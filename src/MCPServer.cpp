@@ -416,6 +416,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("resample_animation"), &MCPServer::toolResampleAnimation},
         {QStringLiteral("simplify_animation"), &MCPServer::toolSimplifyAnimation},
         {QStringLiteral("analyze_animation"), &MCPServer::toolAnalyzeAnimation},
+        {QStringLiteral("bake_animation_fps"), &MCPServer::toolBakeAnimationFps},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
         {QStringLiteral("validate_mesh"), &MCPServer::toolValidateMesh},
@@ -454,6 +455,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("merge_animations"),
         QStringLiteral("resample_animation"),
         QStringLiteral("simplify_animation"),
+        QStringLiteral("bake_animation_fps"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene")
     };
@@ -2396,6 +2398,68 @@ QJsonObject MCPServer::toolAnalyzeAnimation(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolBakeAnimationFps(const QJsonObject &args)
+{
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr)
+            return makeErrorResult("Error: Manager not available");
+
+        const int targetFps = args.value("fps").toInt(0);
+        if (targetFps <= 0)
+            return makeErrorResult("Error: 'fps' must be a positive integer (10/15/30/60 are typical).");
+
+        QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+        QList<Ogre::Entity*> allEntities = mgr->getEntities();
+        if (!entityName.isEmpty()) {
+            for (auto* ent : allEntities) {
+                if (ent && QString::fromStdString(ent->getName()) == entityName) {
+                    entity = ent; break;
+                }
+            }
+            if (!entity)
+                return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        } else {
+            for (auto* ent : allEntities) {
+                if (ent && ent->hasSkeleton()) { entity = ent; break; }
+            }
+        }
+        if (!entity || !entity->hasSkeleton())
+            return makeErrorResult("Error: No entity with skeleton found");
+
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        if (!skel)
+            return makeErrorResult("Error: No skeleton found");
+
+        QString animName = args["animation_name"].toString();
+        std::vector<std::string> animNames;
+        if (!animName.isEmpty()) {
+            if (!skel->hasAnimation(animName.toStdString()))
+                return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+            animNames.push_back(animName.toStdString());
+        } else {
+            for (unsigned short i = 0; i < skel->getNumAnimations(); ++i)
+                animNames.push_back(skel->getAnimation(i)->getName());
+        }
+
+        int totalKeys = 0;
+        for (const auto& name : animNames) {
+            totalKeys += AnimationMerger::bakeAnimationAtFps(skel.get(), name, targetFps);
+        }
+        entity->refreshAvailableAnimationState();
+
+        QString result = QString("Baked %1 animation(s) to %2 FPS — %3 total keyframes")
+            .arg(animNames.size()).arg(targetFps).arg(totalKeys);
+        return makeSuccessResult(result);
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
 QJsonObject MCPServer::toolSaveScene(const QJsonObject &args)
 {
     try {
@@ -3707,6 +3771,24 @@ QJsonArray MCPServer::buildToolsList()
             "Report how many keyframes are redundant (would be removed by simplify_animation) under the given "
             "tolerances, without modifying the animation. Useful for previewing savings before committing.",
             props
+        );
+    }
+
+    // bake_animation_fps
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
+        props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to bake. If omitted, all animations on the skeleton are processed."}};
+        props["fps"] = QJsonObject{{"type", "number"}, {"description", "Target keyframes-per-second (10, 15, 30, 60 are typical). The animation is re-gridded to a uniform 1/fps spacing while preserving the existing curve shape via interpolation between original anchors."}};
+        appendTool(
+            "bake_animation_fps",
+            "Re-grid every bone track in the animation to a uniform N FPS layout. Useful for export pipelines that "
+            "require a fixed cadence (e.g. Mixamo's 30/60 FPS options) or for compressing dense mocap data down to "
+            "a chosen rate. Densifies sparse tracks AND reduces dense ones — both directions converge to the target. "
+            "Original keyframe values are linearly interpolated between bracketing original anchors to preserve curve "
+            "shape; the clip's first and last keyframes are kept exactly so duration is unchanged.",
+            props,
+            QJsonArray{"fps"}
         );
     }
 
