@@ -1107,14 +1107,14 @@ TEST_F(AnimationControlControllerPlaybackTest, MoveKeyframePreviewNoOpWithoutSel
     EXPECT_FALSE(ctrl->moveKeyframePreview("Bone", 0.5, 0.6));
 }
 
-// ── editCurveAndResampleAround macro ──────────────────────────────────────────
+// ── setCurveHandle / Ogre interp sync / explicit Bake ────────────────────────
 
-TEST_F(AnimationControlControllerTest, EditCurveAndResampleAroundIsSingleUndoStep) {
-    // CodeRabbit/codex regression: a mode/tangent change must wrap the
-    // CurveEditModel side-table edit + neighbor resamples in ONE
-    // QUndoStack macro so a single Ctrl+Z reverts everything together.
+TEST_F(AnimationControlControllerTest, SetCurveHandleDoesNotInsertKeyframes) {
+    // A mode/tangent edit must update the side-table + Ogre's per-anim
+    // interp mode WITHOUT exploding the keyframe count. The user opts
+    // into resampling explicitly via the Bake button.
     ASSERT_TRUE(canLoadMeshFiles());
-    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_EditMacro");
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_NoBake");
     ASSERT_NE(entity, nullptr);
 
     auto* ctrl = AnimationControlController::instance();
@@ -1122,27 +1122,43 @@ TEST_F(AnimationControlControllerTest, EditCurveAndResampleAroundIsSingleUndoSte
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
     QString bone = ctrl->boneNames().first();
 
-    // Anchors: TestAnim has keys at 0.0, 0.5, 1.0.
-    QVariantList anchors;
-    anchors << 0.0 << 0.5 << 1.0;
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int before = track->getNumKeyFrames();
 
-    auto* stack = UndoManager::getSingleton()->stack();
-    const int before = stack->count();
+    EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 0.0, 0.0,
+                                      CurveEditModel::ModeBezier));
 
-    EXPECT_TRUE(ctrl->editCurveAndResampleAround(
-        bone, "tx", 0.5, 0.0, 0.0,
-        CurveEditModel::ModeStepped, anchors));
-
-    // The macro plus its child commands collapse into one stack entry.
-    EXPECT_EQ(stack->count(), before + 1)
-        << "edit + 2 resamples must collapse into ONE undo entry";
+    EXPECT_EQ(track->getNumKeyFrames(), before)
+        << "setCurveHandle must not insert keyframes";
 }
 
-TEST_F(AnimationControlControllerTest, EditCurveUndoRestoresModelMode) {
-    // After undo, the CurveEditModel mode must be back to its
-    // pre-edit value — not stuck on whatever the macro applied.
+TEST_F(AnimationControlControllerTest, SetCurveHandleSyncsOgreInterpolation) {
+    // Bezier in CurveEditModel → Ogre's animation interp = IM_SPLINE.
+    // Linear (or default) → IM_LINEAR. Cheap mapping that gets
+    // playback close to the curve shape without a resample.
     ASSERT_TRUE(canLoadMeshFiles());
-    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_ModelUndo");
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_InterpSync");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+    Ogre::Animation* anim = entity->getSkeleton()->getAnimation("TestAnim");
+
+    EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 1.0, 1.0,
+                                      CurveEditModel::ModeBezier));
+    EXPECT_EQ(anim->getInterpolationMode(), Ogre::Animation::IM_SPLINE);
+
+    EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 0.0, 0.0,
+                                      CurveEditModel::ModeLinear));
+    EXPECT_EQ(anim->getInterpolationMode(), Ogre::Animation::IM_LINEAR);
+}
+
+TEST_F(AnimationControlControllerTest, SetCurveHandleUndoRestoresModelEntry) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_HandleUndo");
     ASSERT_NE(entity, nullptr);
 
     auto* ctrl = AnimationControlController::instance();
@@ -1151,12 +1167,8 @@ TEST_F(AnimationControlControllerTest, EditCurveUndoRestoresModelMode) {
     QString bone = ctrl->boneNames().first();
     QString skel = QString::fromStdString(entity->getName());
 
-    QVariantList anchors;
-    anchors << 0.0 << 0.5 << 1.0;
-
-    EXPECT_TRUE(ctrl->editCurveAndResampleAround(
-        bone, "tx", 0.5, 0.0, 0.0,
-        CurveEditModel::ModeStepped, anchors));
+    EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 1.0, 1.0,
+                                      CurveEditModel::ModeStepped));
 
     auto* m = CurveEditModel::instance();
     auto after = m->tangentsAt(skel, "TestAnim", bone, "tx", 0.5);
@@ -1165,17 +1177,15 @@ TEST_F(AnimationControlControllerTest, EditCurveUndoRestoresModelMode) {
     UndoManager::getSingleton()->stack()->undo();
 
     auto restored = m->tangentsAt(skel, "TestAnim", bone, "tx", 0.5);
-    EXPECT_EQ(restored[2].toInt(), CurveEditModel::ModeBezier)
-        << "undo must restore CurveEditModel mode to its pre-edit value";
+    EXPECT_EQ(restored[2].toInt(), CurveEditModel::ModeBezier);
 }
 
-TEST_F(AnimationControlControllerTest, ResampleAroundUsesAuthoredAnchors) {
-    // Pass anchors that EXCLUDE the dense post-resample frames to
-    // confirm the resampler honors the authored neighbor list (codex
-    // regression: it used to pull from row.keyTimes which contains
-    // synthetic samples after one resample pass).
+TEST_F(AnimationControlControllerTest, ResampleAllSegmentsForBoneIsExplicit) {
+    // The Bake button calls this to commit the visual curve into
+    // dense TransformKeyFrames. Returns the number of segments
+    // resampled, and the keyframe count grows substantially.
     ASSERT_TRUE(canLoadMeshFiles());
-    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_AnchorList");
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_BakeButton");
     ASSERT_NE(entity, nullptr);
 
     auto* ctrl = AnimationControlController::instance();
@@ -1183,15 +1193,40 @@ TEST_F(AnimationControlControllerTest, ResampleAroundUsesAuthoredAnchors) {
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
     QString bone = ctrl->boneNames().first();
 
-    // Two anchors only — segment 0.0..1.0. No 0.5 anchor: the resampler
-    // must NOT pretend there's a key at 0.5 even though TestAnim has one.
-    QVariantList anchors;
-    anchors << 0.0 << 1.0;
+    // Stepped on the start key drives the resampler to keep dense
+    // samples through the discontinuity.
+    ctrl->setCurveHandle(bone, "tx", 0.0, 0.0, 0.0,
+                         CurveEditModel::ModeStepped);
 
-    EXPECT_TRUE(ctrl->resampleAround(bone, "tx", 0.5, anchors));
-    // Function returned true because 0.5 has authored neighbors at
-    // 0.0 (prev) and 1.0 (next). The actual segments inside the call
-    // are validated by ResampleCurveCommand_test.
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int before = track->getNumKeyFrames();
+
+    const int segments = ctrl->resampleAllSegmentsForBone(bone, "tx");
+    EXPECT_GT(segments, 0);
+    EXPECT_GT(track->getNumKeyFrames(), before)
+        << "Bake should densify the track";
+}
+
+TEST_F(AnimationControlControllerTest, ResampleAllSegmentsForBoneIsSingleUndoStep) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_BakeMacro");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    ctrl->setCurveHandle(bone, "tx", 0.0, 0.0, 0.0,
+                         CurveEditModel::ModeStepped);
+    auto* stack = UndoManager::getSingleton()->stack();
+    const int before = stack->count();
+
+    ctrl->resampleAllSegmentsForBone(bone, "tx");
+
+    EXPECT_EQ(stack->count(), before + 1)
+        << "Bake must collapse all per-segment resamples into ONE undo entry";
 }
 
 TEST_F(AnimationControlControllerTest, SetKeyframeValuePreviewWritesWithoutUndoPush) {

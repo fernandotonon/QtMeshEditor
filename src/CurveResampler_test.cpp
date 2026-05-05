@@ -59,9 +59,12 @@ TEST_F(CurveResamplerTest, MismatchedSizesReturnsEmpty) {
     EXPECT_TRUE(out.empty());
 }
 
-TEST_F(CurveResamplerTest, LinearCurveProducesBaseRateSamples) {
-    // Linear mode → constant slope → near-zero second derivative →
-    // base rate (30 Hz). 1-second segment ≈ 30 samples.
+TEST_F(CurveResamplerTest, LinearCurveCollapsesToSingleEndpoint) {
+    // Linear mode = straight line between anchors, which matches Ogre's
+    // default linear interpolation between adjacent TransformKeyFrames
+    // exactly. Adaptive sampling collapses the entire segment to ZERO
+    // new interior keyframes — the caller's existing t0/t1 anchors
+    // describe the segment perfectly. Output is just the t1 endpoint.
     auto* m = CurveEditModel::instance();
     m->setMode("s", "a", "b", "tx", 0.0, CurveEditModel::ModeLinear);
     m->setMode("s", "a", "b", "tx", 1.0, CurveEditModel::ModeLinear);
@@ -70,19 +73,17 @@ TEST_F(CurveResamplerTest, LinearCurveProducesBaseRateSamples) {
                                                0.0, 1.0,
                                                toVariants({0.0, 1.0}),
                                                toVariants({0.0, 1.0}));
-    EXPECT_EQ(out.size(), CurveResampler::kBaseHz);
-    // First sample is at t = 1/30 ≈ 0.0333, value linearly ≈ 0.0333.
-    EXPECT_NEAR(out.front().time,  1.0 / CurveResampler::kBaseHz, 1e-6);
-    EXPECT_NEAR(out.front().value, 1.0 / CurveResampler::kBaseHz, 1e-3);
-    // Last sample is at t = 1.0 (segment end), value = 1.0.
+    EXPECT_EQ(out.size(), 1u);
     EXPECT_NEAR(out.back().time,  1.0, 1e-6);
     EXPECT_NEAR(out.back().value, 1.0, 1e-3);
 }
 
-TEST_F(CurveResamplerTest, SteppedCurveBumpsToBoostRate) {
-    // Stepped mode holds the upstream value until the next keyframe,
-    // then jumps — that's a near-infinite second derivative, so the
-    // resampler must escalate from 30 Hz to 60 Hz.
+TEST_F(CurveResamplerTest, SteppedCurveRetainsDenseSamples) {
+    // Stepped mode jumps near the next keyframe — Douglas-Peucker
+    // can't faithfully represent the discontinuity with linear
+    // segments, so the simplifier keeps many samples around the jump.
+    // We don't pin the exact count (RDP picks adaptively) but it
+    // must be substantially denser than a linear curve.
     auto* m = CurveEditModel::instance();
     m->setMode("s", "a", "b", "tx", 0.0, CurveEditModel::ModeStepped);
     m->setMode("s", "a", "b", "tx", 1.0, CurveEditModel::ModeStepped);
@@ -91,12 +92,13 @@ TEST_F(CurveResamplerTest, SteppedCurveBumpsToBoostRate) {
                                                0.0, 1.0,
                                                toVariants({0.0, 1.0}),
                                                toVariants({0.0, 1.0}));
-    EXPECT_EQ(out.size(), CurveResampler::kBoostHz);
+    EXPECT_GE(out.size(), 5u) << "stepped jump must keep enough samples";
 }
 
-TEST_F(CurveResamplerTest, LongSegmentClampedToMaxSamples) {
-    // 10-second segment with stepped curve would want 600 samples at
-    // 60 Hz. The cap brings it back to 200.
+TEST_F(CurveResamplerTest, LongSegmentRespectsMaxSamplesCap) {
+    // 10-second segment with stepped curve dense-samples at 60 Hz =
+    // 600 raw samples, capped at 200 BEFORE simplification. After RDP
+    // the kept count is ≤ 200 and ≥ 1.
     auto* m = CurveEditModel::instance();
     m->setMode("s", "a", "b", "tx", 0.0,  CurveEditModel::ModeStepped);
     m->setMode("s", "a", "b", "tx", 10.0, CurveEditModel::ModeStepped);
@@ -105,7 +107,8 @@ TEST_F(CurveResamplerTest, LongSegmentClampedToMaxSamples) {
                                                0.0, 10.0,
                                                toVariants({0.0, 10.0}),
                                                toVariants({0.0, 1.0}));
-    EXPECT_EQ(out.size(), CurveResampler::kMaxSamples);
+    EXPECT_LE(out.size(), static_cast<size_t>(CurveResampler::kMaxSamples));
+    EXPECT_GE(out.size(), 1u);
 }
 
 TEST_F(CurveResamplerTest, SamplesEndAtSegmentEnd) {
@@ -121,7 +124,9 @@ TEST_F(CurveResamplerTest, SamplesEndAtSegmentEnd) {
 }
 
 TEST_F(CurveResamplerTest, SamplesAreMonotonicInTime) {
+    // Use stepped mode so simplification keeps multiple samples.
     auto* m = CurveEditModel::instance();
+    m->setMode("s", "a", "b", "tx", 0.0, CurveEditModel::ModeStepped);
     auto out = CurveResampler::resampleSegment(m, "s", "a", "b", "tx",
                                                0.0, 1.0,
                                                toVariants({0.0, 1.0}),
@@ -132,9 +137,9 @@ TEST_F(CurveResamplerTest, SamplesAreMonotonicInTime) {
     }
 }
 
-TEST_F(CurveResamplerTest, BezierWithStrongTangentsBoostsRate) {
-    // Aggressive tangents create curvature peaks in the middle of the
-    // segment — should escalate to 60 Hz like stepped.
+TEST_F(CurveResamplerTest, BezierWithStrongTangentsRetainsSamples) {
+    // Aggressive tangents create curvature peaks the simplifier
+    // can't collapse; output must keep multiple interior samples.
     auto* m = CurveEditModel::instance();
     m->setTangents("s", "a", "b", "tx", 0.0, 0.0, 50.0);
     m->setTangents("s", "a", "b", "tx", 1.0, -50.0, 0.0);
@@ -143,5 +148,5 @@ TEST_F(CurveResamplerTest, BezierWithStrongTangentsBoostsRate) {
                                                0.0, 1.0,
                                                toVariants({0.0, 1.0}),
                                                toVariants({0.0, 1.0}));
-    EXPECT_EQ(out.size(), CurveResampler::kBoostHz);
+    EXPECT_GE(out.size(), 5u);
 }

@@ -1491,17 +1491,15 @@ bool AnimationControlController::resampleCurveSegment(const QString& boneName,
     return true;
 }
 
-bool AnimationControlController::editCurveAndResampleAround(
-        const QString& boneName, const QString& channel,
-        double keyTime,
-        double newInTangent, double newOutTangent, int newMode,
-        const QVariantList& anchorTimes)
+bool AnimationControlController::setCurveHandle(const QString& boneName,
+                                                 const QString& channel,
+                                                 double keyTime,
+                                                 double newInTangent,
+                                                 double newOutTangent,
+                                                 int newMode)
 {
     if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
     if (m_selectedEntityName.empty() || m_selectedAnimation.empty()) return false;
-
-    double prevAnchor = -1.0, nextAnchor = -1.0;
-    if (!neighborAnchors(keyTime, anchorTimes, prevAnchor, nextAnchor)) return false;
 
     auto* m = CurveEditModel::instance();
     const QString skel = QString::fromStdString(m_selectedEntityName);
@@ -1510,50 +1508,95 @@ bool AnimationControlController::editCurveAndResampleAround(
     const double oldIn   = prev.size() >= 1 ? prev[0].toDouble() : 0.0;
     const double oldOut  = prev.size() >= 2 ? prev[1].toDouble() : 0.0;
     const int    oldMode = prev.size() >= 3 ? prev[2].toInt()    : 0;
-    const int    finalNewMode = (newMode < 0) ? oldMode : newMode;
+    const int    finalMode = (newMode < 0) ? oldMode : newMode;
 
-    // Bundle: side-table edit + neighbor-segment resamples under one
-    // QUndoStack macro so a single Ctrl+Z reverts the whole gesture.
-    auto* stack = UndoManager::getSingleton()->stack();
-    stack->beginMacro(QObject::tr("Edit curve handle"));
-
-    auto* edit = new CurveEditModelChangeCommand( // NOSONAR — stack owns
+    auto* cmd = new CurveEditModelChangeCommand( // NOSONAR — stack owns
             m_selectedEntityName, m_selectedAnimation,
             boneName.toStdString(), channel.toLower().toStdString(),
             keyTime,
             oldIn, oldOut, oldMode,
-            newInTangent, newOutTangent, finalNewMode);
-    stack->push(edit);
+            newInTangent, newOutTangent, finalMode);
+    UndoManager::getSingleton()->push(cmd);
 
-    if (prevAnchor >= 0.0) {
-        resampleCurveSegment(boneName, channel, prevAnchor, keyTime);
-    }
-    if (nextAnchor >= 0.0) {
-        resampleCurveSegment(boneName, channel, keyTime, nextAnchor);
-    }
-
-    stack->endMacro();
+    syncOgreInterpolationMode();
     return true;
 }
 
-bool AnimationControlController::resampleAround(const QString& boneName,
-                                                 const QString& channel,
-                                                 double keyTime,
-                                                 const QVariantList& anchorTimes)
+int AnimationControlController::resampleAllSegmentsForBone(const QString& boneName,
+                                                            const QString& channel)
 {
-    if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return 0;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return 0;
+    const std::string boneStd = boneName.toStdString();
+    if (!m_selectedSkeleton->hasBone(boneStd)) return 0;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return 0;
 
-    double prevAnchor = -1.0, nextAnchor = -1.0;
-    if (!neighborAnchors(keyTime, anchorTimes, prevAnchor, nextAnchor)) return false;
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneStd);
+    if (!bone || !anim->hasNodeTrack(bone->getHandle())) return 0;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    if (track->getNumKeyFrames() < 2) return 0;
 
-    // Bundle two sibling resamples so one Ctrl+Z reverts both. If
-    // there's only one neighbor, skip the macro overhead — the single
-    // resample is its own undo entry.
+    // Collect authored anchor times before resampling — each
+    // ResampleCurveCommand will reshuffle the track, so iterating
+    // by index would skip frames after the first redo.
+    std::vector<double> anchors;
+    anchors.reserve(track->getNumKeyFrames());
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        anchors.push_back(track->getKeyFrame(i)->getTime());
+    }
+
     auto* stack = UndoManager::getSingleton()->stack();
-    const bool both = prevAnchor >= 0.0 && nextAnchor >= 0.0;
-    if (both) stack->beginMacro(QObject::tr("Resample curve segments"));
-    if (prevAnchor >= 0.0) resampleCurveSegment(boneName, channel, prevAnchor, keyTime);
-    if (nextAnchor >= 0.0) resampleCurveSegment(boneName, channel, keyTime, nextAnchor);
-    if (both) stack->endMacro();
-    return true;
+    stack->beginMacro(QObject::tr("Resample bone curve"));
+    int count = 0;
+    for (size_t i = 1; i < anchors.size(); ++i) {
+        if (resampleCurveSegment(boneName, channel, anchors[i-1], anchors[i])) {
+            ++count;
+        }
+    }
+    stack->endMacro();
+    return count;
+}
+
+void AnimationControlController::syncOgreInterpolationMode()
+{
+    // Pick IM_SPLINE when ANY keyframe in the active animation is in
+    // a curved mode (Bezier/Auto). Otherwise IM_LINEAR — that matches
+    // the CurveEditModel "Linear" or default state, and Ogre's linear
+    // interp draws the same straight line the curve editor renders.
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return;
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    auto* m = CurveEditModel::instance();
+    const QString skel = QString::fromStdString(m_selectedEntityName);
+    const QString animQ = QString::fromStdString(m_selectedAnimation);
+
+    bool wantSpline = false;
+    for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+        Ogre::Node* node = track->getAssociatedNode();
+        if (!node) continue;
+        const QString boneQ = QString::fromStdString(node->getName());
+        for (unsigned short i = 0; i < track->getNumKeyFrames() && !wantSpline; ++i) {
+            const double t = track->getKeyFrame(i)->getTime();
+            for (const QString& chQ : { QStringLiteral("tx"), QStringLiteral("ty"),
+                                         QStringLiteral("tz"), QStringLiteral("rx"),
+                                         QStringLiteral("ry"), QStringLiteral("rz"),
+                                         QStringLiteral("rw"), QStringLiteral("sx"),
+                                         QStringLiteral("sy"), QStringLiteral("sz") }) {
+                const QVariantList tangents = m->tangentsAt(skel, animQ, boneQ, chQ, t);
+                if (tangents.size() >= 3) {
+                    const int mode = tangents[2].toInt();
+                    if (mode == CurveEditModel::ModeBezier
+                        || mode == CurveEditModel::ModeAuto) {
+                        wantSpline = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (wantSpline) break;
+    }
+    anim->setInterpolationMode(wantSpline ? Ogre::Animation::IM_SPLINE
+                                          : Ogre::Animation::IM_LINEAR);
+    notifyOgreUpdate();
 }

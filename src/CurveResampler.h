@@ -31,6 +31,12 @@ constexpr int    kBaseHz       = 30;
 constexpr int    kBoostHz      = 60;
 constexpr int    kMaxSamples   = 200;
 constexpr double kCurvatureEps = 1.0;
+// Simplification tolerance: 0.5% of the segment's value range, with
+// a 1e-3 absolute floor for flat-ish curves. Linear segments collapse
+// to zero new keyframes (Ogre's default linear interp matches the
+// curve); only Stepped/sharp shapes retain dense samples.
+constexpr double kSimplifyRel   = 0.005;
+constexpr double kSimplifyFloor = 1e-3;
 
 /// Resample one channel between adjacent keyframes [t0, t1].
 /// `kfTimes` and `kfValues` are the channel's existing data (must be

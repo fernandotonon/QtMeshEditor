@@ -81,15 +81,6 @@ Rectangle {
         curveCanvas.requestPaint()
     }
 
-    // Snapshot the current row's keyTimes for resampler anchors. Caller
-    // captures this BEFORE any preview/resample so subsequent passes
-    // use the authored key list, not the dense post-resample one.
-    function snapshotAnchorTimes() {
-        var row = selectedBoneRow()
-        if (!row || !row.keyTimes) return []
-        return row.keyTimes.slice()
-    }
-
     function clampViewStart() {
         var maxT = AnimationControlController.animationLength
         if (maxT <= 0) { root.viewStart = 0; return }
@@ -208,6 +199,31 @@ Rectangle {
                     onClicked: root.zoomVertical(1.25, curveCanvas.height / 2)
                     ToolTip.visible: hovered
                     ToolTip.text: "Zoom in value axis (Shift+wheel)"
+                }
+            }
+
+            // Bake = explicit resample of every segment on the active
+            // bone/channel into dense TransformKeyFrames. Use this when
+            // Stepped or strong Bezier shapes need exact playback
+            // fidelity beyond what Ogre's IM_LINEAR/IM_SPLINE can do.
+            // Note: keyframe count grows substantially.
+            Button {
+                text: "Bake"; height: 18
+                font.pixelSize: 10
+                anchors.verticalCenter: parent.verticalCenter
+                enabled: root.selectedBone !== ""
+                ToolTip.visible: hovered
+                ToolTip.text: "Resample curves into dense keyframes"
+                onClicked: {
+                    var row = root.selectedBoneRow()
+                    if (!row || !row.channels) return
+                    for (var i = 0; i < root.channelOrder.length; i++) {
+                        var ch = root.channelOrder[i]
+                        if (row.channels[ch.id]) {
+                            AnimationControlController.resampleAllSegmentsForBone(
+                                root.selectedBone, ch.id)
+                        }
+                    }
                 }
             }
 
@@ -346,23 +362,20 @@ Rectangle {
         property string boneName: ""
         property string channelId: ""
         property real keyTime: 0
-        // Captured at popup time so the resampler uses authored anchors
-        // even after the user has resampled neighboring segments.
-        property var anchorTimes: []
 
         function applyMode(mode) {
-            // Bundles the side-table edit (mode flag) + neighbor
-            // resamples under one undo macro. Single Ctrl+Z reverts
-            // both Ogre keyframes AND the model's mode entry.
+            // Updates the side-table mode + tunes Ogre's per-animation
+            // interp mode (IM_LINEAR vs IM_SPLINE) so playback follows
+            // the curve shape WITHOUT inserting dense keyframes.
+            // Click the "Bake" button to commit a resample explicitly.
             var prev = CurveEditModel.tangentsAt(
                 AnimationControlController.selectedEntityName,
                 AnimationControlController.selectedAnimation,
                 boneName, channelId, keyTime)
             var inT  = prev.length >= 1 ? prev[0] : 0
             var outT = prev.length >= 2 ? prev[1] : 0
-            AnimationControlController.editCurveAndResampleAround(
-                boneName, channelId, keyTime,
-                inT, outT, mode, anchorTimes)
+            AnimationControlController.setCurveHandle(
+                boneName, channelId, keyTime, inT, outT, mode)
         }
 
         MenuItem { text: "Bezier";   onTriggered: modeMenu.applyMode(CurveEditModel.ModeBezier) }
@@ -449,17 +462,10 @@ Rectangle {
         property real   dragTangentKy: 0
         property real   dragInT: 0
         property real   dragOutT: 0
-        // Authored anchor times captured at press (before any preview
-        // resample). Resample-on-release uses these instead of the
-        // current row.keyTimes, which gets densely populated.
-        property var    dragAnchorTimes: []
-        // CurveEditModel state at tangent-drag press, captured so
-        // onReleased can push a CurveEditModelChangeCommand recording
-        // the in/out tangent transition (single Ctrl+Z reverts both
-        // the model entry and the resample).
+        // CurveEditModel state at tangent-drag press, used by the
+        // CurveEditModelChangeCommand pushed on release.
         property real   dragTangentOrigInT: 0
         property real   dragTangentOrigOutT: 0
-        property int    dragTangentOrigMode: 0
 
         onPressed: function(mouse) {
             if (mouse.button === Qt.MiddleButton) {
@@ -472,10 +478,6 @@ Rectangle {
                     modeMenu.boneName    = rhit.bone
                     modeMenu.channelId   = rhit.channel
                     modeMenu.keyTime     = rhit.time
-                    // Snapshot anchors NOW so a resample triggered by
-                    // a prior gesture in this same popup session uses
-                    // the authored key list.
-                    modeMenu.anchorTimes = root.snapshotAnchorTimes()
                     modeMenu.popup()
                     mouse.accepted = true
                 } else {
@@ -501,12 +503,6 @@ Rectangle {
                     // a third element of tangentsAt.
                     panArea.dragTangentOrigInT  = thit.inT
                     panArea.dragTangentOrigOutT = thit.outT
-                    var prev = CurveEditModel.tangentsAt(
-                        AnimationControlController.selectedEntityName,
-                        AnimationControlController.selectedAnimation,
-                        thit.bone, thit.channel, thit.time)
-                    panArea.dragTangentOrigMode = prev.length >= 3 ? prev[2] : 0
-                    panArea.dragAnchorTimes = root.snapshotAnchorTimes()
                     mouse.accepted = true
                     return
                 }
@@ -525,7 +521,6 @@ Rectangle {
                     panArea.dragLastValue = khit.value
                     panArea.dragPressX = canvasX
                     panArea.dragPressY = canvasY
-                    panArea.dragAnchorTimes = root.snapshotAnchorTimes()
                     mouse.accepted = true
                     return
                 }
@@ -628,17 +623,18 @@ Rectangle {
                         panArea.dragBone, panArea.dragChannel,
                         panArea.dragKeyTime, panArea.dragLastValue)
                 }
-                if (valueChanged || timeChanged) {
-                    AnimationControlController.resampleAround(
-                        panArea.dragBone, panArea.dragChannel,
-                        panArea.dragKeyTime, panArea.dragAnchorTimes)
-                }
+                // Value/time edits already pushed proper commands via
+                // setKeyframeValue/moveKeyframe — Ogre's existing
+                // interp draws the segment, no implicit resample.
             } else if (panArea.dragMode === "tangent") {
                 // Tangent drag wrote CurveEditModel directly during
                 // move (no undo per move). On release, restore the
-                // pre-drag tangents and push one macro that captures
-                // the model transition + resamples both neighbor
-                // segments — single Ctrl+Z reverts everything.
+                // pre-drag tangents and push one undoable
+                // CurveEditModelChangeCommand. Ogre's interp mode
+                // (linear vs spline) is updated to match the new
+                // shape, but no dense keyframes are inserted — the
+                // user opts in via the Bake button when they want
+                // exact curve fidelity baked into the track.
                 CurveEditModel.setTangents(
                     AnimationControlController.selectedEntityName,
                     AnimationControlController.selectedAnimation,
@@ -646,12 +642,11 @@ Rectangle {
                     panArea.dragKeyTime,
                     panArea.dragTangentOrigInT,
                     panArea.dragTangentOrigOutT)
-                AnimationControlController.editCurveAndResampleAround(
+                AnimationControlController.setCurveHandle(
                     panArea.dragBone, panArea.dragChannel,
                     panArea.dragKeyTime,
                     panArea.dragInT, panArea.dragOutT,
-                    -1, // mode unchanged
-                    panArea.dragAnchorTimes)
+                    -1)
             }
             panArea.dragMode = ""
         }
