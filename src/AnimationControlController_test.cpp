@@ -1133,12 +1133,13 @@ TEST_F(AnimationControlControllerTest, SetCurveHandleDoesNotInsertKeyframes) {
         << "setCurveHandle must not insert keyframes";
 }
 
-TEST_F(AnimationControlControllerTest, SetCurveHandleSyncsOgreInterpolation) {
-    // Bezier in CurveEditModel → Ogre's animation interp = IM_SPLINE.
-    // Linear (or default) → IM_LINEAR. Cheap mapping that gets
-    // playback close to the curve shape without a resample.
+TEST_F(AnimationControlControllerTest, SetCurveHandleDoesNotMutateAnimInterp) {
+    // Animation::setInterpolationMode is per-Animation, not per-track —
+    // touching it on a single-bone curve edit distorts every other
+    // bone's track. setCurveHandle must leave the animation's interp
+    // mode untouched; the user opts in to a resample via Bake instead.
     ASSERT_TRUE(canLoadMeshFiles());
-    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_InterpSync");
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_NoInterpFlip");
     ASSERT_NE(entity, nullptr);
 
     auto* ctrl = AnimationControlController::instance();
@@ -1146,14 +1147,15 @@ TEST_F(AnimationControlControllerTest, SetCurveHandleSyncsOgreInterpolation) {
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
     QString bone = ctrl->boneNames().first();
     Ogre::Animation* anim = entity->getSkeleton()->getAnimation("TestAnim");
+    const auto before = anim->getInterpolationMode();
 
     EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 1.0, 1.0,
                                       CurveEditModel::ModeBezier));
-    EXPECT_EQ(anim->getInterpolationMode(), Ogre::Animation::IM_SPLINE);
+    EXPECT_EQ(anim->getInterpolationMode(), before);
 
-    EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 0.0, 0.0,
-                                      CurveEditModel::ModeLinear));
-    EXPECT_EQ(anim->getInterpolationMode(), Ogre::Animation::IM_LINEAR);
+    EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 1.0, 1.0,
+                                      CurveEditModel::ModeStepped));
+    EXPECT_EQ(anim->getInterpolationMode(), before);
 }
 
 TEST_F(AnimationControlControllerTest, SetCurveHandleUndoRestoresModelEntry) {

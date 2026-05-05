@@ -312,10 +312,6 @@ private:
     void refreshSliderTicks();
     void pushKeyframeValues();
     void notifyOgreUpdate();
-    /// Pick IM_SPLINE or IM_LINEAR for the active animation based on
-    /// whether any keyframe is in a curved CurveEditModel mode. Cheap
-    /// to call after every handle/mode edit — no keyframe insertion.
-    void syncOgreInterpolationMode();
 
     static AnimationControlController* m_pSingleton;
 

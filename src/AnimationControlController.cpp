@@ -1517,8 +1517,12 @@ bool AnimationControlController::setCurveHandle(const QString& boneName,
             oldIn, oldOut, oldMode,
             newInTangent, newOutTangent, finalMode);
     UndoManager::getSingleton()->push(cmd);
-
-    syncOgreInterpolationMode();
+    // Don't touch Ogre's per-Animation interp mode here:
+    // Animation::setInterpolationMode is animation-wide, not per-track,
+    // so flipping it for one bone's curve change visibly distorts every
+    // other bone's track in the same animation. Curve editor canvas
+    // shows the authored shape; click Bake to commit the curve into
+    // dense TransformKeyFrames if you need playback to match exactly.
     return true;
 }
 
@@ -1558,45 +1562,3 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     return count;
 }
 
-void AnimationControlController::syncOgreInterpolationMode()
-{
-    // Pick IM_SPLINE when ANY keyframe in the active animation is in
-    // a curved mode (Bezier/Auto). Otherwise IM_LINEAR — that matches
-    // the CurveEditModel "Linear" or default state, and Ogre's linear
-    // interp draws the same straight line the curve editor renders.
-    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return;
-    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return;
-    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
-    auto* m = CurveEditModel::instance();
-    const QString skel = QString::fromStdString(m_selectedEntityName);
-    const QString animQ = QString::fromStdString(m_selectedAnimation);
-
-    bool wantSpline = false;
-    for (const auto& [handle, track] : anim->_getNodeTrackList()) {
-        Ogre::Node* node = track->getAssociatedNode();
-        if (!node) continue;
-        const QString boneQ = QString::fromStdString(node->getName());
-        for (unsigned short i = 0; i < track->getNumKeyFrames() && !wantSpline; ++i) {
-            const double t = track->getKeyFrame(i)->getTime();
-            for (const QString& chQ : { QStringLiteral("tx"), QStringLiteral("ty"),
-                                         QStringLiteral("tz"), QStringLiteral("rx"),
-                                         QStringLiteral("ry"), QStringLiteral("rz"),
-                                         QStringLiteral("rw"), QStringLiteral("sx"),
-                                         QStringLiteral("sy"), QStringLiteral("sz") }) {
-                const QVariantList tangents = m->tangentsAt(skel, animQ, boneQ, chQ, t);
-                if (tangents.size() >= 3) {
-                    const int mode = tangents[2].toInt();
-                    if (mode == CurveEditModel::ModeBezier
-                        || mode == CurveEditModel::ModeAuto) {
-                        wantSpline = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if (wantSpline) break;
-    }
-    anim->setInterpolationMode(wantSpline ? Ogre::Animation::IM_SPLINE
-                                          : Ogre::Animation::IM_LINEAR);
-    notifyOgreUpdate();
-}
