@@ -1596,18 +1596,17 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     // spacing) AND source-much-denser-than-N (drops to N) AND
     // source-sparser-than-N (densifies to N).
     if (fixedFps > 0 && anchors.size() >= 2) {
-        const double t0 = anchors.front();
-        const double t1 = anchors.back();
-        // Collapse to just the two endpoint anchors via reduce(1):
-        // 1 FPS minGap = 1.0s, dropping every interior key on any
-        // typical clip. DecimateTrackCommand always keeps first +
-        // last so we end up with exactly two anchors. Then a single
-        // resample at fixedFps fills the segment with a uniform
-        // N-FPS grid — works whether the source was denser, sparser,
-        // or non-uniform.
-        reduceTrackToFps(boneName, 1);
+        // Treat the whole clip as a single segment so the per-pair
+        // loop's "1/N source duration → 0 new samples" issue
+        // disappears. ResampleCurveCommand snapshots kfTimes/kfValues
+        // from the live track BEFORE stripping the interior, so the
+        // curve evaluator still has the full original data to
+        // interpolate from when generating the dense samples — even
+        // though the strip+insert phase replaces every interior
+        // keyframe with the uniform N-FPS grid.
         if (resampleCurveSegment(boneName, channel,
-                                  t0, t1, 1.0, fixedFps)) {
+                                  anchors.front(), anchors.back(),
+                                  1.0, fixedFps)) {
             ++count;
         }
     } else {
