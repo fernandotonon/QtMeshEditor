@@ -1212,6 +1212,48 @@ TEST_F(AnimationControlControllerTest, ResampleAllSegmentsForBoneIsExplicit) {
         << "Bake should densify the track";
 }
 
+TEST_F(AnimationControlControllerTest, BakeAt60FpsRegridsTrack) {
+    // Set to 60 FPS must always re-grid the track to a uniform 60 FPS
+    // layout — even when the source already has roughly 60 keys, the
+    // times shift to clean 1/60s steps.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_Bake60");
+    ASSERT_NE(entity, nullptr);
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    // TestAnim is a sparse 3-key clip (0, 0.5, 1). Set to 60 FPS
+    // should densify it substantially — well over 30 keys.
+    const int before = track->getNumKeyFrames();
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 6);  // 6 = 60 FPS
+    const int after = track->getNumKeyFrames();
+    EXPECT_GT(after, before + 30) << "60 FPS bake must noticeably densify a sparse track";
+}
+
+TEST_F(AnimationControlControllerTest, BakeAt60FpsAfter30FpsAddsKeys) {
+    // Source first baked at 30 FPS, then set to 60 FPS — the second
+    // bake should add additional keys (not be a no-op).
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_Bake30Then60");
+    ASSERT_NE(entity, nullptr);
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 5);  // 5 = 30 FPS
+    const int after30 = track->getNumKeyFrames();
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 6);  // 6 = 60 FPS
+    const int after60 = track->getNumKeyFrames();
+    EXPECT_GT(after60, after30) << "60 FPS bake after 30 FPS must add keys";
+}
+
 TEST_F(AnimationControlControllerTest, BakeUndoEmitsBoneRowsChanged) {
     // Ctrl+Z after a Bake must fire boneRowsChanged so the QML
     // dope-sheet + curve-editor refresh their cached keyTimes —

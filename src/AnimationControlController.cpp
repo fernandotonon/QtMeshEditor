@@ -1604,10 +1604,15 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
         // interpolate from when generating the dense samples — even
         // though the strip+insert phase replaces every interior
         // keyframe with the uniform N-FPS grid.
+        const int beforeKeys = static_cast<int>(track->getNumKeyFrames());
         if (resampleCurveSegment(boneName, channel,
                                   anchors.front(), anchors.back(),
                                   1.0, fixedFps)) {
             ++count;
+            const int afterKeys = static_cast<int>(track->getNumKeyFrames());
+            SentryReporter::addBreadcrumb("ui.action",
+                QString("Bake @ %1 FPS: %2 → %3 keys")
+                    .arg(fixedFps).arg(beforeKeys).arg(afterKeys));
         }
     } else {
         // Adaptive modes use a coarser baselineFps as a pre-decimate
