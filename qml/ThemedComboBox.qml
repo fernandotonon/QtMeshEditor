@@ -78,21 +78,14 @@ ComboBox {
     // clipped by parent bounds (the curve editor's bake combo hits this
     // with 10+ items in a small editor area).
     popup: Popup {
-        // Reparent to the Window's content item so the popup can extend
-        // beyond the host QQuickWidget's bounds — without this, a long
-        // popup spawned from the curve editor's narrow strip gets
-        // clipped by the editor's render area and the user can't scroll
-        // to the bottom items.
-        parent: control.Window.window ? control.Window.window.contentItem
-                                       : control
-        x: {
-            var pt = control.mapToItem(parent, 0, control.height)
-            return pt.x
-        }
-        y: {
-            var pt = control.mapToItem(parent, 0, control.height)
-            return pt.y
-        }
+        // Use a native top-level window for the popup so it escapes
+        // the host QQuickWidget's bounds. Long bake/reduce lists in
+        // the curve editor's narrow strip would otherwise be clipped.
+        // popupType: Popup.Window is Qt 6.8+ — falls back gracefully
+        // when unsupported, but on Qt 6.9 (our build) it's the
+        // canonical fix for QQuickWidget popup clipping.
+        popupType: Popup.Window
+        y: control.height
         width: control.width
         implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
         padding: 1
