@@ -205,6 +205,13 @@ public:
     Q_INVOKABLE bool moveKeyframe(const QString& boneName,
                                   double oldTime, double newTime);
 
+    /// Retime a keyframe in place without pushing an undo command. The
+    /// caller commits one MoveKeyframeCommand on drag release; without
+    /// the preview path each move event triggers Skeleton::reset(true)
+    /// via MainWindow's indexChanged handler, blinking to T-pose.
+    Q_INVOKABLE bool moveKeyframePreview(const QString& boneName,
+                                         double oldTime, double newTime);
+
     // ── Bulk keyframe ops (slice D1) ──────────────────────────────────────────
     /// Move every selected keyframe by the same `dt` in seconds. Selection
     /// is a list of QVariantMaps with "bone" + "time" keys. Atomic: a
@@ -240,6 +247,13 @@ public:
     Q_INVOKABLE bool setKeyframeValue(const QString& boneName,
                                        const QString& channel,
                                        double time, double value);
+
+    /// Write a channel value in place without pushing an undo command.
+    /// Caller commits one SetKeyframeValueCommand on drag release. See
+    /// moveKeyframePreview for the rationale.
+    Q_INVOKABLE bool setKeyframeValuePreview(const QString& boneName,
+                                              const QString& channel,
+                                              double time, double value);
 
 public slots:
     void updateAnimationTree();

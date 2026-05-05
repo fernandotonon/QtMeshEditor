@@ -2,11 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import AnimationControl 1.0
 
-// Curve editor — visualizes per-channel animation curves with Bezier handles.
-// Reads keyframe times + values from AnimationControlController and tangent
-// state from CurveEditModel. Read-only display in this slice (D3a); handle
-// dragging + resample-into-track lands in D3b. The dope sheet remains the
-// primary editing surface for keyframe selection and time shifts.
+// Curve editor — per-channel animation curves with Bezier handles.
 Rectangle {
     id: root
     color: AnimationControlController.panelColor
@@ -19,13 +15,7 @@ Rectangle {
 
     property int leftStripWidth: 130
 
-    // Pulled from AnimationControlController on signal. Each row is the same
-    // shape as the dope sheet's allBoneRows() returns: { bone, keyTimes,
-    // channels: { tx, ty, ..., sz: bool } }.
     property var rows: AnimationControlController.allBoneRows()
-
-    // Selected bone — only that bone's animated channels are drawn. Reuses
-    // AnimationControlController.selectedBone for cross-panel sync.
     readonly property string selectedBone: AnimationControlController.selectedBone
 
     readonly property var channelOrder: [
@@ -61,6 +51,45 @@ Rectangle {
         return activeChannelsFor(selectedBoneRow())
     }
 
+    // anchorPx is the pixel that should stay fixed while zooming.
+    function zoomHorizontal(factor, anchorPx) {
+        var newPx = Math.max(20, Math.min(2000, root.pxPerSec * factor))
+        if (newPx === root.pxPerSec) return
+        var tCursor = root.viewStart + anchorPx / root.pxPerSec
+        root.pxPerSec = newPx
+        root.viewStart = Math.max(0, tCursor - anchorPx / newPx)
+        clampViewStart()
+        curveCanvas.requestPaint()
+    }
+
+    function zoomVertical(factor, anchorPy) {
+        var newScale = Math.max(8, Math.min(800, root.yScale * factor))
+        if (newScale === root.yScale) return
+        var midY = (curveCanvas.height - 16) / 2
+        var vCursor = root.yCenter - (anchorPy - midY) / root.yScale
+        root.yScale = newScale
+        root.yCenter = vCursor + (anchorPy - midY) / newScale
+        curveCanvas.requestPaint()
+    }
+
+    function fitToView() {
+        var maxT = AnimationControlController.animationLength
+        if (maxT <= 0 || curveCanvas.width <= 0) return
+        var pad = 0.05
+        root.pxPerSec = Math.max(20, curveCanvas.width / (maxT * (1.0 + pad)))
+        root.viewStart = 0
+        curveCanvas.requestPaint()
+    }
+
+    function clampViewStart() {
+        var maxT = AnimationControlController.animationLength
+        if (maxT <= 0) { root.viewStart = 0; return }
+        var visibleSecs = curveCanvas.width / root.pxPerSec
+        var maxStart = Math.max(0, maxT - visibleSecs * 0.5)
+        if (root.viewStart > maxStart) root.viewStart = maxStart
+        if (root.viewStart < 0) root.viewStart = 0
+    }
+
     Connections {
         target: AnimationControlController
         function onBoneRowsChanged()      {
@@ -85,7 +114,6 @@ Rectangle {
         function onModelChanged() { curveCanvas.requestPaint() }
     }
 
-    // ── Empty-state placeholder ──────────────────────────────────────────────
     Text {
         anchors.centerIn: parent
         visible: !AnimationControlController.hasAnimation || !root.selectedBone
@@ -96,7 +124,6 @@ Rectangle {
         font.pixelSize: 12
     }
 
-    // ── Header ───────────────────────────────────────────────────────────────
     Rectangle {
         id: header
         width: parent.width; height: 24
@@ -112,11 +139,67 @@ Rectangle {
             color: AnimationControlController.textColor
         }
 
-        // Channel legend
         Row {
             anchors.right: parent.right; anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
             spacing: 10
+
+            Row {
+                spacing: 2
+                anchors.verticalCenter: parent.verticalCenter
+                Text {
+                    text: "H:"
+                    color: AnimationControlController.textColor
+                    font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Button {
+                    text: "−"; width: 22; height: 18
+                    font.pixelSize: 12
+                    onClicked: root.zoomHorizontal(1.0 / 1.25, curveCanvas.width / 2)
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Zoom out time axis (wheel)"
+                }
+                Button {
+                    text: "+"; width: 22; height: 18
+                    font.pixelSize: 12
+                    onClicked: root.zoomHorizontal(1.25, curveCanvas.width / 2)
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Zoom in time axis (wheel)"
+                }
+                Button {
+                    text: "⤢"; width: 22; height: 18
+                    font.pixelSize: 11
+                    onClicked: root.fitToView()
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Fit animation to view"
+                }
+            }
+            Row {
+                spacing: 2
+                anchors.verticalCenter: parent.verticalCenter
+                Text {
+                    text: "V:"
+                    color: AnimationControlController.textColor
+                    font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Button {
+                    text: "−"; width: 22; height: 18
+                    font.pixelSize: 12
+                    onClicked: root.zoomVertical(1.0 / 1.25, curveCanvas.height / 2)
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Zoom out value axis (Shift+wheel)"
+                }
+                Button {
+                    text: "+"; width: 22; height: 18
+                    font.pixelSize: 12
+                    onClicked: root.zoomVertical(1.25, curveCanvas.height / 2)
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Zoom in value axis (Shift+wheel)"
+                }
+            }
+
             Repeater {
                 model: root.activeChannelsForSelected()
                 Row {
@@ -137,17 +220,15 @@ Rectangle {
         }
     }
 
-    // ── Curve canvas ─────────────────────────────────────────────────────────
     Canvas {
         id: curveCanvas
         anchors.left: parent.left
         anchors.top: header.visible ? header.bottom : parent.top
         anchors.right: parent.right
         anchors.bottom: parent.bottom
+        anchors.bottomMargin: 14   // matches hScrollBar.height
         visible: header.visible
 
-        // Cache per-channel values keyed by channel id. Refreshed whenever
-        // the controller emits boneRowsChanged.
         property var channelValues: ({})
 
         function refreshChannelValues(boneRow) {
@@ -171,9 +252,6 @@ Rectangle {
             )
         }
 
-        // Populate the cache up-front so the first paint shows real curves
-        // even when the view is opened after a selection is already active
-        // (no fresh boneRowsChanged signal will fire to seed it otherwise).
         Component.onCompleted: refreshChannelValues(root.selectedBoneRow())
 
         onPaint: {
@@ -183,7 +261,6 @@ Rectangle {
             var maxT = AnimationControlController.animationLength
             if (maxT <= 0) return
 
-            // Time-axis ruler at the bottom
             ctx.strokeStyle = AnimationControlController.borderColor
             ctx.fillStyle   = AnimationControlController.textColor
             ctx.font        = "10px sans-serif"; ctx.lineWidth = 1
@@ -194,7 +271,6 @@ Rectangle {
                 ctx.fillText(t.toFixed(2) + "s", x + 2, height - 14)
             }
 
-            // Horizontal value-axis grid lines (every 0.5 in value units)
             var midY = (height - 16) / 2
             ctx.strokeStyle = AnimationControlController.borderColor
             ctx.globalAlpha = 0.25
@@ -206,9 +282,6 @@ Rectangle {
             }
             ctx.globalAlpha = 1.0
 
-            // Per-channel curve. evaluate() reads real per-channel values
-            // pulled from the controller and cached in channelValues, so the
-            // curve reflects the underlying TransformKeyFrame data.
             var chans = root.activeChannelsForSelected()
             for (var c = 0; c < chans.length; c++) {
                 var ch = chans[c]
@@ -227,8 +300,6 @@ Rectangle {
                 }
                 ctx.stroke()
 
-                // Keyframe squares + tangent handle stubs (drawn only for
-                // visual reference in D3a — non-interactive).
                 ctx.fillStyle = ch.color
                 for (var k = 0; k < row.keyTimes.length; k++) {
                     var kt = row.keyTimes[k]
@@ -246,7 +317,6 @@ Rectangle {
                         var outT = tdata[1]
                         ctx.strokeStyle = ch.color; ctx.lineWidth = 1
                         ctx.globalAlpha = 0.6
-                        // Draw a short handle in each direction
                         var handlePx = 30
                         ctx.beginPath()
                         ctx.moveTo(kx - handlePx, ky + inT * handlePx * 0.5)
@@ -260,7 +330,6 @@ Rectangle {
         }
     }
 
-    // ── Interp-mode picker (right-click on keyframe square) ────────────────
     Menu {
         id: modeMenu
         property string boneName: ""
@@ -280,9 +349,6 @@ Rectangle {
         MenuItem { text: "Auto";     onTriggered: modeMenu.applyMode(CurveEditModel.ModeAuto) }
     }
 
-    // Look up a keyframe near (px, py) and return { bone, channel, time, x, y }
-    // or null if the click missed everything. Used by the right-click handler
-    // to decide whether to open the mode picker.
     function pickKeyframeAt(px, py) {
         var row = selectedBoneRow()
         if (!row) return null
@@ -297,63 +363,324 @@ Rectangle {
                 var ky = midY - (kv - yCenter) * yScale
                 if (Math.abs(px - kx) < 8 && Math.abs(py - ky) < 8) {
                     return { bone: row.bone, channel: ch.id,
-                             time: kt, x: kx, y: ky }
+                             time: kt, value: kv, x: kx, y: ky }
                 }
             }
         }
         return null
     }
 
-    // Wheel = zoom horizontally (Ctrl/Cmd) or vertically (Shift), pan with
-    // middle-drag. Right-click on a keyframe square opens the interp-mode
-    // picker. Matches the dope sheet's input vocabulary as closely as
-    // possible to keep mental load low when switching panels.
+    function pickTangentHandleAt(px, py) {
+        var row = selectedBoneRow()
+        if (!row) return null
+        var midY = (curveCanvas.height - 16) / 2
+        var chans = activeChannelsFor(row)
+        var handlePx = 30
+        for (var c = 0; c < chans.length; c++) {
+            var ch = chans[c]
+            for (var k = 0; k < row.keyTimes.length; k++) {
+                var kt = row.keyTimes[k]
+                var kv = curveCanvas.valueAtTimeForChannel(row, ch.id, kt)
+                var kx = (kt - viewStart) * pxPerSec
+                var ky = midY - (kv - yCenter) * yScale
+                var tdata = CurveEditModel.tangentsAt(
+                    AnimationControlController.selectedEntityName,
+                    AnimationControlController.selectedAnimation,
+                    row.bone, ch.id, kt)
+                if (!tdata || tdata.length < 2) continue
+                var inT  = tdata[0]
+                var outT = tdata[1]
+                var inHx  = kx - handlePx, inHy  = ky + inT * handlePx * 0.5
+                var outHx = kx + handlePx, outHy = ky - outT * handlePx * 0.5
+                if (Math.abs(px - inHx) < 6 && Math.abs(py - inHy) < 6) {
+                    return { bone: row.bone, channel: ch.id, time: kt,
+                             side: "in", inT: inT, outT: outT, kx: kx, ky: ky }
+                }
+                if (Math.abs(px - outHx) < 6 && Math.abs(py - outHy) < 6) {
+                    return { bone: row.bone, channel: ch.id, time: kt,
+                             side: "out", inT: inT, outT: outT, kx: kx, ky: ky }
+                }
+            }
+        }
+        return null
+    }
+
     MouseArea {
         id: panArea
         anchors.fill: parent
-        acceptedButtons: Qt.MiddleButton | Qt.RightButton
+        acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
         property real panStartX: 0
         property real panStartView: 0
+
+        // dragMode: "" / "keyframe" / "tangent"
+        property string dragMode: ""
+        property string dragBone: ""
+        property string dragChannel: ""
+        property real   dragKeyTime: 0
+        property real   dragOriginalKeyTime: 0
+        property real   dragOriginalValue: 0
+        property real   dragLastValue: 0
+        property real   dragPressX: 0
+        property real   dragPressY: 0
+        property string dragTangentSide: ""
+        property real   dragTangentKx: 0
+        property real   dragTangentKy: 0
+        property real   dragInT: 0
+        property real   dragOutT: 0
+
         onPressed: function(mouse) {
             if (mouse.button === Qt.MiddleButton) {
                 panStartX = mouse.x; panStartView = root.viewStart
                 mouse.accepted = true
             } else if (mouse.button === Qt.RightButton) {
-                var hit = root.pickKeyframeAt(
+                var rhit = root.pickKeyframeAt(
                     mouse.x - curveCanvas.x, mouse.y - curveCanvas.y)
-                if (hit) {
-                    modeMenu.boneName  = hit.bone
-                    modeMenu.channelId = hit.channel
-                    modeMenu.keyTime   = hit.time
+                if (rhit) {
+                    modeMenu.boneName  = rhit.bone
+                    modeMenu.channelId = rhit.channel
+                    modeMenu.keyTime   = rhit.time
                     modeMenu.popup()
                     mouse.accepted = true
                 } else {
                     mouse.accepted = false
                 }
+            } else if (mouse.button === Qt.LeftButton) {
+                // Try tangent handle (smaller target) first, then keyframe square.
+                var canvasX = mouse.x - curveCanvas.x
+                var canvasY = mouse.y - curveCanvas.y
+                var thit = root.pickTangentHandleAt(canvasX, canvasY)
+                if (thit) {
+                    panArea.dragMode = "tangent"
+                    panArea.dragBone = thit.bone
+                    panArea.dragChannel = thit.channel
+                    panArea.dragKeyTime = thit.time
+                    panArea.dragTangentSide = thit.side
+                    panArea.dragTangentKx = thit.kx
+                    panArea.dragTangentKy = thit.ky
+                    panArea.dragInT = thit.inT
+                    panArea.dragOutT = thit.outT
+                    mouse.accepted = true
+                    return
+                }
+                var khit = root.pickKeyframeAt(canvasX, canvasY)
+                if (khit) {
+                    panArea.dragMode = "keyframe"
+                    panArea.dragBone = khit.bone
+                    panArea.dragChannel = khit.channel
+                    panArea.dragKeyTime = khit.time
+                    panArea.dragOriginalKeyTime = khit.time
+                    panArea.dragOriginalValue = khit.value
+                    panArea.dragPressX = canvasX
+                    panArea.dragPressY = canvasY
+                    mouse.accepted = true
+                    return
+                }
+                mouse.accepted = false
             } else mouse.accepted = false
         }
         onPositionChanged: function(mouse) {
-            // mouse.button on a move event is the event trigger, not the
-            // held buttons — check the bitmask in mouse.buttons instead.
-            // Otherwise middle-drag pan never fires after the initial press.
-            if (!pressed || !(mouse.buttons & Qt.MiddleButton)) return
-            var dx = mouse.x - panStartX
-            root.viewStart = panStartView - dx / root.pxPerSec
-            if (root.viewStart < 0) root.viewStart = 0
-            curveCanvas.requestPaint()
+            if (!pressed) return
+
+            if (mouse.buttons & Qt.MiddleButton) {
+                var dx = mouse.x - panStartX
+                root.viewStart = panStartView - dx / root.pxPerSec
+                if (root.viewStart < 0) root.viewStart = 0
+                curveCanvas.requestPaint()
+                return
+            }
+
+            if (!(mouse.buttons & Qt.LeftButton) || panArea.dragMode === "") return
+            var canvasX = mouse.x - curveCanvas.x
+            var canvasY = mouse.y - curveCanvas.y
+
+            if (panArea.dragMode === "keyframe") {
+                // Shift locks to the dominant axis since press.
+                var midY = (curveCanvas.height - 16) / 2
+                var newValue = root.yCenter - (canvasY - midY) / root.yScale
+                var newTime  = root.viewStart + canvasX / root.pxPerSec
+                if (newTime < 0) newTime = 0
+
+                var dxAxis = Math.abs(canvasX - panArea.dragPressX)
+                var dyAxis = Math.abs(canvasY - panArea.dragPressY)
+                var shift = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                var lockX = shift && dyAxis > dxAxis
+                var lockY = shift && dxAxis > dyAxis
+
+                // Preview API skips the undo stack — pushing a command
+                // per move fires MainWindow's indexChanged handler,
+                // which calls Skeleton::reset(true) and snaps the bone
+                // to T-pose between events. Commit on release.
+                panArea.dragLastValue = newValue
+                if (!lockX) {
+                    AnimationControlController.setKeyframeValuePreview(
+                        panArea.dragBone, panArea.dragChannel,
+                        panArea.dragKeyTime, newValue)
+                }
+                if (!lockY) {
+                    var ok = AnimationControlController.moveKeyframePreview(
+                        panArea.dragBone, panArea.dragKeyTime, newTime)
+                    if (ok) panArea.dragKeyTime = newTime
+                }
+                // boneRowsChanged is suppressed by the preview API; refresh inline.
+                root.rows = AnimationControlController.allBoneRows()
+                curveCanvas.refreshChannelValues(root.selectedBoneRow())
+                curveCanvas.requestPaint()
+            } else if (panArea.dragMode === "tangent") {
+                // Mirrors the encoding in onPaint.
+                var handlePx = 30
+                if (panArea.dragTangentSide === "in") {
+                    var newInT = (canvasY - panArea.dragTangentKy) / (handlePx * 0.5)
+                    panArea.dragInT = newInT
+                    CurveEditModel.setTangents(
+                        AnimationControlController.selectedEntityName,
+                        AnimationControlController.selectedAnimation,
+                        panArea.dragBone, panArea.dragChannel,
+                        panArea.dragKeyTime, newInT, panArea.dragOutT)
+                } else {
+                    var newOutT = -(canvasY - panArea.dragTangentKy) / (handlePx * 0.5)
+                    panArea.dragOutT = newOutT
+                    CurveEditModel.setTangents(
+                        AnimationControlController.selectedEntityName,
+                        AnimationControlController.selectedAnimation,
+                        panArea.dragBone, panArea.dragChannel,
+                        panArea.dragKeyTime, panArea.dragInT, newOutT)
+                }
+                curveCanvas.requestPaint()
+            }
+        }
+        onReleased: function(mouse) {
+            if (panArea.dragMode === "keyframe") {
+                var valueChanged = panArea.dragLastValue !== panArea.dragOriginalValue
+                var timeChanged  = panArea.dragKeyTime    !== panArea.dragOriginalKeyTime
+
+                // Restore originals before pushing the real commands so
+                // their redo() captures the correct old-state snapshot.
+                if (timeChanged) {
+                    AnimationControlController.moveKeyframePreview(
+                        panArea.dragBone,
+                        panArea.dragKeyTime, panArea.dragOriginalKeyTime)
+                    AnimationControlController.moveKeyframe(
+                        panArea.dragBone,
+                        panArea.dragOriginalKeyTime, panArea.dragKeyTime)
+                }
+                if (valueChanged) {
+                    AnimationControlController.setKeyframeValuePreview(
+                        panArea.dragBone, panArea.dragChannel,
+                        panArea.dragKeyTime, panArea.dragOriginalValue)
+                    AnimationControlController.setKeyframeValue(
+                        panArea.dragBone, panArea.dragChannel,
+                        panArea.dragKeyTime, panArea.dragLastValue)
+                }
+            }
+            panArea.dragMode = ""
+        }
+
+        // Pointer handlers must be children of the MouseArea — at root
+        // level the MouseArea blocks them.
+
+        // Plain wheel / two-finger scroll = pan; horizontal swipe pans
+        // time, vertical pans value. pixelDelta is preferred when set
+        // so trackpad pan tracks finger motion 1:1.
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            acceptedModifiers: Qt.NoModifier
+            onWheel: function(event) {
+                var pxX = event.pixelDelta.x !== 0 ? event.pixelDelta.x
+                                                   : event.angleDelta.x / 8
+                var pxY = event.pixelDelta.y !== 0 ? event.pixelDelta.y
+                                                   : event.angleDelta.y / 8
+
+                if (Math.abs(pxX) > Math.abs(pxY)) {
+                    root.viewStart -= pxX / root.pxPerSec
+                    root.clampViewStart()
+                } else {
+                    root.yCenter += pxY / root.yScale
+                }
+                curveCanvas.requestPaint()
+            }
+        }
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            acceptedModifiers: Qt.ControlModifier | Qt.MetaModifier
+            onWheel: function(event) {
+                var dy = event.pixelDelta.y !== 0 ? event.pixelDelta.y
+                                                  : event.angleDelta.y
+                var factor = dy > 0 ? 1.15 : (1.0 / 1.15)
+                root.zoomHorizontal(factor, event.point.position.x)
+            }
+        }
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            acceptedModifiers: Qt.ShiftModifier
+            onWheel: function(event) {
+                var dy = event.pixelDelta.y !== 0 ? event.pixelDelta.y
+                                                  : event.angleDelta.y
+                var factor = dy > 0 ? 1.15 : (1.0 / 1.15)
+                root.zoomVertical(factor, event.point.position.y)
+            }
         }
     }
-    WheelHandler {
-        target: null
-        acceptedModifiers: Qt.ControlModifier | Qt.MetaModifier
-        onWheel: function(event) {
-            var factor = event.angleDelta.y > 0 ? 1.15 : (1.0 / 1.15)
-            var newPx = Math.max(20, Math.min(2000, root.pxPerSec * factor))
-            if (newPx === root.pxPerSec) return
-            var tCursor = root.viewStart + event.point.position.x / root.pxPerSec
-            root.pxPerSec = newPx
-            root.viewStart = tCursor - event.point.position.x / newPx
-            if (root.viewStart < 0) root.viewStart = 0
+
+    // Drives root.viewStart while the user drags the thumb. Visible
+    // only when the timeline overflows the canvas width.
+    ScrollBar {
+        id: hScrollBar
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: 14
+        active: true
+        orientation: Qt.Horizontal
+        policy: ScrollBar.AlwaysOn
+        visible: header.visible
+                 && AnimationControlController.animationLength > 0
+                 && (AnimationControlController.animationLength * root.pxPerSec)
+                    > curveCanvas.width
+
+        readonly property real scrollableSecs: {
+            var maxT = AnimationControlController.animationLength
+            if (maxT <= 0 || curveCanvas.width <= 0) return 0
+            var visibleSecs = curveCanvas.width / root.pxPerSec
+            return Math.max(0, maxT - visibleSecs)
+        }
+
+        // Both directions of the position↔viewStart sync are imperative;
+        // the `syncing` guard prevents a bounce.
+        size: {
+            var maxT = AnimationControlController.animationLength
+            if (maxT <= 0 || curveCanvas.width <= 0) return 1
+            var visibleSecs = curveCanvas.width / root.pxPerSec
+            return Math.min(1, visibleSecs / maxT)
+        }
+
+        property bool syncing: false
+        function syncFromViewStart() {
+            var maxT = AnimationControlController.animationLength
+            if (maxT <= 0) return
+            syncing = true
+            position = Math.max(0, Math.min(1 - size, root.viewStart / maxT))
+            syncing = false
+        }
+
+        Component.onCompleted: syncFromViewStart()
+        Connections {
+            target: root
+            function onViewStartChanged() {
+                if (hScrollBar.pressed) return
+                hScrollBar.syncFromViewStart()
+            }
+        }
+
+        Connections {
+            target: AnimationControlController
+            function onAnimationLengthChanged() { hScrollBar.syncFromViewStart() }
+        }
+
+        onPositionChanged: {
+            if (syncing) return
+            var maxT = AnimationControlController.animationLength
+            if (maxT <= 0) return
+            root.viewStart = position * maxT
             curveCanvas.requestPaint()
         }
     }

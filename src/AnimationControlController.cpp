@@ -941,6 +941,55 @@ bool AnimationControlController::moveKeyframe(const QString& boneName,
     return true;
 }
 
+bool AnimationControlController::moveKeyframePreview(const QString& boneName,
+                                                      double oldTime, double newTime)
+{
+    if (boneName.isEmpty()) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (qFuzzyCompare(oldTime + 1.0, newTime + 1.0)) return false;
+
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    const std::string boneStd = boneName.toStdString();
+    if (!m_selectedSkeleton->hasBone(boneStd)) return false;
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneStd);
+    if (!bone || !anim->hasNodeTrack(bone->getHandle())) return false;
+    Ogre::NodeAnimationTrack* track = anim->getNodeTrack(bone->getHandle());
+
+    constexpr float kEpsilon = 0.001f;
+    int sourceIdx = -1;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - static_cast<float>(oldTime)) <= kEpsilon) {
+            sourceIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    if (sourceIdx < 0) return false;
+
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (static_cast<int>(i) == sourceIdx) continue;
+        if (std::fabs(track->getKeyFrame(i)->getTime() - static_cast<float>(newTime)) <= kEpsilon) {
+            return false;
+        }
+    }
+
+    auto* oldKf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(sourceIdx));
+    const Ogre::Vector3    t = oldKf->getTranslate();
+    const Ogre::Quaternion r = oldKf->getRotation();
+    const Ogre::Vector3    s = oldKf->getScale();
+    track->removeKeyFrame(static_cast<unsigned short>(sourceIdx));
+    auto* newKf = track->createNodeKeyFrame(static_cast<float>(newTime));
+    newKf->setTranslate(t);
+    newKf->setRotation(r);
+    newKf->setScale(s);
+    track->_keyFrameDataChanged();
+
+    // Skip refreshSliderTicks + boneRowsChanged: the release-time
+    // MoveKeyframeCommand re-emits both.
+    notifyOgreUpdate();
+    return true;
+}
+
 // ── Bulk keyframe ops (slice D1) ──────────────────────────────────────────────
 
 namespace {
@@ -1268,6 +1317,23 @@ bool isKnownChannel(const QString& ch) {
     return kKnown.contains(ch.toLower());
 }
 
+// Symmetric writer to readChannel — writes the requested scalar onto
+// the keyframe's TRS without touching the other 9 components.
+void writeChannel(Ogre::TransformKeyFrame* kf, const QString& ch, double v) {
+    const QString c = ch.toLower();
+    const float fv = static_cast<float>(v);
+    if (c == "tx") { auto t = kf->getTranslate(); t.x = fv; kf->setTranslate(t); return; }
+    if (c == "ty") { auto t = kf->getTranslate(); t.y = fv; kf->setTranslate(t); return; }
+    if (c == "tz") { auto t = kf->getTranslate(); t.z = fv; kf->setTranslate(t); return; }
+    if (c == "rw") { auto r = kf->getRotation();  r.w = fv; kf->setRotation(r);  return; }
+    if (c == "rx") { auto r = kf->getRotation();  r.x = fv; kf->setRotation(r);  return; }
+    if (c == "ry") { auto r = kf->getRotation();  r.y = fv; kf->setRotation(r);  return; }
+    if (c == "rz") { auto r = kf->getRotation();  r.z = fv; kf->setRotation(r);  return; }
+    if (c == "sx") { auto s = kf->getScale();     s.x = fv; kf->setScale(s);     return; }
+    if (c == "sy") { auto s = kf->getScale();     s.y = fv; kf->setScale(s);     return; }
+    if (c == "sz") { auto s = kf->getScale();     s.z = fv; kf->setScale(s);     return; }
+}
+
 } // namespace
 
 QVariantList AnimationControlController::channelValuesAt(
@@ -1326,5 +1392,30 @@ bool AnimationControlController::setKeyframeValue(const QString& boneName,
     UndoManager::getSingleton()->push(cmd);
     refreshSliderTicks();
     emit boneRowsChanged();
+    return true;
+}
+
+bool AnimationControlController::setKeyframeValuePreview(const QString& boneName,
+                                                          const QString& channel,
+                                                          double time, double value)
+{
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (!m_selectedSkeleton->hasBone(boneName.toStdString())) return false;
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneName.toStdString());
+    if (!anim->hasNodeTrack(bone->getHandle())) return false;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    Ogre::TransformKeyFrame* target = nullptr;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - static_cast<float>(time)) <= 0.001f) {
+            target = kf; break;
+        }
+    }
+    if (!target) return false;
+    writeChannel(target, channel, value);
+    notifyOgreUpdate();
     return true;
 }
