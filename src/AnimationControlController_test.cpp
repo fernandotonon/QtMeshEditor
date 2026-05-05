@@ -977,6 +977,179 @@ TEST_F(AnimationControlControllerTest, MoveKeyframeRejectsCollision) {
     EXPECT_TRUE(stillThere);
 }
 
+// ── Preview API (curve editor live-drag) ──────────────────────────────────────
+
+TEST_F(AnimationControlControllerTest, MoveKeyframePreviewRetimesWithoutUndoPush) {
+    // The curve editor calls this on every mouseMove during a keyframe
+    // drag — it must NOT push onto the undo stack (otherwise MainWindow's
+    // indexChanged handler resets the skeleton and the bone blinks to
+    // T-pose between events).
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MovePreview");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    const int undoBefore = UndoManager::getSingleton()->stack()->count();
+
+    EXPECT_TRUE(ctrl->moveKeyframePreview(bone, 0.5, 0.7));
+
+    EXPECT_EQ(UndoManager::getSingleton()->stack()->count(), undoBefore)
+        << "moveKeyframePreview must not push undo commands";
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    bool foundMoved = false, foundOriginal = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const float t = track->getKeyFrame(i)->getTime();
+        if (std::fabs(t - 0.5f) < 0.001f) foundOriginal = true;
+        if (std::fabs(t - 0.7f) < 0.001f) foundMoved = true;
+    }
+    EXPECT_FALSE(foundOriginal);
+    EXPECT_TRUE(foundMoved);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframePreviewPreservesTRS) {
+    // The retime must preserve the keyframe's translate/rotate/scale.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MovePreservesTRS");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    Ogre::TransformKeyFrame* before = nullptr;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - 0.5f) < 0.001f) { before = kf; break; }
+    }
+    ASSERT_NE(before, nullptr);
+    const Ogre::Vector3 t = before->getTranslate();
+    const Ogre::Quaternion r = before->getRotation();
+    const Ogre::Vector3 s = before->getScale();
+
+    EXPECT_TRUE(ctrl->moveKeyframePreview(bone, 0.5, 0.65));
+
+    Ogre::TransformKeyFrame* after = nullptr;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - 0.65f) < 0.001f) { after = kf; break; }
+    }
+    ASSERT_NE(after, nullptr);
+    EXPECT_NEAR(after->getTranslate().x, t.x, 1e-4);
+    EXPECT_NEAR(after->getTranslate().y, t.y, 1e-4);
+    EXPECT_NEAR(after->getTranslate().z, t.z, 1e-4);
+    EXPECT_NEAR(after->getRotation().w, r.w, 1e-4);
+    EXPECT_NEAR(after->getScale().x,    s.x, 1e-4);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframePreviewRejectsCollision) {
+    // Same collision rules as moveKeyframe so the preview can't silently
+    // overwrite an adjacent keyframe mid-drag.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MovePreviewCollision");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    EXPECT_FALSE(ctrl->moveKeyframePreview(bone, 0.5, 1.0));
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    bool stillThere = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - 0.5f) < 0.001f) {
+            stillThere = true; break;
+        }
+    }
+    EXPECT_TRUE(stillThere);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframePreviewRejectsMissingTime) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MovePreviewMissing");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    EXPECT_FALSE(ctrl->moveKeyframePreview(bone, 0.42, 0.6));
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframePreviewNoOpOnIdenticalTime) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MovePreviewSame");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    EXPECT_FALSE(ctrl->moveKeyframePreview(bone, 0.5, 0.5));
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, MoveKeyframePreviewNoOpWithoutSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->moveKeyframePreview("Bone", 0.5, 0.6));
+}
+
+TEST_F(AnimationControlControllerTest, SetKeyframeValuePreviewWritesWithoutUndoPush) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_ValuePreview");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    const int undoBefore = UndoManager::getSingleton()->stack()->count();
+    EXPECT_TRUE(ctrl->setKeyframeValuePreview(bone, "tx", 0.5, 9.25));
+    EXPECT_EQ(UndoManager::getSingleton()->stack()->count(), undoBefore);
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - 0.5f) < 0.001f) {
+            EXPECT_NEAR(kf->getTranslate().x, 9.25f, 1e-4);
+            return;
+        }
+    }
+    FAIL() << "Keyframe at t=0.5 not found";
+}
+
+TEST_F(AnimationControlControllerTest, SetKeyframeValuePreviewRejectsUnknownChannel) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_ValuePreviewUnknown");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    EXPECT_FALSE(ctrl->setKeyframeValuePreview(bone, "qq", 0.5, 1.0));
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, SetKeyframeValuePreviewNoOpWithoutSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->setKeyframeValuePreview("Bone", "tx", 0.5, 1.0));
+}
+
 // ── Bulk keyframe ops (slice D1) ──────────────────────────────────────────────
 
 TEST_F(AnimationControlControllerPlaybackTest, MoveKeyframesEmptySelectionReturnsFalse) {
