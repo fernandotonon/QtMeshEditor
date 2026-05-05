@@ -81,6 +81,7 @@ ResampleCurveCommand::ResampleCurveCommand(std::string entityName,
                                              std::string channel,
                                              float t0, float t1,
                                              double toleranceMul,
+                                             int fixedFps,
                                              QUndoCommand* parent)
     : QUndoCommand(parent)
     , mEntityName(std::move(entityName))
@@ -90,6 +91,7 @@ ResampleCurveCommand::ResampleCurveCommand(std::string entityName,
     , mT0(t0)
     , mT1(t1)
     , mToleranceMul(toleranceMul)
+    , mFixedFps(fixedFps)
 {
     setText(QObject::tr("Resample curve"));
 }
@@ -182,7 +184,7 @@ bool ResampleCurveCommand::resampleAndWrite()
         QString::fromStdString(mBoneName),
         QString::fromStdString(mChannel),
         mT0, mT1, kfTimes, kfValues,
-        mToleranceMul);
+        mToleranceMul, mFixedFps);
     if (samples.empty()) return false;
 
     // Drop the closing endpoint sample if it lands on t1 — that anchor

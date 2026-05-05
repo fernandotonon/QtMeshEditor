@@ -580,6 +580,11 @@ void AnimationControlController::onUndoRedoCommandApplied()
 
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);
+    // The dope sheet + curve editor read keyTimes from allBoneRows(),
+    // which they refresh on boneRowsChanged. Without this emit, undo
+    // of a Bake leaves the QML views showing stale dense keyframes
+    // even though the underlying track has been reverted.
+    emit boneRowsChanged();
 }
 
 // ── Keyframe editing ──────────────────────────────────────────────────────────
@@ -1455,7 +1460,8 @@ bool neighborAnchors(double keyTime,
 bool AnimationControlController::resampleCurveSegment(const QString& boneName,
                                                       const QString& channel,
                                                       double t0, double t1,
-                                                      double toleranceMul)
+                                                      double toleranceMul,
+                                                      int fixedFps)
 {
     if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
     if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
@@ -1485,7 +1491,8 @@ bool AnimationControlController::resampleCurveSegment(const QString& boneName,
                                           channel.toLower().toStdString(),
                                           static_cast<float>(t0),
                                           static_cast<float>(t1),
-                                          toleranceMul);
+                                          toleranceMul,
+                                          fixedFps);
     UndoManager::getSingleton()->push(cmd);
     SentryReporter::addBreadcrumb("ui.action", "Resampled curve segment");
     refreshSliderTicks();
@@ -1544,16 +1551,17 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     auto* track = anim->getNodeTrack(bone->getHandle());
     if (track->getNumKeyFrames() < 2) return 0;
 
-    // Map density level → simplification tolerance multiplier. Higher
-    // tolerance = sparser bake. Sparse is the default first-click pass
-    // because most curves authored in the editor only need a handful
-    // of keys to capture the shape; users escalate to Medium/Dense
-    // when they need exact playback fidelity for sharp shapes.
-    double toleranceMul;
+    // Map density level → (toleranceMul, fixedFps). Adaptive modes
+    // (0/1/2) feed the Douglas-Peucker simplifier; fixed-FPS modes
+    // (3/4) bypass simplification and emit one key per 1/fps interval.
+    double toleranceMul = 1.0;
+    int    fixedFps     = 0;
     switch (density) {
-        case 2:  toleranceMul = 1.0;  break;  // Dense
-        case 1:  toleranceMul = 4.0;  break;  // Medium
-        default: toleranceMul = 12.0; break;  // Sparse
+        case 4:  fixedFps = 60; break;          // 60 FPS fixed
+        case 3:  fixedFps = 30; break;          // 30 FPS fixed
+        case 2:  toleranceMul = 1.0;  break;    // Dense
+        case 1:  toleranceMul = 4.0;  break;    // Medium
+        default: toleranceMul = 12.0; break;    // Sparse
     }
 
     std::vector<double> anchors;
@@ -1567,7 +1575,8 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     int count = 0;
     for (size_t i = 1; i < anchors.size(); ++i) {
         if (resampleCurveSegment(boneName, channel,
-                                  anchors[i-1], anchors[i], toleranceMul)) {
+                                  anchors[i-1], anchors[i],
+                                  toleranceMul, fixedFps)) {
             ++count;
         }
     }

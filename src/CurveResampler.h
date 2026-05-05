@@ -48,6 +48,12 @@ constexpr double kSimplifyFloor = 1e-3;
 /// `toleranceMul` scales the simplification tolerance: higher = fewer
 /// kept samples (sparser bake), lower = more (denser bake). Default
 /// 1.0 matches the original kSimplifyRel.
+///
+/// `fixedFps` overrides adaptive sampling entirely: when > 0, the
+/// resampler emits one sample per 1/fps interval and skips
+/// Douglas-Peucker simplification. Use 30 / 60 for predictable
+/// keyframe density. The kMaxSamples cap still applies so a very
+/// long segment doesn't explode the track size.
 std::vector<Sample> resampleSegment(const CurveEditModel* model,
                                     const QString& skeleton,
                                     const QString& anim,
@@ -56,7 +62,8 @@ std::vector<Sample> resampleSegment(const CurveEditModel* model,
                                     double t0, double t1,
                                     const QVariantList& kfTimes,
                                     const QVariantList& kfValues,
-                                    double toleranceMul = 1.0);
+                                    double toleranceMul = 1.0,
+                                    int fixedFps = 0);
 
 } // namespace CurveResampler
 

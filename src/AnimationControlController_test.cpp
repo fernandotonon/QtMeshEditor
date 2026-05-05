@@ -1212,6 +1212,50 @@ TEST_F(AnimationControlControllerTest, ResampleAllSegmentsForBoneIsExplicit) {
         << "Bake should densify the track";
 }
 
+TEST_F(AnimationControlControllerTest, BakeUndoEmitsBoneRowsChanged) {
+    // Ctrl+Z after a Bake must fire boneRowsChanged so the QML
+    // dope-sheet + curve-editor refresh their cached keyTimes —
+    // otherwise the views show stale dense keyframes even though
+    // the underlying track has been reverted ("intermediate state"
+    // bug user reported).
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_BakeUndoSignal");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    QSignalSpy spy(ctrl, &AnimationControlController::boneRowsChanged);
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 2);
+    spy.clear();
+
+    ctrl->onUndoRedoCommandApplied();
+    EXPECT_GE(spy.count(), 1) << "undo path must emit boneRowsChanged";
+}
+
+TEST_F(AnimationControlControllerTest, BakeFixedFpsProducesUniformDensity) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_BakeFps");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int baseCount = track->getNumKeyFrames();
+
+    // 30 FPS × 1s clip = ~30 keys minus the anchor at t1. Plus the
+    // original anchors. Just verify the count grew significantly.
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 3);
+    EXPECT_GT(track->getNumKeyFrames(), baseCount + 10)
+        << "30 FPS bake should produce predictable dense keys";
+}
+
 TEST_F(AnimationControlControllerTest, BakeDensityLevelsProduceDifferentCounts) {
     // Sparse < Medium < Dense in resulting keyframe counts (for a
     // curve sharp enough that simplification doesn't collapse the

@@ -137,6 +137,33 @@ TEST_F(CurveResamplerTest, SamplesAreMonotonicInTime) {
     }
 }
 
+TEST_F(CurveResamplerTest, FixedFpsProducesUniformSamples) {
+    // Fixed-FPS mode bypasses adaptive sampling + simplification:
+    // exactly fps samples per second, regardless of curve shape.
+    auto* m = CurveEditModel::instance();
+    auto out = CurveResampler::resampleSegment(m, "s", "a", "b", "tx",
+                                               0.0, 1.0,
+                                               toVariants({0.0, 1.0}),
+                                               toVariants({0.0, 1.0}),
+                                               1.0, 30);
+    EXPECT_EQ(out.size(), 30u);
+    // Times are uniformly spaced by 1/30s.
+    for (size_t i = 1; i < out.size(); ++i) {
+        EXPECT_NEAR(out[i].time - out[i-1].time, 1.0 / 30.0, 1e-6);
+    }
+}
+
+TEST_F(CurveResamplerTest, FixedFpsRespectsMaxSamplesCap) {
+    auto* m = CurveEditModel::instance();
+    auto out = CurveResampler::resampleSegment(m, "s", "a", "b", "tx",
+                                               0.0, 100.0,
+                                               toVariants({0.0, 100.0}),
+                                               toVariants({0.0, 1.0}),
+                                               1.0, 60);
+    // 60 fps × 100s = 6000 raw samples, capped at kMaxSamples (200).
+    EXPECT_LE(out.size(), static_cast<size_t>(CurveResampler::kMaxSamples));
+}
+
 TEST_F(CurveResamplerTest, BezierWithStrongTangentsRetainsSamples) {
     // Aggressive tangents create curvature peaks the simplifier
     // can't collapse; output must keep multiple interior samples.

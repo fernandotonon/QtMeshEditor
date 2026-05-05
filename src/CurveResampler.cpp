@@ -97,17 +97,35 @@ std::vector<Sample> resampleSegment(const CurveEditModel* model,
                                     double t0, double t1,
                                     const QVariantList& kfTimes,
                                     const QVariantList& kfValues,
-                                    double toleranceMul)
+                                    double toleranceMul,
+                                    int fixedFps)
 {
     std::vector<Sample> out;
     if (!model || t1 <= t0) return out;
     if (kfTimes.size() != kfValues.size() || kfTimes.isEmpty()) return out;
 
+    const double duration = t1 - t0;
+
+    // Fixed-FPS mode: skip both adaptive Hz and simplification. The
+    // user explicitly asked for predictable keyframe density.
+    if (fixedFps > 0) {
+        int sampleCount = static_cast<int>(std::ceil(duration * fixedFps));
+        if (sampleCount > kMaxSamples) sampleCount = kMaxSamples;
+        if (sampleCount < 1) sampleCount = 1;
+        const double step = duration / sampleCount;
+        out.reserve(static_cast<size_t>(sampleCount));
+        for (int i = 1; i <= sampleCount; ++i) {
+            const double t = t0 + i * step;
+            out.push_back({t, model->evaluate(skeleton, anim, bone, channel,
+                                               t, kfTimes, kfValues)});
+        }
+        return out;
+    }
+
     const double curvature = peakCurvature(model, skeleton, anim, bone, channel,
                                            t0, t1, kfTimes, kfValues, 16);
     int hz = (curvature > kCurvatureEps) ? kBoostHz : kBaseHz;
 
-    const double duration = t1 - t0;
     int sampleCount = static_cast<int>(std::ceil(duration * hz));
     if (sampleCount > kMaxSamples) {
         sampleCount = kMaxSamples;

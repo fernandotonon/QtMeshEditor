@@ -234,6 +234,9 @@ Rectangle {
                 MenuItem { text: "Sparse"; onTriggered: bakeMenu.bake(0) }
                 MenuItem { text: "Medium"; onTriggered: bakeMenu.bake(1) }
                 MenuItem { text: "Dense";  onTriggered: bakeMenu.bake(2) }
+                MenuSeparator {}
+                MenuItem { text: "30 FPS"; onTriggered: bakeMenu.bake(3) }
+                MenuItem { text: "60 FPS"; onTriggered: bakeMenu.bake(4) }
             }
 
             Repeater {

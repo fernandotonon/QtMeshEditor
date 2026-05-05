@@ -263,7 +263,8 @@ public:
     Q_INVOKABLE bool resampleCurveSegment(const QString& boneName,
                                           const QString& channel,
                                           double t0, double t1,
-                                          double toleranceMul = 1.0);
+                                          double toleranceMul = 1.0,
+                                          int fixedFps = 0);
 
     /// Set the curve handle (in/out tangent + interp mode) for one
     /// keyframe via an undoable command, then sync Ogre's per-animation
@@ -281,9 +282,12 @@ public:
     /// Walk every adjacent-keyframe pair on `bone`'s `channel` track
     /// and resample each segment. Bundled into one undo macro so
     /// Ctrl+Z reverts the whole bake. Returns the number of segments
-    /// resampled. `density` is 0=Sparse / 1=Medium / 2=Dense — picks
-    /// the simplification tolerance multiplier so the user can pick
-    /// keyframe density vs. fidelity per bake.
+    /// resampled. `density` picks the bake mode:
+    ///   0 = Sparse (12× tolerance, fewest keys)
+    ///   1 = Medium (4× tolerance)
+    ///   2 = Dense  (1× tolerance, full adaptive sampling)
+    ///   3 = 30 FPS fixed-rate (one key per 1/30s, no simplification)
+    ///   4 = 60 FPS fixed-rate (one key per 1/60s)
     Q_INVOKABLE int resampleAllSegmentsForBone(const QString& boneName,
                                                const QString& channel,
                                                int density = 0);

@@ -31,6 +31,7 @@ public:
                          std::string channel,
                          float t0, float t1,
                          double toleranceMul = 1.0,
+                         int fixedFps = 0,
                          QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -55,6 +56,7 @@ private:
     float       mT0;
     float       mT1;
     double      mToleranceMul;
+    int         mFixedFps;
     std::vector<KeyframeSnapshot> mBefore;
     std::vector<KeyframeSnapshot> mAfter;
     bool        mCaptured = false;
