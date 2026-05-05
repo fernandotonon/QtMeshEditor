@@ -11,6 +11,8 @@ The MIT License
 
 #include <QFile>
 
+#include <OgrePixelFormat.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <vector>
@@ -27,6 +29,20 @@ inline uint32_t readU32le(const uint8_t* p)
     return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
 }
 
+inline void writeU16le(uint8_t* p, uint16_t v)
+{
+    p[0] = uint8_t(v & 0xFF);
+    p[1] = uint8_t((v >> 8) & 0xFF);
+}
+
+inline void writeU32le(uint8_t* p, uint32_t v)
+{
+    p[0] = uint8_t(v & 0xFF);
+    p[1] = uint8_t((v >> 8) & 0xFF);
+    p[2] = uint8_t((v >> 16) & 0xFF);
+    p[3] = uint8_t((v >> 24) & 0xFF);
+}
+
 static void psxBgr555ToRgba(uint16_t c, uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a)
 {
     // Bits: 0..4 R, 5..9 G, 10..14 B, 15 STP (semi-transparency flag in GPU)
@@ -38,6 +54,15 @@ static void psxBgr555ToRgba(uint16_t c, uint8_t& r, uint8_t& g, uint8_t& b, uint
     b = uint8_t((bb * 255 + 15) / 31);
     // Convention: 0 is transparent in many TIMs; otherwise opaque.
     a = (c == 0) ? 0 : 255;
+}
+
+static uint16_t rgbaToPsxBgr555(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    const uint16_t r5 = uint16_t(r >> 3);
+    const uint16_t g5 = uint16_t(g >> 3);
+    const uint16_t b5 = uint16_t(b >> 3);
+    const uint16_t stp = (a < 128) ? 1u : 0u;
+    return uint16_t((stp << 15) | (b5 << 10) | (g5 << 5) | (r5 << 0));
 }
 
 struct TimImageHeader {
@@ -274,6 +299,98 @@ bool loadTimToOgreImage(const QString& timPath, Ogre::Image& outImage, QString* 
     auto* heap = OGRE_ALLOC_T(uint8_t, canvas.size(), Ogre::MEMCATEGORY_GENERAL);
     std::copy(canvas.begin(), canvas.end(), heap);
     outImage.loadDynamicImage(heap, (size_t)kPageW, (size_t)kPageH, 1, Ogre::PF_BYTE_RGBA, true);
+    return true;
+}
+
+bool saveOgreImageToTim16(const Ogre::Image& image, const QString& timPath, QString* outError)
+{
+    // Convert to RGBA8 if needed (Ogre 14 Image has no convert()).
+    Ogre::Image img = image;
+    std::vector<uint8_t> converted;
+    if (img.getFormat() != Ogre::PF_BYTE_RGBA) {
+        try {
+            const size_t w = img.getWidth();
+            const size_t h = img.getHeight();
+            const Ogre::PixelBox srcBox = img.getPixelBox();
+            converted.resize(w * h * 4u);
+            Ogre::PixelBox dstBox(w, h, 1, Ogre::PF_BYTE_RGBA, converted.data());
+            Ogre::PixelUtil::bulkPixelConversion(srcBox, dstBox);
+            // Wrap as a temporary image view (no ownership).
+            img.loadDynamicImage(converted.data(), w, h, 1, Ogre::PF_BYTE_RGBA, false);
+        } catch (...) {
+            if (outError) *outError = "Failed to convert image to RGBA8";
+            return false;
+        }
+    }
+
+    constexpr int kPageW = 256;
+    constexpr int kPageH = 256;
+
+    const int w = int(img.getWidth());
+    const int h = int(img.getHeight());
+    if (w <= 0 || h <= 0) {
+        if (outError) *outError = "Invalid image dimensions";
+        return false;
+    }
+
+    // Embed into a 256x256 RGBA canvas.
+    std::vector<uint8_t> canvas(size_t(kPageW) * size_t(kPageH) * 4u, 0);
+    const uint8_t* src = img.getData();
+    const int copyW = std::min(w, kPageW);
+    const int copyH = std::min(h, kPageH);
+    for (int y = 0; y < copyH; ++y) {
+        for (int x = 0; x < copyW; ++x) {
+            const size_t si = (size_t(y) * size_t(w) + size_t(x)) * 4u;
+            const size_t di = (size_t(y) * size_t(kPageW) + size_t(x)) * 4u;
+            canvas[di + 0] = src[si + 0];
+            canvas[di + 1] = src[si + 1];
+            canvas[di + 2] = src[si + 2];
+            canvas[di + 3] = src[si + 3];
+        }
+    }
+
+    // TIM 16bpp (no CLUT):
+    // - header: magic 0x10, flags bppMode=2 (0x02)
+    // - image block: len, x, y, wWords, h, data (BGR555)
+    const uint32_t flags = 0x02u;
+    const uint16_t xVram = 0;
+    const uint16_t yVram = 0;
+    const uint16_t wWords = kPageW; // 16bpp: 1 word per pixel
+    const uint16_t hWords = kPageH;
+    const uint32_t imgDataBytes = uint32_t(kPageW * kPageH * 2);
+    const uint32_t blockLen = 12u + imgDataBytes;
+
+    QByteArray out;
+    out.resize(int(8 + blockLen));
+    uint8_t* d = reinterpret_cast<uint8_t*>(out.data());
+    writeU32le(d + 0, 0x10u);
+    writeU32le(d + 4, flags);
+    writeU32le(d + 8, blockLen);
+    writeU16le(d + 12, xVram);
+    writeU16le(d + 14, yVram);
+    writeU16le(d + 16, wWords);
+    writeU16le(d + 18, hWords);
+
+    uint8_t* px = d + 20;
+    for (int y = 0; y < kPageH; ++y) {
+        for (int x = 0; x < kPageW; ++x) {
+            const size_t ci = (size_t(y) * size_t(kPageW) + size_t(x)) * 4u;
+            const uint16_t c16 = rgbaToPsxBgr555(canvas[ci + 0], canvas[ci + 1], canvas[ci + 2], canvas[ci + 3]);
+            writeU16le(px + (size_t(y) * size_t(kPageW) + size_t(x)) * 2u, c16);
+        }
+    }
+
+    QFile f(timPath);
+    if (!f.open(QIODevice::WriteOnly)) {
+        if (outError) *outError = "Failed to open output TIM for write";
+        return false;
+    }
+    const qint64 wrote = f.write(out);
+    f.close();
+    if (wrote != out.size()) {
+        if (outError) *outError = "Failed to write TIM";
+        return false;
+    }
     return true;
 }
 

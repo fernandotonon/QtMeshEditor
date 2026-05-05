@@ -101,6 +101,60 @@ static QByteArray makeMinimalG3Tmd()
     return buf;
 }
 
+/** Minimal TMD: one object, three vertices, three normals, one G3 triangle with per-vertex colors (mode 0x30, ilen 6). */
+static QByteArray makeMinimalG3ColorTmd()
+{
+    constexpr uint32_t kTmdId = 0x41u;
+    constexpr size_t kHead = 12u;
+    constexpr size_t kObjH = 28u;
+    const size_t vAbs = kHead + kObjH;
+    const size_t nAbs = vAbs + 3u * 8u;
+    const size_t pAbs = nAbs + 3u * 8u;
+    const uint32_t vOff = static_cast<uint32_t>(vAbs - 12u);
+    const uint32_t nOff = static_cast<uint32_t>(nAbs - 12u);
+    const uint32_t pOff = static_cast<uint32_t>(pAbs - 12u);
+
+    QByteArray buf(static_cast<int>(pAbs + 4u + 24u), '\0');
+    uint8_t* d = reinterpret_cast<uint8_t*>(buf.data());
+
+    writeU32le(d, kTmdId);
+    writeU32le(d + 4, 0);
+    writeU32le(d + 8, 1);
+
+    uint8_t* oh = d + kHead;
+    writeU32le(oh, vOff);
+    writeU32le(oh + 4, 3);
+    writeU32le(oh + 8, nOff);
+    writeU32le(oh + 12, 3);
+    writeU32le(oh + 16, pOff);
+    writeU32le(oh + 20, 1);
+    writeU32le(oh + 24, 0);
+
+    writeVertex8(0, 0, 0, d + vAbs);
+    writeVertex8(4096, 0, 0, d + vAbs + 8);
+    writeVertex8(0, 4096, 0, d + vAbs + 16);
+
+    writeVertex8(0, 0, 4096, d + nAbs);
+    writeVertex8(0, 0, 4096, d + nAbs + 8);
+    writeVertex8(0, 0, 4096, d + nAbs + 16);
+
+    uint8_t* pkt = d + pAbs;
+    pkt[0] = 8;
+    pkt[1] = 6;
+    pkt[2] = 0;
+    pkt[3] = 0x30;
+    uint8_t* pay = pkt + 4;
+    // RGB0, RGB1, RGB2 (with pad bytes).
+    pay[0] = 255; pay[1] = 0; pay[2] = 0; pay[3] = 0;
+    pay[4] = 0; pay[5] = 255; pay[6] = 0; pay[7] = 0;
+    pay[8] = 0; pay[9] = 0; pay[10] = 255; pay[11] = 0;
+    writeU16le(pay + 12, 0); writeU16le(pay + 14, 0);
+    writeU16le(pay + 16, 1); writeU16le(pay + 18, 1);
+    writeU16le(pay + 20, 2); writeU16le(pay + 22, 2);
+
+    return buf;
+}
+
 /** One textured tri, no-light (mode 0x25, flag 1, ilen 6) — Net Yaroze layout. */
 static QByteArray makeMinimal25NoLightTmd()
 {
@@ -680,6 +734,27 @@ TEST_F(PS1TMDTest, ImportMinimalG3Triangle)
     EXPECT_NEAR(pf[1], -10.f, 1e-3f);
     EXPECT_NEAR(pf[2], 0.f, 1e-4f);
     posBuf->unlock();
+}
+
+TEST_F(PS1TMDTest, ImportMode30GouraudTriangleWithVertexColors)
+{
+    QTemporaryFile tmp(QDir::tempPath() + "/qtmesh_ps1tmd_g3c_XXXXXX.tmd");
+    tmp.setAutoRemove(true);
+    ASSERT_TRUE(tmp.open());
+    const QByteArray blob = makeMinimalG3ColorTmd();
+    ASSERT_EQ(tmp.write(blob), blob.size());
+    tmp.flush();
+
+    const std::string meshName = "PS1TmdG3ColorMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    Ogre::MeshPtr mesh = PS1TMD::importTmd(tmp.fileName(), meshName);
+    ASSERT_TRUE(mesh);
+    Ogre::SubMesh* sm = mesh->getSubMesh(0);
+    ASSERT_TRUE(sm && sm->vertexData);
+    const auto* colEl = sm->vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
+    ASSERT_NE(colEl, nullptr);
 }
 
 TEST_F(PS1TMDTest, ExportImportRoundTripSingleTriangle)

@@ -271,6 +271,22 @@ static bool parseTmdObject(const uint8_t* data, size_t fileSize, uint32_t stored
                           Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false, c0, c0, c0, true);
             continue;
         }
+        if (mode == 0x30 && flag == 0 && ilen == 6) {
+            const Ogre::ColourValue c0(float(d[0]) / 255.0f, float(d[1]) / 255.0f, float(d[2]) / 255.0f, 1.0f);
+            const Ogre::ColourValue c1(float(d[4]) / 255.0f, float(d[5]) / 255.0f, float(d[6]) / 255.0f, 1.0f);
+            const Ogre::ColourValue c2(float(d[8]) / 255.0f, float(d[9]) / 255.0f, float(d[10]) / 255.0f, 1.0f);
+            const uint16_t n0 = readU16le(d + 12);
+            const uint16_t v0 = readU16le(d + 14);
+            const uint16_t n1 = readU16le(d + 16);
+            const uint16_t v1 = readU16le(d + 18);
+            const uint16_t n2 = readU16le(d + 20);
+            const uint16_t v2 = readU16le(d + 22);
+            if (v0 < nVert && v1 < nVert && v2 < nVert && n0 < nNorm && n1 < nNorm && n2 < nNorm)
+                appendTri(out, verts[v0], verts[v2], verts[v1], norms[n0], norms[n2], norms[n1],
+                          Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
+                          c0, c2, c1, true);
+            continue;
+        }
         if (mode == 0x24 && flag == 0 && ilen == 5) {
             const uint16_t ni = readU16le(d + 12);
             const uint16_t i0 = readU16le(d + 14);
@@ -729,6 +745,29 @@ static void appendG3(std::vector<uint8_t>& pb, uint16_t i0, uint16_t i1, uint16_
     writeU16le(pkt + 18, i2);
 }
 
+// Gouraud-shaded triangle with per-vertex colors (GP0 0x30 packet with 3 colors).
+// Layout: cmd+RGB0, RGB1, RGB2, then (n0,v0)(n1,v1)(n2,v2).
+static void appendG3C(std::vector<uint8_t>& pb,
+                      uint16_t i0, uint16_t i1, uint16_t i2,
+                      uint16_t n0, uint16_t n1, uint16_t n2,
+                      const Ogre::ColourValue& c0, const Ogre::ColourValue& c1, const Ogre::ColourValue& c2)
+{
+    const size_t start = pb.size();
+    pb.resize(start + 4 + 24);
+    uint8_t* pkt = pb.data() + start;
+    pkt[0] = 8;
+    pkt[1] = 6;
+    pkt[2] = 0;
+    pkt[3] = 0x30;
+    auto enc = [](float v) -> uint8_t { return static_cast<uint8_t>(std::clamp(int(std::lround(v * 255.0f)), 0, 255)); };
+    pkt[4] = enc(c0.r); pkt[5] = enc(c0.g); pkt[6] = enc(c0.b); pkt[7] = 0x30;
+    pkt[8] = enc(c1.r); pkt[9] = enc(c1.g); pkt[10] = enc(c1.b); pkt[11] = 0;
+    pkt[12] = enc(c2.r); pkt[13] = enc(c2.g); pkt[14] = enc(c2.b); pkt[15] = 0;
+    writeU16le(pkt + 16, n0); writeU16le(pkt + 18, i0);
+    writeU16le(pkt + 20, n1); writeU16le(pkt + 22, i1);
+    writeU16le(pkt + 24, n2); writeU16le(pkt + 26, i2);
+}
+
 static void appendFt3(std::vector<uint8_t>& pb, uint16_t i0, uint16_t i1, uint16_t i2, uint16_t ni, const Ogre::Vector2& t0,
                       const Ogre::Vector2& t1, const Ogre::Vector2& t2)
 {
@@ -922,6 +961,38 @@ bool exportEntity(const Ogre::Entity* entity, const QString& filePath, float ogr
     };
     std::vector<ObjBlob> objects(numSub);
 
+    // If the mesh is textured, export a sibling TIM next to the TMD (best-effort).
+    try {
+        Ogre::MaterialPtr mat;
+        for (unsigned si = 0; si < numSub; ++si) {
+            if (auto* se = entity->getSubEntity(si)) {
+                mat = se->getMaterial();
+                if (submeshHasDiffuseTexture(mat))
+                    break;
+                mat.reset();
+            }
+        }
+        if (mat && mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
+            Ogre::Pass* p0 = mat->getTechnique(0)->getPass(0);
+            if (p0 && p0->getNumTextureUnitStates() > 0) {
+                Ogre::TextureUnitState* tus = p0->getTextureUnitState(0);
+                if (tus && !tus->getTextureName().empty()) {
+                    const QString timPath = QFileInfo(filePath).absolutePath() + "/" + QFileInfo(filePath).completeBaseName() + ".tim";
+                    auto tex = Ogre::TextureManager::getSingleton().getByName(tus->getTextureName());
+                    if (tex) {
+                        if (!tex->isLoaded())
+                            tex->load();
+                        Ogre::Image img;
+                        tex->convertToImage(img);
+                        QString err;
+                        (void)PS1TIM::saveOgreImageToTim16(img, timPath, &err);
+                    }
+                }
+            }
+        }
+    } catch (...) {
+    }
+
     for (unsigned si = 0; si < numSub; ++si) {
         Ogre::SubMesh* sm = mesh->getSubMesh(si);
         Ogre::VertexData* vd = sm->useSharedVertices ? mesh->sharedVertexData : sm->vertexData;
@@ -931,6 +1002,7 @@ bool exportEntity(const Ogre::Entity* entity, const QString& filePath, float ogr
         const auto* posEl = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
         const auto* nrmEl = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
         const auto* uvEl = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
+        const auto* colEl = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
         if (!posEl || !nrmEl)
             continue;
 
@@ -938,22 +1010,61 @@ bool exportEntity(const Ogre::Entity* entity, const QString& filePath, float ogr
         const bool textured = subEnt && submeshHasDiffuseTexture(subEnt->getMaterial());
         const bool hasUv = textured && uvEl;
 
-        auto posBuf = vd->vertexBufferBinding->getBuffer(posEl->getSource());
-        auto nrmBuf = vd->vertexBufferBinding->getBuffer(nrmEl->getSource());
+        const unsigned short posSrc = posEl->getSource();
+        const unsigned short nrmSrc = nrmEl->getSource();
+        const unsigned short uvSrc = (hasUv && uvEl) ? uvEl->getSource() : 0;
+
+        auto posBuf = vd->vertexBufferBinding->getBuffer(posSrc);
+        auto nrmBuf = vd->vertexBufferBinding->getBuffer(nrmSrc);
+        Ogre::HardwareVertexBufferSharedPtr colBuf;
+        const unsigned short colSrc = colEl ? colEl->getSource() : 0;
+        if (colEl)
+            colBuf = vd->vertexBufferBinding->getBuffer(colSrc);
         Ogre::HardwareVertexBufferSharedPtr uvBuf;
-        if (hasUv)
-            uvBuf = vd->vertexBufferBinding->getBuffer(uvEl->getSource());
+        if (hasUv && uvEl)
+            uvBuf = vd->vertexBufferBinding->getBuffer(uvSrc);
+
         const size_t posStride = posBuf->getVertexSize();
         const size_t nrmStride = nrmBuf->getVertexSize();
         const size_t uvStride = uvBuf ? uvBuf->getVertexSize() : 0;
+        const size_t colStride = colBuf ? colBuf->getVertexSize() : 0;
 
         const uint32_t vCount = vd->vertexCount;
         objects[si].verts.resize(size_t(vCount) * 8u, 0);
         objects[si].norms.resize(size_t(vCount) * 8u, 0);
 
+        // Lock each unique source buffer only once (pos/nrm often share a buffer).
         const uint8_t* posBase = static_cast<const uint8_t*>(posBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-        const uint8_t* nrmBase = static_cast<const uint8_t*>(nrmBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-        const uint8_t* uvBase = uvBuf ? static_cast<const uint8_t*>(uvBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY)) : nullptr;
+        const uint8_t* nrmBase = nullptr;
+        const uint8_t* uvBase = nullptr;
+        const uint8_t* colBase = nullptr;
+
+        if (nrmSrc == posSrc) {
+            nrmBase = posBase;
+        } else {
+            nrmBase = static_cast<const uint8_t*>(nrmBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        }
+
+        if (uvBuf) {
+            if (uvSrc == posSrc) {
+                uvBase = posBase;
+            } else if (uvSrc == nrmSrc && nrmSrc != posSrc) {
+                uvBase = nrmBase;
+            } else {
+                uvBase = static_cast<const uint8_t*>(uvBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+            }
+        }
+        if (colBuf) {
+            if (colSrc == posSrc) {
+                colBase = posBase;
+            } else if (colSrc == nrmSrc && nrmSrc != posSrc) {
+                colBase = nrmBase;
+            } else if (uvBuf && colSrc == uvSrc && uvSrc != posSrc && !(uvSrc == nrmSrc && nrmSrc != posSrc)) {
+                colBase = uvBase;
+            } else {
+                colBase = static_cast<const uint8_t*>(colBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+            }
+        }
 
         for (uint32_t vi = 0; vi < vCount; ++vi) {
             const uint8_t* prow = posBase + vi * posStride;
@@ -976,10 +1087,6 @@ bool exportEntity(const Ogre::Entity* entity, const QString& filePath, float ogr
             writeVertex8(px, py, pz, objects[si].verts.data() + vi * 8);
             writeVertex8(nx, ny, nz, objects[si].norms.data() + vi * 8);
         }
-        posBuf->unlock();
-        nrmBuf->unlock();
-        if (uvBuf)
-            uvBuf->unlock();
 
         auto ibuf = sm->indexData->indexBuffer;
         const uint8_t* ib = static_cast<const uint8_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
@@ -1004,11 +1111,11 @@ bool exportEntity(const Ogre::Entity* entity, const QString& filePath, float ogr
                 continue;
             if (hasUv && uvEl && uvBase) {
                 Ogre::Real* tf = nullptr;
-                uvEl->baseVertexPointerToElement(const_cast<uint8_t*>(const_cast<uint8_t*>(uvBase + i0 * uvStride)), &tf);
+                uvEl->baseVertexPointerToElement(const_cast<uint8_t*>(uvBase + i0 * uvStride), &tf);
                 const Ogre::Vector2 tv0(tf[0], tf[1]);
-                uvEl->baseVertexPointerToElement(const_cast<uint8_t*>(const_cast<uint8_t*>(uvBase + i1 * uvStride)), &tf);
+                uvEl->baseVertexPointerToElement(const_cast<uint8_t*>(uvBase + i1 * uvStride), &tf);
                 const Ogre::Vector2 tv1(tf[0], tf[1]);
-                uvEl->baseVertexPointerToElement(const_cast<uint8_t*>(const_cast<uint8_t*>(uvBase + i2 * uvStride)), &tf);
+                uvEl->baseVertexPointerToElement(const_cast<uint8_t*>(uvBase + i2 * uvStride), &tf);
                 const Ogre::Vector2 tv2(tf[0], tf[1]);
                 // Undo import winding swap so .tmd primitive order matches PSX convention on disk.
                 appendFt3(objects[si].prims, static_cast<uint16_t>(i0), static_cast<uint16_t>(i2), static_cast<uint16_t>(i1),
@@ -1017,11 +1124,35 @@ bool exportEntity(const Ogre::Entity* entity, const QString& filePath, float ogr
                 appendFt3(objects[si].prims, static_cast<uint16_t>(i0), static_cast<uint16_t>(i2), static_cast<uint16_t>(i1),
                           static_cast<uint16_t>(i0), Ogre::Vector2(0, 0), Ogre::Vector2(0, 0), Ogre::Vector2(0, 0));
             } else {
-                appendG3(objects[si].prims, static_cast<uint16_t>(i0), static_cast<uint16_t>(i2), static_cast<uint16_t>(i1),
-                         static_cast<uint16_t>(i0), static_cast<uint16_t>(i2), static_cast<uint16_t>(i1));
+                if (colEl && colBase) {
+                    Ogre::RGBA* c = nullptr;
+                    colEl->baseVertexPointerToElement(const_cast<uint8_t*>(colBase + i0 * colStride), &c);
+                    Ogre::ColourValue cv0; cv0.setAsARGB(*c);
+                    colEl->baseVertexPointerToElement(const_cast<uint8_t*>(colBase + i1 * colStride), &c);
+                    Ogre::ColourValue cv1; cv1.setAsARGB(*c);
+                    colEl->baseVertexPointerToElement(const_cast<uint8_t*>(colBase + i2 * colStride), &c);
+                    Ogre::ColourValue cv2; cv2.setAsARGB(*c);
+
+                    appendG3C(objects[si].prims,
+                              static_cast<uint16_t>(i0), static_cast<uint16_t>(i2), static_cast<uint16_t>(i1),
+                              static_cast<uint16_t>(i0), static_cast<uint16_t>(i2), static_cast<uint16_t>(i1),
+                              cv0, cv2, cv1);
+                } else {
+                    appendG3(objects[si].prims, static_cast<uint16_t>(i0), static_cast<uint16_t>(i2), static_cast<uint16_t>(i1),
+                             static_cast<uint16_t>(i0), static_cast<uint16_t>(i2), static_cast<uint16_t>(i1));
+                }
             }
         }
         ibuf->unlock();
+
+        // Unlock vertex buffers after all consumers are done.
+        if (colBuf && colSrc != posSrc && colSrc != nrmSrc && !(uvBuf && colSrc == uvSrc && uvSrc != posSrc && !(uvSrc == nrmSrc && nrmSrc != posSrc)))
+            colBuf->unlock();
+        if (uvBuf && uvSrc != posSrc && !(uvSrc == nrmSrc && nrmSrc != posSrc))
+            uvBuf->unlock();
+        if (nrmSrc != posSrc)
+            nrmBuf->unlock();
+        posBuf->unlock();
     }
 
     bool anyGeometry = false;
@@ -1042,9 +1173,9 @@ bool exportEntity(const Ogre::Entity* entity, const QString& filePath, float ogr
     writeU32le(file.data() + 8, numSub);
 
     for (unsigned si = 0; si < numSub; ++si) {
-        uint8_t* oh = file.data() + 12 + si * kObjHeaderSize;
+        const size_t ohOff = 12u + size_t(si) * kObjHeaderSize;
         if (objects[si].verts.empty() || objects[si].prims.empty()) {
-            std::memset(oh, 0, kObjHeaderSize);
+            std::memset(file.data() + ohOff, 0, kObjHeaderSize);
             continue;
         }
         const uint32_t vOff = static_cast<uint32_t>(file.size() - 12u);
@@ -1057,7 +1188,10 @@ bool exportEntity(const Ogre::Entity* entity, const QString& filePath, float ogr
         const uint32_t pktCount = countPrimPackets(objects[si].prims);
         file.insert(file.end(), objects[si].prims.begin(), objects[si].prims.end());
 
-        writeU32le(oh, vOff);
+        // IMPORTANT: `file.insert` may reallocate, invalidating raw pointers.
+        // Reacquire the header pointer after appending payloads.
+        uint8_t* oh = file.data() + ohOff;
+        writeU32le(oh + 0, vOff);
         writeU32le(oh + 4, nVert);
         writeU32le(oh + 8, nOff);
         writeU32le(oh + 12, nNorm);

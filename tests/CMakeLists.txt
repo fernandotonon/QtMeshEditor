@@ -92,6 +92,11 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HalfEdgeMesh.cpp
+
+        # PS1 importers are referenced by core code (MaterialEditorQML, MeshImporterExporter).
+        # Include them so the MaterialEditorQML test executables link successfully.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1TMD.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1TIM.cpp
     )
 
     set(TEST_HEADER_FILES
@@ -294,6 +299,11 @@ if(BUILD_TESTS)
     # Add llama.cpp libraries if local LLM is enabled
     if(ENABLE_LOCAL_LLM)
         list(APPEND COMMON_TEST_LIBRARIES llama ggml)
+    endif()
+
+    # Link Sentry for tests if enabled (SentryReporter is part of TEST_SRC_FILES).
+    if(ENABLE_SENTRY)
+        list(APPEND COMMON_TEST_LIBRARIES sentry)
     endif()
     
     # Helper function to create test executables
