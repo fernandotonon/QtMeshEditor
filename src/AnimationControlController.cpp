@@ -1554,20 +1554,24 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     auto* track = anim->getNodeTrack(bone->getHandle());
     if (track->getNumKeyFrames() < 2) return 0;
 
-    // Map density level → (toleranceMul, fixedFps). Adaptive modes
-    // (0/1/2) feed the Douglas-Peucker simplifier; fixed-FPS modes
-    // (3/4/5/6) decimate-then-densify so the track lands at exactly
-    // the target rate regardless of starting density.
-    double toleranceMul = 1.0;
-    int    fixedFps     = 0;
+    // Map density level → (toleranceMul, baselineFps, fixedFps).
+    // Fixed-FPS modes lock the track to that exact rate. Adaptive
+    // modes pre-decimate to a baseline so repeated bakes at the same
+    // density CONVERGE to a stable keyframe count (without the
+    // pre-decimate, on an already-dense track each anchor pair is
+    // already smaller than the simplifier's source rate, and the
+    // bake becomes a no-op).
+    double toleranceMul   = 1.0;
+    int    fixedFps       = 0;  // exact-rate modes
+    int    baselineFps    = 0;  // adaptive pre-decimate target
     switch (density) {
         case 6:  fixedFps = 60; break;          // 60 FPS exact
         case 5:  fixedFps = 30; break;          // 30 FPS exact
         case 4:  fixedFps = 15; break;          // 15 FPS exact
         case 3:  fixedFps = 10; break;          // 10 FPS exact
-        case 2:  toleranceMul = 1.0;  break;    // Dense
-        case 1:  toleranceMul = 4.0;  break;    // Medium
-        default: toleranceMul = 12.0; break;    // Sparse
+        case 2:  toleranceMul = 1.0;  baselineFps = 30; break;  // Dense
+        case 1:  toleranceMul = 4.0;  baselineFps = 15; break;  // Medium
+        default: toleranceMul = 12.0; baselineFps = 5;  break;  // Sparse
     }
 
     std::vector<double> anchors;
@@ -1590,9 +1594,16 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     // first to pull the density DOWN to target. Then the densify
     // loop fills any gaps that are sparser than 1/fps. Net effect:
     // single uniform N-FPS grid.
-    if (fixedFps > 0) {
-        reduceTrackToFps(boneName, fixedFps);
-        // Re-snapshot anchors after decimation since the track shrank.
+    //
+    // Adaptive modes use a coarser baselineFps as the pre-decimation
+    // target so the simplifier has consistent input regardless of
+    // starting density. Repeated Sparse/Medium/Dense bakes converge
+    // to stable counts (without pre-decimation, the second bake on an
+    // already-dense track was a no-op because each anchor pair was
+    // already shorter than the simplifier's source sample interval).
+    const int decimateTo = fixedFps > 0 ? fixedFps : baselineFps;
+    if (decimateTo > 0) {
+        reduceTrackToFps(boneName, decimateTo);
         anchors.clear();
         anchors.reserve(track->getNumKeyFrames());
         for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
