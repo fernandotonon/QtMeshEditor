@@ -261,6 +261,14 @@ bool ResampleCurveCommand::resampleAndWrite()
         kf->setScale(sc);
         // Overwrite the resampled channel with the curve's value at t.
         writeChannel(kf, mChannel, s.value);
+        // writeChannel on a quaternion component (rw/rx/ry/rz) leaves
+        // the rotation non-unit; Ogre's track interp slerps non-unit
+        // quaternions incorrectly, producing visible rotation drift.
+        if (mChannel.size() == 2 && mChannel[0] == 'r') {
+            Ogre::Quaternion q = kf->getRotation();
+            q.normalise();
+            kf->setRotation(q);
+        }
         mAfter.push_back(snapshotKf(kf));
     }
 
@@ -286,5 +294,10 @@ void ResampleCurveCommand::redo()
 
 void ResampleCurveCommand::undo()
 {
+    // If captureBefore failed (mCaptured stays false, mBefore empty),
+    // a stack-driven undo would otherwise call applySnapshot({}) and
+    // strip every interior keyframe in (t0, t1) with nothing to
+    // re-insert — destroying the user's track.
+    if (!mCaptured) return;
     applySnapshot(mBefore);
 }

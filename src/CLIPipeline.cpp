@@ -1454,8 +1454,19 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         skel = animOnlySkeletons.first();
 
     if (!skel) {
-        SentryReporter::captureMessage(QString("CLI anim: import failed (.%1)").arg(fi.suffix()), "error");
-        err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        // Distinguish "import failed" from "loaded but non-rigged" so
+        // CLI users get an actionable message. The first branch fires
+        // when no entity was created AND no anim-only skeleton was
+        // returned by the importer.
+        const bool importFailed = entities.isEmpty() && animOnlySkeletons.isEmpty();
+        SentryReporter::captureMessage(QString("CLI anim: %1 (.%2)")
+            .arg(importFailed ? "import failed" : "no skeleton")
+            .arg(fi.suffix()), "error");
+        if (importFailed) {
+            err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        } else {
+            err() << "Error: No skeleton found." << Qt::endl;
+        }
         return 1;
     }
 

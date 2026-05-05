@@ -389,10 +389,12 @@ Rectangle {
         property real keyTime: 0
 
         function applyMode(mode) {
-            // Updates the side-table mode + tunes Ogre's per-animation
-            // interp mode (IM_LINEAR vs IM_SPLINE) so playback follows
-            // the curve shape WITHOUT inserting dense keyframes.
-            // Click the "Bake" button to commit a resample explicitly.
+            // Updates the CurveEditModel side-table mode + tangents.
+            // Doesn't touch Ogre's per-animation interp (that's a
+            // global setting and would distort other bones); the
+            // canvas reflects the new shape but viewport playback
+            // still uses the existing TransformKeyFrames until the
+            // user clicks Bake to commit a resample explicitly.
             var prev = CurveEditModel.tangentsAt(
                 AnimationControlController.selectedEntityName,
                 AnimationControlController.selectedAnimation,

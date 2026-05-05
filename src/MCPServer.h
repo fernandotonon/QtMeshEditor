@@ -230,7 +230,8 @@ private:
     static constexpr const char* MCP_VERSION = "2024-11-05";
     static constexpr const char* SERVER_NAME = "QtMeshEditor";
     // 1.4.0 — added simplify_animation / analyze_animation tools
-    static constexpr const char* SERVER_VERSION = "1.4.0";
+    // 1.5.0 — added bake_animation_fps tool
+    static constexpr const char* SERVER_VERSION = "1.5.0";
 };
 
 #endif // MCPSERVER_H

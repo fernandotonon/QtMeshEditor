@@ -1266,9 +1266,10 @@ TEST_F(AnimationControlControllerTest, BakeFixedFpsProducesUniformDensity) {
                          ->_getNodeTrackList().begin()->second;
     const int baseCount = track->getNumKeyFrames();
 
-    // 30 FPS × 1s clip = ~30 keys minus the anchor at t1. Plus the
-    // original anchors. Just verify the count grew significantly.
-    ctrl->resampleAllSegmentsForBone(bone, "tx", 3);
+    // density=5 → 30 FPS exact. TestAnim is a 1s clip, expect ~30
+    // uniform keys after baking. Just verify the count grew well
+    // beyond the original sparse anchors.
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 5);
     EXPECT_GT(track->getNumKeyFrames(), baseCount + 10)
         << "30 FPS bake should produce predictable dense keys";
 }

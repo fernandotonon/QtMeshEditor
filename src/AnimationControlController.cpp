@@ -1529,12 +1529,14 @@ bool AnimationControlController::setCurveHandle(const QString& boneName,
             oldIn, oldOut, oldMode,
             newInTangent, newOutTangent, finalMode);
     UndoManager::getSingleton()->push(cmd);
-    // Don't touch Ogre's per-Animation interp mode here:
-    // Animation::setInterpolationMode is animation-wide, not per-track,
-    // so flipping it for one bone's curve change visibly distorts every
-    // other bone's track in the same animation. Curve editor canvas
-    // shows the authored shape; click Bake to commit the curve into
-    // dense TransformKeyFrames if you need playback to match exactly.
+    SentryReporter::addBreadcrumb("ui.action", "Edited curve handle");
+    // We don't touch Ogre's per-Animation interp mode here. The
+    // Animation::setInterpolationMode setter is animation-wide, not
+    // per-track, so flipping it for one bone's curve change visibly
+    // distorts every other bone's track in the same animation. The
+    // curve editor canvas shows the authored shape; the user clicks
+    // Bake to commit the curve into dense TransformKeyFrames when
+    // playback needs to match exactly.
     return true;
 }
 

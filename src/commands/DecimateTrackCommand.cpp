@@ -128,5 +128,9 @@ void DecimateTrackCommand::redo()
 
 void DecimateTrackCommand::undo()
 {
+    // Same guard as ResampleCurveCommand: if the first redo bailed
+    // (track unresolved), mBefore is empty and replaceTrack would
+    // strip every keyframe.
+    if (!mCaptured) return;
     replaceTrack(mBefore);
 }

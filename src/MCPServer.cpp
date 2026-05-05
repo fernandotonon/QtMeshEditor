@@ -3779,7 +3779,7 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
         props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to bake. If omitted, all animations on the skeleton are processed."}};
-        props["fps"] = QJsonObject{{"type", "number"}, {"description", "Target keyframes-per-second (10, 15, 30, 60 are typical). The animation is re-gridded to a uniform 1/fps spacing while preserving the existing curve shape via interpolation between original anchors."}};
+        props["fps"] = QJsonObject{{"type", "integer"}, {"description", "Target keyframes-per-second (10, 15, 30, 60 are typical). The animation is re-gridded to a uniform 1/fps spacing while preserving the existing curve shape via interpolation between original anchors."}};
         appendTool(
             "bake_animation_fps",
             "Re-grid every bone track in the animation to a uniform N FPS layout. Useful for export pipelines that "
