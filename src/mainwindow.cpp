@@ -393,6 +393,9 @@ void MainWindow::initToolBar()
                     // when the user has paused playback. Apply the
                     // active animation directly at the slider time so
                     // the pose survives the post-edit refresh.
+                    // Use the unmasked overload — passing the mask
+                    // pointer crashes when no mask was configured for
+                    // this bone, which is the common case.
                     const std::string activeName =
                         animCtrl->selectedAnimation().toStdString();
                     if (!activeName.empty() && skel->hasAnimation(activeName)
@@ -401,7 +404,7 @@ void MainWindow::initToolBar()
                         if (!state->getEnabled()) {
                             Ogre::Animation* anim = skel->getAnimation(activeName);
                             anim->apply(skel, state->getTimePosition(),
-                                        1.0f, state->getBlendMask(), 1.0f);
+                                        1.0f, 1.0f);
                         }
                     }
                     skel->_updateTransforms();
