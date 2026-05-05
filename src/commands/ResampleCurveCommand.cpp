@@ -147,32 +147,53 @@ bool ResampleCurveCommand::resampleAndWrite()
     auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName);
     if (!track) return false;
 
-    // Find anchor keyframes at t0 and t1 so we can read all 10 channels'
-    // values at the segment endpoints — used to fill the non-resampled
-    // channels of the new interior keyframes via linear interpolation.
-    Ogre::TransformKeyFrame* kfA = nullptr;
-    Ogre::TransformKeyFrame* kfB = nullptr;
+    // Snapshot every keyframe in the segment + endpoints. The
+    // non-resampled channels of new keys lerp between the BRACKETING
+    // snapshot pair for each output time, NOT just the segment
+    // endpoints — otherwise a whole-clip resample (fixed-FPS bake)
+    // would flatten the animation by interpolating only between t=0
+    // and t=length, losing every intermediate pose.
+    struct Sample {
+        float            time;
+        Ogre::Vector3    translate;
+        Ogre::Quaternion rotation;
+        Ogre::Vector3    scale;
+    };
+    std::vector<Sample> snap;
+    snap.reserve(track->getNumKeyFrames());
     for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
         auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
-        if (std::fabs(kf->getTime() - mT0) <= kEpsilon) kfA = kf;
-        if (std::fabs(kf->getTime() - mT1) <= kEpsilon) kfB = kf;
+        const float t = kf->getTime();
+        if (t >= mT0 - kEpsilon && t <= mT1 + kEpsilon) {
+            snap.push_back({ t, kf->getTranslate(),
+                             kf->getRotation(), kf->getScale() });
+        }
     }
-    if (!kfA || !kfB) return false;
-
-    const Ogre::Vector3    tA = kfA->getTranslate(), tB = kfB->getTranslate();
-    const Ogre::Quaternion rA = kfA->getRotation(),  rB = kfB->getRotation();
-    const Ogre::Vector3    sA = kfA->getScale(),     sB = kfB->getScale();
+    if (snap.size() < 2) return false;
 
     // Build the channel time/value arrays the resampler needs from
-    // EVERY keyframe on the track (the curve evaluator interpolates
-    // across the full series, not just the segment endpoints).
+    // the snapshot (so curve evaluation has the full series even
+    // after the strip phase removes interior keyframes).
     std::vector<double> kfTimesD, kfValuesD;
-    kfTimesD.reserve(track->getNumKeyFrames());
-    kfValuesD.reserve(track->getNumKeyFrames());
-    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
-        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
-        kfTimesD.push_back(kf->getTime());
-        kfValuesD.push_back(readChannel(kf, mChannel));
+    kfTimesD.reserve(snap.size());
+    kfValuesD.reserve(snap.size());
+    for (const auto& s : snap) {
+        kfTimesD.push_back(s.time);
+        // readChannel needs a TransformKeyFrame; we have a snapshot
+        // struct — synthesize the channel value inline.
+        const std::string& c = mChannel;
+        double v = 0.0;
+        if      (c == "tx") v = s.translate.x;
+        else if (c == "ty") v = s.translate.y;
+        else if (c == "tz") v = s.translate.z;
+        else if (c == "rw") v = s.rotation.w;
+        else if (c == "rx") v = s.rotation.x;
+        else if (c == "ry") v = s.rotation.y;
+        else if (c == "rz") v = s.rotation.z;
+        else if (c == "sx") v = s.scale.x;
+        else if (c == "sy") v = s.scale.y;
+        else if (c == "sz") v = s.scale.z;
+        kfValuesD.push_back(v);
     }
     const QVariantList kfTimes  = toVariantList(kfTimesD);
     const QVariantList kfValues = toVariantList(kfValuesD);
@@ -187,8 +208,7 @@ bool ResampleCurveCommand::resampleAndWrite()
         mToleranceMul, mFixedFps);
     if (samples.empty()) return false;
 
-    // Drop the closing endpoint sample if it lands on t1 — that anchor
-    // already exists; we only insert strictly interior frames.
+    // Drop the closing endpoint sample if it lands on t1.
     while (!samples.empty()
            && std::fabs(samples.back().time - mT1) <= kEpsilon) {
         samples.pop_back();
@@ -203,21 +223,37 @@ bool ResampleCurveCommand::resampleAndWrite()
         }
     }
 
-    // Insert resampled frames. Non-resampled channels get linearly
-    // interpolated TRS between the two anchor keyframes — that
-    // preserves the segment's other-channel shape without forcing a
-    // separate resample for each channel.
+    // Helper: find the bracketing snapshot pair for time `t`. Returns
+    // (lower, upper) snapshot pointers; on or beyond either end the
+    // lower/upper collapses to that endpoint.
+    auto bracket = [&snap](float t) -> std::pair<const Sample*, const Sample*> {
+        const Sample* lo = &snap.front();
+        const Sample* hi = &snap.back();
+        for (size_t i = 0; i + 1 < snap.size(); ++i) {
+            if (t >= snap[i].time - kEpsilon && t <= snap[i+1].time + kEpsilon) {
+                lo = &snap[i];
+                hi = &snap[i+1];
+                break;
+            }
+        }
+        return { lo, hi };
+    };
+
+    // Insert resampled frames. Non-resampled channels lerp between
+    // the BRACKETING original keyframes for each output time so
+    // intermediate poses survive the strip.
     mAfter.clear();
     mAfter.reserve(samples.size());
-    const float duration = mT1 - mT0;
     for (const auto& s : samples) {
         const float t = static_cast<float>(s.time);
-        const float u = duration > 0.0f
-                        ? std::clamp((t - mT0) / duration, 0.0f, 1.0f)
+        const auto [lo, hi] = bracket(t);
+        const float gap = hi->time - lo->time;
+        const float u = gap > 1e-6f
+                        ? std::clamp((t - lo->time) / gap, 0.0f, 1.0f)
                         : 0.0f;
-        Ogre::Vector3    tr = tA + (tB - tA) * u;
-        Ogre::Quaternion ro = Ogre::Quaternion::Slerp(u, rA, rB, true);
-        Ogre::Vector3    sc = sA + (sB - sA) * u;
+        Ogre::Vector3    tr = lo->translate + (hi->translate - lo->translate) * u;
+        Ogre::Quaternion ro = Ogre::Quaternion::Slerp(u, lo->rotation, hi->rotation, true);
+        Ogre::Vector3    sc = lo->scale + (hi->scale - lo->scale) * u;
 
         auto* kf = track->createNodeKeyFrame(t);
         kf->setTranslate(tr);
