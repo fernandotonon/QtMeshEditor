@@ -255,6 +255,15 @@ public:
                                               const QString& channel,
                                               double time, double value);
 
+    /// Resample the curve segment between two adjacent keyframes for one
+    /// channel into dense TransformKeyFrames so Ogre playback follows
+    /// the Bezier/Auto/Stepped/Linear shape held in CurveEditModel.
+    /// Pushes a single ResampleCurveCommand. Returns true on success.
+    /// `t0` and `t1` must each be within 1ms of an existing keyframe.
+    Q_INVOKABLE bool resampleCurveSegment(const QString& boneName,
+                                          const QString& channel,
+                                          double t0, double t1);
+
 public slots:
     void updateAnimationTree();
 

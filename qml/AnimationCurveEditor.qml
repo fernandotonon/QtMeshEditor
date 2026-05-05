@@ -81,6 +81,28 @@ Rectangle {
         curveCanvas.requestPaint()
     }
 
+    // Resample the segments adjacent to `keyTime` so Ogre playback
+    // follows the curve shape held in CurveEditModel. Skip if the
+    // keyTime sits at a track boundary (no segment to one side).
+    function resampleAround(boneName, channel, keyTime) {
+        var row = selectedBoneRow()
+        if (!row || !row.keyTimes) return
+        var sorted = row.keyTimes.slice().sort(function(a, b) { return a - b })
+        var idx = -1
+        for (var i = 0; i < sorted.length; i++) {
+            if (Math.abs(sorted[i] - keyTime) < 0.001) { idx = i; break }
+        }
+        if (idx < 0) return
+        if (idx > 0) {
+            AnimationControlController.resampleCurveSegment(
+                boneName, channel, sorted[idx - 1], sorted[idx])
+        }
+        if (idx < sorted.length - 1) {
+            AnimationControlController.resampleCurveSegment(
+                boneName, channel, sorted[idx], sorted[idx + 1])
+        }
+    }
+
     function clampViewStart() {
         var maxT = AnimationControlController.animationLength
         if (maxT <= 0) { root.viewStart = 0; return }
@@ -343,6 +365,9 @@ Rectangle {
                 AnimationControlController.selectedEntityName,
                 AnimationControlController.selectedAnimation,
                 boneName, channelId, keyTime, mode)
+            // Mode change reshapes the segments on either side of this
+            // key — resample both so playback reflects the new shape.
+            root.resampleAround(boneName, channelId, keyTime)
         }
 
         MenuItem { text: "Bezier";   onTriggered: modeMenu.applyMode(CurveEditModel.ModeBezier) }
@@ -581,6 +606,17 @@ Rectangle {
                         panArea.dragBone, panArea.dragChannel,
                         panArea.dragKeyTime, panArea.dragLastValue)
                 }
+                if (valueChanged || timeChanged) {
+                    root.resampleAround(panArea.dragBone, panArea.dragChannel,
+                                         panArea.dragKeyTime)
+                }
+            } else if (panArea.dragMode === "tangent") {
+                // Tangent edits already wrote into CurveEditModel during
+                // drag (no undo entry per move). On release, resample the
+                // affected segments so playback follows the new shape and
+                // the resample itself is the undo entry.
+                root.resampleAround(panArea.dragBone, panArea.dragChannel,
+                                     panArea.dragKeyTime)
             }
             panArea.dragMode = ""
         }

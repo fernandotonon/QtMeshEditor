@@ -6,6 +6,7 @@
 #include "commands/MoveKeyframeCommand.h"
 #include "commands/BulkKeyframeCommands.h"
 #include "commands/SetKeyframeValueCommand.h"
+#include "commands/ResampleCurveCommand.h"
 #include "commands/AddKeyframeCommand.h"
 #include "commands/DeleteKeyframeCommand.h"
 #include <QApplication>
@@ -1417,5 +1418,43 @@ bool AnimationControlController::setKeyframeValuePreview(const QString& boneName
     if (!target) return false;
     writeChannel(target, channel, value);
     notifyOgreUpdate();
+    return true;
+}
+
+bool AnimationControlController::resampleCurveSegment(const QString& boneName,
+                                                      const QString& channel,
+                                                      double t0, double t1)
+{
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    const std::string boneStd = boneName.toStdString();
+    if (!m_selectedSkeleton->hasBone(boneStd)) return false;
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneStd);
+    if (!bone || !anim->hasNodeTrack(bone->getHandle())) return false;
+    if (t1 <= t0) return false;
+
+    // Pre-check: both endpoints must be near existing keyframes so the
+    // command's interior-overwrite math is well defined.
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    bool foundT0 = false, foundT1 = false;
+    constexpr float kEps = 0.001f;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const float kt = track->getKeyFrame(i)->getTime();
+        if (std::fabs(kt - static_cast<float>(t0)) <= kEps) foundT0 = true;
+        if (std::fabs(kt - static_cast<float>(t1)) <= kEps) foundT1 = true;
+    }
+    if (!foundT0 || !foundT1) return false;
+
+    auto* cmd = new ResampleCurveCommand(m_selectedEntityName, // NOSONAR — QUndoStack owns
+                                          m_selectedAnimation,
+                                          boneStd,
+                                          channel.toLower().toStdString(),
+                                          static_cast<float>(t0),
+                                          static_cast<float>(t1));
+    UndoManager::getSingleton()->push(cmd);
+    refreshSliderTicks();
+    emit boneRowsChanged();
     return true;
 }
