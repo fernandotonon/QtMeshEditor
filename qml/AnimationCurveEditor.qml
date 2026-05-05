@@ -203,23 +203,30 @@ Rectangle {
             }
 
             // Bake = explicit resample of every segment on the active
-            // bone/channel into dense TransformKeyFrames. The dropdown
-            // picks density: Sparse (~few keys, default), Medium, or
-            // Dense (highest fidelity, most keys). Each click bakes
-            // again at the chosen density — call it twice at Sparse +
-            // once at Medium to progressively add detail.
-            Button {
-                id: bakeButton
-                text: "Bake ▾"; height: 18
-                font.pixelSize: 10
+            // bone/channel into dense TransformKeyFrames. ThemedComboBox
+            // matches the inspector's other dropdowns. The "Bake…"
+            // header stays visible (we never select an entry — selecting
+            // any item triggers the action, then we reset the index).
+            ThemedComboBox {
+                id: bakeCombo
+                width: 100; height: 22
                 anchors.verticalCenter: parent.verticalCenter
                 enabled: root.selectedBone !== ""
+                font.pixelSize: 10
+                model: [
+                    "Bake…",
+                    "Sparse",
+                    "Medium",
+                    "Dense",
+                    "Bake @ 30 FPS",
+                    "Bake @ 60 FPS",
+                    "Reduce → 15 FPS",
+                    "Reduce → 30 FPS",
+                    "Reduce → 60 FPS"
+                ]
                 ToolTip.visible: hovered
                 ToolTip.text: "Resample curves into keyframes"
-                onClicked: bakeMenu.popup()
-            }
-            Menu {
-                id: bakeMenu
+
                 function bake(density) {
                     var row = root.selectedBoneRow()
                     if (!row || !row.channels) return
@@ -236,16 +243,23 @@ Rectangle {
                     AnimationControlController.reduceTrackToFps(
                         root.selectedBone, fps)
                 }
-                MenuItem { text: "Sparse"; onTriggered: bakeMenu.bake(0) }
-                MenuItem { text: "Medium"; onTriggered: bakeMenu.bake(1) }
-                MenuItem { text: "Dense";  onTriggered: bakeMenu.bake(2) }
-                MenuSeparator {}
-                MenuItem { text: "30 FPS"; onTriggered: bakeMenu.bake(3) }
-                MenuItem { text: "60 FPS"; onTriggered: bakeMenu.bake(4) }
-                MenuSeparator {}
-                MenuItem { text: "Reduce → 15 FPS"; onTriggered: bakeMenu.reduce(15) }
-                MenuItem { text: "Reduce → 30 FPS"; onTriggered: bakeMenu.reduce(30) }
-                MenuItem { text: "Reduce → 60 FPS"; onTriggered: bakeMenu.reduce(60) }
+
+                onActivated: function(index) {
+                    switch (index) {
+                        case 1: bake(0); break  // Sparse
+                        case 2: bake(1); break  // Medium
+                        case 3: bake(2); break  // Dense
+                        case 4: bake(3); break  // 30 FPS bake
+                        case 5: bake(4); break  // 60 FPS bake
+                        case 6: reduce(15); break
+                        case 7: reduce(30); break
+                        case 8: reduce(60); break
+                    }
+                    // Snap back to the header label so the combo always
+                    // shows "Bake…" — these entries are actions, not
+                    // a persistent selection.
+                    currentIndex = 0
+                }
             }
 
             Repeater {
