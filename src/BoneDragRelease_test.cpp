@@ -233,6 +233,77 @@ TEST_F(BoneDragReleaseTest, NoAnimSetsInitial) {
     EXPECT_EQ(bone->getPosition(), after);
 }
 
+// Drag-release-tick-drag-release: an animation tick between two drags
+// re-applies the curve via _updateAnimation. If the first drag's revert
+// path didn't fully restore TRS before clearing manualControlled, the
+// tick would re-apply the curve on top of leaked state and the second
+// drag's before-state would be wrong.
+TEST_F(BoneDragReleaseTest, EntityTickBetweenDragsDoesNotAccumulate) {
+    Ogre::Entity* entity = createAnimatedTestEntity("BDR_TickBetween");
+    ASSERT_NE(entity, nullptr);
+    Ogre::Bone* bone = entity->getSkeleton()->getBone("Child");
+
+    if (entity->hasAnimationState("TestAnim")) {
+        auto* state = entity->getAnimationState("TestAnim");
+        state->setEnabled(true);
+        state->setTimePosition(0.0f);
+    }
+
+    const Ogre::Vector3 origLocal = bone->getPosition();
+
+    simulateBoneDrag(bone, origLocal + Ogre::Vector3(0, 0.5f, 0));
+    BoneDragRelease::apply(bone, origLocal, bone->getInitialOrientation(),
+                           bone->getInitialScale(),
+                           /*hasAnim=*/true, /*autoKey=*/false, entity);
+    EXPECT_EQ(bone->getPosition(), origLocal);
+
+    // Frame tick: re-apply animation. Without a clean revert this
+    // re-applies the curve on top of leaked state.
+    entity->_updateAnimation();
+    entity->getSkeleton()->_updateTransforms();
+
+    const Ogre::Vector3 drag2Local = bone->getPosition();
+    EXPECT_EQ(drag2Local, origLocal) << "tick after revert leaked offset";
+
+    simulateBoneDrag(bone, origLocal + Ogre::Vector3(0.5f, 0, 0));
+    BoneDragRelease::apply(bone, drag2Local, bone->getInitialOrientation(),
+                           bone->getInitialScale(),
+                           /*hasAnim=*/true, /*autoKey=*/false, entity);
+    EXPECT_EQ(bone->getPosition(), origLocal) << "Drag 2 revert failed after mid-sequence tick";
+}
+
+// Force a derived-transform recompute via needUpdate(true) + _update
+// between drags so any cached state is flushed mid-sequence.
+TEST_F(BoneDragReleaseTest, NeedUpdateBetweenDragsDoesNotAccumulate) {
+    Ogre::Entity* entity = createAnimatedTestEntity("BDR_NeedUpdateBetween");
+    ASSERT_NE(entity, nullptr);
+    Ogre::Bone* bone = entity->getSkeleton()->getBone("Child");
+
+    const Ogre::Vector3 origLocal = bone->getPosition();
+    const Ogre::Vector3 origDerived = bone->_getDerivedPosition();
+
+    simulateBoneDrag(bone, origLocal + Ogre::Vector3(0, 0.5f, 0));
+    BoneDragRelease::apply(bone, origLocal, bone->getInitialOrientation(),
+                           bone->getInitialScale(),
+                           /*hasAnim=*/true, /*autoKey=*/false, entity);
+
+    bone->needUpdate(true);
+    bone->_update(true, true);
+    EXPECT_NEAR((bone->_getDerivedPosition() - origDerived).length(), 0.0f, 1e-5f)
+        << "derived position drifted after revert + needUpdate";
+
+    // Capture before-state for drag 2 BEFORE simulating the drag —
+    // passing bone->getPosition() AFTER the drag would feed the helper
+    // an after==before pair and short-circuit to NoOp instead of
+    // reverting.
+    const Ogre::Vector3 drag2Before = bone->getPosition();
+    simulateBoneDrag(bone, origLocal + Ogre::Vector3(0.5f, 0, 0));
+    BoneDragRelease::apply(bone, drag2Before, bone->getInitialOrientation(),
+                           bone->getInitialScale(),
+                           /*hasAnim=*/true, /*autoKey=*/false, entity);
+    EXPECT_EQ(bone->getPosition(), origLocal);
+}
+
 // Documents Ogre's parentless-bone behavior that drove the
 // TransformOperator move-handler fix: _setDerivedPosition is a no-op on
 // nodes with no parent, so the bone-drag handler falls back to
