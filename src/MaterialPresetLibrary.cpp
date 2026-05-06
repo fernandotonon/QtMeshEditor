@@ -182,7 +182,13 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
             applyPbrTemplate(mat, kPbrWorkflowUnlit);
         }
 
-        mat->compile();
+        // autoManageTextureUnits=false: keep all 6 PBR slots on a single
+        // pass. With the default `true`, Ogre splits the pass when the
+        // render system's max-texture-units cap is below the slot count
+        // (e.g., Mesa software in CI reports 8 but auto-manage still
+        // re-shuffles), which causes getTechnique(0)->getPass(0) to lose
+        // slots. Tests + slice F shaders need the slot count preserved.
+        mat->compile(/*autoManageTextureUnits=*/false);
     }
 
     // Apply to resolved entities (handles node selection as well as direct entity/sub-entity selection)
