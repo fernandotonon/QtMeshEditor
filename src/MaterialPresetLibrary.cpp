@@ -135,7 +135,18 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
         mat = mgr->create(matName.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
         Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
 
-        if (name.startsWith("Plastic")) {
+        // PBR templates must be matched first: "Metallic-Roughness"
+        // would otherwise hit the `name.startsWith("Metal")` branch
+        // below and never run configurePbrSlots, leaving 0 TUS on the
+        // pass. Specular-Glossiness and Unlit PBR are unambiguous but
+        // we keep them grouped here for readability.
+        if (name == "Metallic-Roughness") {
+            applyPbrTemplate(mat, kPbrWorkflowMetallic);
+        } else if (name == "Specular-Glossiness") {
+            applyPbrTemplate(mat, kPbrWorkflowSpecular);
+        } else if (name == "Unlit PBR") {
+            applyPbrTemplate(mat, kPbrWorkflowUnlit);
+        } else if (name.startsWith("Plastic")) {
             Ogre::ColourValue c(0.8f, 0.2f, 0.2f);
             if (name.contains("Blue"))  c = Ogre::ColourValue(0.2f, 0.3f, 0.9f);
             else if (name.contains("White")) c = Ogre::ColourValue(0.9f, 0.9f, 0.9f);
@@ -174,13 +185,10 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
             pass->setPolygonMode(Ogre::PM_WIREFRAME);
             pass->setLightingEnabled(false);
             pass->setDiffuse(Ogre::ColourValue(0.6f, 0.9f, 0.6f));
-        } else if (name == "Metallic-Roughness") {
-            applyPbrTemplate(mat, kPbrWorkflowMetallic);
-        } else if (name == "Specular-Glossiness") {
-            applyPbrTemplate(mat, kPbrWorkflowSpecular);
-        } else if (name == "Unlit PBR") {
-            applyPbrTemplate(mat, kPbrWorkflowUnlit);
         }
+        // PBR templates are dispatched at the top of this branch — see
+        // the comment there for why they must be matched before the
+        // Plastic/Metal/etc startsWith() checks.
 
         // autoManageTextureUnits=false: keep all 6 PBR slots on a single
         // pass. With the default `true`, Ogre splits the pass when the
