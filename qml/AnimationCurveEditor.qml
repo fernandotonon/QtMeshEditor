@@ -202,6 +202,56 @@ Rectangle {
                 }
             }
 
+            // Bake = explicit resample of every segment on the active
+            // bone/channel into dense TransformKeyFrames. ThemedComboBox
+            // matches the inspector's other dropdowns. The "Bake…"
+            // header stays visible (we never select an entry — selecting
+            // any item triggers the action, then we reset the index).
+            ThemedComboBox {
+                id: bakeCombo
+                width: 100; height: 22
+                anchors.verticalCenter: parent.verticalCenter
+                enabled: root.selectedBone !== ""
+                font.pixelSize: 10
+                model: [
+                    "Bake…",
+                    "Sparse",
+                    "Medium",
+                    "Dense",
+                    "Set to 10 FPS",
+                    "Set to 15 FPS",
+                    "Set to 30 FPS",
+                    "Set to 60 FPS"
+                ]
+                ToolTip.visible: hovered
+                ToolTip.text: "Resample curves into keyframes"
+
+                function bake(density) {
+                    var row = root.selectedBoneRow()
+                    if (!row || !row.channels) return
+                    for (var i = 0; i < root.channelOrder.length; i++) {
+                        var ch = root.channelOrder[i]
+                        if (row.channels[ch.id]) {
+                            AnimationControlController.resampleAllSegmentsForBone(
+                                root.selectedBone, ch.id, density)
+                        }
+                    }
+                }
+
+                onActivated: function(index) {
+                    // Density int passes through to the controller:
+                    // 0 Sparse / 1 Medium / 2 Dense / 3-6 = 10/15/30/60 FPS exact.
+                    // Use `< model.length` instead of a hand-counted
+                    // upper bound so adding/removing entries can't
+                    // silently drop the last action again.
+                    if (index >= 1 && index < model.length) bake(index - 1)
+                    // Snap back to the header label so the combo always
+                    // shows "Bake…" — these entries are actions, not
+                    // a persistent selection.
+                    currentIndex = 0
+                }
+            }
+
             Repeater {
                 model: root.activeChannelsForSelected()
                 Row {
@@ -339,10 +389,20 @@ Rectangle {
         property real keyTime: 0
 
         function applyMode(mode) {
-            CurveEditModel.setMode(
+            // Updates the CurveEditModel side-table mode + tangents.
+            // Doesn't touch Ogre's per-animation interp (that's a
+            // global setting and would distort other bones); the
+            // canvas reflects the new shape but viewport playback
+            // still uses the existing TransformKeyFrames until the
+            // user clicks Bake to commit a resample explicitly.
+            var prev = CurveEditModel.tangentsAt(
                 AnimationControlController.selectedEntityName,
                 AnimationControlController.selectedAnimation,
-                boneName, channelId, keyTime, mode)
+                boneName, channelId, keyTime)
+            var inT  = prev.length >= 1 ? prev[0] : 0
+            var outT = prev.length >= 2 ? prev[1] : 0
+            AnimationControlController.setCurveHandle(
+                boneName, channelId, keyTime, inT, outT, mode)
         }
 
         MenuItem { text: "Bezier";   onTriggered: modeMenu.applyMode(CurveEditModel.ModeBezier) }
@@ -429,6 +489,10 @@ Rectangle {
         property real   dragTangentKy: 0
         property real   dragInT: 0
         property real   dragOutT: 0
+        // CurveEditModel state at tangent-drag press, used by the
+        // CurveEditModelChangeCommand pushed on release.
+        property real   dragTangentOrigInT: 0
+        property real   dragTangentOrigOutT: 0
 
         onPressed: function(mouse) {
             if (mouse.button === Qt.MiddleButton) {
@@ -438,9 +502,9 @@ Rectangle {
                 var rhit = root.pickKeyframeAt(
                     mouse.x - curveCanvas.x, mouse.y - curveCanvas.y)
                 if (rhit) {
-                    modeMenu.boneName  = rhit.bone
-                    modeMenu.channelId = rhit.channel
-                    modeMenu.keyTime   = rhit.time
+                    modeMenu.boneName    = rhit.bone
+                    modeMenu.channelId   = rhit.channel
+                    modeMenu.keyTime     = rhit.time
                     modeMenu.popup()
                     mouse.accepted = true
                 } else {
@@ -461,6 +525,11 @@ Rectangle {
                     panArea.dragTangentKy = thit.ky
                     panArea.dragInT = thit.inT
                     panArea.dragOutT = thit.outT
+                    // Capture pre-drag CurveEditModel state for the
+                    // release-time undo entry. Mode comes through as
+                    // a third element of tangentsAt.
+                    panArea.dragTangentOrigInT  = thit.inT
+                    panArea.dragTangentOrigOutT = thit.outT
                     mouse.accepted = true
                     return
                 }
@@ -581,6 +650,30 @@ Rectangle {
                         panArea.dragBone, panArea.dragChannel,
                         panArea.dragKeyTime, panArea.dragLastValue)
                 }
+                // Value/time edits already pushed proper commands via
+                // setKeyframeValue/moveKeyframe — Ogre's existing
+                // interp draws the segment, no implicit resample.
+            } else if (panArea.dragMode === "tangent") {
+                // Tangent drag wrote CurveEditModel directly during
+                // move (no undo per move). On release, restore the
+                // pre-drag tangents and push one undoable
+                // CurveEditModelChangeCommand. Ogre's interp mode
+                // (linear vs spline) is updated to match the new
+                // shape, but no dense keyframes are inserted — the
+                // user opts in via the Bake button when they want
+                // exact curve fidelity baked into the track.
+                CurveEditModel.setTangents(
+                    AnimationControlController.selectedEntityName,
+                    AnimationControlController.selectedAnimation,
+                    panArea.dragBone, panArea.dragChannel,
+                    panArea.dragKeyTime,
+                    panArea.dragTangentOrigInT,
+                    panArea.dragTangentOrigOutT)
+                AnimationControlController.setCurveHandle(
+                    panArea.dragBone, panArea.dragChannel,
+                    panArea.dragKeyTime,
+                    panArea.dragInT, panArea.dragOutT,
+                    -1)
             }
             panArea.dragMode = ""
         }

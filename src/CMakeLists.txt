@@ -7,6 +7,7 @@ about.cpp
 AnimationBlender.cpp
 AnimationControlController.cpp
 CurveEditModel.cpp
+CurveResampler.cpp
 main.cpp
 Manager.cpp
 material.cpp
@@ -58,6 +59,9 @@ commands/TransformCommands.cpp
 commands/MoveKeyframeCommand.cpp
 commands/BulkKeyframeCommands.cpp
 commands/SetKeyframeValueCommand.cpp
+commands/ResampleCurveCommand.cpp
+commands/CurveEditModelChangeCommand.cpp
+commands/DecimateTrackCommand.cpp
 commands/BoneTransformCommand.cpp
 commands/AddKeyframeCommand.cpp
 commands/DeleteKeyframeCommand.cpp
@@ -87,6 +91,7 @@ set(HEADER_FILES
 AnimationBlender.h
 AnimationControlController.h
 CurveEditModel.h
+CurveResampler.h
 GlobalDefinitions.h
 Euler.h
 about.h

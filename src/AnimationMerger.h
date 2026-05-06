@@ -81,6 +81,21 @@ public:
                                           int* outOriginal,
                                           int* outRedundant);
 
+    /// Re-grid every node track in `animName` to a uniform `targetFps`
+    /// keyframes-per-second layout. Walks each track's existing
+    /// keyframes for evaluation, then replaces the interior with
+    /// linearly-interpolated samples at clean 1/fps intervals. Used
+    /// by the CLI / MCP / Inspector "Bake @ N FPS" actions for fast
+    /// pipeline export at a known cadence. Returns the total number
+    /// of keyframes in the animation after baking. No-op (returns 0)
+    /// if the animation is missing or has no tracks.
+    ///
+    /// `targetFps` must be > 0. First and last keyframes of each track
+    /// are preserved so the clip duration is unchanged.
+    static int bakeAnimationAtFps(Ogre::Skeleton* skel,
+                                  const std::string& animName,
+                                  int targetFps);
+
     /// Merge animations from sourceEntities into baseEntity's skeleton.
     /// Convenience wrapper; forwards an empty skeleton list to the 4-argument overload.
     static Ogre::Entity* mergeAnimations(

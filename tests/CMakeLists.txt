@@ -18,6 +18,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationBlender.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationControlController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CurveEditModel.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CurveResampler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/material.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialEditorQML.cpp
@@ -67,6 +68,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MoveKeyframeCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/BulkKeyframeCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SetKeyframeValueCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ResampleCurveCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/CurveEditModelChangeCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/DecimateTrackCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/BoneTransformCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AddKeyframeCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/DeleteKeyframeCommand.cpp

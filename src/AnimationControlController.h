@@ -255,6 +255,59 @@ public:
                                               const QString& channel,
                                               double time, double value);
 
+    /// Resample the curve segment between two adjacent keyframes for one
+    /// channel into dense TransformKeyFrames so Ogre playback follows
+    /// the Bezier/Auto/Stepped/Linear shape held in CurveEditModel.
+    /// Pushes a single ResampleCurveCommand. Returns true on success.
+    /// `t0` and `t1` must each be within 1ms of an existing keyframe.
+    Q_INVOKABLE bool resampleCurveSegment(const QString& boneName,
+                                          const QString& channel,
+                                          double t0, double t1,
+                                          double toleranceMul = 1.0,
+                                          int fixedFps = 0);
+
+    /// Set the curve handle (in/out tangent + interp mode) for one
+    /// keyframe via an undoable command, then sync Ogre's per-animation
+    /// interpolation mode (IM_LINEAR vs. IM_SPLINE) so playback follows
+    /// the authored shape WITHOUT inserting dense keyframes. The
+    /// caller can request an explicit resample later via
+    /// resampleAllSegmentsForBone().
+    Q_INVOKABLE bool setCurveHandle(const QString& boneName,
+                                    const QString& channel,
+                                    double keyTime,
+                                    double newInTangent,
+                                    double newOutTangent,
+                                    int newMode);
+
+    /// Walk every adjacent-keyframe pair on `bone`'s `channel` track
+    /// and resample each segment. Bundled into one undo macro so
+    /// Ctrl+Z reverts the whole bake. Returns the number of segments
+    /// resampled. `density` picks the bake mode:
+    ///   0 = Sparse (12× tolerance, fewest keys)
+    ///   1 = Medium (4× tolerance)
+    ///   2 = Dense  (1× tolerance, full adaptive sampling)
+    ///   3 = 30 FPS fixed-rate (one key per 1/30s, no simplification)
+    ///   4 = 60 FPS fixed-rate (one key per 1/60s)
+    Q_INVOKABLE int resampleAllSegmentsForBone(const QString& boneName,
+                                               const QString& channel,
+                                               int density = 0);
+
+    /// Decimate an already-dense track down to a target FPS by
+    /// dropping keyframes that fall closer than 1/targetFps from a
+    /// kept neighbor. Channel-agnostic (operates on the whole
+    /// track's keyframes). Pushes ResampleCurveCommands per gap so
+    /// Ctrl+Z reverts the decimation. Returns the number of frames
+    /// removed.
+    Q_INVOKABLE int reduceTrackToFps(const QString& boneName,
+                                     int targetFps);
+
+    /// Whole-animation bake helpers: temporarily suppress the per-
+    /// segment QML refresh emitted by resampleCurveSegment so a
+    /// thousands-of-segments macro doesn't fire thousands of dope
+    /// sheet rebuilds.
+    void setRowsRefreshSuspended(bool suspend) { m_suspendRowsRefresh = suspend; }
+    void refreshAfterBulkResample();
+
 public slots:
     void updateAnimationTree();
 
@@ -302,6 +355,10 @@ private:
 
     QVariantList m_animationTree;
     bool         m_animationTreeBuilt = false; ///< true after first updateAnimationTree
+    /// When true, resampleCurveSegment skips its per-call
+    /// refreshSliderTicks + boneRowsChanged emit. Set by whole-
+    /// animation bake to coalesce thousands of refreshes into one.
+    bool         m_suspendRowsRefresh  = false;
     QStringList  m_boneNames;
     QVariantList m_keyframeTicks;
 

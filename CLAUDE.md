@@ -49,6 +49,8 @@ qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
 qtmesh anim model.fbx --resample 30 -o optimized.fbx  # resample to 30 keyframes
 qtmesh anim model.fbx --decimate-step 5 -o lighter.fbx  # keep every 5th keyframe
 qtmesh anim model.fbx --resample 30 --animation "Walk" -o out.fbx  # resample specific animation
+qtmesh anim model.fbx --bake-fps 30 -o uniform.fbx     # re-grid every track to uniform 30 FPS
+qtmesh anim model.fbx --bake-fps 60 --animation "Run" -o out.fbx  # bake one animation at 60 FPS
 qtmesh pose model.fbx --animation "Walk" --time 0.5 -o posed.stl  # export single frame
 qtmesh pose model.fbx --animation "Dance" --count 4 -o pose_%02d.stl  # export N evenly spaced frames
 qtmesh validate model.fbx                      # validate mesh (exit 1 if errors found)

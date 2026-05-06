@@ -73,6 +73,16 @@ public:
     Q_INVOKABLE void clearAnimation(const QString& skeleton,
                                     const QString& anim);
 
+    /// True when at least one keyframe entry exists for (skeleton, anim,
+    /// bone, channel). Used by the whole-animation bake to skip
+    /// channels the user never authored — those default to Bezier with
+    /// zero tangents (effectively linear), so densifying them just
+    /// produces redundant keyframes.
+    Q_INVOKABLE bool hasEntryForChannel(const QString& skeleton,
+                                        const QString& anim,
+                                        const QString& bone,
+                                        const QString& channel) const;
+
     /// Evaluate the curve at `time` for one channel. Returns the stored
     /// keyframe value at `time` if there's an exact match; otherwise
     /// interpolates per the upstream keyframe's outgoing mode.

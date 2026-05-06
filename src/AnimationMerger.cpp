@@ -605,6 +605,90 @@ int AnimationMerger::simplifyAnimation(Ogre::Skeleton* skel,
     return totalRemoved;
 }
 
+int AnimationMerger::bakeAnimationAtFps(Ogre::Skeleton* skel,
+                                         const std::string& animName,
+                                         int targetFps)
+{
+    if (!skel || targetFps <= 0) return 0;
+    if (!skel->hasAnimation(animName)) return 0;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    if (!anim) return 0;
+
+    const float step = 1.0f / static_cast<float>(targetFps);
+    constexpr float kEps = 1e-4f;
+    int totalKeys = 0;
+
+    for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+        const unsigned short numKf = track->getNumKeyFrames();
+        if (numKf < 2) {
+            totalKeys += numKf;
+            continue;
+        }
+
+        // Snapshot every existing keyframe so we can interpolate
+        // against the original curve after stripping the interior.
+        std::vector<SimpleKey> snap;
+        snap.reserve(numKf);
+        for (unsigned short k = 0; k < numKf; ++k) {
+            const auto* kf = track->getNodeKeyFrame(k);
+            snap.push_back({ kf->getTime(),
+                             kf->getTranslate(),
+                             kf->getRotation(),
+                             kf->getScale() });
+        }
+        const float t0 = snap.front().time;
+        const float t1 = snap.back().time;
+        const float duration = t1 - t0;
+        if (duration <= 0.0f) {
+            totalKeys += numKf;
+            continue;
+        }
+
+        // Strip every keyframe (we'll re-create endpoints + interior).
+        for (int k = static_cast<int>(track->getNumKeyFrames()) - 1; k >= 0; --k) {
+            track->removeKeyFrame(static_cast<unsigned short>(k));
+        }
+
+        // Helper: lerp full TRS between bracketing snapshot keys.
+        auto sampleAt = [&snap](float t) -> SimpleKey {
+            const SimpleKey* lo = &snap.front();
+            const SimpleKey* hi = &snap.back();
+            for (size_t i = 0; i + 1 < snap.size(); ++i) {
+                if (t >= snap[i].time - 1e-4f
+                    && t <= snap[i+1].time + 1e-4f) {
+                    lo = &snap[i];
+                    hi = &snap[i+1];
+                    break;
+                }
+            }
+            const float gap = hi->time - lo->time;
+            const float u = gap > 1e-6f
+                ? std::clamp((t - lo->time) / gap, 0.0f, 1.0f) : 0.0f;
+            SimpleKey out;
+            out.time      = t;
+            out.translate = lo->translate + (hi->translate - lo->translate) * u;
+            out.rotation  = Ogre::Quaternion::Slerp(u, lo->rotation, hi->rotation, true);
+            out.scale     = lo->scale + (hi->scale - lo->scale) * u;
+            return out;
+        };
+
+        // Insert uniform N-FPS grid: t0, t0+step, t0+2*step, ..., t1.
+        const int sampleCount = static_cast<int>(std::ceil(duration / step)) + 1;
+        for (int i = 0; i < sampleCount; ++i) {
+            float t = t0 + i * step;
+            if (t > t1 - kEps) t = t1;
+            const SimpleKey s = sampleAt(t);
+            auto* kf = track->createNodeKeyFrame(t);
+            kf->setTranslate(s.translate);
+            kf->setRotation(s.rotation);
+            kf->setScale(s.scale);
+            ++totalKeys;
+            if (t >= t1 - kEps) break;
+        }
+    }
+    return totalKeys;
+}
+
 void AnimationMerger::analyzeRedundantKeyframes(const Ogre::Animation* anim,
                                                 const SimplifyTolerances& tol,
                                                 int* outOriginal,

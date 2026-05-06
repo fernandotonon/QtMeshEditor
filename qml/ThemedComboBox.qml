@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import ThemeManager 1.0
 
 // Themed ComboBox matching the look of the typeahead dropdowns elsewhere
@@ -73,10 +74,20 @@ ComboBox {
 
     // Pop directly under the input (no gap) — matches the SceneTreeNode
     // material typeahead. Default ComboBox.popup leaves ~5px gap on macOS.
+    // Cap height so long lists scroll inside the popup instead of getting
+    // clipped by parent bounds (the curve editor's bake combo hits this
+    // with 10+ items in a small editor area).
     popup: Popup {
+        // Use a native top-level window for the popup so it escapes
+        // the host QQuickWidget's bounds. Long bake/reduce lists in
+        // the curve editor's narrow strip would otherwise be clipped.
+        // popupType: Popup.Window is Qt 6.8+ — falls back gracefully
+        // when unsupported, but on Qt 6.9 (our build) it's the
+        // canonical fix for QQuickWidget popup clipping.
+        popupType: Popup.Window
         y: control.height
         width: control.width
-        implicitHeight: contentItem.implicitHeight
+        implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
         padding: 1
 
         contentItem: ListView {
@@ -84,6 +95,11 @@ ComboBox {
             implicitHeight: contentHeight
             model: control.delegateModel
             currentIndex: control ? control.highlightedIndex : 0
+            // Don't auto-scroll to currentIndex: that bound to
+            // control.highlightedIndex keeps snapping the view back
+            // to the top when the user scrolls (highlightedIndex stays
+            // 0 between hovers). Visual highlight is delegate-driven.
+            highlightFollowsCurrentItem: false
             ScrollIndicator.vertical: ScrollIndicator { }
         }
 

@@ -5,6 +5,7 @@
 #include <QTest>
 #include <QThread>
 #include "AnimationControlController.h"
+#include "CurveEditModel.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
@@ -1104,6 +1105,227 @@ TEST_F(AnimationControlControllerTest, MoveKeyframePreviewNoOpOnIdenticalTime) {
 TEST_F(AnimationControlControllerPlaybackTest, MoveKeyframePreviewNoOpWithoutSelection) {
     auto* ctrl = AnimationControlController::instance();
     EXPECT_FALSE(ctrl->moveKeyframePreview("Bone", 0.5, 0.6));
+}
+
+// ── setCurveHandle / Ogre interp sync / explicit Bake ────────────────────────
+
+TEST_F(AnimationControlControllerTest, SetCurveHandleDoesNotInsertKeyframes) {
+    // A mode/tangent edit must update the side-table + Ogre's per-anim
+    // interp mode WITHOUT exploding the keyframe count. The user opts
+    // into resampling explicitly via the Bake button.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_NoBake");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int before = track->getNumKeyFrames();
+
+    EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 0.0, 0.0,
+                                      CurveEditModel::ModeBezier));
+
+    EXPECT_EQ(track->getNumKeyFrames(), before)
+        << "setCurveHandle must not insert keyframes";
+}
+
+TEST_F(AnimationControlControllerTest, SetCurveHandleDoesNotMutateAnimInterp) {
+    // Animation::setInterpolationMode is per-Animation, not per-track —
+    // touching it on a single-bone curve edit distorts every other
+    // bone's track. setCurveHandle must leave the animation's interp
+    // mode untouched; the user opts in to a resample via Bake instead.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_NoInterpFlip");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+    Ogre::Animation* anim = entity->getSkeleton()->getAnimation("TestAnim");
+    const auto before = anim->getInterpolationMode();
+
+    EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 1.0, 1.0,
+                                      CurveEditModel::ModeBezier));
+    EXPECT_EQ(anim->getInterpolationMode(), before);
+
+    EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 1.0, 1.0,
+                                      CurveEditModel::ModeStepped));
+    EXPECT_EQ(anim->getInterpolationMode(), before);
+}
+
+TEST_F(AnimationControlControllerTest, SetCurveHandleUndoRestoresModelEntry) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_HandleUndo");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+    QString skel = QString::fromStdString(entity->getName());
+
+    EXPECT_TRUE(ctrl->setCurveHandle(bone, "tx", 0.5, 1.0, 1.0,
+                                      CurveEditModel::ModeStepped));
+
+    auto* m = CurveEditModel::instance();
+    auto after = m->tangentsAt(skel, "TestAnim", bone, "tx", 0.5);
+    EXPECT_EQ(after[2].toInt(), CurveEditModel::ModeStepped);
+
+    UndoManager::getSingleton()->stack()->undo();
+
+    auto restored = m->tangentsAt(skel, "TestAnim", bone, "tx", 0.5);
+    EXPECT_EQ(restored[2].toInt(), CurveEditModel::ModeBezier);
+}
+
+TEST_F(AnimationControlControllerTest, ResampleAllSegmentsForBoneIsExplicit) {
+    // The Bake button calls this to commit the visual curve into
+    // dense TransformKeyFrames. Returns the number of segments
+    // resampled, and the keyframe count grows substantially.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_BakeButton");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    // Stepped on the start key drives the resampler to keep dense
+    // samples through the discontinuity.
+    ctrl->setCurveHandle(bone, "tx", 0.0, 0.0, 0.0,
+                         CurveEditModel::ModeStepped);
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int before = track->getNumKeyFrames();
+
+    // Dense level keeps fidelity at the lowest tolerance multiplier,
+    // so the bake reliably adds keys for a stepped curve.
+    const int segments = ctrl->resampleAllSegmentsForBone(bone, "tx", 2);
+    EXPECT_GT(segments, 0);
+    EXPECT_GT(track->getNumKeyFrames(), before)
+        << "Bake should densify the track";
+}
+
+TEST_F(AnimationControlControllerTest, BakeAt60FpsRegridsTrack) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_Bake60");
+    ASSERT_NE(entity, nullptr);
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int before = track->getNumKeyFrames();
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 6);  // 6 = 60 FPS
+    const int after = track->getNumKeyFrames();
+    EXPECT_GT(after, before + 30) << "60 FPS bake must noticeably densify a sparse track";
+}
+
+TEST_F(AnimationControlControllerTest, BakeUndoEmitsBoneRowsChanged) {
+    // Ctrl+Z after a Bake must fire boneRowsChanged so the QML
+    // dope-sheet + curve-editor refresh their cached keyTimes —
+    // otherwise the views show stale dense keyframes even though
+    // the underlying track has been reverted ("intermediate state"
+    // bug user reported).
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_BakeUndoSignal");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    QSignalSpy spy(ctrl, &AnimationControlController::boneRowsChanged);
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 2);
+    spy.clear();
+
+    ctrl->onUndoRedoCommandApplied();
+    EXPECT_GE(spy.count(), 1) << "undo path must emit boneRowsChanged";
+}
+
+TEST_F(AnimationControlControllerTest, BakeFixedFpsProducesUniformDensity) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_BakeFps");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int baseCount = track->getNumKeyFrames();
+
+    // density=5 → 30 FPS exact. TestAnim is a 1s clip, expect ~30
+    // uniform keys after baking. Just verify the count grew well
+    // beyond the original sparse anchors.
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 5);
+    EXPECT_GT(track->getNumKeyFrames(), baseCount + 10)
+        << "30 FPS bake should produce predictable dense keys";
+}
+
+TEST_F(AnimationControlControllerTest, BakeDensityLevelsProduceDifferentCounts) {
+    // Sparse < Medium < Dense in resulting keyframe counts (for a
+    // curve sharp enough that simplification doesn't collapse the
+    // medium and dense passes to identical counts).
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_BakeDensity");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+    ctrl->setCurveHandle(bone, "tx", 0.0, 0.0, 0.0,
+                         CurveEditModel::ModeStepped);
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int baseCount = track->getNumKeyFrames();
+
+    // Sparse pass.
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 0);
+    const int sparseCount = track->getNumKeyFrames();
+    UndoManager::getSingleton()->stack()->undo();
+    EXPECT_EQ(track->getNumKeyFrames(), baseCount);
+
+    // Dense pass.
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 2);
+    const int denseCount = track->getNumKeyFrames();
+
+    EXPECT_GT(denseCount, sparseCount)
+        << "Dense bake must produce more keyframes than Sparse";
+}
+
+TEST_F(AnimationControlControllerTest, ResampleAllSegmentsForBoneIsSingleUndoStep) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_BakeMacro");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    ctrl->setCurveHandle(bone, "tx", 0.0, 0.0, 0.0,
+                         CurveEditModel::ModeStepped);
+    auto* stack = UndoManager::getSingleton()->stack();
+    const int before = stack->count();
+
+    ctrl->resampleAllSegmentsForBone(bone, "tx");
+
+    EXPECT_EQ(stack->count(), before + 1)
+        << "Bake must collapse all per-segment resamples into ONE undo entry";
 }
 
 TEST_F(AnimationControlControllerTest, SetKeyframeValuePreviewWritesWithoutUndoPush) {

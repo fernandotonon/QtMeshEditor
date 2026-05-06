@@ -6,6 +6,10 @@
 #include "commands/MoveKeyframeCommand.h"
 #include "commands/BulkKeyframeCommands.h"
 #include "commands/SetKeyframeValueCommand.h"
+#include "commands/ResampleCurveCommand.h"
+#include "commands/CurveEditModelChangeCommand.h"
+#include "commands/DecimateTrackCommand.h"
+#include "CurveEditModel.h"
 #include "commands/AddKeyframeCommand.h"
 #include "commands/DeleteKeyframeCommand.h"
 #include <QApplication>
@@ -577,6 +581,11 @@ void AnimationControlController::onUndoRedoCommandApplied()
 
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);
+    // The dope sheet + curve editor read keyTimes from allBoneRows(),
+    // which they refresh on boneRowsChanged. Without this emit, undo
+    // of a Bake leaves the QML views showing stale dense keyframes
+    // even though the underlying track has been reverted.
+    emit boneRowsChanged();
 }
 
 // ── Keyframe editing ──────────────────────────────────────────────────────────
@@ -1419,3 +1428,254 @@ bool AnimationControlController::setKeyframeValuePreview(const QString& boneName
     notifyOgreUpdate();
     return true;
 }
+
+namespace {
+
+// Find the immediate predecessor and successor of `keyTime` in
+// `anchorTimes`. anchors is the AUTHORED key list (without resampled
+// frames) — passing the dense post-resample list here would expand the
+// segment by one synthetic neighbor on each pass and the resampler
+// would never close on a stable shape.
+bool neighborAnchors(double keyTime,
+                     const QVariantList& anchorTimes,
+                     double& prevOut, double& nextOut)
+{
+    constexpr double kEps = 0.001;
+    double prev = -1.0, next = -1.0;
+    bool havePrev = false, haveNext = false;
+    for (const QVariant& v : anchorTimes) {
+        const double t = v.toDouble();
+        if (t < keyTime - kEps) {
+            if (!havePrev || t > prev) { prev = t; havePrev = true; }
+        } else if (t > keyTime + kEps) {
+            if (!haveNext || t < next) { next = t; haveNext = true; }
+        }
+    }
+    prevOut = prev;
+    nextOut = next;
+    return havePrev || haveNext;
+}
+
+} // namespace
+
+bool AnimationControlController::resampleCurveSegment(const QString& boneName,
+                                                      const QString& channel,
+                                                      double t0, double t1,
+                                                      double toleranceMul,
+                                                      int fixedFps)
+{
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    const std::string boneStd = boneName.toStdString();
+    if (!m_selectedSkeleton->hasBone(boneStd)) return false;
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneStd);
+    if (!bone || !anim->hasNodeTrack(bone->getHandle())) return false;
+    if (t1 <= t0) return false;
+
+    // Pre-check: both endpoints must be near existing keyframes so the
+    // command's interior-overwrite math is well defined.
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    bool foundT0 = false, foundT1 = false;
+    constexpr float kEps = 0.001f;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const float kt = track->getKeyFrame(i)->getTime();
+        if (std::fabs(kt - static_cast<float>(t0)) <= kEps) foundT0 = true;
+        if (std::fabs(kt - static_cast<float>(t1)) <= kEps) foundT1 = true;
+    }
+    if (!foundT0 || !foundT1) return false;
+
+    auto* cmd = new ResampleCurveCommand(m_selectedEntityName, // NOSONAR — QUndoStack owns
+                                          m_selectedAnimation,
+                                          boneStd,
+                                          channel.toLower().toStdString(),
+                                          static_cast<float>(t0),
+                                          static_cast<float>(t1),
+                                          toleranceMul,
+                                          fixedFps);
+    UndoManager::getSingleton()->push(cmd);
+    SentryReporter::addBreadcrumb("ui.action", "Resampled curve segment");
+    if (!m_suspendRowsRefresh) {
+        refreshSliderTicks();
+        emit boneRowsChanged();
+    }
+    return true;
+}
+
+bool AnimationControlController::setCurveHandle(const QString& boneName,
+                                                 const QString& channel,
+                                                 double keyTime,
+                                                 double newInTangent,
+                                                 double newOutTangent,
+                                                 int newMode)
+{
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
+    if (m_selectedEntityName.empty() || m_selectedAnimation.empty()) return false;
+
+    auto* m = CurveEditModel::instance();
+    const QString skel = QString::fromStdString(m_selectedEntityName);
+    const QString anim = QString::fromStdString(m_selectedAnimation);
+    const QVariantList prev = m->tangentsAt(skel, anim, boneName, channel, keyTime);
+    const double oldIn   = prev.size() >= 1 ? prev[0].toDouble() : 0.0;
+    const double oldOut  = prev.size() >= 2 ? prev[1].toDouble() : 0.0;
+    const int    oldMode = prev.size() >= 3 ? prev[2].toInt()    : 0;
+    const int    finalMode = (newMode < 0) ? oldMode : newMode;
+
+    auto* cmd = new CurveEditModelChangeCommand( // NOSONAR — stack owns
+            m_selectedEntityName, m_selectedAnimation,
+            boneName.toStdString(), channel.toLower().toStdString(),
+            keyTime,
+            oldIn, oldOut, oldMode,
+            newInTangent, newOutTangent, finalMode);
+    UndoManager::getSingleton()->push(cmd);
+    SentryReporter::addBreadcrumb("ui.action", "Edited curve handle");
+    // We don't touch Ogre's per-Animation interp mode here. The
+    // Animation::setInterpolationMode setter is animation-wide, not
+    // per-track, so flipping it for one bone's curve change visibly
+    // distorts every other bone's track in the same animation. The
+    // curve editor canvas shows the authored shape; the user clicks
+    // Bake to commit the curve into dense TransformKeyFrames when
+    // playback needs to match exactly.
+    return true;
+}
+
+int AnimationControlController::resampleAllSegmentsForBone(const QString& boneName,
+                                                            const QString& channel,
+                                                            int density)
+{
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return 0;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return 0;
+    const std::string boneStd = boneName.toStdString();
+    if (!m_selectedSkeleton->hasBone(boneStd)) return 0;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return 0;
+
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneStd);
+    if (!bone || !anim->hasNodeTrack(bone->getHandle())) return 0;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    if (track->getNumKeyFrames() < 2) return 0;
+
+    // Map density level → (toleranceMul, baselineFps, fixedFps).
+    // Fixed-FPS modes lock the track to that exact rate. Adaptive
+    // modes pre-decimate to a baseline so repeated bakes at the same
+    // density CONVERGE to a stable keyframe count (without the
+    // pre-decimate, on an already-dense track each anchor pair is
+    // already smaller than the simplifier's source rate, and the
+    // bake becomes a no-op).
+    double toleranceMul   = 1.0;
+    int    fixedFps       = 0;  // exact-rate modes
+    int    baselineFps    = 0;  // adaptive pre-decimate target
+    switch (density) {
+        case 6:  fixedFps = 60; break;          // 60 FPS exact
+        case 5:  fixedFps = 30; break;          // 30 FPS exact
+        case 4:  fixedFps = 15; break;          // 15 FPS exact
+        case 3:  fixedFps = 10; break;          // 10 FPS exact
+        case 2:  toleranceMul = 1.0;  baselineFps = 30; break;  // Dense
+        case 1:  toleranceMul = 4.0;  baselineFps = 15; break;  // Medium
+        default: toleranceMul = 12.0; baselineFps = 5;  break;  // Sparse
+    }
+
+    std::vector<double> anchors;
+    anchors.reserve(track->getNumKeyFrames());
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        anchors.push_back(track->getKeyFrame(i)->getTime());
+    }
+
+    auto* stack = UndoManager::getSingleton()->stack();
+    stack->beginMacro(QObject::tr("Resample bone curve"));
+    // Suspend per-segment QML refresh — the dope sheet + curve editor
+    // would otherwise rebuild thousands of times during the macro.
+    const bool prevSuspend = m_suspendRowsRefresh;
+    m_suspendRowsRefresh = true;
+
+    int count = 0;
+
+    // Fixed-FPS bake: collapse the track to first+last anchor, then
+    // resample that single segment at exactly N FPS. Net effect is a
+    // single uniform N-FPS grid regardless of starting density —
+    // works for source-already-at-N-FPS (re-grids non-uniform
+    // spacing) AND source-much-denser-than-N (drops to N) AND
+    // source-sparser-than-N (densifies to N).
+    if (fixedFps > 0 && anchors.size() >= 2) {
+        // Treat the whole clip as a single segment so the per-pair
+        // loop's "1/N source duration → 0 new samples" issue
+        // disappears. ResampleCurveCommand snapshots kfTimes/kfValues
+        // from the live track BEFORE stripping the interior, so the
+        // curve evaluator still has the full original data to
+        // interpolate from when generating the dense samples — even
+        // though the strip+insert phase replaces every interior
+        // keyframe with the uniform N-FPS grid.
+        const int beforeKeys = static_cast<int>(track->getNumKeyFrames());
+        if (resampleCurveSegment(boneName, channel,
+                                  anchors.front(), anchors.back(),
+                                  1.0, fixedFps)) {
+            ++count;
+            const int afterKeys = static_cast<int>(track->getNumKeyFrames());
+            SentryReporter::addBreadcrumb("ui.action",
+                QString("Bake @ %1 FPS: %2 → %3 keys")
+                    .arg(fixedFps).arg(beforeKeys).arg(afterKeys));
+        }
+    } else {
+        // Adaptive modes use a coarser baselineFps as a pre-decimate
+        // so the simplifier has consistent input regardless of
+        // starting density. Repeated Sparse/Medium/Dense bakes
+        // converge to stable counts (without pre-decimation, on an
+        // already-dense track each anchor pair was already smaller
+        // than the simplifier's source sample interval, and the
+        // bake silently no-op'd).
+        if (baselineFps > 0) {
+            reduceTrackToFps(boneName, baselineFps);
+            anchors.clear();
+            anchors.reserve(track->getNumKeyFrames());
+            for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+                anchors.push_back(track->getKeyFrame(i)->getTime());
+            }
+        }
+        for (size_t i = 1; i < anchors.size(); ++i) {
+            if (resampleCurveSegment(boneName, channel,
+                                      anchors[i-1], anchors[i],
+                                      toleranceMul, fixedFps)) {
+                ++count;
+            }
+        }
+    }
+    m_suspendRowsRefresh = prevSuspend;
+    stack->endMacro();
+    if (!m_suspendRowsRefresh) {
+        refreshSliderTicks();
+        emit boneRowsChanged();
+    }
+    return count;
+}
+
+void AnimationControlController::refreshAfterBulkResample()
+{
+    refreshSliderTicks();
+    emit boneRowsChanged();
+}
+
+int AnimationControlController::reduceTrackToFps(const QString& boneName,
+                                                  int targetFps)
+{
+    if (boneName.isEmpty() || targetFps <= 0) return 0;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return 0;
+    const std::string boneStd = boneName.toStdString();
+    if (!m_selectedSkeleton->hasBone(boneStd)) return 0;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return 0;
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneStd);
+    if (!bone || !anim->hasNodeTrack(bone->getHandle())) return 0;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    const int beforeCount = static_cast<int>(track->getNumKeyFrames());
+
+    auto* cmd = new DecimateTrackCommand( // NOSONAR — QUndoStack owns
+        m_selectedEntityName, m_selectedAnimation, boneStd, targetFps);
+    UndoManager::getSingleton()->push(cmd);
+    SentryReporter::addBreadcrumb("ui.action", "Reduced keyframes to target FPS");
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    const int afterCount = static_cast<int>(track->getNumKeyFrames());
+    return std::max(0, beforeCount - afterCount);
+}
+

@@ -522,6 +522,9 @@ void CLIPipeline::printUsage()
         "                                    Remove redundant keyframes (tolerance-based, preserves sharp keys)\n"
         "                                    Default preset: balanced (~1mm / 0.5°)\n"
         "                                    --tolerance T sets translation+scale tolerance (world units)\n"
+        "  anim <file> --bake-fps N [-o <output>] [--animation <name>]\n"
+        "                                    Re-grid to exactly N keyframes per second (uniform)\n"
+        "                                    Common values: 10, 15, 30, 60. Mixamo / pipeline export.\n"
         "  anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]\n"
         "                                    Report % redundant keyframes and projected file-size savings\n"
         "  validate <file> [--json]          Validate mesh geometry (exit 1 if errors found)\n"
@@ -1295,9 +1298,11 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool resampleMode = false;
     bool decimateMode = false;
     bool simplifyMode = false;
+    bool bakeFpsMode  = false;
     bool jsonOutput = false;
     int resampleCount = 0;
     int decimateStep = 0;
+    int bakeFps      = 0;
     // Default tolerances mirror the AnimationMerger "Balanced" preset
     // (1mm translation, 0.5° rotation) — visually indistinguishable on
     // meter-scale character clips. Override via --tolerance / --rotation-tolerance-deg
@@ -1339,6 +1344,11 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         if (arg == "--decimate-step" && i + 1 < argc) {
             decimateMode = true;
             decimateStep = QString(argv[++i]).toInt();
+            continue;
+        }
+        if (arg == "--bake-fps" && i + 1 < argc) {
+            bakeFpsMode = true;
+            bakeFps = QString(argv[++i]).toInt();
             continue;
         }
         if (arg == "--simplify") { simplifyMode = true; continue; }
@@ -1387,21 +1397,23 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     filePath = positional[0];
 
     if (!listMode && !renameMode && !mergeMode && !resampleMode && !decimateMode
-        && !simplifyMode && !analyzeMode) {
-        err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --simplify, or --analyze." << Qt::endl;
+        && !simplifyMode && !analyzeMode && !bakeFpsMode) {
+        err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --simplify, --bake-fps, or --analyze." << Qt::endl;
         err() << "Usage: qtmesh anim <file> --list [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --rename <old> <new> [-o <output>]" << Qt::endl;
         err() << "       qtmesh anim <file> --merge <f1> [f2...] [-o <output>]" << Qt::endl;
         err() << "       qtmesh anim <file> --resample N [-o <output>] [--animation <name>]" << Qt::endl;
         err() << "       qtmesh anim <file> --decimate-step S [-o <output>] [--animation <name>]" << Qt::endl;
+        err() << "       qtmesh anim <file> --bake-fps N [-o <output>] [--animation <name>]" << Qt::endl;
         err() << "       qtmesh anim <file> --simplify [--preset {conservative|balanced|aggressive}] [--tolerance T] [--rotation-tolerance-deg D] [-o <output>] [--animation <name>]" << Qt::endl;
         err() << "                          (--tolerance T sets translation+scale tolerance in world units)" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]" << Qt::endl;
         return 2;
     }
 
-    if ((renameMode || mergeMode || resampleMode || decimateMode || simplifyMode) && outputPath.isEmpty()) {
+    if ((renameMode || mergeMode || resampleMode || decimateMode || simplifyMode
+         || bakeFpsMode) && outputPath.isEmpty()) {
         outputPath = filePath;  // overwrite in place
     }
 
@@ -1418,6 +1430,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                    : resampleMode  ? "resample"
                    : decimateMode  ? "decimate"
                    : simplifyMode  ? "simplify"
+                   : bakeFpsMode   ? "bake-fps"
                    : analyzeMode   ? "analyze"
                                    : "merge";
     SentryReporter::addBreadcrumb("cli.anim", QString("Anim %1 .%2%3")
@@ -1441,8 +1454,19 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         skel = animOnlySkeletons.first();
 
     if (!skel) {
-        SentryReporter::captureMessage(QString("CLI anim: import failed (.%1)").arg(fi.suffix()), "error");
-        err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        // Distinguish "import failed" from "loaded but non-rigged" so
+        // CLI users get an actionable message. The first branch fires
+        // when no entity was created AND no anim-only skeleton was
+        // returned by the importer.
+        const bool importFailed = entities.isEmpty() && animOnlySkeletons.isEmpty();
+        SentryReporter::captureMessage(QString("CLI anim: %1 (.%2)")
+            .arg(importFailed ? "import failed" : "no skeleton")
+            .arg(fi.suffix()), "error");
+        if (importFailed) {
+            err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        } else {
+            err() << "Error: No skeleton found." << Qt::endl;
+        }
         return 1;
     }
 
@@ -1681,6 +1705,65 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
         cliWrite(QString("Decimated %1 animation(s) with step %2 (removed %3 keyframes)\nOutput: %4\n")
             .arg(animsProcessed).arg(decimateStep).arg(totalRemoved).arg(outFi.fileName()));
+        return 0;
+    }
+
+    // Bake-FPS mode: re-grid every animation to a uniform N FPS layout.
+    if (bakeFpsMode) {
+        if (bakeFps < 1) {
+            err() << "Error: --bake-fps requires N >= 1." << Qt::endl;
+            return 2;
+        }
+
+        SentryReporter::addBreadcrumb("cli.anim", QString("Bake fps=%1 anim=%2")
+            .arg(bakeFps).arg(animationFilter.isEmpty() ? "(all)" : animationFilter));
+
+        std::vector<std::string> animNames;
+        unsigned short numAnims = skel->getNumAnimations();
+        for (unsigned short i = 0; i < numAnims; ++i)
+            animNames.push_back(skel->getAnimation(i)->getName());
+
+        int totalKeys = 0;
+        int animsProcessed = 0;
+        for (const auto& name : animNames) {
+            if (!animationFilter.isEmpty() && animationFilter.toStdString() != name)
+                continue;
+            const int kept = AnimationMerger::bakeAnimationAtFps(skel.get(), name, bakeFps);
+            totalKeys += kept;
+            ++animsProcessed;
+        }
+
+        if (animsProcessed == 0) {
+            err() << "Error: No matching animation found." << Qt::endl;
+            if (!animationFilter.isEmpty()) {
+                err() << "Available animations:" << Qt::endl;
+                for (const auto& name : animNames)
+                    err() << "  " << QString::fromStdString(name) << Qt::endl;
+            }
+            return 1;
+        }
+
+        QFileInfo outFi(outputPath);
+        if (isAnimOnlyInput) {
+            QString exportErr;
+            if (!exportAnimOnly(skel, outFi.absoluteFilePath(), &exportErr)) {
+                SentryReporter::captureMessage(QString("CLI anim: bake-fps export failed (anim-only)"), "error");
+                err() << "Error: Export failed: " << exportErr << Qt::endl;
+                return 1;
+            }
+        } else {
+            entity->refreshAvailableAnimationState();
+            auto* node = entity->getParentSceneNode();
+            int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), formatForExtension(outputPath));
+            if (result != 0) {
+                SentryReporter::captureMessage(QString("CLI anim: bake-fps export failed (.%1)").arg(outFi.suffix()), "error");
+                err() << "Error: Export failed." << Qt::endl;
+                return 1;
+            }
+        }
+
+        cliWrite(QString("Baked %1 animation(s) at %2 FPS (%3 total keyframes)\nOutput: %4\n")
+            .arg(animsProcessed).arg(bakeFps).arg(totalKeys).arg(outFi.fileName()));
         return 0;
     }
 

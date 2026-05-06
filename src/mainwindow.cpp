@@ -388,6 +388,13 @@ void MainWindow::initToolBar()
                     skel->reset(true);
                     skel->_notifyManualBonesDirty();
                     ent->_updateAnimation();
+                    // _updateAnimation correctly skips disabled
+                    // animation states, leaving bones at bind pose
+                    // when no animation is active — that's what the
+                    // user expects (e.g. baking from a T-pose view
+                    // should keep the T-pose). Don't second-guess
+                    // it: an enabled-but-paused state still applies
+                    // through _updateAnimation at its current time.
                     skel->_updateTransforms();
                 }
             }

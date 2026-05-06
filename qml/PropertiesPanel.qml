@@ -2026,6 +2026,40 @@ Rectangle {
                                             }
                                         }
                                     }
+
+                                    // Bake — resample / reduce every bone track in this
+                                    // animation. Mirrors the curve editor's per-bone Bake
+                                    // dropdown but applies to the whole animation in one
+                                    // undo macro. Hidden for non-skeletal entities.
+                                    ThemedComboBox {
+                                        id: bakeAnimCombo
+                                        visible: grp.hasSkeleton
+                                        width: 90; height: 18
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        font.pixelSize: 10
+                                        model: [
+                                            "Bake…",
+                                            "Sparse",
+                                            "Medium",
+                                            "Dense",
+                                            "Set to 10 FPS",
+                                            "Set to 15 FPS",
+                                            "Set to 30 FPS",
+                                            "Set to 60 FPS"
+                                        ]
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: "Bake every bone track in this animation"
+                                        onActivated: function(index) {
+                                            // Density int passes through:
+                                            // 0 Sparse / 1 Medium / 2 Dense / 3-6 = 10/15/30/60 FPS exact.
+                                            if (index >= 1 && index < model.length) {
+                                                PropertiesPanelController.bakeAnimation(
+                                                    grp.entity, modelData.name, index - 1)
+                                            }
+                                            currentIndex = 0
+                                            simplifyBtn.cachedAnalysis = null
+                                        }
+                                    }
                                 }
                             }
                         }

@@ -48,6 +48,27 @@ std::string CurveEditModel::makeKey(const QString& skeleton,
     return ss.str();
 }
 
+bool CurveEditModel::hasEntryForChannel(const QString& skeleton,
+                                         const QString& anim,
+                                         const QString& bone,
+                                         const QString& channel) const
+{
+    // Composite key prefix: anything matching this (bone, channel) pair
+    // regardless of time means the user authored at least one curve
+    // handle for it.
+    std::ostringstream prefix;
+    prefix << skeleton.toStdString() << '|'
+           << anim.toStdString()     << '|'
+           << bone.toStdString()     << '|'
+           << channel.toStdString()  << '|';
+    const std::string p = prefix.str();
+    for (const auto& [key, entry] : m_entries) {
+        if (key.size() >= p.size() && key.compare(0, p.size(), p) == 0)
+            return true;
+    }
+    return false;
+}
+
 QVariantList CurveEditModel::tangentsAt(const QString& skeleton,
                                          const QString& anim,
                                          const QString& bone,
