@@ -100,14 +100,29 @@ TEST_F(DecimateTrackCommandTest, FirstAndLastFramesPreserved) {
     auto* track = trackOf(entity);
     ASSERT_NE(track, nullptr);
 
-    // Capture the original first/last times.
+    // Densify the track first so decimate has something to drop —
+    // otherwise the original 3 sparse anchors fit any low-fps target
+    // without modification and this test wouldn't exercise the
+    // endpoint-preservation logic.
+    for (int i = 1; i < 50; ++i) {
+        const float t = static_cast<float>(i) / 50.0f;
+        if (t < 0.99f) {
+            auto* kf = track->createNodeKeyFrame(t);
+            kf->setTranslate(Ogre::Vector3::ZERO);
+            kf->setRotation(Ogre::Quaternion::IDENTITY);
+            kf->setScale(Ogre::Vector3::UNIT_SCALE);
+        }
+    }
     const float firstT = track->getKeyFrame(0)->getTime();
     const float lastT  = track->getKeyFrame(track->getNumKeyFrames() - 1)->getTime();
+    const int dense = track->getNumKeyFrames();
 
     DecimateTrackCommand cmd(entity->getName(), "TestAnim",
                              track->getAssociatedNode()->getName(), 5);
     cmd.redo();
 
+    EXPECT_LT(track->getNumKeyFrames(), dense)
+        << "decimate must actually drop keys for the endpoint check to be meaningful";
     EXPECT_NEAR(track->getKeyFrame(0)->getTime(), firstT, 1e-4);
     EXPECT_NEAR(track->getKeyFrame(track->getNumKeyFrames() - 1)->getTime(),
                 lastT, 1e-4);

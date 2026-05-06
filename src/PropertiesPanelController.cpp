@@ -799,8 +799,13 @@ int PropertiesPanelController::bakeAnimation(const QString& entityName,
         stack->endMacro();
         animCtrl->refreshAfterBulkResample();
 
-        // Restore the prior selection so the user's panel state stays put.
-        if (prevEntity != entityName || prevAnim != animName) {
+        // Restore the prior selection so the user's panel state stays
+        // put. Skip when the prior selection was empty — passing empty
+        // names to selectAnimation clears the controller's selected
+        // entity/animation, which would lose the bake-time selection
+        // we just installed.
+        if ((prevEntity != entityName || prevAnim != animName)
+            && !prevEntity.isEmpty() && !prevAnim.isEmpty()) {
             animCtrl->selectAnimation(prevEntity, prevAnim);
         }
 
