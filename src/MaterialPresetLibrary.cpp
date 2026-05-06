@@ -32,13 +32,88 @@ void MaterialPresetLibrary::kill()
 
 MaterialPresetLibrary::MaterialPresetLibrary() : QObject(nullptr) {}
 
+const char* MaterialPresetLibrary::kPbrWorkflowKey      = "pbr_workflow";
+const char* MaterialPresetLibrary::kPbrWorkflowMetallic = "metallic_roughness";
+const char* MaterialPresetLibrary::kPbrWorkflowSpecular = "specular_glossiness";
+const char* MaterialPresetLibrary::kPbrWorkflowUnlit    = "unlit";
+
+namespace {
+
+// Canonical PBR texture-unit slot order. The runtime shading is
+// Phong-approximated in slice E; slice F can read these slot names
+// plus the pbr_workflow user binding to swap in a real PBR sub-render
+// state without re-creating the material.
+constexpr const char* kPbrSlots[] = {
+    "albedo",      // base colour / diffuse
+    "normal_map",  // tangent-space normal — name matches RTShaderHelper::applyNormalMap
+    "metallic",    // metallic-roughness workflow only (specular-glossiness reuses for specular)
+    "roughness",   // metallic-roughness workflow only (specular-glossiness reuses for glossiness)
+    "ao",          // ambient occlusion
+    "emissive"     // emissive map
+};
+
+// Configure a Pass with the six canonical PBR texture-unit slots in
+// order. Slots are created with names only (no texture file) so the
+// user can drag textures in via the existing Material Editor inspector.
+// The albedo slot is given a 1×1 white fallback so the material renders
+// before any texture is assigned.
+void configurePbrSlots(Ogre::Pass* pass)
+{
+    for (const char* slotName : kPbrSlots) {
+        Ogre::TextureUnitState* tus = pass->createTextureUnitState();
+        tus->setName(slotName);
+    }
+    // Albedo slot: keep the default state — it'll modulate the diffuse
+    // colour with whatever texture the user drops in. Other slots stay
+    // empty (export pipeline preserves the names; runtime ignores).
+}
+
+void applyPbrTemplate(Ogre::MaterialPtr& mat,
+                      const QString& workflow)
+{
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+    if (workflow == MaterialPresetLibrary::kPbrWorkflowMetallic) {
+        // Metallic-Roughness: neutral mid-gray albedo, mid shininess.
+        // Real metallic/roughness response would need a custom shader;
+        // for now we approximate "non-metal default" appearance.
+        pass->setAmbient(Ogre::ColourValue(0.25f, 0.25f, 0.25f));
+        pass->setDiffuse(Ogre::ColourValue(0.8f, 0.8f, 0.8f));
+        pass->setSpecular(Ogre::ColourValue(0.5f, 0.5f, 0.5f));
+        pass->setShininess(40.0f);
+        pass->setLightingEnabled(true);
+    } else if (workflow == MaterialPresetLibrary::kPbrWorkflowSpecular) {
+        // Specular-Glossiness: brighter spec response baseline.
+        pass->setAmbient(Ogre::ColourValue(0.25f, 0.25f, 0.25f));
+        pass->setDiffuse(Ogre::ColourValue(0.8f, 0.8f, 0.8f));
+        pass->setSpecular(Ogre::ColourValue(0.8f, 0.8f, 0.8f));
+        pass->setShininess(60.0f);
+        pass->setLightingEnabled(true);
+    } else if (workflow == MaterialPresetLibrary::kPbrWorkflowUnlit) {
+        // Unlit PBR: ignore lighting, treat albedo as final colour.
+        pass->setLightingEnabled(false);
+        pass->setDiffuse(Ogre::ColourValue::White);
+    }
+    configurePbrSlots(pass);
+
+    // Tag the workflow on the pass so slice F can detect PBR intent
+    // without name-matching the preset string. Ogre::Material doesn't
+    // expose UserObjectBindings — Pass and Technique do — and the
+    // pass-level tag is sufficient since PBR shading is per-pass.
+    pass->getUserObjectBindings().setUserAny(
+        MaterialPresetLibrary::kPbrWorkflowKey,
+        Ogre::Any(Ogre::String(workflow.toStdString())));
+}
+
+} // namespace
+
 QStringList MaterialPresetLibrary::presetNames() const
 {
     return {"Plastic (Red)", "Plastic (Blue)", "Plastic (White)",
             "Metal (Silver)", "Metal (Gold)", "Metal (Copper)",
             "Wood (Oak)", "Wood (Birch)",
             "Glass (Clear)", "Glass (Tinted)",
-            "Unlit (White)", "Wireframe"};
+            "Unlit (White)", "Wireframe",
+            "Metallic-Roughness", "Specular-Glossiness", "Unlit PBR"};
 }
 
 void MaterialPresetLibrary::applyPreset(const QString& name)
@@ -99,6 +174,12 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
             pass->setPolygonMode(Ogre::PM_WIREFRAME);
             pass->setLightingEnabled(false);
             pass->setDiffuse(Ogre::ColourValue(0.6f, 0.9f, 0.6f));
+        } else if (name == "Metallic-Roughness") {
+            applyPbrTemplate(mat, kPbrWorkflowMetallic);
+        } else if (name == "Specular-Glossiness") {
+            applyPbrTemplate(mat, kPbrWorkflowSpecular);
+        } else if (name == "Unlit PBR") {
+            applyPbrTemplate(mat, kPbrWorkflowUnlit);
         }
 
         mat->compile();

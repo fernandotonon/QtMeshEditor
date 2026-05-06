@@ -286,3 +286,128 @@ TEST_F(MaterialPresetLibraryTests, UnlitAndWireframePresetsDisableLighting) {
     EXPECT_EQ(wirePass->getPolygonMode(), Ogre::PM_WIREFRAME);
     EXPECT_EQ(QString::fromStdString(entity->getSubEntity(0)->getMaterialName()), QString("Preset/Wireframe"));
 }
+
+// ── PBR Templates (slice E) ──────────────────────────────────────────────────
+
+namespace {
+// Canonical PBR slot order — matches the kPbrSlots array in the cpp.
+const QStringList kExpectedPbrSlots = {
+    "albedo", "normal_map", "metallic", "roughness", "ao", "emissive"
+};
+} // namespace
+
+TEST_F(MaterialPresetLibraryTests, PresetNamesContainsPbrTemplates) {
+    auto names = MaterialPresetLibrary::instance()->presetNames();
+    EXPECT_TRUE(names.contains("Metallic-Roughness"));
+    EXPECT_TRUE(names.contains("Specular-Glossiness"));
+    EXPECT_TRUE(names.contains("Unlit PBR"));
+}
+
+TEST_F(MaterialPresetLibraryTests, MetallicRoughnessTemplateCreatesSixCanonicalSlots) {
+    Manager::kill();
+    QThread::msleep(50);
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    Ogre::Entity* entity = createSelectedEntity("PbrMR_Node", "PbrMR_Entity", "PbrMR_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    MaterialPresetLibrary::instance()->applyPreset("Metallic-Roughness");
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Metallic-Roughness");
+    ASSERT_TRUE(bool(mat));
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+
+    ASSERT_EQ(pass->getNumTextureUnitStates(), 6u);
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        EXPECT_EQ(QString::fromStdString(pass->getTextureUnitState(i)->getName()),
+                  kExpectedPbrSlots[i])
+            << "PBR slot " << i << " out of order";
+    }
+
+    // Workflow tag readable by future PBR sub-render-state.
+    auto tag = pass->getUserObjectBindings().getUserAny(
+        MaterialPresetLibrary::kPbrWorkflowKey);
+    ASSERT_FALSE(tag.has_value() == false);
+    EXPECT_EQ(Ogre::any_cast<Ogre::String>(tag),
+              Ogre::String(MaterialPresetLibrary::kPbrWorkflowMetallic));
+
+    // Phong approximation sanity: shininess in the lit window.
+    EXPECT_GE(pass->getShininess(), 20.0f);
+    EXPECT_LE(pass->getShininess(), 80.0f);
+    EXPECT_TRUE(pass->getLightingEnabled());
+
+    EXPECT_EQ(QString::fromStdString(entity->getSubEntity(0)->getMaterialName()),
+              QString("Preset/Metallic-Roughness"));
+}
+
+TEST_F(MaterialPresetLibraryTests, SpecularGlossinessTemplateTagsWorkflow) {
+    Manager::kill();
+    QThread::msleep(50);
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    Ogre::Entity* entity = createSelectedEntity("PbrSG_Node", "PbrSG_Entity", "PbrSG_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    MaterialPresetLibrary::instance()->applyPreset("Specular-Glossiness");
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Specular-Glossiness");
+    ASSERT_TRUE(bool(mat));
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+
+    EXPECT_EQ(pass->getNumTextureUnitStates(), 6u);
+    auto tag = pass->getUserObjectBindings().getUserAny(
+        MaterialPresetLibrary::kPbrWorkflowKey);
+    EXPECT_EQ(Ogre::any_cast<Ogre::String>(tag),
+              Ogre::String(MaterialPresetLibrary::kPbrWorkflowSpecular));
+    EXPECT_TRUE(pass->getLightingEnabled());
+}
+
+TEST_F(MaterialPresetLibraryTests, UnlitPbrDisablesLightingButKeepsSlots) {
+    Manager::kill();
+    QThread::msleep(50);
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    Ogre::Entity* entity = createSelectedEntity("PbrUL_Node", "PbrUL_Entity", "PbrUL_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    MaterialPresetLibrary::instance()->applyPreset("Unlit PBR");
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Unlit PBR");
+    ASSERT_TRUE(bool(mat));
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+
+    EXPECT_FALSE(pass->getLightingEnabled());
+    EXPECT_EQ(pass->getNumTextureUnitStates(), 6u);
+    auto tag = pass->getUserObjectBindings().getUserAny(
+        MaterialPresetLibrary::kPbrWorkflowKey);
+    EXPECT_EQ(Ogre::any_cast<Ogre::String>(tag),
+              Ogre::String(MaterialPresetLibrary::kPbrWorkflowUnlit));
+}
+
+TEST_F(MaterialPresetLibraryTests, PbrTemplateReapplyIsIdempotent) {
+    Manager::kill();
+    QThread::msleep(50);
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    Ogre::Entity* entity = createSelectedEntity("PbrIdem_Node", "PbrIdem_Entity", "PbrIdem_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    auto* inst = MaterialPresetLibrary::instance();
+    inst->applyPreset("Metallic-Roughness");
+    inst->applyPreset("Metallic-Roughness");
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Metallic-Roughness");
+    ASSERT_TRUE(bool(mat));
+    // Re-applying the same preset must not duplicate the 6 slots —
+    // the second call hits the resourceExists-true branch and skips
+    // configurePbrSlots entirely.
+    EXPECT_EQ(mat->getTechnique(0)->getPass(0)->getNumTextureUnitStates(), 6u);
+}

@@ -2,6 +2,7 @@
 #include "mainwindow.h"
 #include "Manager.h"
 #include "MaterialEditorQML.h"
+#include "MaterialPresetLibrary.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -390,6 +391,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("get_material"), &MCPServer::toolGetMaterial},
         {QStringLiteral("list_materials"), &MCPServer::toolListMaterials},
         {QStringLiteral("apply_material"), &MCPServer::toolApplyMaterial},
+        {QStringLiteral("list_material_presets"), &MCPServer::toolListMaterialPresets},
+        {QStringLiteral("apply_material_preset"), &MCPServer::toolApplyMaterialPreset},
         {QStringLiteral("load_mesh"), &MCPServer::toolLoadMesh},
         {QStringLiteral("get_mesh_info"), &MCPServer::toolGetMeshInfo},
         {QStringLiteral("transform_mesh"), &MCPServer::toolTransformMesh},
@@ -838,6 +841,72 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
 
         return makeSuccessResult(QString("Applied material '%1' to: %2").arg(materialName).arg(appliedTo.join(", ")));
 
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+QJsonObject MCPServer::toolListMaterialPresets(const QJsonObject &)
+{
+    auto names = MaterialPresetLibrary::instance()->presetNames();
+    QString out = QString("Material presets (%1):").arg(names.size());
+    for (const auto& n : names)
+        out += "\n  - " + n;
+    return makeSuccessResult(out);
+}
+
+QJsonObject MCPServer::toolApplyMaterialPreset(const QJsonObject &args)
+{
+    QString preset = args["preset"].toString();
+    if (preset.isEmpty()) preset = args["name"].toString();
+    if (preset.isEmpty())
+        return makeErrorResult("Error: 'preset' is required (use list_material_presets to see available names)");
+
+    auto* lib = MaterialPresetLibrary::instance();
+    if (!lib->presetNames().contains(preset))
+        return makeErrorResult(QString("Error: Unknown preset '%1'").arg(preset));
+
+    // Accept "mesh", "mesh_name", or "entity" / "entity_name" — the
+    // preset library applies to whatever's in the SelectionSet. If the
+    // caller specifies a target, briefly swap selection to that entity,
+    // apply, then restore.
+    QString meshName = args["mesh"].toString();
+    if (meshName.isEmpty()) meshName = args["mesh_name"].toString();
+    if (meshName.isEmpty()) meshName = args["entity"].toString();
+    if (meshName.isEmpty()) meshName = args["entity_name"].toString();
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel)
+        return makeErrorResult("Error: SelectionSet not available");
+
+    try {
+        if (!meshName.isEmpty()) {
+            Manager* mgr = Manager::getSingletonPtr();
+            if (!mgr) return makeErrorResult("Error: Manager not available");
+
+            Ogre::Entity* target = nullptr;
+            for (Ogre::Entity* ent : mgr->getEntities()) {
+                if (ent && QString::fromStdString(ent->getName()) == meshName) {
+                    target = ent; break;
+                }
+            }
+            if (!target)
+                return makeErrorResult(QString("Error: Mesh '%1' not found").arg(meshName));
+
+            // Snapshot + replace selection so applyPreset hits the right entity.
+            auto prevNodes = sel->getNodesSelectionList();
+            sel->clear();
+            sel->append(target->getParentSceneNode());
+            lib->applyPreset(preset);
+            sel->clear();
+            for (auto* n : prevNodes) sel->append(n);
+        } else {
+            if (sel->getEntitiesCount() == 0
+                && sel->getSubEntitiesSelectionList().isEmpty())
+                return makeErrorResult("Error: No mesh specified and no entities selected");
+            lib->applyPreset(preset);
+        }
+        return makeSuccessResult(QString("Applied preset '%1'").arg(preset));
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
@@ -3359,6 +3428,28 @@ QJsonArray MCPServer::buildToolsList()
         tools.append(buildToolDefinition(
             "apply_material",
             "Apply a material to a mesh entity in the scene. Use list_materials to find available material names and get_scene_info to find mesh/entity names.",
+            inputSchema
+        ));
+    }
+
+    // list_material_presets
+    appendTool(
+        "list_material_presets",
+        "List the built-in material presets (Plastic / Metal / Wood / Glass / Unlit / Wireframe + PBR templates: Metallic-Roughness, Specular-Glossiness, Unlit PBR). Pass any returned name to apply_material_preset.",
+        QJsonObject());
+
+    // apply_material_preset
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["preset"] = QJsonObject{{"type", "string"}, {"description", "Preset name from list_material_presets (e.g. 'Metal (Gold)', 'Metallic-Roughness')."}};
+        properties["mesh"] = QJsonObject{{"type", "string"}, {"description", "Optional mesh/entity name. When omitted, the preset applies to the current selection."}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"preset"};
+        tools.append(buildToolDefinition(
+            "apply_material_preset",
+            "Apply a built-in material preset to a mesh. PBR templates (Metallic-Roughness / Specular-Glossiness / Unlit PBR) create the canonical 6-slot texture-unit layout (albedo / normal_map / metallic / roughness / ao / emissive) and tag the pass with a 'pbr_workflow' user binding so PBR-aware shaders can detect intent.",
             inputSchema
         ));
     }

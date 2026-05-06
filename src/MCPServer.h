@@ -129,6 +129,8 @@ private:
     QJsonObject toolGetMaterial(const QJsonObject &args);
     QJsonObject toolListMaterials(const QJsonObject &args);
     QJsonObject toolApplyMaterial(const QJsonObject &args);
+    QJsonObject toolListMaterialPresets(const QJsonObject &args);
+    QJsonObject toolApplyMaterialPreset(const QJsonObject &args);
     QJsonObject toolLoadMesh(const QJsonObject &args);
     QJsonObject toolGetMeshInfo(const QJsonObject &args);
     QJsonObject toolTransformMesh(const QJsonObject &args);
@@ -231,7 +233,8 @@ private:
     static constexpr const char* SERVER_NAME = "QtMeshEditor";
     // 1.4.0 — added simplify_animation / analyze_animation tools
     // 1.5.0 — added bake_animation_fps tool
-    static constexpr const char* SERVER_VERSION = "1.5.0";
+    // 1.6.0 — added list_material_presets / apply_material_preset (incl. PBR templates)
+    static constexpr const char* SERVER_VERSION = "1.6.0";
 };
 
 #endif // MCPSERVER_H

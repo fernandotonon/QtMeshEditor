@@ -61,6 +61,8 @@ qtmesh lod model.fbx --count 3                 # generate 3 LODs → model_lod1.
 qtmesh lod model.fbx --count 2 --reductions 0.25,0.5 -o out.fbx  # custom reductions, named output
 qtmesh lod model.fbx --auto                    # auto-generate LODs
 qtmesh lod model.fbx --remove -o clean.fbx     # strip LODs and save
+qtmesh material model.fbx --preset "Metallic-Roughness" -o out.fbx  # apply a built-in material preset (writes .material sidecar)
+qtmesh material --list-presets                 # list built-in preset names (incl. PBR templates)
 qtmesh scan ./assets                           # scan directory for asset issues
 qtmesh scan ./assets --config qtmesh.yml       # use YAML config file
 qtmesh scan ./assets --json                    # JSON output
@@ -71,7 +73,7 @@ qtmesh scan ./assets --include "*.fbx,*.glb"   # filter by extension
 qtmesh scan ./assets --fail-on warning         # exit 1 on warnings or errors
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`, `material`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 

@@ -21,6 +21,15 @@ public:
     QStringList presetNames() const;
     Q_INVOKABLE void applyPreset(const QString& name);
 
+    /// Canonical TUS slot names for PBR templates. Slice E ships the
+    /// material structure; slice F will swap in real PBR shading by
+    /// reading these names + the "pbr_workflow" user-object binding
+    /// without recreating the material.
+    static const char* kPbrWorkflowKey;          // "pbr_workflow" (user-binding key)
+    static const char* kPbrWorkflowMetallic;     // "metallic_roughness"
+    static const char* kPbrWorkflowSpecular;     // "specular_glossiness"
+    static const char* kPbrWorkflowUnlit;        // "unlit"
+
 signals:
     void presetApplied(const QString& name);
 
