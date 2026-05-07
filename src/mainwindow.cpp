@@ -67,6 +67,7 @@
 #include "WelcomeScreenController.h"
 #include "AssetBrowserController.h"
 #include "EditModeController.h"
+#include "EditorModeController.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -77,6 +78,27 @@
 #include <QColorDialog>
 #include <QSignalBlocker>
 #include <QGridLayout>
+#include <QToolBar>
+
+namespace {
+
+constexpr int kBottomToolHeight = 180;
+constexpr int kBottomDockMaxHeight = 220;
+
+void registerEditorModeQmlSingletons()
+{
+    static bool registered = false;
+    if (registered)
+        return;
+
+    qmlRegisterSingletonType<EditorModeController>("EditorMode", 1, 0, "EditorModeController",
+        [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+            return EditorModeController::qmlInstance(engine, nullptr);
+        });
+    registered = true;
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
@@ -113,6 +135,9 @@ MainWindow::MainWindow(QWidget *parent) :
     ui->menuFile->insertMenu(ui->actionExport_Selected, m_recentFilesMenu);
     ui->menuFile->insertSeparator(ui->actionExport_Selected);
     updateRecentFilesMenu();
+
+    ui->menuOp_es->insertAction(ui->actionChange_Ambient_Light, ui->actionMaterial_Editor);
+    ui->menuOp_es->insertSeparator(ui->actionChange_Ambient_Light);
 
     QSettings settings;
     mCurrentPalette = settings.value("palette","dark").toString();
@@ -170,7 +195,12 @@ MainWindow::MainWindow(QWidget *parent) :
     m_editModeLabel = new QLabel("Object Mode", this);
     m_editModeLabel->setStyleSheet("QLabel { font-weight: bold; padding: 2px 8px; }");
     statusBar()->addPermanentWidget(m_editModeLabel);
+    EditorModeController::instance();
     connect(EditModeController::instance(), &EditModeController::editModeChanged,
+            this, &MainWindow::updateEditModeIndicator);
+    connect(EditorModeController::instance(), &EditorModeController::modeChanged,
+            this, &MainWindow::updateEditModeIndicator);
+    connect(EditorModeController::instance(), &EditorModeController::statusTextChanged,
             this, &MainWindow::updateEditModeIndicator);
     updateEditModeIndicator();
 
@@ -275,6 +305,7 @@ MainWindow::~MainWindow()
     // Ogre resources). In that case, destroying Ogre-backed singletons can
     // crash due to dangling SceneManager pointers — skip teardown and let the
     // process exit cleanly.
+    EditorModeController::kill();
     Manager* manager = Manager::getSingletonPtr();
     if (manager) {
         EditModeController::kill();
@@ -407,6 +438,7 @@ void MainWindow::initToolBar()
         qputenv("QSG_RHI_BACKEND", "software");
         qputenv("QT_QUICK_BACKEND", "software");
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+        registerEditorModeQmlSingletons();
 
         m_propertiesPanel = new QQuickWidget();
         m_propertiesPanel->setResizeMode(QQuickWidget::SizeRootObjectToView);
@@ -473,6 +505,7 @@ void MainWindow::initToolBar()
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
+        createModeSurfaces();
 
         // Force QQuickWidget repaint when snap settings change — QQuickWidget
         // inside a QDockWidget doesn't repaint on internal QML property changes.
@@ -537,12 +570,14 @@ void MainWindow::initToolBar()
         auto* assetBrowserWidget = new QQuickWidget();
         assetBrowserWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
         assetBrowserWidget->setMinimumWidth(250);
-        assetBrowserWidget->setMinimumHeight(200);
+        assetBrowserWidget->setMinimumHeight(kBottomToolHeight);
+        assetBrowserWidget->setMaximumHeight(kBottomToolHeight);
         assetBrowserWidget->setFocusPolicy(Qt::StrongFocus);
         assetBrowserWidget->setSource(QUrl("qrc:/AssetBrowser/AssetBrowser.qml"));
         m_assetBrowserDock = new QDockWidget(tr("Asset Browser"), this);
         m_assetBrowserDock->setWidget(assetBrowserWidget);
         m_assetBrowserDock->setObjectName("AssetBrowserDock");
+        configureBottomToolDock(m_assetBrowserDock);
         addDockWidget(Qt::BottomDockWidgetArea, m_assetBrowserDock);
         m_assetBrowserDock->hide();
 
@@ -562,7 +597,8 @@ void MainWindow::initToolBar()
     {
         auto* dopeSheetWidget = new QQuickWidget(); // NOSONAR — Qt parent ownership
         dopeSheetWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
-        dopeSheetWidget->setMinimumHeight(160);
+        dopeSheetWidget->setMinimumHeight(kBottomToolHeight);
+        dopeSheetWidget->setMaximumHeight(kBottomToolHeight);
         dopeSheetWidget->setFocusPolicy(Qt::StrongFocus);
         dopeSheetWidget->setSource(QUrl("qrc:/AnimationControl/AnimationDopeSheet.qml"));
 
@@ -599,6 +635,7 @@ void MainWindow::initToolBar()
         m_dopeSheetDock = new QDockWidget(tr("Dope Sheet"), this); // NOSONAR — Qt parent ownership
         m_dopeSheetDock->setWidget(dopeSheetWidget);
         m_dopeSheetDock->setObjectName("DopeSheetDock");
+        configureBottomToolDock(m_dopeSheetDock);
         addDockWidget(Qt::BottomDockWidgetArea, m_dopeSheetDock);
         m_dopeSheetDock->hide();
         connect(m_dopeSheetDock, &QDockWidget::visibilityChanged, this, [](bool vis) {
@@ -626,12 +663,14 @@ void MainWindow::initToolBar()
     {
         auto* curveEditorWidget = new QQuickWidget(); // NOSONAR — Qt parent ownership
         curveEditorWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
-        curveEditorWidget->setMinimumHeight(180);
+        curveEditorWidget->setMinimumHeight(kBottomToolHeight);
+        curveEditorWidget->setMaximumHeight(kBottomToolHeight);
         curveEditorWidget->setFocusPolicy(Qt::StrongFocus);
         curveEditorWidget->setSource(QUrl("qrc:/AnimationControl/AnimationCurveEditor.qml"));
         m_curveEditorDock = new QDockWidget(tr("Curve Editor"), this); // NOSONAR
         m_curveEditorDock->setWidget(curveEditorWidget);
         m_curveEditorDock->setObjectName("CurveEditorDock");
+        configureBottomToolDock(m_curveEditorDock);
         addDockWidget(Qt::BottomDockWidgetArea, m_curveEditorDock);
         // Tab on top of the dope sheet by default — the user toggles whichever
         // they want via the View menu. tabifyDockWidget runs after both docks
@@ -643,6 +682,7 @@ void MainWindow::initToolBar()
                 vis ? "Curve Editor shown" : "Curve Editor hidden");
         });
     }
+    tabifyBottomToolDocks();
 
     // Welcome Screen overlay — shown on first launch or when user hasn't opted out
     {
@@ -731,7 +771,8 @@ void MainWindow::initToolBar()
     addPrimitiveMenu->addAction(pAddSpring);
 
     addPrimitiveButton->setMenu(addPrimitiveMenu);
-    ui->objectsToolbar->addWidget(addPrimitiveButton);
+    QAction* addPrimitiveAction = ui->objectsToolbar->addWidget(addPrimitiveButton);
+    addPrimitiveAction->setObjectName("modeObjectPrimitiveAction");
 
     // AI Chat button — star icon is the common AI shorthand
     auto aiChatButton = new QToolButton(ui->objectsToolbar);
@@ -747,7 +788,8 @@ void MainWindow::initToolBar()
             m_chatDock->raise();
         }
     });
-    ui->objectsToolbar->addWidget(aiChatButton);
+    QAction* aiChatToolbarAction = ui->objectsToolbar->addWidget(aiChatButton);
+    aiChatToolbarAction->setObjectName("modeAnyAiChatAction");
 
     // Topology tools — toolbar shortcuts for Extrude / Bevel. They
     // delegate to the same EditModeController actions the Inspector
@@ -815,6 +857,7 @@ void MainWindow::initToolBar()
     // Hiding the widget directly doesn't affect the toolbar's layout —
     // we have to toggle the action's visibility instead.
     QAction* extrudeAction = ui->objectsToolbar->addWidget(extrudeButton);
+    extrudeAction->setObjectName("modeEditExtrudeAction");
 
     // Bevel: edge OR vertex mode.
     auto bevelButton = new QToolButton(ui->objectsToolbar);
@@ -833,6 +876,7 @@ void MainWindow::initToolBar()
         EditModeController::instance()->bevelSelection();
     });
     QAction* bevelAction = ui->objectsToolbar->addWidget(bevelButton);
+    bevelAction->setObjectName("modeEditBevelAction");
 
     // Knife: opens a multi-point cut session. Available in edit mode
     // regardless of selection component (vertex/edge/face), because
@@ -851,6 +895,7 @@ void MainWindow::initToolBar()
         else                         c->beginKnife();
     });
     QAction* knifeAction = ui->objectsToolbar->addWidget(knifeButton);
+    knifeAction->setObjectName("modeEditKnifeAction");
 
     // Merge: vertex-mode-only collapse of the current selection. Drops a
     // small popup so the user can pick the survivor target (Center / First
@@ -891,6 +936,7 @@ void MainWindow::initToolBar()
         EditModeController::instance()->mergeByDistance(1e-4f);
     });
     QAction* mergeAction = ui->objectsToolbar->addWidget(mergeButton);
+    mergeAction->setObjectName("modeEditMergeAction");
 
     // Delete / Dissolve: works in any selection mode. The dropdown lets
     // the user pick "Delete" (remove element + adjacent geometry) or
@@ -923,6 +969,7 @@ void MainWindow::initToolBar()
         EditModeController::instance()->dissolveSelection();
     });
     QAction* deleteAction = ui->objectsToolbar->addWidget(deleteButton);
+    deleteAction->setObjectName("modeEditDeleteAction");
 
     // Subdivide: dropdown with two modes.
     //  - Standard: 1-to-4 triangle split on the selected faces/edges
@@ -949,6 +996,7 @@ void MainWindow::initToolBar()
         EditModeController::instance()->subdivideCatmullClarkAll();
     });
     QAction* subdivideAction = ui->objectsToolbar->addWidget(subdivideButton);
+    subdivideAction->setObjectName("modeEditSubdivideAction");
 
     // Fill: vertex mode (3-4+ verts → triangle / fan) or edge mode (closed
     // boundary loop → fan-triangulated cap, useful for capping holes).
@@ -962,6 +1010,7 @@ void MainWindow::initToolBar()
         EditModeController::instance()->fillSelection();
     });
     QAction* fillAction = ui->objectsToolbar->addWidget(fillButton);
+    fillAction->setObjectName("modeEditFillAction");
 
     // Loop cut: edge mode only — pick one edge, the op walks the
     // perpendicular ring of quads and bisects each one.
@@ -1170,6 +1219,7 @@ void MainWindow::initToolBar()
     });
 
     QAction* vertexPaintAction = ui->objectsToolbar->addWidget(vertexPaintButton);
+    vertexPaintAction->setObjectName("modeEditVertexPaintAction");
 
     // Context-aware visibility + enabled:
     //  - Hidden entirely when NOT in edit mode.
@@ -1245,6 +1295,9 @@ void MainWindow::initToolBar()
     // the mesh has been promoted.
     connect(editCtrlForTopo, &EditModeController::meshDataChanged,
             this, refreshTopoButtons);
+    connect(EditorModeController::instance(), &EditorModeController::modeChanged,
+            this, &MainWindow::updateToolRailForMode);
+    updateToolRailForMode();
 
     connect(pAddCube,       SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createCube()));
     connect(pAddSphere,     SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createSphere()));
@@ -1303,18 +1356,29 @@ void MainWindow::initToolBar()
     for (EditorViewport* vp : mDockWidgetList)
         connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);
 
-    // Asset Browser dock toggle via View menu
-    connect(ui->actionAsset_Browser, &QAction::toggled, this, [this](bool checked) {
-        SentryReporter::addBreadcrumb("ui.action",
-            checked ? "Asset Browser shown" : "Asset Browser hidden");
-        if (m_assetBrowserDock) {
-            m_assetBrowserDock->setVisible(checked);
-        }
-    });
-    // Sync menu checkmark when dock is closed via its title bar
-    if (m_assetBrowserDock) {
-        connect(m_assetBrowserDock, &QDockWidget::visibilityChanged,
-                ui->actionAsset_Browser, &QAction::setChecked);
+    // Asset Browser toggle — use the dock's own action so tabified bottom
+    // docks behave consistently with Dope Sheet / Curve Editor.
+    if (m_assetBrowserDock && ui->menuView) {
+        QAction* assetAct = m_assetBrowserDock->toggleViewAction();
+        assetAct->setText(tr("Asset Browser"));
+        ui->menuView->insertAction(ui->actionAsset_Browser, assetAct);
+        ui->menuView->removeAction(ui->actionAsset_Browser);
+
+        connect(ui->actionAsset_Browser, &QAction::toggled, this, [assetAct](bool checked) {
+            if (assetAct->isChecked() != checked)
+                assetAct->trigger();
+        });
+        connect(assetAct, &QAction::toggled, ui->actionAsset_Browser, &QAction::setChecked);
+        connect(assetAct, &QAction::triggered, this, [this](bool checked) {
+            SentryReporter::addBreadcrumb("ui.action",
+                checked ? "Asset Browser shown" : "Asset Browser hidden");
+            if (!checked || !m_assetBrowserDock)
+                return;
+
+            QTimer::singleShot(0, this, [this]() {
+                showBottomToolDock(m_assetBrowserDock);
+            });
+        });
     }
 
     // Dope Sheet toggle — uses the dock's own toggleViewAction so we don't
@@ -1323,12 +1387,28 @@ void MainWindow::initToolBar()
         QAction* dopeAct = m_dopeSheetDock->toggleViewAction();
         dopeAct->setText(tr("Dope Sheet"));
         ui->menuView->addAction(dopeAct);
+        connect(dopeAct, &QAction::triggered, this, [this](bool checked) {
+            if (!checked || !m_dopeSheetDock)
+                return;
+
+            QTimer::singleShot(0, this, [this]() {
+                showBottomToolDock(m_dopeSheetDock);
+            });
+        });
     }
     // Curve Editor toggle — same pattern, lives next to Dope Sheet.
     if (m_curveEditorDock && ui->menuView) {
         QAction* curveAct = m_curveEditorDock->toggleViewAction();
         curveAct->setText(tr("Curve Editor"));
         ui->menuView->addAction(curveAct);
+        connect(curveAct, &QAction::triggered, this, [this](bool checked) {
+            if (!checked || !m_curveEditorDock)
+                return;
+
+            QTimer::singleShot(0, this, [this]() {
+                showBottomToolDock(m_curveEditorDock);
+            });
+        });
     }
 
     // Connect Browse button to a native file dialog (must be parented to MainWindow on macOS)
@@ -1470,6 +1550,192 @@ const QPalette &MainWindow::darkPalette()
 
 void MainWindow::setPlaying(bool playing)
 {   isPlaying = playing;    }
+
+void MainWindow::createModeSurfaces()
+{
+    if (!m_modeBarShell) {
+        m_modeBarShell = new QToolBar(tr("Modes"), this);
+        m_modeBarShell->setObjectName("modeBarToolbar");
+        m_modeBarShell->setMovable(false);
+        m_modeBarShell->setFloatable(false);
+        m_modeBarShell->setAllowedAreas(Qt::TopToolBarArea);
+
+        m_modeBar = new QQuickWidget(m_modeBarShell);
+        m_modeBar->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        m_modeBar->setMinimumHeight(38);
+        m_modeBar->setMaximumHeight(38);
+        m_modeBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_modeBar->setSource(QUrl("qrc:/ModeBar/ModeBar.qml"));
+        m_modeBarShell->addWidget(m_modeBar);
+
+        insertToolBar(ui->toolToolbar, m_modeBarShell);
+    }
+
+    if (!m_bottomContextDock) {
+        auto* contextWidget = new QQuickWidget();
+        contextWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        contextWidget->setMinimumHeight(kBottomToolHeight);
+        contextWidget->setMaximumHeight(kBottomToolHeight);
+        contextWidget->rootContext()->setContextProperty("materialEditorAction", ui->actionMaterial_Editor);
+        contextWidget->setSource(QUrl("qrc:/BottomContextPanel/BottomContextPanel.qml"));
+
+        m_bottomContextDock = new QDockWidget(tr("Context"), this);
+        m_bottomContextDock->setObjectName("BottomContextDock");
+        m_bottomContextDock->setAllowedAreas(Qt::BottomDockWidgetArea);
+        m_bottomContextDock->setWidget(contextWidget);
+        configureBottomToolDock(m_bottomContextDock);
+        addDockWidget(Qt::BottomDockWidgetArea, m_bottomContextDock);
+        resizeDocks({m_bottomContextDock}, {kBottomToolHeight}, Qt::Vertical);
+        m_bottomContextDock->hide();
+
+        QAction* contextPanelAction = m_bottomContextDock->toggleViewAction();
+        contextPanelAction->setText(tr("Context Panel"));
+        ui->menuView->addAction(contextPanelAction);
+        connect(contextPanelAction, &QAction::triggered, this, [this](bool checked) {
+            if (!checked || !m_bottomContextDock)
+                return;
+
+            QTimer::singleShot(0, this, [this]() {
+                showBottomToolDock(m_bottomContextDock);
+            });
+        });
+        connect(m_bottomContextDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+            if (!visible)
+                return;
+
+            QTimer::singleShot(0, this, [this]() {
+                if (m_bottomContextDock)
+                    m_bottomContextDock->raise();
+            });
+        });
+    }
+
+    if (!ui->toolToolbar->findChild<QToolButton*>(QStringLiteral("viewportOptionsButton"))) {
+        auto* viewportOptionsButton = new QToolButton(ui->toolToolbar);
+        viewportOptionsButton->setObjectName("viewportOptionsButton");
+        viewportOptionsButton->setText(tr("Viewport"));
+        viewportOptionsButton->setToolTip(tr("Viewport display options"));
+        viewportOptionsButton->setPopupMode(QToolButton::InstantPopup);
+
+        auto* viewportOptionsMenu = new QMenu(viewportOptionsButton);
+        viewportOptionsMenu->addAction(ui->actionShow_Grid);
+        viewportOptionsMenu->addAction(ui->actionShow_Normals);
+        viewportOptionsMenu->addAction(ui->actionShow_Mesh_Info);
+        viewportOptionsMenu->addAction(ui->actionShow_View_Cube);
+        viewportOptionsButton->setMenu(viewportOptionsMenu);
+        ui->toolToolbar->addWidget(viewportOptionsButton);
+    }
+
+    QSignalBlocker blocker(ui->actionView_Toolbar);
+    ui->actionView_Toolbar->setChecked(false);
+    ui->viewToolbar->hide();
+}
+
+void MainWindow::configureBottomToolDock(QDockWidget* dock)
+{
+    if (!dock)
+        return;
+
+    dock->setAllowedAreas(Qt::BottomDockWidgetArea);
+
+    QWidget* content = dock->widget();
+    if (content) {
+        content->setMinimumHeight(kBottomToolHeight);
+        content->setMaximumHeight(dock->isFloating() ? QWIDGETSIZE_MAX : kBottomToolHeight);
+    }
+
+    dock->setMaximumHeight(dock->isFloating() ? QWIDGETSIZE_MAX : kBottomDockMaxHeight);
+
+    static const char connectedProperty[] = "_qtme_bottomToolSignalsConnected";
+    if (dock->property(connectedProperty).toBool())
+        return;
+
+    dock->setProperty(connectedProperty, true);
+    connect(dock, &QDockWidget::topLevelChanged, this, [this, dock](bool) {
+        configureBottomToolDock(dock);
+        if (!dock->isFloating()) {
+            QTimer::singleShot(0, this, [this]() {
+                tabifyBottomToolDocks();
+            });
+        }
+    });
+}
+
+void MainWindow::showBottomToolDock(QDockWidget* dock)
+{
+    if (!dock)
+        return;
+
+    if (dock->isFloating())
+        dock->setFloating(false);
+
+    if (dockWidgetArea(dock) != Qt::BottomDockWidgetArea)
+        addDockWidget(Qt::BottomDockWidgetArea, dock);
+
+    configureBottomToolDock(dock);
+    tabifyBottomToolDocks();
+    dock->show();
+    resizeDocks({dock}, {kBottomToolHeight}, Qt::Vertical);
+    dock->raise();
+}
+
+void MainWindow::tabifyBottomToolDocks()
+{
+    const QList<QDockWidget*> docks = {
+        m_dopeSheetDock,
+        m_curveEditorDock,
+        m_assetBrowserDock,
+        m_bottomContextDock
+    };
+
+    QDockWidget* anchor = nullptr;
+    for (QDockWidget* dock : docks) {
+        configureBottomToolDock(dock);
+        if (!anchor && dock && !dock->isFloating() && dockWidgetArea(dock) == Qt::BottomDockWidgetArea)
+            anchor = dock;
+    }
+
+    if (!anchor)
+        return;
+
+    const QList<QDockWidget*> anchorTabs = tabifiedDockWidgets(anchor);
+    for (QDockWidget* dock : docks) {
+        if (!dock || dock == anchor || dock->isFloating() || dockWidgetArea(dock) != Qt::BottomDockWidgetArea)
+            continue;
+
+        if (!anchorTabs.contains(dock) && !tabifiedDockWidgets(dock).contains(anchor))
+            tabifyDockWidget(anchor, dock);
+    }
+}
+
+void MainWindow::updateToolRailForMode()
+{
+    const int mode = EditorModeController::instance()->currentMode();
+    const bool objectMode = mode == EditorModeController::ObjectMode;
+    const bool editMode = mode == EditorModeController::EditMode;
+    const bool animationMode = mode == EditorModeController::AnimationMode;
+    const bool materialMode = mode == EditorModeController::MaterialMode;
+
+    for (QAction* action : ui->objectsToolbar->actions()) {
+        const QString name = action->objectName();
+        if (name.startsWith(QStringLiteral("modeObject"))) {
+            action->setVisible(objectMode);
+        } else if (name.startsWith(QStringLiteral("modeEdit"))) {
+            action->setVisible(editMode && EditModeController::instance()->isEditModeActive());
+        } else if (name.startsWith(QStringLiteral("modeAny"))) {
+            action->setVisible(true);
+        }
+    }
+
+    ui->actionSelect_Object->setVisible(objectMode || editMode);
+    ui->actionTranslate_Object->setVisible(objectMode || editMode);
+    ui->actionRotate_Object->setVisible(objectMode || editMode);
+    ui->actionScale_Object->setVisible(objectMode || editMode);
+    ui->actionToggle_Transform_Space->setVisible(objectMode || editMode);
+    ui->actionRemove_Object->setVisible(objectMode);
+    ui->actionMaterial_Editor->setVisible(objectMode || materialMode);
+    ui->actionMerge_Animations->setVisible(objectMode || animationMode);
+}
 
 // LCOV_EXCL_START — Ogre frame listener requires render loop
 bool MainWindow::frameStarted(const Ogre::FrameEvent &evt)
@@ -1874,7 +2140,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
        break;
     case Qt::Key_Tab:
         SentryReporter::addBreadcrumb("ui.shortcut", "Tab — Toggle Edit Mode");
-        EditModeController::instance()->toggleEditMode();
+        EditorModeController::instance()->toggleObjectEditMode();
         event->accept();
        break;
     default:
@@ -2317,7 +2583,9 @@ void MainWindow::on_actionView_Toolbar_toggled(bool arg1)
 {    ui->viewToolbar->setVisible(arg1); }
 
 void MainWindow::on_actionMeshEditor_toggled(bool arg1)
-{    ui->meshEditorWidget->setVisible(arg1);    }
+{
+    ui->meshEditorWidget->setVisible(arg1);
+}
 
 // LCOV_EXCL_START — color dialog
 void MainWindow::chooseBgColor()
@@ -2364,14 +2632,15 @@ void MainWindow::setTransformState(TransformOperator::TransformState newState)
 void MainWindow::updateEditModeIndicator()
 {
     if (!m_editModeLabel) return;
-    auto* ctrl = EditModeController::instance();
-    if (ctrl->isEditModeActive()) {
-        m_editModeLabel->setText("Edit Mode");
+    auto* modeCtrl = EditorModeController::instance();
+    auto* editCtrl = EditModeController::instance();
+    if (editCtrl->isEditModeActive()) {
+        m_editModeLabel->setText(modeCtrl->statusText());
         m_editModeLabel->setStyleSheet(
             "QLabel { font-weight: bold; padding: 2px 8px; "
             "background-color: #3d6b3d; color: white; border-radius: 3px; }");
     } else {
-        m_editModeLabel->setText("Object Mode");
+        m_editModeLabel->setText(modeCtrl->statusText());
         m_editModeLabel->setStyleSheet(
             "QLabel { font-weight: bold; padding: 2px 8px; }");
     }
