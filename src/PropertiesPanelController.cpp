@@ -242,66 +242,6 @@ QString PropertiesPanelController::selectionName() const
     return QString();
 }
 
-QString PropertiesPanelController::transformTargetKind() const
-{
-    auto* sel = SelectionSet::getSingleton();
-    const bool hasNodes = sel->hasNodes();
-    const bool hasEntities = sel->hasEntities();
-    const bool hasSubEntities = sel->hasSubEntities();
-
-    if (!hasNodes && !hasEntities && !hasSubEntities)
-        return QStringLiteral("none");
-    if (hasNodes && (hasEntities || hasSubEntities))
-        return QStringLiteral("mixed");
-    if (hasNodes)
-        return QStringLiteral("node");
-    if (hasEntities && hasSubEntities)
-        return QStringLiteral("mixedGeometry");
-    if (hasEntities)
-        return QStringLiteral("mesh");
-    return QStringLiteral("submesh");
-}
-
-QString PropertiesPanelController::transformTargetLabel() const
-{
-    const QString kind = transformTargetKind();
-    if (kind == QStringLiteral("node"))
-        return QStringLiteral("Node Transform");
-    if (kind == QStringLiteral("mesh"))
-        return QStringLiteral("Mesh Geometry");
-    if (kind == QStringLiteral("submesh"))
-        return QStringLiteral("Submesh Geometry");
-    if (kind == QStringLiteral("mixedGeometry"))
-        return QStringLiteral("Mixed Geometry");
-    if (kind == QStringLiteral("mixed"))
-        return QStringLiteral("Mixed Targets");
-    return QStringLiteral("No Selection");
-}
-
-QString PropertiesPanelController::transformTargetDetail() const
-{
-    const QString kind = transformTargetKind();
-    if (kind == QStringLiteral("node"))
-        return QStringLiteral("Object placement only; mesh vertices stay unchanged.");
-    if (kind == QStringLiteral("mesh"))
-        return QStringLiteral("Transforms mesh vertex data; exports include these edits.");
-    if (kind == QStringLiteral("submesh"))
-        return QStringLiteral("Transforms selected submesh vertex data.");
-    if (kind == QStringLiteral("mixedGeometry"))
-        return QStringLiteral("Geometry selection is mixed; use one mesh target type for precise edits.");
-    if (kind == QStringLiteral("mixed"))
-        return QStringLiteral("Node transform path is active; select only Mesh/Submesh to edit geometry.");
-    return QStringLiteral("Select a node for placement or a mesh for geometry edits.");
-}
-
-bool PropertiesPanelController::transformAffectsMesh() const
-{
-    const QString kind = transformTargetKind();
-    return kind == QStringLiteral("mesh")
-        || kind == QStringLiteral("submesh")
-        || kind == QStringLiteral("mixedGeometry");
-}
-
 QStringList PropertiesPanelController::sceneNodeNames() const
 {
     QStringList names;

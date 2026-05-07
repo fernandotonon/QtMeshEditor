@@ -141,46 +141,6 @@ TEST_F(PropertiesPanelControllerTests, SelectionStateFollowsSelectedSceneNode)
     EXPECT_EQ(SelectionSet::getSingleton()->getSceneNode(0), node);
 }
 
-TEST_F(PropertiesPanelControllerTests, TransformTargetMetadataExplainsSelectionImpact)
-{
-    EXPECT_EQ(controller->transformTargetKind(), QString("none"));
-    EXPECT_EQ(controller->transformTargetLabel(), QString("No Selection"));
-    EXPECT_FALSE(controller->transformAffectsMesh());
-
-    Ogre::SceneNode* node = createSelectedNode("PanelTargetNode");
-    ASSERT_NE(node, nullptr);
-
-    EXPECT_EQ(controller->transformTargetKind(), QString("node"));
-    EXPECT_EQ(controller->transformTargetLabel(), QString("Node Transform"));
-    EXPECT_FALSE(controller->transformAffectsMesh());
-    EXPECT_TRUE(controller->transformTargetDetail().contains("mesh vertices stay unchanged"));
-
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-    Ogre::SceneNode* meshNode = Manager::getSingleton()->addSceneNode("PanelTargetMeshNode");
-    ASSERT_NE(meshNode, nullptr);
-    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("PanelTargetMesh");
-    Ogre::Entity* entity = Manager::getSingleton()->createEntity(meshNode, mesh);
-    ASSERT_NE(entity, nullptr);
-
-    SelectionSet::getSingleton()->selectOne(entity);
-    EXPECT_EQ(controller->transformTargetKind(), QString("mesh"));
-    EXPECT_EQ(controller->transformTargetLabel(), QString("Mesh Geometry"));
-    EXPECT_TRUE(controller->transformAffectsMesh());
-
-    SelectionSet::getSingleton()->selectOne(entity->getSubEntity(0));
-    EXPECT_EQ(controller->transformTargetKind(), QString("submesh"));
-    EXPECT_EQ(controller->transformTargetLabel(), QString("Submesh Geometry"));
-    EXPECT_TRUE(controller->transformAffectsMesh());
-
-    SelectionSet::getSingleton()->clear();
-    SelectionSet::getSingleton()->append(node);
-    SelectionSet::getSingleton()->append(entity);
-    EXPECT_EQ(controller->transformTargetKind(), QString("mixed"));
-    EXPECT_EQ(controller->transformTargetLabel(), QString("Mixed Targets"));
-    EXPECT_FALSE(controller->transformAffectsMesh());
-    EXPECT_TRUE(controller->transformTargetDetail().contains("Node transform path is active"));
-}
-
 TEST_F(PropertiesPanelControllerTests, SceneNodeNamesAndSelectionHelpersHandleMultipleNodes)
 {
     Ogre::SceneNode* first = Manager::getSingleton()->addSceneNode("PanelNodeA");
