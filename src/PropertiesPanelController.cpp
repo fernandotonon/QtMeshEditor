@@ -9,6 +9,7 @@
 #include "AnimationControlController.h"
 #include "AnimationMerger.h"
 #include "CurveEditModel.h"
+#include "EditModeController.h"
 #include "SentryReporter.h"
 #include "MeshImporterExporter.h"
 #include "UndoManager.h"
@@ -55,6 +56,8 @@ PropertiesPanelController::PropertiesPanelController() : QObject(nullptr)
 {
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
             this, &PropertiesPanelController::onSelectionChanged);
+    connect(EditModeController::instance(), &EditModeController::editModeChanged,
+            this, [this]() { emit selectionChanged(); });
 
     // When the blender bakes a new clip, the entity's animation list grew —
     // tell the Inspector to re-query so the new clip shows up immediately.
@@ -244,6 +247,9 @@ QString PropertiesPanelController::selectionName() const
 
 QString PropertiesPanelController::transformTargetKind() const
 {
+    if (EditModeController::instance()->isEditModeActive())
+        return QStringLiteral("editMesh");
+
     auto* sel = SelectionSet::getSingleton();
     const bool hasNodes = sel->hasNodes();
     const bool hasEntities = sel->hasEntities();
@@ -267,6 +273,8 @@ QString PropertiesPanelController::transformTargetLabel() const
     const QString kind = transformTargetKind();
     if (kind == QStringLiteral("node"))
         return QStringLiteral("Node Transform");
+    if (kind == QStringLiteral("editMesh"))
+        return QStringLiteral("Mesh Geometry");
     if (kind == QStringLiteral("mesh"))
         return QStringLiteral("Mesh Geometry");
     if (kind == QStringLiteral("submesh"))
@@ -283,6 +291,8 @@ QString PropertiesPanelController::transformTargetDetail() const
     const QString kind = transformTargetKind();
     if (kind == QStringLiteral("node"))
         return QStringLiteral("Object placement only; mesh vertices stay unchanged.");
+    if (kind == QStringLiteral("editMesh"))
+        return QStringLiteral("Edit Mode transforms mesh vertices; exports include these edits.");
     if (kind == QStringLiteral("mesh"))
         return QStringLiteral("Transforms mesh vertex data; exports include these edits.");
     if (kind == QStringLiteral("submesh"))
@@ -298,6 +308,7 @@ bool PropertiesPanelController::transformAffectsMesh() const
 {
     const QString kind = transformTargetKind();
     return kind == QStringLiteral("mesh")
+        || kind == QStringLiteral("editMesh")
         || kind == QStringLiteral("submesh")
         || kind == QStringLiteral("mixedGeometry");
 }

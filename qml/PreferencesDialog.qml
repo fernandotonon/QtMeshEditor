@@ -458,9 +458,9 @@ Rectangle {
                                     clip: true
                                     selectByMouse: true
                                     validator: DoubleValidator { bottom: 0.001; top: 1000; decimals: 3 }
-                                    text: readSetting("Viewport/nearClip", "0.1")
+                                    text: readSetting("Viewport/nearClip", "0.01")
 
-                                    onEditingFinished: writeSetting("Viewport/nearClip", parseFloat(text) || 0.1)
+                                    onEditingFinished: writeSetting("Viewport/nearClip", parseFloat(text) || 0.01)
                                 }
                             }
                         }
