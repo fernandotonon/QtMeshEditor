@@ -21,6 +21,7 @@ Rectangle {
     function targetAccent(kind) {
         switch (kind) {
         case "node": return "#6ca0dc"
+        case "editMesh": return "#55b65a"
         case "mesh": return "#55b65a"
         case "submesh": return "#c9b64f"
         case "mixed":

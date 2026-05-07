@@ -77,13 +77,19 @@ void applyViewportCameraFromSettings(SpaceCamera* cam)
     if (!cam || !cam->getCamera())
         return;
     QSettings settings;
-    Ogre::Real speed = settings.value(ViewportSettingsKeys::cameraSpeed(), 1.0).toReal();
+    Ogre::Real speed = settings.value(
+        ViewportSettingsKeys::cameraSpeed(),
+        ViewportSettingsKeys::defaultCameraSpeed()).toReal();
     if (speed > 0)
         cam->setCameraSpeed(speed);
     cam->getCamera()->setNearClipDistance(
-        settings.value(ViewportSettingsKeys::nearClip(), 0.1).toDouble());
+        settings.value(
+            ViewportSettingsKeys::nearClip(),
+            ViewportSettingsKeys::defaultNearClip()).toDouble());
     cam->getCamera()->setFarClipDistance(
-        settings.value(ViewportSettingsKeys::farClip(), 10000.0).toDouble());
+        settings.value(
+            ViewportSettingsKeys::farClip(),
+            ViewportSettingsKeys::defaultFarClip()).toDouble());
 }
 }
 
@@ -241,9 +247,9 @@ void OgreWidget::initOgreWindow(void)
 #endif
 
     QSettings settings;
-    // Default FSAA=0 on Linux: MSAA support varies by driver/setup and can cause
-    // a black viewport in some installed environments. Users can opt-in via settings.
-    const int requestedFsaa = settings.value(ViewportSettingsKeys::fsaaSamples(), 0).toInt();
+    const int requestedFsaa = settings.value(
+        ViewportSettingsKeys::fsaaSamples(),
+        ViewportSettingsKeys::defaultFsaaSamples()).toInt();
     if (requestedFsaa > 0)
         params["FSAA"] = Ogre::StringConverter::toString(requestedFsaa);
 

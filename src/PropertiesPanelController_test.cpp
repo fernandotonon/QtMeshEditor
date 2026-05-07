@@ -11,6 +11,7 @@
 #include <QUndoCommand>
 
 #include "AnimationWidget.h"
+#include "EditModeController.h"
 #include "Manager.h"
 #include "PrimitiveObject.h"
 #include "PropertiesPanelController.h"
@@ -32,6 +33,7 @@ protected:
         originalPalette = app->palette();
 
         PropertiesPanelController::kill();
+        EditModeController::kill();
         Manager::kill();
         app->processEvents();
 
@@ -50,6 +52,7 @@ protected:
         }
 
         PropertiesPanelController::kill();
+        EditModeController::kill();
         Manager::kill();
         if (app)
             app->processEvents();
@@ -166,6 +169,15 @@ TEST_F(PropertiesPanelControllerTests, TransformTargetMetadataExplainsSelectionI
     EXPECT_EQ(controller->transformTargetKind(), QString("mesh"));
     EXPECT_EQ(controller->transformTargetLabel(), QString("Mesh Geometry"));
     EXPECT_TRUE(controller->transformAffectsMesh());
+
+    SelectionSet::getSingleton()->selectOne(meshNode);
+    EXPECT_EQ(controller->transformTargetKind(), QString("node"));
+    ASSERT_TRUE(EditModeController::instance()->enterEditMode());
+    EXPECT_EQ(controller->transformTargetKind(), QString("editMesh"));
+    EXPECT_EQ(controller->transformTargetLabel(), QString("Mesh Geometry"));
+    EXPECT_TRUE(controller->transformAffectsMesh());
+    EXPECT_TRUE(controller->transformTargetDetail().contains("Edit Mode transforms mesh vertices"));
+    EditModeController::instance()->exitEditMode(false);
 
     SelectionSet::getSingleton()->selectOne(entity->getSubEntity(0));
     EXPECT_EQ(controller->transformTargetKind(), QString("submesh"));
