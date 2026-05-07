@@ -18,6 +18,17 @@ Rectangle {
             || mode === EditorModeController.ValidationMode
     }
 
+    function targetAccent(kind) {
+        switch (kind) {
+        case "node": return "#6ca0dc"
+        case "mesh": return "#55b65a"
+        case "submesh": return "#c9b64f"
+        case "mixed":
+        case "mixedGeometry": return "#d18f3f"
+        default: return PropertiesPanelController.borderColor
+        }
+    }
+
     Connections {
         target: EditorModeController
         function onModeChanged() {
@@ -130,6 +141,76 @@ Rectangle {
                 }
             }
 
+            // ---- Selection Target Indicator ----
+            Rectangle {
+                width: parent.width
+                height: visible ? 58 : 0
+                visible: PropertiesPanelController.hasSelection
+                color: Qt.darker(PropertiesPanelController.panelColor, 1.08)
+                border.color: root.targetAccent(PropertiesPanelController.transformTargetKind)
+                border.width: 1
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 8
+
+                    Rectangle {
+                        width: 4
+                        Layout.fillHeight: true
+                        radius: 2
+                        color: root.targetAccent(PropertiesPanelController.transformTargetKind)
+                    }
+
+                    ColumnLayout {
+                        spacing: 2
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignVCenter
+
+                        RowLayout {
+                            spacing: 6
+                            Layout.fillWidth: true
+
+                            Text {
+                                text: PropertiesPanelController.transformTargetLabel
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 12
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+
+                            Rectangle {
+                                radius: 3
+                                color: root.targetAccent(PropertiesPanelController.transformTargetKind)
+                                implicitWidth: impactLabel.implicitWidth + 10
+                                implicitHeight: 18
+
+                                Text {
+                                    id: impactLabel
+                                    anchors.centerIn: parent
+                                    text: PropertiesPanelController.transformAffectsMesh ? "EXPORTS" : "PLACEMENT"
+                                    color: "white"
+                                    font.pixelSize: 9
+                                    font.bold: true
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: PropertiesPanelController.transformTargetDetail
+                            color: PropertiesPanelController.textColor
+                            opacity: 0.78
+                            font.pixelSize: 10
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+            }
+
             // ---- Edit Mode Tools ----
             CollapsibleSection {
                 title: "Edit Mode Tools"
@@ -150,7 +231,7 @@ Rectangle {
 
             // ---- Transform ----
             CollapsibleSection {
-                title: "Transform"
+                title: PropertiesPanelController.transformTargetLabel
                 sectionVisible: root.currentTab === 0 && PropertiesPanelController.hasSelection
 
                 Component.onCompleted: content = transformComponent
