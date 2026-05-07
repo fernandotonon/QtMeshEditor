@@ -3,30 +3,10 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import PropertiesPanel 1.0
 import AnimationControl 1.0
-import EditorMode 1.0
 
 Rectangle {
     id: root
     color: PropertiesPanelController.panelColor
-
-    property int currentTab: 0
-
-    function showModeToolsForMode(mode) {
-        return mode === EditorModeController.EditMode
-            || mode === EditorModeController.AnimationMode
-            || mode === EditorModeController.MaterialMode
-            || mode === EditorModeController.ValidationMode
-    }
-
-    Connections {
-        target: EditorModeController
-        function onModeChanged() {
-            if (root.showModeToolsForMode(EditorModeController.currentMode))
-                root.currentTab = 2
-            else
-                root.currentTab = 0
-        }
-    }
 
     ScrollView {
         anchors.fill: parent
@@ -35,53 +15,6 @@ Rectangle {
         Column {
             width: root.width
             spacing: 0
-
-            // ---- Top-level Inspector Tabs ----
-            Rectangle {
-                width: parent.width
-                height: 38
-                color: PropertiesPanelController.headerColor
-
-                Row {
-                    anchors.fill: parent
-                    anchors.margins: 5
-                    spacing: 3
-
-                    Repeater {
-                        model: [ "Inspector", "Scene", "Mode Tools", "History" ]
-
-                        Rectangle {
-                            width: Math.max(66, (parent.width - 9) / 4)
-                            height: 28
-                            radius: 4
-                            color: root.currentTab === index
-                                ? PropertiesPanelController.highlightColor
-                                : tabMouse.containsMouse
-                                  ? Qt.lighter(PropertiesPanelController.panelColor, 1.2)
-                                  : PropertiesPanelController.panelColor
-                            border.color: PropertiesPanelController.borderColor
-                            border.width: 1
-
-                            Text {
-                                anchors.centerIn: parent
-                                text: modelData
-                                color: PropertiesPanelController.textColor
-                                font.pixelSize: 10
-                                font.bold: root.currentTab === index
-                                elide: Text.ElideRight
-                            }
-
-                            MouseArea {
-                                id: tabMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.currentTab = index
-                            }
-                        }
-                    }
-                }
-            }
 
             // ---- Edit Mode Indicator ----
             Rectangle {
@@ -125,7 +58,7 @@ Rectangle {
                         font.pixelSize: 10
                         ToolTip.text: "Toggle Edit Mode (Tab)"
                         ToolTip.visible: hovered
-                        onClicked: EditorModeController.toggleObjectEditMode()
+                        onClicked: EditModeController.toggleEditMode()
                     }
                 }
             }
@@ -133,7 +66,7 @@ Rectangle {
             // ---- Edit Mode Tools ----
             CollapsibleSection {
                 title: "Edit Mode Tools"
-                sectionVisible: root.currentTab === 2 && EditModeController.editModeActive
+                sectionVisible: EditModeController.editModeActive
                 expanded: true
 
                 Component.onCompleted: content = editModeToolsComponent
@@ -142,7 +75,6 @@ Rectangle {
             // ---- Scene Outliner ----
             CollapsibleSection {
                 title: "Scene"
-                sectionVisible: root.currentTab === 1
                 expanded: true
 
                 Component.onCompleted: content = sceneOutlinerComponent
@@ -151,7 +83,7 @@ Rectangle {
             // ---- Transform ----
             CollapsibleSection {
                 title: "Transform"
-                sectionVisible: root.currentTab === 0 && PropertiesPanelController.hasSelection
+                sectionVisible: PropertiesPanelController.hasSelection
 
                 Component.onCompleted: content = transformComponent
             }
@@ -159,7 +91,6 @@ Rectangle {
             // ---- Snap Settings ----
             CollapsibleSection {
                 title: "Snap Settings"
-                sectionVisible: root.currentTab === 0
                 expanded: false
 
                 Component.onCompleted: content = snapSettingsComponent
@@ -168,7 +99,7 @@ Rectangle {
             // ---- Primitive Parameters ----
             CollapsibleSection {
                 title: "Primitive: " + PropertiesPanelController.primitiveType
-                sectionVisible: root.currentTab === 0 && PropertiesPanelController.hasPrimitive
+                sectionVisible: PropertiesPanelController.hasPrimitive
 
                 Component.onCompleted: content = primitiveComponent
             }
@@ -176,7 +107,7 @@ Rectangle {
             // ---- Animations ----
             CollapsibleSection {
                 title: "Animations"
-                sectionVisible: root.currentTab === 2 && PropertiesPanelController.hasAnimations
+                sectionVisible: PropertiesPanelController.hasAnimations
 
                 Component.onCompleted: content = animationComponent
             }
@@ -184,7 +115,7 @@ Rectangle {
             // ---- Animation Control (keyframe editor) ----
             CollapsibleSection {
                 title: "Animation Control"
-                sectionVisible: root.currentTab === 2 && AnimationControlController.hasAnimation
+                sectionVisible: AnimationControlController.hasAnimation
                 expanded: false
 
                 Component.onCompleted: content = animControlComponent
@@ -193,7 +124,7 @@ Rectangle {
             // ---- LOD Generation ----
             CollapsibleSection {
                 title: "LOD Generation"
-                sectionVisible: root.currentTab === 2 && MeshLodController.hasSelection
+                sectionVisible: MeshLodController.hasSelection
                 expanded: false
 
                 Component.onCompleted: content = lodComponent
@@ -202,7 +133,7 @@ Rectangle {
             // ---- Material Presets ----
             CollapsibleSection {
                 title: "Material Presets"
-                sectionVisible: root.currentTab === 2 && PropertiesPanelController.hasSelection
+                sectionVisible: PropertiesPanelController.hasSelection
                 expanded: false
 
                 Component.onCompleted: content = materialPresetsComponent
@@ -211,7 +142,7 @@ Rectangle {
             // ---- Mesh Validation ----
             CollapsibleSection {
                 title: "Mesh Validation"
-                sectionVisible: root.currentTab === 2 && MeshValidator.hasSelection
+                sectionVisible: MeshValidator.hasSelection
                 expanded: false
 
                 Component.onCompleted: content = validationComponent
@@ -220,7 +151,6 @@ Rectangle {
             // ---- Undo History ----
             CollapsibleSection {
                 title: "Undo History"
-                sectionVisible: root.currentTab === 3
                 expanded: false
 
                 Component.onCompleted: content = undoHistoryComponent

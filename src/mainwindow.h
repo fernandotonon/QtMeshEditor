@@ -18,12 +18,10 @@ class MeshInfoOverlay;
 class ViewCubeController;
 class PropertiesPanelController;
 class EditModeController;
-class EditorModeController;
 class WelcomeScreenController;
 class AssetBrowserController;
 class QQuickWidget;
 class QLabel;
-class QToolBar;
 
 namespace Ui {
 class MainWindow;
@@ -151,9 +149,6 @@ private:
     QDockWidget* m_assetBrowserDock = nullptr;
     QDockWidget* m_dopeSheetDock = nullptr;
     QDockWidget* m_curveEditorDock = nullptr;
-    QDockWidget* m_bottomContextDock = nullptr;
-    QToolBar* m_modeBarShell = nullptr;
-    QQuickWidget* m_modeBar = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
     void addToRecentFiles(const QString& filePath);
@@ -173,11 +168,6 @@ private:
     /// `frameEnded()` causes on the status bar's main slot.
     QLabel* m_editHintLabel = nullptr;
     void updateEditModeIndicator();
-    void createModeSurfaces();
-    void configureBottomToolDock(QDockWidget* dock);
-    void showBottomToolDock(QDockWidget* dock);
-    void tabifyBottomToolDocks();
-    void updateToolRailForMode();
 };
 
 #endif // MAINWINDOW_H
