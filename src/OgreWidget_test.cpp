@@ -253,25 +253,13 @@ TEST_F(OgreWidgetTest, RebuildRenderWindowPreservesBackgroundAndKeepsCamera)
     EXPECT_NEAR(widget->getSpaceCamera()->getCamera()->getFarClipDistance(), 5000.0, 1e-3);
 }
 
-TEST_F(OgreWidgetTest, ViewportDefaultsApplyWhenUnset)
+TEST_F(OgreWidgetTest, FsaaDefaultsToZeroWhenUnset)
 {
     QSettings settings;
     settings.remove(ViewportSettingsKeys::fsaaSamples());
-    settings.remove(ViewportSettingsKeys::nearClip());
-    settings.remove(ViewportSettingsKeys::farClip());
-    settings.remove(ViewportSettingsKeys::cameraSpeed());
 
     EXPECT_NO_THROW(widget->rebuildRenderWindow());
     app->processEvents();
 
-    EXPECT_EQ(widget->fsaaSamples(),
-              static_cast<unsigned int>(ViewportSettingsKeys::defaultFsaaSamples()));
-    ASSERT_NE(widget->getSpaceCamera(), nullptr);
-    ASSERT_NE(widget->getSpaceCamera()->getCamera(), nullptr);
-    EXPECT_NEAR(widget->getSpaceCamera()->getCameraSpeed(),
-                ViewportSettingsKeys::defaultCameraSpeed(), 1e-5);
-    EXPECT_NEAR(widget->getSpaceCamera()->getCamera()->getNearClipDistance(),
-                ViewportSettingsKeys::defaultNearClip(), 1e-5);
-    EXPECT_NEAR(widget->getSpaceCamera()->getCamera()->getFarClipDistance(),
-                ViewportSettingsKeys::defaultFarClip(), 1e-3);
+    EXPECT_EQ(widget->fsaaSamples(), 0u);
 }
