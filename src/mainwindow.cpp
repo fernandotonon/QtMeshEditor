@@ -1808,10 +1808,14 @@ void MainWindow::updateToolRailForMode()
     const bool materialMode = mode == EditorModeController::MaterialMode;
     const bool validationMode = mode == EditorModeController::ValidationMode;
 
-    auto setSharedToolbarActionVisible = [this](QAction* action, bool visible) {
+    // Keeps the QAction reachable in menus (so users can always find Material
+    // Editor / Merge Animations under their menu) while showing or hiding only
+    // the toolbar-button representation per the active mode. The QAction's
+    // own visibility is intentionally left unchanged.
+    auto setSharedToolbarButtonVisible = [this](QAction* action, bool showButton) {
         action->setVisible(true);
         if (QWidget* toolbarButton = ui->toolToolbar->widgetForAction(action))
-            toolbarButton->setVisible(visible);
+            toolbarButton->setVisible(showButton);
     };
 
     for (QAction* action : ui->objectsToolbar->actions()) {
@@ -1842,8 +1846,8 @@ void MainWindow::updateToolRailForMode()
     ui->actionScale_Object->setVisible(objectMode || editMode);
     ui->actionToggle_Transform_Space->setVisible(objectMode || editMode);
     ui->actionRemove_Object->setVisible(objectMode);
-    setSharedToolbarActionVisible(ui->actionMaterial_Editor, objectMode || materialMode);
-    setSharedToolbarActionVisible(ui->actionMerge_Animations, objectMode || animationMode);
+    setSharedToolbarButtonVisible(ui->actionMaterial_Editor, objectMode || materialMode);
+    setSharedToolbarButtonVisible(ui->actionMerge_Animations, objectMode || animationMode);
 }
 
 // LCOV_EXCL_START — Ogre frame listener requires render loop
@@ -2584,6 +2588,12 @@ void MainWindow::on_actionMaterial_Editor_triggered()
 
 void MainWindow::updateMergeAnimationsButton()
 {
+    // SelectionSet::selectionChanged is wired to updateMergeAnimationsButton
+    // first and updateToolRailForMode immediately after (see the connect()
+    // pair where these slots are registered). Qt fires connections in
+    // registration order, so the tool rail is always refreshed for free
+    // after this slot completes — calling updateToolRailForMode() here
+    // would just iterate every toolbar action twice per selection event.
     auto entities = SelectionSet::getSingleton()->getResolvedEntities();
 
     // Filter to entities with skeletons
@@ -2597,7 +2607,6 @@ void MainWindow::updateMergeAnimationsButton()
     if (skelEntities.size() < 2)
     {
         ui->actionMerge_Animations->setEnabled(false);
-        updateToolRailForMode();
         return;
     }
 
@@ -2609,13 +2618,11 @@ void MainWindow::updateMergeAnimationsButton()
         if (!AnimationMerger::areSkeletonsCompatible(baseSkel, otherSkel))
         {
             ui->actionMerge_Animations->setEnabled(false);
-            updateToolRailForMode();
             return;
         }
     }
 
     ui->actionMerge_Animations->setEnabled(true);
-    updateToolRailForMode();
 }
 
 // LCOV_EXCL_START — complex dialog with entity merging
