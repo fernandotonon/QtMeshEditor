@@ -24,6 +24,7 @@ class AssetBrowserController;
 class QQuickWidget;
 class QLabel;
 class QToolBar;
+class OgreWidget;
 
 namespace Ui {
 class MainWindow;
@@ -117,6 +118,17 @@ private slots:
 public slots:
     void setPlaying(bool playing);
 
+public:
+    /// Accessors for the viewport display QActions so per-viewport
+    /// title bars (built by `EditorViewport`) can bind their toolbuttons
+    /// without forcing the whole `Ui::MainWindow` to be public. Each action
+    /// is owned by `ui->menuOptions` (autogen by Qt Designer) and lives for
+    /// the lifetime of MainWindow.
+    QAction* actionShowGrid() const;
+    QAction* actionShowNormals() const;
+    QAction* actionShowMeshInfo() const;
+    QAction* actionShowViewCube() const;
+
 private:
     Ui::MainWindow *ui;
 
@@ -144,6 +156,7 @@ protected:
     void keyReleaseEvent(QKeyEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void initToolBar();
