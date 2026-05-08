@@ -79,9 +79,13 @@ TEST_F(EditorModeControllerTest, InspectorTabPolicyDefaultsByMode)
 
     EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::ObjectMode),
               EditorModeController::InspectorTab);
+    EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::EditMode),
+              EditorModeController::ModeToolsTab);
     EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::AnimationMode),
               EditorModeController::ModeToolsTab);
     EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::MaterialMode),
+              EditorModeController::ModeToolsTab);
+    EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::ValidationMode),
               EditorModeController::ModeToolsTab);
     EXPECT_EQ(ctrl->defaultInspectorTabForMode(99),
               EditorModeController::InspectorTab);

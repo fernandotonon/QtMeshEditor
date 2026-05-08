@@ -60,6 +60,11 @@ Rectangle {
             if (root.shouldKeepExplicitTab(root.currentTab))
                 return
             root.currentTab = root.defaultTabForMode(EditorModeController.currentMode)
+            // Switching modes resets the Mode-Tools filter back to "Current"
+            // so each mode lands on its own tools by default. A sticky "All"
+            // would silently survive a mode change and contradict the
+            // "current-mode tools" default the filter advertises.
+            root.showAllModeTools = false
         }
     }
 
@@ -83,13 +88,24 @@ Rectangle {
                     spacing: 3
 
                     Repeater {
-                        model: [ "Inspector", "Scene", "Mode Tools", "History" ]
+                        // Bind label order to the canonical InspectorTabId enum
+                        // values exposed by EditorModeController. Don't rely on
+                        // the Repeater's implicit `index` to map tabs — that
+                        // would silently couple this array's order to the C++
+                        // enum order and break every `sectionVisible` binding
+                        // if anyone reordered either.
+                        model: [
+                            { label: "Inspector",  id: root.inspectorTab  },
+                            { label: "Scene",      id: root.sceneTab      },
+                            { label: "Mode Tools", id: root.modeToolsTab  },
+                            { label: "History",    id: root.historyTab    }
+                        ]
 
                         Rectangle {
                             width: Math.max(66, (parent.width - 9) / 4)
                             height: 28
                             radius: 4
-                            color: root.currentTab === index
+                            color: root.currentTab === modelData.id
                                 ? PropertiesPanelController.highlightColor
                                 : tabMouse.containsMouse
                                   ? Qt.lighter(PropertiesPanelController.panelColor, 1.2)
@@ -99,10 +115,10 @@ Rectangle {
 
                             Text {
                                 anchors.centerIn: parent
-                                text: modelData
+                                text: modelData.label
                                 color: PropertiesPanelController.textColor
                                 font.pixelSize: 10
-                                font.bold: root.currentTab === index
+                                font.bold: root.currentTab === modelData.id
                                 elide: Text.ElideRight
                             }
 
@@ -111,7 +127,7 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: root.currentTab = index
+                                onClicked: root.currentTab = modelData.id
                             }
                         }
                     }
