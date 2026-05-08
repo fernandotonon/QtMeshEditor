@@ -49,3 +49,32 @@ TEST_F(EditorModeControllerTest, InvalidModeIsIgnored)
     ctrl->requestMode(99);
     EXPECT_EQ(ctrl->currentMode(), EditorModeController::ValidationMode);
 }
+
+TEST_F(EditorModeControllerTest, ObjectModeRequestUpdatesStatusText)
+{
+    auto* ctrl = EditorModeController::instance();
+
+    // Hop away first so the request actually transitions back to ObjectMode.
+    ctrl->requestMode(EditorModeController::AnimationMode);
+    ASSERT_EQ(ctrl->currentMode(), EditorModeController::AnimationMode);
+
+    ctrl->requestMode(EditorModeController::ObjectMode);
+    EXPECT_EQ(ctrl->currentMode(), EditorModeController::ObjectMode);
+    EXPECT_EQ(ctrl->modeName(), QStringLiteral("Object"));
+    EXPECT_EQ(ctrl->statusText(), QStringLiteral("Object mode"));
+}
+
+TEST_F(EditorModeControllerTest, EditModeRequestWithoutMeshFallsBackToHint)
+{
+    auto* ctrl = EditorModeController::instance();
+    auto* edit = EditModeController::instance();
+    ASSERT_FALSE(edit->isEditModeActive());
+    ASSERT_FALSE(edit->canEnterEditMode());
+
+    // No selection → enterEditMode() refuses, so EditorModeController stays
+    // in ObjectMode and surfaces a hint via statusText().
+    ctrl->requestMode(EditorModeController::EditMode);
+    EXPECT_EQ(ctrl->currentMode(), EditorModeController::ObjectMode);
+    EXPECT_EQ(ctrl->statusText(), QStringLiteral("Select one mesh to enter Edit mode"));
+    EXPECT_FALSE(edit->isEditModeActive());
+}

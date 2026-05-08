@@ -33,10 +33,12 @@ Rectangle {
     Connections {
         target: EditorModeController
         function onModeChanged() {
-            if (root.showModeToolsForMode(EditorModeController.currentMode))
-                root.currentTab = 2
-            else
-                root.currentTab = 0
+            // Don't yank the user away from Scene (1) or History (3) when
+            // they're explicitly browsing those tabs. Only retarget the
+            // Inspector/Mode-Tools pair, which are the mode-aware ones.
+            if (root.currentTab === 1 || root.currentTab === 3)
+                return
+            root.currentTab = root.showModeToolsForMode(EditorModeController.currentMode) ? 2 : 0
         }
     }
 
@@ -258,7 +260,9 @@ Rectangle {
             // ---- Animations ----
             CollapsibleSection {
                 title: "Animations"
-                sectionVisible: root.currentTab === 2 && PropertiesPanelController.hasAnimations
+                sectionVisible: root.currentTab === 2
+                    && EditorModeController.currentMode === EditorModeController.AnimationMode
+                    && PropertiesPanelController.hasAnimations
 
                 Component.onCompleted: content = animationComponent
             }
@@ -266,7 +270,9 @@ Rectangle {
             // ---- Animation Control (keyframe editor) ----
             CollapsibleSection {
                 title: "Animation Control"
-                sectionVisible: root.currentTab === 2 && AnimationControlController.hasAnimation
+                sectionVisible: root.currentTab === 2
+                    && EditorModeController.currentMode === EditorModeController.AnimationMode
+                    && AnimationControlController.hasAnimation
                 expanded: false
 
                 Component.onCompleted: content = animControlComponent
@@ -284,7 +290,9 @@ Rectangle {
             // ---- Material Presets ----
             CollapsibleSection {
                 title: "Material Presets"
-                sectionVisible: root.currentTab === 2 && PropertiesPanelController.hasSelection
+                sectionVisible: root.currentTab === 2
+                    && EditorModeController.currentMode === EditorModeController.MaterialMode
+                    && PropertiesPanelController.hasSelection
                 expanded: false
 
                 Component.onCompleted: content = materialPresetsComponent
@@ -293,7 +301,9 @@ Rectangle {
             // ---- Mesh Validation ----
             CollapsibleSection {
                 title: "Mesh Validation"
-                sectionVisible: root.currentTab === 2 && MeshValidator.hasSelection
+                sectionVisible: root.currentTab === 2
+                    && EditorModeController.currentMode === EditorModeController.ValidationMode
+                    && MeshValidator.hasSelection
                 expanded: false
 
                 Component.onCompleted: content = validationComponent

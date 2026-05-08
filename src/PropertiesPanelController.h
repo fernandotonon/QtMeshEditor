@@ -39,10 +39,10 @@ class PropertiesPanelController : public QObject
     Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY selectionChanged)
     Q_PROPERTY(bool hasEntitySelection READ hasEntitySelection NOTIFY selectionChanged)
     Q_PROPERTY(QString selectionName READ selectionName NOTIFY selectionChanged)
-    Q_PROPERTY(QString transformTargetKind READ transformTargetKind NOTIFY selectionChanged)
-    Q_PROPERTY(QString transformTargetLabel READ transformTargetLabel NOTIFY selectionChanged)
-    Q_PROPERTY(QString transformTargetDetail READ transformTargetDetail NOTIFY selectionChanged)
-    Q_PROPERTY(bool transformAffectsMesh READ transformAffectsMesh NOTIFY selectionChanged)
+    Q_PROPERTY(QString transformTargetKind READ transformTargetKind NOTIFY transformTargetMetadataChanged)
+    Q_PROPERTY(QString transformTargetLabel READ transformTargetLabel NOTIFY transformTargetMetadataChanged)
+    Q_PROPERTY(QString transformTargetDetail READ transformTargetDetail NOTIFY transformTargetMetadataChanged)
+    Q_PROPERTY(bool transformAffectsMesh READ transformAffectsMesh NOTIFY transformTargetMetadataChanged)
     Q_PROPERTY(QStringList sceneNodeNames READ sceneNodeNames NOTIFY sceneChanged)
     Q_PROPERTY(SceneTreeModel* sceneTreeModel READ sceneTreeModel CONSTANT)
 
@@ -252,6 +252,10 @@ public slots:
 signals:
     void transformChanged();
     void selectionChanged();
+    /// Emitted when the transform-target metadata (`transformTargetKind`,
+    /// `transformTargetLabel`, `transformTargetDetail`, `transformAffectsMesh`)
+    /// may have changed. Fires on selection deltas and on Edit Mode toggles.
+    void transformTargetMetadataChanged();
     void sceneChanged();
     void themeChanged();
     void primitiveChanged();

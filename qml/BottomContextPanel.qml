@@ -13,6 +13,11 @@ Rectangle {
     property bool expanded: true
     property int contentMode: EditorModeController.currentMode
 
+    // Set from C++ (mainwindow.cpp) so the Material Editor button can trigger
+    // the QAction directly. Declared explicitly so the QML compiler resolves
+    // the identifier locally instead of relying on an ambient context value.
+    property var materialEditorAction: null
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0

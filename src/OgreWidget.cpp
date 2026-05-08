@@ -46,6 +46,7 @@ THE SOFTWARE.
 #include "QtInputManager.h"
 #include "EditModeController.h"
 #include "TransformOperator.h"
+#include "SentryReporter.h"
 
 namespace {
 
@@ -77,19 +78,31 @@ void applyViewportCameraFromSettings(SpaceCamera* cam)
     if (!cam || !cam->getCamera())
         return;
     QSettings settings;
-    Ogre::Real speed = settings.value(
+    const Ogre::Real speed = settings.value(
         ViewportSettingsKeys::cameraSpeed(),
         ViewportSettingsKeys::defaultCameraSpeed()).toReal();
-    if (speed > 0)
+    if (speed > 0) {
         cam->setCameraSpeed(speed);
-    cam->getCamera()->setNearClipDistance(
-        settings.value(
-            ViewportSettingsKeys::nearClip(),
-            ViewportSettingsKeys::defaultNearClip()).toDouble());
-    cam->getCamera()->setFarClipDistance(
-        settings.value(
-            ViewportSettingsKeys::farClip(),
-            ViewportSettingsKeys::defaultFarClip()).toDouble());
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("viewport.settings"),
+            QStringLiteral("Apply camera speed: %1").arg(speed));
+    }
+
+    const double nearClip = settings.value(
+        ViewportSettingsKeys::nearClip(),
+        ViewportSettingsKeys::defaultNearClip()).toDouble();
+    cam->getCamera()->setNearClipDistance(nearClip);
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("viewport.settings"),
+        QStringLiteral("Apply near clip: %1").arg(nearClip));
+
+    const double farClip = settings.value(
+        ViewportSettingsKeys::farClip(),
+        ViewportSettingsKeys::defaultFarClip()).toDouble();
+    cam->getCamera()->setFarClipDistance(farClip);
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("viewport.settings"),
+        QStringLiteral("Apply far clip: %1").arg(farClip));
 }
 }
 
@@ -250,8 +263,12 @@ void OgreWidget::initOgreWindow(void)
     const int requestedFsaa = settings.value(
         ViewportSettingsKeys::fsaaSamples(),
         ViewportSettingsKeys::defaultFsaaSamples()).toInt();
-    if (requestedFsaa > 0)
+    if (requestedFsaa > 0) {
         params["FSAA"] = Ogre::StringConverter::toString(requestedFsaa);
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("viewport.settings"),
+            QStringLiteral("Apply FSAA samples: %1").arg(requestedFsaa));
+    }
 
     QString name = "Viewport " + QString::number(getIndex());
     while (mOgreRoot->getRenderTarget(name.toStdString())) {

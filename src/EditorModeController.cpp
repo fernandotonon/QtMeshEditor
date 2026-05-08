@@ -22,7 +22,10 @@ EditorModeController::EditorModeController(QObject* parent)
             this, &EditorModeController::refreshEditAvailability);
 
     m_currentMode = edit->isEditModeActive() ? EditMode : ObjectMode;
-    setStatusText(QStringLiteral("Object mode"));
+    if (m_currentMode == EditMode)
+        setStatusText(edit->modeLabel());
+    else
+        setStatusText(QStringLiteral("Object mode"));
 }
 
 EditorModeController* EditorModeController::instance()
@@ -92,12 +95,12 @@ void EditorModeController::syncFromEditMode()
 {
     auto* edit = editController();
     if (edit->isEditModeActive()) {
+        // setModeInternal already refreshes the status text via
+        // edit->modeLabel() when entering EditMode, so don't double-set it.
         setModeInternal(EditMode, false);
-        setStatusText(edit->modeLabel());
-    } else {
-        if (m_currentMode == EditMode)
-            setModeInternal(ObjectMode, false);
-        setStatusText(QStringLiteral("Object mode"));
+    } else if (m_currentMode == EditMode) {
+        // setModeInternal sets status text to "Object mode" here too.
+        setModeInternal(ObjectMode, false);
     }
     emit editModeAvailabilityChanged();
 }

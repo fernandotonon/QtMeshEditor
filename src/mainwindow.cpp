@@ -82,8 +82,8 @@
 
 namespace {
 
-constexpr int kBottomToolHeight = 180;
-constexpr int kBottomDockMaxHeight = 220;
+constexpr int kBottomToolHeight = MainWindow::kDefaultDockedHeight;
+constexpr int kBottomDockMaxHeight = MainWindow::kDefaultDockedMaxHeight;
 
 void registerEditorModeQmlSingletons()
 {
@@ -1024,6 +1024,7 @@ void MainWindow::initToolBar()
         EditModeController::instance()->loopCutSelection();
     });
     QAction* loopCutAction = ui->objectsToolbar->addWidget(loopCutButton);
+    loopCutAction->setObjectName("modeEditLoopCutAction");
 
     // Convert to Quads: walks the mesh and merges coplanar adjacent
     // triangle pairs into n-gon quads. Useful when an imported tri
@@ -1038,6 +1039,7 @@ void MainWindow::initToolBar()
         EditModeController::instance()->convertToQuads();
     });
     QAction* convertToQuadsAction = ui->objectsToolbar->addWidget(convertToQuadsButton);
+    convertToQuadsAction->setObjectName("modeEditConvertToQuadsAction");
 
     // Vertex paint: toggle on main click; arrow opens brush settings (color, radius, strength).
     auto makeVertexPaintBrushIcon = []() -> QIcon {
@@ -1576,8 +1578,11 @@ void MainWindow::createModeSurfaces()
         contextWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
         contextWidget->setMinimumHeight(kBottomToolHeight);
         contextWidget->setMaximumHeight(kBottomToolHeight);
-        contextWidget->rootContext()->setContextProperty("materialEditorAction", ui->actionMaterial_Editor);
         contextWidget->setSource(QUrl("qrc:/BottomContextPanel/BottomContextPanel.qml"));
+        if (auto* root = contextWidget->rootObject()) {
+            root->setProperty("materialEditorAction",
+                              QVariant::fromValue(static_cast<QObject*>(ui->actionMaterial_Editor)));
+        }
 
         m_bottomContextDock = new QDockWidget(tr("Context"), this);
         m_bottomContextDock->setObjectName("BottomContextDock");

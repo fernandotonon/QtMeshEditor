@@ -829,7 +829,8 @@ TEST_F(MainWindowTest, BottomToolDockRedocksAndUsesDefaultDockedHeight)
     EXPECT_FALSE(window->m_assetBrowserDock->isFloating());
     EXPECT_EQ(window->dockWidgetArea(window->m_assetBrowserDock), Qt::BottomDockWidgetArea);
     EXPECT_FALSE(window->m_assetBrowserDock->isHidden());
-    EXPECT_EQ(window->m_assetBrowserDock->widget()->maximumHeight(), 180);
+    EXPECT_EQ(window->m_assetBrowserDock->widget()->maximumHeight(),
+              MainWindow::kDefaultDockedHeight);
 
     window->m_assetBrowserDock->setFloating(true);
     app->processEvents();
@@ -845,7 +846,8 @@ TEST_F(MainWindowTest, BottomToolDockRedocksAndUsesDefaultDockedHeight)
     EXPECT_EQ(window->dockWidgetArea(window->m_assetBrowserDock), Qt::BottomDockWidgetArea);
     EXPECT_FALSE(window->m_assetBrowserDock->isHidden());
     EXPECT_LT(window->m_assetBrowserDock->maximumHeight(), QWIDGETSIZE_MAX);
-    EXPECT_EQ(window->m_assetBrowserDock->widget()->maximumHeight(), 180);
+    EXPECT_EQ(window->m_assetBrowserDock->widget()->maximumHeight(),
+              MainWindow::kDefaultDockedHeight);
 }
 
 TEST_F(MainWindowTest, LoadFileQueuesNonSceneFileAndTracksRecentFiles)
