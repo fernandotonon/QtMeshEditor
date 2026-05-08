@@ -2912,3 +2912,44 @@ TEST(CLIPipelineCmdScanCloud, TokenSkipsLocalQtmeshYmlUsesDefaultsWhenApiFails)
     // Cloud fetch fails → defaults (no max_vertex_count) → scan passes.
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
 }
+
+// -- cmdMaterial error paths --
+
+TEST(CLIPipelineCmdMaterialError, NoArgs)
+{
+    TestArgv args({"qtmesh", "material"});
+    // Missing both file and preset → usage error (2).
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdMaterialError, FileWithoutPreset)
+{
+    TestArgv args({"qtmesh", "material", "/tmp/nonexistent_mat_test.fbx"});
+    // File specified but no --preset → usage error (2).
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdMaterialError, UnknownPreset)
+{
+    TestArgv args({"qtmesh", "material", "/tmp/whatever.fbx",
+                   "--preset", "Definitely-Not-A-Real-Preset"});
+    // Unknown preset name is reported before the file is opened → usage (2).
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdMaterialError, NonexistentFile)
+{
+    TestArgv args({"qtmesh", "material",
+                   "/tmp/nonexistent_mat_test_xyzzy_999.fbx",
+                   "--preset", "Plastic (Red)"});
+    // Valid preset but file does not exist → runtime error (1).
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdMaterial, ListPresetsExitsZero)
+{
+    TestArgv args({"qtmesh", "material", "--list-presets"});
+    // --list-presets is a standalone op: dump names, exit 0. No mesh
+    // load needed, so this works without Ogre headless init.
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 0);
+}

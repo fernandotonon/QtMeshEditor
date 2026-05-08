@@ -9,7 +9,9 @@
 #include "ScanConfig.h"
 #include "ScanEngine.h"
 #include "FBX/FBXExporter.h"
+#include "MaterialPresetLibrary.h"
 #include "QtMeshCloudClient.h"
+#include <OgreMaterialSerializer.h>
 #include <QApplication>
 #include <QWidget>
 #include <QDir>
@@ -538,6 +540,11 @@ void CLIPipeline::printUsage()
         "  pose <file> --animation <name> --count N -o <pattern>\n"
         "                                    Export N evenly spaced frames (use %02d in pattern)\n"
         "  scan [path] [options]           Scan directory for 3D asset issues (default path: .)\n"
+        "  material <file> --preset <name> [-o <output>]\n"
+        "                                  Apply a built-in material preset to every sub-entity\n"
+        "                                  (Plastic/Metal/Wood/Glass/Unlit/Wireframe + PBR templates:\n"
+        "                                  Metallic-Roughness, Specular-Glossiness, Unlit PBR)\n"
+        "  material --list-presets         List the built-in preset names\n"
         "\n"
         "Scan options:\n"
         "  --config <file>           Config file (default: qtmesh.yml, qtmesh.json)\n"
@@ -949,6 +956,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "lod") rc = cmdLod(argc, argv);
     else if (cmd == "pose") rc = cmdPose(argc, argv);
     else if (cmd == "scan") rc = cmdScan(argc, argv);
+    else if (cmd == "material") rc = cmdMaterial(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -2429,6 +2437,163 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             .arg(QFileInfo(outputPath).fileName()));
         return 0;
     }
+}
+
+int CLIPipeline::cmdMaterial(int argc, char* argv[])
+{
+    // Parse:
+    //   material <file> --preset <name> [-o <output>]
+    //   material <file> --list-presets
+    //   material --list-presets
+    QString inputPath, outputPath, presetName;
+    bool listPresets = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "material" || arg == "--cli") continue;
+        if (arg == "--list-presets") { listPresets = true; continue; }
+        if (arg == "--preset" && i + 1 < argc) {
+            presetName = QString(argv[++i]);
+            continue;
+        }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString(argv[++i]);
+            continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) {
+            inputPath = arg;
+            continue;
+        }
+    }
+
+    auto* lib = MaterialPresetLibrary::instance();
+    const QStringList names = lib->presetNames();
+
+    // --list-presets is a standalone op: dump names and exit.
+    if (listPresets) {
+        QString out;
+        for (const QString& n : names) out += n + "\n";
+        cliWrite(out);
+        return 0;
+    }
+
+    if (inputPath.isEmpty() || presetName.isEmpty()) {
+        err() << "Error: Missing required arguments." << Qt::endl;
+        err() << "Usage: qtmesh material <file> --preset <name> [-o <output>]" << Qt::endl;
+        err() << "       qtmesh material --list-presets" << Qt::endl;
+        return 2;
+    }
+
+    if (!names.contains(presetName)) {
+        err() << "Error: Unknown preset '" << presetName << "'." << Qt::endl;
+        err() << "Available presets:" << Qt::endl;
+        for (const QString& n : names)
+            err() << "  " << n << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    if (outputPath.isEmpty()) outputPath = inputPath;
+    QFileInfo outFi(outputPath);
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.material",
+        QString("Apply preset '%1' to .%2 -> .%3")
+            .arg(presetName, fi.suffix(), outFi.suffix()));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing file %1").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        SentryReporter::captureMessage(
+            QString("CLI material: import failed (.%1)").arg(fi.suffix()), "error");
+        err() << "Error: Failed to load file: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    // Select all loaded entities so applyPreset finds them.
+    // Manager::getEntities() returns all attached objects including
+    // ManualObjects; check the movable type before casting to avoid
+    // a crash on non-Entity items.
+    auto* sel = SelectionSet::getSingleton();
+    int selectedEntityCount = 0;
+    for (auto* obj : entities) {
+        if (!obj || obj->getMovableType() != "Entity")
+            continue;
+        sel->append(obj);
+        ++selectedEntityCount;
+    }
+    if (selectedEntityCount == 0) {
+        err() << "Error: No Ogre Entity objects found in imported scene." << Qt::endl;
+        return 1;
+    }
+
+    lib->applyPreset(presetName);
+
+    Ogre::Entity* entity = entities.first();
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Exporting file %1").arg(outFi.absoluteFilePath()));
+
+    int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(),
+                                                formatForExtension(outputPath));
+    if (result != 0) {
+        SentryReporter::captureMessage(
+            QString("CLI material: export failed (.%1)").arg(outFi.suffix()), "error");
+        err() << "Error: Export failed." << Qt::endl;
+        return 1;
+    }
+
+    // Write a sidecar .material file alongside the output mesh so that
+    // engines/tools that expect Ogre material scripts can pick up the preset.
+    // Sidecar generation is part of the core feature contract — failures
+    // here propagate as a non-zero exit code, not silent success.
+    const std::string matName = ("Preset/" + presetName).toStdString();
+    auto matMgr = Ogre::MaterialManager::getSingletonPtr();
+    if (!matMgr || !matMgr->resourceExists(matName)) {
+        err() << "Error: Material resource not found for sidecar export: "
+              << QString::fromStdString(matName) << Qt::endl;
+        return 1;
+    }
+    Ogre::MaterialPtr mat = matMgr->getByName(matName);
+    if (!mat) {
+        err() << "Error: Failed to resolve material for sidecar export: "
+              << QString::fromStdString(matName) << Qt::endl;
+        return 1;
+    }
+    Ogre::MaterialSerializer ms;
+    ms.queueForExport(mat, false, false, matName);
+    const QString matText = QString::fromStdString(ms.getQueuedAsString());
+
+    const QString sidecarPath = QDir(outFi.absolutePath())
+        .filePath(outFi.completeBaseName() + ".material");
+    QFile matFile(sidecarPath);
+    if (!matFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        err() << "Error: Failed to write material sidecar: " << sidecarPath << Qt::endl;
+        return 1;
+    }
+    matFile.write(matText.toUtf8());
+    matFile.close();
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Wrote material sidecar %1").arg(sidecarPath));
+
+    cliWrite(QString("Applied preset '%1' to %2 (%3 entit%4). Saved: %5\n")
+        .arg(presetName)
+        .arg(fi.fileName())
+        .arg(selectedEntityCount)
+        .arg(selectedEntityCount == 1 ? "y" : "ies")
+        .arg(outFi.fileName()));
+
+    return 0;
 }
 
 int CLIPipeline::cmdScan(int argc, char* argv[])

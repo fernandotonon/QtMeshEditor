@@ -730,6 +730,29 @@ ApplicationWindow {
                                         materialTextArea.text = "material NormalMapMaterial\n{\n    technique\n    {\n        pass\n        {\n            ambient 0.2 0.2 0.2 1.0\n            diffuse 0.8 0.8 0.8 1.0\n            specular 0.5 0.5 0.5 32.0\n            \n            texture_unit\n            {\n                texture diffuse.png\n            }\n            \n            texture_unit normal_map\n            {\n                texture normal.png\n            }\n        }\n    }\n}"
                                     }
                                 }
+
+                                MenuSeparator {}
+
+                                MenuItem {
+                                    text: "PBR — Metallic-Roughness"
+                                    onTriggered: {
+                                        materialTextArea.text = "material PbrMetallicRoughness\n{\n    technique\n    {\n        pass\n        {\n            ambient 0.25 0.25 0.25 1.0\n            diffuse 0.8 0.8 0.8 1.0\n            specular 0.5 0.5 0.5 1.0 40.0\n            lighting on\n\n            // 6 canonical PBR slots — drop your maps in here.\n            // Slice F's PBR shader looks up these names.\n            texture_unit albedo     { }\n            texture_unit normal_map { }\n            texture_unit metallic   { }\n            texture_unit roughness  { }\n            texture_unit ao         { }\n            texture_unit emissive   { }\n        }\n    }\n}"
+                                    }
+                                }
+
+                                MenuItem {
+                                    text: "PBR — Specular-Glossiness"
+                                    onTriggered: {
+                                        materialTextArea.text = "material PbrSpecularGlossiness\n{\n    technique\n    {\n        pass\n        {\n            ambient 0.25 0.25 0.25 1.0\n            diffuse 0.8 0.8 0.8 1.0\n            specular 0.8 0.8 0.8 1.0 60.0\n            lighting on\n\n            // 6 canonical PBR slots — 'metallic'/'roughness' are reused\n            // as 'specular'/'glossiness' under this workflow.\n            texture_unit albedo     { }\n            texture_unit normal_map { }\n            texture_unit metallic   { }\n            texture_unit roughness  { }\n            texture_unit ao         { }\n            texture_unit emissive   { }\n        }\n    }\n}"
+                                    }
+                                }
+
+                                MenuItem {
+                                    text: "PBR — Unlit"
+                                    onTriggered: {
+                                        materialTextArea.text = "material PbrUnlit\n{\n    technique\n    {\n        pass\n        {\n            lighting off\n            diffuse 1.0 1.0 1.0 1.0\n\n            // Albedo is the final colour. Other slots are kept so the\n            // PBR slot layout stays consistent with the lit templates.\n            texture_unit albedo     { }\n            texture_unit normal_map { }\n            texture_unit metallic   { }\n            texture_unit roughness  { }\n            texture_unit ao         { }\n            texture_unit emissive   { }\n        }\n    }\n}"
+                                    }
+                                }
                             }
                         }
                     }
