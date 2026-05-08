@@ -544,7 +544,7 @@ void CLIPipeline::printUsage()
         "                                  Apply a built-in material preset to every sub-entity\n"
         "                                  (Plastic/Metal/Wood/Glass/Unlit/Wireframe + PBR templates:\n"
         "                                  Metallic-Roughness, Specular-Glossiness, Unlit PBR)\n"
-        "  material <file> --list-presets  List the built-in preset names\n"
+        "  material --list-presets         List the built-in preset names\n"
         "\n"
         "Scan options:\n"
         "  --config <file>           Config file (default: qtmesh.yml, qtmesh.json)\n"
@@ -2506,6 +2506,8 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     SentryReporter::addBreadcrumb("cli.material",
         QString("Apply preset '%1' to .%2 -> .%3")
             .arg(presetName, fi.suffix(), outFi.suffix()));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing file %1").arg(fi.absoluteFilePath()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
 
@@ -2518,14 +2520,29 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     }
 
     // Select all loaded entities so applyPreset finds them.
+    // Manager::getEntities() returns all attached objects including
+    // ManualObjects; check the movable type before casting to avoid
+    // a crash on non-Entity items.
     auto* sel = SelectionSet::getSingleton();
-    for (Ogre::Entity* entity : entities)
-        sel->append(entity);
+    int selectedEntityCount = 0;
+    for (auto* obj : entities) {
+        if (!obj || obj->getMovableType() != "Entity")
+            continue;
+        sel->append(obj);
+        ++selectedEntityCount;
+    }
+    if (selectedEntityCount == 0) {
+        err() << "Error: No Ogre Entity objects found in imported scene." << Qt::endl;
+        return 1;
+    }
 
     lib->applyPreset(presetName);
 
     Ogre::Entity* entity = entities.first();
     Ogre::SceneNode* node = entity->getParentSceneNode();
+
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Exporting file %1").arg(outFi.absoluteFilePath()));
 
     int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(),
                                                 formatForExtension(outputPath));
@@ -2538,30 +2555,42 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
 
     // Write a sidecar .material file alongside the output mesh so that
     // engines/tools that expect Ogre material scripts can pick up the preset.
+    // Sidecar generation is part of the core feature contract — failures
+    // here propagate as a non-zero exit code, not silent success.
     const std::string matName = ("Preset/" + presetName).toStdString();
     auto matMgr = Ogre::MaterialManager::getSingletonPtr();
-    if (matMgr && matMgr->resourceExists(matName)) {
-        Ogre::MaterialPtr mat = matMgr->getByName(matName);
-        if (mat) {
-            Ogre::MaterialSerializer ms;
-            ms.queueForExport(mat, false, false, matName);
-            const QString matText = QString::fromStdString(ms.getQueuedAsString());
-
-            const QString sidecarPath = QDir(outFi.absolutePath())
-                .filePath(outFi.completeBaseName() + ".material");
-            QFile matFile(sidecarPath);
-            if (matFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                matFile.write(matText.toUtf8());
-                matFile.close();
-            }
-        }
+    if (!matMgr || !matMgr->resourceExists(matName)) {
+        err() << "Error: Material resource not found for sidecar export: "
+              << QString::fromStdString(matName) << Qt::endl;
+        return 1;
     }
+    Ogre::MaterialPtr mat = matMgr->getByName(matName);
+    if (!mat) {
+        err() << "Error: Failed to resolve material for sidecar export: "
+              << QString::fromStdString(matName) << Qt::endl;
+        return 1;
+    }
+    Ogre::MaterialSerializer ms;
+    ms.queueForExport(mat, false, false, matName);
+    const QString matText = QString::fromStdString(ms.getQueuedAsString());
+
+    const QString sidecarPath = QDir(outFi.absolutePath())
+        .filePath(outFi.completeBaseName() + ".material");
+    QFile matFile(sidecarPath);
+    if (!matFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        err() << "Error: Failed to write material sidecar: " << sidecarPath << Qt::endl;
+        return 1;
+    }
+    matFile.write(matText.toUtf8());
+    matFile.close();
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Wrote material sidecar %1").arg(sidecarPath));
 
     cliWrite(QString("Applied preset '%1' to %2 (%3 entit%4). Saved: %5\n")
         .arg(presetName)
         .arg(fi.fileName())
-        .arg(entities.size())
-        .arg(entities.size() == 1 ? "y" : "ies")
+        .arg(selectedEntityCount)
+        .arg(selectedEntityCount == 1 ? "y" : "ies")
         .arg(outFi.fileName()));
 
     return 0;

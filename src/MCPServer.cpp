@@ -17,6 +17,7 @@
 #include <QDebug>
 #include <QFile>
 #include <QDir>
+#include <QScopeGuard>
 #include <QTemporaryFile>
 #include <QImage>
 #include <QBuffer>
@@ -881,25 +882,38 @@ QJsonObject MCPServer::toolApplyMaterialPreset(const QJsonObject &args)
 
     try {
         if (!meshName.isEmpty()) {
-            Manager* mgr = Manager::getSingletonPtr();
-            if (!mgr) return makeErrorResult("Error: Manager not available");
+            if (!Manager::getSingletonPtr())
+                return makeErrorResult("Error: Manager not available");
 
-            Ogre::Entity* target = nullptr;
-            for (Ogre::Entity* ent : mgr->getEntities()) {
-                if (ent && QString::fromStdString(ent->getName()) == meshName) {
-                    target = ent; break;
-                }
-            }
+            // Use the safe getMovableType-checking helper rather than
+            // iterating Manager::getEntities() and casting; the latter
+            // crashes on ManualObjects mixed into the entity list.
+            Ogre::Entity* target = findEntityByName(meshName);
             if (!target)
                 return makeErrorResult(QString("Error: Mesh '%1' not found").arg(meshName));
 
-            // Snapshot + replace selection so applyPreset hits the right entity.
-            auto prevNodes = sel->getNodesSelectionList();
+            Ogre::SceneNode* parent = target->getParentSceneNode();
+            if (!parent)
+                return makeErrorResult(
+                    QString("Error: Mesh '%1' is not attached to a scene node").arg(meshName));
+
+            // Snapshot the FULL selection (nodes + sub-entities) and
+            // restore it on every exit path — including exceptions from
+            // applyPreset — via QScopeGuard. The previous version
+            // snapshot only nodes and used early returns, leaking the
+            // swapped selection on error and silently dropping any
+            // active sub-entity selection on success.
+            const auto prevNodes   = sel->getNodesSelectionList();
+            const auto prevSubEnts = sel->getSubEntitiesSelectionList();
+            auto restoreSelection = qScopeGuard([&] {
+                sel->clear();
+                for (auto* n : prevNodes)    sel->append(n);
+                for (auto* se : prevSubEnts) sel->append(se);
+            });
+
             sel->clear();
-            sel->append(target->getParentSceneNode());
+            sel->append(parent);
             lib->applyPreset(preset);
-            sel->clear();
-            for (auto* n : prevNodes) sel->append(n);
         } else {
             if (sel->getEntitiesCount() == 0
                 && sel->getSubEntitiesSelectionList().isEmpty())
