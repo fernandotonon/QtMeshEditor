@@ -33,6 +33,7 @@ THE SOFTWARE.
 
 class OgreWidget;
 class MainWindow;
+class ViewportTitleBar;
 
 class EditorViewport : public QDockWidget
 {
@@ -45,6 +46,11 @@ public:
     int           getIndex()      const;
     OgreWidget*   getOgreWidget() const;
     MainWindow*   getMainWindow() const;
+
+    /// Custom title bar built in the constructor — exposed for tests so they
+    /// can verify the embedded G/N/I toolbuttons are wired to the right
+    /// QActions without poking at private layout state.
+    ViewportTitleBar* titleBarWidgetCustom() const { return m_titleBar; }
 
 signals:
     void widgetAboutToClose(EditorViewport* const& widget);
@@ -60,6 +66,7 @@ private:
     int                 mIndex;
     OgreWidget*         m_pOgreWidget;
     MainWindow*         m_pMainWindow;
+    ViewportTitleBar*   m_titleBar = nullptr;
 
 };
 

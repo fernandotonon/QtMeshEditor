@@ -428,10 +428,10 @@ QVariantList PropertiesPanelController::shortcutData() const
     data << entry("File", "Ctrl + ,",       "Open preferences");
 
     // View
-    data << entry("View", "Show Grid",       "Toggle grid display (Options menu)");
-    data << entry("View", "Show Normals",    "Toggle vertex normals (Options menu)");
-    data << entry("View", "Show Mesh Info",  "Toggle mesh info overlay (Options menu)");
-    data << entry("View", "Show View Cube",  "Toggle 3D view cube (Options menu)");
+    data << entry("View", "Show Grid",       "Toggle grid display (View menu)");
+    data << entry("View", "Show Normals",    "Toggle vertex normals (View menu)");
+    data << entry("View", "Show Mesh Info",  "Toggle mesh info overlay (View menu)");
+    data << entry("View", "Show View Cube",  "Toggle 3D view cube (View menu)");
 
     // Help
     data << entry("Help", "Ctrl + /", "Open keyboard shortcut reference");
