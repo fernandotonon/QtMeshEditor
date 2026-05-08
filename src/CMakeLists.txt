@@ -84,6 +84,7 @@ AssetBrowserController.cpp
 MaterialPreviewRenderer.cpp
 EditableMesh.cpp
 EditModeController.cpp
+EditorModeController.cpp
 HalfEdgeMesh.cpp
 )
 
@@ -163,6 +164,7 @@ AssetBrowserController.h
 MaterialPreviewRenderer.h
 EditableMesh.h
 EditModeController.h
+EditorModeController.h
 HalfEdgeMesh.h
 )
 

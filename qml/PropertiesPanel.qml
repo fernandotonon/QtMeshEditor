@@ -3,10 +3,44 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import PropertiesPanel 1.0
 import AnimationControl 1.0
+import EditorMode 1.0
 
 Rectangle {
     id: root
     color: PropertiesPanelController.panelColor
+
+    property int currentTab: 0
+
+    function showModeToolsForMode(mode) {
+        return mode === EditorModeController.EditMode
+            || mode === EditorModeController.AnimationMode
+            || mode === EditorModeController.MaterialMode
+            || mode === EditorModeController.ValidationMode
+    }
+
+    function targetAccent(kind) {
+        switch (kind) {
+        case "node": return "#6ca0dc"
+        case "editMesh": return "#55b65a"
+        case "mesh": return "#55b65a"
+        case "submesh": return "#c9b64f"
+        case "mixed":
+        case "mixedGeometry": return "#d18f3f"
+        default: return PropertiesPanelController.borderColor
+        }
+    }
+
+    Connections {
+        target: EditorModeController
+        function onModeChanged() {
+            // Don't yank the user away from Scene (1) or History (3) when
+            // they're explicitly browsing those tabs. Only retarget the
+            // Inspector/Mode-Tools pair, which are the mode-aware ones.
+            if (root.currentTab === 1 || root.currentTab === 3)
+                return
+            root.currentTab = root.showModeToolsForMode(EditorModeController.currentMode) ? 2 : 0
+        }
+    }
 
     ScrollView {
         anchors.fill: parent
@@ -15,6 +49,53 @@ Rectangle {
         Column {
             width: root.width
             spacing: 0
+
+            // ---- Top-level Inspector Tabs ----
+            Rectangle {
+                width: parent.width
+                height: 38
+                color: PropertiesPanelController.headerColor
+
+                Row {
+                    anchors.fill: parent
+                    anchors.margins: 5
+                    spacing: 3
+
+                    Repeater {
+                        model: [ "Inspector", "Scene", "Mode Tools", "History" ]
+
+                        Rectangle {
+                            width: Math.max(66, (parent.width - 9) / 4)
+                            height: 28
+                            radius: 4
+                            color: root.currentTab === index
+                                ? PropertiesPanelController.highlightColor
+                                : tabMouse.containsMouse
+                                  ? Qt.lighter(PropertiesPanelController.panelColor, 1.2)
+                                  : PropertiesPanelController.panelColor
+                            border.color: PropertiesPanelController.borderColor
+                            border.width: 1
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                                font.bold: root.currentTab === index
+                                elide: Text.ElideRight
+                            }
+
+                            MouseArea {
+                                id: tabMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.currentTab = index
+                            }
+                        }
+                    }
+                }
+            }
 
             // ---- Edit Mode Indicator ----
             Rectangle {
@@ -58,7 +139,77 @@ Rectangle {
                         font.pixelSize: 10
                         ToolTip.text: "Toggle Edit Mode (Tab)"
                         ToolTip.visible: hovered
-                        onClicked: EditModeController.toggleEditMode()
+                        onClicked: EditorModeController.toggleObjectEditMode()
+                    }
+                }
+            }
+
+            // ---- Selection Target Indicator ----
+            Rectangle {
+                width: parent.width
+                height: visible ? 58 : 0
+                visible: PropertiesPanelController.hasSelection
+                color: Qt.darker(PropertiesPanelController.panelColor, 1.08)
+                border.color: root.targetAccent(PropertiesPanelController.transformTargetKind)
+                border.width: 1
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 8
+
+                    Rectangle {
+                        width: 4
+                        Layout.fillHeight: true
+                        radius: 2
+                        color: root.targetAccent(PropertiesPanelController.transformTargetKind)
+                    }
+
+                    ColumnLayout {
+                        spacing: 2
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignVCenter
+
+                        RowLayout {
+                            spacing: 6
+                            Layout.fillWidth: true
+
+                            Text {
+                                text: PropertiesPanelController.transformTargetLabel
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 12
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+
+                            Rectangle {
+                                radius: 3
+                                color: root.targetAccent(PropertiesPanelController.transformTargetKind)
+                                implicitWidth: impactLabel.implicitWidth + 10
+                                implicitHeight: 18
+
+                                Text {
+                                    id: impactLabel
+                                    anchors.centerIn: parent
+                                    text: PropertiesPanelController.transformAffectsMesh ? "EXPORTS" : "PLACEMENT"
+                                    color: "white"
+                                    font.pixelSize: 9
+                                    font.bold: true
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: PropertiesPanelController.transformTargetDetail
+                            color: PropertiesPanelController.textColor
+                            opacity: 0.78
+                            font.pixelSize: 10
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
                     }
                 }
             }
@@ -66,7 +217,7 @@ Rectangle {
             // ---- Edit Mode Tools ----
             CollapsibleSection {
                 title: "Edit Mode Tools"
-                sectionVisible: EditModeController.editModeActive
+                sectionVisible: root.currentTab === 2 && EditModeController.editModeActive
                 expanded: true
 
                 Component.onCompleted: content = editModeToolsComponent
@@ -75,6 +226,7 @@ Rectangle {
             // ---- Scene Outliner ----
             CollapsibleSection {
                 title: "Scene"
+                sectionVisible: root.currentTab === 1
                 expanded: true
 
                 Component.onCompleted: content = sceneOutlinerComponent
@@ -82,8 +234,8 @@ Rectangle {
 
             // ---- Transform ----
             CollapsibleSection {
-                title: "Transform"
-                sectionVisible: PropertiesPanelController.hasSelection
+                title: PropertiesPanelController.transformTargetLabel
+                sectionVisible: root.currentTab === 0 && PropertiesPanelController.hasSelection
 
                 Component.onCompleted: content = transformComponent
             }
@@ -91,6 +243,7 @@ Rectangle {
             // ---- Snap Settings ----
             CollapsibleSection {
                 title: "Snap Settings"
+                sectionVisible: root.currentTab === 0
                 expanded: false
 
                 Component.onCompleted: content = snapSettingsComponent
@@ -99,7 +252,7 @@ Rectangle {
             // ---- Primitive Parameters ----
             CollapsibleSection {
                 title: "Primitive: " + PropertiesPanelController.primitiveType
-                sectionVisible: PropertiesPanelController.hasPrimitive
+                sectionVisible: root.currentTab === 0 && PropertiesPanelController.hasPrimitive
 
                 Component.onCompleted: content = primitiveComponent
             }
@@ -107,7 +260,9 @@ Rectangle {
             // ---- Animations ----
             CollapsibleSection {
                 title: "Animations"
-                sectionVisible: PropertiesPanelController.hasAnimations
+                sectionVisible: root.currentTab === 2
+                    && EditorModeController.currentMode === EditorModeController.AnimationMode
+                    && PropertiesPanelController.hasAnimations
 
                 Component.onCompleted: content = animationComponent
             }
@@ -115,7 +270,9 @@ Rectangle {
             // ---- Animation Control (keyframe editor) ----
             CollapsibleSection {
                 title: "Animation Control"
-                sectionVisible: AnimationControlController.hasAnimation
+                sectionVisible: root.currentTab === 2
+                    && EditorModeController.currentMode === EditorModeController.AnimationMode
+                    && AnimationControlController.hasAnimation
                 expanded: false
 
                 Component.onCompleted: content = animControlComponent
@@ -124,7 +281,7 @@ Rectangle {
             // ---- LOD Generation ----
             CollapsibleSection {
                 title: "LOD Generation"
-                sectionVisible: MeshLodController.hasSelection
+                sectionVisible: root.currentTab === 2 && MeshLodController.hasSelection
                 expanded: false
 
                 Component.onCompleted: content = lodComponent
@@ -133,7 +290,9 @@ Rectangle {
             // ---- Material Presets ----
             CollapsibleSection {
                 title: "Material Presets"
-                sectionVisible: PropertiesPanelController.hasSelection
+                sectionVisible: root.currentTab === 2
+                    && EditorModeController.currentMode === EditorModeController.MaterialMode
+                    && PropertiesPanelController.hasSelection
                 expanded: false
 
                 Component.onCompleted: content = materialPresetsComponent
@@ -142,7 +301,9 @@ Rectangle {
             // ---- Mesh Validation ----
             CollapsibleSection {
                 title: "Mesh Validation"
-                sectionVisible: MeshValidator.hasSelection
+                sectionVisible: root.currentTab === 2
+                    && EditorModeController.currentMode === EditorModeController.ValidationMode
+                    && MeshValidator.hasSelection
                 expanded: false
 
                 Component.onCompleted: content = validationComponent
@@ -151,6 +312,7 @@ Rectangle {
             // ---- Undo History ----
             CollapsibleSection {
                 title: "Undo History"
+                sectionVisible: root.currentTab === 3
                 expanded: false
 
                 Component.onCompleted: content = undoHistoryComponent

@@ -11,6 +11,7 @@
 #include <QUndoCommand>
 
 #include "AnimationWidget.h"
+#include "EditModeController.h"
 #include "Manager.h"
 #include "PrimitiveObject.h"
 #include "PropertiesPanelController.h"
@@ -32,6 +33,7 @@ protected:
         originalPalette = app->palette();
 
         PropertiesPanelController::kill();
+        EditModeController::kill();
         Manager::kill();
         app->processEvents();
 
@@ -50,6 +52,7 @@ protected:
         }
 
         PropertiesPanelController::kill();
+        EditModeController::kill();
         Manager::kill();
         if (app)
             app->processEvents();
@@ -139,6 +142,55 @@ TEST_F(PropertiesPanelControllerTests, SelectionStateFollowsSelectedSceneNode)
 
     controller->selectNodeByName("PanelSelectionNode");
     EXPECT_EQ(SelectionSet::getSingleton()->getSceneNode(0), node);
+}
+
+TEST_F(PropertiesPanelControllerTests, TransformTargetMetadataExplainsSelectionImpact)
+{
+    EXPECT_EQ(controller->transformTargetKind(), QString("none"));
+    EXPECT_EQ(controller->transformTargetLabel(), QString("No Selection"));
+    EXPECT_FALSE(controller->transformAffectsMesh());
+
+    Ogre::SceneNode* node = createSelectedNode("PanelTargetNode");
+    ASSERT_NE(node, nullptr);
+
+    EXPECT_EQ(controller->transformTargetKind(), QString("node"));
+    EXPECT_EQ(controller->transformTargetLabel(), QString("Node Transform"));
+    EXPECT_FALSE(controller->transformAffectsMesh());
+    EXPECT_TRUE(controller->transformTargetDetail().contains("mesh vertices stay unchanged"));
+
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    Ogre::SceneNode* meshNode = Manager::getSingleton()->addSceneNode("PanelTargetMeshNode");
+    ASSERT_NE(meshNode, nullptr);
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("PanelTargetMesh");
+    Ogre::Entity* entity = Manager::getSingleton()->createEntity(meshNode, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    SelectionSet::getSingleton()->selectOne(entity);
+    EXPECT_EQ(controller->transformTargetKind(), QString("mesh"));
+    EXPECT_EQ(controller->transformTargetLabel(), QString("Mesh Geometry"));
+    EXPECT_TRUE(controller->transformAffectsMesh());
+
+    SelectionSet::getSingleton()->selectOne(meshNode);
+    EXPECT_EQ(controller->transformTargetKind(), QString("node"));
+    ASSERT_TRUE(EditModeController::instance()->enterEditMode());
+    EXPECT_EQ(controller->transformTargetKind(), QString("editMesh"));
+    EXPECT_EQ(controller->transformTargetLabel(), QString("Mesh Geometry"));
+    EXPECT_TRUE(controller->transformAffectsMesh());
+    EXPECT_TRUE(controller->transformTargetDetail().contains("Edit Mode transforms mesh vertices"));
+    EditModeController::instance()->exitEditMode(false);
+
+    SelectionSet::getSingleton()->selectOne(entity->getSubEntity(0));
+    EXPECT_EQ(controller->transformTargetKind(), QString("submesh"));
+    EXPECT_EQ(controller->transformTargetLabel(), QString("Submesh Geometry"));
+    EXPECT_TRUE(controller->transformAffectsMesh());
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(node);
+    SelectionSet::getSingleton()->append(entity);
+    EXPECT_EQ(controller->transformTargetKind(), QString("mixed"));
+    EXPECT_EQ(controller->transformTargetLabel(), QString("Mixed Targets"));
+    EXPECT_FALSE(controller->transformAffectsMesh());
+    EXPECT_TRUE(controller->transformTargetDetail().contains("Node transform path is active"));
 }
 
 TEST_F(PropertiesPanelControllerTests, SceneNodeNamesAndSelectionHelpersHandleMultipleNodes)

@@ -24,6 +24,12 @@
     <file alias="ProfileGraph.qml">../qml/ProfileGraph.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
   </qresource>
+  <qresource prefix="/ModeBar">
+    <file alias="ModeBar.qml">../qml/ModeBar.qml</file>
+  </qresource>
+  <qresource prefix="/BottomContextPanel">
+    <file alias="BottomContextPanel.qml">../qml/BottomContextPanel.qml</file>
+  </qresource>
   <qresource prefix="/AnimationControl">
     <file alias="AnimationControlPanel.qml">../qml/AnimationControlPanel.qml</file>
     <file alias="AnimationDopeSheet.qml">../qml/AnimationDopeSheet.qml</file>
