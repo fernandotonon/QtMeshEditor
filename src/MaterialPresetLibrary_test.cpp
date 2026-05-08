@@ -535,9 +535,26 @@ TEST_F(MaterialPresetLibraryTests, MetallicRoughnessPresetAttachesPbrShaderTechn
             break;
         }
     }
-    EXPECT_TRUE(hasShaderTech)
+    ASSERT_TRUE(hasShaderTech)
         << "Metallic-Roughness preset must produce an RTSS shader technique "
-           "(SRS_COOK_TORRANCE_LIGHTING via applyPbrIfTagged)";
+           "(via applyPbrIfTagged → createShaderBasedTechnique)";
+
+    // Stronger assertion: the RTSS RenderState for this material must
+    // carry the SRS_COOK_TORRANCE_LIGHTING SubRenderState specifically.
+    // Without this, a regression that drops the Cook-Torrance SRS but
+    // leaves a default-Phong RTSS technique attached would still pass
+    // hasShaderTech above (false confidence).
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    ASSERT_NE(shaderGen, nullptr);
+    auto* renderState = shaderGen->getRenderState(
+        Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat, 0);
+    ASSERT_NE(renderState, nullptr) << "RTSS render state missing post-apply";
+    auto* cookSRS = renderState->getSubRenderState(
+        Ogre::RTShader::SRS_COOK_TORRANCE_LIGHTING);
+    EXPECT_NE(cookSRS, nullptr)
+        << "Cook-Torrance SubRenderState not attached — slice F1 PBR path "
+           "did not run, or createSubRenderState returned null and the "
+           "function silently fell through.";
 }
 
 // Non-PBR presets must NOT trigger the Cook-Torrance path — they use
@@ -550,6 +567,13 @@ TEST_F(MaterialPresetLibraryTests, NonPbrPresetDoesNotAttachPbrShaderTechnique) 
     ASSERT_TRUE(canLoadMeshFiles());
     createStandardOgreMaterials();
 
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+    RTShaderHelper::initialize(sceneMgr);
+    auto rtssShutdown = qScopeGuard([sceneMgr] {
+        RTShaderHelper::shutdown(sceneMgr);
+    });
+
     Ogre::Entity* entity = createSelectedEntity(
         "NonPbr_Node", "NonPbr_Entity", "NonPbr_Mesh");
     ASSERT_NE(entity, nullptr);
@@ -559,14 +583,33 @@ TEST_F(MaterialPresetLibraryTests, NonPbrPresetDoesNotAttachPbrShaderTechnique) 
     auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Plastic (Red)");
     ASSERT_TRUE(bool(mat));
 
-    // The Plastic preset's pass has no `pbr_workflow` user-binding, so
-    // applyPbrIfTagged returns early without creating a shader-based
-    // technique. The material may pick up an RTSS technique later via
-    // handleSchemeNotFound (FFP-derived), but applyPreset itself should
-    // not have triggered one.
+    // The Plastic preset's pass has no `pbr_workflow` user-binding, and
+    // its TUS layout doesn't match the 6-slot PBR layout either, so
+    // applyPbrIfTagged must early-return without creating a shader
+    // technique. Verify both signals.
     auto* pass = mat->getTechnique(0)->getPass(0);
     auto tag = pass->getUserObjectBindings().getUserAny(
         MaterialPresetLibrary::kPbrWorkflowKey);
     EXPECT_FALSE(tag.has_value())
         << "Plastic preset must not carry a pbr_workflow tag";
+
+    // Stronger guarantee: no RTSS scheme technique attached *because of*
+    // applyPreset. Future calls (e.g. handleSchemeNotFound on first render)
+    // may add one for FFP shading later — that's fine; the assertion is
+    // simply that applyPreset itself did not trigger a Cook-Torrance
+    // technique. We check the SRS list under the ShaderGenerator scheme.
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    ASSERT_NE(shaderGen, nullptr);
+    if (shaderGen->hasRenderState(
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME)) {
+        auto* renderState = shaderGen->getRenderState(
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat, 0);
+        if (renderState) {
+            auto* cookSRS = renderState->getSubRenderState(
+                Ogre::RTShader::SRS_COOK_TORRANCE_LIGHTING);
+            EXPECT_EQ(cookSRS, nullptr)
+                << "Plastic preset unexpectedly produced a Cook-Torrance SRS — "
+                   "applyPbrIfTagged should reject non-PBR materials.";
+        }
+    }
 }
