@@ -54,21 +54,12 @@ Rectangle {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: EditorModeController.requestMode(modelData.mode)
                     }
-
-                    ToolTip.text: modelData.tip
-                    ToolTip.visible: modeMouse.containsMouse
                 }
             }
         }
 
-        Text {
+        Item {
             Layout.fillWidth: true
-            Layout.alignment: Qt.AlignVCenter
-            text: EditorModeController.statusText
-            color: PropertiesPanelController.textColor
-            elide: Text.ElideRight
-            font.pixelSize: 11
-            opacity: 0.82
         }
 
         Button {
@@ -79,8 +70,6 @@ Rectangle {
             implicitWidth: 76
             font.pixelSize: 11
             onClicked: EditorModeController.toggleObjectEditMode()
-            ToolTip.text: "Toggle Edit mode (Tab)"
-            ToolTip.visible: hovered
         }
     }
 }

@@ -1848,6 +1848,11 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
     else
         statusMessage += "No selection";
 
+    // Editor mode status (e.g. "Object mode", "Edit mode (Vertex)")
+    const QString modeStatus = EditorModeController::instance()->statusText();
+    if (!modeStatus.isEmpty())
+        statusMessage += QString(" | %1").arg(modeStatus);
+
     ui->statusBar->showMessage(statusMessage);
 
     return true;
