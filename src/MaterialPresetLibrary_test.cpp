@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 #include "MaterialPresetLibrary.h"
 #include "Manager.h"
+#include "RTShaderHelper.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
+#include <OgreRTShaderSystem.h>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QThread>
 
@@ -480,4 +483,133 @@ TEST_F(MaterialPresetLibraryTests, PbrSlotColourOpsApproximatePbrSemantics) {
     EXPECT_EQ(roughBlend.operation, Ogre::LBX_MODULATE_X2);
     EXPECT_EQ(roughBlend.source1,   Ogre::LBS_TEXTURE);
     EXPECT_EQ(roughBlend.source2,   Ogre::LBS_CURRENT);
+}
+
+// Slice F1: Metallic-Roughness preset auto-attaches Ogre's stock
+// SRS_COOK_TORRANCE_LIGHTING SubRenderState via
+// RTShaderHelper::applyPbrIfTagged. Without this, the preset would
+// only render via slice E's FFP approximation. We initialize RTSS
+// explicitly in this test (production launches do this in
+// Manager::loadResources, but the test fixture's tryInitOgre() does
+// not run that path).
+TEST_F(MaterialPresetLibraryTests, MetallicRoughnessPresetAttachesPbrShaderTechnique) {
+    Manager::kill();
+    QThread::msleep(50);
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+    RTShaderHelper::initialize(sceneMgr);
+    auto rtssShutdown = qScopeGuard([sceneMgr] {
+        RTShaderHelper::shutdown(sceneMgr);
+    });
+
+    Ogre::Entity* entity = createSelectedEntity(
+        "PbrShader_Node", "PbrShader_Entity", "PbrShader_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    MaterialPresetLibrary::instance()->applyPreset("Metallic-Roughness");
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Metallic-Roughness");
+    ASSERT_TRUE(bool(mat));
+
+    // The workflow tag must be set regardless of RTSS state.
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    auto tag = pass->getUserObjectBindings().getUserAny(
+        MaterialPresetLibrary::kPbrWorkflowKey);
+    ASSERT_TRUE(tag.has_value());
+    EXPECT_EQ(Ogre::any_cast<Ogre::String>(tag),
+              Ogre::String(MaterialPresetLibrary::kPbrWorkflowMetallic));
+
+    // applyPbrIfTagged calls createShaderBasedTechnique, which adds a
+    // technique to the material under the RTSS scheme name. Count
+    // techniques whose scheme matches the ShaderGenerator's scheme.
+    bool hasShaderTech = false;
+    const auto& shaderGenScheme =
+        Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME;
+    for (auto* tech : mat->getTechniques()) {
+        if (tech->getSchemeName() == shaderGenScheme) {
+            hasShaderTech = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(hasShaderTech)
+        << "Metallic-Roughness preset must produce an RTSS shader technique "
+           "(via applyPbrIfTagged → createShaderBasedTechnique)";
+
+    // Stronger assertion: the RTSS RenderState for this material must
+    // carry the SRS_COOK_TORRANCE_LIGHTING SubRenderState specifically.
+    // Without this, a regression that drops the Cook-Torrance SRS but
+    // leaves a default-Phong RTSS technique attached would still pass
+    // hasShaderTech above (false confidence).
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    ASSERT_NE(shaderGen, nullptr);
+    auto* renderState = shaderGen->getRenderState(
+        Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat, 0);
+    ASSERT_NE(renderState, nullptr) << "RTSS render state missing post-apply";
+    auto* cookSRS = renderState->getSubRenderState(
+        Ogre::RTShader::SRS_COOK_TORRANCE_LIGHTING);
+    EXPECT_NE(cookSRS, nullptr)
+        << "Cook-Torrance SubRenderState not attached — slice F1 PBR path "
+           "did not run, or createSubRenderState returned null and the "
+           "function silently fell through.";
+}
+
+// Non-PBR presets must NOT trigger the Cook-Torrance path — they use
+// the legacy FFP rendering only. Plastic is the canonical legacy preset
+// (no `pbr_workflow` tag set on its pass).
+TEST_F(MaterialPresetLibraryTests, NonPbrPresetDoesNotAttachPbrShaderTechnique) {
+    Manager::kill();
+    QThread::msleep(50);
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+    RTShaderHelper::initialize(sceneMgr);
+    auto rtssShutdown = qScopeGuard([sceneMgr] {
+        RTShaderHelper::shutdown(sceneMgr);
+    });
+
+    Ogre::Entity* entity = createSelectedEntity(
+        "NonPbr_Node", "NonPbr_Entity", "NonPbr_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    MaterialPresetLibrary::instance()->applyPreset("Plastic (Red)");
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Plastic (Red)");
+    ASSERT_TRUE(bool(mat));
+
+    // The Plastic preset's pass has no `pbr_workflow` user-binding, and
+    // its TUS layout doesn't match the 6-slot PBR layout either, so
+    // applyPbrIfTagged must early-return without creating a shader
+    // technique. Verify both signals.
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    auto tag = pass->getUserObjectBindings().getUserAny(
+        MaterialPresetLibrary::kPbrWorkflowKey);
+    EXPECT_FALSE(tag.has_value())
+        << "Plastic preset must not carry a pbr_workflow tag";
+
+    // Stronger guarantee: no RTSS scheme technique attached *because of*
+    // applyPreset. Future calls (e.g. handleSchemeNotFound on first render)
+    // may add one for FFP shading later — that's fine; the assertion is
+    // simply that applyPreset itself did not trigger a Cook-Torrance
+    // technique. We check the SRS list under the ShaderGenerator scheme.
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    ASSERT_NE(shaderGen, nullptr);
+    if (shaderGen->hasRenderState(
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME)) {
+        auto* renderState = shaderGen->getRenderState(
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat, 0);
+        if (renderState) {
+            auto* cookSRS = renderState->getSubRenderState(
+                Ogre::RTShader::SRS_COOK_TORRANCE_LIGHTING);
+            EXPECT_EQ(cookSRS, nullptr)
+                << "Plastic preset unexpectedly produced a Cook-Torrance SRS — "
+                   "applyPbrIfTagged should reject non-PBR materials.";
+        }
+    }
 }

@@ -1,5 +1,6 @@
 #include "MaterialPresetLibrary.h"
 #include "Manager.h"
+#include "RTShaderHelper.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "UndoManager.h"
@@ -227,6 +228,15 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
         // re-shuffles), which causes getTechnique(0)->getPass(0) to lose
         // slots. Tests + slice F shaders need the slot count preserved.
         mat->compile(/*autoManageTextureUnits=*/false);
+
+        // Slice F: if the just-built material is tagged with the
+        // metallic_roughness PBR workflow, attach Ogre's stock
+        // SRS_COOK_TORRANCE_LIGHTING SRS so it renders with a real
+        // Cook-Torrance BRDF instead of the slice E FFP approximation.
+        // applyPbrIfTagged returns false (and the material falls back
+        // to FFP) for other workflows or when SRS_COOK_TORRANCE_LIGHTING
+        // isn't built into the running Ogre.
+        RTShaderHelper::applyPbrIfTagged(mat);
     }
 
     // Apply to resolved entities (handles node selection as well as direct entity/sub-entity selection)

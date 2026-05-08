@@ -326,3 +326,188 @@ void RTShaderHelper::applyNormalMap(Ogre::MaterialPtr& mat, const std::string& n
 }
 
 // LCOV_EXCL_STOP
+
+namespace {
+
+/// Look up the slice E `pbr_workflow` user-binding key on a pass and
+/// return the workflow string ("metallic_roughness", "specular_glossiness",
+/// "unlit") or empty if absent. Mirrors the key constant defined in
+/// MaterialPresetLibrary.h without taking a header dependency on it.
+constexpr const char* kPbrWorkflowKey = "pbr_workflow";
+
+Ogre::String readPbrWorkflowTag(const Ogre::Pass* pass)
+{
+    if (!pass) return {};
+    const auto& bindings = pass->getUserObjectBindings();
+    auto any = bindings.getUserAny(kPbrWorkflowKey);
+    if (!any.has_value()) return {};
+    try { return Ogre::any_cast<Ogre::String>(any); }
+    catch (...) { return {}; }
+}
+
+/// Find the texture name on a TUS slot by name. Returns empty if the
+/// slot doesn't exist or has no texture set.
+Ogre::String textureOnSlot(const Ogre::Pass* pass, const Ogre::String& slotName)
+{
+    if (!pass) return {};
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        const auto* tus = pass->getTextureUnitState(i);
+        if (tus->getName() == slotName)
+            return tus->getTextureName();
+    }
+    return {};
+}
+
+bool hasNamedTUS(const Ogre::Pass* pass, const Ogre::String& slotName)
+{
+    if (!pass) return false;
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        if (pass->getTextureUnitState(i)->getName() == slotName)
+            return true;
+    }
+    return false;
+}
+
+/// MaterialSerializer does NOT serialize Pass::UserObjectBindings, so the
+/// pbr_workflow tag is lost on script round-trip (e.g., user edits the
+/// material text and clicks Apply). Fall back to detecting PBR layout by
+/// the canonical slot names: a pass with all 6 named slots is treated as
+/// metallic-roughness PBR. Slice F2 may add an explicit serialized signal
+/// (script-level extension or material-name convention) — for now this
+/// keeps the text-edit path working.
+bool detectMetallicRoughnessByLayout(const Ogre::Pass* pass)
+{
+    return hasNamedTUS(pass, "albedo")
+        && hasNamedTUS(pass, "normal_map")
+        && hasNamedTUS(pass, "metallic")
+        && hasNamedTUS(pass, "roughness")
+        && hasNamedTUS(pass, "ao")
+        && hasNamedTUS(pass, "emissive");
+}
+
+} // namespace
+
+bool RTShaderHelper::applyPbrIfTagged(Ogre::MaterialPtr& mat)
+{
+    if (!mat || mat->getNumTechniques() == 0) return false;
+    auto* srcPass = mat->getTechnique(0)->getPass(0);
+    Ogre::String workflow = readPbrWorkflowTag(srcPass);
+
+    // MaterialSerializer drops UserObjectBindings, so the tag is missing
+    // after parseScript round-trips. Fall back to slot-layout detection
+    // when the tag is absent. Specular-Glossiness and Unlit aren't yet
+    // distinguishable from layout alone, so layout-detection only
+    // promotes to metallic_roughness.
+    if (workflow.empty() && detectMetallicRoughnessByLayout(srcPass)) {
+        workflow = "metallic_roughness";
+    }
+
+    // Slice F1 wires only metallic_roughness via Ogre's stock SRS.
+    // Specular-Glossiness and Unlit keep slice E's FFP wiring.
+    if (workflow != "metallic_roughness") return false;
+
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (!shaderGen) return false;
+
+    // Helper to drop any RTSS technique we may have created so the
+    // material returns to a clean FFP-only state on bail-out paths.
+    // Without this, a partial technique created by
+    // createShaderBasedTechnique persists when getRenderState or
+    // createSubRenderState fail later — handleSchemeNotFound then
+    // validates it as plain Phong, silently overriding the FFP fallback.
+    auto cleanupRtssTech = [&]() {
+        if (!mat) return;
+        for (auto* t : mat->getTechniques()) {
+            if (t->getSchemeName() ==
+                Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME) {
+                shaderGen->removeShaderBasedTechnique(
+                    t, Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
+                break;
+            }
+        }
+    };
+
+    try {
+        if (!mat->isLoaded())
+            mat->load();
+
+        // Drop any pre-existing RTSS technique so we replace it with
+        // the Cook-Torrance one cleanly. Without this, an FFP-derived
+        // RTSS technique from handleSchemeNotFound persists alongside.
+        Ogre::Technique* srcTech = nullptr;
+        for (auto* t : mat->getTechniques()) {
+            if (t->getSchemeName() == Ogre::MaterialManager::DEFAULT_SCHEME_NAME) {
+                srcTech = t;
+                break;
+            }
+        }
+        if (srcTech) {
+            shaderGen->removeShaderBasedTechnique(
+                srcTech, Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
+        }
+
+        bool created = shaderGen->createShaderBasedTechnique(
+            *mat,
+            Ogre::MaterialManager::DEFAULT_SCHEME_NAME,
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
+        if (!created) {
+            Ogre::LogManager::getSingleton().logMessage(
+                "RTShaderHelper: PBR technique creation failed for '" + mat->getName() + "'");
+            return false;
+        }
+
+        auto* renderState = shaderGen->getRenderState(
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat, 0);
+        if (!renderState) {
+            cleanupRtssTech();
+            return false;
+        }
+
+        // Reset to built-in SRSes so we don't accumulate stale state
+        // (e.g., a previous SRS_NORMALMAP with a different texture_index).
+        // We add SRS_COOK_TORRANCE_LIGHTING explicitly; the normal-map
+        // SRS is added separately by applyNormalMap when called.
+        renderState->resetToBuiltinSubRenderStates();
+
+        auto* pbrSRS = shaderGen->createSubRenderState(
+            Ogre::RTShader::SRS_COOK_TORRANCE_LIGHTING);
+        if (!pbrSRS) {
+            Ogre::LogManager::getSingleton().logMessage(
+                "RTShaderHelper: SRS_COOK_TORRANCE_LIGHTING unavailable in this Ogre build");
+            cleanupRtssTech();
+            return false;
+        }
+
+        // glTF MR-texture convention: a single RGBA texture with
+        // .r=AO, .g=roughness, .b=metallic. If the user populated the
+        // `metallic` slot (most common), use that as the packed map.
+        // The SRS's `texture` parameter expects the texture *name*.
+        const Ogre::String mrTexName = textureOnSlot(srcPass, "metallic");
+        if (!mrTexName.empty()) {
+            pbrSRS->setParameter("texture", mrTexName);
+        }
+        // No mr texture → SRS uses ACT_SURFACE_SPECULAR_COLOUR.xy as
+        // metal/roughness scalars. We could route the pass shininess
+        // here in a future revision, but the Phong approximation set
+        // by MaterialPresetLibrary already feeds setSpecular/setShininess.
+
+        renderState->addTemplateSubRenderState(pbrSRS);
+
+        shaderGen->invalidateMaterial(
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, mat->getName());
+        shaderGen->validateMaterial(
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat);
+
+        Ogre::LogManager::getSingleton().logMessage(
+            "RTShaderHelper: PBR (Cook-Torrance) applied to '" + mat->getName() +
+            (mrTexName.empty() ? "' [no MR texture]" : "' tex='" + mrTexName + "'"));
+        return true;
+    } catch (const Ogre::Exception& e) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "RTShaderHelper: Ogre exception applying PBR: " + e.getDescription());
+    } catch (const std::exception& e) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "RTShaderHelper: Exception applying PBR: " + std::string(e.what()));
+    }
+    return false;
+}
