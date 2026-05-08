@@ -80,6 +80,7 @@
 #include <QSignalBlocker>
 #include <QGridLayout>
 #include <QToolBar>
+#include <functional>
 
 namespace {
 
@@ -830,6 +831,70 @@ void MainWindow::initToolBar()
         }
     )";
 
+    auto addRailButton = [this, topoBtnStyle](const QString& text,
+                                              const QString& tooltip,
+                                              const QString& actionObjectName,
+                                              const std::function<void()>& triggered) {
+        auto* button = new QToolButton(ui->objectsToolbar);
+        button->setText(text);
+        button->setToolTip(tooltip);
+        QFont font = button->font();
+        font.setPixelSize(text.size() > 1 ? 10 : 15);
+        font.setBold(true);
+        button->setFont(font);
+        button->setStyleSheet(topoBtnStyle);
+        connect(button, &QToolButton::clicked, this, triggered);
+
+        QAction* action = ui->objectsToolbar->addWidget(button);
+        action->setObjectName(actionObjectName);
+        return action;
+    };
+
+    addRailButton(
+        QStringLiteral("D"),
+        tr("Show Dope Sheet"),
+        QStringLiteral("modeAnimationDopeSheetAction"),
+        [this]() {
+            SentryReporter::addBreadcrumb("ui.action", "Rail: Dope Sheet");
+            showBottomToolDock(m_dopeSheetDock);
+        });
+
+    addRailButton(
+        QStringLiteral("C"),
+        tr("Show Curve Editor"),
+        QStringLiteral("modeAnimationCurveEditorAction"),
+        [this]() {
+            SentryReporter::addBreadcrumb("ui.action", "Rail: Curve Editor");
+            showBottomToolDock(m_curveEditorDock);
+        });
+
+    addRailButton(
+        QStringLiteral("\u21C4"),
+        tr("Merge animations"),
+        QStringLiteral("modeAnimationMergeAction"),
+        [this]() {
+            SentryReporter::addBreadcrumb("ui.action", "Rail: Merge Animations");
+            ui->actionMerge_Animations->trigger();
+        });
+
+    addRailButton(
+        QStringLiteral("M"),
+        tr("Open Material Editor"),
+        QStringLiteral("modeMaterialEditorAction"),
+        [this]() {
+            SentryReporter::addBreadcrumb("ui.action", "Rail: Material Editor");
+            ui->actionMaterial_Editor->trigger();
+        });
+
+    addRailButton(
+        QStringLiteral("\u2713"),
+        tr("Validate selected mesh"),
+        QStringLiteral("modeValidationRunAction"),
+        []() {
+            SentryReporter::addBreadcrumb("ui.action", "Rail: Validate Mesh");
+            MeshValidator::instance()->validate();
+        });
+
     // Extrude: face mode only.
     auto extrudeButton = new QToolButton(ui->objectsToolbar);
     extrudeButton->setText("\u2B06");  // ⬆ (extrude = push outward)
@@ -1335,6 +1400,10 @@ void MainWindow::initToolBar()
     // Merge Animations button — enable/disable based on selection
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
             this, &MainWindow::updateMergeAnimationsButton);
+    connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
+            this, &MainWindow::updateToolRailForMode);
+    connect(MeshValidator::instance(), &MeshValidator::selectionChanged,
+            this, &MainWindow::updateToolRailForMode);
 
     // Viewport
     connect(ui->actionAdd_Viewport, SIGNAL(triggered()), this, SLOT(createEditorViewport()));
@@ -1737,6 +1806,17 @@ void MainWindow::updateToolRailForMode()
     const bool editMode = mode == EditorModeController::EditMode;
     const bool animationMode = mode == EditorModeController::AnimationMode;
     const bool materialMode = mode == EditorModeController::MaterialMode;
+    const bool validationMode = mode == EditorModeController::ValidationMode;
+
+    // Keeps the QAction reachable in menus (so users can always find Material
+    // Editor / Merge Animations under their menu) while showing or hiding only
+    // the toolbar-button representation per the active mode. The QAction's
+    // own visibility is intentionally left unchanged.
+    auto setSharedToolbarButtonVisible = [this](QAction* action, bool showButton) {
+        action->setVisible(true);
+        if (QWidget* toolbarButton = ui->toolToolbar->widgetForAction(action))
+            toolbarButton->setVisible(showButton);
+    };
 
     for (QAction* action : ui->objectsToolbar->actions()) {
         const QString name = action->objectName();
@@ -1744,9 +1824,20 @@ void MainWindow::updateToolRailForMode()
             action->setVisible(objectMode);
         } else if (name.startsWith(QStringLiteral("modeEdit"))) {
             action->setVisible(editMode && EditModeController::instance()->isEditModeActive());
+        } else if (name.startsWith(QStringLiteral("modeAnimation"))) {
+            action->setVisible(animationMode);
+        } else if (name.startsWith(QStringLiteral("modeMaterial"))) {
+            action->setVisible(materialMode);
+        } else if (name.startsWith(QStringLiteral("modeValidation"))) {
+            action->setVisible(validationMode);
         } else if (name.startsWith(QStringLiteral("modeAny"))) {
             action->setVisible(true);
         }
+
+        if (name == QStringLiteral("modeAnimationMergeAction"))
+            action->setEnabled(ui->actionMerge_Animations->isEnabled());
+        else if (name == QStringLiteral("modeValidationRunAction"))
+            action->setEnabled(MeshValidator::instance()->hasSelection());
     }
 
     ui->actionSelect_Object->setVisible(objectMode || editMode);
@@ -1755,8 +1846,8 @@ void MainWindow::updateToolRailForMode()
     ui->actionScale_Object->setVisible(objectMode || editMode);
     ui->actionToggle_Transform_Space->setVisible(objectMode || editMode);
     ui->actionRemove_Object->setVisible(objectMode);
-    ui->actionMaterial_Editor->setVisible(objectMode || materialMode);
-    ui->actionMerge_Animations->setVisible(objectMode || animationMode);
+    setSharedToolbarButtonVisible(ui->actionMaterial_Editor, objectMode || materialMode);
+    setSharedToolbarButtonVisible(ui->actionMerge_Animations, objectMode || animationMode);
 }
 
 // LCOV_EXCL_START — Ogre frame listener requires render loop
@@ -2497,6 +2588,12 @@ void MainWindow::on_actionMaterial_Editor_triggered()
 
 void MainWindow::updateMergeAnimationsButton()
 {
+    // SelectionSet::selectionChanged is wired to updateMergeAnimationsButton
+    // first and updateToolRailForMode immediately after (see the connect()
+    // pair where these slots are registered). Qt fires connections in
+    // registration order, so the tool rail is always refreshed for free
+    // after this slot completes — calling updateToolRailForMode() here
+    // would just iterate every toolbar action twice per selection event.
     auto entities = SelectionSet::getSingleton()->getResolvedEntities();
 
     // Filter to entities with skeletons

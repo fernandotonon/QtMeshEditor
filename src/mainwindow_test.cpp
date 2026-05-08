@@ -234,6 +234,92 @@ TEST_F(MainWindowTest, ModeBarLoadsAndModeChangeUpdatesStatusIndicator)
     EXPECT_EQ(window->m_editModeLabel->text(), QStringLiteral("Material mode"));
 }
 
+TEST_F(MainWindowTest, ContextualToolRailSwitchesActionsByMode)
+{
+    QAction* primitiveAction = findActionByObjectName("modeObjectPrimitiveAction");
+    QAction* editExtrudeAction = findActionByObjectName("modeEditExtrudeAction");
+    QAction* dopeAction = findActionByObjectName("modeAnimationDopeSheetAction");
+    QAction* curveAction = findActionByObjectName("modeAnimationCurveEditorAction");
+    QAction* mergeAction = findActionByObjectName("modeAnimationMergeAction");
+    QAction* materialAction = findActionByObjectName("modeMaterialEditorAction");
+    QAction* validationAction = findActionByObjectName("modeValidationRunAction");
+    ASSERT_NE(primitiveAction, nullptr);
+    ASSERT_NE(editExtrudeAction, nullptr);
+    ASSERT_NE(dopeAction, nullptr);
+    ASSERT_NE(curveAction, nullptr);
+    ASSERT_NE(mergeAction, nullptr);
+    ASSERT_NE(materialAction, nullptr);
+    ASSERT_NE(validationAction, nullptr);
+
+    auto* modeController = EditorModeController::instance();
+
+    modeController->requestMode(EditorModeController::ObjectMode);
+    app->processEvents();
+    EXPECT_TRUE(primitiveAction->isVisible());
+    EXPECT_FALSE(editExtrudeAction->isVisible());
+    EXPECT_FALSE(dopeAction->isVisible());
+    EXPECT_FALSE(materialAction->isVisible());
+    EXPECT_FALSE(validationAction->isVisible());
+
+    modeController->requestMode(EditorModeController::AnimationMode);
+    app->processEvents();
+    EXPECT_FALSE(primitiveAction->isVisible());
+    EXPECT_TRUE(dopeAction->isVisible());
+    EXPECT_TRUE(curveAction->isVisible());
+    EXPECT_TRUE(mergeAction->isVisible());
+    EXPECT_FALSE(materialAction->isVisible());
+    EXPECT_FALSE(validationAction->isVisible());
+
+    modeController->requestMode(EditorModeController::MaterialMode);
+    app->processEvents();
+    EXPECT_FALSE(dopeAction->isVisible());
+    EXPECT_TRUE(materialAction->isVisible());
+    EXPECT_FALSE(validationAction->isVisible());
+
+    modeController->requestMode(EditorModeController::ValidationMode);
+    app->processEvents();
+    EXPECT_FALSE(materialAction->isVisible());
+    EXPECT_TRUE(validationAction->isVisible());
+    EXPECT_FALSE(validationAction->isEnabled());
+}
+
+TEST_F(MainWindowTest, ContextualToolRailKeepsSharedMenuActionsReachable)
+{
+    auto* modeController = EditorModeController::instance();
+    modeController->requestMode(EditorModeController::ValidationMode);
+    app->processEvents();
+
+    EXPECT_TRUE(window->ui->actionMaterial_Editor->isVisible());
+    EXPECT_TRUE(window->ui->actionMerge_Animations->isVisible());
+
+    QWidget* materialToolbarButton =
+        window->ui->toolToolbar->widgetForAction(window->ui->actionMaterial_Editor);
+    QWidget* mergeToolbarButton =
+        window->ui->toolToolbar->widgetForAction(window->ui->actionMerge_Animations);
+    ASSERT_NE(materialToolbarButton, nullptr);
+    ASSERT_NE(mergeToolbarButton, nullptr);
+    EXPECT_TRUE(materialToolbarButton->isHidden());
+    EXPECT_TRUE(mergeToolbarButton->isHidden());
+}
+
+TEST_F(MainWindowTest, ContextualToolRailButtonsTriggerExistingBottomTools)
+{
+    QAction* dopeAction = findActionByObjectName("modeAnimationDopeSheetAction");
+    ASSERT_NE(dopeAction, nullptr);
+    auto* dopeButton = qobject_cast<QToolButton*>(window->ui->objectsToolbar->widgetForAction(dopeAction));
+    ASSERT_NE(dopeButton, nullptr);
+    ASSERT_NE(window->m_dopeSheetDock, nullptr);
+
+    window->m_dopeSheetDock->hide();
+    EditorModeController::instance()->requestMode(EditorModeController::AnimationMode);
+    app->processEvents();
+
+    dopeButton->click();
+    app->processEvents();
+    EXPECT_FALSE(window->m_dopeSheetDock->isHidden());
+    EXPECT_EQ(window->dockWidgetArea(window->m_dopeSheetDock), Qt::BottomDockWidgetArea);
+}
+
 // ---- Cycle all transform states via keyboard ----
 
 TEST_F(MainWindowTest, CycleAllStatesViaKeyboard) {
