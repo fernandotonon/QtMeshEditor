@@ -5,6 +5,7 @@
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
 #include <Ogre.h>
+#include <OgreRTShaderSystem.h>
 
 MaterialPresetLibrary* MaterialPresetLibrary::m_pSingleton = nullptr;
 
@@ -62,10 +63,39 @@ void configurePbrSlots(Ogre::Pass* pass)
     for (const char* slotName : kPbrSlots) {
         Ogre::TextureUnitState* tus = pass->createTextureUnitState();
         tus->setName(slotName);
+        // FFP approximations — see wirePbrSlotsForFFP in
+        // MaterialEditorQML.cpp for the rationale per slot. Slice F
+        // replaces these with a real PBR SubRenderState.
+        const std::string n(slotName);
+        if (n == "normal_map") {
+            Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
+        } else if (n == "albedo") {
+            tus->setColourOperationEx(
+                Ogre::LBX_MODULATE,
+                Ogre::LBS_TEXTURE,
+                Ogre::LBS_DIFFUSE);
+        } else if (n == "ao") {
+            tus->setColourOperationEx(
+                Ogre::LBX_MODULATE,
+                Ogre::LBS_TEXTURE,
+                Ogre::LBS_DIFFUSE);
+        } else if (n == "emissive") {
+            tus->setColourOperationEx(
+                Ogre::LBX_ADD,
+                Ogre::LBS_TEXTURE,
+                Ogre::LBS_CURRENT);
+        } else if (n == "metallic") {
+            tus->setColourOperationEx(
+                Ogre::LBX_ADD_SIGNED,
+                Ogre::LBS_TEXTURE,
+                Ogre::LBS_CURRENT);
+        } else if (n == "roughness") {
+            tus->setColourOperationEx(
+                Ogre::LBX_MODULATE_X2,
+                Ogre::LBS_TEXTURE,
+                Ogre::LBS_CURRENT);
+        }
     }
-    // Albedo slot: keep the default state — it'll modulate the diffuse
-    // colour with whatever texture the user drops in. Other slots stay
-    // empty (export pipeline preserves the names; runtime ignores).
 }
 
 void applyPbrTemplate(Ogre::MaterialPtr& mat,

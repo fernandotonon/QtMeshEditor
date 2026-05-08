@@ -411,3 +411,73 @@ TEST_F(MaterialPresetLibraryTests, PbrTemplateReapplyIsIdempotent) {
     // configurePbrSlots entirely.
     EXPECT_EQ(mat->getTechnique(0)->getPass(0)->getNumTextureUnitStates(), 6u);
 }
+
+// PBR slots must have semantic colour operations so they don't render as
+// plain stacked texture layers. These tests check the colour-op-ex set on
+// each slot at preset-apply time. Real PBR shading lands in slice F; these
+// FFP approximations are slice E's "make-something-visible" implementation.
+TEST_F(MaterialPresetLibraryTests, PbrSlotColourOpsApproximatePbrSemantics) {
+    Manager::kill();
+    QThread::msleep(50);
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    Ogre::Entity* entity = createSelectedEntity(
+        "PbrColourOp_Node", "PbrColourOp_Entity", "PbrColourOp_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    MaterialPresetLibrary::instance()->applyPreset("Metallic-Roughness");
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Metallic-Roughness");
+    ASSERT_TRUE(bool(mat));
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+    ASSERT_EQ(pass->getNumTextureUnitStates(), 6u);
+
+    // Build name → TUS map so the test doesn't depend on slot ordering.
+    QMap<QString, Ogre::TextureUnitState*> byName;
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        auto* tus = pass->getTextureUnitState(i);
+        byName.insert(QString::fromStdString(tus->getName()), tus);
+    }
+    ASSERT_TRUE(byName.contains("albedo"));
+    ASSERT_TRUE(byName.contains("ao"));
+    ASSERT_TRUE(byName.contains("emissive"));
+    ASSERT_TRUE(byName.contains("metallic"));
+    ASSERT_TRUE(byName.contains("roughness"));
+
+    const auto& albedoBlend   = byName["albedo"]->getColourBlendMode();
+    const auto& aoBlend       = byName["ao"]->getColourBlendMode();
+    const auto& emissiveBlend = byName["emissive"]->getColourBlendMode();
+    const auto& metallicBlend = byName["metallic"]->getColourBlendMode();
+    const auto& roughBlend    = byName["roughness"]->getColourBlendMode();
+
+    // albedo: textured base — modulate texture × per-vertex diffuse.
+    EXPECT_EQ(albedoBlend.operation, Ogre::LBX_MODULATE);
+    EXPECT_EQ(albedoBlend.source1,   Ogre::LBS_TEXTURE);
+    EXPECT_EQ(albedoBlend.source2,   Ogre::LBS_DIFFUSE);
+
+    // ao: darken by sampled value, anchored to vertex diffuse so the
+    // result is independent of TUS chain position.
+    EXPECT_EQ(aoBlend.operation, Ogre::LBX_MODULATE);
+    EXPECT_EQ(aoBlend.source1,   Ogre::LBS_TEXTURE);
+    EXPECT_EQ(aoBlend.source2,   Ogre::LBS_DIFFUSE);
+
+    // emissive: additive on top of running colour — visible even with
+    // ambient=black (the user-visible test for slice E emissive).
+    EXPECT_EQ(emissiveBlend.operation, Ogre::LBX_ADD);
+    EXPECT_EQ(emissiveBlend.source1,   Ogre::LBS_TEXTURE);
+    EXPECT_EQ(emissiveBlend.source2,   Ogre::LBS_CURRENT);
+
+    // metallic: ADD_SIGNED brightens the running colour where the texture
+    // is bright, faking a metallic look in pure FFP.
+    EXPECT_EQ(metallicBlend.operation, Ogre::LBX_ADD_SIGNED);
+    EXPECT_EQ(metallicBlend.source1,   Ogre::LBS_TEXTURE);
+    EXPECT_EQ(metallicBlend.source2,   Ogre::LBS_CURRENT);
+
+    // roughness: MODULATE_X2 brightens smooth (low-roughness) regions
+    // — opposite-direction approximation of glossiness, again pure FFP.
+    EXPECT_EQ(roughBlend.operation, Ogre::LBX_MODULATE_X2);
+    EXPECT_EQ(roughBlend.source1,   Ogre::LBS_TEXTURE);
+    EXPECT_EQ(roughBlend.source2,   Ogre::LBS_CURRENT);
+}
