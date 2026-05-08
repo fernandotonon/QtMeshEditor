@@ -249,9 +249,38 @@ void RTShaderHelper::applyNormalMap(Ogre::MaterialPtr& mat, const std::string& n
     // Without this redirect, applyNormalMap's resetToBuiltinSubRenderStates
     // would replace the Cook-Torrance SRS, dropping PBR shading whenever
     // a normal map gets re-applied (e.g. on import or material text edit).
-    if (isMetallicRoughnessMaterial(mat)) {
-        applyPbrIfTagged(mat);
-        return;
+    //
+    // Two carve-outs covered here:
+    //   1. The caller may have passed a `normalMapTexName` (e.g. Assimp
+    //      import discovering a normal texture before any TUS holds it).
+    //      Seed the empty `normal_map` slot with that texture so
+    //      applyPbrIfTagged picks it up via textureOnSlot.
+    //   2. applyPbrIfTagged can return false (SRS unavailable, render
+    //      state missing, etc.). In that case we MUST fall through to
+    //      the legacy SRS_NORMALMAP path, otherwise PBR-tagged materials
+    //      silently lose all normal-map detail when Cook-Torrance can't
+    //      be attached.
+    if (isMetallicRoughnessMaterial(mat) && mat->getNumTechniques() > 0) {
+        if (!normalMapTexName.empty()) {
+            auto* pbrPass = mat->getTechnique(0)->getPass(0);
+            for (unsigned short i = 0; i < pbrPass->getNumTextureUnitStates(); ++i) {
+                auto* tus = pbrPass->getTextureUnitState(i);
+                const auto& n = tus->getName();
+                if ((n == "normal_map" || n == "NormalMap") && tus->getTextureName().empty()) {
+                    tus->setTextureName(normalMapTexName);
+                    break;
+                }
+            }
+        }
+        if (applyPbrIfTagged(mat)) {
+            return;
+        }
+        // applyPbrIfTagged failed (e.g., Cook-Torrance SRS unavailable).
+        // Fall through to the legacy path so the user at least gets
+        // normal-map shading.
+        Ogre::LogManager::getSingleton().logMessage(
+            "RTShaderHelper: PBR composition failed for '" + mat->getName() +
+            "' — falling back to plain SRS_NORMALMAP wiring");
     }
 
     try {
