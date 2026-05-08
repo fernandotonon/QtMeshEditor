@@ -36,6 +36,14 @@ public:
     };
     Q_ENUM(Mode)
 
+    enum InspectorTabId {
+        InspectorTab = 0,
+        SceneTab = 1,
+        ModeToolsTab = 2,
+        HistoryTab = 3
+    };
+    Q_ENUM(InspectorTabId)
+
     static EditorModeController* instance();
     static EditorModeController* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
     static void kill();
@@ -52,6 +60,12 @@ public:
     Q_INVOKABLE void toggleObjectEditMode();
     Q_INVOKABLE QString modeNameFor(int mode) const;
     Q_INVOKABLE QString modeTooltipFor(int mode) const;
+    Q_INVOKABLE bool modeHasModeTools(int mode) const;
+    Q_INVOKABLE int defaultInspectorTabForMode(int mode) const;
+    Q_INVOKABLE bool shouldKeepExplicitInspectorTab(int tab) const;
+    Q_INVOKABLE bool modeToolMatches(int sectionMode, bool showAllModeTools) const;
+    Q_INVOKABLE bool modeToolMatchesCurrentMode(
+        int sectionMode, bool showAllModeTools, int currentMode) const;
 
 signals:
     void modeChanged();

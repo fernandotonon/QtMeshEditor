@@ -8,6 +8,14 @@
 
 EditorModeController* EditorModeController::m_pSingleton = nullptr;
 
+namespace {
+bool isValidMode(int mode)
+{
+    return mode >= EditorModeController::ObjectMode
+        && mode <= EditorModeController::ValidationMode;
+}
+}
+
 EditorModeController::EditorModeController(QObject* parent)
     : QObject(parent)
 {
@@ -58,7 +66,7 @@ void EditorModeController::setCurrentMode(int mode)
 
 void EditorModeController::requestMode(int mode)
 {
-    if (mode < ObjectMode || mode > ValidationMode)
+    if (!isValidMode(mode))
         return;
 
     setModeInternal(static_cast<Mode>(mode), true);
@@ -122,6 +130,45 @@ QVariantList EditorModeController::availableModes() const
     }
 
     return modes;
+}
+
+bool EditorModeController::modeHasModeTools(int mode) const
+{
+    if (!isValidMode(mode))
+        return false;
+
+    return mode == EditMode
+        || mode == AnimationMode
+        || mode == MaterialMode
+        || mode == ValidationMode;
+}
+
+int EditorModeController::defaultInspectorTabForMode(int mode) const
+{
+    return modeHasModeTools(mode) ? ModeToolsTab : InspectorTab;
+}
+
+bool EditorModeController::shouldKeepExplicitInspectorTab(int tab) const
+{
+    return tab == SceneTab || tab == HistoryTab;
+}
+
+bool EditorModeController::modeToolMatches(int sectionMode, bool showAllModeTools) const
+{
+    return modeToolMatchesCurrentMode(
+        sectionMode, showAllModeTools, static_cast<int>(m_currentMode));
+}
+
+bool EditorModeController::modeToolMatchesCurrentMode(
+    int sectionMode, bool showAllModeTools, int currentMode) const
+{
+    if (!isValidMode(sectionMode))
+        return false;
+
+    if (!isValidMode(currentMode))
+        return false;
+
+    return showAllModeTools || currentMode == sectionMode;
 }
 
 bool EditorModeController::editModeAvailable() const
