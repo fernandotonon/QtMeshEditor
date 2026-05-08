@@ -308,6 +308,13 @@ bool MaterialEditorQML::applyMaterial()
         if (m_ogreMaterial) {
             wirePbrSlotsForFFP(m_ogreMaterial.get());
             m_ogreMaterial->compile();
+            // Slice F: if user-edited material text carries the
+            // pbr_workflow tag (e.g. they hand-typed it, or the script
+            // came from MaterialPresetLibrary's PBR templates),
+            // upgrade FFP wiring to Cook-Torrance via Ogre's stock
+            // SRS_COOK_TORRANCE_LIGHTING. Returns false silently for
+            // non-tagged materials → slice E FFP wiring stays.
+            RTShaderHelper::applyPbrIfTagged(m_ogreMaterial);
         }
 
         // Re-apply the edited material to sub-entities that use it.
@@ -1656,6 +1663,14 @@ void MaterialEditorQML::updateMaterialText()
 
         // Recompile the material
         m_ogreMaterial->compile();
+
+        // Slice F: upgrade tagged metallic_roughness materials to the
+        // Cook-Torrance SRS. Runs after compile so the SRS sees the
+        // final pass state (FFP wiring above is harmless — when
+        // applyPbrIfTagged returns true, RTSS replaces the FFP path).
+        // Returns false for non-tagged materials → FFP path stays.
+        const bool pbrApplied = RTShaderHelper::applyPbrIfTagged(m_ogreMaterial);
+        (void)pbrApplied;
 
         // If the material has a normal_map TUS with a texture set, re-wire
         // it through SRS_NORMALMAP. Without this, dropping all shader

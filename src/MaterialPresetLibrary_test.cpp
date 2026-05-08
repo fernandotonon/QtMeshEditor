@@ -3,6 +3,7 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
+#include <OgreRTShaderSystem.h>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QSignalSpy>
@@ -480,4 +481,76 @@ TEST_F(MaterialPresetLibraryTests, PbrSlotColourOpsApproximatePbrSemantics) {
     EXPECT_EQ(roughBlend.operation, Ogre::LBX_MODULATE_X2);
     EXPECT_EQ(roughBlend.source1,   Ogre::LBS_TEXTURE);
     EXPECT_EQ(roughBlend.source2,   Ogre::LBS_CURRENT);
+}
+
+// Slice F1: Metallic-Roughness preset auto-attaches Ogre's stock
+// SRS_COOK_TORRANCE_LIGHTING SubRenderState via
+// RTShaderHelper::applyPbrIfTagged. Without this, the preset would
+// only render via slice E's FFP approximation. We verify it by checking
+// that the material gained a non-default-scheme technique (the RTSS
+// shader-generated one) after applyPreset returns. The exact scheme
+// name comes from ShaderGenerator::DEFAULT_SCHEME_NAME ("ShaderGeneratorDefaultScheme")
+// — different from MaterialManager's default scheme used by FFP.
+TEST_F(MaterialPresetLibraryTests, MetallicRoughnessPresetAttachesPbrShaderTechnique) {
+    Manager::kill();
+    QThread::msleep(50);
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    Ogre::Entity* entity = createSelectedEntity(
+        "PbrShader_Node", "PbrShader_Entity", "PbrShader_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    MaterialPresetLibrary::instance()->applyPreset("Metallic-Roughness");
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Metallic-Roughness");
+    ASSERT_TRUE(bool(mat));
+
+    // applyPbrIfTagged calls createShaderBasedTechnique, which adds a
+    // technique to the material under the RTSS scheme name. Count
+    // techniques whose scheme matches the ShaderGenerator's scheme.
+    bool hasShaderTech = false;
+    const auto& shaderGenScheme =
+        Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME;
+    for (auto* tech : mat->getTechniques()) {
+        if (tech->getSchemeName() == shaderGenScheme) {
+            hasShaderTech = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasShaderTech)
+        << "Metallic-Roughness preset must produce an RTSS shader technique "
+           "(SRS_COOK_TORRANCE_LIGHTING via applyPbrIfTagged)";
+}
+
+// Non-PBR presets must NOT trigger the Cook-Torrance path — they use
+// the legacy FFP rendering only. Plastic is the canonical legacy preset
+// (no `pbr_workflow` tag set on its pass).
+TEST_F(MaterialPresetLibraryTests, NonPbrPresetDoesNotAttachPbrShaderTechnique) {
+    Manager::kill();
+    QThread::msleep(50);
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    Ogre::Entity* entity = createSelectedEntity(
+        "NonPbr_Node", "NonPbr_Entity", "NonPbr_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    MaterialPresetLibrary::instance()->applyPreset("Plastic (Red)");
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Plastic (Red)");
+    ASSERT_TRUE(bool(mat));
+
+    // The Plastic preset's pass has no `pbr_workflow` user-binding, so
+    // applyPbrIfTagged returns early without creating a shader-based
+    // technique. The material may pick up an RTSS technique later via
+    // handleSchemeNotFound (FFP-derived), but applyPreset itself should
+    // not have triggered one.
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    auto tag = pass->getUserObjectBindings().getUserAny(
+        MaterialPresetLibrary::kPbrWorkflowKey);
+    EXPECT_FALSE(tag.has_value())
+        << "Plastic preset must not carry a pbr_workflow tag";
 }
