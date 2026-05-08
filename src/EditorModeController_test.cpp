@@ -66,6 +66,62 @@ TEST_F(EditorModeControllerTest, ModeTooltipsCoverAllModes)
     EXPECT_FALSE(ctrl->modeTooltipFor(EditorModeController::ValidationMode).isEmpty());
 }
 
+TEST_F(EditorModeControllerTest, InspectorTabPolicyDefaultsByMode)
+{
+    auto* ctrl = EditorModeController::instance();
+
+    EXPECT_FALSE(ctrl->modeHasModeTools(EditorModeController::ObjectMode));
+    EXPECT_TRUE(ctrl->modeHasModeTools(EditorModeController::EditMode));
+    EXPECT_TRUE(ctrl->modeHasModeTools(EditorModeController::AnimationMode));
+    EXPECT_TRUE(ctrl->modeHasModeTools(EditorModeController::MaterialMode));
+    EXPECT_TRUE(ctrl->modeHasModeTools(EditorModeController::ValidationMode));
+    EXPECT_FALSE(ctrl->modeHasModeTools(99));
+
+    EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::ObjectMode),
+              EditorModeController::InspectorTab);
+    EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::EditMode),
+              EditorModeController::ModeToolsTab);
+    EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::AnimationMode),
+              EditorModeController::ModeToolsTab);
+    EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::MaterialMode),
+              EditorModeController::ModeToolsTab);
+    EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::ValidationMode),
+              EditorModeController::ModeToolsTab);
+    EXPECT_EQ(ctrl->defaultInspectorTabForMode(99),
+              EditorModeController::InspectorTab);
+}
+
+TEST_F(EditorModeControllerTest, InspectorTabPolicyKeepsExplicitSceneAndHistoryTabs)
+{
+    auto* ctrl = EditorModeController::instance();
+
+    EXPECT_FALSE(ctrl->shouldKeepExplicitInspectorTab(EditorModeController::InspectorTab));
+    EXPECT_TRUE(ctrl->shouldKeepExplicitInspectorTab(EditorModeController::SceneTab));
+    EXPECT_FALSE(ctrl->shouldKeepExplicitInspectorTab(EditorModeController::ModeToolsTab));
+    EXPECT_TRUE(ctrl->shouldKeepExplicitInspectorTab(EditorModeController::HistoryTab));
+}
+
+TEST_F(EditorModeControllerTest, ModeToolFilterKeepsNonCurrentSectionsReachableThroughAll)
+{
+    auto* ctrl = EditorModeController::instance();
+    ctrl->requestMode(EditorModeController::AnimationMode);
+
+    EXPECT_TRUE(ctrl->modeToolMatches(EditorModeController::AnimationMode, false));
+    EXPECT_FALSE(ctrl->modeToolMatches(EditorModeController::MaterialMode, false));
+    EXPECT_TRUE(ctrl->modeToolMatches(EditorModeController::MaterialMode, true));
+    EXPECT_TRUE(ctrl->modeToolMatches(EditorModeController::ValidationMode, true));
+    EXPECT_FALSE(ctrl->modeToolMatches(99, true));
+
+    EXPECT_TRUE(ctrl->modeToolMatchesCurrentMode(
+        EditorModeController::MaterialMode, false, EditorModeController::MaterialMode));
+    EXPECT_FALSE(ctrl->modeToolMatchesCurrentMode(
+        EditorModeController::ValidationMode, false, EditorModeController::MaterialMode));
+    EXPECT_TRUE(ctrl->modeToolMatchesCurrentMode(
+        EditorModeController::ValidationMode, true, EditorModeController::MaterialMode));
+    EXPECT_FALSE(ctrl->modeToolMatchesCurrentMode(
+        EditorModeController::ValidationMode, true, 99));
+}
+
 TEST_F(EditorModeControllerTest, NonEditModesUpdateModeAndStatus)
 {
     auto* ctrl = EditorModeController::instance();
