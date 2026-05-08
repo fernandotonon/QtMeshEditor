@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 #include "MaterialPresetLibrary.h"
 #include "Manager.h"
+#include "RTShaderHelper.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
 #include <OgreRTShaderSystem.h>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QThread>
 
@@ -486,17 +488,23 @@ TEST_F(MaterialPresetLibraryTests, PbrSlotColourOpsApproximatePbrSemantics) {
 // Slice F1: Metallic-Roughness preset auto-attaches Ogre's stock
 // SRS_COOK_TORRANCE_LIGHTING SubRenderState via
 // RTShaderHelper::applyPbrIfTagged. Without this, the preset would
-// only render via slice E's FFP approximation. We verify it by checking
-// that the material gained a non-default-scheme technique (the RTSS
-// shader-generated one) after applyPreset returns. The exact scheme
-// name comes from ShaderGenerator::DEFAULT_SCHEME_NAME ("ShaderGeneratorDefaultScheme")
-// — different from MaterialManager's default scheme used by FFP.
+// only render via slice E's FFP approximation. We initialize RTSS
+// explicitly in this test (production launches do this in
+// Manager::loadResources, but the test fixture's tryInitOgre() does
+// not run that path).
 TEST_F(MaterialPresetLibraryTests, MetallicRoughnessPresetAttachesPbrShaderTechnique) {
     Manager::kill();
     QThread::msleep(50);
     ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
     ASSERT_TRUE(canLoadMeshFiles());
     createStandardOgreMaterials();
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+    RTShaderHelper::initialize(sceneMgr);
+    auto rtssShutdown = qScopeGuard([sceneMgr] {
+        RTShaderHelper::shutdown(sceneMgr);
+    });
 
     Ogre::Entity* entity = createSelectedEntity(
         "PbrShader_Node", "PbrShader_Entity", "PbrShader_Mesh");
@@ -506,6 +514,14 @@ TEST_F(MaterialPresetLibraryTests, MetallicRoughnessPresetAttachesPbrShaderTechn
 
     auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Metallic-Roughness");
     ASSERT_TRUE(bool(mat));
+
+    // The workflow tag must be set regardless of RTSS state.
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    auto tag = pass->getUserObjectBindings().getUserAny(
+        MaterialPresetLibrary::kPbrWorkflowKey);
+    ASSERT_TRUE(tag.has_value());
+    EXPECT_EQ(Ogre::any_cast<Ogre::String>(tag),
+              Ogre::String(MaterialPresetLibrary::kPbrWorkflowMetallic));
 
     // applyPbrIfTagged calls createShaderBasedTechnique, which adds a
     // technique to the material under the RTSS scheme name. Count
