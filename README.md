@@ -211,6 +211,7 @@ Split View|Skeleton Animation Controls
 | OBJ | .obj | ✅ | ✅ | — |
 | STL | .stl | ✅ | ✅ | — |
 | Ogre Mesh | .mesh / .mesh.xml | ✅ | ✅ | ✅ |
+| PlayStation TMD | .tmd | ✅ | ✅ | — |
 | 3DS | .3ds | ✅ | ✅ | — |
 | PLY | .ply | ✅ | ✅ | — |
 

@@ -274,6 +274,7 @@ qtmesh scan ./assets --fail-on error`}</CodeBlock>
                   ['.obj', 'Wavefront OBJ', 'Yes', 'Yes'],
                   ['.stl', 'STL', 'Yes', 'Yes'],
                   ['.ply', 'Stanford PLY', 'Yes', 'Yes'],
+                  ['.tmd', 'PlayStation TMD', 'Yes', 'Yes'],
                   ['.3ds', '3D Studio', 'Yes', 'No'],
                   ['.mesh', 'Ogre Mesh', 'Yes', 'No'],
                 ].map(([ext, fmt, imp, exp], i) => <tr key={i}><td><Code>{ext}</Code></td><td>{fmt}</td><td>{imp}</td><td>{exp}</td></tr>)}

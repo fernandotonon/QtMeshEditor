@@ -35,6 +35,26 @@ OTHER DEALINGS IN THE SOFTWARE.
 namespace ViewportSettingsKeys
 {
 
+inline int defaultFsaaSamples()
+{
+    return 4;
+}
+
+inline double defaultNearClip()
+{
+    return 0.01;
+}
+
+inline double defaultFarClip()
+{
+    return 10000.0;
+}
+
+inline double defaultCameraSpeed()
+{
+    return 1.0;
+}
+
 /**
  * @brief QSettings key strings for Viewport/ preferences (single source of truth).
  *

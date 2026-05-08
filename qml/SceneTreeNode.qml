@@ -26,6 +26,38 @@ Column {
             selected = treeModel.isSelected(nodeIndex.row, treeModel.parent(nodeIndex))
     }
 
+    function typeLabel() {
+        return treeModel ? (treeModel.data(nodeIndex, 259) || "") : ""
+    }
+
+    function impactBadgeText() {
+        switch (typeLabel()) {
+        case "Node":
+        case "Group":
+            return "PLACEMENT"
+        case "Mesh":
+            return "MESH DATA"
+        case "Submesh":
+            return "SUBMESH"
+        default:
+            return ""
+        }
+    }
+
+    function impactBadgeColor() {
+        switch (typeLabel()) {
+        case "Node":
+        case "Group":
+            return "#6ca0dc"
+        case "Mesh":
+            return "#55b65a"
+        case "Submesh":
+            return "#c9b64f"
+        default:
+            return PropertiesPanelController.borderColor
+        }
+    }
+
     Connections {
         target: treeModel
         function onSelectionUpdated() { treeNode.refreshSelected() }
@@ -58,6 +90,7 @@ Column {
         }
 
         Row {
+            id: treeRowContent
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
             anchors.leftMargin: 4 + indentLevel * 16
@@ -124,7 +157,32 @@ Column {
                 color: treeNode.selected ? "white" : PropertiesPanelController.textColor
                 font.pixelSize: 11
                 elide: Text.ElideRight
+                width: Math.max(40, treeNode.width - treeRowContent.anchors.leftMargin
+                                - 14 - 10 - 4
+                                - (treeNode.impactBadgeText() !== "" ? badgeText.implicitWidth + 12 : 0)
+                                - (matSelector.visible ? matSelector.width + 4 : 0)
+                                - 8)
                 anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Rectangle {
+                visible: treeNode.impactBadgeText() !== ""
+                width: visible ? badgeText.implicitWidth + 8 : 0
+                height: 16
+                radius: 3
+                color: treeNode.selected ? Qt.rgba(1, 1, 1, 0.18) : Qt.rgba(0, 0, 0, 0)
+                border.color: treeNode.selected ? "white" : treeNode.impactBadgeColor()
+                border.width: 1
+                anchors.verticalCenter: parent.verticalCenter
+
+                Text {
+                    id: badgeText
+                    anchors.centerIn: parent
+                    text: treeNode.impactBadgeText()
+                    color: treeNode.selected ? "white" : treeNode.impactBadgeColor()
+                    font.pixelSize: 8
+                    font.bold: true
+                }
             }
 
             // Material selector (typeahead combo for submeshes)
