@@ -9,13 +9,7 @@ Rectangle {
     color: PropertiesPanelController.headerColor
     implicitHeight: 38
 
-    property var modes: [
-        { label: "Object", mode: EditorModeController.ObjectMode, tip: "Object mode" },
-        { label: "Edit", mode: EditorModeController.EditMode, tip: "Edit mesh components" },
-        { label: "Animation", mode: EditorModeController.AnimationMode, tip: "Animation tools" },
-        { label: "Material", mode: EditorModeController.MaterialMode, tip: "Material tools" },
-        { label: "Validation", mode: EditorModeController.ValidationMode, tip: "Mesh validation" }
-    ]
+    property var modes: EditorModeController.availableModes
 
     RowLayout {
         anchors.fill: parent

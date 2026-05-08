@@ -24,6 +24,29 @@ TEST_F(EditorModeControllerTest, ModeNamesCoverPublicModes)
     EXPECT_EQ(ctrl->modeNameFor(EditorModeController::ValidationMode), QStringLiteral("Validation"));
 }
 
+TEST_F(EditorModeControllerTest, AvailableModesExposeModeBarMetadata)
+{
+    auto* ctrl = EditorModeController::instance();
+    const QVariantList modes = ctrl->availableModes();
+
+    ASSERT_EQ(modes.size(), 5);
+    EXPECT_EQ(modes.at(0).toMap().value(QStringLiteral("mode")).toInt(),
+              EditorModeController::ObjectMode);
+    EXPECT_EQ(modes.at(0).toMap().value(QStringLiteral("label")).toString(),
+              QStringLiteral("Object"));
+    EXPECT_EQ(modes.at(0).toMap().value(QStringLiteral("tip")).toString(),
+              ctrl->modeTooltipFor(EditorModeController::ObjectMode));
+
+    EXPECT_EQ(modes.at(1).toMap().value(QStringLiteral("mode")).toInt(),
+              EditorModeController::EditMode);
+    EXPECT_EQ(modes.at(2).toMap().value(QStringLiteral("mode")).toInt(),
+              EditorModeController::AnimationMode);
+    EXPECT_EQ(modes.at(3).toMap().value(QStringLiteral("mode")).toInt(),
+              EditorModeController::MaterialMode);
+    EXPECT_EQ(modes.at(4).toMap().value(QStringLiteral("mode")).toInt(),
+              EditorModeController::ValidationMode);
+}
+
 TEST_F(EditorModeControllerTest, NonEditModesUpdateModeAndStatus)
 {
     auto* ctrl = EditorModeController::instance();

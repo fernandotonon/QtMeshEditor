@@ -4,6 +4,7 @@
 #include "SentryReporter.h"
 
 #include <QJSEngine>
+#include <QVariantMap>
 
 EditorModeController* EditorModeController::m_pSingleton = nullptr;
 
@@ -83,6 +84,40 @@ QString EditorModeController::modeNameFor(int mode) const
     case ValidationMode: return QStringLiteral("Validation");
     }
     return QStringLiteral("Object");
+}
+
+QString EditorModeController::modeTooltipFor(int mode) const
+{
+    switch (static_cast<Mode>(mode)) {
+    case ObjectMode: return QStringLiteral("Object placement and scene organization");
+    case EditMode: return QStringLiteral("Edit mesh components");
+    case AnimationMode: return QStringLiteral("Animation playback and clip tools");
+    case MaterialMode: return QStringLiteral("Material assignment and editing");
+    case ValidationMode: return QStringLiteral("Mesh validation and scan tools");
+    }
+    return QStringLiteral("Object placement and scene organization");
+}
+
+QVariantList EditorModeController::availableModes() const
+{
+    QVariantList modes;
+    const QList<Mode> orderedModes = {
+        ObjectMode,
+        EditMode,
+        AnimationMode,
+        MaterialMode,
+        ValidationMode
+    };
+
+    for (Mode mode : orderedModes) {
+        QVariantMap entry;
+        entry.insert(QStringLiteral("mode"), static_cast<int>(mode));
+        entry.insert(QStringLiteral("label"), modeNameFor(static_cast<int>(mode)));
+        entry.insert(QStringLiteral("tip"), modeTooltipFor(static_cast<int>(mode)));
+        modes.push_back(entry);
+    }
+
+    return modes;
 }
 
 bool EditorModeController::editModeAvailable() const

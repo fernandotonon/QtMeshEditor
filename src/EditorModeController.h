@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QQmlEngine>
 #include <QString>
+#include <QVariantList>
 
 class EditModeController;
 
@@ -17,6 +18,7 @@ class EditorModeController : public QObject
     Q_PROPERTY(QString modeName READ modeName NOTIFY modeChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(bool editModeAvailable READ editModeAvailable NOTIFY editModeAvailabilityChanged)
+    Q_PROPERTY(QVariantList availableModes READ availableModes CONSTANT)
 
 public:
     enum Mode {
@@ -38,10 +40,12 @@ public:
     QString modeName() const;
     QString statusText() const { return m_statusText; }
     bool editModeAvailable() const;
+    QVariantList availableModes() const;
 
     Q_INVOKABLE void requestMode(int mode);
     Q_INVOKABLE void toggleObjectEditMode();
     Q_INVOKABLE QString modeNameFor(int mode) const;
+    Q_INVOKABLE QString modeTooltipFor(int mode) const;
 
 signals:
     void modeChanged();

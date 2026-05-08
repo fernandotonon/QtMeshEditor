@@ -1566,11 +1566,13 @@ void MainWindow::createModeSurfaces()
         m_modeBar->setResizeMode(QQuickWidget::SizeRootObjectToView);
         m_modeBar->setMinimumHeight(38);
         m_modeBar->setMaximumHeight(38);
-        m_modeBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_modeBar->setMinimumWidth(560);
+        m_modeBar->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Fixed);
         m_modeBar->setSource(QUrl("qrc:/ModeBar/ModeBar.qml"));
         m_modeBarShell->addWidget(m_modeBar);
 
         insertToolBar(ui->toolToolbar, m_modeBarShell);
+        insertToolBarBreak(ui->toolToolbar);
     }
 
     if (!m_bottomContextDock) {
