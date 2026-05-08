@@ -9,13 +9,7 @@ Rectangle {
     color: PropertiesPanelController.headerColor
     implicitHeight: 38
 
-    property var modes: [
-        { label: "Object", mode: EditorModeController.ObjectMode, tip: "Object mode" },
-        { label: "Edit", mode: EditorModeController.EditMode, tip: "Edit mesh components" },
-        { label: "Animation", mode: EditorModeController.AnimationMode, tip: "Animation tools" },
-        { label: "Material", mode: EditorModeController.MaterialMode, tip: "Material tools" },
-        { label: "Validation", mode: EditorModeController.ValidationMode, tip: "Mesh validation" }
-    ]
+    property var modes: EditorModeController.availableModes
 
     RowLayout {
         anchors.fill: parent
@@ -60,21 +54,12 @@ Rectangle {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: EditorModeController.requestMode(modelData.mode)
                     }
-
-                    ToolTip.text: modelData.tip
-                    ToolTip.visible: modeMouse.containsMouse
                 }
             }
         }
 
-        Text {
+        Item {
             Layout.fillWidth: true
-            Layout.alignment: Qt.AlignVCenter
-            text: EditorModeController.statusText
-            color: PropertiesPanelController.textColor
-            elide: Text.ElideRight
-            font.pixelSize: 11
-            opacity: 0.82
         }
 
         Button {
@@ -85,8 +70,6 @@ Rectangle {
             implicitWidth: 76
             font.pixelSize: 11
             onClicked: EditorModeController.toggleObjectEditMode()
-            ToolTip.text: "Toggle Edit mode (Tab)"
-            ToolTip.visible: hovered
         }
     }
 }
