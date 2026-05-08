@@ -18,6 +18,12 @@ class EditorModeController : public QObject
     Q_PROPERTY(QString modeName READ modeName NOTIFY modeChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(bool editModeAvailable READ editModeAvailable NOTIFY editModeAvailabilityChanged)
+    // `availableModes` is `CONSTANT` because the set of editor modes is fixed
+    // at compile time. If a future plugin/feature flag ever needs to gate a
+    // mode at runtime (e.g. hiding ValidationMode when the scan engine is
+    // disabled), drop CONSTANT, add an `availableModesChanged()` signal, and
+    // emit it whenever the list changes — otherwise QML bindings on this
+    // property will not refresh.
     Q_PROPERTY(QVariantList availableModes READ availableModes CONSTANT)
 
 public:

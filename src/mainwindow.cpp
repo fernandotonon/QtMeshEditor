@@ -11,6 +11,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QJsonArray>
+#include <QFontMetrics>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -1566,7 +1567,21 @@ void MainWindow::createModeSurfaces()
         m_modeBar->setResizeMode(QQuickWidget::SizeRootObjectToView);
         m_modeBar->setMinimumHeight(38);
         m_modeBar->setMaximumHeight(38);
-        m_modeBar->setMinimumWidth(560);
+        // Pick a minimum width wide enough to fit all five mode buttons plus
+        // the trailing Edit/Exit button without truncating labels. We derive
+        // it from the current font metrics so HiDPI / accessibility-scaled
+        // fonts don't end up clipped, with `kModeBarMinWidthFloor` as a
+        // safety net for unusually narrow fonts.
+        constexpr int kModeBarMinWidthFloor = 560;
+        const QFontMetrics fm(m_modeBar->font());
+        const int labelWidth = fm.horizontalAdvance(
+            QStringLiteral("Object Edit Animation Material Validation Edit"));
+        // Per-button chrome (border + padding + spacing) plus the Edit button
+        // and the layout's left/right margins (~10 px each side).
+        constexpr int kPerButtonChrome = 24;
+        constexpr int kButtons = 6; // 5 modes + Edit toggle
+        const int derivedWidth = labelWidth + kPerButtonChrome * kButtons + 40;
+        m_modeBar->setMinimumWidth(qMax(kModeBarMinWidthFloor, derivedWidth));
         m_modeBar->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Fixed);
         m_modeBar->setSource(QUrl("qrc:/ModeBar/ModeBar.qml"));
         m_modeBarShell->addWidget(m_modeBar);
@@ -1848,10 +1863,10 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
     else
         statusMessage += "No selection";
 
-    // Editor mode status (e.g. "Object mode", "Edit mode (Vertex)")
-    const QString modeStatus = EditorModeController::instance()->statusText();
-    if (!modeStatus.isEmpty())
-        statusMessage += QString(" | %1").arg(modeStatus);
+    // The editor mode (e.g. "Object mode", "Edit mode (Vertex)") is rendered by
+    // the permanent `m_editModeLabel` widget on the right side of the status
+    // bar (see updateEditModeIndicator()). Don't append it here too — that
+    // would duplicate the same string on the rolling left-hand message.
 
     ui->statusBar->showMessage(statusMessage);
 

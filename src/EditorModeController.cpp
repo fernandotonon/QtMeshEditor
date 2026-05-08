@@ -109,11 +109,15 @@ QVariantList EditorModeController::availableModes() const
         ValidationMode
     };
 
+    // The map intentionally exposes only `mode` and `label`. ModeBar.qml
+    // dropped tooltips in PR #433 to stop them from intercepting clicks on
+    // top-bar buttons, so a `tip` entry would be dead metadata. Tooltip text
+    // is still reachable through `Q_INVOKABLE modeTooltipFor(int)` for
+    // accessibility hooks and any future consumer.
     for (Mode mode : orderedModes) {
         QVariantMap entry;
         entry.insert(QStringLiteral("mode"), static_cast<int>(mode));
         entry.insert(QStringLiteral("label"), modeNameFor(static_cast<int>(mode)));
-        entry.insert(QStringLiteral("tip"), modeTooltipFor(static_cast<int>(mode)));
         modes.push_back(entry);
     }
 

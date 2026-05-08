@@ -78,6 +78,11 @@ protected:
     void TearDown() override {
         delete window;
         window = nullptr;
+        // Tests below switch the editor mode (Animation/Material/etc). Reset
+        // the singleton so subsequent test cases see a fresh ObjectMode
+        // controller — otherwise stale state leaks into m_editModeLabel and
+        // any test that implicitly assumes the default mode.
+        EditorModeController::kill();
         QSettings().clear();
         QCoreApplication::setOrganizationName(previousOrganizationName);
         QCoreApplication::setApplicationName(previousApplicationName);
@@ -203,7 +208,7 @@ TEST_F(MainWindowTest, RebuildAllOgreViewportsDoesNotCrash)
     EXPECT_NO_THROW(ow->fsaaSamples());
 }
 
-TEST_F(MainWindowTest, ModeBarLoadsAndSelectionUpdatesStatusIndicator)
+TEST_F(MainWindowTest, ModeBarLoadsAndModeChangeUpdatesStatusIndicator)
 {
     ASSERT_NE(window->m_modeBarShell, nullptr);
     ASSERT_NE(window->m_modeBar, nullptr);
