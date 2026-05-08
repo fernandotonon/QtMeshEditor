@@ -24,6 +24,48 @@ TEST_F(EditorModeControllerTest, ModeNamesCoverPublicModes)
     EXPECT_EQ(ctrl->modeNameFor(EditorModeController::ValidationMode), QStringLiteral("Validation"));
 }
 
+TEST_F(EditorModeControllerTest, AvailableModesExposeModeBarMetadata)
+{
+    auto* ctrl = EditorModeController::instance();
+    const QVariantList modes = ctrl->availableModes();
+
+    ASSERT_EQ(modes.size(), 5);
+
+    const QList<QPair<EditorModeController::Mode, QString>> expected = {
+        {EditorModeController::ObjectMode,     QStringLiteral("Object")},
+        {EditorModeController::EditMode,       QStringLiteral("Edit")},
+        {EditorModeController::AnimationMode,  QStringLiteral("Animation")},
+        {EditorModeController::MaterialMode,   QStringLiteral("Material")},
+        {EditorModeController::ValidationMode, QStringLiteral("Validation")},
+    };
+
+    for (int i = 0; i < expected.size(); ++i) {
+        const QVariantMap entry = modes.at(i).toMap();
+        EXPECT_EQ(entry.value(QStringLiteral("mode")).toInt(),
+                  static_cast<int>(expected[i].first))
+            << "mode mismatch at index " << i;
+        EXPECT_EQ(entry.value(QStringLiteral("label")).toString(),
+                  expected[i].second)
+            << "label mismatch at index " << i;
+        // The map intentionally exposes only `mode` and `label`. `tip` was
+        // dropped when ModeBar.qml stopped using tooltips.
+        EXPECT_FALSE(entry.contains(QStringLiteral("tip")))
+            << "tip should not be exposed at index " << i;
+    }
+}
+
+TEST_F(EditorModeControllerTest, ModeTooltipsCoverAllModes)
+{
+    auto* ctrl = EditorModeController::instance();
+    // Tooltip strings remain reachable through Q_INVOKABLE for accessibility
+    // hooks even though ModeBar.qml no longer renders them.
+    EXPECT_FALSE(ctrl->modeTooltipFor(EditorModeController::ObjectMode).isEmpty());
+    EXPECT_FALSE(ctrl->modeTooltipFor(EditorModeController::EditMode).isEmpty());
+    EXPECT_FALSE(ctrl->modeTooltipFor(EditorModeController::AnimationMode).isEmpty());
+    EXPECT_FALSE(ctrl->modeTooltipFor(EditorModeController::MaterialMode).isEmpty());
+    EXPECT_FALSE(ctrl->modeTooltipFor(EditorModeController::ValidationMode).isEmpty());
+}
+
 TEST_F(EditorModeControllerTest, NonEditModesUpdateModeAndStatus)
 {
     auto* ctrl = EditorModeController::instance();

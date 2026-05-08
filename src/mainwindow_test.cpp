@@ -31,6 +31,7 @@
 #include "SentryReporter.h"
 #include "TransformOperator.h"
 #include "EditModeController.h"
+#include "EditorModeController.h"
 #include "TestHelpers.h"
 #include "EditorViewport.h"
 #include "ViewportSettingsKeys.h"
@@ -77,6 +78,11 @@ protected:
     void TearDown() override {
         delete window;
         window = nullptr;
+        // Tests below switch the editor mode (Animation/Material/etc). Reset
+        // the singleton so subsequent test cases see a fresh ObjectMode
+        // controller — otherwise stale state leaks into m_editModeLabel and
+        // any test that implicitly assumes the default mode.
+        EditorModeController::kill();
         QSettings().clear();
         QCoreApplication::setOrganizationName(previousOrganizationName);
         QCoreApplication::setApplicationName(previousApplicationName);
@@ -200,6 +206,32 @@ TEST_F(MainWindowTest, RebuildAllOgreViewportsDoesNotCrash)
     auto* ow = window->mDockWidgetList.first()->getOgreWidget();
     ASSERT_NE(ow, nullptr);
     EXPECT_NO_THROW(ow->fsaaSamples());
+}
+
+TEST_F(MainWindowTest, ModeBarLoadsAndModeChangeUpdatesStatusIndicator)
+{
+    ASSERT_NE(window->m_modeBarShell, nullptr);
+    ASSERT_NE(window->m_modeBar, nullptr);
+    ASSERT_NE(window->m_modeBar->rootObject(), nullptr);
+    ASSERT_EQ(window->m_modeBar->status(), QQuickWidget::Ready);
+    EXPECT_GE(window->m_modeBar->minimumWidth(), 560);
+    EXPECT_EQ(window->toolBarArea(window->m_modeBarShell), Qt::TopToolBarArea);
+    EXPECT_FALSE(window->m_modeBarShell->isHidden());
+    ASSERT_NE(window->m_editModeLabel, nullptr);
+
+    auto* modeController = EditorModeController::instance();
+
+    modeController->requestMode(EditorModeController::AnimationMode);
+    app->processEvents();
+    EXPECT_EQ(modeController->currentMode(), EditorModeController::AnimationMode);
+    EXPECT_EQ(modeController->statusText(), QStringLiteral("Animation mode"));
+    EXPECT_EQ(window->m_editModeLabel->text(), QStringLiteral("Animation mode"));
+
+    modeController->requestMode(EditorModeController::MaterialMode);
+    app->processEvents();
+    EXPECT_EQ(modeController->currentMode(), EditorModeController::MaterialMode);
+    EXPECT_EQ(modeController->statusText(), QStringLiteral("Material mode"));
+    EXPECT_EQ(window->m_editModeLabel->text(), QStringLiteral("Material mode"));
 }
 
 // ---- Cycle all transform states via keyboard ----
