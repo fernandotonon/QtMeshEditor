@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1110</width>
-    <height>660</height>
+    <width>1100</width>
+    <height>800</height>
    </rect>
   </property>
   <property name="mouseTracking">
@@ -42,7 +42,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1010</width>
+     <width>1100</width>
      <height>24</height>
     </rect>
    </property>

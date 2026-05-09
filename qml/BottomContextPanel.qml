@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import EditorMode 1.0
 import PropertiesPanel 1.0
 import AnimationControl 1.0
+import AssetBrowser 1.0
 
 Rectangle {
     id: root
@@ -12,11 +13,30 @@ Rectangle {
 
     property bool expanded: true
     property int contentMode: EditorModeController.currentMode
-
-    // Set from C++ (mainwindow.cpp) so the Material Editor button can trigger
-    // the QAction directly. Declared explicitly so the QML compiler resolves
-    // the identifier locally instead of relying on an ambient context value.
     property var materialEditorAction: null
+    readonly property string currentSummaryObjectName: summaryLoader.item ? summaryLoader.item.objectName : ""
+
+    function issueSummary() {
+        if (!MeshValidator.validated)
+            return "Not run"
+        return String(MeshValidator.issues.length)
+    }
+
+    function fileSummary() {
+        return String(AssetBrowserController.files.length)
+    }
+
+    function rootFolderName() {
+        var path = AssetBrowserController.rootPath
+        if (!path || path.length === 0)
+            return "Not set"
+        var parts = path.split(/[\\/]/)
+        for (var i = parts.length - 1; i >= 0; --i) {
+            if (parts[i] && parts[i].length > 0)
+                return parts[i]
+        }
+        return path
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -42,7 +62,8 @@ Rectangle {
                     elide: Text.ElideRight
                 }
 
-                Button {
+                ToolButton {
+                    objectName: "bottomContextExpandButton"
                     implicitWidth: 28
                     implicitHeight: 22
                     text: root.expanded ? "-" : "+"
@@ -52,6 +73,8 @@ Rectangle {
         }
 
         Loader {
+            id: summaryLoader
+            objectName: "bottomContextSummaryLoader"
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: root.expanded
@@ -67,88 +90,109 @@ Rectangle {
 
     Component {
         id: objectSummary
-        RowLayout {
+        ColumnLayout {
+            objectName: "objectSummaryRoot"
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 18
+            spacing: 0
 
-            SummaryText { label: "Selection"; value: PropertiesPanelController.hasSelection ? PropertiesPanelController.selectionName : "None" }
-            SummaryText { label: "Scene Nodes"; value: PropertiesPanelController.sceneTreeModel ? PropertiesPanelController.sceneTreeModel.rowCount() : 0 }
-            SummaryText { label: "Primitive"; value: PropertiesPanelController.hasPrimitive ? PropertiesPanelController.primitiveType : "No" }
-            Item { Layout.fillWidth: true }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 18
+
+                SummaryText { label: "Selection"; value: PropertiesPanelController.hasSelection ? PropertiesPanelController.selectionName : "None" }
+                SummaryText { label: "Transform Target"; value: PropertiesPanelController.transformTargetLabel }
+                SummaryText { label: "Scene Nodes"; value: PropertiesPanelController.sceneTreeModel ? PropertiesPanelController.sceneTreeModel.rowCount() : 0 }
+                SummaryText { label: "Primitive"; value: PropertiesPanelController.hasPrimitive ? PropertiesPanelController.primitiveType : "No" }
+                Item { Layout.fillWidth: true }
+            }
         }
     }
 
     Component {
         id: editSummary
-        RowLayout {
+        ColumnLayout {
+            objectName: "editSummaryRoot"
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 18
+            spacing: 0
 
-            SummaryText { label: "Vertices"; value: EditModeController.vertexCount }
-            SummaryText { label: "Triangles"; value: EditModeController.triangleCount }
-            SummaryText { label: "Selected V/E/F"; value: EditModeController.selectedVertexCount + " / " + EditModeController.selectedEdgeCount + " / " + EditModeController.selectedFaceCount }
-            SummaryText { label: "Warnings"; value: EditModeController.hasValidationWarnings ? EditModeController.degenerateTriangleCount : "None" }
-            Item { Layout.fillWidth: true }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 18
+
+                SummaryText { label: "Scope"; value: "Mesh Geometry" }
+                SummaryText { label: "Vertices"; value: EditModeController.vertexCount }
+                SummaryText { label: "Triangles"; value: EditModeController.triangleCount }
+                SummaryText { label: "SubMeshes"; value: EditModeController.subMeshCount }
+                SummaryText { label: "Selected V/E/F"; value: EditModeController.selectedVertexCount + " / " + EditModeController.selectedEdgeCount + " / " + EditModeController.selectedFaceCount }
+                SummaryText { label: "Warnings"; value: EditModeController.hasValidationWarnings ? EditModeController.degenerateTriangleCount : "None" }
+                Item { Layout.fillWidth: true }
+            }
         }
     }
 
     Component {
         id: animationSummary
-        RowLayout {
+        ColumnLayout {
+            objectName: "animationSummaryRoot"
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 14
+            spacing: 0
 
-            SummaryText { label: "Animated"; value: PropertiesPanelController.hasAnimations ? "Available" : "None" }
-            SummaryText { label: "Timeline"; value: AnimationControlController.hasAnimation ? AnimationControlController.selectedAnimation : "No clip" }
-            Button {
-                text: PropertiesPanelController.playing ? "Pause" : "Play"
-                enabled: PropertiesPanelController.hasAnimations
-                onClicked: PropertiesPanelController.playing = !PropertiesPanelController.playing
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 18
+
+                SummaryText { label: "Animated"; value: PropertiesPanelController.hasAnimations ? "Available" : "None" }
+                SummaryText { label: "Clip"; value: AnimationControlController.hasAnimation ? AnimationControlController.selectedAnimation : "No clip" }
+                SummaryText { label: "Bone"; value: AnimationControlController.selectedBone.length > 0 ? AnimationControlController.selectedBone : "None" }
+                SummaryText { label: "Timeline"; value: AnimationControlController.sliderValue / 1000.0 }
+                SummaryText { label: "Playback"; value: PropertiesPanelController.playing ? "Playing" : "Paused" }
+                Item { Layout.fillWidth: true }
             }
-            Item { Layout.fillWidth: true }
         }
     }
 
     Component {
         id: materialSummary
-        RowLayout {
+        ColumnLayout {
+            objectName: "materialSummaryRoot"
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 14
+            spacing: 0
 
-            SummaryText { label: "Selection"; value: PropertiesPanelController.hasSelection ? PropertiesPanelController.selectionName : "None" }
-            Button {
-                text: "Material Editor"
-                onClicked: if (materialEditorAction) materialEditorAction.trigger()
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 18
+
+                SummaryText { label: "Selection"; value: PropertiesPanelController.hasSelection ? PropertiesPanelController.selectionName : "None" }
+                SummaryText { label: "Asset Root"; value: root.rootFolderName() }
+                SummaryText { label: "Files"; value: root.fileSummary() }
+                SummaryText { label: "Editor"; value: PropertiesPanelController.hasSelection ? "Available" : "Select an object" }
+                Item { Layout.fillWidth: true }
             }
-            SummaryText { label: "Presets"; value: PropertiesPanelController.hasSelection ? "Available" : "Select an object" }
-            Item { Layout.fillWidth: true }
         }
     }
 
     Component {
         id: validationSummary
-        RowLayout {
+        ColumnLayout {
+            objectName: "validationSummaryRoot"
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 14
+            spacing: 0
 
-            SummaryText { label: "Selection"; value: MeshValidator.hasSelection ? PropertiesPanelController.selectionName : "None" }
-            SummaryText { label: "Findings"; value: MeshValidator.validated ? MeshValidator.issues.length : "Not run" }
-            Button {
-                text: MeshValidator.validating ? "Validating" : "Validate"
-                enabled: MeshValidator.hasSelection && !MeshValidator.validating
-                onClicked: MeshValidator.validate()
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 18
+
+                SummaryText { label: "Selection"; value: MeshValidator.hasSelection ? PropertiesPanelController.selectionName : "None" }
+                SummaryText { label: "Findings"; value: root.issueSummary() }
+                SummaryText { label: "Fixable"; value: MeshValidator.hasFixableIssues ? "Yes" : "No" }
+                SummaryText { label: "Status"; value: MeshValidator.validating ? "Running" : (MeshValidator.validated ? "Ready" : "Idle") }
+                Item { Layout.fillWidth: true }
             }
-            Button {
-                text: "Fix All"
-                enabled: MeshValidator.hasFixableIssues
-                onClicked: MeshValidator.fixAll()
-            }
-            Item { Layout.fillWidth: true }
         }
     }
 
@@ -172,4 +216,5 @@ Rectangle {
             Layout.maximumWidth: 220
         }
     }
+
 }

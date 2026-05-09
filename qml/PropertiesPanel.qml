@@ -15,6 +15,12 @@ Rectangle {
     readonly property int historyTab: EditorModeController.HistoryTab
     property int currentTab: 0
     property bool showAllModeTools: false
+    property var bottomToolHost: null
+
+    function revealBottomTool(toolId) {
+        if (bottomToolHost && bottomToolHost.revealBottomTool)
+            bottomToolHost.revealBottomTool(toolId)
+    }
 
     function showModeToolsForMode(mode) {
         return EditorModeController.modeHasModeTools(mode)
@@ -273,6 +279,19 @@ Rectangle {
                 expanded: true
 
                 Component.onCompleted: content = editModeToolsComponent
+            }
+
+            CollapsibleSection {
+                title: "Workspace Panels"
+                sectionVisible: root.currentTab === root.modeToolsTab
+                    && (root.showAllModeTools
+                        || EditorModeController.currentMode === EditorModeController.EditMode
+                        || EditorModeController.currentMode === EditorModeController.AnimationMode
+                        || EditorModeController.currentMode === EditorModeController.MaterialMode
+                        || EditorModeController.currentMode === EditorModeController.ValidationMode)
+                expanded: false
+
+                Component.onCompleted: content = workspacePanelsComponent
             }
 
             // ---- Scene Outliner ----
@@ -821,6 +840,54 @@ Rectangle {
         }
     }
 
+    Component {
+        id: workspacePanelsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            Flow {
+                width: parent.width - 16
+                spacing: 6
+
+                ModeToolShortcutButton {
+                    objectName: "workspaceContextButton"
+                    visible: root.showAllModeTools
+                        || EditorModeController.currentMode === EditorModeController.EditMode
+                        || EditorModeController.currentMode === EditorModeController.ValidationMode
+                    text: "Context"
+                    onClicked: root.revealBottomTool("context")
+                }
+
+                ModeToolShortcutButton {
+                    objectName: "workspaceAssetBrowserButton"
+                    visible: root.showAllModeTools
+                        || EditorModeController.currentMode === EditorModeController.MaterialMode
+                    text: "Asset Browser"
+                    onClicked: root.revealBottomTool("assetBrowser")
+                }
+
+                ModeToolShortcutButton {
+                    objectName: "workspaceDopeSheetButton"
+                    visible: root.showAllModeTools
+                        || EditorModeController.currentMode === EditorModeController.AnimationMode
+                    text: "Dope Sheet"
+                    onClicked: root.revealBottomTool("dopeSheet")
+                }
+
+                ModeToolShortcutButton {
+                    objectName: "workspaceCurveEditorButton"
+                    visible: root.showAllModeTools
+                        || EditorModeController.currentMode === EditorModeController.AnimationMode
+                    text: "Curve Editor"
+                    onClicked: root.revealBottomTool("curveEditor")
+                }
+            }
+        }
+    }
+
     // ---- Transform Content ----
     Component {
         id: transformComponent
@@ -932,6 +999,33 @@ Rectangle {
                     }
                 }
             }
+        }
+    }
+
+    component ModeToolShortcutButton: Button {
+        id: shortcutButton
+        implicitHeight: 24
+        implicitWidth: Math.max(92, contentItem.implicitWidth + 18)
+        font.pixelSize: 10
+
+        background: Rectangle {
+            radius: 3
+            color: shortcutButton.down
+                ? Qt.darker(PropertiesPanelController.highlightColor, 1.1)
+                : shortcutButton.hovered
+                    ? Qt.lighter(PropertiesPanelController.inputColor, 1.08)
+                    : PropertiesPanelController.inputColor
+            border.width: 1
+            border.color: PropertiesPanelController.borderColor
+        }
+
+        contentItem: Text {
+            text: shortcutButton.text
+            color: PropertiesPanelController.textColor
+            font: shortcutButton.font
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
         }
     }
 
