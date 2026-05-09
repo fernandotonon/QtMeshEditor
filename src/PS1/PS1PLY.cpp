@@ -17,6 +17,7 @@ The MIT License
 #include <OgrePass.h>
 #include <OgreSubMesh.h>
 #include <OgreTechnique.h>
+#include <OgreAny.h>
 #include <OgreVertexIndexData.h>
 
 #include <QColor>
@@ -386,9 +387,88 @@ static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const Tri
     return mesh;
 }
 
-static bool parsePsyqPlyLines(const QStringList& lines, TriSoup& outSoup, const QVector<QColor>* faceColors)
+static size_t triCountFromPsyqFaceLayout(const std::vector<uint8_t>& layout)
+{
+    size_t t = 0;
+    for (uint8_t c : layout) {
+        if (c == 3)
+            ++t;
+        else if (c == 4)
+            t += 2;
+    }
+    return t;
+}
+
+static std::string serializePsyqPlyFaceLayout(const std::vector<uint8_t>& layout)
+{
+    // Magic "QP1F" + little-endian uint32 count + raw bytes (each 3 or 4).
+    std::string s;
+    s.resize(8 + layout.size());
+    s[0] = 'Q';
+    s[1] = 'P';
+    s[2] = '1';
+    s[3] = 'F';
+    const uint32_t n = static_cast<uint32_t>(layout.size());
+    s[4] = static_cast<char>(n & 0xFF);
+    s[5] = static_cast<char>((n >> 8) & 0xFF);
+    s[6] = static_cast<char>((n >> 16) & 0xFF);
+    s[7] = static_cast<char>((n >> 24) & 0xFF);
+    for (size_t i = 0; i < layout.size(); ++i)
+        s[8 + i] = static_cast<char>(layout[i]);
+    return s;
+}
+
+static bool deserializePsyqPlyFaceLayout(const std::string& blob, std::vector<uint8_t>& outLayout)
+{
+    outLayout.clear();
+    if (blob.size() < 8 || blob[0] != 'Q' || blob[1] != 'P' || blob[2] != '1' || blob[3] != 'F')
+        return false;
+    const uint32_t n = static_cast<uint32_t>(static_cast<uint8_t>(blob[4]))
+                     | (static_cast<uint32_t>(static_cast<uint8_t>(blob[5])) << 8)
+                     | (static_cast<uint32_t>(static_cast<uint8_t>(blob[6])) << 16)
+                     | (static_cast<uint32_t>(static_cast<uint8_t>(blob[7])) << 24);
+    if (blob.size() != 8u + static_cast<size_t>(n))
+        return false;
+    outLayout.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint8_t c = static_cast<uint8_t>(blob[8u + i]);
+        if (c != 3 && c != 4)
+            return false;
+        outLayout[i] = c;
+    }
+    return true;
+}
+
+static bool tryLoadPsyqPlyFaceLayoutFromMesh(const Ogre::MeshPtr& mesh, std::vector<uint8_t>& outLayout)
+{
+    outLayout.clear();
+    if (!mesh)
+        return false;
+    const Ogre::Any& a = mesh->getUserObjectBindings().getUserAny(PS1PLY::kPsyqPlyFaceLayoutUserKey);
+    if (a.isEmpty())
+        return false;
+    try {
+        const std::string& blob = Ogre::any_cast<std::string>(a);
+        return deserializePsyqPlyFaceLayout(blob, outLayout);
+    } catch (...) {
+        return false;
+    }
+}
+
+static void storePsyqPlyFaceLayoutOnMesh(const Ogre::MeshPtr& mesh, const std::vector<uint8_t>& layout)
+{
+    if (!mesh || layout.empty())
+        return;
+    mesh->getUserObjectBindings().setUserAny(PS1PLY::kPsyqPlyFaceLayoutUserKey,
+                                             Ogre::Any(serializePsyqPlyFaceLayout(layout)));
+}
+
+static bool parsePsyqPlyLines(const QStringList& lines, TriSoup& outSoup, const QVector<QColor>* faceColors,
+                              std::vector<uint8_t>* logicalFaceVertCounts = nullptr)
 {
     outSoup = {};
+    if (logicalFaceVertCounts)
+        logicalFaceVertCounts->clear();
     static const QRegularExpression kHeaderRe(QStringLiteral("^@PLY\\d*\\s*$"),
                                              QRegularExpression::CaseInsensitiveOption);
     int idx = 0;
@@ -471,6 +551,8 @@ static bool parsePsyqPlyLines(const QStringList& lines, TriSoup& outSoup, const 
                 return false;
             if (n0 >= nN || n1 >= nN || n2 >= nN)
                 return false;
+            if (logicalFaceVertCounts)
+                logicalFaceVertCounts->push_back(3);
             if (useFaceColors)
                 appendTriMaybeFlipColored(soup, verts, norms, v0, v1, v2, n0, n1, n2, faceRgba);
             else
@@ -489,6 +571,8 @@ static bool parsePsyqPlyLines(const QStringList& lines, TriSoup& outSoup, const 
                 return false;
             if (n0 >= nN || n1 >= nN || n2 >= nN || n3 >= nN)
                 return false;
+            if (logicalFaceVertCounts)
+                logicalFaceVertCounts->push_back(4);
             if (useFaceColors) {
                 appendTriMaybeFlipColored(soup, verts, norms, v0, v1, v2, n0, n1, n2, faceRgba);
                 appendTriMaybeFlipColored(soup, verts, norms, v1, v2, v3, n1, n2, n3, faceRgba);
@@ -530,11 +614,15 @@ static bool parsePsyqPlyLines(const QStringList& lines, TriSoup& outSoup, const 
                 return false;
 
             if (cnt == 3) {
+                if (logicalFaceVertCounts)
+                    logicalFaceVertCounts->push_back(3);
                 if (useFaceColors)
                     appendTriMaybeFlipColored(soup, verts, norms, v0, v1, v2, n0, n1, n2, faceRgba);
                 else
                     appendTri(soup, verts, norms, v0, v1, v2, n0, n1, n2);
             } else {
+                if (logicalFaceVertCounts)
+                    logicalFaceVertCounts->push_back(4);
                 if (useFaceColors) {
                     appendTriMaybeFlipColored(soup, verts, norms, v0, v1, v2, n0, n1, n2, faceRgba);
                     appendTriMaybeFlipColored(soup, verts, norms, v1, v2, v3, n1, n2, n3, faceRgba);
@@ -662,6 +750,79 @@ struct PsyqExportFace {
     bool hasColor = false;
 };
 
+/** Rebuild Psy-Q face list from stored import layout + current welded triangle indices (export order). */
+static bool buildExportFacesFromLayout(const std::vector<uint32_t>& I0,
+                                       const std::vector<uint32_t>& I1,
+                                       const std::vector<uint32_t>& I2,
+                                       const std::vector<uint8_t>& layout,
+                                       const QVector<QColor>* triFaceColors,
+                                       std::vector<PsyqExportFace>& outFaces)
+{
+    outFaces.clear();
+    size_t ti = 0;
+    const bool haveCol = triFaceColors && triFaceColors->size() == static_cast<int>(I0.size());
+
+    for (uint8_t nc : layout) {
+        if (nc == 3) {
+            if (ti >= I0.size())
+                return false;
+            PsyqExportFace f;
+            f.isQuad = false;
+            f.v[0] = I0[ti];
+            f.v[1] = I1[ti];
+            f.v[2] = I2[ti];
+            if (haveCol) {
+                f.color = (*triFaceColors)[static_cast<int>(ti)];
+                f.hasColor = true;
+            }
+            outFaces.push_back(f);
+            ++ti;
+        } else if (nc == 4) {
+            if (ti + 1 >= I0.size())
+                return false;
+            const uint32_t q0 = I0[ti], q1 = I1[ti], q2 = I2[ti];
+            const uint32_t b0 = I0[ti + 1], b1 = I1[ti + 1], b2 = I2[ti + 1];
+            if (q1 == b0 && q2 == b1) {
+                PsyqExportFace f;
+                f.isQuad = true;
+                f.v[0] = q0;
+                f.v[1] = q1;
+                f.v[2] = q2;
+                f.v[3] = b2;
+                if (haveCol) {
+                    const QColor& a = (*triFaceColors)[static_cast<int>(ti)];
+                    const QColor& b = (*triFaceColors)[static_cast<int>(ti + 1)];
+                    f.color = QColor((a.red() + b.red()) / 2, (a.green() + b.green()) / 2, (a.blue() + b.blue()) / 2);
+                    f.hasColor = true;
+                }
+                outFaces.push_back(f);
+            } else {
+                PsyqExportFace t1;
+                t1.isQuad = false;
+                t1.v[0] = q0;
+                t1.v[1] = q1;
+                t1.v[2] = q2;
+                PsyqExportFace t2;
+                t2.isQuad = false;
+                t2.v[0] = b0;
+                t2.v[1] = b1;
+                t2.v[2] = b2;
+                if (haveCol) {
+                    t1.color = (*triFaceColors)[static_cast<int>(ti)];
+                    t1.hasColor = true;
+                    t2.color = (*triFaceColors)[static_cast<int>(ti + 1)];
+                    t2.hasColor = true;
+                }
+                outFaces.push_back(t1);
+                outFaces.push_back(t2);
+            }
+            ti += 2;
+        } else
+            return false;
+    }
+    return ti == I0.size();
+}
+
 static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
                                     const std::vector<uint32_t>& I1,
                                     const std::vector<uint32_t>& I2,
@@ -674,7 +835,7 @@ static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
         return;
 
     std::vector<char> used(n, 0);
-    const float minDot = 0.98f;
+    const float minDot = 0.94f;
     const bool haveTriColors = (triFaceColors && triFaceColors->size() == static_cast<int>(n));
 
     auto triRgb = [&](size_t i) -> QColor {
@@ -750,10 +911,15 @@ Ogre::MeshPtr importPsyqPly(const QString& filePath, const std::string& meshName
     const QString text = QString::fromLatin1(f.readAll());
     const QStringList lines = readNonEmptyLines(text);
     TriSoup soup;
-    if (!parsePsyqPlyLines(lines, soup, nullptr))
+    std::vector<uint8_t> faceLayout;
+    if (!parsePsyqPlyLines(lines, soup, nullptr, &faceLayout))
         return {};
 
-    return buildMeshFromTriSoup(meshName, soup);
+    Ogre::MeshPtr mesh = buildMeshFromTriSoup(meshName, soup);
+    if (mesh && !faceLayout.empty()
+        && triCountFromPsyqFaceLayout(faceLayout) == soup.pos.size() / 3u)
+        storePsyqPlyFaceLayoutOnMesh(mesh, faceLayout);
+    return mesh;
 }
 
 Ogre::MeshPtr importPsyqPlyWithFaceColors(const QString& filePath,
@@ -766,9 +932,14 @@ Ogre::MeshPtr importPsyqPlyWithFaceColors(const QString& filePath,
     const QString text = QString::fromLatin1(f.readAll());
     const QStringList lines = readNonEmptyLines(text);
     TriSoup soup;
-    if (!parsePsyqPlyLines(lines, soup, &faceColors))
+    std::vector<uint8_t> faceLayout;
+    if (!parsePsyqPlyLines(lines, soup, &faceColors, &faceLayout))
         return {};
-    return buildMeshFromTriSoup(meshName, soup);
+    Ogre::MeshPtr mesh = buildMeshFromTriSoup(meshName, soup);
+    if (mesh && !faceLayout.empty()
+        && triCountFromPsyqFaceLayout(faceLayout) == soup.pos.size() / 3u)
+        storePsyqPlyFaceLayoutOnMesh(mesh, faceLayout);
+    return mesh;
 }
 
 bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
@@ -838,6 +1009,11 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
         return false;
     }
 
+    std::vector<uint8_t> meshFaceLayout;
+    const bool haveMeshLayout =
+        (numSub == 1u && tryLoadPsyqPlyFaceLayoutFromMesh(mesh, meshFaceLayout)
+         && triCountFromPsyqFaceLayout(meshFaceLayout) == static_cast<size_t>(totalFaces));
+
     std::vector<Ogre::Vector3> weldedPos;
     std::vector<Ogre::Vector3> weldedNrm;
     weldedPos.reserve(size_t(totalFaces) * 3u);
@@ -861,7 +1037,8 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
         return idx;
     };
 
-    for (SubData& sd : subs) {
+    for (unsigned si = 0; si < subs.size(); ++si) {
+        SubData& sd = subs[si];
         const uint8_t* posBase = static_cast<const uint8_t*>(sd.posBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
         const uint8_t* nrmBase = nullptr;
         if (sd.nrmEl->getSource() == sd.posEl->getSource()) {
@@ -960,11 +1137,16 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
         }
 
         std::vector<PsyqExportFace> subFaces;
-        mergeSubmeshTrisToQuads(smI0, smI1, smI2, weldedPos,
-                                collectFaceColors && smFaceCols.size() == static_cast<int>(smI0.size())
-                                    ? &smFaceCols
-                                    : nullptr,
-                                subFaces);
+        QVector<QColor>* colorMerge =
+            collectFaceColors && smFaceCols.size() == static_cast<int>(smI0.size()) ? &smFaceCols : nullptr;
+
+        if (haveMeshLayout && numSub == 1u && si == 0u
+            && triCountFromPsyqFaceLayout(meshFaceLayout) == smI0.size()) {
+            if (!buildExportFacesFromLayout(smI0, smI1, smI2, meshFaceLayout, colorMerge, subFaces))
+                mergeSubmeshTrisToQuads(smI0, smI1, smI2, weldedPos, colorMerge, subFaces);
+        } else {
+            mergeSubmeshTrisToQuads(smI0, smI1, smI2, weldedPos, colorMerge, subFaces);
+        }
         allExportFaces.insert(allExportFaces.end(), subFaces.begin(), subFaces.end());
 
         ibuf->unlock();
