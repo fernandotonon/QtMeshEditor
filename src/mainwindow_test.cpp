@@ -9,6 +9,7 @@
 #include <QMenuBar>
 #include <QMimeData>
 #include <QMessageBox>
+#include <QQuickItem>
 #include <QQuickWidget>
 #include <QSettings>
 #include <QSignalSpy>
@@ -32,9 +33,11 @@
 #include "TransformOperator.h"
 #include "EditModeController.h"
 #include "EditorModeController.h"
+#include "MeshInfoOverlay.h"
 #include "TestHelpers.h"
 #include "EditorViewport.h"
 #include "ViewportSettingsKeys.h"
+#include "ViewportTitleBar.h"
 #include "OgreWidget.h"
 #include "ui_mainwindow.h"
 
@@ -318,6 +321,74 @@ TEST_F(MainWindowTest, ContextualToolRailButtonsTriggerExistingBottomTools)
     app->processEvents();
     EXPECT_FALSE(window->m_dopeSheetDock->isHidden());
     EXPECT_EQ(window->dockWidgetArea(window->m_dopeSheetDock), Qt::BottomDockWidgetArea);
+}
+
+TEST_F(MainWindowTest, ViewportDisplayActionsLiveInViewMenuNotToolbar)
+{
+    const QList<QAction*> viewMenuActions = window->ui->menuView->actions();
+    EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Grid));
+    EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Normals));
+    EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Mesh_Info));
+    EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_View_Cube));
+
+    const QList<QAction*> topOptionsActions = window->ui->menuOp_es->actions();
+    EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Grid));
+    EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Normals));
+    EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Mesh_Info));
+    EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_View_Cube));
+
+    const QList<QAction*> viewToolbarActions = window->ui->viewToolbar->actions();
+    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_Grid));
+    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_Normals));
+    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_Mesh_Info));
+    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_View_Cube));
+}
+
+TEST_F(MainWindowTest, ViewportTitleBarHostsViewportActions)
+{
+    // The viewport display menu is now embedded in each EditorViewport's
+    // custom title bar instead of a free-floating QQuickWidget. Verify the
+    // title bar exists, exposes G/N/I/C toolbuttons, and that triggering one
+    // propagates to the underlying QAction (and therefore the matching
+    // display state in MainWindow).
+    ASSERT_FALSE(window->mDockWidgetList.isEmpty());
+    EditorViewport* viewport = window->mDockWidgetList.first();
+    ASSERT_NE(viewport, nullptr);
+
+    ViewportTitleBar* titleBar = viewport->titleBarWidgetCustom();
+    ASSERT_NE(titleBar, nullptr);
+    EXPECT_EQ(viewport->titleBarWidget(), titleBar);
+
+    ASSERT_NE(titleBar->gridButton(), nullptr);
+    ASSERT_NE(titleBar->normalsButton(), nullptr);
+    ASSERT_NE(titleBar->meshInfoButton(), nullptr);
+    ASSERT_NE(titleBar->viewCubeButton(), nullptr);
+    ASSERT_NE(titleBar->floatButton(), nullptr);
+    ASSERT_NE(titleBar->closeButton(), nullptr);
+
+    EXPECT_EQ(titleBar->viewCubeButton()->text(), QStringLiteral("C"));
+
+    // Buttons should mirror the QAction's checked state immediately.
+    EXPECT_EQ(titleBar->gridButton()->isChecked(),
+              window->ui->actionShow_Grid->isChecked());
+    EXPECT_EQ(titleBar->viewCubeButton()->isChecked(),
+              window->ui->actionShow_View_Cube->isChecked());
+
+    // The viewport action buttons and recreated dock chrome buttons should
+    // share a visible bordered style so they read as one title-bar group.
+    EXPECT_TRUE(titleBar->gridButton()->styleSheet().contains(QStringLiteral("border: 1px")));
+    EXPECT_TRUE(titleBar->viewCubeButton()->styleSheet().contains(QStringLiteral("border: 1px")));
+    EXPECT_TRUE(titleBar->floatButton()->styleSheet().contains(QStringLiteral("border: 1px")));
+    EXPECT_TRUE(titleBar->closeButton()->styleSheet().contains(QStringLiteral("border: 1px")));
+
+    window->ui->actionShow_Mesh_Info->setChecked(false);
+    titleBar->meshInfoButton()->click();
+    app->processEvents();
+
+    EXPECT_TRUE(window->ui->actionShow_Mesh_Info->isChecked());
+    ASSERT_NE(window->m_meshInfoOverlay, nullptr);
+    EXPECT_TRUE(window->m_meshInfoOverlay->isVisible());
+    EXPECT_TRUE(titleBar->meshInfoButton()->isChecked());
 }
 
 // ---- Cycle all transform states via keyboard ----

@@ -21,6 +21,7 @@ SkeletonDebug.cpp
 SkeletonTransform.cpp
 MeshImporterExporter.cpp
 EditorViewport.cpp
+ViewportTitleBar.cpp
 RotationGizmo.cpp
 TranslationGizmo.cpp
 ScaleGizmo.cpp
@@ -111,6 +112,7 @@ SkeletonDebug.h
 SkeletonTransform.h
 MeshImporterExporter.h
 EditorViewport.h
+ViewportTitleBar.h
 RotationGizmo.h
 TranslationGizmo.h
 ScaleGizmo.h

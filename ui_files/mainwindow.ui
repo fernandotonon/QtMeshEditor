@@ -61,6 +61,12 @@
      <addaction name="actionTools_Toolbar"/>
      <addaction name="actionView_Toolbar"/>
      <addaction name="actionMeshEditor"/>
+     <addaction name="separator"/>
+     <addaction name="actionShow_Grid"/>
+     <addaction name="actionShow_Normals"/>
+     <addaction name="actionShow_Mesh_Info"/>
+     <addaction name="actionShow_View_Cube"/>
+     <addaction name="separator"/>
      <addaction name="actionAsset_Browser"/>
     </widget>
     <widget class="QMenu" name="menuViewport_Layout">
@@ -80,10 +86,6 @@
      <addaction name="actionDark"/>
      <addaction name="actionCustom"/>
     </widget>
-    <addaction name="actionShow_Grid"/>
-    <addaction name="actionShow_Normals"/>
-    <addaction name="actionShow_Mesh_Info"/>
-    <addaction name="actionShow_View_Cube"/>
     <addaction name="actionChange_Ambient_Light"/>
     <addaction name="actionChange_BG_Color"/>
     <addaction name="menuView"/>
@@ -180,10 +182,6 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-   <addaction name="actionShow_Grid"/>
-   <addaction name="actionShow_Normals"/>
-   <addaction name="actionShow_Mesh_Info"/>
-   <addaction name="actionShow_View_Cube"/>
   </widget>
   <widget class="QDockWidget" name="meshEditorWidget">
    <property name="sizePolicy">

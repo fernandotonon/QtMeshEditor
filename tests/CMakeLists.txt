@@ -31,6 +31,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonTransform.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshImporterExporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorViewport.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportTitleBar.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RotationGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TranslationGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScaleGizmo.cpp
@@ -124,6 +125,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonTransform.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshImporterExporter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorViewport.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportTitleBar.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RotationGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TranslationGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScaleGizmo.h

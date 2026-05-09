@@ -20,6 +20,7 @@
 #include <QJSEngine>
 #include <QQuickWindow>
 #include <QFileInfo>
+#include <QEvent>
 #include "SentryReporter.h"
 #include <QDialog>
 #include <QProgressDialog>
@@ -1508,10 +1509,10 @@ void MainWindow::initToolBar()
     connect(m_viewCubeController, &ViewCubeController::visibilityChanged, ui->actionShow_View_Cube, &QAction::setChecked);
 
     // Connect viewports created before the ViewCube existed
-    for (EditorViewport* vp : mDockWidgetList)
-        connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget, this, [this](OgreWidget* w) {
-            m_viewCubeController->setActiveWidget(w);
-        });
+    for (EditorViewport* vp : mDockWidgetList) {
+        connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget,
+                m_viewCubeController, &ViewCubeController::setActiveWidget);
+    }
 
     // Activate the first viewport, then set visible
     // (setActiveWidget emits visibilityChanged which checks isVisible(),
@@ -1701,25 +1702,29 @@ void MainWindow::createModeSurfaces()
         });
     }
 
-    if (!ui->toolToolbar->findChild<QToolButton*>(QStringLiteral("viewportOptionsButton"))) {
-        auto* viewportOptionsButton = new QToolButton(ui->toolToolbar);
-        viewportOptionsButton->setObjectName("viewportOptionsButton");
-        viewportOptionsButton->setText(tr("Viewport"));
-        viewportOptionsButton->setToolTip(tr("Viewport display options"));
-        viewportOptionsButton->setPopupMode(QToolButton::InstantPopup);
-
-        auto* viewportOptionsMenu = new QMenu(viewportOptionsButton);
-        viewportOptionsMenu->addAction(ui->actionShow_Grid);
-        viewportOptionsMenu->addAction(ui->actionShow_Normals);
-        viewportOptionsMenu->addAction(ui->actionShow_Mesh_Info);
-        viewportOptionsMenu->addAction(ui->actionShow_View_Cube);
-        viewportOptionsButton->setMenu(viewportOptionsMenu);
-        ui->toolToolbar->addWidget(viewportOptionsButton);
-    }
-
     QSignalBlocker blocker(ui->actionView_Toolbar);
     ui->actionView_Toolbar->setChecked(false);
     ui->viewToolbar->hide();
+}
+
+QAction* MainWindow::actionShowGrid() const
+{
+    return ui ? ui->actionShow_Grid : nullptr;
+}
+
+QAction* MainWindow::actionShowNormals() const
+{
+    return ui ? ui->actionShow_Normals : nullptr;
+}
+
+QAction* MainWindow::actionShowMeshInfo() const
+{
+    return ui ? ui->actionShow_Mesh_Info : nullptr;
+}
+
+QAction* MainWindow::actionShowViewCube() const
+{
+    return ui ? ui->actionShow_View_Cube : nullptr;
 }
 
 void MainWindow::configureBottomToolDock(QDockWidget* dock)
@@ -2318,6 +2323,11 @@ void MainWindow::resizeEvent(QResizeEvent *event)
         repositionWelcomeScreen();
 }
 
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    return QMainWindow::eventFilter(watched, event);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 // LCOV_EXCL_START — opens QFileDialog
 void MainWindow::on_actionImport_triggered()
@@ -2796,9 +2806,8 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
     if (m_meshInfoOverlay)
         connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);
     if (m_viewCubeController)
-        connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget, this, [this](OgreWidget* w) {
-            m_viewCubeController->setActiveWidget(w);
-        });
+        connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget,
+                m_viewCubeController, &ViewCubeController::setActiveWidget);
 
     if(!mDockWidgetList.isEmpty())
     {

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QPaintEvent>
 #include <QSignalSpy>
 #include <QThread>
 #include <QStyleFactory>
@@ -89,6 +90,14 @@ protected:
 QApplication* EditorViewportTest::app = nullptr;
 MainWindow* EditorViewportTest::mainWindow = nullptr;
 
+namespace {
+class PaintableEditorViewport : public EditorViewport {
+public:
+    using EditorViewport::EditorViewport;
+    using EditorViewport::paintEvent;
+};
+}
+
 TEST_F(EditorViewportTest, ConstructionWithIndex) {
     EditorViewport viewport(mainWindow, 5);
     EXPECT_EQ(viewport.getIndex(), 5);
@@ -111,6 +120,19 @@ TEST_F(EditorViewportTest, GetOgreWidgetReturnsValid) {
     EditorViewport viewport(mainWindow, 0);
     OgreWidget* ogreWidget = viewport.getOgreWidget();
     EXPECT_NE(ogreWidget, nullptr);
+}
+
+TEST_F(EditorViewportTest, PaintEventDoesNotOverridePaletteForFocusedViewport) {
+    PaintableEditorViewport viewport(mainWindow, 0);
+    QPalette markerPalette = viewport.palette();
+    markerPalette.setColor(QPalette::Window, QColor(12, 34, 56));
+    viewport.setPalette(markerPalette);
+
+    QPaintEvent paintEvent(viewport.rect());
+    viewport.paintEvent(&paintEvent);
+
+    EXPECT_EQ(viewport.palette().color(QPalette::Window), QColor(12, 34, 56));
+    EXPECT_NE(viewport.palette().color(QPalette::Window), QColor(0, 255, 127));
 }
 
 TEST_F(EditorViewportTest, WidgetAboutToCloseSignalEmitted) {
