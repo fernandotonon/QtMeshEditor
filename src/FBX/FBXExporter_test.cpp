@@ -2656,5 +2656,15 @@ TEST_F(FBXExporterCoverageTest, PbrSlotConnections_DispatchToFbxPropertyNames) {
     EXPECT_TRUE(seenProps.count("Maya|TEX_emissive_map") > 0)
         << "emissive slot must connect under Maya|TEX_emissive_map";
 
+    // Round-trip parity: the albedo texture must ALSO emit a DiffuseColor
+    // connection so Assimp's reimporter populates aiTextureType_DIFFUSE
+    // alongside aiTextureType_BASE_COLOR — matching the slot ordering of
+    // a first-import (where the same texture appears under both legacy
+    // DIFFUSE and BASE_COLOR), so `diffuse_map` lands at TUS index 0
+    // instead of `albedo`.
+    EXPECT_TRUE(seenProps.count("DiffuseColor") > 0)
+        << "albedo slot must also connect under DiffuseColor for first-"
+           "import slot ordering parity";
+
     cleanup(r);
 }

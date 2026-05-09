@@ -174,6 +174,172 @@ TEST(MaterialProcessorTest, ProcessMaterialKeepsDefaultAmbientWhenAmbientIsBlack
     EXPECT_GT(a.b, 0.9f);
 }
 
+// Slot-ordering parity regression: an FBX with BASE_COLOR + METALNESS +
+// DIFFUSE_ROUGHNESS (our slice-F4 export) must produce the same TUS order
+// as an FBX with only DIFFUSE + METALNESS + SHININESS (typical third-party
+// PBR FBX): albedo last, after metallic/roughness.
+TEST(MaterialProcessorTest, ProcessMaterialPbrSlotOrderingParityWithLegacyFbx) {
+    auto ogreRoot = std::make_unique<Ogre::Root>();
+    ensureMaterialManagerInitialised();
+
+    auto& texMgr = Ogre::TextureManager::getSingleton();
+    auto ensureTex = [&](const std::string& n) {
+        if (!texMgr.getByName(n))
+            texMgr.createManual(n,
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                Ogre::TEX_TYPE_2D, 1, 1, 0, Ogre::PF_R8G8B8);
+    };
+    ensureTex("base_color.png");
+    ensureTex("metallic.png");
+    ensureTex("roughness.png");
+
+    auto buildAndProcess = [&](const std::string& matName,
+                               bool withBaseColor) {
+        MaterialProcessor proc;
+        aiScene scene{};
+        aiMaterial mat;
+        aiString nm(matName);
+        mat.AddProperty(&nm, AI_MATKEY_NAME);
+
+        aiString base; base.Set("base_color.png");
+        // Both files have a DiffuseColor connection.
+        mat.AddProperty(&base, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, 0));
+        if (withBaseColor) {
+            // Simulate our re-exported FBX which also writes Maya|TEX_color_map.
+            mat.AddProperty(&base, AI_MATKEY_TEXTURE(aiTextureType_BASE_COLOR, 0));
+        }
+
+        aiString metal; metal.Set("metallic.png");
+        mat.AddProperty(&metal, AI_MATKEY_TEXTURE(aiTextureType_METALNESS, 0));
+
+        aiString rough; rough.Set("roughness.png");
+        if (withBaseColor) {
+            mat.AddProperty(&rough, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE_ROUGHNESS, 0));
+        } else {
+            mat.AddProperty(&rough, AI_MATKEY_TEXTURE(aiTextureType_SHININESS, 0));
+        }
+
+        return proc.processMaterial(&mat, &scene);
+    };
+
+    auto legacy = buildAndProcess("PbrLegacyOrdering", /*withBaseColor=*/false);
+    auto reExport = buildAndProcess("PbrReExportOrdering", /*withBaseColor=*/true);
+    ASSERT_TRUE(legacy);
+    ASSERT_TRUE(reExport);
+
+    auto slotNames = [](Ogre::MaterialPtr m) {
+        std::vector<std::string> names;
+        auto* p = m->getTechnique(0)->getPass(0);
+        for (unsigned short i = 0; i < p->getNumTextureUnitStates(); ++i)
+            names.push_back(p->getTextureUnitState(i)->getName());
+        return names;
+    };
+
+    auto legacyNames = slotNames(legacy);
+    auto reExportNames = slotNames(reExport);
+
+    EXPECT_EQ(legacyNames, reExportNames)
+        << "Slot ordering must be identical for legacy and re-export FBX layouts";
+    // Albedo must be the LAST slot in both cases (matches third-party
+    // PBR FBX layout), not the first.
+    ASSERT_FALSE(legacyNames.empty());
+    EXPECT_EQ(legacyNames.back(), "albedo")
+        << "albedo must be the last TUS to match third-party FBX ordering";
+}
+
+TEST(MaterialProcessorTest, ProcessMaterialPbrAlbedoWithBlackDiffuseForcesWhiteForFFP) {
+    // PBR-FBX round-trip regression: when a reimported FBX has BASE_COLOR
+    // (slice F4 export uses Maya|TEX_color_map) but no legacy DIFFUSE,
+    // the `albedo` slot becomes the first FFP-eligible TUS. PBR exporters
+    // typically write DiffuseColor=(0,0,0), so the FFP modulate
+    // (texture × diffuse) used to produce a near-black surface even
+    // though the texture itself was correct. The importer must force
+    // pass->diffuse to white in this case so the texture passes through.
+    auto ogreRoot = std::make_unique<Ogre::Root>();
+    ensureMaterialManagerInitialised();
+
+    // Pre-register a texture so bindPbrSlot's getByName lookup succeeds
+    // without hitting the real filesystem.
+    const std::string texName = "albedo_pbr_roundtrip.png";
+    auto& texMgr = Ogre::TextureManager::getSingleton();
+    if (!texMgr.getByName(texName)) {
+        texMgr.createManual(texName,
+                            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                            Ogre::TEX_TYPE_2D, 1, 1, 0, Ogre::PF_R8G8B8);
+    }
+
+    MaterialProcessor processor;
+    aiScene scene{};
+    aiMaterial material;
+    aiString matName(std::string("MaterialProcessorPbrAlbedoBlackDiffuse"));
+    material.AddProperty(&matName, AI_MATKEY_NAME);
+
+    // Black diffuse colour — typical of PBR FBX writers.
+    aiColor3D diffuseBlack(0.0f, 0.0f, 0.0f);
+    material.AddProperty(&diffuseBlack, 1, AI_MATKEY_COLOR_DIFFUSE);
+
+    // BASE_COLOR set, legacy DIFFUSE texture NOT set — this is the
+    // round-trip case. Use Set() to dodge the "most vexing parse" trap.
+    aiString basePath; basePath.Set(texName);
+    material.AddProperty(&basePath, AI_MATKEY_TEXTURE(aiTextureType_BASE_COLOR, 0));
+
+    Ogre::MaterialPtr out = processor.processMaterial(&material, &scene);
+    ASSERT_TRUE(out);
+
+    Ogre::Pass* pass = out->getTechnique(0)->getPass(0);
+    ASSERT_NE(pass, nullptr);
+
+    // Albedo slot must exist; diffuse_map slot must NOT exist.
+    EXPECT_NE(pass->getTextureUnitState("albedo"), nullptr);
+    EXPECT_EQ(pass->getTextureUnitState("diffuse_map"), nullptr);
+
+    // Black DiffuseColor was bumped to white so FFP modulate doesn't
+    // crush the texture to near-black.
+    auto d = pass->getDiffuse();
+    EXPECT_GT(d.r, 0.99f) << "Diffuse R should be ~1 to pass texture through";
+    EXPECT_GT(d.g, 0.99f);
+    EXPECT_GT(d.b, 0.99f);
+}
+
+TEST(MaterialProcessorTest, ProcessMaterialPbrAlbedoWithUserTintPreservesTint) {
+    // Inverse of the previous test: when the user (or DCC) wrote a real
+    // non-black DiffuseColor alongside BASE_COLOR, that tint must NOT
+    // be overwritten — it represents an intentional artist choice.
+    auto ogreRoot = std::make_unique<Ogre::Root>();
+    ensureMaterialManagerInitialised();
+
+    const std::string texName = "albedo_with_tint.png";
+    auto& texMgr = Ogre::TextureManager::getSingleton();
+    if (!texMgr.getByName(texName)) {
+        texMgr.createManual(texName,
+                            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                            Ogre::TEX_TYPE_2D, 1, 1, 0, Ogre::PF_R8G8B8);
+    }
+
+    MaterialProcessor processor;
+    aiScene scene{};
+    aiMaterial material;
+    aiString matName(std::string("MaterialProcessorPbrAlbedoTintedDiffuse"));
+    material.AddProperty(&matName, AI_MATKEY_NAME);
+
+    aiColor3D tinted(0.5f, 0.7f, 0.3f);
+    material.AddProperty(&tinted, 1, AI_MATKEY_COLOR_DIFFUSE);
+
+    aiString basePath; basePath.Set(texName);
+    material.AddProperty(&basePath, AI_MATKEY_TEXTURE(aiTextureType_BASE_COLOR, 0));
+
+    Ogre::MaterialPtr out = processor.processMaterial(&material, &scene);
+    ASSERT_TRUE(out);
+
+    Ogre::Pass* pass = out->getTechnique(0)->getPass(0);
+    ASSERT_NE(pass, nullptr);
+
+    auto d = pass->getDiffuse();
+    EXPECT_NEAR(d.r, 0.5f, 1e-4f);
+    EXPECT_NEAR(d.g, 0.7f, 1e-4f);
+    EXPECT_NEAR(d.b, 0.3f, 1e-4f);
+}
+
 TEST(MaterialProcessorTest, ProcessMaterialReturnsExistingMaterialIfAlreadyCreated) {
     auto ogreRoot = std::make_unique<Ogre::Root>();
     ensureMaterialManagerInitialised();

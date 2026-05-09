@@ -45,11 +45,19 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     if(materialName.empty()) materialName="importedMaterial" + std::to_string(materials.size());
 
     if(auto existingMaterial = Ogre::MaterialManager::getSingleton().getByName(materialName)) {
-        // Material already exists (e.g. from a .material script), but still apply
-        // normal maps from Assimp if present, since scripts rarely include RTSS directives.
+        // Material already exists (e.g. from a .material script, or from
+        // a previous import in the same session). Apply Assimp data on
+        // top — but only ADD what the existing material is missing,
+        // never replace TUS that are already there. Scripts win for slots
+        // they explicitly define, and Assimp augments with the rest.
+        Ogre::Pass* xPass = ensureFirstPass(existingMaterial);
+        if (!xPass) return existingMaterial;
+
+        // Normal map (legacy DIFFUSE/HEIGHT/NORMAL_CAMERA path → RTSS).
         aiString existingNormalPath;
-        if(AI_SUCCESS == material->GetTexture(aiTextureType_NORMALS, 0, &existingNormalPath)
-           || AI_SUCCESS == material->GetTexture(aiTextureType_HEIGHT, 0, &existingNormalPath)) {
+        if(AI_SUCCESS == material->GetTexture(aiTextureType_NORMALS,       0, &existingNormalPath)
+           || AI_SUCCESS == material->GetTexture(aiTextureType_HEIGHT,        0, &existingNormalPath)
+           || AI_SUCCESS == material->GetTexture(aiTextureType_NORMAL_CAMERA, 0, &existingNormalPath)) {
             std::string normalTexPath = existingNormalPath.C_Str();
             std::string normalFilename = normalTexPath.substr(normalTexPath.find_last_of("/\\") + 1);
             Ogre::TexturePtr normalTexPtr = Ogre::TextureManager::getSingleton().getByName(normalFilename);
@@ -62,12 +70,54 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
             }
             if(normalTexPtr) {
                 Ogre::LogManager::getSingleton().logMessage("MaterialProcessor: Applying RTSS normal map '" + normalFilename + "' to existing material '" + materialName + "'");
-                // Some materials can exist without any techniques/passes (e.g. partially loaded
-                // script materials). Ensure a valid pass exists before RTSS touches it.
-                (void)ensureFirstPass(existingMaterial);
                 applyRTSSNormalMap(existingMaterial, normalTexPtr->getName());
             }
         }
+
+        // PBR slots: add any that are missing on the existing material.
+        // Without this, reimporting an FBX whose material already exists
+        // (e.g. from a previous import in this session) would leave the
+        // PBR slots stale — pointing at the texture pointers from the
+        // first import — and the embedded reimport textures would never
+        // bind, producing the user-visible "different from original"
+        // shading on round-tripped FBXes.
+        auto addMissingSlot = [&](aiTextureType type, const std::string& slotName) {
+            if (xPass->getTextureUnitState(slotName)) return;
+            aiString p;
+            if (material->GetTexture(type, 0, &p) != AI_SUCCESS) return;
+            std::string sp = p.C_Str();
+            std::string fn = sp.substr(sp.find_last_of("/\\") + 1);
+            if (fn.empty()) return;
+            Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().getByName(fn);
+            if (!tex) {
+                try { tex = loadTexture(fn, p, scene); }
+                catch (...) { return; }
+            }
+            if (!tex) return;
+            auto* tus = xPass->createTextureUnitState(tex->getName());
+            tus->setName(slotName);
+            if (slotName != "albedo"
+                && Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+                Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
+            }
+        };
+        addMissingSlot(aiTextureType_METALNESS,          "metallic");
+        addMissingSlot(aiTextureType_DIFFUSE_ROUGHNESS,  "roughness");
+        if (!xPass->getTextureUnitState("roughness"))
+            addMissingSlot(aiTextureType_SHININESS,      "roughness");
+        addMissingSlot(aiTextureType_AMBIENT_OCCLUSION,  "ao");
+        addMissingSlot(aiTextureType_EMISSIVE,           "emissive");
+        if (!xPass->getTextureUnitState("emissive"))
+            addMissingSlot(aiTextureType_EMISSION_COLOR, "emissive");
+        addMissingSlot(aiTextureType_BASE_COLOR,         "albedo");
+
+        // Wire FFP slot operations on the augmented material so the
+        // newly-added PBR TUS render the same as they would after a
+        // no-op Apply in the Material Editor (matches the new-material
+        // path's behaviour at the bottom of this function).
+        RTShaderHelper::wirePbrSlotsForFFP(existingMaterial.get());
+        existingMaterial->compile();
+
         return existingMaterial;
     }
 
@@ -115,10 +165,17 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         tus->setName("diffuse_map");
     }
 
-    // Handle normal maps via RTSS (check NORMALS first, then HEIGHT as fallback for Blender exports)
+    // Handle normal maps via RTSS. Probe in order:
+    //   NORMALS         — generic "NormalMap" property (most exporters)
+    //   HEIGHT          — Blender's older bump/normal output
+    //   NORMAL_CAMERA   — Assimp routes Maya|TEX_normal_map here on FBX
+    //                     reimport, so this lets a Maya-Stingray-styled
+    //                     FBX round-trip its normal map back into our
+    //                     RTSS pipeline.
     aiString normalPath;
-    bool hasNormalMap = (AI_SUCCESS == material->GetTexture(aiTextureType_NORMALS, 0, &normalPath))
-                     || (AI_SUCCESS == material->GetTexture(aiTextureType_HEIGHT, 0, &normalPath));
+    bool hasNormalMap = (AI_SUCCESS == material->GetTexture(aiTextureType_NORMALS,       0, &normalPath))
+                     || (AI_SUCCESS == material->GetTexture(aiTextureType_HEIGHT,        0, &normalPath))
+                     || (AI_SUCCESS == material->GetTexture(aiTextureType_NORMAL_CAMERA, 0, &normalPath));
     if(hasNormalMap) {
         std::string normalTexPath = normalPath.C_Str();
         std::string normalFilename = normalTexPath.substr(normalTexPath.find_last_of("/\\") + 1);
@@ -196,26 +253,42 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         }
     }
 
+    // Order matters: we want the final TUS layout to match what a typical
+    // first-import of a third-party PBR FBX produces, which is
+    // [diffuse_map, normal_map(RTSS), metallic, roughness, ao, emissive, albedo].
+    // Most third-party exporters use ReflectionFactor / ShininessExponent
+    // (no Maya|TEX_color_map), so on first-import BASE_COLOR is missing and
+    // `albedo` is created last via the diffuse_map alias fallback. To make
+    // re-imports of our own export look identical, we add the BASE_COLOR
+    // albedo slot at the very end too.
     bool gotPbrMap = false;
-    gotPbrMap |= bindPbrSlot(aiTextureType_BASE_COLOR,         "albedo");
     gotPbrMap |= bindPbrSlot(aiTextureType_METALNESS,          "metallic");
     // Probe both DIFFUSE_ROUGHNESS and SHININESS — different exporters
-    // (Blender vs. native FBX SDK) use one or the other. UNKNOWN is the
-    // catch-all Assimp uses when an FBX texture's role isn't recognised.
+    // (Blender vs. native FBX SDK, vs. Maya Stingray) use one or the other.
     gotPbrMap |= bindPbrSlot(aiTextureType_DIFFUSE_ROUGHNESS,  "roughness");
-    if (!gotPbrMap || !pass->getTextureUnitState("roughness")) {
-        bindPbrSlot(aiTextureType_SHININESS, "roughness");
+    if (!pass->getTextureUnitState("roughness")) {
+        gotPbrMap |= bindPbrSlot(aiTextureType_SHININESS, "roughness");
     }
     gotPbrMap |= bindPbrSlot(aiTextureType_AMBIENT_OCCLUSION,  "ao");
+    // EMISSIVE vs. EMISSION_COLOR: Assimp's FBXConverter routes
+    // Maya|TEX_emissive_map to aiTextureType_EMISSION_COLOR (not EMISSIVE).
     gotPbrMap |= bindPbrSlot(aiTextureType_EMISSIVE,           "emissive");
+    if (!pass->getTextureUnitState("emissive"))
+        gotPbrMap |= bindPbrSlot(aiTextureType_EMISSION_COLOR, "emissive");
 
-    // Fallback: if no BASE_COLOR was found but a legacy diffuse_map
-    // exists (created by the DIFFUSE branch above), reuse its texture
-    // for the albedo slot. We don't create a duplicate TUS — instead
-    // we add a second alias slot pointing at the same texture, so the
-    // existing FFP texturing chain still works. This is what most
-    // PBR-aware DCCs do when round-tripping FBX↔glTF.
-    if (!hasAlbedoSlot && gotPbrMap) {
+    // Albedo last — this matches the slot layout produced when a FBX
+    // exposes only DiffuseColor (no Maya|TEX_color_map): the legacy
+    // DIFFUSE branch creates `diffuse_map` first, then we synthesise an
+    // `albedo` alias at the end. Doing the same for FBXes that DO carry
+    // BASE_COLOR keeps the post-import material identical regardless of
+    // how the file was authored.
+    gotPbrMap |= bindPbrSlot(aiTextureType_BASE_COLOR,         "albedo");
+
+    // Fallback: if no BASE_COLOR was exposed but a legacy diffuse_map was
+    // created above, alias diffuse_map's texture into the canonical
+    // `albedo` slot so PBR-aware tooling (templates, Cook-Torrance) finds
+    // it. Most third-party PBR FBX exporters only emit DiffuseColor.
+    if (!hasAlbedoSlot && !pass->getTextureUnitState("albedo")) {
         for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
             auto* tus = pass->getTextureUnitState(i);
             if (tus->getName() == "diffuse_map" && !tus->getTextureName().empty()) {
@@ -226,6 +299,26 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
                 }
                 break;
             }
+        }
+    }
+
+    // PBR-FBX round-trip fix: when the source FBX exposes BASE_COLOR but
+    // no legacy DIFFUSE (which is what our slice F4 export does, and what
+    // most PBR-authored FBX files do), the `albedo` slot becomes the
+    // first FFP-eligible TUS. FFP texturing modulates that against
+    // `pass->diffuse`, but PBR exporters routinely write
+    // `DiffuseColor = (0,0,0)` because in PBR the base colour comes from
+    // the texture, not the material colour. The result was a near-black
+    // surface on reimport even though the texture itself was correct.
+    //
+    // If we have an albedo slot, no diffuse_map slot, and the imported
+    // diffuse colour is essentially black, force it to white so the FFP
+    // modulate passes the texture through unchanged. A user-set tint
+    // (anything above the epsilon) is preserved.
+    if (hasAlbedoSlot && !pass->getTextureUnitState("diffuse_map")) {
+        const auto d = pass->getDiffuse();
+        if (d.r < 0.001f && d.g < 0.001f && d.b < 0.001f) {
+            pass->setDiffuse(1.0f, 1.0f, 1.0f, d.a);
         }
     }
 
@@ -241,6 +334,17 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     // and the rendered material continues using the legacy FFP diffuse
     // path (correct on-import visuals).
     (void)gotPbrMap;
+
+    // Wire the slice E PBR slot colour-ops + non-FFP markers. Without
+    // this, the freshly imported material renders darker than after a
+    // no-op "Apply" in the Material Editor, because the editor calls
+    // wirePbrSlotsForFFP on apply but the importer didn't. The albedo
+    // slot gets explicit LBX_MODULATE so it acts as the visible base
+    // colour; metallic/roughness/ao/emissive get their FFP approximation
+    // ops; non-albedo slots are marked non-FFP so RTSS rebuilds without
+    // them in the FFP chain.
+    RTShaderHelper::wirePbrSlotsForFFP(ogreMaterial.get());
+    ogreMaterial->compile();
 
     return ogreMaterial;
 }
