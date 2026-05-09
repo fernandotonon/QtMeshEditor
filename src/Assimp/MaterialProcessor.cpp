@@ -172,7 +172,11 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         // Mark non-FFP for everything except albedo. Albedo modulates
         // with the existing diffuse layer naturally; the others would
         // stack as garbage layers and darken the visible surface.
-        if (slotName != "albedo") {
+        // Guard the call: in unit-test fixtures only MaterialManager is
+        // initialised — Ogre::RTShader::ShaderGenerator hasn't been set
+        // up, and _markNonFFP segfaults on the missing singleton there.
+        if (slotName != "albedo"
+            && Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
             Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
         }
         return true;
@@ -217,7 +221,9 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
             if (tus->getName() == "diffuse_map" && !tus->getTextureName().empty()) {
                 auto* alb = pass->createTextureUnitState(tus->getTextureName());
                 alb->setName("albedo");
-                Ogre::RTShader::ShaderGenerator::_markNonFFP(alb);
+                if (Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+                    Ogre::RTShader::ShaderGenerator::_markNonFFP(alb);
+                }
                 break;
             }
         }
