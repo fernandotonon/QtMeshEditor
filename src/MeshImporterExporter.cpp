@@ -86,7 +86,17 @@ const QMap<QString, QString> MeshImporterExporter::exportFormats = {
 
 void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
 {
-    Ogre::Real size = std::max(std::max(en->getBoundingBox().getSize().y,en->getBoundingBox().getSize().x),en->getBoundingBox().getSize().z)    ;
+    // Use the WORLD-space bbox so the camera distance accounts for any
+    // scale applied to the parent SceneNode (e.g. the auto-scale fix
+    // in importer() for sub-unit meshes). Without `derive=true` we'd
+    // read mesh-local bbox sizes — fine for sensible-scale assets, but
+    // for an auto-scaled mm-unit FBX the local bbox is still ~5 mm and
+    // the camera would land at distance ~0, leaving the camera inside
+    // the enlarged mesh and the near-clip plane. (Codex review on PR #456.)
+    const Ogre::AxisAlignedBox worldBb = en->getWorldBoundingBox(/*derive=*/true);
+    const auto worldSize = worldBb.getSize();
+    Ogre::Real size = std::max({worldSize.x, worldSize.y, worldSize.z});
+
     auto cameras = Manager::getSingleton()->getSceneMgr()->getCameras();
     for(const auto &[_, camera] : cameras)
     {
