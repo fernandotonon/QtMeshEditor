@@ -1563,9 +1563,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     }
                 }
 
-                // Final fallback: if MAT exists but we couldn't parse it and the mesh is still effectively untextured,
-                // force a simple unlit textured material so the asset isn't black/blank.
-                if (!firstTimResource.isEmpty() && rsdMaterialFromScript.isEmpty() && !matPath.isEmpty() && QFileInfo::exists(matPath)) {
+                // Final fallback: if MAT exists but we couldn't parse it (no script, no per-face colours) and the mesh
+                // is still effectively untextured, force a simple unlit textured material so the asset isn't blank.
+                if (!firstTimResource.isEmpty() && rsdMaterialFromScript.isEmpty() && rsdFaceColors.isEmpty()
+                    && !matPath.isEmpty() && QFileInfo::exists(matPath)) {
                     applyTextureMaterialToEntity(const_cast<Ogre::Entity*>(en),
                                                       QStringLiteral("PS1/RSD/") + file.baseName(),
                                                       firstTimResource);

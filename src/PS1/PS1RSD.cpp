@@ -18,6 +18,9 @@ The MIT License
 
 namespace {
 
+// Cap sparse TEX[n] indices so a hostile file cannot force huge QStringList allocations.
+constexpr int kMaxTexSlotIndex = 256;
+
 static bool isCommentLine(const QString& s)
 {
     const QString t = s.trimmed();
@@ -98,7 +101,7 @@ bool parseRsdFile(const QString& rsdPath, RsdDescriptor& out, QString* outError)
             if (ok) out.ntex = n;
         } else if (kUpper.startsWith(QStringLiteral("TEX["))) {
             const int idx = parseTexIndex(key);
-            if (idx < 0) {
+            if (idx < 0 || idx >= kMaxTexSlotIndex) {
                 // Keep but append in order encountered.
                 out.textures << value;
             } else {
@@ -147,16 +150,18 @@ bool writeRsdFile(const QString& rsdPath, const RsdDescriptor& desc, QString* ou
     if (!desc.grpPath.trimmed().isEmpty())
         ts << "GRP=" << desc.grpPath.trimmed() << "\n";
 
-    const QStringList tex = desc.textures;
-    const int ntex = desc.ntex >= 0 ? desc.ntex : tex.size();
-    if (ntex > 0 || !tex.isEmpty()) {
+    QStringList texNonEmpty;
+    texNonEmpty.reserve(desc.textures.size());
+    for (const QString& t : desc.textures) {
+        const QString v = t.trimmed();
+        if (!v.isEmpty())
+            texNonEmpty.push_back(v);
+    }
+    const int ntex = texNonEmpty.size();
+    if (ntex > 0) {
         ts << "NTEX=" << ntex << "\n";
-        for (int i = 0; i < tex.size(); ++i) {
-            const QString v = tex[i].trimmed();
-            if (v.isEmpty())
-                continue;
-            ts << "TEX[" << i << "]=" << v << "\n";
-        }
+        for (int i = 0; i < texNonEmpty.size(); ++i)
+            ts << "TEX[" << i << "]=" << texNonEmpty[i] << "\n";
     }
 
     if (ts.status() != QTextStream::Ok) {

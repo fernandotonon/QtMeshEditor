@@ -40,7 +40,8 @@ bool parseMatFile(const QString& matPath, QVector<MatEntry>& outEntries, QString
     for (int i = 0; i < lines.size(); ++i) {
         const QString t = lines[i].trimmed();
         if (t.startsWith('@')) {
-            sawHeader = true;
+            if (t.startsWith(QStringLiteral("@MAT"), Qt::CaseInsensitive))
+                sawHeader = true;
             continue;
         }
         if (isSkippable(t))
@@ -86,6 +87,14 @@ bool parseMatFile(const QString& matPath, QVector<MatEntry>& outEntries, QString
 
     if (outEntries.isEmpty()) {
         if (outError) *outError = QStringLiteral("No material entries parsed.");
+        return false;
+    }
+
+    if (outEntries.size() < expected) {
+        if (outError)
+            *outError = QStringLiteral("Parsed %1 of %2 material entries.")
+                            .arg(outEntries.size())
+                            .arg(expected);
         return false;
     }
 

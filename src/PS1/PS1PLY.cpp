@@ -682,8 +682,10 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
     triI0.reserve(totalFaces);
     triI1.reserve(totalFaces);
     triI2.reserve(totalFaces);
-    if (outFaceColors)
+    if (outFaceColors) {
         outFaceColors->clear();
+        outFaceColors->reserve(static_cast<int>(totalFaces));
+    }
 
     auto weldCorner = [&](const Ogre::Vector3& p, const Ogre::Vector3& n, int32_t crgba) -> uint32_t {
         const WeldKey key{quantizeWorld(p.x), quantizeWorld(p.y), quantizeWorld(p.z),
@@ -776,13 +778,9 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
             triI2.push_back(w2);
 
             if (outFaceColors && sd.colEl && colBase) {
-                Ogre::RGBA* cp = nullptr;
-                sd.colEl->baseVertexPointerToElement(const_cast<uint8_t*>(colBase + size_t(i0) * sd.colStride), &cp);
-                const Ogre::ColourValue cv0 = decodePackedColour(sd.colEl, *cp);
-                sd.colEl->baseVertexPointerToElement(const_cast<uint8_t*>(colBase + size_t(i1) * sd.colStride), &cp);
-                const Ogre::ColourValue cv1 = decodePackedColour(sd.colEl, *cp);
-                sd.colEl->baseVertexPointerToElement(const_cast<uint8_t*>(colBase + size_t(i2) * sd.colStride), &cp);
-                const Ogre::ColourValue cv2 = decodePackedColour(sd.colEl, *cp);
+                const Ogre::ColourValue cv0 = decodePackedColour(sd.colEl, static_cast<Ogre::RGBA>(c0));
+                const Ogre::ColourValue cv1 = decodePackedColour(sd.colEl, static_cast<Ogre::RGBA>(c1));
+                const Ogre::ColourValue cv2 = decodePackedColour(sd.colEl, static_cast<Ogre::RGBA>(c2));
                 const Ogre::ColourValue ca((cv0.r + cv1.r + cv2.r) / 3.0f,
                                            (cv0.g + cv1.g + cv2.g) / 3.0f,
                                            (cv0.b + cv1.b + cv2.b) / 3.0f,
