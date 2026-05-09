@@ -32,8 +32,8 @@ static void ensureBaseMaterialForPlyImport()
     }
     Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().create(
         "BaseMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    m->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
-    m->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1, 1);
+    m->getTechnique(0)->getPass(0)->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+    m->getTechnique(0)->getPass(0)->setAmbient(1.0f, 1.0f, 1.0f);
 }
 
 /** Two triangles (0,1,2) and (1,2,3) — PS1 quad split; flat +Z normal. */
