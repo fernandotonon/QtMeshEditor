@@ -171,10 +171,117 @@ void RTShaderHelper::shutdown(Ogre::SceneManager* sceneMgr)
     }
 }
 
+namespace {
+
+/// Look up the slice E `pbr_workflow` user-binding key on a pass and
+/// return the workflow string ("metallic_roughness", "specular_glossiness",
+/// "unlit") or empty if absent. Mirrors the key constant defined in
+/// MaterialPresetLibrary.h without taking a header dependency on it.
+constexpr const char* kPbrWorkflowKey = "pbr_workflow";
+
+Ogre::String readPbrWorkflowTag(const Ogre::Pass* pass)
+{
+    if (!pass) return {};
+    const auto& bindings = pass->getUserObjectBindings();
+    auto any = bindings.getUserAny(kPbrWorkflowKey);
+    if (!any.has_value()) return {};
+    try { return Ogre::any_cast<Ogre::String>(any); }
+    catch (...) { return {}; }
+}
+
+/// Find the texture name on a TUS slot by name. Returns empty if the
+/// slot doesn't exist or has no texture set.
+Ogre::String textureOnSlot(const Ogre::Pass* pass, const Ogre::String& slotName)
+{
+    if (!pass) return {};
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        const auto* tus = pass->getTextureUnitState(i);
+        if (tus->getName() == slotName)
+            return tus->getTextureName();
+    }
+    return {};
+}
+
+bool hasNamedTUS(const Ogre::Pass* pass, const Ogre::String& slotName)
+{
+    if (!pass) return false;
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        if (pass->getTextureUnitState(i)->getName() == slotName)
+            return true;
+    }
+    return false;
+}
+
+/// MaterialSerializer does NOT serialize Pass::UserObjectBindings, so the
+/// pbr_workflow tag is lost on script round-trip (e.g., user edits the
+/// material text and clicks Apply). Fall back to detecting PBR layout by
+/// the canonical slot names: a pass with all 6 named slots is treated as
+/// metallic-roughness PBR.
+bool detectMetallicRoughnessByLayout(const Ogre::Pass* pass)
+{
+    return hasNamedTUS(pass, "albedo")
+        && hasNamedTUS(pass, "normal_map")
+        && hasNamedTUS(pass, "metallic")
+        && hasNamedTUS(pass, "roughness")
+        && hasNamedTUS(pass, "ao")
+        && hasNamedTUS(pass, "emissive");
+}
+
+bool isMetallicRoughnessMaterial(const Ogre::MaterialPtr& mat)
+{
+    if (!mat || mat->getNumTechniques() == 0) return false;
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    const Ogre::String tag = readPbrWorkflowTag(pass);
+    return tag == "metallic_roughness"
+        || (tag.empty() && detectMetallicRoughnessByLayout(pass));
+}
+
+} // namespace
+
 void RTShaderHelper::applyNormalMap(Ogre::MaterialPtr& mat, const std::string& normalMapTexName)
 {
     auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
     if (!shaderGen) return;
+
+    // Slice F2: when the material is PBR-tagged (or matches the PBR
+    // layout), defer to applyPbrIfTagged so the normal map is composed
+    // with SRS_COOK_TORRANCE_LIGHTING in a single render-state cycle.
+    // Without this redirect, applyNormalMap's resetToBuiltinSubRenderStates
+    // would replace the Cook-Torrance SRS, dropping PBR shading whenever
+    // a normal map gets re-applied (e.g. on import or material text edit).
+    //
+    // Two carve-outs covered here:
+    //   1. The caller may have passed a `normalMapTexName` (e.g. Assimp
+    //      import discovering a normal texture before any TUS holds it).
+    //      Seed the empty `normal_map` slot with that texture so
+    //      applyPbrIfTagged picks it up via textureOnSlot.
+    //   2. applyPbrIfTagged can return false (SRS unavailable, render
+    //      state missing, etc.). In that case we MUST fall through to
+    //      the legacy SRS_NORMALMAP path, otherwise PBR-tagged materials
+    //      silently lose all normal-map detail when Cook-Torrance can't
+    //      be attached.
+    if (isMetallicRoughnessMaterial(mat) && mat->getNumTechniques() > 0) {
+        if (!normalMapTexName.empty()) {
+            auto* pbrPass = mat->getTechnique(0)->getPass(0);
+            for (unsigned short i = 0; i < pbrPass->getNumTextureUnitStates(); ++i) {
+                auto* tus = pbrPass->getTextureUnitState(i);
+                const auto& n = tus->getName();
+                if ((n == "normal_map" || n == "NormalMap") && tus->getTextureName().empty()) {
+                    tus->setTextureName(normalMapTexName);
+                    break;
+                }
+            }
+        }
+        if (applyPbrIfTagged(mat)) {
+            return;
+        }
+        // applyPbrIfTagged failed (e.g., Cook-Torrance SRS unavailable).
+        // Fall through to the legacy path so the user at least gets
+        // normal-map shading.
+        Ogre::LogManager::getSingleton().logMessage(
+            "RTShaderHelper: PBR composition failed for '" + mat->getName() +
+            "' — falling back to plain SRS_NORMALMAP wiring");
+    }
 
     try {
         // Verify the normal map texture is registered (exists in any resource group).
@@ -327,66 +434,6 @@ void RTShaderHelper::applyNormalMap(Ogre::MaterialPtr& mat, const std::string& n
 
 // LCOV_EXCL_STOP
 
-namespace {
-
-/// Look up the slice E `pbr_workflow` user-binding key on a pass and
-/// return the workflow string ("metallic_roughness", "specular_glossiness",
-/// "unlit") or empty if absent. Mirrors the key constant defined in
-/// MaterialPresetLibrary.h without taking a header dependency on it.
-constexpr const char* kPbrWorkflowKey = "pbr_workflow";
-
-Ogre::String readPbrWorkflowTag(const Ogre::Pass* pass)
-{
-    if (!pass) return {};
-    const auto& bindings = pass->getUserObjectBindings();
-    auto any = bindings.getUserAny(kPbrWorkflowKey);
-    if (!any.has_value()) return {};
-    try { return Ogre::any_cast<Ogre::String>(any); }
-    catch (...) { return {}; }
-}
-
-/// Find the texture name on a TUS slot by name. Returns empty if the
-/// slot doesn't exist or has no texture set.
-Ogre::String textureOnSlot(const Ogre::Pass* pass, const Ogre::String& slotName)
-{
-    if (!pass) return {};
-    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
-        const auto* tus = pass->getTextureUnitState(i);
-        if (tus->getName() == slotName)
-            return tus->getTextureName();
-    }
-    return {};
-}
-
-bool hasNamedTUS(const Ogre::Pass* pass, const Ogre::String& slotName)
-{
-    if (!pass) return false;
-    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
-        if (pass->getTextureUnitState(i)->getName() == slotName)
-            return true;
-    }
-    return false;
-}
-
-/// MaterialSerializer does NOT serialize Pass::UserObjectBindings, so the
-/// pbr_workflow tag is lost on script round-trip (e.g., user edits the
-/// material text and clicks Apply). Fall back to detecting PBR layout by
-/// the canonical slot names: a pass with all 6 named slots is treated as
-/// metallic-roughness PBR. Slice F2 may add an explicit serialized signal
-/// (script-level extension or material-name convention) — for now this
-/// keeps the text-edit path working.
-bool detectMetallicRoughnessByLayout(const Ogre::Pass* pass)
-{
-    return hasNamedTUS(pass, "albedo")
-        && hasNamedTUS(pass, "normal_map")
-        && hasNamedTUS(pass, "metallic")
-        && hasNamedTUS(pass, "roughness")
-        && hasNamedTUS(pass, "ao")
-        && hasNamedTUS(pass, "emissive");
-}
-
-} // namespace
-
 bool RTShaderHelper::applyPbrIfTagged(Ogre::MaterialPtr& mat)
 {
     if (!mat || mat->getNumTechniques() == 0) return false;
@@ -465,8 +512,6 @@ bool RTShaderHelper::applyPbrIfTagged(Ogre::MaterialPtr& mat)
 
         // Reset to built-in SRSes so we don't accumulate stale state
         // (e.g., a previous SRS_NORMALMAP with a different texture_index).
-        // We add SRS_COOK_TORRANCE_LIGHTING explicitly; the normal-map
-        // SRS is added separately by applyNormalMap when called.
         renderState->resetToBuiltinSubRenderStates();
 
         auto* pbrSRS = shaderGen->createSubRenderState(
@@ -493,6 +538,41 @@ bool RTShaderHelper::applyPbrIfTagged(Ogre::MaterialPtr& mat)
 
         renderState->addTemplateSubRenderState(pbrSRS);
 
+        // Slice F2: chain SRS_NORMALMAP when the pass has a `normal_map`
+        // TUS with a texture set, so PBR materials with normal maps get
+        // both effects. NormalMapLighting's getExecutionOrder is
+        // FFP_LIGHTING - 1, so it runs before Cook-Torrance and supplies
+        // the per-pixel normal that Cook-Torrance will then sample.
+        // Without this, a PBR-tagged material with a normal map gets only
+        // the Cook-Torrance shader (no per-pixel normal) — the previous
+        // applyNormalMap call's render-state was reset above.
+        const Ogre::String normalMapTexName = textureOnSlot(srcPass, "normal_map");
+        if (!normalMapTexName.empty()) {
+            // Find the slot index for the SRS's texture_index parameter.
+            int16_t normalMapIdx = -1;
+            for (unsigned short i = 0; i < srcPass->getNumTextureUnitStates(); ++i) {
+                const auto& n = srcPass->getTextureUnitState(i)->getName();
+                if (n == "normal_map" || n == "NormalMap") {
+                    normalMapIdx = static_cast<int16_t>(i);
+                    break;
+                }
+            }
+            if (normalMapIdx >= 0) {
+                // Mark the normal-map TUS non-FFP so the FFP texturing
+                // chain doesn't sample it as a regular diffuse layer.
+                Ogre::RTShader::ShaderGenerator::_markNonFFP(
+                    srcPass->getTextureUnitState(normalMapIdx));
+
+                auto* normalSRS = shaderGen->createSubRenderState(
+                    Ogre::RTShader::SRS_NORMALMAP);
+                if (normalSRS) {
+                    normalSRS->setParameter("texture_index",
+                                            std::to_string(normalMapIdx));
+                    renderState->addTemplateSubRenderState(normalSRS);
+                }
+            }
+        }
+
         shaderGen->invalidateMaterial(
             Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, mat->getName());
         shaderGen->validateMaterial(
@@ -500,7 +580,8 @@ bool RTShaderHelper::applyPbrIfTagged(Ogre::MaterialPtr& mat)
 
         Ogre::LogManager::getSingleton().logMessage(
             "RTShaderHelper: PBR (Cook-Torrance) applied to '" + mat->getName() +
-            (mrTexName.empty() ? "' [no MR texture]" : "' tex='" + mrTexName + "'"));
+            (mrTexName.empty() ? "' [no MR texture]" : "' tex='" + mrTexName + "'") +
+            (normalMapTexName.empty() ? "" : " + normal map '" + normalMapTexName + "'"));
         return true;
     } catch (const Ogre::Exception& e) {
         Ogre::LogManager::getSingleton().logMessage(
