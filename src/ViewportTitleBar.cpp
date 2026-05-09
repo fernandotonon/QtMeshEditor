@@ -38,13 +38,14 @@ THE SOFTWARE.
 #include <QToolButton>
 
 namespace {
-constexpr int kBarHeight        = 20;
+constexpr int kBarHeight        = 15;
 constexpr int kButtonWidth      = 22;
-constexpr int kButtonHeight     = 18;
-constexpr int kIconButtonWidth  = 20;
+constexpr int kButtonHeight     = 13;
+constexpr int kIconButtonWidth  = 16;
 constexpr int kHorizontalMargin = 4;
 constexpr int kButtonSpacing    = 2;
 constexpr int kLabelFontDelta   = -1; ///< px shrink off default font for compactness
+constexpr int kViewportButtonFontPixelSize = 8;
 
 const char* kTitleButtonStyle = R"(
     QToolButton {
@@ -173,6 +174,9 @@ QToolButton* ViewportTitleBar::makeActionButton(QAction* action,
     button->setToolButtonStyle(Qt::ToolButtonTextOnly);
     button->setStyleSheet(QString::fromLatin1(kTitleButtonStyle));
     button->setToolTip(action->toolTip().isEmpty() ? action->text() : action->toolTip());
+    QFont buttonFont = button->font();
+    buttonFont.setPixelSize(kViewportButtonFontPixelSize);
+    button->setFont(buttonFont);
 
     // Mirror the QAction state — we deliberately do NOT use `setDefaultAction`
     // because that would also adopt the action's full text/icon and override

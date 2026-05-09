@@ -8,6 +8,8 @@
 #include <exception>
 #include <OgreException.h>
 #include "EditorViewport.h"
+#include "ViewportTitleBar.h"
+#include "OgreWidget.h"
 #include "mainwindow.h"
 #include "Manager.h"
 #include "TestHelpers.h"
@@ -133,6 +135,25 @@ TEST_F(EditorViewportTest, PaintEventDoesNotOverridePaletteForFocusedViewport) {
 
     EXPECT_EQ(viewport.palette().color(QPalette::Window), QColor(12, 34, 56));
     EXPECT_NE(viewport.palette().color(QPalette::Window), QColor(0, 255, 127));
+}
+
+TEST_F(EditorViewportTest, OgreWidgetStartsFlushBelowTitleBar)
+{
+    EditorViewport viewport(mainWindow, 0);
+    viewport.resize(640, 360);
+    viewport.show();
+    app->processEvents();
+
+    auto* titleBar = viewport.titleBarWidgetCustom();
+    auto* ogreWidget = viewport.getOgreWidget();
+    ASSERT_NE(titleBar, nullptr);
+    ASSERT_NE(ogreWidget, nullptr);
+
+    const QRect titleGeom = titleBar->geometry();
+    const QRect ogreGeom = ogreWidget->geometry();
+    const int seamOffset = ogreGeom.top() - (titleGeom.bottom() + 1);
+
+    EXPECT_LE(std::abs(seamOffset), 2);
 }
 
 TEST_F(EditorViewportTest, WidgetAboutToCloseSignalEmitted) {

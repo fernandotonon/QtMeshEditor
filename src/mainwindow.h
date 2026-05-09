@@ -128,6 +128,7 @@ public:
     QAction* actionShowNormals() const;
     QAction* actionShowMeshInfo() const;
     QAction* actionShowViewCube() const;
+    Q_INVOKABLE void revealBottomTool(const QString& toolId);
 
 private:
     Ui::MainWindow *ui;
