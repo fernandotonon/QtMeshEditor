@@ -25,14 +25,10 @@ The MIT License
  * 1=quad) with separate normal indices.
  *
  * Rendering: Ogre stores triangle index buffers, so quads from a PLY are expanded to
- * two triangles at import. The original face layout (triangle vs quad) is stored on
- * the mesh (see kPsyqPlyFaceLayoutUserKey) so Psy-Q export can write quad lines back
- * without guessing from topology.
+ * two triangles at import. Polygon topology (tri/quad and higher) is written with
+ * the same `qtme.faces.<i>` n-gon binding as FBX (see EditableMesh / HalfEdgeMesh).
  */
 namespace PS1PLY {
-
-/// Ogre::Mesh UserObjectBindings key: std::string blob (see PS1PLY.cpp) listing 3 or 4 per logical face.
-inline constexpr const char kPsyqPlyFaceLayoutUserKey[] = "qtme.psyq_ply_face_layout";
 
 /// Uniform scale for RSD sidecar Psy-Q PLY geometry (kept at 1× so ring-style assets stay editor-sized).
 constexpr float kPsyqPlyEditorUniformScale = 1.0f;
@@ -47,9 +43,9 @@ Ogre::MeshPtr importPsyqPlyWithFaceColors(const QString& filePath,
                                          const QVector<QColor>& faceColors);
 
 /// Export an Ogre entity as Psy-Q PLY. Welds corners that share the same quantized
-/// position, normal, and (if present) vertex colour. If the mesh has kPsyqPlyFaceLayoutUserKey
-/// from a prior Psy-Q import and triangle order still matches, quad face records (type 1)
-/// are written from that layout; otherwise coplanar triangle pairs are merged heuristically.
+/// position, normal, and (if present) vertex colour. For a single submesh, if
+/// `readNgonFacesFromMesh` finds `qtme.faces.0`, Psy-Q face lines follow those polygons
+/// (tri / quad / n-gon fanned to tris); otherwise coplanar triangle pairs are merged heuristically.
 /// If outFaceColors is provided and vertex colours exist on all submeshes, one RGB per
 /// written face is filled (for a MAT sidecar).
 bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,

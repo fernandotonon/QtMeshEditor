@@ -310,8 +310,8 @@ bool readNgonFacesFromMesh(const Ogre::Mesh* mesh,
     try {
         outFaces = Ogre::any_cast<NgonFaceList>(any);
     } catch (const Ogre::Exception&) {
-        // Wrong payload type stored under our key — bail out, exporter
-        // will fall back to the triangle index buffer.
+        return false;
+    } catch (const std::bad_cast&) {
         return false;
     }
     return !outFaces.empty();
