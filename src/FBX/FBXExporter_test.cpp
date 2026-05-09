@@ -2587,3 +2587,70 @@ TEST_F(FBXExporterCoverageTest, VerticesZMirrored_WithNonZeroZ) {
 
     cleanup(r);
 }
+
+// Slice F4: PBR slot names dispatch to FBX property names
+//
+// FBXExporter writes Texture→Material connections with a property name
+// at properties[3] of each "OP" connection. Before slice F4 every TUS
+// that wasn't named "normal_map" got "DiffuseColor" — so a material
+// with metallic / roughness / ao / emissive textures round-tripped as
+// 4 competing diffuse channels and the user only got the first one
+// back on reimport. This test rebuilds a textured mesh, renames its
+// TUSes to the slice E canonical PBR slot names + adds extras for the
+// other slots, exports, and asserts each slot's texture pairs with
+// the correct FBX property name in Connections.
+TEST_F(FBXExporterCoverageTest, PbrSlotConnections_DispatchToFbxPropertyNames) {
+    auto name = uniqueName("pbrcon");
+    auto* entity = createTexturedMesh(name);
+    ASSERT_NE(entity, nullptr);
+
+    // Replace the single diffuse TUS with the 6 canonical PBR slots.
+    // Each one references a distinct texture filename so we can match
+    // texture↔property in the parsed Connections section.
+    auto mat = entity->getSubEntity(0)->getMaterial();
+    ASSERT_TRUE(bool(mat));
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    pass->removeAllTextureUnitStates();
+    auto bind = [&](const std::string& slot, const std::string& tex) {
+        auto* tus = pass->createTextureUnitState(tex);
+        tus->setName(slot);
+    };
+    bind("albedo",     "albedo_tex.png");
+    bind("normal_map", "normal_tex.png");
+    bind("metallic",   "metallic_tex.png");
+    bind("roughness",  "roughness_tex.png");
+    bind("ao",         "ao_tex.png");
+    bind("emissive",   "emissive_tex.png");
+    mat->compile();
+
+    auto r = exportAndParse(entity);
+    ASSERT_TRUE(r.success);
+
+    auto* conn = findTopLevel(r.nodes, "Connections");
+    ASSERT_NE(conn, nullptr);
+    auto cNodes = conn->findAll("C");
+
+    // Collect all OP connections' FBX property names.
+    std::set<std::string> seenProps;
+    for (const auto* c : cNodes) {
+        if (c->properties.size() < 4) continue;
+        if (c->properties[0].stringVal != "OP") continue;
+        seenProps.insert(c->properties[3].stringVal);
+    }
+
+    // Each slice E canonical slot must dispatch to its own FBX property.
+    EXPECT_TRUE(seenProps.count("DiffuseColor") > 0)
+        << "albedo slot must connect under DiffuseColor";
+    EXPECT_TRUE(seenProps.count("NormalMap") > 0)
+        << "normal_map slot must connect under NormalMap";
+    EXPECT_TRUE(seenProps.count("Metallic") > 0)
+        << "metallic slot must connect under Metallic — re-import otherwise sees DiffuseColor";
+    EXPECT_TRUE(seenProps.count("DiffuseRoughness") > 0)
+        << "roughness slot must connect under DiffuseRoughness";
+    EXPECT_TRUE(seenProps.count("AmbientColor") > 0)
+        << "ao slot must connect under AmbientColor";
+    EXPECT_TRUE(seenProps.count("EmissiveColor") > 0)
+        << "emissive slot must connect under EmissiveColor";
+
+    cleanup(r);
+}

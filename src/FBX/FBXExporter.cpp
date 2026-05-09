@@ -1901,10 +1901,37 @@ private:
                     {
                         auto* tus = pass->getTextureUnitState(ti);
                         std::string texName = tus->getTextureName();
-                        if (!texName.empty()) {
-                            std::string fbxProp = (tus->getName() == "normal_map") ? "NormalMap" : "DiffuseColor";
-                            texMatPairs.insert({texName, mat->getName(), fbxProp});
+                        if (texName.empty()) continue;
+                        // Map slice E canonical PBR slot names to FBX 7.x
+                        // material property names so re-importers
+                        // (Assimp, Blender, Maya, Unity FBX SDK) bind the
+                        // textures to the right Assimp aiTextureType_*
+                        // on read. Without this, all PBR maps collapsed
+                        // under DiffuseColor and only the diffuse came
+                        // back on round-trip — slice F4 fixes that.
+                        const std::string& slot = tus->getName();
+                        std::string fbxProp = "DiffuseColor"; // legacy fallback
+                        if (slot == "normal_map" || slot == "NormalMap") {
+                            fbxProp = "NormalMap";
+                        } else if (slot == "albedo") {
+                            // Standard FBX has no separate BaseColor — use
+                            // DiffuseColor (PBR-aware re-importers like
+                            // Assimp's FBX reader expose it as both
+                            // aiTextureType_DIFFUSE and BASE_COLOR).
+                            fbxProp = "DiffuseColor";
+                        } else if (slot == "metallic") {
+                            // Stingray PBS / Autodesk PBR property name.
+                            fbxProp = "Metallic";
+                        } else if (slot == "roughness") {
+                            fbxProp = "DiffuseRoughness";
+                        } else if (slot == "ao") {
+                            fbxProp = "AmbientColor";
+                        } else if (slot == "emissive") {
+                            fbxProp = "EmissiveColor";
                         }
+                        // Anything else (e.g. user-renamed slot) → keep
+                        // DiffuseColor so it round-trips visibly.
+                        texMatPairs.insert({texName, mat->getName(), fbxProp});
                     }
                 }
             }
