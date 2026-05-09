@@ -38,8 +38,10 @@ Ogre::MeshPtr importPsyqPlyWithFaceColors(const QString& filePath,
                                          const std::string& meshName,
                                          const QVector<QColor>& faceColors);
 
-/// Export an Ogre entity as Psy-Q PLY. If outFaceColors is provided and vertex colours exist,
-/// one averaged RGB entry per written face is appended (for writing a MAT sidecar).
+/// Export an Ogre entity as Psy-Q PLY. Welds corners that share the same quantized
+/// position, normal, and (if present) vertex colour, then merges coplanar triangle pairs
+/// into quad face records (type 1) where possible. If outFaceColors is provided and vertex
+/// colours exist on all submeshes, one RGB per written face is filled (for a MAT sidecar).
 bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                              const QString& plyPath,
                              QVector<QColor>* outFaceColors = nullptr,

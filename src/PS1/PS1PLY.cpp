@@ -25,8 +25,10 @@ The MIT License
 #include <QStringConverter>
 #include <QTextStream>
 
+#include <array>
 #include <cmath>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -35,6 +37,39 @@ struct TriSoup {
     std::vector<Ogre::Vector3> pos;
     std::vector<Ogre::Vector3> nrm;
     std::vector<Ogre::RGBA> col; // optional; if present must match pos size
+};
+
+static int32_t quantizeWorld(Ogre::Real v)
+{
+    return static_cast<int32_t>(std::lround(double(v) * 100000.0));
+}
+
+struct WeldKey {
+    int32_t px, py, pz, nx, ny, nz;
+    int32_t crgba;
+
+    bool operator==(const WeldKey& o) const
+    {
+        return px == o.px && py == o.py && pz == o.pz && nx == o.nx && ny == o.ny && nz == o.nz && crgba == o.crgba;
+    }
+};
+
+struct WeldKeyHash {
+    size_t operator()(const WeldKey& k) const noexcept
+    {
+        size_t h = 1469598103934665603ull;
+        auto mix = [&](int32_t x) {
+            h ^= static_cast<size_t>(static_cast<uint32_t>(x)) * 1099511628211ull;
+        };
+        mix(k.px);
+        mix(k.py);
+        mix(k.pz);
+        mix(k.nx);
+        mix(k.ny);
+        mix(k.nz);
+        mix(k.crgba);
+        return h;
+    }
 };
 
 static void applyPlyImportWorldTransform(Ogre::Vector3& p)
@@ -213,6 +248,43 @@ static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const Tri
         return {};
     const bool haveColors = (!soup.col.empty() && soup.col.size() == soup.pos.size());
 
+    std::vector<Ogre::Vector3> uniqPos;
+    std::vector<Ogre::Vector3> uniqNrm;
+    std::vector<Ogre::RGBA> uniqCol;
+    std::vector<uint32_t> indices;
+    uniqPos.reserve(soup.pos.size());
+    uniqNrm.reserve(soup.nrm.size());
+    indices.reserve(soup.pos.size());
+    if (haveColors)
+        uniqCol.reserve(soup.pos.size());
+
+    std::unordered_map<WeldKey, uint32_t, WeldKeyHash> cornerWeld;
+    cornerWeld.reserve(soup.pos.size() / 2);
+
+    for (size_t i = 0; i < soup.pos.size(); ++i) {
+        int32_t crgba = 0;
+        if (haveColors)
+            crgba = static_cast<int32_t>(soup.col[i]);
+        const WeldKey key{quantizeWorld(soup.pos[i].x), quantizeWorld(soup.pos[i].y), quantizeWorld(soup.pos[i].z),
+                          quantizeWorld(soup.nrm[i].x), quantizeWorld(soup.nrm[i].y), quantizeWorld(soup.nrm[i].z),
+                          crgba};
+        const auto it = cornerWeld.find(key);
+        if (it == cornerWeld.end()) {
+            const uint32_t ni = static_cast<uint32_t>(uniqPos.size());
+            cornerWeld.emplace(key, ni);
+            uniqPos.push_back(soup.pos[i]);
+            uniqNrm.push_back(soup.nrm[i]);
+            if (haveColors)
+                uniqCol.push_back(soup.col[i]);
+            indices.push_back(ni);
+        } else
+            indices.push_back(it->second);
+    }
+
+    const size_t nVert = uniqPos.size();
+    const size_t nIdx = indices.size();
+    const size_t nTri = nIdx / 3;
+
     if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
         Ogre::MeshManager::getSingleton().remove(old);
 
@@ -231,7 +303,6 @@ static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const Tri
     sm->setMaterialName(Ogre::MaterialManager::getSingleton().getByName(plyMatName) ? plyMatName : "BaseMaterial");
     sm->useSharedVertices = false;
 
-    const size_t nVert = soup.pos.size();
     sm->vertexData = new Ogre::VertexData();
     sm->vertexData->vertexCount = static_cast<uint32_t>(nVert);
     auto* decl = sm->vertexData->vertexDeclaration;
@@ -253,17 +324,17 @@ static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const Tri
         uint8_t* row = dst + i * vsize;
         float* pf = nullptr;
         decl->findElementBySemantic(Ogre::VES_POSITION)->baseVertexPointerToElement(row, &pf);
-        pf[0] = soup.pos[i].x;
-        pf[1] = soup.pos[i].y;
-        pf[2] = soup.pos[i].z;
+        pf[0] = uniqPos[i].x;
+        pf[1] = uniqPos[i].y;
+        pf[2] = uniqPos[i].z;
         decl->findElementBySemantic(Ogre::VES_NORMAL)->baseVertexPointerToElement(row, &pf);
-        pf[0] = soup.nrm[i].x;
-        pf[1] = soup.nrm[i].y;
-        pf[2] = soup.nrm[i].z;
+        pf[0] = uniqNrm[i].x;
+        pf[1] = uniqNrm[i].y;
+        pf[2] = uniqNrm[i].z;
         if (haveColors) {
             Ogre::RGBA* cp = nullptr;
             decl->findElementBySemantic(Ogre::VES_DIFFUSE)->baseVertexPointerToElement(row, (void**)&cp);
-            *cp = soup.col[i];
+            *cp = uniqCol[i];
         }
     }
     vbuf->unlock();
@@ -276,7 +347,6 @@ static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const Tri
             if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
                 Ogre::Pass* p0 = mat->getTechnique(0)->getPass(0);
                 if (p0) {
-                    // Lighting ON by default; vertex colors (if present) modulate diffuse/ambient.
                     p0->setLightingEnabled(true);
                     p0->setAmbient(1.0f, 1.0f, 1.0f);
                     p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
@@ -288,20 +358,19 @@ static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const Tri
     } catch (...) {
     }
 
-    const size_t nTri = nVert / 3;
     const bool use32 = nVert > 65535;
     auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
-        use32 ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT, nTri * 3,
+        use32 ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT, nIdx,
         Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
     if (use32) {
         auto* ip = static_cast<uint32_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for (size_t i = 0; i < nVert; ++i)
-            ip[i] = static_cast<uint32_t>(i);
+        for (size_t i = 0; i < nIdx; ++i)
+            ip[i] = indices[i];
         ibuf->unlock();
     } else {
         auto* ip = static_cast<uint16_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for (size_t i = 0; i < nVert; ++i)
-            ip[i] = static_cast<uint16_t>(i);
+        for (size_t i = 0; i < nIdx; ++i)
+            ip[i] = static_cast<uint16_t>(indices[i]);
         ibuf->unlock();
     }
     sm->indexData->indexBuffer = ibuf;
@@ -309,7 +378,7 @@ static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const Tri
     sm->indexData->indexStart = 0;
 
     Ogre::AxisAlignedBox bounds;
-    for (const auto& v : soup.pos)
+    for (const auto& v : uniqPos)
         bounds.merge(v);
     mesh->_setBounds(bounds);
     mesh->_setBoundingSphereRadius(bounds.getHalfSize().length());
@@ -527,38 +596,136 @@ static Ogre::ColourValue decodePackedColour(const Ogre::VertexElement* colEl, Og
     return cv;
 }
 
-static int32_t quantizeWorld(Ogre::Real v)
+static Ogre::Vector3 triFaceNormalWelded(const Ogre::Vector3& p0, const Ogre::Vector3& p1, const Ogre::Vector3& p2)
 {
-    return static_cast<int32_t>(std::lround(double(v) * 100000.0));
+    Ogre::Vector3 n = (p1 - p0).crossProduct(p2 - p0);
+    const float len = n.normalise();
+    if (len <= 1e-20f)
+        return Ogre::Vector3::ZERO;
+    return n;
 }
 
-struct WeldKey {
-    int32_t px, py, pz, nx, ny, nz;
-    int32_t crgba; // raw packed diffuse, or 0 if mesh has no per-vertex colour
+static bool hasDirectedEdge(uint32_t e0, uint32_t e1, uint32_t x, uint32_t y, uint32_t z)
+{
+    return (x == e0 && y == e1) || (y == e0 && z == e1) || (z == e0 && x == e1);
+}
 
-    bool operator==(const WeldKey& o) const
-    {
-        return px == o.px && py == o.py && pz == o.pz && nx == o.nx && ny == o.ny && nz == o.nz && crgba == o.crgba;
+static bool tryMergeTrisToQuad(const std::array<uint32_t, 3>& A,
+                               const std::array<uint32_t, 3>& B,
+                               const std::vector<Ogre::Vector3>& wp,
+                               float minNormalDot,
+                               std::array<uint32_t, 4>& quad)
+{
+    for (int e = 0; e < 3; ++e) {
+        const uint32_t o = A[static_cast<size_t>(e)];
+        const uint32_t e0 = A[static_cast<size_t>((e + 1) % 3)];
+        const uint32_t e1 = A[static_cast<size_t>((e + 2) % 3)];
+
+        if (!hasDirectedEdge(e0, e1, B[0], B[1], B[2]))
+            continue;
+
+        uint32_t d = 0;
+        bool foundD = false;
+        for (uint32_t t : {B[0], B[1], B[2]}) {
+            if (t != e0 && t != e1) {
+                d = t;
+                foundD = true;
+                break;
+            }
+        }
+        if (!foundD || d == o)
+            continue;
+        if (o == e0 || o == e1)
+            continue;
+
+        std::unordered_set<uint32_t> uniq({o, e0, e1, d});
+        if (uniq.size() != 4)
+            continue;
+
+        const Ogre::Vector3 nA = triFaceNormalWelded(wp[o], wp[e0], wp[e1]);
+        const Ogre::Vector3 nB = triFaceNormalWelded(wp[e0], wp[e1], wp[d]);
+        if (nA.isZeroLength() || nB.isZeroLength())
+            continue;
+        if (nA.dotProduct(nB) < minNormalDot)
+            continue;
+
+        quad = {o, e0, e1, d};
+        return true;
     }
+    return false;
+}
+
+struct PsyqExportFace {
+    bool isQuad = false;
+    uint32_t v[4] = {};
+    QColor color;
+    bool hasColor = false;
 };
 
-struct WeldKeyHash {
-    size_t operator()(const WeldKey& k) const noexcept
-    {
-        size_t h = 1469598103934665603ull;
-        auto mix = [&](int32_t x) {
-            h ^= static_cast<size_t>(static_cast<uint32_t>(x)) * 1099511628211ull;
-        };
-        mix(k.px);
-        mix(k.py);
-        mix(k.pz);
-        mix(k.nx);
-        mix(k.ny);
-        mix(k.nz);
-        mix(k.crgba);
-        return h;
+static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
+                                    const std::vector<uint32_t>& I1,
+                                    const std::vector<uint32_t>& I2,
+                                    const std::vector<Ogre::Vector3>& weldPos,
+                                    const QVector<QColor>* triFaceColors,
+                                    std::vector<PsyqExportFace>& outFaces)
+{
+    const size_t n = I0.size();
+    if (I1.size() != n || I2.size() != n || n == 0)
+        return;
+
+    std::vector<char> used(n, 0);
+    const float minDot = 0.98f;
+    const bool haveTriColors = (triFaceColors && triFaceColors->size() == static_cast<int>(n));
+
+    auto triRgb = [&](size_t i) -> QColor {
+        return haveTriColors ? (*triFaceColors)[static_cast<int>(i)] : QColor();
+    };
+
+    for (size_t i = 0; i < n; ++i) {
+        if (used[i])
+            continue;
+
+        bool merged = false;
+        for (size_t j = i + 1; j < n && !merged; ++j) {
+            if (used[j])
+                continue;
+
+            std::array<uint32_t, 4> q{};
+            if (!tryMergeTrisToQuad({I0[i], I1[i], I2[i]}, {I0[j], I1[j], I2[j]}, weldPos, minDot, q))
+                continue;
+
+            PsyqExportFace f;
+            f.isQuad = true;
+            f.v[0] = q[0];
+            f.v[1] = q[1];
+            f.v[2] = q[2];
+            f.v[3] = q[3];
+            if (haveTriColors) {
+                const QColor a = triRgb(i);
+                const QColor b = triRgb(j);
+                f.color = QColor((a.red() + b.red()) / 2, (a.green() + b.green()) / 2, (a.blue() + b.blue()) / 2);
+                f.hasColor = true;
+            }
+            outFaces.push_back(f);
+            used[i] = used[j] = 1;
+            merged = true;
+        }
+
+        if (!merged) {
+            PsyqExportFace f;
+            f.isQuad = false;
+            f.v[0] = I0[i];
+            f.v[1] = I1[i];
+            f.v[2] = I2[i];
+            if (haveTriColors) {
+                f.color = triRgb(i);
+                f.hasColor = true;
+            }
+            outFaces.push_back(f);
+            used[i] = 1;
+        }
     }
-};
+}
 
 } // namespace
 
@@ -678,14 +845,8 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
     std::unordered_map<WeldKey, uint32_t, WeldKeyHash> weld;
     weld.reserve(size_t(totalFaces) * 3u);
 
-    std::vector<uint32_t> triI0, triI1, triI2;
-    triI0.reserve(totalFaces);
-    triI1.reserve(totalFaces);
-    triI2.reserve(totalFaces);
-    if (outFaceColors) {
-        outFaceColors->clear();
-        outFaceColors->reserve(static_cast<int>(totalFaces));
-    }
+    std::vector<PsyqExportFace> allExportFaces;
+    allExportFaces.reserve(totalFaces);
 
     auto weldCorner = [&](const Ogre::Vector3& p, const Ogre::Vector3& n, int32_t crgba) -> uint32_t {
         const WeldKey key{quantizeWorld(p.x), quantizeWorld(p.y), quantizeWorld(p.z),
@@ -724,6 +885,15 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
         const bool idx32 = (ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT);
         const unsigned ist = sd.id->indexStart;
         const size_t triCount = sd.id->indexCount / 3;
+
+        std::vector<uint32_t> smI0;
+        std::vector<uint32_t> smI1;
+        std::vector<uint32_t> smI2;
+        QVector<QColor> smFaceCols;
+        smI0.reserve(triCount);
+        smI1.reserve(triCount);
+        smI2.reserve(triCount);
+        const bool collectFaceColors = (outFaceColors != nullptr && sd.colEl && colBase);
 
         for (size_t t = 0; t < triCount; ++t) {
             uint32_t i0, i1, i2;
@@ -773,11 +943,11 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
             const uint32_t w0 = weldCorner(p0, n0, c0);
             const uint32_t w1 = weldCorner(p1, n1, c1);
             const uint32_t w2 = weldCorner(p2, n2, c2);
-            triI0.push_back(w0);
-            triI1.push_back(w1);
-            triI2.push_back(w2);
+            smI0.push_back(w0);
+            smI1.push_back(w1);
+            smI2.push_back(w2);
 
-            if (outFaceColors && sd.colEl && colBase) {
+            if (collectFaceColors) {
                 const Ogre::ColourValue cv0 = decodePackedColour(sd.colEl, static_cast<Ogre::RGBA>(c0));
                 const Ogre::ColourValue cv1 = decodePackedColour(sd.colEl, static_cast<Ogre::RGBA>(c1));
                 const Ogre::ColourValue cv2 = decodePackedColour(sd.colEl, static_cast<Ogre::RGBA>(c2));
@@ -785,9 +955,17 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                                            (cv0.g + cv1.g + cv2.g) / 3.0f,
                                            (cv0.b + cv1.b + cv2.b) / 3.0f,
                                            1.0f);
-                outFaceColors->push_back(QColor::fromRgbF(ca.r, ca.g, ca.b, 1.0));
+                smFaceCols.push_back(QColor::fromRgbF(ca.r, ca.g, ca.b, 1.0));
             }
         }
+
+        std::vector<PsyqExportFace> subFaces;
+        mergeSubmeshTrisToQuads(smI0, smI1, smI2, weldedPos,
+                                collectFaceColors && smFaceCols.size() == static_cast<int>(smI0.size())
+                                    ? &smFaceCols
+                                    : nullptr,
+                                subFaces);
+        allExportFaces.insert(allExportFaces.end(), subFaces.begin(), subFaces.end());
 
         ibuf->unlock();
         if (sd.colBuf && colBase && sd.colEl->getSource() != sd.posEl->getSource()
@@ -799,8 +977,24 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
         sd.posBuf->unlock();
     }
 
+    if (outFaceColors) {
+        outFaceColors->clear();
+        bool allColored = !allExportFaces.empty();
+        for (const PsyqExportFace& ef : allExportFaces) {
+            if (!ef.hasColor) {
+                allColored = false;
+                break;
+            }
+        }
+        if (allColored) {
+            outFaceColors->reserve(static_cast<int>(allExportFaces.size()));
+            for (const PsyqExportFace& ef : allExportFaces)
+                outFaceColors->push_back(ef.color);
+        }
+    }
+
     const uint32_t nV = static_cast<uint32_t>(weldedPos.size());
-    const uint32_t nWrittenFaces = static_cast<uint32_t>(triI0.size());
+    const uint32_t nWrittenFaces = static_cast<uint32_t>(allExportFaces.size());
 
     QFile f(plyPath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
@@ -818,11 +1012,14 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
     for (const Ogre::Vector3& n : weldedNrm)
         ts << n.x << " " << n.y << " " << n.z << "\n";
 
-    for (uint32_t fi = 0; fi < nWrittenFaces; ++fi) {
-        const uint32_t v0 = triI0[fi];
-        const uint32_t v1 = triI1[fi];
-        const uint32_t v2 = triI2[fi];
-        ts << "0 " << v0 << " " << v1 << " " << v2 << " 0 " << v0 << " " << v1 << " " << v2 << " 0\n";
+    for (const PsyqExportFace& ef : allExportFaces) {
+        if (ef.isQuad) {
+            ts << "1 " << ef.v[0] << " " << ef.v[1] << " " << ef.v[2] << " " << ef.v[3] << " " << ef.v[0] << " "
+               << ef.v[1] << " " << ef.v[2] << " " << ef.v[3] << "\n";
+        } else {
+            ts << "0 " << ef.v[0] << " " << ef.v[1] << " " << ef.v[2] << " 0 " << ef.v[0] << " " << ef.v[1] << " "
+               << ef.v[2] << " 0\n";
+        }
     }
 
     if (ts.status() != QTextStream::Ok) {
