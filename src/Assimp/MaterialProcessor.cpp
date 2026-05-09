@@ -114,9 +114,11 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         // Wire FFP slot operations on the augmented material so the
         // newly-added PBR TUS render the same as they would after a
         // no-op Apply in the Material Editor (matches the new-material
-        // path's behaviour at the bottom of this function).
+        // path's behaviour at the bottom of this function). compile()
+        // is guarded for the lightweight test fixture (no render system).
         RTShaderHelper::wirePbrSlotsForFFP(existingMaterial.get());
-        existingMaterial->compile();
+        if (Ogre::Root::getSingletonPtr() && Ogre::Root::getSingletonPtr()->getRenderSystem())
+            existingMaterial->compile();
 
         return existingMaterial;
     }
@@ -344,7 +346,14 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     // ops; non-albedo slots are marked non-FFP so RTSS rebuilds without
     // them in the FFP chain.
     RTShaderHelper::wirePbrSlotsForFFP(ogreMaterial.get());
-    ogreMaterial->compile();
+    // compile() is intentionally guarded: the lightweight unit-test
+    // fixture instantiates Ogre::Root without a render system, and
+    // Material::compile walks the technique→pass→render-system chain.
+    // Skipping it under tests is safe — the colour ops are already on
+    // the TUS data and Ogre will compile lazily on first render in real
+    // use.
+    if (Ogre::Root::getSingletonPtr() && Ogre::Root::getSingletonPtr()->getRenderSystem())
+        ogreMaterial->compile();
 
     return ogreMaterial;
 }

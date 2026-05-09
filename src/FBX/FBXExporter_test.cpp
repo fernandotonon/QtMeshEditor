@@ -1437,8 +1437,11 @@ TEST_F(FBXExporterCoverageTest, MaterialProperties) {
     EXPECT_NEAR(specular->properties[5].doubleVal, 0.6, 0.01);
     EXPECT_NEAR(specular->properties[6].doubleVal, 0.7, 0.01);
 
-    // Shininess: 64.0
-    auto* shininess = findP70(*props, "Shininess");
+    // ShininessExponent: 64.0 — slice F5 renamed "Shininess" to
+    // "ShininessExponent" so Assimp's reimporter actually picks the
+    // value up (FBXConverter only reads AI_MATKEY_SHININESS from
+    // ShininessExponent).
+    auto* shininess = findP70(*props, "ShininessExponent");
     ASSERT_NE(shininess, nullptr);
     EXPECT_NEAR(shininess->properties[4].doubleVal, 64.0, 0.01);
 
@@ -2523,8 +2526,10 @@ TEST_F(FBXExporterCoverageTest, ExportMeshWithMaterials_WritesMaterialData) {
     EXPECT_NEAR(specular->properties[5].doubleVal, 0.6, 0.05);
     EXPECT_NEAR(specular->properties[6].doubleVal, 0.7, 0.05);
 
-    // Check for shininess
-    auto* shininess = findP70(*props, "Shininess");
+    // Check for shininess (slice F5: renamed Shininess → ShininessExponent
+    // because Assimp's FBX importer reads AI_MATKEY_SHININESS only from
+    // ShininessExponent — the legacy "Shininess" was silently dropped).
+    auto* shininess = findP70(*props, "ShininessExponent");
     ASSERT_NE(shininess, nullptr);
     EXPECT_NEAR(shininess->properties[4].doubleVal, 64.0, 0.5);
 
