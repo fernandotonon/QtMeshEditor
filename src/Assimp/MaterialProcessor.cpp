@@ -113,12 +113,12 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
 
         // Wire FFP slot operations on the augmented material so the
         // newly-added PBR TUS render the same as they would after a
-        // no-op Apply in the Material Editor (matches the new-material
-        // path's behaviour at the bottom of this function). compile()
-        // is guarded for the lightweight test fixture (no render system).
-        RTShaderHelper::wirePbrSlotsForFFP(existingMaterial.get());
-        if (Ogre::Root::getSingletonPtr() && Ogre::Root::getSingletonPtr()->getRenderSystem())
+        // no-op Apply in the Material Editor. Guarded behind the render-
+        // system check (lightweight test fixture has Ogre::Root only).
+        if (Ogre::Root::getSingletonPtr() && Ogre::Root::getSingletonPtr()->getRenderSystem()) {
+            RTShaderHelper::wirePbrSlotsForFFP(existingMaterial.get());
             existingMaterial->compile();
+        }
 
         return existingMaterial;
     }
@@ -337,23 +337,17 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     // path (correct on-import visuals).
     (void)gotPbrMap;
 
-    // Wire the slice E PBR slot colour-ops + non-FFP markers. Without
-    // this, the freshly imported material renders darker than after a
-    // no-op "Apply" in the Material Editor, because the editor calls
-    // wirePbrSlotsForFFP on apply but the importer didn't. The albedo
-    // slot gets explicit LBX_MODULATE so it acts as the visible base
-    // colour; metallic/roughness/ao/emissive get their FFP approximation
-    // ops; non-albedo slots are marked non-FFP so RTSS rebuilds without
-    // them in the FFP chain.
-    RTShaderHelper::wirePbrSlotsForFFP(ogreMaterial.get());
-    // compile() is intentionally guarded: the lightweight unit-test
-    // fixture instantiates Ogre::Root without a render system, and
-    // Material::compile walks the technique→pass→render-system chain.
-    // Skipping it under tests is safe — the colour ops are already on
-    // the TUS data and Ogre will compile lazily on first render in real
-    // use.
-    if (Ogre::Root::getSingletonPtr() && Ogre::Root::getSingletonPtr()->getRenderSystem())
+    // Wire the slice E PBR slot colour-ops so the freshly-imported
+    // material renders the same as after a no-op Apply in the Material
+    // Editor (which calls wirePbrSlotsForFFP). Guarded behind the
+    // render-system check because the lightweight test fixture sets up
+    // Ogre::Root without a render system; setColourOperationEx +
+    // subsequent compile both walk paths that segfault on that fixture.
+    // In real app use the render system is always up by import time.
+    if (Ogre::Root::getSingletonPtr() && Ogre::Root::getSingletonPtr()->getRenderSystem()) {
+        RTShaderHelper::wirePbrSlotsForFFP(ogreMaterial.get());
         ogreMaterial->compile();
+    }
 
     return ogreMaterial;
 }
