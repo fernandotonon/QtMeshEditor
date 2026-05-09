@@ -178,7 +178,7 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_UnknownFormat_ReturnsURIW
 }
 
 TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ReturnsFilterString) {
-    QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;FBX Binary (*.fbx);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;PlayStation TMD (*.tmd);;STL (*.stl);;X (*.x);;glTF 2.0 (*.gltf);;glTF 2.0 Binary (*.glb)";
+    QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;FBX Binary (*.fbx);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;PlayStation RSD (*.rsd);;PlayStation TMD (*.tmd);;STL (*.stl);;X (*.x);;glTF 2.0 (*.gltf);;glTF 2.0 Binary (*.glb)";
 
     QString result = MeshImporterExporter::exportFileDialogFilter();
 
@@ -551,7 +551,7 @@ TEST_F(MeshImporterExporterTest, SceneExporter_MixedEmptyAndEntityNodesOnlyCount
 TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ContainsAllFormats) {
     QString filter = MeshImporterExporter::exportFileDialogFilter();
     // One ";;" between each format entry (N formats => N-1 separators)
-    EXPECT_EQ(filter.count(";;"), 18);
+    EXPECT_EQ(filter.count(";;"), 19);
     // Spot-check format keys
     EXPECT_TRUE(filter.contains("3DS (*.3ds)"));
     EXPECT_TRUE(filter.contains("Assimp Binary (*.assbin)"));
@@ -567,6 +567,7 @@ TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ContainsAllForma
     EXPECT_TRUE(filter.contains("Ogre Mesh v1.8+(*.mesh)"));
     EXPECT_TRUE(filter.contains("Ogre XML (*.mesh.xml)"));
     EXPECT_TRUE(filter.contains("PLY (*.ply)"));
+    EXPECT_TRUE(filter.contains("PlayStation RSD (*.rsd)"));
     EXPECT_TRUE(filter.contains("PlayStation TMD (*.tmd)"));
     EXPECT_TRUE(filter.contains("STL (*.stl)"));
     EXPECT_TRUE(filter.contains("X (*.x)"));
@@ -622,6 +623,8 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_AllFormats_CorrectExtensi
         {"glTF 2.0 Binary (*.glb)", ".glb"},
         {"Assimp Binary (*.assbin)", ".assbin"},
         {"FBX Binary (*.fbx)", ".fbx"},
+        {"PlayStation TMD (*.tmd)", ".tmd"},
+        {"PlayStation RSD (*.rsd)", ".rsd"},
     };
     for (const auto& c : cases) {
         QString result = MeshImporterExporter::formatFileURI("/tmp/test", c.format);

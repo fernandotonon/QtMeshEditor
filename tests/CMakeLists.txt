@@ -101,6 +101,9 @@ if(BUILD_TESTS)
 
         # PS1 importers are referenced by core code (MaterialEditorQML, MeshImporterExporter).
         # Include them so the MaterialEditorQML test executables link successfully.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1MAT.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1PLY.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1RSD.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1TMD.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1TIM.cpp
     )

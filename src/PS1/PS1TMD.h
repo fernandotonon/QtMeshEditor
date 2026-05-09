@@ -40,7 +40,7 @@ namespace PS1TMD {
 /// Default: Ogre world units per one TMD fixed-point step (PSX-style 12.4).
 constexpr float kDefaultOgreUnitsPerTmdStep = 1.0f / 4096.0f;
 
-/// Extra scale applied when importing (removed on export) so typical TMDs are a usable size in the editor.
+/// Extra scale applied when importing (removed on export) to better match typical Ogre world units.
 constexpr float kTmdEditorUniformScale = 10.0f;
 
 /** Import a .tmd file into a new manual Ogre::Mesh in group "General". */
