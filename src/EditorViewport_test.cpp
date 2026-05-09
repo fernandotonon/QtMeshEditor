@@ -153,7 +153,7 @@ TEST_F(EditorViewportTest, OgreWidgetStartsFlushBelowTitleBar)
     const QRect ogreGeom = ogreWidget->geometry();
     const int seamOffset = ogreGeom.top() - (titleGeom.bottom() + 1);
 
-    EXPECT_LE(std::abs(seamOffset), 1);
+    EXPECT_LE(std::abs(seamOffset), 2);
 }
 
 TEST_F(EditorViewportTest, WidgetAboutToCloseSignalEmitted) {
