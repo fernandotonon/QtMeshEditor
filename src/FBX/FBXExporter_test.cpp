@@ -2638,19 +2638,23 @@ TEST_F(FBXExporterCoverageTest, PbrSlotConnections_DispatchToFbxPropertyNames) {
         seenProps.insert(c->properties[3].stringVal);
     }
 
-    // Each slice E canonical slot must dispatch to its own FBX property.
-    EXPECT_TRUE(seenProps.count("DiffuseColor") > 0)
-        << "albedo slot must connect under DiffuseColor";
+    // Each slice E canonical slot must dispatch to a property name
+    // that Assimp's FBX importer recognises on re-read. Assimp uses
+    // the Maya Stingray "Maya|TEX_*_map" prefix for PBR maps — generic
+    // "Metallic" / "DiffuseRoughness" / "AmbientColor" property names
+    // are silently dropped by FBXConverter::SetTextureProperties.
     EXPECT_TRUE(seenProps.count("NormalMap") > 0)
         << "normal_map slot must connect under NormalMap";
-    EXPECT_TRUE(seenProps.count("Metallic") > 0)
-        << "metallic slot must connect under Metallic — re-import otherwise sees DiffuseColor";
-    EXPECT_TRUE(seenProps.count("DiffuseRoughness") > 0)
-        << "roughness slot must connect under DiffuseRoughness";
-    EXPECT_TRUE(seenProps.count("AmbientColor") > 0)
-        << "ao slot must connect under AmbientColor";
-    EXPECT_TRUE(seenProps.count("EmissiveColor") > 0)
-        << "emissive slot must connect under EmissiveColor";
+    EXPECT_TRUE(seenProps.count("Maya|TEX_color_map") > 0)
+        << "albedo slot must connect under Maya|TEX_color_map (PBR base colour)";
+    EXPECT_TRUE(seenProps.count("Maya|TEX_metallic_map") > 0)
+        << "metallic slot must connect under Maya|TEX_metallic_map";
+    EXPECT_TRUE(seenProps.count("Maya|TEX_roughness_map") > 0)
+        << "roughness slot must connect under Maya|TEX_roughness_map";
+    EXPECT_TRUE(seenProps.count("Maya|TEX_ao_map") > 0)
+        << "ao slot must connect under Maya|TEX_ao_map";
+    EXPECT_TRUE(seenProps.count("Maya|TEX_emissive_map") > 0)
+        << "emissive slot must connect under Maya|TEX_emissive_map";
 
     cleanup(r);
 }

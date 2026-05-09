@@ -1902,35 +1902,43 @@ private:
                         auto* tus = pass->getTextureUnitState(ti);
                         std::string texName = tus->getTextureName();
                         if (texName.empty()) continue;
-                        // Map slice E canonical PBR slot names to FBX 7.x
-                        // material property names so re-importers
-                        // (Assimp, Blender, Maya, Unity FBX SDK) bind the
-                        // textures to the right Assimp aiTextureType_*
-                        // on read. Without this, all PBR maps collapsed
-                        // under DiffuseColor and only the diffuse came
-                        // back on round-trip — slice F4 fixes that.
+                        // Map slice E canonical PBR slot names to FBX
+                        // material property names that Assimp's FBX
+                        // importer recognises on re-read. The "Maya|TEX_*_map"
+                        // prefix is the Stingray PBS convention — it's
+                        // the only PBR property naming Assimp's
+                        // FBXConverter::SetTextureProperties knows how
+                        // to translate back to aiTextureType_METALNESS /
+                        // DIFFUSE_ROUGHNESS / AMBIENT_OCCLUSION /
+                        // BASE_COLOR / EMISSION_COLOR. Without this
+                        // (i.e. if we use generic "Metallic" / "DiffuseRoughness"
+                        // / "AmbientColor" property names), Assimp drops
+                        // those connections silently on import and only
+                        // diffuse + normal round-trip — see Slice F4
+                        // discussion / FBXConverter.cpp:2143-2148 for
+                        // the full Assimp recognition list.
                         const std::string& slot = tus->getName();
                         std::string fbxProp = "DiffuseColor"; // legacy fallback
                         if (slot == "normal_map" || slot == "NormalMap") {
+                            // Use the standard "NormalMap" property which
+                            // existing Assimp / Blender / Maya importers
+                            // all recognise.
                             fbxProp = "NormalMap";
                         } else if (slot == "albedo") {
-                            // Standard FBX has no separate BaseColor — use
-                            // DiffuseColor (PBR-aware re-importers like
-                            // Assimp's FBX reader expose it as both
-                            // aiTextureType_DIFFUSE and BASE_COLOR).
-                            fbxProp = "DiffuseColor";
+                            // Maya Stingray base colour. Maps back to
+                            // aiTextureType_BASE_COLOR on import.
+                            fbxProp = "Maya|TEX_color_map";
                         } else if (slot == "metallic") {
-                            // Stingray PBS / Autodesk PBR property name.
-                            fbxProp = "Metallic";
+                            fbxProp = "Maya|TEX_metallic_map";
                         } else if (slot == "roughness") {
-                            fbxProp = "DiffuseRoughness";
+                            fbxProp = "Maya|TEX_roughness_map";
                         } else if (slot == "ao") {
-                            fbxProp = "AmbientColor";
+                            fbxProp = "Maya|TEX_ao_map";
                         } else if (slot == "emissive") {
-                            fbxProp = "EmissiveColor";
+                            fbxProp = "Maya|TEX_emissive_map";
                         }
-                        // Anything else (e.g. user-renamed slot) → keep
-                        // DiffuseColor so it round-trips visibly.
+                        // Anything else (e.g. user-renamed slot) keeps
+                        // DiffuseColor so it at least round-trips visibly.
                         texMatPairs.insert({texName, mat->getName(), fbxProp});
                     }
                 }
