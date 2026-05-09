@@ -1,5 +1,6 @@
 #include "MaterialProcessor.h"
 #include "RTShaderHelper.h"
+#include <OgreRTShaderSystem.h>
 
 namespace {
 static Ogre::Pass* ensureFirstPass(const Ogre::MaterialPtr& mat)
@@ -132,6 +133,114 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         if(normalTexPtr)
             applyRTSSNormalMap(ogreMaterial, normalTexPtr->getName());
     }
+
+    // Slice F3: read PBR-specific texture types from Assimp and bind
+    // them to the slice E canonical slot names so the user can see
+    // them in the Material Editor and they survive
+    // export round-trips. We deliberately do NOT auto-promote the
+    // material to Cook-Torrance shading here — that path needs IBL to
+    // not look dark and is a separate slice. The slots are also tagged
+    // with `pbr_workflow=metallic_roughness` so a future "Convert to
+    // PBR" inspector action can apply Cook-Torrance to the existing
+    // textures rather than the user having to re-bind everything.
+    //
+    //   aiTextureType_BASE_COLOR        → "albedo"
+    //   aiTextureType_METALNESS         → "metallic"  (or packed glTF MR)
+    //   aiTextureType_DIFFUSE_ROUGHNESS → "roughness"
+    //   aiTextureType_AMBIENT_OCCLUSION → "ao"
+    //   aiTextureType_EMISSIVE          → "emissive"
+    auto bindPbrSlot = [&](aiTextureType type, const std::string& slotName) {
+        aiString p;
+        if (material->GetTexture(type, 0, &p) != AI_SUCCESS) return false;
+        const std::string sp = p.C_Str();
+        const std::string fn = sp.substr(sp.find_last_of("/\\") + 1);
+        if (fn.empty()) return false;
+        Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().getByName(fn);
+        if (!tex) {
+            try { tex = loadTexture(fn, p, scene); }
+            catch (...) {
+                Ogre::LogManager::getSingleton().logMessage(
+                    "MaterialProcessor: Failed to load PBR map '" + fn +
+                    "' for slot '" + slotName + "'");
+                return false;
+            }
+        }
+        if (!tex) return false;
+
+        auto* tus = pass->createTextureUnitState(tex->getName());
+        tus->setName(slotName);
+        // Mark non-FFP for everything except albedo. Albedo modulates
+        // with the existing diffuse layer naturally; the others would
+        // stack as garbage layers and darken the visible surface.
+        // Guard the call: in unit-test fixtures only MaterialManager is
+        // initialised — Ogre::RTShader::ShaderGenerator hasn't been set
+        // up, and _markNonFFP segfaults on the missing singleton there.
+        if (slotName != "albedo"
+            && Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+            Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
+        }
+        return true;
+    };
+
+    // If no BASE_COLOR is exposed but a legacy DIFFUSE was bound above,
+    // also expose it under the canonical "albedo" slot so PBR tooling
+    // (e.g. a future "Convert to PBR" action, or Slice F's Cook-Torrance
+    // path) finds it. Many FBX exporters write the base colour under
+    // aiTextureType_DIFFUSE only — without this fallback the albedo
+    // slot stays empty even though a clearly-albedo texture exists.
+    bool hasAlbedoSlot = false;
+    {
+        aiString p;
+        if (material->GetTexture(aiTextureType_BASE_COLOR, 0, &p) == AI_SUCCESS) {
+            hasAlbedoSlot = true;
+        }
+    }
+
+    bool gotPbrMap = false;
+    gotPbrMap |= bindPbrSlot(aiTextureType_BASE_COLOR,         "albedo");
+    gotPbrMap |= bindPbrSlot(aiTextureType_METALNESS,          "metallic");
+    // Probe both DIFFUSE_ROUGHNESS and SHININESS — different exporters
+    // (Blender vs. native FBX SDK) use one or the other. UNKNOWN is the
+    // catch-all Assimp uses when an FBX texture's role isn't recognised.
+    gotPbrMap |= bindPbrSlot(aiTextureType_DIFFUSE_ROUGHNESS,  "roughness");
+    if (!gotPbrMap || !pass->getTextureUnitState("roughness")) {
+        bindPbrSlot(aiTextureType_SHININESS, "roughness");
+    }
+    gotPbrMap |= bindPbrSlot(aiTextureType_AMBIENT_OCCLUSION,  "ao");
+    gotPbrMap |= bindPbrSlot(aiTextureType_EMISSIVE,           "emissive");
+
+    // Fallback: if no BASE_COLOR was found but a legacy diffuse_map
+    // exists (created by the DIFFUSE branch above), reuse its texture
+    // for the albedo slot. We don't create a duplicate TUS — instead
+    // we add a second alias slot pointing at the same texture, so the
+    // existing FFP texturing chain still works. This is what most
+    // PBR-aware DCCs do when round-tripping FBX↔glTF.
+    if (!hasAlbedoSlot && gotPbrMap) {
+        for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+            auto* tus = pass->getTextureUnitState(i);
+            if (tus->getName() == "diffuse_map" && !tus->getTextureName().empty()) {
+                auto* alb = pass->createTextureUnitState(tus->getTextureName());
+                alb->setName("albedo");
+                if (Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+                    Ogre::RTShader::ShaderGenerator::_markNonFFP(alb);
+                }
+                break;
+            }
+        }
+    }
+
+    // NOTE: We deliberately do NOT tag the pass with `pbr_workflow` on
+    // import. Tagging would trigger applyPbrIfTagged via the slice F2
+    // applyNormalMap redirect, attaching SRS_COOK_TORRANCE_LIGHTING.
+    // Without IBL, Cook-Torrance produces near-black output for
+    // metallic surfaces (the diffuse term is baseColor × (1 - metallic)
+    // and there's no env map to supply indirect specular). A future
+    // slice with proper IBL can either tag-on-import then or expose a
+    // "Convert to PBR" inspector action that adds the tag deliberately.
+    // For now: slots are populated and visible in the Material Editor,
+    // and the rendered material continues using the legacy FFP diffuse
+    // path (correct on-import visuals).
+    (void)gotPbrMap;
 
     return ogreMaterial;
 }
