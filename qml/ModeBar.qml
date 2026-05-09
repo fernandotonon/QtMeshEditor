@@ -61,15 +61,5 @@ Rectangle {
         Item {
             Layout.fillWidth: true
         }
-
-        Button {
-            Layout.alignment: Qt.AlignVCenter
-            text: EditModeController.editModeActive ? "Exit Edit" : "Edit"
-            enabled: EditModeController.editModeActive || EditorModeController.editModeAvailable
-            implicitHeight: 26
-            implicitWidth: 76
-            font.pixelSize: 11
-            onClicked: EditorModeController.toggleObjectEditMode()
-        }
     }
 }

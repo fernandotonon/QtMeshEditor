@@ -326,6 +326,7 @@ TEST_F(MainWindowTest, ContextualToolRailButtonsTriggerExistingBottomTools)
 TEST_F(MainWindowTest, BottomContextPanelLoadsAndTracksCurrentMode)
 {
     ASSERT_NE(window->m_bottomContextDock, nullptr);
+    EXPECT_FALSE(window->m_bottomContextDock->isHidden());
     auto* quickWidget = qobject_cast<QQuickWidget*>(window->m_bottomContextDock->widget());
     ASSERT_NE(quickWidget, nullptr);
     ASSERT_EQ(quickWidget->status(), QQuickWidget::Ready);
@@ -390,6 +391,8 @@ TEST_F(MainWindowTest, BottomToolRevealTabsContextWithOtherBottomTools)
 TEST_F(MainWindowTest, BottomToolRevealReturnsDetachedContextDockToBottomArea)
 {
     ASSERT_NE(window->m_bottomContextDock, nullptr);
+    window->show();
+    app->processEvents();
 
     window->m_bottomContextDock->setFloating(true);
     app->processEvents();

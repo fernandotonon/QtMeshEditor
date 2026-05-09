@@ -508,6 +508,10 @@ void MainWindow::initToolBar()
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
+        if (auto* root = m_propertiesPanel->rootObject()) {
+            root->setProperty("bottomToolHost",
+                              QVariant::fromValue(static_cast<QObject*>(this)));
+        }
         createModeSurfaces();
 
         // Force QQuickWidget repaint when snap settings change — QQuickWidget
@@ -1669,8 +1673,6 @@ void MainWindow::createModeSurfaces()
         if (auto* root = contextWidget->rootObject()) {
             root->setProperty("materialEditorAction",
                               QVariant::fromValue(static_cast<QObject*>(ui->actionMaterial_Editor)));
-            root->setProperty("bottomToolHost",
-                              QVariant::fromValue(static_cast<QObject*>(this)));
         }
 
         m_bottomContextDock = new QDockWidget(tr("Context"), this);
@@ -1680,7 +1682,7 @@ void MainWindow::createModeSurfaces()
         configureBottomToolDock(m_bottomContextDock);
         addDockWidget(Qt::BottomDockWidgetArea, m_bottomContextDock);
         resizeDocks({m_bottomContextDock}, {kBottomToolHeight}, Qt::Vertical);
-        m_bottomContextDock->hide();
+        showBottomToolDock(m_bottomContextDock);
 
         QAction* contextPanelAction = m_bottomContextDock->toggleViewAction();
         contextPanelAction->setText(tr("Context Panel"));
@@ -1732,17 +1734,32 @@ QAction* MainWindow::actionShowViewCube() const
 void MainWindow::revealBottomTool(const QString& toolId)
 {
     QDockWidget* dock = nullptr;
+    QString breadcrumb;
     if (toolId == QStringLiteral("context"))
+    {
         dock = m_bottomContextDock;
+        breadcrumb = QStringLiteral("Rail: Context");
+    }
     else if (toolId == QStringLiteral("assetBrowser"))
+    {
         dock = m_assetBrowserDock;
+        breadcrumb = QStringLiteral("Rail: Asset Browser");
+    }
     else if (toolId == QStringLiteral("dopeSheet"))
+    {
         dock = m_dopeSheetDock;
+        breadcrumb = QStringLiteral("Rail: Dope Sheet");
+    }
     else if (toolId == QStringLiteral("curveEditor"))
+    {
         dock = m_curveEditorDock;
+        breadcrumb = QStringLiteral("Rail: Curve Editor");
+    }
 
-    if (dock)
+    if (dock) {
+        SentryReporter::addBreadcrumb("ui.action", breadcrumb);
         showBottomToolDock(dock);
+    }
 }
 
 void MainWindow::configureBottomToolDock(QDockWidget* dock)

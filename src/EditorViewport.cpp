@@ -52,8 +52,12 @@ EditorViewport::EditorViewport(MainWindow* parent, int index)
     setFeatures( DockWidgetClosable | DockWidgetMovable | DockWidgetFloatable);
 
     m_pOgreWidget = new OgreWidget(this);
+    m_pOgreWidget->setContentsMargins(0, 0, 0, 0);
 
     setWidget(m_pOgreWidget);
+    setContentsMargins(0, 0, 0, 0);
+    if (layout())
+        layout()->setContentsMargins(0, 0, 0, 0);
 
     // Replace Qt's default dock title bar with a compact strip that hosts
     // the per-viewport display toggles (Show Grid / Show Normals /
@@ -70,6 +74,8 @@ EditorViewport::EditorViewport(MainWindow* parent, int index)
     QAction* viewCubeAction = m_pMainWindow ? m_pMainWindow->actionShowViewCube() : nullptr;
     m_titleBar = new ViewportTitleBar(this, gridAction, normalsAction, meshInfoAction, viewCubeAction, this);
     setTitleBarWidget(m_titleBar);
+    if (layout())
+        layout()->setContentsMargins(0, 0, 0, 0);
 }
 
 EditorViewport::~EditorViewport()

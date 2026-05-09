@@ -14,13 +14,7 @@ Rectangle {
     property bool expanded: true
     property int contentMode: EditorModeController.currentMode
     property var materialEditorAction: null
-    property var bottomToolHost: null
     readonly property string currentSummaryObjectName: summaryLoader.item ? summaryLoader.item.objectName : ""
-
-    function revealBottomTool(toolId) {
-        if (bottomToolHost && bottomToolHost.revealBottomTool)
-            bottomToolHost.revealBottomTool(toolId)
-    }
 
     function issueSummary() {
         if (!MeshValidator.validated)
@@ -100,7 +94,7 @@ Rectangle {
             objectName: "objectSummaryRoot"
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 10
+            spacing: 0
 
             RowLayout {
                 Layout.fillWidth: true
@@ -112,23 +106,6 @@ Rectangle {
                 SummaryText { label: "Primitive"; value: PropertiesPanelController.hasPrimitive ? PropertiesPanelController.primitiveType : "No" }
                 Item { Layout.fillWidth: true }
             }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    objectName: "objectContextButton"
-                    text: "Context"
-                    onClicked: root.revealBottomTool("context")
-                }
-                ActionButton {
-                    objectName: "objectAssetsButton"
-                    text: "Asset Browser"
-                    onClicked: root.revealBottomTool("assetBrowser")
-                }
-                Item { Layout.fillWidth: true }
-            }
         }
     }
 
@@ -138,7 +115,7 @@ Rectangle {
             objectName: "editSummaryRoot"
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 10
+            spacing: 0
 
             RowLayout {
                 Layout.fillWidth: true
@@ -152,23 +129,6 @@ Rectangle {
                 SummaryText { label: "Warnings"; value: EditModeController.hasValidationWarnings ? EditModeController.degenerateTriangleCount : "None" }
                 Item { Layout.fillWidth: true }
             }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    objectName: "editContextButton"
-                    text: "Context"
-                    onClicked: root.revealBottomTool("context")
-                }
-                ActionButton {
-                    objectName: "editValidationButton"
-                    text: "Validation"
-                    onClicked: EditorModeController.requestMode(EditorModeController.ValidationMode)
-                }
-                Item { Layout.fillWidth: true }
-            }
         }
     }
 
@@ -178,7 +138,7 @@ Rectangle {
             objectName: "animationSummaryRoot"
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 10
+            spacing: 0
 
             RowLayout {
                 Layout.fillWidth: true
@@ -188,29 +148,7 @@ Rectangle {
                 SummaryText { label: "Clip"; value: AnimationControlController.hasAnimation ? AnimationControlController.selectedAnimation : "No clip" }
                 SummaryText { label: "Bone"; value: AnimationControlController.selectedBone.length > 0 ? AnimationControlController.selectedBone : "None" }
                 SummaryText { label: "Timeline"; value: AnimationControlController.sliderValue / 1000.0 }
-                Item { Layout.fillWidth: true }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    objectName: "animationPlayButton"
-                    text: PropertiesPanelController.playing ? "Pause" : "Play"
-                    enabled: PropertiesPanelController.hasAnimations
-                    onClicked: PropertiesPanelController.playing = !PropertiesPanelController.playing
-                }
-                ActionButton {
-                    objectName: "animationDopeSheetButton"
-                    text: "Dope Sheet"
-                    onClicked: root.revealBottomTool("dopeSheet")
-                }
-                ActionButton {
-                    objectName: "animationCurveEditorButton"
-                    text: "Curve Editor"
-                    onClicked: root.revealBottomTool("curveEditor")
-                }
+                SummaryText { label: "Playback"; value: PropertiesPanelController.playing ? "Playing" : "Paused" }
                 Item { Layout.fillWidth: true }
             }
         }
@@ -222,7 +160,7 @@ Rectangle {
             objectName: "materialSummaryRoot"
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 10
+            spacing: 0
 
             RowLayout {
                 Layout.fillWidth: true
@@ -231,23 +169,7 @@ Rectangle {
                 SummaryText { label: "Selection"; value: PropertiesPanelController.hasSelection ? PropertiesPanelController.selectionName : "None" }
                 SummaryText { label: "Asset Root"; value: root.rootFolderName() }
                 SummaryText { label: "Files"; value: root.fileSummary() }
-                Item { Layout.fillWidth: true }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    objectName: "materialEditorButton"
-                    text: "Material Editor"
-                    onClicked: if (materialEditorAction) materialEditorAction.trigger()
-                }
-                ActionButton {
-                    objectName: "materialAssetBrowserButton"
-                    text: "Asset Browser"
-                    onClicked: root.revealBottomTool("assetBrowser")
-                }
+                SummaryText { label: "Editor"; value: PropertiesPanelController.hasSelection ? "Available" : "Select an object" }
                 Item { Layout.fillWidth: true }
             }
         }
@@ -259,7 +181,7 @@ Rectangle {
             objectName: "validationSummaryRoot"
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 10
+            spacing: 0
 
             RowLayout {
                 Layout.fillWidth: true
@@ -268,30 +190,7 @@ Rectangle {
                 SummaryText { label: "Selection"; value: MeshValidator.hasSelection ? PropertiesPanelController.selectionName : "None" }
                 SummaryText { label: "Findings"; value: root.issueSummary() }
                 SummaryText { label: "Fixable"; value: MeshValidator.hasFixableIssues ? "Yes" : "No" }
-                Item { Layout.fillWidth: true }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    objectName: "validationRunButton"
-                    text: MeshValidator.validating ? "Validating" : "Validate"
-                    enabled: MeshValidator.hasSelection && !MeshValidator.validating
-                    onClicked: MeshValidator.validate()
-                }
-                ActionButton {
-                    objectName: "validationFixButton"
-                    text: "Fix All"
-                    enabled: MeshValidator.hasFixableIssues
-                    onClicked: MeshValidator.fixAll()
-                }
-                ActionButton {
-                    objectName: "validationContextButton"
-                    text: "Context"
-                    onClicked: root.revealBottomTool("context")
-                }
+                SummaryText { label: "Status"; value: MeshValidator.validating ? "Running" : (MeshValidator.validated ? "Ready" : "Idle") }
                 Item { Layout.fillWidth: true }
             }
         }
@@ -318,8 +217,4 @@ Rectangle {
         }
     }
 
-    component ActionButton: Button {
-        implicitHeight: 26
-        implicitWidth: Math.max(88, contentItem.implicitWidth + 20)
-    }
 }
