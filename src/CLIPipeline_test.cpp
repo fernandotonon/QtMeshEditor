@@ -491,6 +491,12 @@ TEST(CLIPipelineFormatForExtension, Tmd)
     EXPECT_EQ(CLIPipeline::formatForExtension("MODEL.TMD"), "PlayStation TMD (*.tmd)");
 }
 
+TEST(CLIPipelineFormatForExtension, Rsd)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.rsd"), "PlayStation RSD (*.rsd)");
+    EXPECT_EQ(CLIPipeline::formatForExtension("MODEL.RSD"), "PlayStation RSD (*.rsd)");
+}
+
 TEST(CLIPipelineFormatForExtension, UnknownDefaultsToMesh)
 {
     EXPECT_EQ(CLIPipeline::formatForExtension("model.xyz"), "Ogre Mesh (*.mesh)");
