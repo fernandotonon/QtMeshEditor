@@ -42,9 +42,11 @@ Ogre::MeshPtr importPsyqPlyWithFaceColors(const QString& filePath,
                                          const std::string& meshName,
                                          const QVector<QColor>& faceColors);
 
-/// Export an Ogre entity as Psy-Q PLY. Welds corners that share the same quantized
-/// position, normal, and (if present) vertex colour. For a single submesh, if
-/// `readNgonFacesFromMesh` finds `qtme.faces.0`, Psy-Q face lines follow those polygons
+/// Export an Ogre entity as Psy-Q PLY. Writes separate vertex and normal tables (counts
+/// `nV` and `nN` may differ): positions and normals are welded independently by quantized
+/// float, so shared 3D points can reuse one vertex index with distinct per-corner normals.
+/// For a single submesh, if `readNgonFacesFromMesh` finds `qtme.faces.0`, Psy-Q face lines
+/// follow those polygons
 /// (tri / quad / n-gon fanned to tris); otherwise coplanar triangle pairs are merged heuristically.
 /// If outFaceColors is provided and vertex colours exist on all submeshes, one RGB per
 /// written face is filled (for a MAT sidecar).
