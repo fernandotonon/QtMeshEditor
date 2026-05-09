@@ -193,6 +193,73 @@ void MaterialEditorQML::createNewMaterial(const QString &materialName)
     emit selectedTextureUnitIndexChanged();
 }
 
+// Wire canonical PBR slot TUSs into Ogre's FFP pipeline so they have
+// approximately the right visual contribution in slice E. Slice F's
+// PBR SubRenderState will replace this with a real shader.
+//
+//   albedo    → modulates with the per-vertex diffuse colour (textured base)
+//   ao        → modulates the per-vertex diffuse (darkens lit base)
+//   emissive  → adds on top of the running colour (self-illumination)
+//   metallic  → ADD_SIGNED with running colour: brightens / tints toward
+//               metal in textured regions (FFP approximation)
+//   roughness → MODULATE_X2 with running colour: brightens smooth (low-
+//               roughness) regions to fake spec gloss; FFP approximation
+//   normal_map → marked non-FFP; RTShaderHelper::applyNormalMap wires
+//                it through SRS_NORMALMAP elsewhere when a texture is set
+//
+// AO/metallic/roughness use LBS_DIFFUSE (per-vertex diffuse from
+// lighting+material) instead of LBS_CURRENT so the result doesn't
+// depend on where the slot lands in the TUS chain. Without this,
+// AO would render as a new texture *layer* on top of the diffuse
+// rather than darkening it, depending on where the user dropped it.
+static void wirePbrSlotsForFFP(Ogre::Material* mat)
+{
+    if (!mat) return;
+    for (auto* tech : mat->getTechniques()) {
+        for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
+            auto* p = tech->getPass(pi);
+            for (unsigned short i = 0; i < p->getNumTextureUnitStates(); ++i) {
+                auto* tus = p->getTextureUnitState(i);
+                const std::string& n = tus->getName();
+                if (n == "normal_map" || n == "NormalMap") {
+                    Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
+                } else if (n == "albedo") {
+                    tus->setColourOperationEx(
+                        Ogre::LBX_MODULATE,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_DIFFUSE);
+                } else if (n == "ao") {
+                    tus->setColourOperationEx(
+                        Ogre::LBX_MODULATE,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_DIFFUSE);
+                } else if (n == "emissive") {
+                    tus->setColourOperationEx(
+                        Ogre::LBX_ADD,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_CURRENT);
+                } else if (n == "metallic") {
+                    // FFP approximation: signed-add brightens current
+                    // toward white in textured (metal) regions. Slice F
+                    // shader will replace with a real metal BRDF lobe.
+                    tus->setColourOperationEx(
+                        Ogre::LBX_ADD_SIGNED,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_CURRENT);
+                } else if (n == "roughness") {
+                    // FFP approximation: modulate-x2 brightens smooth
+                    // (low-roughness) regions. Slice F shader will
+                    // replace with real specular falloff control.
+                    tus->setColourOperationEx(
+                        Ogre::LBX_MODULATE_X2,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_CURRENT);
+                }
+            }
+        }
+    }
+}
+
 bool MaterialEditorQML::applyMaterial()
 {
     SentryReporter::addBreadcrumb("ui.material", "Apply material");
@@ -239,7 +306,15 @@ bool MaterialEditorQML::applyMaterial()
             Ogre::MaterialManager::getSingleton().getByName(m_materialName.toStdString()));
         
         if (m_ogreMaterial) {
+            wirePbrSlotsForFFP(m_ogreMaterial.get());
             m_ogreMaterial->compile();
+            // Slice F: if user-edited material text carries the
+            // pbr_workflow tag (e.g. they hand-typed it, or the script
+            // came from MaterialPresetLibrary's PBR templates),
+            // upgrade FFP wiring to Cook-Torrance via Ogre's stock
+            // SRS_COOK_TORRANCE_LIGHTING. Returns false silently for
+            // non-tagged materials → slice E FFP wiring stays.
+            RTShaderHelper::applyPbrIfTagged(m_ogreMaterial);
         }
 
         // Re-apply the edited material to sub-entities that use it.
@@ -1582,8 +1657,41 @@ void MaterialEditorQML::updateMaterialText()
                 Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
         }
 
+        // Wire PBR slot colour-ops + non-FFP markers in case the user just
+        // edited the material text, before recompile + RTSS regen.
+        wirePbrSlotsForFFP(m_ogreMaterial.get());
+
         // Recompile the material
         m_ogreMaterial->compile();
+
+        // Slice F: upgrade tagged metallic_roughness materials to the
+        // Cook-Torrance SRS. Runs after compile so the SRS sees the
+        // final pass state (FFP wiring above is harmless — when
+        // applyPbrIfTagged returns true, RTSS replaces the FFP path).
+        // Returns false for non-tagged materials → FFP path stays.
+        const bool pbrApplied = RTShaderHelper::applyPbrIfTagged(m_ogreMaterial);
+        (void)pbrApplied;
+
+        // If the material has a normal_map TUS with a texture set, re-wire
+        // it through SRS_NORMALMAP. Without this, dropping all shader
+        // techniques above (and letting RTSS regen via the default
+        // handleSchemeNotFound path) loses the normal-map shader
+        // configuration — so opening the material editor visibly drops the
+        // normal-map effect, even when the user hasn't changed anything.
+        if (m_ogreMaterial->getNumTechniques() > 0) {
+            auto* pass = m_ogreMaterial->getTechnique(0)->getPass(0);
+            for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+                auto* tus = pass->getTextureUnitState(i);
+                const auto& tusName = tus->getName();
+                if (tusName == "normal_map" || tusName == "NormalMap") {
+                    const std::string texName = tus->getTextureName();
+                    if (!texName.empty()) {
+                        RTShaderHelper::applyNormalMap(m_ogreMaterial, texName);
+                    }
+                    break;
+                }
+            }
+        }
 
         // Re-apply material to all sub-entities that use it
         std::string matName = m_materialName.toStdString();

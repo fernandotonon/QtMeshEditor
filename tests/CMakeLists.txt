@@ -31,6 +31,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonTransform.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshImporterExporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorViewport.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportTitleBar.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RotationGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TranslationGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScaleGizmo.cpp
@@ -95,10 +96,14 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorModeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HalfEdgeMesh.cpp
 
         # PS1 importers are referenced by core code (MaterialEditorQML, MeshImporterExporter).
         # Include them so the MaterialEditorQML test executables link successfully.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1MAT.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1PLY.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1RSD.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1TMD.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1TIM.cpp
     )
@@ -123,6 +128,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonTransform.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshImporterExporter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorViewport.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportTitleBar.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RotationGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TranslationGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScaleGizmo.h
@@ -175,6 +181,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorModeController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HalfEdgeMesh.h
     )
 

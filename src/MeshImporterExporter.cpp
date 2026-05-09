@@ -94,9 +94,16 @@ const QMap<QString, QString> MeshImporterExporter::exportFormats = {
 
 void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
 {
-    Ogre::Real size = std::max(
-        std::max(en->getBoundingBox().getSize().y, en->getBoundingBox().getSize().x),
-        en->getBoundingBox().getSize().z);
+    // Use the WORLD-space bbox so the camera distance accounts for any
+    // scale applied to the parent SceneNode (e.g. the auto-scale fix
+    // in importer() for sub-unit meshes). Without `derive=true` we'd
+    // read mesh-local bbox sizes — fine for sensible-scale assets, but
+    // for an auto-scaled mm-unit FBX the local bbox is still ~5 mm and
+    // the camera would land at distance ~0, leaving the camera inside
+    // the enlarged mesh and the near-clip plane. (Codex review on PR #456.)
+    const Ogre::AxisAlignedBox worldBb = en->getWorldBoundingBox(/*derive=*/true);
+    const auto worldSize = worldBb.getSize();
+    Ogre::Real size = std::max({worldSize.x, worldSize.y, worldSize.z});
     auto cameras = Manager::getSingleton()->getSceneMgr()->getCameras();
     for (const auto &[_, camera] : cameras) {
         const Ogre::Radian fov = camera->getFOVy();
@@ -240,27 +247,63 @@ static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
         float shininess = pass->getShininess();
         aiMat->AddProperty(&shininess, 1, AI_MATKEY_SHININESS);
 
+        // Map our canonical slot names to Assimp texture types so the
+        // re-import path (MaterialProcessor) recognises them. Without
+        // this the metallic / roughness / ao / emissive slots would all
+        // export under aiTextureType_DIFFUSE, and on reimport the first
+        // one wins as the "diffuse" texture and the rest are dropped.
+        // We also keep "albedo" routed to DIFFUSE (legacy compatible)
+        // AND mirror it under BASE_COLOR so PBR-aware reimport finds it.
         unsigned short diffuseIdx = 0;
         unsigned short normalIdx = 0;
+        unsigned short baseColorIdx = 0;
+        unsigned short metalIdx = 0;
+        unsigned short roughIdx = 0;
+        unsigned short aoIdx = 0;
+        unsigned short emissiveIdx = 0;
         for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
         {
             auto* tus = pass->getTextureUnitState(ti);
-            if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED)
-            {
-                QString safeName = MeshImporterExporter::exportTextureName(
-                    QString::fromStdString(tus->getTextureName()));
-                aiString texPath(safeName.toStdString());
-                const auto& tusName = tus->getName();
-                if (tusName == "normal_map" || tusName == "NormalMap")
-                {
-                    aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
-                    ++normalIdx;
-                }
-                else
-                {
-                    aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
-                    ++diffuseIdx;
-                }
+            if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                continue;
+            QString safeName = MeshImporterExporter::exportTextureName(
+                QString::fromStdString(tus->getTextureName()));
+            aiString texPath(safeName.toStdString());
+            const auto& tusName = tus->getName();
+
+            if (tusName == "normal_map" || tusName == "NormalMap") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
+                ++normalIdx;
+            } else if (tusName == "albedo") {
+                // glTF base colour: write BASE_COLOR (PBR re-import) AND
+                // DIFFUSE (legacy / Phong renderers). Most engines accept
+                // both; Assimp routes BASE_COLOR back to aiTextureType_BASE_COLOR
+                // on re-read, which our MaterialProcessor binds to the
+                // "albedo" canonical slot.
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_BASE_COLOR, baseColorIdx));
+                ++baseColorIdx;
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
+                ++diffuseIdx;
+            } else if (tusName == "metallic") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_METALNESS, metalIdx));
+                ++metalIdx;
+            } else if (tusName == "roughness") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE_ROUGHNESS, roughIdx));
+                ++roughIdx;
+            } else if (tusName == "ao") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_AMBIENT_OCCLUSION, aoIdx));
+                ++aoIdx;
+            } else if (tusName == "emissive") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_EMISSIVE, emissiveIdx));
+                ++emissiveIdx;
+            } else if (tusName == "diffuse_map" || tusName.empty()) {
+                // Legacy Phong diffuse, or unnamed TUS — route as DIFFUSE.
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
+                ++diffuseIdx;
+            } else {
+                // Unknown slot name — route as UNKNOWN so it's preserved
+                // round-trip without being mistaken for a diffuse.
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_UNKNOWN, ti));
             }
         }
     }
@@ -1651,10 +1694,35 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             }
 
             sn->setPosition(0,0,0);
+
+            // Auto-scale sub-unit meshes so they aren't clipped by the
+            // camera near plane. FBX/glTF files exported with millimetre
+            // or centimetre source units (Blender default 0.001 unit
+            // scale, real-world-scale photogrammetry, etc.) come in with
+            // bounding-box extents <0.01 — the entity loads but sits
+            // entirely inside the default near-clip distance and never
+            // renders. Scale the parent SceneNode so the largest
+            // dimension lands at ~1 unit. Threshold of 0.01 avoids
+            // touching sensible-scale assets (anything from a few cm up).
+            if (en && en->getMesh()) {
+                const auto& bbSize = en->getBoundingBox().getSize();
+                const Ogre::Real maxExtent = std::max({bbSize.x, bbSize.y, bbSize.z});
+                if (maxExtent > 0.0f && maxExtent < 0.01f) {
+                    const Ogre::Real factor = 1.0f / maxExtent;
+                    sn->setScale(factor, factor, factor);
+                    Ogre::LogManager::getSingleton().logMessage(
+                        "MeshImporterExporter: auto-scaled '" + en->getName() +
+                        "' by " + std::to_string(factor) +
+                        " (source max-extent " + std::to_string(maxExtent) +
+                        " was inside the near-clip plane)");
+                }
+            }
+
             configureCamera(en);
         }
-    } 
-    catch (Ogre::Exception& e) {
+    }
+    catch (Ogre::Exception& e)
+    {
         Ogre::LogManager::getSingleton().logMessage(e.getFullDescription());
     } catch (const std::exception& e) {
         Ogre::LogManager::getSingleton().logMessage(

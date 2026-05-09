@@ -188,6 +188,16 @@ void TransformOperator::swap(int& x, int& y)
     x = y; y = temp;
 }
 
+bool TransformOperator::shouldRouteToBoneGizmo(TransformState state,
+                                               const Ogre::Bone* selectedBone,
+                                               bool boneCanTranslate)
+{
+    if (!selectedBone) return false;
+    if (state == TS_ROTATE || state == TS_SCALE) return true;
+    if (state == TS_TRANSLATE) return boneCanTranslate;
+    return false;
+}
+
 ////////////////////////////////////////
 // Snap settings
 
@@ -1080,29 +1090,22 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             m_pSelectionBox->setVisible(true);
 
         }
-        else if ((mTransformState == TS_TRANSLATE
-                  || mTransformState == TS_ROTATE
-                  || mTransformState == TS_SCALE)
-                 && AnimationControlController::instance()->selectedBonePtr()
-                 && e->button() == Qt::LeftButton)
+        else if (e->button() == Qt::LeftButton
+                 && shouldRouteToBoneGizmo(
+                        mTransformState,
+                        AnimationControlController::instance()->selectedBonePtr(),
+                        AnimationControlController::instance()->boneCanTranslate(
+                            AnimationControlController::instance()->selectedBonePtr())))
         {
             // Bone-gizmo press (translate/rotate/scale): drive the
             // bone's local TRS instead of any scene-node selection.
-            // Capture before-state for undo; the actual delta is
-            // applied in mouseMoveEvent via the bone-aware path.
-            Ogre::Bone* bone = AnimationControlController::instance()->selectedBonePtr();
             // Translation is restricted on rigged non-root bones —
-            // moving them tears the bone from its parent. Rotation
-            // and scale are always allowed (rotation is the primary
-            // posing tool; scale is uncommon but valid for stretchy
-            // rigs).
-            if (mTransformState == TS_TRANSLATE
-                && !AnimationControlController::instance()->boneCanTranslate(bone))
-            {
-                SentryReporter::addBreadcrumb("ui.transform",
-                    "Bone translate blocked: rigged non-root bone");
-                return;
-            }
+            // moving them tears the bone from its parent — so for
+            // those, this branch is skipped and we fall through to the
+            // entity-translate branch below. Rotation and scale always
+            // go through the bone path because that's the primary
+            // posing workflow.
+            Ogre::Bone* bone = AnimationControlController::instance()->selectedBonePtr();
             mBoneDragActive       = true;
             mBoneStartPos         = bone->getPosition();
             mBoneStartOrient      = bone->getOrientation();

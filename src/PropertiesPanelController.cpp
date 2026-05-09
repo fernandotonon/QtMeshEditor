@@ -9,6 +9,7 @@
 #include "AnimationControlController.h"
 #include "AnimationMerger.h"
 #include "CurveEditModel.h"
+#include "EditModeController.h"
 #include "SentryReporter.h"
 #include "MeshImporterExporter.h"
 #include "UndoManager.h"
@@ -55,6 +56,8 @@ PropertiesPanelController::PropertiesPanelController() : QObject(nullptr)
 {
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
             this, &PropertiesPanelController::onSelectionChanged);
+    connect(EditModeController::instance(), &EditModeController::editModeChanged,
+            this, [this]() { emit transformTargetMetadataChanged(); });
 
     // When the blender bakes a new clip, the entity's animation list grew —
     // tell the Inspector to re-query so the new clip shows up immediately.
@@ -242,6 +245,114 @@ QString PropertiesPanelController::selectionName() const
     return QString();
 }
 
+namespace {
+// Internal enum for transform target classification — drives all four
+// transformTarget* accessors so they share one selection probe and the
+// label/detail/affects-mesh strings can't drift away from kind names.
+enum class TransformTarget {
+    None,
+    Node,
+    EditMesh,
+    Mesh,
+    Submesh,
+    MixedGeometry,
+    Mixed,
+};
+
+TransformTarget resolveTransformTarget()
+{
+    if (EditModeController::instance()->isEditModeActive())
+        return TransformTarget::EditMesh;
+
+    auto* sel = SelectionSet::getSingleton();
+    const bool hasNodes = sel->hasNodes();
+    const bool hasEntities = sel->hasEntities();
+    const bool hasSubEntities = sel->hasSubEntities();
+
+    if (!hasNodes && !hasEntities && !hasSubEntities)
+        return TransformTarget::None;
+    if (hasNodes && (hasEntities || hasSubEntities))
+        return TransformTarget::Mixed;
+    if (hasNodes)
+        return TransformTarget::Node;
+    if (hasEntities && hasSubEntities)
+        return TransformTarget::MixedGeometry;
+    if (hasEntities)
+        return TransformTarget::Mesh;
+    return TransformTarget::Submesh;
+}
+
+QString transformTargetKindString(TransformTarget kind)
+{
+    switch (kind) {
+    case TransformTarget::None:          return QStringLiteral("none");
+    case TransformTarget::Node:          return QStringLiteral("node");
+    case TransformTarget::EditMesh:      return QStringLiteral("editMesh");
+    case TransformTarget::Mesh:          return QStringLiteral("mesh");
+    case TransformTarget::Submesh:       return QStringLiteral("submesh");
+    case TransformTarget::MixedGeometry: return QStringLiteral("mixedGeometry");
+    case TransformTarget::Mixed:         return QStringLiteral("mixed");
+    }
+    return QStringLiteral("none");
+}
+} // namespace
+
+QString PropertiesPanelController::transformTargetKind() const
+{
+    return transformTargetKindString(resolveTransformTarget());
+}
+
+QString PropertiesPanelController::transformTargetLabel() const
+{
+    switch (resolveTransformTarget()) {
+    case TransformTarget::Node:          return QStringLiteral("Node Transform");
+    case TransformTarget::EditMesh:      return QStringLiteral("Mesh Geometry");
+    case TransformTarget::Mesh:          return QStringLiteral("Mesh Geometry");
+    case TransformTarget::Submesh:       return QStringLiteral("Submesh Geometry");
+    case TransformTarget::MixedGeometry: return QStringLiteral("Mixed Geometry");
+    case TransformTarget::Mixed:         return QStringLiteral("Mixed Targets");
+    case TransformTarget::None:          break;
+    }
+    return QStringLiteral("No Selection");
+}
+
+QString PropertiesPanelController::transformTargetDetail() const
+{
+    switch (resolveTransformTarget()) {
+    case TransformTarget::Node:
+        return QStringLiteral("Object placement only; mesh vertices stay unchanged.");
+    case TransformTarget::EditMesh:
+        return QStringLiteral("Edit Mode transforms mesh vertices; exports include these edits.");
+    case TransformTarget::Mesh:
+        return QStringLiteral("Transforms mesh vertex data; exports include these edits.");
+    case TransformTarget::Submesh:
+        return QStringLiteral("Transforms selected submesh vertex data.");
+    case TransformTarget::MixedGeometry:
+        return QStringLiteral("Geometry selection is mixed; use one mesh target type for precise edits.");
+    case TransformTarget::Mixed:
+        return QStringLiteral("Node transform path is active; select only Mesh/Submesh to edit geometry.");
+    case TransformTarget::None:
+        break;
+    }
+    return QStringLiteral("Select a node for placement or a mesh for geometry edits.");
+}
+
+bool PropertiesPanelController::transformAffectsMesh() const
+{
+    switch (resolveTransformTarget()) {
+    case TransformTarget::Mesh:
+    case TransformTarget::EditMesh:
+    case TransformTarget::Submesh:
+    case TransformTarget::MixedGeometry:
+        return true;
+    case TransformTarget::None:
+    case TransformTarget::Node:
+    case TransformTarget::Mixed:
+        return false;
+    }
+    return false;
+}
+
 QStringList PropertiesPanelController::sceneNodeNames() const
 {
     QStringList names;
@@ -317,10 +428,10 @@ QVariantList PropertiesPanelController::shortcutData() const
     data << entry("File", "Ctrl + ,",       "Open preferences");
 
     // View
-    data << entry("View", "Show Grid",       "Toggle grid display (Options menu)");
-    data << entry("View", "Show Normals",    "Toggle vertex normals (Options menu)");
-    data << entry("View", "Show Mesh Info",  "Toggle mesh info overlay (Options menu)");
-    data << entry("View", "Show View Cube",  "Toggle 3D view cube (Options menu)");
+    data << entry("View", "Show Grid",       "Toggle grid display (View menu)");
+    data << entry("View", "Show Normals",    "Toggle vertex normals (View menu)");
+    data << entry("View", "Show Mesh Info",  "Toggle mesh info overlay (View menu)");
+    data << entry("View", "Show View Cube",  "Toggle 3D view cube (View menu)");
 
     // Help
     data << entry("Help", "Ctrl + /", "Open keyboard shortcut reference");
@@ -901,6 +1012,7 @@ void PropertiesPanelController::onSelectionChanged()
 {
     onTransformChanged();
     emit selectionChanged();
+    emit transformTargetMetadataChanged();
     emit primitiveChanged();
 }
 

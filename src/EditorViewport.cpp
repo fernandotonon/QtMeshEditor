@@ -32,6 +32,7 @@ THE SOFTWARE.
 
 #include "EditorViewport.h"
 #include "OgreWidget.h"
+#include "ViewportTitleBar.h"
 #include "mainwindow.h"
 
 #include <Ogre.h>
@@ -53,6 +54,22 @@ EditorViewport::EditorViewport(MainWindow* parent, int index)
     m_pOgreWidget = new OgreWidget(this);
 
     setWidget(m_pOgreWidget);
+
+    // Replace Qt's default dock title bar with a compact strip that hosts
+    // the per-viewport display toggles (Show Grid / Show Normals /
+    // Show Mesh Info / Show View Cube). This used to be a free-floating
+    // QQuickWidget overlay
+    // sitting on top of the OgreWidget, but it had to be a top-level Qt::Tool
+    // window to compose correctly over Ogre's WA_PaintOnScreen surface, which
+    // collided with the View Cube and gave us nothing to anchor to in
+    // multi-viewport layouts. Embedding the controls in the title bar is
+    // both simpler and per-viewport by construction.
+    QAction* gridAction     = m_pMainWindow ? m_pMainWindow->actionShowGrid()     : nullptr;
+    QAction* normalsAction  = m_pMainWindow ? m_pMainWindow->actionShowNormals()  : nullptr;
+    QAction* meshInfoAction = m_pMainWindow ? m_pMainWindow->actionShowMeshInfo() : nullptr;
+    QAction* viewCubeAction = m_pMainWindow ? m_pMainWindow->actionShowViewCube() : nullptr;
+    m_titleBar = new ViewportTitleBar(this, gridAction, normalsAction, meshInfoAction, viewCubeAction, this);
+    setTitleBarWidget(m_titleBar);
 }
 
 EditorViewport::~EditorViewport()
@@ -72,21 +89,6 @@ MainWindow*   EditorViewport::getMainWindow() const
 
 void EditorViewport::paintEvent(QPaintEvent *e)
 {
-    // Safety check: don't access OgreWidget if it's being destroyed
-    if (m_pOgreWidget)
-    {
-        if (m_pOgreWidget->hasFocus())
-        {
-            setPalette(QPalette(QColor(0, 255, 127)));
-            setAutoFillBackground(true);
-        }
-        else
-        {
-            setPalette(QGuiApplication::palette());
-            setAutoFillBackground(true);
-        }
-    }
-
     QDockWidget::paintEvent(e);
     //m_pOgreWidget->update();
     e->accept();

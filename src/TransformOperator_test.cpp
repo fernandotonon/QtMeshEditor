@@ -140,6 +140,79 @@ TEST(TransformOperatorTest, Swap)
     EXPECT_EQ(y, 1);
 }
 
+// Bone-gizmo routing decision: with no bone selected, all states route
+// to entity transform (return false). With a bone selected, rotate/scale
+// always route to the bone; translate only routes when the bone supports
+// translation (root or unrigged) — otherwise it falls through so the user
+// can still translate the entity that owns the rig.
+//
+// `selectedBone` is treated as an opaque non-null marker — the helper
+// doesn't dereference it. Using a non-null int and reinterpret_cast lets
+// the test stay header-only without a real Ogre::Bone instance.
+TEST(TransformOperatorTest, ShouldRouteToBoneGizmoNoBoneNeverRoutes)
+{
+    EXPECT_FALSE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_TRANSLATE, nullptr, /*canTranslate=*/true));
+    EXPECT_FALSE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_ROTATE, nullptr, true));
+    EXPECT_FALSE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_SCALE, nullptr, true));
+    EXPECT_FALSE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_SELECT, nullptr, true));
+    EXPECT_FALSE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_NONE, nullptr, true));
+}
+
+TEST(TransformOperatorTest, ShouldRouteToBoneGizmoRotateAlwaysRoutes)
+{
+    int sentinel = 0;
+    auto* bone = reinterpret_cast<const Ogre::Bone*>(&sentinel);
+    // Rotate goes through the bone gizmo regardless of translate-ability —
+    // posing is the primary workflow and rotate is always valid on a bone.
+    EXPECT_TRUE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_ROTATE, bone, /*canTranslate=*/false));
+    EXPECT_TRUE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_ROTATE, bone, /*canTranslate=*/true));
+}
+
+TEST(TransformOperatorTest, ShouldRouteToBoneGizmoScaleAlwaysRoutes)
+{
+    int sentinel = 0;
+    auto* bone = reinterpret_cast<const Ogre::Bone*>(&sentinel);
+    // Scale also bypasses the translate-ability check — it's uncommon
+    // but valid (stretchy rigs).
+    EXPECT_TRUE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_SCALE, bone, /*canTranslate=*/false));
+    EXPECT_TRUE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_SCALE, bone, /*canTranslate=*/true));
+}
+
+TEST(TransformOperatorTest, ShouldRouteToBoneGizmoTranslateRespectsBoneCanTranslate)
+{
+    int sentinel = 0;
+    auto* bone = reinterpret_cast<const Ogre::Bone*>(&sentinel);
+    // Translatable bone (root / unrigged): take the bone path.
+    EXPECT_TRUE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_TRANSLATE, bone, /*canTranslate=*/true));
+    // Non-translatable bone (rigged non-root): fall through to entity
+    // translate. This is the bug-fix case: previously the bone branch
+    // was taken and silently returned, so the user could not move the
+    // imported skinned model at all once a bone got auto-selected.
+    EXPECT_FALSE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_TRANSLATE, bone, /*canTranslate=*/false));
+}
+
+TEST(TransformOperatorTest, ShouldRouteToBoneGizmoNonTransformStatesDoNotRoute)
+{
+    int sentinel = 0;
+    auto* bone = reinterpret_cast<const Ogre::Bone*>(&sentinel);
+    // SELECT and NONE never go through the bone gizmo branch.
+    EXPECT_FALSE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_SELECT, bone, true));
+    EXPECT_FALSE(TransformOperator::shouldRouteToBoneGizmo(
+        TransformOperator::TS_NONE, bone, true));
+}
+
 TEST_F(TransformOperatorTests, TransformSpaceChangesOnlyWhenValueDiffers)
 {
     QSignalSpy spy(op, &TransformOperator::transformSpaceChanged);

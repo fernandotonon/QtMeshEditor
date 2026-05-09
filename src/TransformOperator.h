@@ -24,6 +24,7 @@ namespace Ogre{
     class SceneNode;
     class MovableObject;
     class SubEntity;
+    class Bone;
 }
 class TransformOperator : public QObject, public QtMouseListener
 {
@@ -96,6 +97,17 @@ public:
     // Made public for testing
     static void swap(int& x, int& y);
     Ogre::Ray   rayFromScreenPoint(const QPoint& pos);
+
+    /// Decides whether a left-click during translate/rotate/scale should
+    /// route to the bone-gizmo branch. Rotate and scale always go through
+    /// the bone gizmo when a bone is selected — that's the primary posing
+    /// workflow. Translate only goes there when the selected bone supports
+    /// translation (root or unrigged); otherwise the click falls through to
+    /// the entity-translate branch so the user can move the whole model.
+    /// Returns false when no bone is selected.
+    static bool shouldRouteToBoneGizmo(TransformState state,
+                                       const Ogre::Bone* selectedBone,
+                                       bool boneCanTranslate);
 
 private:
     TransformOperator ();

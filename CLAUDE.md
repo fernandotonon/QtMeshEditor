@@ -61,6 +61,8 @@ qtmesh lod model.fbx --count 3                 # generate 3 LODs → model_lod1.
 qtmesh lod model.fbx --count 2 --reductions 0.25,0.5 -o out.fbx  # custom reductions, named output
 qtmesh lod model.fbx --auto                    # auto-generate LODs
 qtmesh lod model.fbx --remove -o clean.fbx     # strip LODs and save
+qtmesh material model.fbx --preset "Metallic-Roughness" -o out.fbx  # apply a built-in material preset (writes .material sidecar)
+qtmesh material --list-presets                 # list built-in preset names (incl. PBR templates)
 qtmesh scan ./assets                           # scan directory for asset issues
 qtmesh scan ./assets --config qtmesh.yml       # use YAML config file
 qtmesh scan ./assets --json                    # JSON output
@@ -71,7 +73,7 @@ qtmesh scan ./assets --include "*.fbx,*.glb"   # filter by extension
 qtmesh scan ./assets --fail-on warning         # exit 1 on warnings or errors
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`, `material`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 
@@ -178,8 +180,9 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 
 ### Mesh Import/Export
 
-- **MeshImporterExporter** (`src/MeshImporterExporter.h/cpp`): Static methods. Supports .mesh, .obj, .dae, .gltf, .fbx via custom Assimp processors in `src/Assimp/`. Also provides `sceneExporter()`/`sceneImporter()` for saving/loading entire scenes (multiple entities with transforms, materials, skeletons, and animations) as glTF files. Multi-entity scenes use entity-name-prefixed bones to avoid cross-entity skeleton contamination when Assimp merges skins.
+- **MeshImporterExporter** (`src/MeshImporterExporter.h/cpp`): Static methods. Supports .mesh, .obj, .dae, .gltf, .fbx via custom Assimp processors in `src/Assimp/`. Also provides `sceneExporter()`/`sceneImporter()` for saving/loading entire scenes (multiple entities with transforms, materials, skeletons, and animations) as glTF files. Multi-entity scenes use entity-name-prefixed bones to avoid cross-entity skeleton contamination when Assimp merges skins. **Auto-scales sub-unit meshes**: assets with bounding-box max-extent below 0.01 (mm-scale FBX, photogrammetry, etc.) get their parent SceneNode scaled by `1/maxExtent` so the largest dim lands at ~1 unit — without this they sit inside the camera near-clip plane and never render. `configureCamera()` reads `getWorldBoundingBox(derive=true)` so the camera distance accounts for the auto-scale.
 - **FBXExporter** (`src/FBX/FBXExporter.h/cpp`): Custom FBX Binary v7300 exporter that writes directly from Ogre data. Handles geometry, skeleton, skin deformers, animations, and materials. Replaces Assimp's broken FBX exporter.
+- **MaterialProcessor** (`src/Assimp/MaterialProcessor.h/cpp`): Builds Ogre::Material from Assimp aiMaterial. Reads legacy `aiTextureType_DIFFUSE` / `_NORMALS` / `_HEIGHT` plus PBR types (`_BASE_COLOR`, `_METALNESS`, `_DIFFUSE_ROUGHNESS` with `_SHININESS` fallback, `_AMBIENT_OCCLUSION`, `_EMISSIVE`) and binds them to the slice E canonical PBR slot names (`albedo`, `metallic`, `roughness`, `ao`, `emissive`) so PBR-aware tooling sees populated slots even on FBX/glTF imports. When no `BASE_COLOR` is exposed but a legacy `aiTextureType_DIFFUSE` was, the importer aliases the diffuse texture under `albedo` (non-FFP). Pass is **not** tagged `pbr_workflow` on import — that would auto-promote to `SRS_COOK_TORRANCE_LIGHTING` via the `applyNormalMap` redirect, producing dark output without IBL. A future slice may expose a "Convert to PBR" inspector action that adds the tag deliberately when IBL is in place.
 
 ### Local LLM
 

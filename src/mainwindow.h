@@ -18,10 +18,13 @@ class MeshInfoOverlay;
 class ViewCubeController;
 class PropertiesPanelController;
 class EditModeController;
+class EditorModeController;
 class WelcomeScreenController;
 class AssetBrowserController;
 class QQuickWidget;
 class QLabel;
+class QToolBar;
+class OgreWidget;
 
 namespace Ui {
 class MainWindow;
@@ -43,6 +46,14 @@ class MainWindow : public QMainWindow, public Ogre::FrameListener
     Q_OBJECT
 
 public:
+    /// Pixel height applied to bottom-docked tool widgets (Asset Browser,
+    /// Dope Sheet, Curve Editor, Context Panel) when docked. Floating
+    /// instances expand freely to QWIDGETSIZE_MAX.
+    static constexpr int kDefaultDockedHeight = 180;
+    /// Slightly larger than kDefaultDockedHeight so the dock title bar fits
+    /// without forcing the inner content to shrink.
+    static constexpr int kDefaultDockedMaxHeight = 220;
+
     explicit MainWindow(QWidget *parent = nullptr);
     virtual ~MainWindow();
     void importMeshs(const QStringList &_uriList);
@@ -107,6 +118,17 @@ private slots:
 public slots:
     void setPlaying(bool playing);
 
+public:
+    /// Accessors for the viewport display QActions so per-viewport
+    /// title bars (built by `EditorViewport`) can bind their toolbuttons
+    /// without forcing the whole `Ui::MainWindow` to be public. Each action
+    /// is owned by `ui->menuOptions` (autogen by Qt Designer) and lives for
+    /// the lifetime of MainWindow.
+    QAction* actionShowGrid() const;
+    QAction* actionShowNormals() const;
+    QAction* actionShowMeshInfo() const;
+    QAction* actionShowViewCube() const;
+
 private:
     Ui::MainWindow *ui;
 
@@ -134,6 +156,7 @@ protected:
     void keyReleaseEvent(QKeyEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void initToolBar();
@@ -149,6 +172,9 @@ private:
     QDockWidget* m_assetBrowserDock = nullptr;
     QDockWidget* m_dopeSheetDock = nullptr;
     QDockWidget* m_curveEditorDock = nullptr;
+    QDockWidget* m_bottomContextDock = nullptr;
+    QToolBar* m_modeBarShell = nullptr;
+    QQuickWidget* m_modeBar = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
     void addToRecentFiles(const QString& filePath);
@@ -168,6 +194,11 @@ private:
     /// `frameEnded()` causes on the status bar's main slot.
     QLabel* m_editHintLabel = nullptr;
     void updateEditModeIndicator();
+    void createModeSurfaces();
+    void configureBottomToolDock(QDockWidget* dock);
+    void showBottomToolDock(QDockWidget* dock);
+    void tabifyBottomToolDocks();
+    void updateToolRailForMode();
 };
 
 #endif // MAINWINDOW_H

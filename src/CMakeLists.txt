@@ -21,6 +21,7 @@ SkeletonDebug.cpp
 SkeletonTransform.cpp
 MeshImporterExporter.cpp
 EditorViewport.cpp
+ViewportTitleBar.cpp
 RotationGizmo.cpp
 TranslationGizmo.cpp
 ScaleGizmo.cpp
@@ -84,6 +85,7 @@ AssetBrowserController.cpp
 MaterialPreviewRenderer.cpp
 EditableMesh.cpp
 EditModeController.cpp
+EditorModeController.cpp
 HalfEdgeMesh.cpp
 )
 
@@ -110,6 +112,7 @@ SkeletonDebug.h
 SkeletonTransform.h
 MeshImporterExporter.h
 EditorViewport.h
+ViewportTitleBar.h
 RotationGizmo.h
 TranslationGizmo.h
 ScaleGizmo.h
@@ -163,6 +166,7 @@ AssetBrowserController.h
 MaterialPreviewRenderer.h
 EditableMesh.h
 EditModeController.h
+EditorModeController.h
 HalfEdgeMesh.h
 )
 

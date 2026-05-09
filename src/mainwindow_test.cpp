@@ -9,6 +9,7 @@
 #include <QMenuBar>
 #include <QMimeData>
 #include <QMessageBox>
+#include <QQuickItem>
 #include <QQuickWidget>
 #include <QSettings>
 #include <QSignalSpy>
@@ -31,9 +32,12 @@
 #include "SentryReporter.h"
 #include "TransformOperator.h"
 #include "EditModeController.h"
+#include "EditorModeController.h"
+#include "MeshInfoOverlay.h"
 #include "TestHelpers.h"
 #include "EditorViewport.h"
 #include "ViewportSettingsKeys.h"
+#include "ViewportTitleBar.h"
 #include "OgreWidget.h"
 #include "ui_mainwindow.h"
 
@@ -77,6 +81,11 @@ protected:
     void TearDown() override {
         delete window;
         window = nullptr;
+        // Tests below switch the editor mode (Animation/Material/etc). Reset
+        // the singleton so subsequent test cases see a fresh ObjectMode
+        // controller — otherwise stale state leaks into m_editModeLabel and
+        // any test that implicitly assumes the default mode.
+        EditorModeController::kill();
         QSettings().clear();
         QCoreApplication::setOrganizationName(previousOrganizationName);
         QCoreApplication::setApplicationName(previousApplicationName);
@@ -200,6 +209,186 @@ TEST_F(MainWindowTest, RebuildAllOgreViewportsDoesNotCrash)
     auto* ow = window->mDockWidgetList.first()->getOgreWidget();
     ASSERT_NE(ow, nullptr);
     EXPECT_NO_THROW(ow->fsaaSamples());
+}
+
+TEST_F(MainWindowTest, ModeBarLoadsAndModeChangeUpdatesStatusIndicator)
+{
+    ASSERT_NE(window->m_modeBarShell, nullptr);
+    ASSERT_NE(window->m_modeBar, nullptr);
+    ASSERT_NE(window->m_modeBar->rootObject(), nullptr);
+    ASSERT_EQ(window->m_modeBar->status(), QQuickWidget::Ready);
+    EXPECT_GE(window->m_modeBar->minimumWidth(), 560);
+    EXPECT_EQ(window->toolBarArea(window->m_modeBarShell), Qt::TopToolBarArea);
+    EXPECT_FALSE(window->m_modeBarShell->isHidden());
+    ASSERT_NE(window->m_editModeLabel, nullptr);
+
+    auto* modeController = EditorModeController::instance();
+
+    modeController->requestMode(EditorModeController::AnimationMode);
+    app->processEvents();
+    EXPECT_EQ(modeController->currentMode(), EditorModeController::AnimationMode);
+    EXPECT_EQ(modeController->statusText(), QStringLiteral("Animation mode"));
+    EXPECT_EQ(window->m_editModeLabel->text(), QStringLiteral("Animation mode"));
+
+    modeController->requestMode(EditorModeController::MaterialMode);
+    app->processEvents();
+    EXPECT_EQ(modeController->currentMode(), EditorModeController::MaterialMode);
+    EXPECT_EQ(modeController->statusText(), QStringLiteral("Material mode"));
+    EXPECT_EQ(window->m_editModeLabel->text(), QStringLiteral("Material mode"));
+}
+
+TEST_F(MainWindowTest, ContextualToolRailSwitchesActionsByMode)
+{
+    QAction* primitiveAction = findActionByObjectName("modeObjectPrimitiveAction");
+    QAction* editExtrudeAction = findActionByObjectName("modeEditExtrudeAction");
+    QAction* dopeAction = findActionByObjectName("modeAnimationDopeSheetAction");
+    QAction* curveAction = findActionByObjectName("modeAnimationCurveEditorAction");
+    QAction* mergeAction = findActionByObjectName("modeAnimationMergeAction");
+    QAction* materialAction = findActionByObjectName("modeMaterialEditorAction");
+    QAction* validationAction = findActionByObjectName("modeValidationRunAction");
+    ASSERT_NE(primitiveAction, nullptr);
+    ASSERT_NE(editExtrudeAction, nullptr);
+    ASSERT_NE(dopeAction, nullptr);
+    ASSERT_NE(curveAction, nullptr);
+    ASSERT_NE(mergeAction, nullptr);
+    ASSERT_NE(materialAction, nullptr);
+    ASSERT_NE(validationAction, nullptr);
+
+    auto* modeController = EditorModeController::instance();
+
+    modeController->requestMode(EditorModeController::ObjectMode);
+    app->processEvents();
+    EXPECT_TRUE(primitiveAction->isVisible());
+    EXPECT_FALSE(editExtrudeAction->isVisible());
+    EXPECT_FALSE(dopeAction->isVisible());
+    EXPECT_FALSE(materialAction->isVisible());
+    EXPECT_FALSE(validationAction->isVisible());
+
+    modeController->requestMode(EditorModeController::AnimationMode);
+    app->processEvents();
+    EXPECT_FALSE(primitiveAction->isVisible());
+    EXPECT_TRUE(dopeAction->isVisible());
+    EXPECT_TRUE(curveAction->isVisible());
+    EXPECT_TRUE(mergeAction->isVisible());
+    EXPECT_FALSE(materialAction->isVisible());
+    EXPECT_FALSE(validationAction->isVisible());
+
+    modeController->requestMode(EditorModeController::MaterialMode);
+    app->processEvents();
+    EXPECT_FALSE(dopeAction->isVisible());
+    EXPECT_TRUE(materialAction->isVisible());
+    EXPECT_FALSE(validationAction->isVisible());
+
+    modeController->requestMode(EditorModeController::ValidationMode);
+    app->processEvents();
+    EXPECT_FALSE(materialAction->isVisible());
+    EXPECT_TRUE(validationAction->isVisible());
+    EXPECT_FALSE(validationAction->isEnabled());
+}
+
+TEST_F(MainWindowTest, ContextualToolRailKeepsSharedMenuActionsReachable)
+{
+    auto* modeController = EditorModeController::instance();
+    modeController->requestMode(EditorModeController::ValidationMode);
+    app->processEvents();
+
+    EXPECT_TRUE(window->ui->actionMaterial_Editor->isVisible());
+    EXPECT_TRUE(window->ui->actionMerge_Animations->isVisible());
+
+    QWidget* materialToolbarButton =
+        window->ui->toolToolbar->widgetForAction(window->ui->actionMaterial_Editor);
+    QWidget* mergeToolbarButton =
+        window->ui->toolToolbar->widgetForAction(window->ui->actionMerge_Animations);
+    ASSERT_NE(materialToolbarButton, nullptr);
+    ASSERT_NE(mergeToolbarButton, nullptr);
+    EXPECT_TRUE(materialToolbarButton->isHidden());
+    EXPECT_TRUE(mergeToolbarButton->isHidden());
+}
+
+TEST_F(MainWindowTest, ContextualToolRailButtonsTriggerExistingBottomTools)
+{
+    QAction* dopeAction = findActionByObjectName("modeAnimationDopeSheetAction");
+    ASSERT_NE(dopeAction, nullptr);
+    auto* dopeButton = qobject_cast<QToolButton*>(window->ui->objectsToolbar->widgetForAction(dopeAction));
+    ASSERT_NE(dopeButton, nullptr);
+    ASSERT_NE(window->m_dopeSheetDock, nullptr);
+
+    window->m_dopeSheetDock->hide();
+    EditorModeController::instance()->requestMode(EditorModeController::AnimationMode);
+    app->processEvents();
+
+    dopeButton->click();
+    app->processEvents();
+    EXPECT_FALSE(window->m_dopeSheetDock->isHidden());
+    EXPECT_EQ(window->dockWidgetArea(window->m_dopeSheetDock), Qt::BottomDockWidgetArea);
+}
+
+TEST_F(MainWindowTest, ViewportDisplayActionsLiveInViewMenuNotToolbar)
+{
+    const QList<QAction*> viewMenuActions = window->ui->menuView->actions();
+    EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Grid));
+    EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Normals));
+    EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Mesh_Info));
+    EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_View_Cube));
+
+    const QList<QAction*> topOptionsActions = window->ui->menuOp_es->actions();
+    EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Grid));
+    EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Normals));
+    EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Mesh_Info));
+    EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_View_Cube));
+
+    const QList<QAction*> viewToolbarActions = window->ui->viewToolbar->actions();
+    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_Grid));
+    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_Normals));
+    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_Mesh_Info));
+    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_View_Cube));
+}
+
+TEST_F(MainWindowTest, ViewportTitleBarHostsViewportActions)
+{
+    // The viewport display menu is now embedded in each EditorViewport's
+    // custom title bar instead of a free-floating QQuickWidget. Verify the
+    // title bar exists, exposes G/N/I/C toolbuttons, and that triggering one
+    // propagates to the underlying QAction (and therefore the matching
+    // display state in MainWindow).
+    ASSERT_FALSE(window->mDockWidgetList.isEmpty());
+    EditorViewport* viewport = window->mDockWidgetList.first();
+    ASSERT_NE(viewport, nullptr);
+
+    ViewportTitleBar* titleBar = viewport->titleBarWidgetCustom();
+    ASSERT_NE(titleBar, nullptr);
+    EXPECT_EQ(viewport->titleBarWidget(), titleBar);
+
+    ASSERT_NE(titleBar->gridButton(), nullptr);
+    ASSERT_NE(titleBar->normalsButton(), nullptr);
+    ASSERT_NE(titleBar->meshInfoButton(), nullptr);
+    ASSERT_NE(titleBar->viewCubeButton(), nullptr);
+    ASSERT_NE(titleBar->floatButton(), nullptr);
+    ASSERT_NE(titleBar->closeButton(), nullptr);
+
+    EXPECT_EQ(titleBar->viewCubeButton()->text(), QStringLiteral("C"));
+
+    // Buttons should mirror the QAction's checked state immediately.
+    EXPECT_EQ(titleBar->gridButton()->isChecked(),
+              window->ui->actionShow_Grid->isChecked());
+    EXPECT_EQ(titleBar->viewCubeButton()->isChecked(),
+              window->ui->actionShow_View_Cube->isChecked());
+
+    // The viewport action buttons and recreated dock chrome buttons should
+    // share a visible bordered style so they read as one title-bar group.
+    EXPECT_TRUE(titleBar->gridButton()->styleSheet().contains(QStringLiteral("border: 1px")));
+    EXPECT_TRUE(titleBar->viewCubeButton()->styleSheet().contains(QStringLiteral("border: 1px")));
+    EXPECT_TRUE(titleBar->floatButton()->styleSheet().contains(QStringLiteral("border: 1px")));
+    EXPECT_TRUE(titleBar->closeButton()->styleSheet().contains(QStringLiteral("border: 1px")));
+
+    window->ui->actionShow_Mesh_Info->setChecked(false);
+    titleBar->meshInfoButton()->click();
+    app->processEvents();
+
+    EXPECT_TRUE(window->ui->actionShow_Mesh_Info->isChecked());
+    ASSERT_NE(window->m_meshInfoOverlay, nullptr);
+    EXPECT_TRUE(window->m_meshInfoOverlay->isVisible());
+    EXPECT_TRUE(titleBar->meshInfoButton()->isChecked());
 }
 
 // ---- Cycle all transform states via keyboard ----
@@ -813,6 +1002,41 @@ TEST_F(MainWindowTest, AssetBrowserMenuActionTracksDockVisibility)
     app->processEvents();
     EXPECT_FALSE(window->ui->actionAsset_Browser->isChecked());
     EXPECT_TRUE(window->m_assetBrowserDock->isHidden());
+}
+
+TEST_F(MainWindowTest, BottomToolDockRedocksAndUsesDefaultDockedHeight)
+{
+    ASSERT_NE(window->m_assetBrowserDock, nullptr);
+    ASSERT_NE(window->m_assetBrowserDock->widget(), nullptr);
+
+    window->show();
+    app->processEvents();
+
+    window->showBottomToolDock(window->m_assetBrowserDock);
+    app->processEvents();
+
+    EXPECT_FALSE(window->m_assetBrowserDock->isFloating());
+    EXPECT_EQ(window->dockWidgetArea(window->m_assetBrowserDock), Qt::BottomDockWidgetArea);
+    EXPECT_FALSE(window->m_assetBrowserDock->isHidden());
+    EXPECT_EQ(window->m_assetBrowserDock->widget()->maximumHeight(),
+              MainWindow::kDefaultDockedHeight);
+
+    window->m_assetBrowserDock->setFloating(true);
+    app->processEvents();
+    EXPECT_TRUE(window->m_assetBrowserDock->isFloating());
+
+    window->m_assetBrowserDock->hide();
+    app->processEvents();
+
+    window->showBottomToolDock(window->m_assetBrowserDock);
+    app->processEvents();
+
+    EXPECT_FALSE(window->m_assetBrowserDock->isFloating());
+    EXPECT_EQ(window->dockWidgetArea(window->m_assetBrowserDock), Qt::BottomDockWidgetArea);
+    EXPECT_FALSE(window->m_assetBrowserDock->isHidden());
+    EXPECT_LT(window->m_assetBrowserDock->maximumHeight(), QWIDGETSIZE_MAX);
+    EXPECT_EQ(window->m_assetBrowserDock->widget()->maximumHeight(),
+              MainWindow::kDefaultDockedHeight);
 }
 
 TEST_F(MainWindowTest, LoadFileQueuesNonSceneFileAndTracksRecentFiles)
