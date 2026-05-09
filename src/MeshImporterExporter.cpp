@@ -232,27 +232,63 @@ static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
         float shininess = pass->getShininess();
         aiMat->AddProperty(&shininess, 1, AI_MATKEY_SHININESS);
 
+        // Map our canonical slot names to Assimp texture types so the
+        // re-import path (MaterialProcessor) recognises them. Without
+        // this the metallic / roughness / ao / emissive slots would all
+        // export under aiTextureType_DIFFUSE, and on reimport the first
+        // one wins as the "diffuse" texture and the rest are dropped.
+        // We also keep "albedo" routed to DIFFUSE (legacy compatible)
+        // AND mirror it under BASE_COLOR so PBR-aware reimport finds it.
         unsigned short diffuseIdx = 0;
         unsigned short normalIdx = 0;
+        unsigned short baseColorIdx = 0;
+        unsigned short metalIdx = 0;
+        unsigned short roughIdx = 0;
+        unsigned short aoIdx = 0;
+        unsigned short emissiveIdx = 0;
         for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
         {
             auto* tus = pass->getTextureUnitState(ti);
-            if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED)
-            {
-                QString safeName = MeshImporterExporter::exportTextureName(
-                    QString::fromStdString(tus->getTextureName()));
-                aiString texPath(safeName.toStdString());
-                const auto& tusName = tus->getName();
-                if (tusName == "normal_map" || tusName == "NormalMap")
-                {
-                    aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
-                    ++normalIdx;
-                }
-                else
-                {
-                    aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
-                    ++diffuseIdx;
-                }
+            if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                continue;
+            QString safeName = MeshImporterExporter::exportTextureName(
+                QString::fromStdString(tus->getTextureName()));
+            aiString texPath(safeName.toStdString());
+            const auto& tusName = tus->getName();
+
+            if (tusName == "normal_map" || tusName == "NormalMap") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
+                ++normalIdx;
+            } else if (tusName == "albedo") {
+                // glTF base colour: write BASE_COLOR (PBR re-import) AND
+                // DIFFUSE (legacy / Phong renderers). Most engines accept
+                // both; Assimp routes BASE_COLOR back to aiTextureType_BASE_COLOR
+                // on re-read, which our MaterialProcessor binds to the
+                // "albedo" canonical slot.
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_BASE_COLOR, baseColorIdx));
+                ++baseColorIdx;
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
+                ++diffuseIdx;
+            } else if (tusName == "metallic") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_METALNESS, metalIdx));
+                ++metalIdx;
+            } else if (tusName == "roughness") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE_ROUGHNESS, roughIdx));
+                ++roughIdx;
+            } else if (tusName == "ao") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_AMBIENT_OCCLUSION, aoIdx));
+                ++aoIdx;
+            } else if (tusName == "emissive") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_EMISSIVE, emissiveIdx));
+                ++emissiveIdx;
+            } else if (tusName == "diffuse_map" || tusName.empty()) {
+                // Legacy Phong diffuse, or unnamed TUS — route as DIFFUSE.
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
+                ++diffuseIdx;
+            } else {
+                // Unknown slot name — route as UNKNOWN so it's preserved
+                // round-trip without being mistaken for a diffuse.
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_UNKNOWN, ti));
             }
         }
     }

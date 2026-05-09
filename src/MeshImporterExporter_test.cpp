@@ -717,6 +717,113 @@ TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
     EXPECT_TRUE(foundNode2) << "Second node with position (-1,0,5) not found";
 }
 
+// Slice F3 export-side PBR slot dispatch:
+// buildAiMaterialFromOgre routed every TUS that wasn't named "normal_map"
+// to aiTextureType_DIFFUSE — so on re-import roughness/metallic/ao/emissive
+// all collapsed into the diffuse slot (first one wins, rest dropped).
+// Now each slot routes to its proper aiTextureType_*. This round-trip test
+// exports a material with all 6 PBR slots populated, reimports, and
+// checks the slots are preserved by name on the imported material.
+TEST_F(SceneSaveLoadTest, RoundTrip_PbrSlots_PreservedAcrossExportImport) {
+    auto* manager = Manager::getSingleton();
+
+    // Pre-create the textures the importer will look up. These names
+    // mirror what a glTF or modern FBX asset would carry.
+    auto& tm = Ogre::TextureManager::getSingleton();
+    auto ensureTex = [&](const std::string& name) {
+        if (tm.getByName(name)) return;
+        tm.createManual(name,
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+            Ogre::TEX_TYPE_2D, 1, 1, 0, Ogre::PF_BYTE_RGBA);
+    };
+    ensureTex("rt_albedo.png");
+    ensureTex("rt_normal.png");
+    ensureTex("rt_metallic.png");
+    ensureTex("rt_roughness.png");
+    ensureTex("rt_ao.png");
+    ensureTex("rt_emissive.png");
+
+    // Build an Ogre material with all six canonical PBR slots, attach
+    // it to an entity, and route it through the scene exporter.
+    auto mat = Ogre::MaterialManager::getSingleton().create(
+        "PbrRoundTripMat",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    auto bindSlot = [&](const std::string& slot, const std::string& tex) {
+        auto* tus = pass->createTextureUnitState(tex);
+        tus->setName(slot);
+    };
+    bindSlot("albedo",     "rt_albedo.png");
+    bindSlot("normal_map", "rt_normal.png");
+    bindSlot("metallic",   "rt_metallic.png");
+    bindSlot("roughness",  "rt_roughness.png");
+    bindSlot("ao",         "rt_ao.png");
+    bindSlot("emissive",   "rt_emissive.png");
+    mat->compile();
+
+    auto mesh = createInMemoryTriangleMesh("pbr_rt_mesh");
+    auto* sn = manager->addSceneNode("PbrRoundTripNode");
+    auto* en = manager->createEntity(sn, mesh);
+    en->getSubEntity(0)->setMaterial(mat);
+    en->getMesh()->getSubMesh(0)->setMaterialName("PbrRoundTripMat");
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString sceneFile = tmpDir.path() + "/pbr_roundtrip.scene.gltf";
+    ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
+    ASSERT_TRUE(QFileInfo::exists(sceneFile));
+
+    // Tear down before reimport so the in-memory material can't satisfy
+    // the lookup — the test must verify the file actually carries the
+    // slot info, not just that we still have it cached locally.
+    manager->destroySceneNode(sn);
+    if (Ogre::MaterialManager::getSingleton().getByName("PbrRoundTripMat"))
+        Ogre::MaterialManager::getSingleton().remove("PbrRoundTripMat");
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+    ASSERT_FALSE(manager->getSceneNodes().isEmpty());
+
+    // Find the reimported entity and check its first sub-entity's material.
+    Ogre::Entity* importedEntity = nullptr;
+    for (auto* node : manager->getSceneNodes()) {
+        for (auto* obj : node->getAttachedObjects()) {
+            if (obj->getMovableType() == "Entity") {
+                importedEntity = static_cast<Ogre::Entity*>(obj);
+                break;
+            }
+        }
+        if (importedEntity) break;
+    }
+    ASSERT_NE(importedEntity, nullptr);
+    ASSERT_GE(importedEntity->getNumSubEntities(), 1u);
+
+    auto importedMat = Ogre::MaterialManager::getSingleton().getByName(
+        importedEntity->getSubEntity(0)->getMaterialName());
+    ASSERT_TRUE(bool(importedMat)) << "Reimported material missing";
+    auto* impPass = importedMat->getTechnique(0)->getPass(0);
+
+    auto hasSlot = [&](const std::string& name) {
+        for (unsigned short i = 0; i < impPass->getNumTextureUnitStates(); ++i) {
+            if (impPass->getTextureUnitState(i)->getName() == name)
+                return true;
+        }
+        return false;
+    };
+
+    // The 4 PBR-only slots are the ones the previous code would have
+    // collapsed under DIFFUSE. They must all round-trip now.
+    EXPECT_TRUE(hasSlot("metallic"))  << "metallic slot lost on round-trip";
+    EXPECT_TRUE(hasSlot("roughness")) << "roughness slot lost on round-trip";
+    EXPECT_TRUE(hasSlot("ao"))        << "ao slot lost on round-trip";
+    EXPECT_TRUE(hasSlot("emissive"))  << "emissive slot lost on round-trip";
+    // Normal map and albedo were already wired correctly before this fix —
+    // include them to guard against future regressions.
+    EXPECT_TRUE(hasSlot("normal_map") || hasSlot("NormalMap"))
+        << "normal_map slot lost on round-trip";
+    EXPECT_TRUE(hasSlot("albedo") || hasSlot("diffuse_map"))
+        << "albedo (or legacy diffuse_map alias) lost on round-trip";
+}
+
 TEST_F(SceneSaveLoadTest, MaterialDedup_SharedMaterial_ExportedOnce) {
     auto* manager = Manager::getSingleton();
 
