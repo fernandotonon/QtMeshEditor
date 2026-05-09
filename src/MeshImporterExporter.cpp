@@ -1318,9 +1318,33 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             }
 
             sn->setPosition(0,0,0);
+
+            // Auto-scale sub-unit meshes so they aren't clipped by the
+            // camera near plane. FBX/glTF files exported with millimetre
+            // or centimetre source units (Blender default 0.001 unit
+            // scale, real-world-scale photogrammetry, etc.) come in with
+            // bounding-box extents <0.01 — the entity loads but sits
+            // entirely inside the default near-clip distance and never
+            // renders. Scale the parent SceneNode so the largest
+            // dimension lands at ~1 unit. Threshold of 0.01 avoids
+            // touching sensible-scale assets (anything from a few cm up).
+            if (en && en->getMesh()) {
+                const auto& bbSize = en->getBoundingBox().getSize();
+                const Ogre::Real maxExtent = std::max({bbSize.x, bbSize.y, bbSize.z});
+                if (maxExtent > 0.0f && maxExtent < 0.01f) {
+                    const Ogre::Real factor = 1.0f / maxExtent;
+                    sn->setScale(factor, factor, factor);
+                    Ogre::LogManager::getSingleton().logMessage(
+                        "MeshImporterExporter: auto-scaled '" + en->getName() +
+                        "' by " + std::to_string(factor) +
+                        " (source max-extent " + std::to_string(maxExtent) +
+                        " was inside the near-clip plane)");
+                }
+            }
+
             configureCamera(en);
         }
-    } 
+    }
     catch(Ogre::Exception &e)
     {
         Ogre::LogManager::getSingleton().logMessage(e.getFullDescription());

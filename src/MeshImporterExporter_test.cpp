@@ -1384,3 +1384,87 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_ShortAliasUppercaseIsAppe
     QString result = MeshImporterExporter::formatFileURI("/tmp/model", "FBX");
     EXPECT_EQ(result, "/tmp/model.FBX");
 }
+
+// Slice F3: sub-unit imports must auto-scale to a sensible size.
+// FBX/glTF assets exported with mm or photogrammetry-scale source units
+// can come in with bounding-box extents below the camera near-clip
+// distance — they load but render invisible. The importer should detect
+// this and scale the parent SceneNode so the largest dimension lands
+// at ~1 unit.
+TEST_F(MeshImporterExporterTest, Importer_SubUnitMesh_AutoScalesParentNode) {
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
+
+    // Build a tiny in-memory mesh and stamp a sub-unit bbox on it. The
+    // bounding box drives the auto-scale heuristic regardless of the
+    // actual vertex data.
+    auto mesh = createInMemoryTriangleMesh("sub_unit_auto_scale_mesh");
+    ASSERT_NE(mesh, nullptr);
+    // Override the unit bounds set by the helper. ~5 mm extent — well
+    // below the 0.01 threshold the importer uses.
+    mesh->_setBounds(Ogre::AxisAlignedBox(-0.0025f, -0.0025f, -0.0025f,
+                                          0.0025f,  0.0025f,  0.0025f));
+
+    // Export to a temp .mesh so we can run it through the importer
+    // (the auto-scale code lives in MeshImporterExporter::importer).
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString outMesh = tmpDir.path() + "/sub_unit.mesh";
+    Ogre::MeshSerializer ser;
+    ser.exportMesh(mesh.get(), outMesh.toStdString());
+
+    // Drop the in-memory mesh so the importer parses it from disk.
+    Ogre::MeshManager::getSingleton().remove(mesh);
+    mesh.reset();
+
+    auto* manager = Manager::getSingleton();
+    const int prevNodeCount = manager->getSceneNodes().size();
+
+    MeshImporterExporter::importer({outMesh});
+
+    ASSERT_GT(manager->getSceneNodes().size(), prevNodeCount);
+    auto* importedNode = manager->getSceneNodes().last();
+    const Ogre::Vector3 scale = importedNode->getScale();
+
+    // Auto-scale should bring the largest dim to ~1. With a 0.005-unit
+    // extent the factor is ~200, but we test loosely (>= 50) to stay
+    // robust against future tweaks to the threshold.
+    EXPECT_GE(scale.x, 50.0f) << "Sub-unit mesh did not get auto-scaled (x)";
+    EXPECT_GE(scale.y, 50.0f) << "Sub-unit mesh did not get auto-scaled (y)";
+    EXPECT_GE(scale.z, 50.0f) << "Sub-unit mesh did not get auto-scaled (z)";
+    // Uniform scale — no axis should differ from the others.
+    EXPECT_FLOAT_EQ(scale.x, scale.y);
+    EXPECT_FLOAT_EQ(scale.y, scale.z);
+}
+
+// The corollary: meshes already at sensible scale (anywhere from a few
+// cm upward) must NOT be auto-scaled. The threshold is 0.01.
+TEST_F(MeshImporterExporterTest, Importer_NormalSizedMesh_KeepsScale1) {
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
+
+    auto mesh = createInMemoryTriangleMesh("normal_scale_mesh");
+    ASSERT_NE(mesh, nullptr);
+    // Default helper bounds are (-1, 1) — the largest extent is 2,
+    // well above the 0.01 auto-scale threshold.
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString outMesh = tmpDir.path() + "/normal_scale.mesh";
+    Ogre::MeshSerializer ser;
+    ser.exportMesh(mesh.get(), outMesh.toStdString());
+
+    Ogre::MeshManager::getSingleton().remove(mesh);
+    mesh.reset();
+
+    auto* manager = Manager::getSingleton();
+    const int prevNodeCount = manager->getSceneNodes().size();
+
+    MeshImporterExporter::importer({outMesh});
+
+    ASSERT_GT(manager->getSceneNodes().size(), prevNodeCount);
+    auto* importedNode = manager->getSceneNodes().last();
+    const Ogre::Vector3 scale = importedNode->getScale();
+
+    EXPECT_FLOAT_EQ(scale.x, 1.0f);
+    EXPECT_FLOAT_EQ(scale.y, 1.0f);
+    EXPECT_FLOAT_EQ(scale.z, 1.0f);
+}
