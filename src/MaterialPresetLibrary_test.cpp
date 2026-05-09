@@ -613,3 +613,76 @@ TEST_F(MaterialPresetLibraryTests, NonPbrPresetDoesNotAttachPbrShaderTechnique) 
         }
     }
 }
+
+// Slice F2: when the Metallic-Roughness preset's pass has a texture in
+// the normal_map slot, applyPbrIfTagged must compose SRS_NORMALMAP with
+// SRS_COOK_TORRANCE_LIGHTING in the same render state. Previously the
+// normal-map SRS was only added by applyNormalMap, which then reset
+// the render state and dropped Cook-Torrance — so PBR + normal map
+// rendered as either PBR or normal-mapped, never both. We seed the
+// normal_map slot with a small in-memory texture, then assert both
+// SRSes appear in the render state after applyPreset.
+TEST_F(MaterialPresetLibraryTests, MetallicRoughnessPresetComposesNormalMapWithCookTorrance) {
+    Manager::kill();
+    QThread::msleep(50);
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+    RTShaderHelper::initialize(sceneMgr);
+    auto rtssShutdown = qScopeGuard([sceneMgr] {
+        RTShaderHelper::shutdown(sceneMgr);
+    });
+
+    Ogre::Entity* entity = createSelectedEntity(
+        "PbrNormal_Node", "PbrNormal_Entity", "PbrNormal_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    // Create the M-R preset material first so we can inject a normal map
+    // texture into its normal_map slot, then apply again so applyPbrIfTagged
+    // re-runs and picks up the texture.
+    MaterialPresetLibrary::instance()->applyPreset("Metallic-Roughness");
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Metallic-Roughness");
+    ASSERT_TRUE(bool(mat));
+    auto* pass = mat->getTechnique(0)->getPass(0);
+
+    // Create a 1x1 fallback texture so the slot has a real texture name.
+    const std::string normTexName = "PbrNormal_FakeNormalTex";
+    if (!Ogre::TextureManager::getSingleton().resourceExists(normTexName)) {
+        Ogre::TextureManager::getSingleton().createManual(
+            normTexName,
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+            Ogre::TEX_TYPE_2D, 1, 1, 0, Ogre::PF_BYTE_RGBA);
+    }
+
+    // Find the normal_map slot and assign the texture.
+    bool found = false;
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        auto* tus = pass->getTextureUnitState(i);
+        if (tus->getName() == "normal_map") {
+            tus->setTextureName(normTexName);
+            found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(found) << "M-R preset is missing the normal_map slot";
+
+    // Re-run the PBR wiring now that the normal slot has a texture.
+    ASSERT_TRUE(RTShaderHelper::applyPbrIfTagged(mat));
+
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    ASSERT_NE(shaderGen, nullptr);
+    auto* renderState = shaderGen->getRenderState(
+        Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat, 0);
+    ASSERT_NE(renderState, nullptr);
+
+    EXPECT_NE(renderState->getSubRenderState(
+                  Ogre::RTShader::SRS_COOK_TORRANCE_LIGHTING), nullptr)
+        << "Cook-Torrance SRS missing — composition path dropped PBR";
+    EXPECT_NE(renderState->getSubRenderState(
+                  Ogre::RTShader::SRS_NORMALMAP), nullptr)
+        << "SRS_NORMALMAP missing — composition path skipped the normal map";
+}

@@ -251,3 +251,21 @@ TEST(MaterialProcessorTest, LoadSceneUnnamedMaterialsGetSequentialImportedNames)
     if (Ogre::MaterialManager::getSingleton().getByName("importedMaterial1"))
         Ogre::MaterialManager::getSingleton().remove("importedMaterial1");
 }
+
+// ─── Slice F3 PBR slot population ─────────────────────────────────────────────
+//
+// MaterialProcessor::processMaterial reads PBR-specific aiTextureType_*
+// constants and binds them to the slice E canonical slot names. The
+// behaviour is exercised end-to-end by SceneSaveLoadTest::
+// RoundTrip_PbrSlots_PreservedAcrossExportImport in MeshImporterExporter_test
+// — which uses tryInitOgre() so it has a full GL context for
+// TextureManager::createManual to allocate a real texture handle.
+//
+// Stand-alone unit tests against MaterialProcessor were attempted but
+// they crashed unit-tests-linux with SIGSEGV because the lightweight
+// `auto ogreRoot = std::make_unique<Ogre::Root>();` test fixture used by
+// the rest of this file doesn't initialise a render system, so
+// TextureManager::createManual / getByName segfault on the missing GL
+// state. The integration test in MeshImporterExporter_test covers the
+// import → export → reimport round-trip end-to-end and is the primary
+// regression guard for slice F3.
