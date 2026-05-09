@@ -825,6 +825,23 @@ TEST_F(SceneSaveLoadTest, RoundTrip_PbrSlots_PreservedAcrossExportImport) {
         << "normal_map slot lost on round-trip";
     EXPECT_TRUE(hasSlot("albedo") || hasSlot("diffuse_map"))
         << "albedo (or legacy diffuse_map alias) lost on round-trip";
+
+    // Slice F5 ordering parity: when albedo is present (alongside other
+    // PBR slots), it must be the LAST FFP-eligible TUS — matches the
+    // typical third-party PBR FBX layout. The importer used to put
+    // `albedo` second (right after `diffuse_map`) when BASE_COLOR was
+    // exposed, which differed from a first-import of a typical PBR FBX
+    // (where albedo only ever appears as the diffuse_map alias at the
+    // end). Keeping ordering stable means a re-imported FBX renders
+    // identically to a first-imported one.
+    if (hasSlot("albedo")) {
+        const auto numTUS = impPass->getNumTextureUnitStates();
+        ASSERT_GT(numTUS, 0u);
+        const auto lastSlot = impPass->getTextureUnitState(numTUS - 1)->getName();
+        EXPECT_EQ(lastSlot, "albedo")
+            << "albedo must be the LAST TUS (matches third-party FBX "
+               "layout for round-trip parity)";
+    }
 }
 
 TEST_F(SceneSaveLoadTest, MaterialDedup_SharedMaterial_ExportedOnce) {
