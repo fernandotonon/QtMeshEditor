@@ -1669,6 +1669,8 @@ void MainWindow::createModeSurfaces()
         if (auto* root = contextWidget->rootObject()) {
             root->setProperty("materialEditorAction",
                               QVariant::fromValue(static_cast<QObject*>(ui->actionMaterial_Editor)));
+            root->setProperty("bottomToolHost",
+                              QVariant::fromValue(static_cast<QObject*>(this)));
         }
 
         m_bottomContextDock = new QDockWidget(tr("Context"), this);
@@ -1727,6 +1729,22 @@ QAction* MainWindow::actionShowViewCube() const
     return ui ? ui->actionShow_View_Cube : nullptr;
 }
 
+void MainWindow::revealBottomTool(const QString& toolId)
+{
+    QDockWidget* dock = nullptr;
+    if (toolId == QStringLiteral("context"))
+        dock = m_bottomContextDock;
+    else if (toolId == QStringLiteral("assetBrowser"))
+        dock = m_assetBrowserDock;
+    else if (toolId == QStringLiteral("dopeSheet"))
+        dock = m_dopeSheetDock;
+    else if (toolId == QStringLiteral("curveEditor"))
+        dock = m_curveEditorDock;
+
+    if (dock)
+        showBottomToolDock(dock);
+}
+
 void MainWindow::configureBottomToolDock(QDockWidget* dock)
 {
     if (!dock)
@@ -1777,6 +1795,13 @@ void MainWindow::showBottomToolDock(QDockWidget* dock)
 
 void MainWindow::tabifyBottomToolDocks()
 {
+    // Bottom tool surfaces are meant to collapse into one tab group
+    // (Dope Sheet / Curve Editor / Asset Browser / Context), so ensure
+    // the shell actually allows tabbed docking before we call
+    // QMainWindow::tabifyDockWidget().
+    if (!(dockOptions() & QMainWindow::AllowTabbedDocks))
+        setDockOptions(dockOptions() | QMainWindow::AllowTabbedDocks);
+
     const QList<QDockWidget*> docks = {
         m_dopeSheetDock,
         m_curveEditorDock,

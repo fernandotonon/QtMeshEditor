@@ -323,6 +323,89 @@ TEST_F(MainWindowTest, ContextualToolRailButtonsTriggerExistingBottomTools)
     EXPECT_EQ(window->dockWidgetArea(window->m_dopeSheetDock), Qt::BottomDockWidgetArea);
 }
 
+TEST_F(MainWindowTest, BottomContextPanelLoadsAndTracksCurrentMode)
+{
+    ASSERT_NE(window->m_bottomContextDock, nullptr);
+    auto* quickWidget = qobject_cast<QQuickWidget*>(window->m_bottomContextDock->widget());
+    ASSERT_NE(quickWidget, nullptr);
+    ASSERT_EQ(quickWidget->status(), QQuickWidget::Ready);
+    QObject* root = quickWidget->rootObject();
+    ASSERT_NE(root, nullptr);
+
+    EXPECT_EQ(root->property("currentSummaryObjectName").toString(),
+              QStringLiteral("objectSummaryRoot"));
+
+    EditorModeController::instance()->requestMode(EditorModeController::AnimationMode);
+    app->processEvents();
+    EXPECT_EQ(root->property("currentSummaryObjectName").toString(),
+              QStringLiteral("animationSummaryRoot"));
+
+    EditorModeController::instance()->requestMode(EditorModeController::MaterialMode);
+    app->processEvents();
+    EXPECT_EQ(root->property("currentSummaryObjectName").toString(),
+              QStringLiteral("materialSummaryRoot"));
+
+    EditorModeController::instance()->requestMode(EditorModeController::ValidationMode);
+    app->processEvents();
+    EXPECT_EQ(root->property("currentSummaryObjectName").toString(),
+              QStringLiteral("validationSummaryRoot"));
+}
+
+TEST_F(MainWindowTest, BottomToolRevealTabsContextWithOtherBottomTools)
+{
+    ASSERT_NE(window->m_bottomContextDock, nullptr);
+    ASSERT_NE(window->m_assetBrowserDock, nullptr);
+    ASSERT_NE(window->m_dopeSheetDock, nullptr);
+    ASSERT_NE(window->m_curveEditorDock, nullptr);
+
+    window->show();
+    app->processEvents();
+
+    window->revealBottomTool(QStringLiteral("dopeSheet"));
+    window->revealBottomTool(QStringLiteral("curveEditor"));
+    window->revealBottomTool(QStringLiteral("assetBrowser"));
+    window->revealBottomTool(QStringLiteral("context"));
+    app->processEvents();
+
+    EXPECT_FALSE(window->m_bottomContextDock->isHidden());
+    EXPECT_FALSE(window->m_assetBrowserDock->isHidden());
+    EXPECT_FALSE(window->m_dopeSheetDock->isHidden());
+    EXPECT_FALSE(window->m_curveEditorDock->isHidden());
+
+    EXPECT_EQ(window->dockWidgetArea(window->m_bottomContextDock), Qt::BottomDockWidgetArea);
+    EXPECT_EQ(window->dockWidgetArea(window->m_assetBrowserDock), Qt::BottomDockWidgetArea);
+    EXPECT_EQ(window->dockWidgetArea(window->m_dopeSheetDock), Qt::BottomDockWidgetArea);
+    EXPECT_EQ(window->dockWidgetArea(window->m_curveEditorDock), Qt::BottomDockWidgetArea);
+
+    const auto areTabified = [this](QDockWidget* first, QDockWidget* second) {
+        return window->tabifiedDockWidgets(first).contains(second)
+            || window->tabifiedDockWidgets(second).contains(first);
+    };
+
+    EXPECT_TRUE(areTabified(window->m_bottomContextDock, window->m_assetBrowserDock));
+    EXPECT_TRUE(areTabified(window->m_bottomContextDock, window->m_dopeSheetDock));
+    EXPECT_TRUE(areTabified(window->m_bottomContextDock, window->m_curveEditorDock));
+}
+
+TEST_F(MainWindowTest, BottomToolRevealReturnsDetachedContextDockToBottomArea)
+{
+    ASSERT_NE(window->m_bottomContextDock, nullptr);
+
+    window->m_bottomContextDock->setFloating(true);
+    app->processEvents();
+    ASSERT_TRUE(window->m_bottomContextDock->isFloating());
+
+    window->m_bottomContextDock->hide();
+    app->processEvents();
+
+    window->revealBottomTool(QStringLiteral("context"));
+    app->processEvents();
+
+    EXPECT_FALSE(window->m_bottomContextDock->isFloating());
+    EXPECT_FALSE(window->m_bottomContextDock->isHidden());
+    EXPECT_EQ(window->dockWidgetArea(window->m_bottomContextDock), Qt::BottomDockWidgetArea);
+}
+
 TEST_F(MainWindowTest, ViewportDisplayActionsLiveInViewMenuNotToolbar)
 {
     const QList<QAction*> viewMenuActions = window->ui->menuView->actions();
