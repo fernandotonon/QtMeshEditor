@@ -48,8 +48,8 @@ class MainWindow : public QMainWindow, public Ogre::FrameListener
     Q_OBJECT
 
 public:
-    /// Pixel height applied to bottom-docked tool widgets (Asset Browser,
-    /// Dope Sheet, Curve Editor, Context Panel, Console) when docked. Floating
+    /// Pixel height applied to bottom-docked tool widgets (Context Panel,
+    /// Console, Asset Browser, Dope Sheet, Curve Editor) when docked. Floating
     /// instances expand freely to QWIDGETSIZE_MAX.
     static constexpr int kDefaultDockedHeight = 180;
     /// Slightly larger than kDefaultDockedHeight so the dock title bar fits

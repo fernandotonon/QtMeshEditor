@@ -1,10 +1,43 @@
 #include <QtDebug>
 
 #include <Ogre.h>
+#include <QSet>
 
 #include "Euler.h"
 #include "Manager.h"
 #include "SelectionSet.h"
+
+namespace {
+
+/// Collect Entity attachments on `node` and all descendant scene nodes
+/// (skips internal/editor nodes via Manager::isForbiddenNodeName).
+static void collectEntitiesOnNodeSubtree(Ogre::SceneNode* node, QList<Ogre::Entity*>& out,
+                                         QSet<Ogre::Entity*>& seen)
+{
+    if (!node)
+        return;
+
+    for (unsigned short i = 0; i < node->numAttachedObjects(); ++i) {
+        Ogre::MovableObject* obj = node->getAttachedObject(i);
+        if (!obj || obj->getMovableType() != "Entity")
+            continue;
+        auto* ent = static_cast<Ogre::Entity*>(obj);
+        if (!seen.contains(ent)) {
+            seen.insert(ent);
+            out.append(ent);
+        }
+    }
+
+    for (Ogre::Node* child : node->getChildren()) {
+        auto* childSn = static_cast<Ogre::SceneNode*>(child);
+        const QString name = QString::fromStdString(childSn->getName());
+        if (Manager::getSingleton()->isForbiddenNodeName(name))
+            continue;
+        collectEntitiesOnNodeSubtree(childSn, out, seen);
+    }
+}
+
+} // namespace
 
 ////////////////////////////////////////
 // Static variable initialisation
@@ -411,15 +444,40 @@ QList<Ogre::Entity*> SelectionSet::getResolvedEntities() const
     if (hasEntities())
         return getEntitiesSelectionList();
 
+    if (hasSubEntities()) {
+        QList<Ogre::Entity*> fromSubs;
+        QSet<Ogre::Entity*> seen;
+        for (Ogre::SubEntity* sub : getSubEntitiesSelectionList()) {
+            if (!sub)
+                continue;
+            Ogre::Entity* ent = sub->getParent();
+            if (ent && !seen.contains(ent)) {
+                seen.insert(ent);
+                fromSubs.append(ent);
+            }
+        }
+        if (!fromSubs.isEmpty())
+            return fromSubs;
+    }
+
     QList<Ogre::Entity*> entities;
     if (!hasNodes())
         return entities;
 
-    const auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    for (const auto* node : getNodesSelectionList())
-    {
-        if (sceneMgr->hasEntity(node->getName()))
-            entities.append(sceneMgr->getEntity(node->getName()));
+    QSet<Ogre::Entity*> seen;
+    Ogre::SceneManager* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    for (Ogre::SceneNode* node : getNodesSelectionList()) {
+        if (!node)
+            continue;
+        // Legacy layout: entity registered under the same name as the node.
+        if (sceneMgr && sceneMgr->hasEntity(node->getName())) {
+            Ogre::Entity* ent = sceneMgr->getEntity(node->getName());
+            if (ent && !seen.contains(ent)) {
+                seen.insert(ent);
+                entities.append(ent);
+            }
+        }
+        collectEntitiesOnNodeSubtree(node, entities, seen);
     }
     return entities;
 }

@@ -442,6 +442,38 @@ TEST_F(MainWindowTest, BottomToolRevealTabsContextWithOtherBottomTools)
     EXPECT_TRUE(areTabified(window->m_bottomContextDock, window->m_consoleDock));
 }
 
+TEST_F(MainWindowTest, BottomToolTabOrderStartsWithContextDock)
+{
+    ASSERT_NE(window->m_bottomContextDock, nullptr);
+    ASSERT_NE(window->m_consoleDock, nullptr);
+    ASSERT_NE(window->m_dopeSheetDock, nullptr);
+
+    window->show();
+    app->processEvents();
+
+    // Reveal in an order that used to leave Console as the active tab; after
+    // tabifyBottomToolDocks(), Context should remain the first tab in the group.
+    window->revealBottomTool(QStringLiteral("console"));
+    window->revealBottomTool(QStringLiteral("dopeSheet"));
+    window->revealBottomTool(QStringLiteral("context"));
+    app->processEvents();
+
+    window->tabifyBottomToolDocks();
+    app->processEvents();
+
+    const QList<QDockWidget*> tabs = window->tabifiedDockWidgets(window->m_bottomContextDock);
+    ASSERT_FALSE(tabs.isEmpty());
+    EXPECT_EQ(tabs.first(), window->m_bottomContextDock)
+        << "Context should be the leading tab in the bottom tool tab strip";
+
+    const int ctxIdx = tabs.indexOf(window->m_bottomContextDock);
+    const int conIdx = tabs.indexOf(window->m_consoleDock);
+    EXPECT_EQ(ctxIdx, 0);
+    EXPECT_GE(conIdx, 0);
+    if (conIdx >= 0)
+        EXPECT_LT(ctxIdx, conIdx);
+}
+
 TEST_F(MainWindowTest, BottomToolRevealReturnsDetachedContextDockToBottomArea)
 {
     ASSERT_NE(window->m_bottomContextDock, nullptr);

@@ -11,6 +11,18 @@
 #include <QVariantMap>
 #include <limits>
 
+namespace {
+
+QList<Ogre::Entity*> lodTargetEntities()
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel)
+        return {};
+    return sel->getResolvedEntities();
+}
+
+} // namespace
+
 MeshLodController* MeshLodController::m_pSingleton = nullptr;
 
 MeshLodController* MeshLodController::instance()
@@ -50,16 +62,12 @@ MeshLodController::~MeshLodController() = default;
 
 bool MeshLodController::hasSelection() const
 {
-    auto* sel = SelectionSet::getSingleton();
-    return sel && sel->hasEntities();
+    return !lodTargetEntities().isEmpty();
 }
 
 int MeshLodController::currentLodLevels() const
 {
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities())
-        return 0;
-    auto entities = sel->getEntitiesSelectionList();
+    const QList<Ogre::Entity*> entities = lodTargetEntities();
     if (entities.empty())
         return 0;
     int count = static_cast<int>(entities.front()->getMesh()->getNumLodLevels());
@@ -69,10 +77,7 @@ int MeshLodController::currentLodLevels() const
 QVariantList MeshLodController::lodLevelInfo() const
 {
     QVariantList result;
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities()) return result;
-
-    auto entities = sel->getEntitiesSelectionList();
+    const QList<Ogre::Entity*> entities = lodTargetEntities();
     if (entities.empty()) return result;
 
     Ogre::MeshPtr mesh = entities.front()->getMesh();
@@ -114,10 +119,7 @@ QVariantList MeshLodController::lodLevelInfo() const
 
 void MeshLodController::previewLod(int lodIndex)
 {
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities()) return;
-
-    for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
+    for (Ogre::Entity* entity : lodTargetEntities()) {
         if (lodIndex < 0) {
             // restore: full range, normal bias
             entity->setMeshLodBias(1.0f, 0, std::numeric_limits<unsigned short>::max());
@@ -130,9 +132,9 @@ void MeshLodController::previewLod(int lodIndex)
 
 void MeshLodController::generateLods(int count, QVariantList reductions)
 {
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities()) {
-        emit error("No mesh selected.");
+    const QList<Ogre::Entity*> targets = lodTargetEntities();
+    if (targets.isEmpty()) {
+        emit error("No mesh found in selection.");
         return;
     }
 
@@ -144,7 +146,7 @@ void MeshLodController::generateLods(int count, QVariantList reductions)
     // distances at which each LOD kicks in (world units)
     static const float kDistances[] = { 50.0f, 150.0f, 400.0f, 1000.0f };
 
-    for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
+    for (Ogre::Entity* entity : targets) {
         Ogre::MeshPtr mesh = entity->getMesh();
         if (!mesh) continue;
 
@@ -174,15 +176,15 @@ void MeshLodController::generateLods(int count, QVariantList reductions)
 
 void MeshLodController::generateAutoLods()
 {
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities()) {
-        emit error("No mesh selected.");
+    const QList<Ogre::Entity*> targets = lodTargetEntities();
+    if (targets.isEmpty()) {
+        emit error("No mesh found in selection.");
         return;
     }
 
     SentryReporter::addBreadcrumb("ui.action", "Auto-generate LOD levels");
 
-    for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
+    for (Ogre::Entity* entity : targets) {
         Ogre::MeshPtr mesh = entity->getMesh();
         if (!mesh) continue;
 
@@ -201,12 +203,12 @@ void MeshLodController::generateAutoLods()
 
 void MeshLodController::removeLods()
 {
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities()) return;
+    const QList<Ogre::Entity*> targets = lodTargetEntities();
+    if (targets.isEmpty()) return;
 
     SentryReporter::addBreadcrumb("ui.action", "Remove LOD levels");
 
-    for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
+    for (Ogre::Entity* entity : targets) {
         Ogre::MeshPtr mesh = entity->getMesh();
         if (mesh)
             mesh->removeLodLevels();
@@ -217,17 +219,16 @@ void MeshLodController::removeLods()
 
 void MeshLodController::exportLods(const QString& format)
 {
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities()) {
-        emit error("No mesh selected.");
+    const QList<Ogre::Entity*> targets = lodTargetEntities();
+    if (targets.isEmpty()) {
+        emit error("No mesh found in selection.");
         return;
     }
 
     SentryReporter::addBreadcrumb("ui.action",
         QString("Export LOD levels (%1)").arg(format.isEmpty() ? "gltf" : format));
 
-    auto entities = sel->getEntitiesSelectionList();
-    Ogre::Entity* entity = entities.empty() ? nullptr : entities.front();
+    Ogre::Entity* entity = targets.front();
     if (!entity) return;
 
     Ogre::MeshPtr mesh = entity->getMesh();
@@ -246,11 +247,10 @@ void MeshLodController::exportLods(const QString& format)
 
 void MeshLodController::doExportLods(const QString& format, const QString& directory)
 {
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities()) return;
+    const QList<Ogre::Entity*> targets = lodTargetEntities();
+    if (targets.isEmpty()) return;
 
-    auto entities = sel->getEntitiesSelectionList();
-    Ogre::Entity* entity = entities.empty() ? nullptr : entities.front();
+    Ogre::Entity* entity = targets.front();
     if (!entity) return;
 
     Ogre::MeshPtr mesh = entity->getMesh();

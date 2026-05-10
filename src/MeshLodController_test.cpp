@@ -119,7 +119,7 @@ TEST_F(MeshLodControllerTest, GenerateLodsEmitsErrorWithNoSelection) {
     app->processEvents();
 
     ASSERT_EQ(spy.count(), 1);
-    EXPECT_TRUE(spy.first().first().toString().contains("No mesh selected"));
+    EXPECT_TRUE(spy.first().first().toString().contains("No mesh found in selection"));
 }
 
 TEST_F(MeshLodControllerTest, GenerateAutoLodsEmitsErrorWithNoSelection) {
@@ -131,7 +131,7 @@ TEST_F(MeshLodControllerTest, GenerateAutoLodsEmitsErrorWithNoSelection) {
     app->processEvents();
 
     ASSERT_EQ(spy.count(), 1);
-    EXPECT_TRUE(spy.first().first().toString().contains("No mesh selected"));
+    EXPECT_TRUE(spy.first().first().toString().contains("No mesh found in selection"));
 }
 
 TEST_F(MeshLodControllerTest, ExportLodsEmitsErrorWithNoSelection) {
@@ -143,7 +143,7 @@ TEST_F(MeshLodControllerTest, ExportLodsEmitsErrorWithNoSelection) {
     app->processEvents();
 
     ASSERT_EQ(spy.count(), 1);
-    EXPECT_TRUE(spy.first().first().toString().contains("No mesh selected"));
+    EXPECT_TRUE(spy.first().first().toString().contains("No mesh found in selection"));
 }
 
 // ===========================================================================
@@ -155,6 +155,65 @@ TEST_F(MeshLodControllerTest, HasSelectionTrueWithEntitySelected) {
     ASSERT_NE(createAndSelectMesh("HasSel"), nullptr);
 
     EXPECT_TRUE(MeshLodController::instance()->hasSelection());
+}
+
+TEST_F(MeshLodControllerTest, HasSelectionTrueWhenAncestorNodeSelected) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    SelectionSet::getSingleton()->clear();
+
+    Ogre::SceneNode* parent = Manager::getSingleton()->addSceneNode(QStringLiteral("lod_nested_parent"));
+    ASSERT_NE(parent, nullptr);
+    SelectionSet::getSingleton()->clear();
+
+    Ogre::SceneNode* child = parent->createChildSceneNode("lod_nested_child");
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("lod_nested_mesh_data");
+    ASSERT_NE(mesh, nullptr);
+    Ogre::SceneManager* sm = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* entity = sm->createEntity(child->getName(), mesh);
+    child->attachObject(entity);
+
+    SelectionSet::getSingleton()->append(parent);
+    app->processEvents();
+
+    EXPECT_TRUE(MeshLodController::instance()->hasSelection());
+
+    SelectionSet::getSingleton()->clear();
+    Manager::getSingleton()->destroySceneNode(parent);
+}
+
+TEST_F(MeshLodControllerTest, GenerateLodsSucceedsWithAncestorNodeSelectionOnly) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    SelectionSet::getSingleton()->clear();
+
+    Ogre::SceneNode* parent = Manager::getSingleton()->addSceneNode(QStringLiteral("lod_gen_nested_parent"));
+    ASSERT_NE(parent, nullptr);
+    SelectionSet::getSingleton()->clear();
+
+    Ogre::SceneNode* child = parent->createChildSceneNode("lod_gen_nested_child");
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("lod_gen_nested_mesh_data");
+    ASSERT_NE(mesh, nullptr);
+    Ogre::SceneManager* sm = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* entity = sm->createEntity(child->getName(), mesh);
+    child->attachObject(entity);
+
+    SelectionSet::getSingleton()->append(parent);
+    app->processEvents();
+
+    auto* ctrl = MeshLodController::instance();
+    QSignalSpy errSpy(ctrl, &MeshLodController::error);
+    QSignalSpy okSpy(ctrl, &MeshLodController::generationSucceeded);
+    ASSERT_TRUE(errSpy.isValid());
+    ASSERT_TRUE(okSpy.isValid());
+
+    ctrl->generateLods(1, QVariantList{0.5f});
+    app->processEvents();
+
+    EXPECT_EQ(errSpy.count(), 0);
+    ASSERT_EQ(okSpy.count(), 1);
+    EXPECT_GE(ctrl->currentLodLevels(), 1);
+
+    SelectionSet::getSingleton()->clear();
+    Manager::getSingleton()->destroySceneNode(parent);
 }
 
 TEST_F(MeshLodControllerTest, CurrentLodLevelsZeroBeforeGeneration) {
