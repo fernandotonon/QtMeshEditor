@@ -3037,3 +3037,86 @@ TEST(CLIPipelineCmdPackTextures, InvertFlagFlipsConstantSource)
     ASSERT_FALSE(img.isNull());
     EXPECT_EQ(qRed(img.pixel(4, 4)), 0);
 }
+
+// -- cmdNormalFromHeight (slice H) --
+
+namespace {
+
+// Helper: write an N×M grayscale PNG with the given per-pixel value
+// function, return the path. Mirrors the helper in
+// NormalMapGenerator_test but kept local to avoid cross-test deps.
+template <class F>
+QString writeGreyPng(const QTemporaryDir& dir, const QString& name,
+                     int w, int h, F valueFn)
+{
+    QImage img(w, h, QImage::Format_RGBA8888);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const int v = valueFn(x, y);
+            img.setPixel(x, y, qRgba(v, v, v, 255));
+        }
+    }
+    const QString path = dir.filePath(name);
+    img.save(path, "PNG");
+    return path;
+}
+
+} // namespace
+
+TEST(CLIPipelineCmdNormalFromHeight, MissingArgsFails)
+{
+    TestArgv args({"qtmesh", "normal-from-height"});
+    EXPECT_EQ(CLIPipeline::cmdNormalFromHeight(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdNormalFromHeight, MissingSourceFileReturnsRuntimeError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray outPath = tmp.filePath("never.png").toUtf8();
+    TestArgv args({"qtmesh", "normal-from-height",
+                   "--src", "/nonexistent/missing_for_test.png",
+                   "-o", outPath.constData()});
+    EXPECT_EQ(CLIPipeline::cmdNormalFromHeight(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdNormalFromHeight, FlatHeightProducesStraightUpNormalMap)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray src = writeGreyPng(tmp, "flat.png", 16, 16,
+                                         [](int, int){ return 128; }).toUtf8();
+    const QByteArray outPath = tmp.filePath("normal.png").toUtf8();
+    TestArgv args({"qtmesh", "normal-from-height",
+                   "--src", src.constData(),
+                   "-o", outPath.constData()});
+    EXPECT_EQ(CLIPipeline::cmdNormalFromHeight(args.argc(), args.argv()), 0);
+
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 16);
+    EXPECT_NEAR(qRed(img.pixel(8, 8)),   128, 2);
+    EXPECT_NEAR(qGreen(img.pixel(8, 8)), 128, 2);
+    EXPECT_EQ(qBlue(img.pixel(8, 8)),    255);
+}
+
+TEST(CLIPipelineCmdNormalFromHeight, InvertGFlipsGreenChannel)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    // Vertical ramp → ny < 0 by default → green < 128. With --invert-g
+    // it should flip above 128.
+    const QByteArray src = writeGreyPng(tmp, "ramp_y.png", 16, 16,
+                                         [](int, int y){ return std::min(255, y * 16); }).toUtf8();
+    const QByteArray outPath = tmp.filePath("normal_dx.png").toUtf8();
+    TestArgv args({"qtmesh", "normal-from-height",
+                   "--src", src.constData(),
+                   "--strength", "2.0",
+                   "--invert-g",
+                   "-o", outPath.constData()});
+    EXPECT_EQ(CLIPipeline::cmdNormalFromHeight(args.argc(), args.argv()), 0);
+
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_GT(qGreen(img.pixel(8, 8)), 135);
+}

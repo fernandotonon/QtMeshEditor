@@ -1729,6 +1729,39 @@ Rectangle {
                     ToolTip.text: "Pack 1–4 grayscale source images into a single RGBA texture (e.g. Unity ORM = AO+Roughness+Metallic, Unreal MR)."
                 }
             }
+
+            // Slice H: Normal Map Generator — Sobel-filter a height/bump
+            // source into a tangent-space normal map. Same Mode-Tools
+            // placement as Pack Texture Channels (operates on disk
+            // files, not the selection's TUS).
+            Rectangle {
+                width: Math.min(parent.width - 16, normalLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                color: normalMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: normalLabel
+                    anchors.centerIn: parent
+                    text: "Generate Normal Map…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: normalMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openNormalMapGeneratorDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: "Generate a tangent-space normal map from a height/bump source via Sobel filter."
+                }
+            }
         }
     }
 
@@ -1751,6 +1784,23 @@ Rectangle {
             textureChannelPackerLoader.active = true
         } else if (textureChannelPackerLoader.item) {
             textureChannelPackerLoader.item.open()
+        }
+    }
+
+    // Slice H: Normal Map Generator dialog — same Loader pattern.
+    Loader {
+        id: normalMapGeneratorLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/NormalMapGeneratorDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+
+    function openNormalMapGeneratorDialog() {
+        if (!normalMapGeneratorLoader.active) {
+            normalMapGeneratorLoader.active = true
+        } else if (normalMapGeneratorLoader.item) {
+            normalMapGeneratorLoader.item.open()
         }
     }
 

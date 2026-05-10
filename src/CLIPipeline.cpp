@@ -11,6 +11,7 @@
 #include "FBX/FBXExporter.h"
 #include "MaterialPresetLibrary.h"
 #include "TextureChannelPacker.h"
+#include "NormalMapGenerator.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -960,6 +961,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "scan") rc = cmdScan(argc, argv);
     else if (cmd == "material") rc = cmdMaterial(argc, argv);
     else if (cmd == "pack-textures") rc = cmdPackTextures(argc, argv);
+    else if (cmd == "normal-from-height") rc = cmdNormalFromHeight(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -2660,6 +2662,57 @@ int CLIPipeline::cmdPackTextures(int argc, char* argv[])
     }
 
     cliWrite(QString("Packed %1x%2 -> %3\n")
+                 .arg(r.usedWidth)
+                 .arg(r.usedHeight)
+                 .arg(QFileInfo(outputPath).fileName()));
+    return 0;
+}
+
+int CLIPipeline::cmdNormalFromHeight(int argc, char* argv[])
+{
+    // Parse:
+    //   normal-from-height --src <bump.png> [--strength N]
+    //                      [--invert-r] [--invert-g]
+    //                      [--width N] [--height N]
+    //                      -o <out.png>
+    NormalMapGenerator::GenSpec spec;
+    QString outputPath;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "normal-from-height" || arg == "--cli") continue;
+        if (arg == "--src" && i + 1 < argc) { spec.sourcePath = QString(argv[++i]); continue; }
+        if (arg == "--strength" && i + 1 < argc) { spec.strength = QString(argv[++i]).toFloat(); continue; }
+        if (arg == "--width"  && i + 1 < argc) { spec.outputWidth  = QString(argv[++i]).toInt(); continue; }
+        if (arg == "--height" && i + 1 < argc) { spec.outputHeight = QString(argv[++i]).toInt(); continue; }
+        if (arg == "--invert-r") { spec.invertR = true; continue; }
+        if (arg == "--invert-g" || arg == "--directx") { spec.invertG = true; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString(argv[++i]);
+            continue;
+        }
+    }
+
+    if (spec.sourcePath.isEmpty() || outputPath.isEmpty()) {
+        err() << "Error: missing --src or -o." << Qt::endl;
+        err() << "Usage: qtmesh normal-from-height --src <height.png>" << Qt::endl;
+        err() << "                                 [--strength N] [--invert-r] [--invert-g]" << Qt::endl;
+        err() << "                                 [--width N --height N]" << Qt::endl;
+        err() << "                                 -o <normal.png>" << Qt::endl;
+        return 2;
+    }
+
+    SentryReporter::addBreadcrumb("cli.normal-from-height",
+        QString("Normal map from %1 -> %2")
+            .arg(QFileInfo(spec.sourcePath).fileName(),
+                 QFileInfo(outputPath).fileName()));
+
+    auto r = NormalMapGenerator::generateToFile(spec, outputPath);
+    if (!r.ok) {
+        err() << "Error: " << r.error << Qt::endl;
+        return 1;
+    }
+    cliWrite(QString("Normal map %1x%2 -> %3\n")
                  .arg(r.usedWidth)
                  .arg(r.usedHeight)
                  .arg(QFileInfo(outputPath).fileName()));

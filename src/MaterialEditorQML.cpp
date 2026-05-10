@@ -10,6 +10,7 @@
 #include "ModelDownloader.h"
 #include "RTShaderHelper.h"
 #include "TextureChannelPacker.h"
+#include "NormalMapGenerator.h"
 #include "PS1/PS1TIM.h"
 #include <OgreRTShaderSystem.h>
 #include <QDebug>
@@ -2917,6 +2918,74 @@ QString MaterialEditorQML::packTextureChannels(const QString& redPath,
     spec.includeAlpha    = includeAlpha;
 
     auto r = TextureChannelPacker::packToFile(spec, outputPath);
+    return r.ok ? QString() : r.error;
+}
+
+QString MaterialEditorQML::saveNormalMapDialog()
+{
+    QString texturesPath = "./media/materials/textures";
+    QDir texturesDir(texturesPath);
+    QString startDir = texturesDir.exists() ? texturesDir.absolutePath() : QDir::currentPath();
+
+    QApplication::processEvents();
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+
+    QString selectedFile = QFileDialog::getSaveFileName(
+        QApplication::activeWindow(),
+        "Save Normal Map",
+        startDir + "/normal.png",
+        "PNG (*.png);;TGA (*.tga);;JPEG (*.jpg *.jpeg);;BMP (*.bmp)",
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons
+    );
+    return selectedFile;
+}
+
+QString MaterialEditorQML::previewNormalMap(const QString& sourcePath,
+                                             double strength,
+                                             bool invertR,
+                                             bool invertG,
+                                             int previewSize)
+{
+    NormalMapGenerator::GenSpec spec;
+    spec.sourcePath = sourcePath;
+    spec.strength = static_cast<float>(strength);
+    spec.invertR = invertR;
+    spec.invertG = invertG;
+    // Cap preview size so live updates are cheap.
+    const int cappedSize = std::clamp(previewSize, 32, 512);
+    spec.outputWidth = cappedSize;
+    spec.outputHeight = cappedSize;
+
+    auto r = NormalMapGenerator::generate(spec);
+    if (!r.ok) return QString();
+
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    if (!r.image.save(&buf, "PNG")) return QString();
+    return QStringLiteral("data:image/png;base64,") + bytes.toBase64();
+}
+
+QString MaterialEditorQML::generateNormalMap(const QString& sourcePath,
+                                              double strength,
+                                              bool invertR,
+                                              bool invertG,
+                                              const QString& outputPath)
+{
+    SentryReporter::addBreadcrumb("ui.action", "Generate normal map");
+
+    NormalMapGenerator::GenSpec spec;
+    spec.sourcePath = sourcePath;
+    spec.strength = static_cast<float>(strength);
+    spec.invertR = invertR;
+    spec.invertG = invertG;
+
+    auto r = NormalMapGenerator::generateToFile(spec, outputPath);
     return r.ok ? QString() : r.error;
 }
 

@@ -4,6 +4,7 @@
 #include "MaterialEditorQML.h"
 #include "MaterialPresetLibrary.h"
 #include "TextureChannelPacker.h"
+#include "NormalMapGenerator.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -444,7 +445,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("reparent_node"), &MCPServer::toolReparentNode},
         {QStringLiteral("set_pivot_mode"), &MCPServer::toolSetPivotMode},
         {QStringLiteral("get_pivot_mode"), &MCPServer::toolGetPivotMode},
-        {QStringLiteral("pack_textures"), &MCPServer::toolPackTextures}
+        {QStringLiteral("pack_textures"), &MCPServer::toolPackTextures},
+        {QStringLiteral("generate_normal_map"), &MCPServer::toolGenerateNormalMap}
     };
     return handlers;
 }
@@ -3394,6 +3396,43 @@ QJsonObject MCPServer::toolPackTextures(const QJsonObject &args)
     return result;
 }
 
+QJsonObject MCPServer::toolGenerateNormalMap(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "generate_normal_map");
+
+    NormalMapGenerator::GenSpec spec;
+    spec.sourcePath = args.value("source").toString();
+    if (args.contains("strength"))
+        spec.strength = static_cast<float>(args.value("strength").toDouble());
+    if (args.contains("width"))
+        spec.outputWidth = args.value("width").toInt();
+    if (args.contains("height"))
+        spec.outputHeight = args.value("height").toInt();
+    if (args.contains("invert_r"))
+        spec.invertR = args.value("invert_r").toBool();
+    if (args.contains("invert_g"))
+        spec.invertG = args.value("invert_g").toBool();
+    if (args.contains("directx") && args.value("directx").toBool())
+        spec.invertG = true;  // alias for invert_g
+
+    const QString outPath = args.value("output").toString();
+    if (spec.sourcePath.isEmpty() || outPath.isEmpty())
+        return makeErrorResult("Error: missing required 'source' and 'output' arguments");
+
+    auto r = NormalMapGenerator::generateToFile(spec, outPath);
+    if (!r.ok)
+        return makeErrorResult(QString("Error: %1").arg(r.error));
+
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{
+        {"type", "text"},
+        {"text", QString("Normal map %1x%2 -> %3").arg(r.usedWidth).arg(r.usedHeight).arg(outPath)}}};
+    result["width"]  = r.usedWidth;
+    result["height"] = r.usedHeight;
+    result["output"] = outPath;
+    return result;
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -4252,6 +4291,40 @@ QJsonArray MCPServer::buildToolsList()
             "Unreal MR = Metallic+Roughness). Each output channel takes either a source image (sampled "
             "as luminance) or a constant 0..1 value. Smaller sources are bilinear-scaled to match the "
             "largest input. Returns the output dimensions on success.",
+            props,
+            required
+        );
+    }
+
+    // generate_normal_map (slice H)
+    {
+        QJsonObject props;
+        props["source"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Path to the grayscale height/bump source image (PNG/TGA/JPG/BMP)."}};
+        props["output"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Output file path. Extension determines format (PNG/TGA/JPG/BMP)."}};
+        props["strength"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Sobel gradient multiplier — effective bump intensity. Default 2.0; clamped to 0..32."}};
+        props["width"]  = QJsonObject{{"type", "integer"},
+            {"description", "Optional output width. Defaults to the source width."}};
+        props["height"] = QJsonObject{{"type", "integer"}};
+        props["invert_r"] = QJsonObject{{"type", "boolean"},
+            {"description", "Flip the red channel — rare; kept for pipeline parity."}};
+        props["invert_g"] = QJsonObject{{"type", "boolean"},
+            {"description", "Flip the green channel — switches OpenGL (+Y up, default) ↔ DirectX (+Y down)."}};
+        props["directx"] = QJsonObject{{"type", "boolean"},
+            {"description", "Alias for invert_g — DirectX convention output."}};
+        QJsonArray required;
+        required.append("source");
+        required.append("output");
+        appendTool(
+            "generate_normal_map",
+            "Generate a tangent-space normal map from a grayscale height/bump source via a 3x3 Sobel "
+            "filter. Output is RGB8 with the OpenGL +Y-up convention by default; set invert_g (or "
+            "directx) for DirectX +Y-down output. Returns the output dimensions on success.",
             props,
             required
         );

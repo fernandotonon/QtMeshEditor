@@ -77,6 +77,7 @@ BatchExporter.cpp
 MaterialPresetLibrary.cpp
 MeshLodController.cpp
 TextureChannelPacker.cpp
+NormalMapGenerator.cpp
 MeshValidator.cpp
 AIChatManager.cpp
 WelcomeScreenController.cpp
@@ -161,6 +162,7 @@ BatchExporter.h
 MaterialPresetLibrary.h
 MeshLodController.h
 TextureChannelPacker.h
+NormalMapGenerator.h
 MeshValidator.h
 AIChatManager.h
 WelcomeScreenController.h
