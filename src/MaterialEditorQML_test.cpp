@@ -6,6 +6,7 @@
 #include <QThread>
 #include <QDir>
 #include <QFile>
+#include <QImage>
 #include <QTemporaryDir>
 #include "MaterialEditorQML.h"
 #include "Manager.h"
@@ -2578,4 +2579,60 @@ TEST_F(MaterialEditorQMLWithOgreTest, NewTechniqueAddPassAndSelectIt) {
     editor->setSelectedTechniqueIndex(0);
     editor->setSelectedPassIndex(0);
     EXPECT_TRUE(editor->lightingEnabled());
+}
+
+// ---------------------------------------------------------------------------
+// Slice G: Q_INVOKABLE wrappers for the texture channel packer
+// ---------------------------------------------------------------------------
+
+TEST_F(MaterialEditorQMLTest, PackTextureChannels_AllConstantsWritesPng) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outPath = tmp.filePath("packed_const.png");
+
+    QString err = editor->packTextureChannels(
+        QString(), QString(), QString(), QString(),
+        1.0, 0.5, 0.0, 1.0,
+        false, false, false, false,
+        true, outPath);
+    EXPECT_TRUE(err.isEmpty()) << err.toStdString();
+    EXPECT_TRUE(QFile::exists(outPath));
+}
+
+TEST_F(MaterialEditorQMLTest, PackTextureChannels_MissingPathReturnsError) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outPath = tmp.filePath("never.png");
+
+    QString err = editor->packTextureChannels(
+        "/nonexistent/missing_for_test.png", QString(), QString(), QString(),
+        0.0, 0.0, 0.0, 1.0,
+        false, false, false, false,
+        true, outPath);
+    EXPECT_FALSE(err.isEmpty());
+    EXPECT_FALSE(QFile::exists(outPath));
+}
+
+TEST_F(MaterialEditorQMLTest, PackTextureChannels_EmptyOutputPathReturnsError) {
+    QString err = editor->packTextureChannels(
+        QString(), QString(), QString(), QString(),
+        0.5, 0.0, 0.0, 1.0,
+        false, false, false, false,
+        true, QString());
+    EXPECT_FALSE(err.isEmpty());
+}
+
+TEST_F(MaterialEditorQMLTest, PackTextureChannels_InvertFlagFlipsConstant) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outPath = tmp.filePath("inv.png");
+    QString err = editor->packTextureChannels(
+        QString(), QString(), QString(), QString(),
+        1.0, 0.0, 0.0, 1.0,
+        /*invertR=*/true, false, false, false,
+        true, outPath);
+    EXPECT_TRUE(err.isEmpty());
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(qRed(img.pixel(0, 0)), 0);
 }

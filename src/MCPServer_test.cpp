@@ -9,6 +9,7 @@
 #include <QSignalSpy>
 #include <QElapsedTimer>
 #include <QDir>
+#include <QImage>
 #include <QTemporaryDir>
 #include <memory>
 #include <QMainWindow>
@@ -5822,4 +5823,83 @@ TEST_F(MCPServerTest, ResampleAnimation_Valid)
     QJsonObject result = server->callTool("resample_animation", args);
     // May succeed or fail depending on skeleton state, but should not crash
     EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+// ==========================================================================
+// SLICE G: pack_textures tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, PackTextures_MissingOutputReturnsError)
+{
+    QJsonObject args;
+    args["red_constant"] = 0.5;
+    QJsonObject result = server->callTool("pack_textures", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("output", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, PackTextures_AllConstantsWritesPng)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outPath = tmp.filePath("packed_constants.png");
+
+    QJsonObject args;
+    args["red_constant"]   = 1.0;
+    args["green_constant"] = 0.5;
+    args["blue_constant"]  = 0.0;
+    args["alpha_constant"] = 1.0;
+    args["width"]  = 32;
+    args["height"] = 32;
+    args["output"] = outPath;
+    QJsonObject result = server->callTool("pack_textures", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_EQ(result["width"].toInt(), 32);
+    EXPECT_EQ(result["height"].toInt(), 32);
+
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 32);
+}
+
+TEST_F(MCPServerTest, PackTextures_MissingSourceReportsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    QJsonObject args;
+    args["red"] = "/nonexistent/should_not_resolve_for_test.png";
+    args["output"] = tmp.filePath("nope.png");
+    QJsonObject result = server->callTool("pack_textures", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, PackTextures_InvertFlagAppliesToConstant)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outPath = tmp.filePath("inv.png");
+    QJsonObject args;
+    args["red_constant"] = 1.0;
+    args["invert_red"]   = true;
+    args["width"]  = 8;
+    args["height"] = 8;
+    args["output"] = outPath;
+    QJsonObject result = server->callTool("pack_textures", args);
+    EXPECT_FALSE(isError(result));
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(qRed(img.pixel(4, 4)), 0);
+}
+
+TEST_F(MCPServerTest, PackTextures_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "pack_textures") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "pack_textures must be exposed in tools/list";
 }
