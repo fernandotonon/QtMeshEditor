@@ -23,6 +23,7 @@
 #include "AppSettingsKeys.h"
 #include "mainwindow.h"
 #include <QApplication>
+#include <QMessageBox>
 #include <QFileDialog>
 #include <QSettings>
 #include <QPalette>
@@ -228,6 +229,68 @@ SceneTreeModel* PropertiesPanelController::sceneTreeModel() const
 bool PropertiesPanelController::hasSelection() const
 {
     return !SelectionSet::getSingleton()->isEmpty();
+}
+
+bool PropertiesPanelController::mergeAnimationsEnabled() const
+{
+    const auto* sel = SelectionSet::getSingleton();
+    return sel->getNodesCount() + sel->getEntitiesCount() >= 2;
+}
+
+void PropertiesPanelController::triggerMergeAnimations()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Scene panel: Merge Animations");
+    for (QWidget* w : QApplication::topLevelWidgets()) {
+        if (auto* mw = qobject_cast<MainWindow*>(w)) {
+            mw->triggerMergeAnimations();
+            return;
+        }
+    }
+}
+
+void PropertiesPanelController::triggerMaterialEditor()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Mode Tools: Material Editor");
+    for (QWidget* w : QApplication::topLevelWidgets()) {
+        if (auto* mw = qobject_cast<MainWindow*>(w)) {
+            mw->triggerMaterialEditor();
+            return;
+        }
+    }
+}
+
+void PropertiesPanelController::deleteSceneTreeNode(const QString& nodeName)
+{
+    if (nodeName.isEmpty() || Manager::getSingleton()->isForbiddenNodeName(nodeName))
+        return;
+
+    SentryReporter::addBreadcrumb("ui.action", "Scene tree: delete node");
+    Manager::getSingleton()->destroySceneNode(nodeName);
+    SelectionSet::getSingleton()->clearList();
+    UndoManager::getSingleton()->clear();
+}
+
+void PropertiesPanelController::clearSceneTreeAllNodes()
+{
+    QWidget* parent = nullptr;
+    for (QWidget* w : QApplication::topLevelWidgets()) {
+        if (auto* mw = qobject_cast<MainWindow*>(w)) {
+            parent = mw;
+            break;
+        }
+    }
+
+    if (QMessageBox::question(parent, tr("Clear scene"),
+            tr("Remove all objects from the scene?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+        != QMessageBox::Yes) {
+        return;
+    }
+
+    SentryReporter::addBreadcrumb("ui.action", "Scene tree: remove all nodes");
+    Manager::getSingleton()->destroyAllUserRootNodes();
+    SelectionSet::getSingleton()->clearList();
+    UndoManager::getSingleton()->clear();
 }
 
 bool PropertiesPanelController::hasEntitySelection() const

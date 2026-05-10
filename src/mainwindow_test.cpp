@@ -13,6 +13,7 @@
 #include <QQuickWidget>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QDateTime>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
@@ -130,6 +131,46 @@ protected:
     }
 };
 
+TEST_F(MainWindowTest, ViewMenuContextPanelAndConsoleDefaultChecked)
+{
+    QAction* ctx = window->findChild<QAction*>(QStringLiteral("actionView_Context_Panel"));
+    QAction* con = window->findChild<QAction*>(QStringLiteral("actionView_Console"));
+    ASSERT_NE(ctx, nullptr);
+    ASSERT_NE(con, nullptr);
+    EXPECT_TRUE(ctx->isChecked());
+    EXPECT_TRUE(con->isChecked());
+    EXPECT_TRUE(QSettings().value(QStringLiteral("View/showContextPanel"), false).toBool());
+    EXPECT_TRUE(QSettings().value(QStringLiteral("View/showConsole"), false).toBool());
+}
+
+TEST_F(MainWindowTest, ViewMenuConsoleToggleUpdatesDockVisibilityAndSettings)
+{
+    QAction* con = window->findChild<QAction*>(QStringLiteral("actionView_Console"));
+    ASSERT_NE(con, nullptr);
+
+    con->setChecked(false);
+    app->processEvents();
+    EXPECT_TRUE(window->m_consoleDock->isHidden());
+    EXPECT_FALSE(QSettings().value(QStringLiteral("View/showConsole"), true).toBool());
+
+    con->setChecked(true);
+    app->processEvents();
+    EXPECT_FALSE(window->m_consoleDock->isHidden());
+    EXPECT_TRUE(QSettings().value(QStringLiteral("View/showConsole"), false).toBool());
+}
+
+TEST_F(MainWindowTest, ConsoleWidgetReceivesQtLogLine)
+{
+    const QString marker = QStringLiteral("QtMeshEditor_TestLogMarker_%1")
+                               .arg(QDateTime::currentMSecsSinceEpoch());
+    qWarning().noquote() << marker;
+    app->processEvents();
+
+    ASSERT_NE(window->m_consoleEdit, nullptr);
+    EXPECT_TRUE(window->m_consoleEdit->toPlainText().contains(marker))
+        << window->m_consoleEdit->toPlainText().toStdString();
+}
+
 // ---- setTransformState ----
 
 TEST_F(MainWindowTest, SetTransformStateSelect) {
@@ -165,6 +206,18 @@ TEST_F(MainWindowTest, KeyXTogglesTransformSpace) {
     QKeyEvent secondToggle(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier);
     window->keyPressEvent(&secondToggle);
     EXPECT_EQ(TransformOperator::getSingleton()->getTransformSpace(), space_before);
+}
+
+TEST_F(MainWindowTest, TransformSpaceActionShowsCurrentSpaceName)
+{
+    auto* action = window->findChild<QAction*>(QStringLiteral("actionToggle_Transform_Space"));
+    ASSERT_NE(action, nullptr);
+
+    TransformOperator::getSingleton()->setTransformSpace(TransformOperator::SPACE_WORLD);
+    EXPECT_EQ(action->text(), QStringLiteral("World"));
+
+    TransformOperator::getSingleton()->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    EXPECT_EQ(action->text(), QStringLiteral("Local"));
 }
 
 TEST_F(MainWindowTest, KeyDeleteWithEmptySelection) {
@@ -243,15 +296,11 @@ TEST_F(MainWindowTest, ContextualToolRailSwitchesActionsByMode)
     QAction* editExtrudeAction = findActionByObjectName("modeEditExtrudeAction");
     QAction* dopeAction = findActionByObjectName("modeAnimationDopeSheetAction");
     QAction* curveAction = findActionByObjectName("modeAnimationCurveEditorAction");
-    QAction* mergeAction = findActionByObjectName("modeAnimationMergeAction");
-    QAction* materialAction = findActionByObjectName("modeMaterialEditorAction");
     QAction* validationAction = findActionByObjectName("modeValidationRunAction");
     ASSERT_NE(primitiveAction, nullptr);
     ASSERT_NE(editExtrudeAction, nullptr);
     ASSERT_NE(dopeAction, nullptr);
     ASSERT_NE(curveAction, nullptr);
-    ASSERT_NE(mergeAction, nullptr);
-    ASSERT_NE(materialAction, nullptr);
     ASSERT_NE(validationAction, nullptr);
 
     auto* modeController = EditorModeController::instance();
@@ -261,7 +310,6 @@ TEST_F(MainWindowTest, ContextualToolRailSwitchesActionsByMode)
     EXPECT_TRUE(primitiveAction->isVisible());
     EXPECT_FALSE(editExtrudeAction->isVisible());
     EXPECT_FALSE(dopeAction->isVisible());
-    EXPECT_FALSE(materialAction->isVisible());
     EXPECT_FALSE(validationAction->isVisible());
 
     modeController->requestMode(EditorModeController::AnimationMode);
@@ -269,19 +317,20 @@ TEST_F(MainWindowTest, ContextualToolRailSwitchesActionsByMode)
     EXPECT_FALSE(primitiveAction->isVisible());
     EXPECT_TRUE(dopeAction->isVisible());
     EXPECT_TRUE(curveAction->isVisible());
-    EXPECT_TRUE(mergeAction->isVisible());
-    EXPECT_FALSE(materialAction->isVisible());
     EXPECT_FALSE(validationAction->isVisible());
 
     modeController->requestMode(EditorModeController::MaterialMode);
     app->processEvents();
     EXPECT_FALSE(dopeAction->isVisible());
-    EXPECT_TRUE(materialAction->isVisible());
     EXPECT_FALSE(validationAction->isVisible());
+    EXPECT_TRUE(window->ui->actionSelect_Object->isVisible());
+    EXPECT_TRUE(window->ui->actionTranslate_Object->isVisible());
+    EXPECT_TRUE(window->ui->actionRotate_Object->isVisible());
+    EXPECT_TRUE(window->ui->actionScale_Object->isVisible());
+    EXPECT_TRUE(window->ui->actionToggle_Transform_Space->isVisible());
 
     modeController->requestMode(EditorModeController::ValidationMode);
     app->processEvents();
-    EXPECT_FALSE(materialAction->isVisible());
     EXPECT_TRUE(validationAction->isVisible());
     EXPECT_FALSE(validationAction->isEnabled());
 }
@@ -295,14 +344,12 @@ TEST_F(MainWindowTest, ContextualToolRailKeepsSharedMenuActionsReachable)
     EXPECT_TRUE(window->ui->actionMaterial_Editor->isVisible());
     EXPECT_TRUE(window->ui->actionMerge_Animations->isVisible());
 
-    QWidget* materialToolbarButton =
-        window->ui->toolToolbar->widgetForAction(window->ui->actionMaterial_Editor);
-    QWidget* mergeToolbarButton =
-        window->ui->toolToolbar->widgetForAction(window->ui->actionMerge_Animations);
-    ASSERT_NE(materialToolbarButton, nullptr);
-    ASSERT_NE(mergeToolbarButton, nullptr);
-    EXPECT_TRUE(materialToolbarButton->isHidden());
-    EXPECT_TRUE(mergeToolbarButton->isHidden());
+    // Material Editor and Merge Animations are no longer on the top Tools bar;
+    // menu actions remain for discoverability.
+    EXPECT_EQ(window->ui->toolToolbar->widgetForAction(window->ui->actionMaterial_Editor),
+              nullptr);
+    EXPECT_EQ(window->ui->toolToolbar->widgetForAction(window->ui->actionMerge_Animations),
+              nullptr);
 }
 
 TEST_F(MainWindowTest, ContextualToolRailButtonsTriggerExistingBottomTools)
@@ -326,6 +373,8 @@ TEST_F(MainWindowTest, ContextualToolRailButtonsTriggerExistingBottomTools)
 TEST_F(MainWindowTest, BottomContextPanelLoadsAndTracksCurrentMode)
 {
     ASSERT_NE(window->m_bottomContextDock, nullptr);
+    window->showBottomToolDock(window->m_bottomContextDock);
+    app->processEvents();
     EXPECT_FALSE(window->m_bottomContextDock->isHidden());
     auto* quickWidget = qobject_cast<QQuickWidget*>(window->m_bottomContextDock->widget());
     ASSERT_NE(quickWidget, nullptr);
@@ -358,6 +407,7 @@ TEST_F(MainWindowTest, BottomToolRevealTabsContextWithOtherBottomTools)
     ASSERT_NE(window->m_assetBrowserDock, nullptr);
     ASSERT_NE(window->m_dopeSheetDock, nullptr);
     ASSERT_NE(window->m_curveEditorDock, nullptr);
+    ASSERT_NE(window->m_consoleDock, nullptr);
 
     window->show();
     app->processEvents();
@@ -365,6 +415,7 @@ TEST_F(MainWindowTest, BottomToolRevealTabsContextWithOtherBottomTools)
     window->revealBottomTool(QStringLiteral("dopeSheet"));
     window->revealBottomTool(QStringLiteral("curveEditor"));
     window->revealBottomTool(QStringLiteral("assetBrowser"));
+    window->revealBottomTool(QStringLiteral("console"));
     window->revealBottomTool(QStringLiteral("context"));
     app->processEvents();
 
@@ -372,11 +423,13 @@ TEST_F(MainWindowTest, BottomToolRevealTabsContextWithOtherBottomTools)
     EXPECT_FALSE(window->m_assetBrowserDock->isHidden());
     EXPECT_FALSE(window->m_dopeSheetDock->isHidden());
     EXPECT_FALSE(window->m_curveEditorDock->isHidden());
+    EXPECT_FALSE(window->m_consoleDock->isHidden());
 
     EXPECT_EQ(window->dockWidgetArea(window->m_bottomContextDock), Qt::BottomDockWidgetArea);
     EXPECT_EQ(window->dockWidgetArea(window->m_assetBrowserDock), Qt::BottomDockWidgetArea);
     EXPECT_EQ(window->dockWidgetArea(window->m_dopeSheetDock), Qt::BottomDockWidgetArea);
     EXPECT_EQ(window->dockWidgetArea(window->m_curveEditorDock), Qt::BottomDockWidgetArea);
+    EXPECT_EQ(window->dockWidgetArea(window->m_consoleDock), Qt::BottomDockWidgetArea);
 
     const auto areTabified = [this](QDockWidget* first, QDockWidget* second) {
         return window->tabifiedDockWidgets(first).contains(second)
@@ -386,6 +439,7 @@ TEST_F(MainWindowTest, BottomToolRevealTabsContextWithOtherBottomTools)
     EXPECT_TRUE(areTabified(window->m_bottomContextDock, window->m_assetBrowserDock));
     EXPECT_TRUE(areTabified(window->m_bottomContextDock, window->m_dopeSheetDock));
     EXPECT_TRUE(areTabified(window->m_bottomContextDock, window->m_curveEditorDock));
+    EXPECT_TRUE(areTabified(window->m_bottomContextDock, window->m_consoleDock));
 }
 
 TEST_F(MainWindowTest, BottomToolRevealReturnsDetachedContextDockToBottomArea)
@@ -422,12 +476,6 @@ TEST_F(MainWindowTest, ViewportDisplayActionsLiveInViewMenuNotToolbar)
     EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Normals));
     EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Mesh_Info));
     EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_View_Cube));
-
-    const QList<QAction*> viewToolbarActions = window->ui->viewToolbar->actions();
-    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_Grid));
-    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_Normals));
-    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_Mesh_Info));
-    EXPECT_FALSE(viewToolbarActions.contains(window->ui->actionShow_View_Cube));
 }
 
 TEST_F(MainWindowTest, ViewportTitleBarHostsViewportActions)
@@ -671,11 +719,6 @@ TEST_F(MainWindowTest, ToolbarTogglesUpdateWidgetVisibility) {
     window->on_actionTools_Toolbar_toggled(true);
     EXPECT_FALSE(window->ui->toolToolbar->isHidden());
 
-    window->on_actionView_Toolbar_toggled(false);
-    EXPECT_TRUE(window->ui->viewToolbar->isHidden());
-    window->on_actionView_Toolbar_toggled(true);
-    EXPECT_FALSE(window->ui->viewToolbar->isHidden());
-
     window->on_actionMeshEditor_toggled(false);
     EXPECT_TRUE(window->ui->meshEditorWidget->isHidden());
     window->on_actionMeshEditor_toggled(true);
@@ -813,13 +856,30 @@ TEST_F(MainWindowTest, ConstructorAutostartsMCPServerWhenEnabledInSettings)
     EXPECT_GT(window->m_mcpServer->httpPort(), 0);
 }
 
-TEST_F(MainWindowTest, UpdateMergeAnimationsButtonDisablesActionWhenSelectionHasNoSkeletons) {
+TEST_F(MainWindowTest, UpdateMergeAnimationsButtonDisablesActionWhenFewerThanTwoNodeOrEntityPicks) {
     window->ui->actionMerge_Animations->setEnabled(true);
     SelectionSet::getSingleton()->clear();
 
     window->updateMergeAnimationsButton();
 
     EXPECT_FALSE(window->ui->actionMerge_Animations->isEnabled());
+}
+
+TEST_F(MainWindowTest, UpdateMergeAnimationsButtonEnablesActionForTwoSceneNodes) {
+    auto* manager = Manager::getSingleton();
+    ASSERT_NE(manager, nullptr);
+    Ogre::SceneNode* nodeA = manager->addSceneNode("MergeEnableNodeA");
+    Ogre::SceneNode* nodeB = manager->addSceneNode("MergeEnableNodeB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(nodeA);
+    SelectionSet::getSingleton()->append(nodeB);
+
+    window->updateMergeAnimationsButton();
+
+    EXPECT_TRUE(window->ui->actionMerge_Animations->isEnabled());
 }
 
 TEST_F(MainWindowTest, UpdateMergeAnimationsButtonDisablesActionForSingleSkeletonEntity) {

@@ -17,8 +17,13 @@ Rectangle {
         anchors.rightMargin: 10
         spacing: 10
 
+        // Spacer first so mode buttons sit flush to the right of the toolbar row
+        Item {
+            Layout.fillWidth: true
+        }
+
         Row {
-            Layout.alignment: Qt.AlignVCenter
+            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
             spacing: 2
 
             Repeater {

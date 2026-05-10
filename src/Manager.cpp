@@ -604,6 +604,33 @@ void Manager::destroySceneNode(const QString & name)
         // Node may not exist or scene manager may be shutting down
     }
 }
+void Manager::destroyAllUserRootNodes()
+{
+    if (!mSceneMgr)
+        return;
+
+    SentryReporter::addBreadcrumb("scene", "Destroy all user root scene nodes");
+
+    Ogre::SceneNode* root = mSceneMgr->getRootSceneNode();
+    QStringList names;
+    for (const auto& child : root->getChildren())
+    {
+        auto* childNode = static_cast<Ogre::SceneNode*>(child);
+        const QString name = QString::fromStdString(childNode->getName());
+        if (name.isEmpty() || isForbiddenNodeName(name))
+            continue;
+        // Match SceneTreeModel::buildChildren — skip transient gizmo rigs.
+        if (name == QStringLiteral("BevelGizmo_Node")
+            || name == QStringLiteral("BevelGizmo_Shaft")
+            || name == QStringLiteral("BevelGizmo_Handle"))
+            continue;
+        names.append(name);
+    }
+
+    for (const QString& name : names)
+        destroySceneNode(name);
+}
+
 void Manager::destroySceneNode(Ogre::SceneNode* node)
 {
     if(!node || !mSceneMgr || isForbiddenNodeName(node->getName().c_str()))
