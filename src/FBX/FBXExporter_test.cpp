@@ -1437,8 +1437,11 @@ TEST_F(FBXExporterCoverageTest, MaterialProperties) {
     EXPECT_NEAR(specular->properties[5].doubleVal, 0.6, 0.01);
     EXPECT_NEAR(specular->properties[6].doubleVal, 0.7, 0.01);
 
-    // Shininess: 64.0
-    auto* shininess = findP70(*props, "Shininess");
+    // ShininessExponent: 64.0 — slice F5 renamed "Shininess" to
+    // "ShininessExponent" so Assimp's reimporter actually picks the
+    // value up (FBXConverter only reads AI_MATKEY_SHININESS from
+    // ShininessExponent).
+    auto* shininess = findP70(*props, "ShininessExponent");
     ASSERT_NE(shininess, nullptr);
     EXPECT_NEAR(shininess->properties[4].doubleVal, 64.0, 0.01);
 
@@ -2523,8 +2526,10 @@ TEST_F(FBXExporterCoverageTest, ExportMeshWithMaterials_WritesMaterialData) {
     EXPECT_NEAR(specular->properties[5].doubleVal, 0.6, 0.05);
     EXPECT_NEAR(specular->properties[6].doubleVal, 0.7, 0.05);
 
-    // Check for shininess
-    auto* shininess = findP70(*props, "Shininess");
+    // Check for shininess (slice F5: renamed Shininess → ShininessExponent
+    // because Assimp's FBX importer reads AI_MATKEY_SHININESS only from
+    // ShininessExponent — the legacy "Shininess" was silently dropped).
+    auto* shininess = findP70(*props, "ShininessExponent");
     ASSERT_NE(shininess, nullptr);
     EXPECT_NEAR(shininess->properties[4].doubleVal, 64.0, 0.5);
 
@@ -2584,6 +2589,87 @@ TEST_F(FBXExporterCoverageTest, VerticesZMirrored_WithNonZeroZ) {
     EXPECT_NEAR(v[2], -1.5, 0.001);
     EXPECT_NEAR(v[5], -2.5, 0.001);
     EXPECT_NEAR(v[8], -3.5, 0.001);
+
+    cleanup(r);
+}
+
+// Slice F4: PBR slot names dispatch to FBX property names
+//
+// FBXExporter writes Texture→Material connections with a property name
+// at properties[3] of each "OP" connection. Before slice F4 every TUS
+// that wasn't named "normal_map" got "DiffuseColor" — so a material
+// with metallic / roughness / ao / emissive textures round-tripped as
+// 4 competing diffuse channels and the user only got the first one
+// back on reimport. This test rebuilds a textured mesh, renames its
+// TUSes to the slice E canonical PBR slot names + adds extras for the
+// other slots, exports, and asserts each slot's texture pairs with
+// the correct FBX property name in Connections.
+TEST_F(FBXExporterCoverageTest, PbrSlotConnections_DispatchToFbxPropertyNames) {
+    auto name = uniqueName("pbrcon");
+    auto* entity = createTexturedMesh(name);
+    ASSERT_NE(entity, nullptr);
+
+    // Replace the single diffuse TUS with the 6 canonical PBR slots.
+    // Each one references a distinct texture filename so we can match
+    // texture↔property in the parsed Connections section.
+    auto mat = entity->getSubEntity(0)->getMaterial();
+    ASSERT_TRUE(bool(mat));
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    pass->removeAllTextureUnitStates();
+    auto bind = [&](const std::string& slot, const std::string& tex) {
+        auto* tus = pass->createTextureUnitState(tex);
+        tus->setName(slot);
+    };
+    bind("albedo",     "albedo_tex.png");
+    bind("normal_map", "normal_tex.png");
+    bind("metallic",   "metallic_tex.png");
+    bind("roughness",  "roughness_tex.png");
+    bind("ao",         "ao_tex.png");
+    bind("emissive",   "emissive_tex.png");
+    mat->compile();
+
+    auto r = exportAndParse(entity);
+    ASSERT_TRUE(r.success);
+
+    auto* conn = findTopLevel(r.nodes, "Connections");
+    ASSERT_NE(conn, nullptr);
+    auto cNodes = conn->findAll("C");
+
+    // Collect all OP connections' FBX property names.
+    std::set<std::string> seenProps;
+    for (const auto* c : cNodes) {
+        if (c->properties.size() < 4) continue;
+        if (c->properties[0].stringVal != "OP") continue;
+        seenProps.insert(c->properties[3].stringVal);
+    }
+
+    // Each slice E canonical slot must dispatch to a property name
+    // that Assimp's FBX importer recognises on re-read. Assimp uses
+    // the Maya Stingray "Maya|TEX_*_map" prefix for PBR maps — generic
+    // "Metallic" / "DiffuseRoughness" / "AmbientColor" property names
+    // are silently dropped by FBXConverter::SetTextureProperties.
+    EXPECT_TRUE(seenProps.count("NormalMap") > 0)
+        << "normal_map slot must connect under NormalMap";
+    EXPECT_TRUE(seenProps.count("Maya|TEX_color_map") > 0)
+        << "albedo slot must connect under Maya|TEX_color_map (PBR base colour)";
+    EXPECT_TRUE(seenProps.count("Maya|TEX_metallic_map") > 0)
+        << "metallic slot must connect under Maya|TEX_metallic_map";
+    EXPECT_TRUE(seenProps.count("Maya|TEX_roughness_map") > 0)
+        << "roughness slot must connect under Maya|TEX_roughness_map";
+    EXPECT_TRUE(seenProps.count("Maya|TEX_ao_map") > 0)
+        << "ao slot must connect under Maya|TEX_ao_map";
+    EXPECT_TRUE(seenProps.count("Maya|TEX_emissive_map") > 0)
+        << "emissive slot must connect under Maya|TEX_emissive_map";
+
+    // Round-trip parity: the albedo texture must ALSO emit a DiffuseColor
+    // connection so Assimp's reimporter populates aiTextureType_DIFFUSE
+    // alongside aiTextureType_BASE_COLOR — matching the slot ordering of
+    // a first-import (where the same texture appears under both legacy
+    // DIFFUSE and BASE_COLOR), so `diffuse_map` lands at TUS index 0
+    // instead of `albedo`.
+    EXPECT_TRUE(seenProps.count("DiffuseColor") > 0)
+        << "albedo slot must also connect under DiffuseColor for first-"
+           "import slot ordering parity";
 
     cleanup(r);
 }

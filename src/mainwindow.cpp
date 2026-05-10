@@ -30,6 +30,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include "mainwindow.h"
+#include "AppConsoleLog.h"
 #include "ui_mainwindow.h"
 #include "OgreWidget.h"
 #include "QtInputManager.h"
@@ -81,12 +82,23 @@
 #include <QSignalBlocker>
 #include <QGridLayout>
 #include <QToolBar>
+#include <QAction>
+#include <QPlainTextEdit>
+#include <QScrollBar>
+#include <QFontDatabase>
 #include <functional>
 
 namespace {
 
 constexpr int kBottomToolHeight = MainWindow::kDefaultDockedHeight;
 constexpr int kBottomDockMaxHeight = MainWindow::kDefaultDockedMaxHeight;
+
+QString transformSpaceLabel(TransformOperator::TransformSpace space)
+{
+    return space == TransformOperator::SPACE_LOCAL
+        ? QObject::tr("Local")
+        : QObject::tr("World");
+}
 
 void registerEditorModeQmlSingletons()
 {
@@ -231,12 +243,16 @@ MainWindow::MainWindow(QWidget *parent) :
     if (mcpEnabled && !m_mcpServer) {
         startMCPServer(mcpPort);
     }
+
+    AppConsoleLog::attachMainWindow(this);
 }
 
 /////////////////////////// TODO Clean up the code of MainWindow
 /// /////////////////////// TODO improve the ui (toolbar, menubar,....) and add translation (obviously Portuguese but french, english, may be japaneese !)
 MainWindow::~MainWindow()
 {
+    AppConsoleLog::detachMainWindow(this);
+
     // Destroy overlays early — they connect to Manager signals and
     // access Ogre resources, so they must be deleted while Manager is alive.
     // ViewCubeController is parented to this, no manual delete needed
@@ -364,7 +380,10 @@ void MainWindow::initToolBar()
     });
     connect(TransformOperator::getSingleton(), &TransformOperator::transformSpaceChanged, this, [this](TransformOperator::TransformSpace space){
         ui->actionToggle_Transform_Space->setChecked(space == TransformOperator::SPACE_LOCAL);
+        ui->actionToggle_Transform_Space->setText(transformSpaceLabel(space));
     });
+    ui->actionToggle_Transform_Space->setText(
+        transformSpaceLabel(TransformOperator::getSingleton()->getTransformSpace()));
 
     // Undo/Redo
     connect(ui->actionUndo, &QAction::triggered, UndoManager::getSingleton(), &UndoManager::undo);
@@ -689,7 +708,66 @@ void MainWindow::initToolBar()
                 vis ? "Curve Editor shown" : "Curve Editor hidden");
         });
     }
+
+    // Console dock — Qt message log (tabbed with other bottom tools)
+    {
+        auto* consoleContainer = new QWidget();
+        auto* consoleLayout = new QVBoxLayout(consoleContainer);
+        consoleLayout->setContentsMargins(4, 4, 4, 4);
+        consoleLayout->setSpacing(4);
+        m_consoleEdit = new QPlainTextEdit(consoleContainer);
+        m_consoleEdit->setReadOnly(true);
+        m_consoleEdit->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+        m_consoleEdit->setMaximumBlockCount(5000);
+        m_consoleEdit->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        auto* clearBtn = new QPushButton(tr("Clear"), consoleContainer);
+        consoleLayout->addWidget(m_consoleEdit, 1);
+        auto* btnRow = new QHBoxLayout();
+        btnRow->addStretch();
+        btnRow->addWidget(clearBtn);
+        consoleLayout->addLayout(btnRow);
+        connect(clearBtn, &QPushButton::clicked, m_consoleEdit, &QPlainTextEdit::clear);
+
+        m_consoleDock = new QDockWidget(tr("Console"), this);
+        m_consoleDock->setObjectName("ConsoleDock");
+        m_consoleDock->setWidget(consoleContainer);
+        configureBottomToolDock(m_consoleDock);
+        addDockWidget(Qt::BottomDockWidgetArea, m_consoleDock);
+        m_consoleDock->hide();
+        connect(m_consoleDock, &QDockWidget::visibilityChanged, this, [](bool vis) {
+            SentryReporter::addBreadcrumb("ui.action",
+                vis ? "Console shown" : "Console hidden");
+        });
+    }
+
     tabifyBottomToolDocks();
+
+    {
+        QSettings viewPrefs;
+        constexpr auto kContextKey = "View/showContextPanel";
+        constexpr auto kConsoleKey = "View/showConsole";
+        if (!viewPrefs.contains(kContextKey))
+            viewPrefs.setValue(kContextKey, true);
+        if (!viewPrefs.contains(kConsoleKey))
+            viewPrefs.setValue(kConsoleKey, true);
+        const bool wantContext = viewPrefs.value(kContextKey, true).toBool();
+        const bool wantConsole = viewPrefs.value(kConsoleKey, true).toBool();
+
+        if (wantConsole && m_consoleDock)
+            showBottomToolDock(m_consoleDock);
+        if (!wantConsole && m_consoleDock)
+            m_consoleDock->hide();
+
+        if (wantContext && m_bottomContextDock)
+            showBottomToolDock(m_bottomContextDock);
+        else if (m_bottomContextDock)
+            m_bottomContextDock->hide();
+
+        if (wantContext && m_bottomContextDock)
+            m_bottomContextDock->raise();
+        else if (wantConsole && m_consoleDock)
+            m_consoleDock->raise();
+    }
 
     // Welcome Screen overlay — shown on first launch or when user hasn't opted out
     {
@@ -871,24 +949,6 @@ void MainWindow::initToolBar()
         [this]() {
             SentryReporter::addBreadcrumb("ui.action", "Rail: Curve Editor");
             showBottomToolDock(m_curveEditorDock);
-        });
-
-    addRailButton(
-        QStringLiteral("\u21C4"),
-        tr("Merge animations"),
-        QStringLiteral("modeAnimationMergeAction"),
-        [this]() {
-            SentryReporter::addBreadcrumb("ui.action", "Rail: Merge Animations");
-            ui->actionMerge_Animations->trigger();
-        });
-
-    addRailButton(
-        QStringLiteral("M"),
-        tr("Open Material Editor"),
-        QStringLiteral("modeMaterialEditorAction"),
-        [this]() {
-            SentryReporter::addBreadcrumb("ui.action", "Rail: Material Editor");
-            ui->actionMaterial_Editor->trigger();
         });
 
     addRailButton(
@@ -1487,6 +1547,46 @@ void MainWindow::initToolBar()
             });
         });
     }
+    if (m_bottomContextDock && m_consoleDock && ui->menuView) {
+        m_contextPanelViewAction = new QAction(tr("Context Panel"), this);
+        m_contextPanelViewAction->setObjectName(QStringLiteral("actionView_Context_Panel"));
+        m_contextPanelViewAction->setCheckable(true);
+        m_contextPanelViewAction->setChecked(
+            QSettings().value(QStringLiteral("View/showContextPanel"), true).toBool());
+        ui->menuView->addAction(m_contextPanelViewAction);
+        connect(m_contextPanelViewAction, &QAction::toggled, this, [this](bool on) {
+            QSettings().setValue(QStringLiteral("View/showContextPanel"), on);
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("ui.action"),
+                on ? QStringLiteral("View: Context Panel enabled")
+                   : QStringLiteral("View: Context Panel disabled"));
+            if (!m_bottomContextDock)
+                return;
+            if (on)
+                showBottomToolDock(m_bottomContextDock);
+            else
+                m_bottomContextDock->hide();
+        });
+
+        m_consoleViewAction = new QAction(tr("Console"), this);
+        m_consoleViewAction->setObjectName(QStringLiteral("actionView_Console"));
+        m_consoleViewAction->setCheckable(true);
+        m_consoleViewAction->setChecked(
+            QSettings().value(QStringLiteral("View/showConsole"), true).toBool());
+        ui->menuView->addAction(m_consoleViewAction);
+        connect(m_consoleViewAction, &QAction::toggled, this, [this](bool on) {
+            QSettings().setValue(QStringLiteral("View/showConsole"), on);
+            SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                on ? QStringLiteral("View: Console enabled")
+                   : QStringLiteral("View: Console disabled"));
+            if (!m_consoleDock)
+                return;
+            if (on)
+                showBottomToolDock(m_consoleDock);
+            else
+                m_consoleDock->hide();
+        });
+    }
 
     // Connect Browse button to a native file dialog (must be parented to MainWindow on macOS)
     connect(AssetBrowserController::instance(), &AssetBrowserController::browseRequested,
@@ -1656,12 +1756,25 @@ void MainWindow::createModeSurfaces()
         constexpr int kButtons = 6; // 5 modes + Edit toggle
         const int derivedWidth = labelWidth + kPerButtonChrome * kButtons + 40;
         m_modeBar->setMinimumWidth(qMax(kModeBarMinWidthFloor, derivedWidth));
-        m_modeBar->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Fixed);
+        // Minimum width only — a stretch toolbar to the left absorbs extra space
+        // so the mode bar stays on the right of the top row next to Tools.
+        m_modeBar->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
         m_modeBar->setSource(QUrl("qrc:/ModeBar/ModeBar.qml"));
         m_modeBarShell->addWidget(m_modeBar);
 
-        insertToolBar(ui->toolToolbar, m_modeBarShell);
-        insertToolBarBreak(ui->toolToolbar);
+        m_topBarStretch = new QToolBar(this);
+        m_topBarStretch->setObjectName(QStringLiteral("topToolBarStretch"));
+        m_topBarStretch->setWindowTitle(QString());
+        m_topBarStretch->setMovable(false);
+        m_topBarStretch->setFloatable(false);
+        m_topBarStretch->setAllowedAreas(Qt::TopToolBarArea);
+        m_topBarStretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        auto* stretch = new QWidget(m_topBarStretch);
+        stretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        stretch->setMinimumWidth(0);
+        m_topBarStretch->addWidget(stretch);
+        addToolBar(Qt::TopToolBarArea, m_topBarStretch);
+        addToolBar(Qt::TopToolBarArea, m_modeBarShell);
     }
 
     if (!m_bottomContextDock) {
@@ -1682,19 +1795,7 @@ void MainWindow::createModeSurfaces()
         configureBottomToolDock(m_bottomContextDock);
         addDockWidget(Qt::BottomDockWidgetArea, m_bottomContextDock);
         resizeDocks({m_bottomContextDock}, {kBottomToolHeight}, Qt::Vertical);
-        showBottomToolDock(m_bottomContextDock);
-
-        QAction* contextPanelAction = m_bottomContextDock->toggleViewAction();
-        contextPanelAction->setText(tr("Context Panel"));
-        ui->menuView->addAction(contextPanelAction);
-        connect(contextPanelAction, &QAction::triggered, this, [this](bool checked) {
-            if (!checked || !m_bottomContextDock)
-                return;
-
-            QTimer::singleShot(0, this, [this]() {
-                showBottomToolDock(m_bottomContextDock);
-            });
-        });
+        m_bottomContextDock->hide();
         connect(m_bottomContextDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
             if (!visible)
                 return;
@@ -1705,10 +1806,6 @@ void MainWindow::createModeSurfaces()
             });
         });
     }
-
-    QSignalBlocker blocker(ui->actionView_Toolbar);
-    ui->actionView_Toolbar->setChecked(false);
-    ui->viewToolbar->hide();
 }
 
 QAction* MainWindow::actionShowGrid() const
@@ -1755,11 +1852,25 @@ void MainWindow::revealBottomTool(const QString& toolId)
         dock = m_curveEditorDock;
         breadcrumb = QStringLiteral("Rail: Curve Editor");
     }
+    else if (toolId == QStringLiteral("console"))
+    {
+        dock = m_consoleDock;
+        breadcrumb = QStringLiteral("Rail: Console");
+    }
 
     if (dock) {
         SentryReporter::addBreadcrumb("ui.action", breadcrumb);
         showBottomToolDock(dock);
     }
+}
+
+void MainWindow::appendConsoleLine(const QString& line)
+{
+    if (!m_consoleEdit)
+        return;
+    m_consoleEdit->appendPlainText(line);
+    if (QScrollBar* sb = m_consoleEdit->verticalScrollBar())
+        sb->setValue(sb->maximum());
 }
 
 void MainWindow::configureBottomToolDock(QDockWidget* dock)
@@ -1813,7 +1924,7 @@ void MainWindow::showBottomToolDock(QDockWidget* dock)
 void MainWindow::tabifyBottomToolDocks()
 {
     // Bottom tool surfaces are meant to collapse into one tab group
-    // (Dope Sheet / Curve Editor / Asset Browser / Context), so ensure
+    // (Dope Sheet / Curve Editor / Asset Browser / Context / Console), so ensure
     // the shell actually allows tabbed docking before we call
     // QMainWindow::tabifyDockWidget().
     if (!(dockOptions() & QMainWindow::AllowTabbedDocks))
@@ -1823,7 +1934,8 @@ void MainWindow::tabifyBottomToolDocks()
         m_dopeSheetDock,
         m_curveEditorDock,
         m_assetBrowserDock,
-        m_bottomContextDock
+        m_bottomContextDock,
+        m_consoleDock
     };
 
     QDockWidget* anchor = nullptr;
@@ -1852,18 +1964,7 @@ void MainWindow::updateToolRailForMode()
     const bool objectMode = mode == EditorModeController::ObjectMode;
     const bool editMode = mode == EditorModeController::EditMode;
     const bool animationMode = mode == EditorModeController::AnimationMode;
-    const bool materialMode = mode == EditorModeController::MaterialMode;
     const bool validationMode = mode == EditorModeController::ValidationMode;
-
-    // Keeps the QAction reachable in menus (so users can always find Material
-    // Editor / Merge Animations under their menu) while showing or hiding only
-    // the toolbar-button representation per the active mode. The QAction's
-    // own visibility is intentionally left unchanged.
-    auto setSharedToolbarButtonVisible = [this](QAction* action, bool showButton) {
-        action->setVisible(true);
-        if (QWidget* toolbarButton = ui->toolToolbar->widgetForAction(action))
-            toolbarButton->setVisible(showButton);
-    };
 
     for (QAction* action : ui->objectsToolbar->actions()) {
         const QString name = action->objectName();
@@ -1873,28 +1974,22 @@ void MainWindow::updateToolRailForMode()
             action->setVisible(editMode && EditModeController::instance()->isEditModeActive());
         } else if (name.startsWith(QStringLiteral("modeAnimation"))) {
             action->setVisible(animationMode);
-        } else if (name.startsWith(QStringLiteral("modeMaterial"))) {
-            action->setVisible(materialMode);
         } else if (name.startsWith(QStringLiteral("modeValidation"))) {
             action->setVisible(validationMode);
         } else if (name.startsWith(QStringLiteral("modeAny"))) {
             action->setVisible(true);
         }
 
-        if (name == QStringLiteral("modeAnimationMergeAction"))
-            action->setEnabled(ui->actionMerge_Animations->isEnabled());
-        else if (name == QStringLiteral("modeValidationRunAction"))
+        if (name == QStringLiteral("modeValidationRunAction"))
             action->setEnabled(MeshValidator::instance()->hasSelection());
     }
 
-    ui->actionSelect_Object->setVisible(objectMode || editMode);
-    ui->actionTranslate_Object->setVisible(objectMode || editMode);
-    ui->actionRotate_Object->setVisible(objectMode || editMode);
-    ui->actionScale_Object->setVisible(objectMode || editMode);
-    ui->actionToggle_Transform_Space->setVisible(objectMode || editMode);
-    ui->actionRemove_Object->setVisible(objectMode);
-    setSharedToolbarButtonVisible(ui->actionMaterial_Editor, objectMode || materialMode);
-    setSharedToolbarButtonVisible(ui->actionMerge_Animations, objectMode || animationMode);
+    // Top Tools bar: gizmo mode + space toggle stay visible in every editor mode.
+    ui->actionSelect_Object->setVisible(true);
+    ui->actionTranslate_Object->setVisible(true);
+    ui->actionRotate_Object->setVisible(true);
+    ui->actionScale_Object->setVisible(true);
+    ui->actionToggle_Transform_Space->setVisible(true);
 }
 
 // LCOV_EXCL_START — Ogre frame listener requires render loop
@@ -2646,35 +2741,20 @@ void MainWindow::updateMergeAnimationsButton()
     // registration order, so the tool rail is always refreshed for free
     // after this slot completes — calling updateToolRailForMode() here
     // would just iterate every toolbar action twice per selection event.
-    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    const auto* sel = SelectionSet::getSingleton();
+    const bool enough =
+        sel->getNodesCount() + sel->getEntitiesCount() >= 2;
+    ui->actionMerge_Animations->setEnabled(enough);
+}
 
-    // Filter to entities with skeletons
-    QList<Ogre::Entity*> skelEntities;
-    for (Ogre::Entity* e : entities)
-    {
-        if (e && e->hasSkeleton())
-            skelEntities.append(e);
-    }
+void MainWindow::triggerMergeAnimations()
+{
+    on_actionMerge_Animations_triggered();
+}
 
-    if (skelEntities.size() < 2)
-    {
-        ui->actionMerge_Animations->setEnabled(false);
-        return;
-    }
-
-    // Check all pairs are compatible
-    Ogre::SkeletonPtr baseSkel = skelEntities.first()->getMesh()->getSkeleton();
-    for (int i = 1; i < skelEntities.size(); ++i)
-    {
-        Ogre::SkeletonPtr otherSkel = skelEntities[i]->getMesh()->getSkeleton();
-        if (!AnimationMerger::areSkeletonsCompatible(baseSkel, otherSkel))
-        {
-            ui->actionMerge_Animations->setEnabled(false);
-            return;
-        }
-    }
-
-    ui->actionMerge_Animations->setEnabled(true);
+void MainWindow::triggerMaterialEditor()
+{
+    on_actionMaterial_Editor_triggered();
 }
 
 // LCOV_EXCL_START — complex dialog with entity merging
@@ -2754,9 +2834,6 @@ void MainWindow::on_actionObjects_Toolbar_toggled(bool arg1)
 
 void MainWindow::on_actionTools_Toolbar_toggled(bool arg1)
 {    ui->toolToolbar->setVisible(arg1); }
-
-void MainWindow::on_actionView_Toolbar_toggled(bool arg1)
-{    ui->viewToolbar->setVisible(arg1); }
 
 void MainWindow::on_actionMeshEditor_toggled(bool arg1)
 {

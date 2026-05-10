@@ -29,4 +29,13 @@ namespace RTShaderHelper {
     /// Specular-Glossiness and Unlit workflows are not yet supported by
     /// this helper — those keep their slice E FFP approximations.
     bool applyPbrIfTagged(Ogre::MaterialPtr& mat);
+
+    /// Wire FFP-friendly colour operations on the slice E canonical PBR
+    /// slots (albedo, ao, emissive, metallic, roughness) and mark the
+    /// non-albedo slots non-FFP. This is what happens implicitly when
+    /// the user clicks "Apply" in the Material Editor; calling it at
+    /// import time keeps the rendered surface consistent with what the
+    /// editor produces, so a freshly-imported PBR FBX doesn't render
+    /// darker than the same material after a no-op Apply.
+    void wirePbrSlotsForFFP(Ogre::Material* mat);
 }

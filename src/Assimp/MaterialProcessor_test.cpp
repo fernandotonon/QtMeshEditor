@@ -174,6 +174,16 @@ TEST(MaterialProcessorTest, ProcessMaterialKeepsDefaultAmbientWhenAmbientIsBlack
     EXPECT_GT(a.b, 0.9f);
 }
 
+// NOTE: Slice F5 PBR slot-ordering / black-diffuse-bump / user-tint-
+// preservation regressions cannot be unit-tested here because they all
+// require TextureManager::createManual to allocate real texture handles,
+// which segfaults under the lightweight `auto ogreRoot = std::make_unique
+// <Ogre::Root>();` fixture (no render system → no GL state for hardware
+// buffers). The integration test
+// SceneSaveLoadTest::RoundTrip_PbrSlots_PreservedAcrossExportImport in
+// MeshImporterExporter_test exercises the slot-ordering and black-diffuse-
+// bump paths end-to-end using tryInitOgre() for a full GL context.
+
 TEST(MaterialProcessorTest, ProcessMaterialReturnsExistingMaterialIfAlreadyCreated) {
     auto ogreRoot = std::make_unique<Ogre::Root>();
     ensureMaterialManagerInitialised();

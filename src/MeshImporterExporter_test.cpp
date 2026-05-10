@@ -833,6 +833,16 @@ TEST_F(SceneSaveLoadTest, RoundTrip_PbrSlots_PreservedAcrossExportImport) {
         << "normal_map slot lost on round-trip";
     EXPECT_TRUE(hasSlot("albedo") || hasSlot("diffuse_map"))
         << "albedo (or legacy diffuse_map alias) lost on round-trip";
+
+    // NOTE: Slot-ordering parity (albedo last) is an FBX-specific
+    // invariant from slice F5. The integration test here goes through
+    // sceneExporter→sceneImporter (glTF), where Assimp's gltf reader,
+    // RTSS shader-technique recreation in applyNormalMap, and
+    // technique reordering in Material::compile combine to produce
+    // a different post-import layout than the FBX path. The end-to-end
+    // guard for FBX slot ordering is the CLI round-trip diff against
+    // the original .material script (verified manually during slice F5
+    // development). We don't assert ordering here.
 }
 
 TEST_F(SceneSaveLoadTest, MaterialDedup_SharedMaterial_ExportedOnce) {

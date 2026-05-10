@@ -362,6 +362,17 @@ Rectangle {
                 Component.onCompleted: content = lodComponent
             }
 
+            // ---- Material Editor (Material mode) ----
+            CollapsibleSection {
+                title: "Material Editor"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.MaterialMode,
+                    true)
+                expanded: true
+
+                Component.onCompleted: content = materialEditorToolComponent
+            }
+
             // ---- Material Presets ----
             CollapsibleSection {
                 title: "Material Presets"
@@ -407,33 +418,106 @@ Rectangle {
             property int nodeCount: treeModel ? treeModel.rowCount() : 0
             property bool delegatesActive: true
 
-            // Scene header with reparent button
-            Row {
+            // Scene header — clear all, reparent to root
+            RowLayout {
                 width: outlinerColumn.width
-                height: 22
-                spacing: 4
+                height: 24
+                spacing: 6
 
                 Text {
                     text: "\u25A1 Scene (Root)"
                     color: PropertiesPanelController.textColor
-                    font.pixelSize: 11; font.bold: true
-                    anchors.verticalCenter: parent.verticalCenter
+                    font.pixelSize: 11
+                    font.bold: true
                     leftPadding: 4
+                    Layout.alignment: Qt.AlignVCenter
                 }
 
-                Item { width: 1; height: 1; Layout.fillWidth: true }
+                Item { Layout.fillWidth: true; Layout.minimumHeight: 1 }
 
-                // "Move to Root" button — visible when a non-root node is selected
+                Rectangle {
+                    visible: outlinerColumn.nodeCount > 0
+                    implicitWidth: 22
+                    implicitHeight: 22
+                    radius: 3
+                    color: clearSceneMa.containsMouse ? PropertiesPanelController.highlightColor : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "\uD83D\uDDD1"
+                        font.pixelSize: 13
+                        color: PropertiesPanelController.textColor
+                    }
+                    MouseArea {
+                        id: clearSceneMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: PropertiesPanelController.clearSceneTreeAllNodes()
+                    }
+                }
+
                 Rectangle {
                     visible: PropertiesPanelController.selectionName !== "" &&
                              PropertiesPanelController.canReparentNode(PropertiesPanelController.selectionName, "root")
-                    width: toRootText.implicitWidth + 10; height: 18; radius: 3
-                    anchors.verticalCenter: parent.verticalCenter
+                    implicitWidth: toRootText.implicitWidth + 10
+                    implicitHeight: 18
+                    radius: 3
                     color: toRootMa.containsMouse ? PropertiesPanelController.highlightColor : PropertiesPanelController.headerColor
-                    border.color: PropertiesPanelController.borderColor; border.width: 1
-                    Text { id: toRootText; anchors.centerIn: parent; text: "\u2191 to Root"; color: PropertiesPanelController.textColor; font.pixelSize: 9 }
-                    MouseArea { id: toRootMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Layout.alignment: Qt.AlignVCenter
+                    Text {
+                        id: toRootText
+                        anchors.centerIn: parent
+                        text: "\u2191 to Root"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 9
+                    }
+                    MouseArea {
+                        id: toRootMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
                         onClicked: PropertiesPanelController.reparentNode(PropertiesPanelController.selectionName, "root")
+                    }
+                }
+            }
+
+            Row {
+                width: outlinerColumn.width
+                height: 26
+                spacing: 6
+
+                Rectangle {
+                    width: Math.min(parent.width - 8, mergeAnimLabel.implicitWidth + 16)
+                    height: 22
+                    radius: 3
+                    anchors.verticalCenter: parent.verticalCenter
+                    opacity: PropertiesPanelController.mergeAnimationsEnabled ? 1.0 : 0.45
+                    color: mergeAnimMa.containsMouse && PropertiesPanelController.mergeAnimationsEnabled
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+
+                    Text {
+                        id: mergeAnimLabel
+                        anchors.centerIn: parent
+                        text: "Merge animations"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: mergeAnimMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: PropertiesPanelController.mergeAnimationsEnabled
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: PropertiesPanelController.triggerMergeAnimations()
                     }
                 }
             }
@@ -1562,6 +1646,52 @@ Rectangle {
                     function onLodChanged() {
                         lodFeedback.text = ""
                     }
+                }
+            }
+        }
+    }
+
+    // ---- Material Editor shortcut (Material mode, Mode Tools tab) ----
+    Component {
+        id: materialEditorToolComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: "Open the full material editor window for the current submesh selection."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.85
+            }
+
+            Rectangle {
+                width: Math.min(parent.width - 16, matEdLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                color: matEdMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: matEdLabel
+                    anchors.centerIn: parent
+                    text: "Open Material Editor"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: matEdMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: PropertiesPanelController.triggerMaterialEditor()
                 }
             }
         }

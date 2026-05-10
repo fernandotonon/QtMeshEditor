@@ -81,6 +81,8 @@ public:
 
     void                destroySceneNode(const QString & name);
     void                destroySceneNode(Ogre::SceneNode* node);
+    /// Destroys every user-owned root scene node (matches Scene outliner top level).
+    void                destroyAllUserRootNodes();
     void                destroyAllAttachedMovableObjects(Ogre::SceneNode* node);
 
     Ogre::SceneNode*    duplicateSceneNode(Ogre::SceneNode* source);

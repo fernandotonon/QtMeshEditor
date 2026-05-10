@@ -4,6 +4,7 @@
 
 set(SRC_FILES
 about.cpp
+AppConsoleLog.cpp
 AnimationBlender.cpp
 AnimationControlController.cpp
 CurveEditModel.cpp
@@ -48,6 +49,7 @@ BoneWeightOverlay.cpp
 NormalVisualizer.cpp
 AnimationMerger.cpp
 CLIPipeline.cpp
+ConsoleLogSanitize.cpp
 MeshInfoOverlay.cpp
 RTShaderHelper.cpp
 ViewCube/ViewCubeController.cpp
@@ -94,9 +96,11 @@ AnimationBlender.h
 AnimationControlController.h
 CurveEditModel.h
 CurveResampler.h
+ConsoleLogSanitize.h
 GlobalDefinitions.h
 Euler.h
 about.h
+AppConsoleLog.h
 AppSettingsKeys.h
 mainwindow.h
 Manager.h

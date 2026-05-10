@@ -1245,7 +1245,11 @@ private:
                 writeP70Color("AmbientColor", a.r, a.g, a.b);
                 auto e = pass->getSelfIllumination();
                 writeP70Color("EmissiveColor", e.r, e.g, e.b);
-                writeP70Number("Shininess", pass->getShininess());
+                // Use "ShininessExponent" not "Shininess": Assimp's FBX
+                // importer reads AI_MATKEY_SHININESS from "ShininessExponent"
+                // only (FBXConverter.cpp:2288). Writing the legacy
+                // "Shininess" name silently dropped the value on reimport.
+                writeP70Number("ShininessExponent", pass->getShininess());
                 writeP70Number("Opacity", d.a);
             }
 
@@ -1901,9 +1905,59 @@ private:
                     {
                         auto* tus = pass->getTextureUnitState(ti);
                         std::string texName = tus->getTextureName();
-                        if (!texName.empty()) {
-                            std::string fbxProp = (tus->getName() == "normal_map") ? "NormalMap" : "DiffuseColor";
-                            texMatPairs.insert({texName, mat->getName(), fbxProp});
+                        if (texName.empty()) continue;
+                        // Map slice E canonical PBR slot names to FBX
+                        // material property names that Assimp's FBX
+                        // importer recognises on re-read. The "Maya|TEX_*_map"
+                        // prefix is the Stingray PBS convention — it's
+                        // the only PBR property naming Assimp's
+                        // FBXConverter::SetTextureProperties knows how
+                        // to translate back to aiTextureType_METALNESS /
+                        // DIFFUSE_ROUGHNESS / AMBIENT_OCCLUSION /
+                        // BASE_COLOR / EMISSION_COLOR. Without this
+                        // (i.e. if we use generic "Metallic" / "DiffuseRoughness"
+                        // / "AmbientColor" property names), Assimp drops
+                        // those connections silently on import and only
+                        // diffuse + normal round-trip — see Slice F4
+                        // discussion / FBXConverter.cpp:2143-2148 for
+                        // the full Assimp recognition list.
+                        const std::string& slot = tus->getName();
+                        std::string fbxProp = "DiffuseColor"; // legacy fallback
+                        if (slot == "normal_map" || slot == "NormalMap") {
+                            // Use the standard "NormalMap" property which
+                            // existing Assimp / Blender / Maya importers
+                            // all recognise.
+                            fbxProp = "NormalMap";
+                        } else if (slot == "albedo") {
+                            // Maya Stingray base colour. Maps back to
+                            // aiTextureType_BASE_COLOR on import.
+                            fbxProp = "Maya|TEX_color_map";
+                        } else if (slot == "metallic") {
+                            fbxProp = "Maya|TEX_metallic_map";
+                        } else if (slot == "roughness") {
+                            fbxProp = "Maya|TEX_roughness_map";
+                        } else if (slot == "ao") {
+                            fbxProp = "Maya|TEX_ao_map";
+                        } else if (slot == "emissive") {
+                            fbxProp = "Maya|TEX_emissive_map";
+                        }
+                        // Anything else (e.g. user-renamed slot) keeps
+                        // DiffuseColor so it at least round-trips visibly.
+                        texMatPairs.insert({texName, mat->getName(), fbxProp});
+
+                        // Round-trip parity: also emit the albedo texture
+                        // under DiffuseColor. Without this, Assimp's FBX
+                        // reader populates only aiTextureType_BASE_COLOR
+                        // on reimport, and our MaterialProcessor's legacy
+                        // DIFFUSE branch never creates `diffuse_map`. The
+                        // albedo slot then becomes the first FFP-eligible
+                        // TUS — a different slot ordering than first
+                        // import (where the same texture is exposed under
+                        // both DIFFUSE and BASE_COLOR by third-party
+                        // exporters, producing both `diffuse_map` and
+                        // `albedo` slots).
+                        if (slot == "albedo") {
+                            texMatPairs.insert({texName, mat->getName(), "DiffuseColor"});
                         }
                     }
                 }
