@@ -61,6 +61,9 @@ public:
     /// Multi-pattern filter for File → Import (includes PlayStation group + All files).
     static QString importFileDialogFilter();
 
+    /// Same filter layout as `importFileDialogFilter()` using a space-separated `".ext"` list (no Manager required).
+    static QString importFileDialogFilterFromExtensionList(const QString& spaceSeparatedDotExtensions);
+
     /// Export the current animated pose of an entity as a static mesh (no skeleton/animation).
     /// Reads software-skinned vertex positions, builds a new mesh, and exports it.
     /// Returns 0 on success, non-zero on error.

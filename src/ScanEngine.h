@@ -8,6 +8,10 @@
 #include <QStringList>
 #include <functional>
 
+#ifdef QTMESH_UNIT_TESTS
+#include <OgreMesh.h>
+#endif
+
 struct aiScene;
 
 enum class Severity { Info, Warning, Error };
@@ -99,7 +103,8 @@ public:
     /// Recursively enumerate asset files under scanRoot filtered by config patterns.
     static QStringList enumerateFiles(const ScanConfig& config, const QString& scanRoot);
 
-    /// Inspect a single asset file using Assimp (lightweight, no Ogre needed).
+    /// Inspect a single asset file (Assimp for most formats; PlayStation TMD / Psy-Q PLY / RSD
+    /// use the same Ogre importers as the editor, with a headless render target when needed).
     static AssetInfo inspectAsset(const QString& filePath, const QString& scanRoot);
 
     /// After `Assimp::Importer::ReadFile`, whether the result would make `inspectAsset` set
@@ -136,6 +141,11 @@ public:
     static bool matchesWildcard(const QString& text, const QString& pattern);
     static bool checkNameCase(const QString& fileName, const QString& convention);
     static QString convertNameToCase(const QString& fileName, const QString& convention);
+
+#ifdef QTMESH_UNIT_TESTS
+    /// Fills \a info geometry fields from an in-memory Ogre mesh (same logic as scan Ogre inspect).
+    static void testApplyOgreMeshInspectCounts(AssetInfo& info, const Ogre::MeshPtr& mesh);
+#endif
 };
 
 #endif // SCANENGINE_H

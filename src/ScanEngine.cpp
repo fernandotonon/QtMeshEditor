@@ -29,8 +29,18 @@
 #include "FBX/FBXExporter.h"
 
 #include <OgreLogManager.h>
+#include <OgreMaterialManager.h>
+#include <OgreMesh.h>
+#include <OgreMeshManager.h>
+#include <OgreSubMesh.h>
+
+#include "PS1/PS1PLY.h"
+#include "PS1/PS1TMD.h"
+#include "PS1/PS1RSD.h"
+#include "TestHelpers.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <set>
 #include <vector>
@@ -115,6 +125,128 @@ static bool pathEndsWithInsensitive(const QString& p, QLatin1String suf)
     if (p.size() < suf.size())
         return false;
     return p.endsWith(suf, Qt::CaseInsensitive);
+}
+
+static int nextScanInspectMeshId()
+{
+    static std::atomic<int> seq{0};
+    return ++seq;
+}
+
+static void ensureBaseMaterialForScanInspect()
+{
+    if (Ogre::MaterialManager::getSingleton().getByName(
+            "BaseMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+        return;
+    }
+    Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().create(
+        "BaseMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    m->getTechnique(0)->getPass(0)->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+    m->getTechnique(0)->getPass(0)->setAmbient(1.0f, 1.0f, 1.0f);
+}
+
+static bool ensureOgreMaterialsForScanInspect(QString* outErr)
+{
+    if (!ensureOgreHeadlessQuiet()) {
+        if (outErr)
+            *outErr = QStringLiteral("Ogre headless init failed (needed for PlayStation mesh scan)");
+        return false;
+    }
+    createStandardOgreMaterials();
+    ensureBaseMaterialForScanInspect();
+    return true;
+}
+
+static void fillAssetInfoFromOgreMesh(AssetInfo& info, const Ogre::MeshPtr& mesh)
+{
+    info.loadError = false;
+    info.errorMessage.clear();
+    info.meshCount = 1;
+    info.materialCount = mesh->getNumSubMeshes();
+    info.animationCount = 0;
+    info.vertexCount = 0;
+    info.faceCount = 0;
+    info.boneCount = 0;
+    info.hasSkeleton = false;
+    info.hasEmbeddedTextures = false;
+    info.materialNames.clear();
+    info.texturePaths.clear();
+    info.textureRefCount = 0;
+    info.animationNames.clear();
+    info.animationDurations.clear();
+    info.animationKeyframeCounts.clear();
+    info.boneNames.clear();
+    info.animationRedundantKeyframeRatio = 0.0;
+    info.totalKeyframes = 0;
+    info.redundantKeyframes = 0;
+
+    const unsigned nSub = mesh->getNumSubMeshes();
+    const bool hasShared = mesh->sharedVertexData != nullptr;
+    if (hasShared && mesh->sharedVertexData)
+        info.vertexCount = mesh->sharedVertexData->vertexCount;
+
+    for (unsigned i = 0; i < nSub; ++i) {
+        const Ogre::SubMesh* sm = mesh->getSubMesh(i);
+        if (!sm || !sm->indexData)
+            continue;
+        if (!hasShared) {
+            if (sm->vertexData)
+                info.vertexCount += sm->vertexData->vertexCount;
+        } else if (!sm->useSharedVertices && sm->vertexData) {
+            // Shared pool is already counted; add submesh-local vertex buffers.
+            info.vertexCount += sm->vertexData->vertexCount;
+        }
+        info.faceCount += sm->indexData->indexCount / 3;
+    }
+
+    for (unsigned i = 0; i < nSub; ++i) {
+        if (const Ogre::SubMesh* sm = mesh->getSubMesh(i)) {
+            const Ogre::String& mat = sm->getMaterialName();
+            if (!mat.empty())
+                info.materialNames.append(QString::fromStdString(mat));
+        }
+    }
+}
+
+#ifdef QTMESH_UNIT_TESTS
+void ScanEngine::testApplyOgreMeshInspectCounts(AssetInfo& info, const Ogre::MeshPtr& mesh)
+{
+    if (!mesh) {
+        info.vertexCount = 0;
+        info.faceCount = 0;
+        return;
+    }
+    fillAssetInfoFromOgreMesh(info, mesh);
+}
+#endif
+
+template<typename ImportFn>
+static bool loadAndFillOgreInspect(AssetInfo& info, ImportFn&& importFn, QString* detailErr)
+{
+    QString ogreErr;
+    if (!ensureOgreMaterialsForScanInspect(&ogreErr)) {
+        info.loadError = true;
+        info.errorMessage = ogreErr;
+        if (detailErr)
+            *detailErr = ogreErr;
+        return false;
+    }
+    const std::string meshName = std::string("_qtmesh_scan_") + std::to_string(nextScanInspectMeshId());
+    Ogre::MeshPtr mesh = importFn(meshName);
+    if (!mesh) {
+        info.loadError = true;
+        info.errorMessage = QStringLiteral("Could not import mesh geometry");
+        if (detailErr)
+            *detailErr = info.errorMessage;
+        return false;
+    }
+    fillAssetInfoFromOgreMesh(info, mesh);
+    try {
+        Ogre::MeshManager::getSingleton().remove(meshName,
+                                                 Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    } catch (...) {
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -433,7 +565,8 @@ static void analyzeAnimationRedundancy(const aiAnimation* anim,
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Asset inspection via Assimp (lightweight — no Ogre needed)
+// Asset inspection: Assimp for most formats; PlayStation TMD / Psy-Q PLY / RSD
+// use the same Ogre importers as the editor (headless Ogre context).
 // ---------------------------------------------------------------------------
 
 bool ScanEngine::isAssimpResultLoadFailure(const aiScene* scene, const char* assimpErrorString,
@@ -465,6 +598,90 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
     info.relativePath = QDir(scanRoot).relativeFilePath(filePath);
     info.format = QFileInfo(filePath).suffix().toLower();
     info.fileSize = QFileInfo(filePath).size();
+
+    const QString extLower = info.format;
+
+    if (extLower == QLatin1String("rsd")) {
+        PS1RSD::RsdDescriptor d;
+        QString rsdErr;
+        if (!PS1RSD::parseRsdFile(filePath, d, &rsdErr)) {
+            info.loadError = true;
+            info.errorMessage = rsdErr;
+            return info;
+        }
+        const QFileInfo fiRsd(filePath);
+        const QString rsdDir = fiRsd.absolutePath();
+        auto resolveGeom = [rsdDir](const QString& rel) -> QString {
+            if (rel.isEmpty())
+                return {};
+            const QFileInfo r(rel);
+            return r.isAbsolute() ? r.absoluteFilePath() : QDir(rsdDir).filePath(rel);
+        };
+        const QString geomPath = resolveGeom(d.plyPath);
+        if (geomPath.isEmpty() || !QFileInfo::exists(geomPath)) {
+            info.loadError = true;
+            info.errorMessage = QStringLiteral("RSD does not reference an existing geometry file (PLY=...)");
+            return info;
+        }
+        const QFileInfo gfi(geomPath);
+        const QString gext = gfi.suffix().toLower();
+        QString detailErr;
+        if (gext == QLatin1String("tmd")) {
+            loadAndFillOgreInspect(
+                info, [geomPath](const std::string& mn) { return PS1TMD::importTmd(geomPath, mn); }, &detailErr);
+            return info;
+        }
+        if (gext == QLatin1String("ply") && PS1PLY::isPsyqPlyFile(geomPath)) {
+            loadAndFillOgreInspect(
+                info, [geomPath](const std::string& mn) { return PS1PLY::importPsyqPly(geomPath, mn); }, &detailErr);
+            return info;
+        }
+        if (gext == QLatin1String("rsd")) {
+            info.loadError = true;
+            info.errorMessage = QStringLiteral("RSD references another RSD as geometry (not supported for scan)");
+            return info;
+        }
+        AssetInfo inner = ScanEngine::inspectAsset(geomPath, QFileInfo(geomPath).absolutePath());
+        info.loadError = inner.loadError;
+        info.errorMessage = inner.errorMessage;
+        info.meshCount = inner.meshCount;
+        info.materialCount = inner.materialCount;
+        info.animationCount = inner.animationCount;
+        info.vertexCount = inner.vertexCount;
+        info.faceCount = inner.faceCount;
+        info.boneCount = inner.boneCount;
+        info.textureRefCount = inner.textureRefCount;
+        info.hasSkeleton = inner.hasSkeleton;
+        info.hasEmbeddedTextures = inner.hasEmbeddedTextures;
+        info.materialNames = inner.materialNames;
+        info.texturePaths = inner.texturePaths;
+        info.animationNames = inner.animationNames;
+        info.animationDurations = inner.animationDurations;
+        info.animationKeyframeCounts = inner.animationKeyframeCounts;
+        info.boneNames = inner.boneNames;
+        info.animationRedundantKeyframeRatio = inner.animationRedundantKeyframeRatio;
+        info.totalKeyframes = inner.totalKeyframes;
+        info.redundantKeyframes = inner.redundantKeyframes;
+        info.filePath = filePath;
+        info.relativePath = QDir(scanRoot).relativeFilePath(filePath);
+        info.format = extLower;
+        info.fileSize = QFileInfo(filePath).size();
+        return info;
+    }
+
+    if (extLower == QLatin1String("tmd")) {
+        QString detailErr;
+        loadAndFillOgreInspect(
+            info, [filePath](const std::string& mn) { return PS1TMD::importTmd(filePath, mn); }, &detailErr);
+        return info;
+    }
+
+    if (extLower == QLatin1String("ply") && PS1PLY::isPsyqPlyFile(filePath)) {
+        QString detailErr;
+        loadAndFillOgreInspect(
+            info, [filePath](const std::string& mn) { return PS1PLY::importPsyqPly(filePath, mn); }, &detailErr);
+        return info;
+    }
 
     Assimp::Importer importer;
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);

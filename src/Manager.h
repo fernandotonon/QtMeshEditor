@@ -64,6 +64,9 @@ public:
     static Manager* getSingletonPtr(); // Get singleton without creating (returns nullptr if doesn't exist)
     static void kill();
 
+    /// Default File → Import extensions as space-separated `".ext"` tokens (static; safe before `getSingleton()`).
+    static QString defaultImportExtensions();
+
     Ogre::Root*         getRoot()               const;
     Ogre::SceneManager* getSceneMgr()           const;
     MainWindow*         getMainWindow()         const;
