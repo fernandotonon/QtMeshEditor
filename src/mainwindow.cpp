@@ -753,15 +753,15 @@ void MainWindow::initToolBar()
         const bool wantContext = viewPrefs.value(kContextKey, true).toBool();
         const bool wantConsole = viewPrefs.value(kConsoleKey, true).toBool();
 
-        if (wantContext && m_bottomContextDock)
-            showBottomToolDock(m_bottomContextDock);
-        else if (m_bottomContextDock)
-            m_bottomContextDock->hide();
-
         if (wantConsole && m_consoleDock)
             showBottomToolDock(m_consoleDock);
         if (!wantConsole && m_consoleDock)
             m_consoleDock->hide();
+
+        if (wantContext && m_bottomContextDock)
+            showBottomToolDock(m_bottomContextDock);
+        else if (m_bottomContextDock)
+            m_bottomContextDock->hide();
 
         tabifyBottomToolDocks();
         if (wantContext && m_bottomContextDock)

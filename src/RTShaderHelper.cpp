@@ -238,6 +238,55 @@ bool isMetallicRoughnessMaterial(const Ogre::MaterialPtr& mat)
 
 } // namespace
 
+void RTShaderHelper::wirePbrSlotsForFFP(Ogre::Material* mat)
+{
+    if (!mat) return;
+    for (auto* tech : mat->getTechniques()) {
+        for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
+            auto* p = tech->getPass(pi);
+            for (unsigned short i = 0; i < p->getNumTextureUnitStates(); ++i) {
+                auto* tus = p->getTextureUnitState(i);
+                const std::string& n = tus->getName();
+                if (n == "normal_map" || n == "NormalMap") {
+                    if (Ogre::RTShader::ShaderGenerator::getSingletonPtr())
+                        Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
+                } else if (n == "albedo") {
+                    tus->setColourOperationEx(
+                        Ogre::LBX_MODULATE,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_DIFFUSE);
+                } else if (n == "ao") {
+                    tus->setColourOperationEx(
+                        Ogre::LBX_MODULATE,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_DIFFUSE);
+                } else if (n == "emissive") {
+                    tus->setColourOperationEx(
+                        Ogre::LBX_ADD,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_CURRENT);
+                } else if (n == "metallic") {
+                    // FFP approximation: signed-add brightens current
+                    // toward white in textured (metal) regions. Slice F
+                    // shader replaces with a real metal BRDF lobe when
+                    // pbr_workflow is tagged.
+                    tus->setColourOperationEx(
+                        Ogre::LBX_ADD_SIGNED,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_CURRENT);
+                } else if (n == "roughness") {
+                    // FFP approximation: modulate-x2 brightens smooth
+                    // (low-roughness) regions.
+                    tus->setColourOperationEx(
+                        Ogre::LBX_MODULATE_X2,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_CURRENT);
+                }
+            }
+        }
+    }
+}
+
 void RTShaderHelper::applyNormalMap(Ogre::MaterialPtr& mat, const std::string& normalMapTexName)
 {
     auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();

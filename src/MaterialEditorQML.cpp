@@ -212,52 +212,13 @@ void MaterialEditorQML::createNewMaterial(const QString &materialName)
 // depend on where the slot lands in the TUS chain. Without this,
 // AO would render as a new texture *layer* on top of the diffuse
 // rather than darkening it, depending on where the user dropped it.
+// Slice E PBR-slot FFP wiring is shared with the importer (so
+// freshly-imported materials don't render darker than they will after a
+// no-op Apply in the Material Editor). The implementation lives in
+// RTShaderHelper alongside the other slot/shader-related helpers.
 static void wirePbrSlotsForFFP(Ogre::Material* mat)
 {
-    if (!mat) return;
-    for (auto* tech : mat->getTechniques()) {
-        for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
-            auto* p = tech->getPass(pi);
-            for (unsigned short i = 0; i < p->getNumTextureUnitStates(); ++i) {
-                auto* tus = p->getTextureUnitState(i);
-                const std::string& n = tus->getName();
-                if (n == "normal_map" || n == "NormalMap") {
-                    Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
-                } else if (n == "albedo") {
-                    tus->setColourOperationEx(
-                        Ogre::LBX_MODULATE,
-                        Ogre::LBS_TEXTURE,
-                        Ogre::LBS_DIFFUSE);
-                } else if (n == "ao") {
-                    tus->setColourOperationEx(
-                        Ogre::LBX_MODULATE,
-                        Ogre::LBS_TEXTURE,
-                        Ogre::LBS_DIFFUSE);
-                } else if (n == "emissive") {
-                    tus->setColourOperationEx(
-                        Ogre::LBX_ADD,
-                        Ogre::LBS_TEXTURE,
-                        Ogre::LBS_CURRENT);
-                } else if (n == "metallic") {
-                    // FFP approximation: signed-add brightens current
-                    // toward white in textured (metal) regions. Slice F
-                    // shader will replace with a real metal BRDF lobe.
-                    tus->setColourOperationEx(
-                        Ogre::LBX_ADD_SIGNED,
-                        Ogre::LBS_TEXTURE,
-                        Ogre::LBS_CURRENT);
-                } else if (n == "roughness") {
-                    // FFP approximation: modulate-x2 brightens smooth
-                    // (low-roughness) regions. Slice F shader will
-                    // replace with real specular falloff control.
-                    tus->setColourOperationEx(
-                        Ogre::LBX_MODULATE_X2,
-                        Ogre::LBS_TEXTURE,
-                        Ogre::LBS_CURRENT);
-                }
-            }
-        }
-    }
+    RTShaderHelper::wirePbrSlotsForFFP(mat);
 }
 
 bool MaterialEditorQML::applyMaterial()
