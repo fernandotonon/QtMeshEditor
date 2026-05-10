@@ -58,6 +58,8 @@ public:
                         bool stripAnimations = false);
     static QString formatFileURI(const QString &_uri, const QString &_format);
     static QString exportFileDialogFilter();
+    /// Multi-pattern filter for File → Import (includes PlayStation group + All files).
+    static QString importFileDialogFilter();
 
     /// Export the current animated pose of an entity as a static mesh (no skeleton/animation).
     /// Reads software-skinned vertex positions, builds a new mesh, and exports it.

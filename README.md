@@ -212,8 +212,12 @@ Split View|Skeleton Animation Controls
 | STL | .stl | ✅ | ✅ | — |
 | Ogre Mesh | .mesh / .mesh.xml | ✅ | ✅ | ✅ |
 | PlayStation TMD | .tmd | ✅ | ✅ | — |
+| PlayStation RSD | .rsd | ✅ | ✅ | — |
 | 3DS | .3ds | ✅ | ✅ | — |
-| PLY | .ply | ✅ | ✅ | — |
+| Stanford PLY | .ply | ✅ | ✅ | — |
+| Psy-Q PLY (PlayStation) | .ply | ✅ | ✅ | — |
+
+`.ply` is dispatched by content: **Stanford** (`ply` header) vs **Psy-Q** (`@PLY…` header). See [documentation/playstation-rsd-ply.md](documentation/playstation-rsd-ply.md).
 
 Import supports all formats provided by Assimp (40+).
 

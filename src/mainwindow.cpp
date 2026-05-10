@@ -1796,6 +1796,15 @@ void MainWindow::createModeSurfaces()
         addDockWidget(Qt::BottomDockWidgetArea, m_bottomContextDock);
         resizeDocks({m_bottomContextDock}, {kBottomToolHeight}, Qt::Vertical);
         m_bottomContextDock->hide();
+        connect(m_bottomContextDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+            if (!visible)
+                return;
+
+            QTimer::singleShot(0, this, [this]() {
+                if (m_bottomContextDock)
+                    m_bottomContextDock->raise();
+            });
+        });
     }
 }
 

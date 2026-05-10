@@ -62,5 +62,9 @@ Rectangle {
                 }
             }
         }
+
+        Item {
+            Layout.fillWidth: true
+        }
     }
 }

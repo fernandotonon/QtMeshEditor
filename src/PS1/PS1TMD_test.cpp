@@ -644,7 +644,7 @@ TEST_F(PS1TMDTest, ImportMode28QuadsUseRequestedTriangulation)
         ASSERT_TRUE(sm->vertexData);
         ASSERT_EQ(sm->vertexData->vertexCount, 6u);
 
-        // Expected positions after import transform: 10× then 180° about Z.
+        // Expected positions after import transform: editor scale then 180° about Z.
         const Ogre::Vector3 v0(0.f, 0.f, 0.f);
         const Ogre::Vector3 v1(-10.f, 0.f, 0.f);
         const Ogre::Vector3 v2(-10.f, -10.f, 0.f);

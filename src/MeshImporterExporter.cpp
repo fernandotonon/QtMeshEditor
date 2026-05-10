@@ -35,7 +35,10 @@ THE SOFTWARE.
 #include <QMessageBox>
 #include <QDebug>
 #include <QFile>
+#include <QDir>
 #include <set>
+#include <cmath>
+#include <algorithm>
 
 #include "OgreXML/OgreXMLMeshSerializer.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
@@ -52,7 +55,11 @@ THE SOFTWARE.
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
 #include "CLIPipeline.h"
+#include "PS1/PS1PLY.h"
+#include "PS1/PS1MAT.h"
+#include "PS1/PS1RSD.h"
 #include "PS1/PS1TMD.h"
+#include "PS1/PS1TIM.h"
 #include "EditableMesh.h"
 #include "EditModeController.h"
 #include <OgreMaterialManager.h>
@@ -81,18 +88,36 @@ const QMap<QString, QString> MeshImporterExporter::exportFormats = {
     {"glTF 2.0 Binary (*.glb)", ".glb"},
     {"Assimp Binary (*.assbin)", ".assbin"},
     {"FBX Binary (*.fbx)", ".fbx"},
-    {"PlayStation TMD (*.tmd)", ".tmd"}
+    {"PlayStation TMD (*.tmd)", ".tmd"},
+    {"PlayStation RSD (*.rsd)", ".rsd"}
 };
 
 void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
 {
-    Ogre::Real size = std::max(std::max(en->getBoundingBox().getSize().y,en->getBoundingBox().getSize().x),en->getBoundingBox().getSize().z)    ;
+    // Use the WORLD-space bbox so the camera distance accounts for any
+    // scale applied to the parent SceneNode (e.g. the auto-scale fix
+    // in importer() for sub-unit meshes). Without `derive=true` we'd
+    // read mesh-local bbox sizes — fine for sensible-scale assets, but
+    // for an auto-scaled mm-unit FBX the local bbox is still ~5 mm and
+    // the camera would land at distance ~0, leaving the camera inside
+    // the enlarged mesh and the near-clip plane. (Codex review on PR #456.)
+    const Ogre::AxisAlignedBox worldBb = en->getWorldBoundingBox(/*derive=*/true);
+    const auto worldSize = worldBb.getSize();
+    Ogre::Real size = std::max({worldSize.x, worldSize.y, worldSize.z});
     auto cameras = Manager::getSingleton()->getSceneMgr()->getCameras();
-    for(const auto &[_, camera] : cameras)
-    {
+    for (const auto &[_, camera] : cameras) {
         const Ogre::Radian fov = camera->getFOVy();
-        Ogre::Real distance = size/(2*std::tan(fov.valueRadians()/2));
-        camera->getParentSceneNode()->setPosition(0,0,-distance);
+        if (fov.valueRadians() <= 1e-6f || size <= 0.f)
+            continue;
+        const Ogre::Real tanHalf = std::tan(fov.valueRadians() / 2.0f);
+        if (!std::isfinite(tanHalf) || tanHalf <= 1e-8f)
+            continue;
+        Ogre::Real distance = size / (2 * tanHalf);
+        if (!std::isfinite(distance) || distance <= 0.f)
+            continue;
+        Ogre::SceneNode* parent = camera->getParentSceneNode();
+        if (parent)
+            parent->setPosition(0, 0, -distance);
     }
 }
 
@@ -222,27 +247,63 @@ static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
         float shininess = pass->getShininess();
         aiMat->AddProperty(&shininess, 1, AI_MATKEY_SHININESS);
 
+        // Map our canonical slot names to Assimp texture types so the
+        // re-import path (MaterialProcessor) recognises them. Without
+        // this the metallic / roughness / ao / emissive slots would all
+        // export under aiTextureType_DIFFUSE, and on reimport the first
+        // one wins as the "diffuse" texture and the rest are dropped.
+        // We also keep "albedo" routed to DIFFUSE (legacy compatible)
+        // AND mirror it under BASE_COLOR so PBR-aware reimport finds it.
         unsigned short diffuseIdx = 0;
         unsigned short normalIdx = 0;
+        unsigned short baseColorIdx = 0;
+        unsigned short metalIdx = 0;
+        unsigned short roughIdx = 0;
+        unsigned short aoIdx = 0;
+        unsigned short emissiveIdx = 0;
         for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
         {
             auto* tus = pass->getTextureUnitState(ti);
-            if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED)
-            {
-                QString safeName = MeshImporterExporter::exportTextureName(
-                    QString::fromStdString(tus->getTextureName()));
-                aiString texPath(safeName.toStdString());
-                const auto& tusName = tus->getName();
-                if (tusName == "normal_map" || tusName == "NormalMap")
-                {
-                    aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
-                    ++normalIdx;
-                }
-                else
-                {
-                    aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
-                    ++diffuseIdx;
-                }
+            if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                continue;
+            QString safeName = MeshImporterExporter::exportTextureName(
+                QString::fromStdString(tus->getTextureName()));
+            aiString texPath(safeName.toStdString());
+            const auto& tusName = tus->getName();
+
+            if (tusName == "normal_map" || tusName == "NormalMap") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
+                ++normalIdx;
+            } else if (tusName == "albedo") {
+                // glTF base colour: write BASE_COLOR (PBR re-import) AND
+                // DIFFUSE (legacy / Phong renderers). Most engines accept
+                // both; Assimp routes BASE_COLOR back to aiTextureType_BASE_COLOR
+                // on re-read, which our MaterialProcessor binds to the
+                // "albedo" canonical slot.
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_BASE_COLOR, baseColorIdx));
+                ++baseColorIdx;
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
+                ++diffuseIdx;
+            } else if (tusName == "metallic") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_METALNESS, metalIdx));
+                ++metalIdx;
+            } else if (tusName == "roughness") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE_ROUGHNESS, roughIdx));
+                ++roughIdx;
+            } else if (tusName == "ao") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_AMBIENT_OCCLUSION, aoIdx));
+                ++aoIdx;
+            } else if (tusName == "emissive") {
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_EMISSIVE, emissiveIdx));
+                ++emissiveIdx;
+            } else if (tusName == "diffuse_map" || tusName.empty()) {
+                // Legacy Phong diffuse, or unnamed TUS — route as DIFFUSE.
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
+                ++diffuseIdx;
+            } else {
+                // Unknown slot name — route as UNKNOWN so it's preserved
+                // round-trip without being mistaken for a diffuse.
+                aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_UNKNOWN, ti));
             }
         }
     }
@@ -935,6 +996,23 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
     return mesh;
 }
 
+namespace {
+
+bool meshHasTextureCoordinates(const Ogre::Mesh* mesh)
+{
+    if (!mesh)
+        return false;
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        const Ogre::SubMesh* sm = mesh->getSubMesh(i);
+        const Ogre::VertexData* vd = sm->useSharedVertices ? mesh->sharedVertexData : sm->vertexData;
+        if (vd && vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
 // Apply RTSS normal map shaders to any materials that have a normal-map texture
 // unit. Called after loading .mesh/.xml files where MaterialProcessor doesn't run.
 // Also reachable as MeshImporterExporter::applyNormalMapsToEntity for callers
@@ -953,7 +1031,7 @@ void MeshImporterExporter::applyNormalMapsToEntity(const Ogre::Entity* en)
             vd = mesh->sharedVertexData;
         if (vd && vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TANGENT))
             hasTangents = true;
-        if (!hasTangents) {
+        if (!hasTangents && meshHasTextureCoordinates(mesh.get())) {
             try {
                 // storeParityInW=true → VET_FLOAT4 tangents with handedness in w,
                 // matching what MeshProcessor exports and what RTSS expects.
@@ -1094,6 +1172,101 @@ static bool loadMaterialsDeclaredInOgreMaterialScript(const QByteArray& script, 
     return anyFound;
 }
 
+/** @return first declared material name in script (ASCII), or empty. */
+static QString firstMaterialNameInOgreMaterialScript(const QByteArray& script)
+{
+    const QList<QByteArray> lines = script.split('\n');
+    for (QByteArray raw : lines) {
+        QByteArray line = raw.trimmed();
+        if (line.isEmpty() || line.startsWith("//"))
+            continue;
+        if (line.size() < 10)
+            continue;
+        if (line.left(8).compare(QByteArrayLiteral("material"), Qt::CaseInsensitive) != 0)
+            continue;
+        const char boundary = line[8];
+        if (boundary != ' ' && boundary != '\t')
+            continue;
+        QByteArray rest = line.mid(9).trimmed();
+        if (rest.isEmpty())
+            continue;
+        int end = 0;
+        while (end < rest.size()) {
+            const char c = rest[end];
+            if (c == ' ' || c == '\t' || c == ':' || c == '{')
+                break;
+            ++end;
+        }
+        if (end <= 0)
+            continue;
+        const QByteArray matName = rest.left(end).trimmed();
+        if (!matName.isEmpty())
+            return QString::fromUtf8(matName);
+    }
+    return {};
+}
+
+static void applyTextureMaterialToEntity(Ogre::Entity* entity,
+                                              const QString& materialName,
+                                              const QString& textureResourceNameOrEmpty)
+{
+    if (!entity)
+        return;
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().getByName(
+        materialName.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!mat) {
+        mat = Ogre::MaterialManager::getSingleton().create(
+            materialName.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    }
+    mat->removeAllTechniques();
+    Ogre::Technique* tech = mat->createTechnique();
+    Ogre::Pass* pass = tech->createPass();
+    pass->setLightingEnabled(true);
+    pass->setAmbient(1.0f, 1.0f, 1.0f);
+    pass->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+    pass->setEmissive(0.0f, 0.0f, 0.0f);
+    pass->removeAllTextureUnitStates();
+    if (!textureResourceNameOrEmpty.isEmpty())
+        pass->createTextureUnitState(textureResourceNameOrEmpty.toStdString());
+    mat->load();
+
+    for (unsigned int si = 0; si < entity->getNumSubEntities(); ++si) {
+        if (auto* se = const_cast<Ogre::SubEntity*>(entity->getSubEntity(si)))
+            se->setMaterial(mat);
+    }
+}
+
+static void applySolidColorMaterialToEntity(Ogre::Entity* entity,
+                                                 const QString& materialName,
+                                                 const QColor& rgb)
+{
+    if (!entity)
+        return;
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().getByName(
+        materialName.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!mat) {
+        mat = Ogre::MaterialManager::getSingleton().create(
+            materialName.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    }
+    mat->removeAllTechniques();
+    Ogre::Technique* tech = mat->createTechnique();
+    Ogre::Pass* pass = tech->createPass();
+    pass->setLightingEnabled(true);
+    const Ogre::Real r = Ogre::Real(rgb.redF());
+    const Ogre::Real g = Ogre::Real(rgb.greenF());
+    const Ogre::Real b = Ogre::Real(rgb.blueF());
+    pass->setAmbient(r, g, b);
+    pass->setDiffuse(r, g, b, 1.0f);
+    pass->setEmissive(0.0f, 0.0f, 0.0f);
+    pass->removeAllTextureUnitStates();
+    mat->load();
+
+    for (unsigned int si = 0; si < entity->getNumSubEntities(); ++si) {
+        if (auto* se = const_cast<Ogre::SubEntity*>(entity->getSubEntity(si)))
+            se->setMaterial(mat);
+    }
+}
+
 /** Parse `<mesh-complete-basename>.material` next to the `.mesh` file (uses completeBaseName so `a.v2.mesh` → `a.v2.material`). */
 static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
 {
@@ -1226,6 +1399,202 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 en = Manager::getSingleton()->createEntity(sn, mesh);
                 applyNormalMapsToEntity(en);
             }
+            else if (!file.suffix().compare(QStringLiteral("rsd"), Qt::CaseInsensitive))
+            {
+                PS1RSD::RsdDescriptor rsd;
+                QString err;
+                if (!PS1RSD::parseRsdFile(file.filePath(), rsd, &err)) {
+                    QMessageBox::warning(
+                        nullptr,
+                        QStringLiteral("PlayStation RSD"),
+                        QStringLiteral("Could not parse %1: %2").arg(file.fileName(), err));
+                    continue;
+                }
+
+                // Preload referenced TIM textures (best-effort). Geometry import below may also load TIMs
+                // (e.g. PS1TMD sibling auto-load), but RSD frequently points to differently named TIMs.
+                const QString rsdDir = file.absolutePath();
+                const auto resolve = [&rsdDir](const QString& rel) -> QString {
+                    if (rel.isEmpty()) return {};
+                    const QFileInfo fi(rel);
+                    return fi.isAbsolute() ? fi.absoluteFilePath() : QDir(rsdDir).filePath(rel);
+                };
+
+                QString firstTimResource;
+                for (const QString& texRel : rsd.textures) {
+                    const QString timPath = resolve(texRel);
+                    if (timPath.isEmpty() || !QFileInfo::exists(timPath))
+                        continue;
+                    Ogre::Image img;
+                    QString timErr;
+                    if (!PS1TIM::loadTimToOgreImage(timPath, img, &timErr))
+                        continue;
+
+                    const QString resName = QFileInfo(timPath).completeBaseName() + QStringLiteral(".tim");
+                    // Create/replace in the default group so TMD materials can reference it.
+                    const Ogre::String ogreName = resName.toStdString();
+                    if (Ogre::TextureManager::getSingleton().resourceExists(ogreName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+                        Ogre::TextureManager::getSingleton().remove(ogreName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                    Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().loadImage(
+                        ogreName,
+                        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                        img);
+                    if (!firstTimResource.isEmpty())
+                        continue;
+                    firstTimResource = resName;
+                }
+
+                // If a MAT sidecar exists, try to interpret it.
+                // - If it looks like an Ogre material script, load it into the RSD directory group.
+                // - Otherwise, treat it as a PS1/Psy-Q descriptor and fall back to a simple unlit textured material.
+                const QString matPath = resolve(rsd.matPath);
+                QString rsdMaterialFromScript;
+                QVector<QColor> rsdFaceColors;
+                if (!matPath.isEmpty() && QFileInfo::exists(matPath)) {
+                    QFile matFile(matPath);
+                    if (matFile.open(QIODevice::ReadOnly)) {
+                        const QByteArray matBytes = matFile.readAll();
+                        const QString firstMatName = firstMaterialNameInOgreMaterialScript(matBytes);
+                        if (!firstMatName.isEmpty()) {
+                            const Ogre::String group = rsdDir.toStdString();
+                            try {
+                                void* scriptMem = const_cast<char*>(matBytes.constData());
+                                Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
+                                    scriptMem,
+                                    static_cast<size_t>(matBytes.size()),
+                                    false,
+                                    true));
+                                Ogre::MaterialManager::getSingleton().parseScript(ds, group);
+                                Ogre::ResourceGroupManager::getSingleton().initialiseResourceGroup(group);
+                                Ogre::ResourceGroupManager::getSingleton().loadResourceGroup(group);
+                                rsdMaterialFromScript = firstMatName;
+                            } catch (const Ogre::Exception& e) {
+                                Ogre::LogManager::getSingleton().logMessage(
+                                    "Warning: .mat material script load: " + e.getFullDescription());
+                            }
+                        }
+                    }
+
+                    // Psy-Q MAT (not an Ogre script): extract a representative color so the mesh isn't blank.
+                    if (rsdMaterialFromScript.isEmpty()) {
+                        QVector<PS1MAT::MatEntry> mats;
+                        QString matErr;
+                        if (PS1MAT::parseMatFile(matPath, mats, &matErr) && !mats.isEmpty()) {
+                            rsdFaceColors.reserve(mats.size());
+                            for (const auto& me : mats)
+                                rsdFaceColors.push_back(me.rgb);
+                        }
+                    }
+                }
+
+                // Resolve geometry target: prefer PLY= entry.
+                const QString geomRel = rsd.plyPath;
+                const QString geomPath = resolve(geomRel);
+                if (geomPath.isEmpty() || !QFileInfo::exists(geomPath)) {
+                    QMessageBox::warning(
+                        nullptr,
+                        QStringLiteral("PlayStation RSD"),
+                        QStringLiteral("RSD does not reference an existing geometry file (PLY=...)."));
+                    continue;
+                }
+
+                Ogre::MeshPtr mesh;
+                const QFileInfo geomFi(geomPath);
+                if (!geomFi.suffix().compare(QStringLiteral("tmd"), Qt::CaseInsensitive)) {
+                    const std::string meshName = (file.baseName() + QStringLiteral("_rsd_tmd")).toStdString();
+                    mesh = PS1TMD::importTmd(geomPath, meshName);
+                } else if (!geomFi.suffix().compare(QStringLiteral("ply"), Qt::CaseInsensitive)
+                           && PS1PLY::isPsyqPlyFile(geomPath)) {
+                    const std::string meshName = (file.baseName() + QStringLiteral("_rsd_ply")).toStdString();
+                    mesh = rsdFaceColors.isEmpty()
+                        ? PS1PLY::importPsyqPly(geomPath, meshName)
+                        : PS1PLY::importPsyqPlyWithFaceColors(geomPath, meshName, rsdFaceColors);
+                } else {
+                    AssimpToOgreImporter importer;
+                    bool convertLH = (geomFi.suffix().compare("x", Qt::CaseInsensitive) != 0);
+                    const std::string sourcePath = geomPath.toStdString();
+                    mesh = importer.loadModel(sourcePath, convertLH, additionalFlags);
+                    if (outUpAxis) *outUpAxis = importer.getSceneUpAxis();
+                }
+
+                if (!mesh) {
+                    QMessageBox::warning(
+                        nullptr,
+                        QStringLiteral("PlayStation RSD"),
+                        QStringLiteral("Could not import geometry referenced by %1").arg(file.fileName()));
+                    continue;
+                }
+
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("file.import"),
+                    QStringLiteral("Imported PlayStation RSD: %1").arg(file.fileName()));
+
+                sn = Manager::getSingleton()->addSceneNode(file.baseName());
+                en = Manager::getSingleton()->createEntity(sn, mesh);
+                applyNormalMapsToEntity(en);
+
+                // Apply MAT override if we loaded a script-defined material.
+                if (!rsdMaterialFromScript.isEmpty()) {
+                    for (unsigned int si = 0; si < en->getNumSubEntities(); ++si) {
+                        if (auto* se = const_cast<Ogre::SubEntity*>(en->getSubEntity(si)))
+                            se->setMaterialName(rsdMaterialFromScript.toStdString(), rsdDir.toStdString());
+                    }
+                } else if (!rsdFaceColors.isEmpty()) {
+                    // Colors were baked into vertex colors; keep lighting on and let vertex colors drive diffuse.
+                }
+
+                // Best-effort: if we loaded a TIM, bind it as the first texture on materials that have UVs
+                // but no explicit texture yet.
+                if (!firstTimResource.isEmpty()) {
+                    for (unsigned int si = 0; si < en->getNumSubEntities(); ++si) {
+                        Ogre::SubEntity* se = const_cast<Ogre::SubEntity*>(en->getSubEntity(si));
+                        Ogre::MaterialPtr mat = se->getMaterial();
+                        if (mat.isNull() || mat->getNumTechniques() == 0)
+                            continue;
+                        Ogre::Technique* tech = mat->getTechnique(0);
+                        if (!tech || tech->getNumPasses() == 0)
+                            continue;
+                        Ogre::Pass* pass = tech->getPass(0);
+                        if (!pass)
+                            continue;
+                        if (pass->getNumTextureUnitStates() == 0) {
+                            pass->createTextureUnitState(firstTimResource.toStdString());
+                        }
+                    }
+                }
+
+                // Final fallback: if MAT exists but we couldn't parse it (no script, no per-face colours) and the mesh
+                // is still effectively untextured, force a simple unlit textured material so the asset isn't blank.
+                if (!firstTimResource.isEmpty() && rsdMaterialFromScript.isEmpty() && rsdFaceColors.isEmpty()
+                    && !matPath.isEmpty() && QFileInfo::exists(matPath)) {
+                    applyTextureMaterialToEntity(const_cast<Ogre::Entity*>(en),
+                                                      QStringLiteral("PS1/RSD/") + file.baseName(),
+                                                      firstTimResource);
+                }
+            }
+            else if (!file.suffix().compare(QStringLiteral("ply"), Qt::CaseInsensitive)
+                     && PS1PLY::isPsyqPlyFile(file.filePath()))
+            {
+                const std::string meshName = (file.baseName() + QStringLiteral("_psyq_ply")).toStdString();
+                Ogre::MeshPtr mesh = PS1PLY::importPsyqPly(file.filePath(), meshName);
+                if (!mesh) {
+                    QMessageBox::warning(
+                        nullptr,
+                        QStringLiteral("PlayStation PLY"),
+                        QStringLiteral("Could not import %1 — invalid Psy-Q PLY (expected @PLY header and "
+                                       "face lines from the Psy-Q / RSD toolchain, not Stanford PLY).")
+                            .arg(file.fileName()));
+                    continue;
+                }
+
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("file.import"),
+                    QStringLiteral("Imported Psy-Q PLY: %1").arg(file.fileName()));
+
+                sn = Manager::getSingleton()->addSceneNode(file.baseName());
+                en = Manager::getSingleton()->createEntity(sn, mesh);
+                applyNormalMapsToEntity(en);
+            }
             else
             {
                 AssimpToOgreImporter importer;
@@ -1295,6 +1664,14 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                         AnimationMerger::registerSkeletonUpAxis(skel->getName(), importer.getSceneUpAxis());
                         if (outAnimOnlySkeletons)
                             outAnimOnlySkeletons->append(skel);
+                    } else if (!file.suffix().compare(QStringLiteral("ply"), Qt::CaseInsensitive)) {
+                        // Was not routed through PS1PLY (e.g. missing @PLY header) and Assimp failed.
+                        QMessageBox::warning(
+                            nullptr,
+                            QStringLiteral("Import PLY"),
+                            QStringLiteral("Could not import %1. PlayStation Psy-Q PLY uses an @PLY header; "
+                                           "Stanford PLY must start with \"ply\".")
+                                .arg(file.fileName()));
                     }
                     continue;
                 }
@@ -1318,12 +1695,39 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             }
 
             sn->setPosition(0,0,0);
+
+            // Auto-scale sub-unit meshes so they aren't clipped by the
+            // camera near plane. FBX/glTF files exported with millimetre
+            // or centimetre source units (Blender default 0.001 unit
+            // scale, real-world-scale photogrammetry, etc.) come in with
+            // bounding-box extents <0.01 — the entity loads but sits
+            // entirely inside the default near-clip distance and never
+            // renders. Scale the parent SceneNode so the largest
+            // dimension lands at ~1 unit. Threshold of 0.01 avoids
+            // touching sensible-scale assets (anything from a few cm up).
+            if (en && en->getMesh()) {
+                const auto& bbSize = en->getBoundingBox().getSize();
+                const Ogre::Real maxExtent = std::max({bbSize.x, bbSize.y, bbSize.z});
+                if (maxExtent > 0.0f && maxExtent < 0.01f) {
+                    const Ogre::Real factor = 1.0f / maxExtent;
+                    sn->setScale(factor, factor, factor);
+                    Ogre::LogManager::getSingleton().logMessage(
+                        "MeshImporterExporter: auto-scaled '" + en->getName() +
+                        "' by " + std::to_string(factor) +
+                        " (source max-extent " + std::to_string(maxExtent) +
+                        " was inside the near-clip plane)");
+                }
+            }
+
             configureCamera(en);
         }
-    } 
-    catch(Ogre::Exception &e)
+    }
+    catch (Ogre::Exception& e)
     {
         Ogre::LogManager::getSingleton().logMessage(e.getFullDescription());
+    } catch (const std::exception& e) {
+        Ogre::LogManager::getSingleton().logMessage(
+            Ogre::String("MeshImporterExporter::importer: ") + e.what());
     }
 }
 
@@ -1347,6 +1751,25 @@ QString MeshImporterExporter::exportFileDialogFilter()
         filter+=*format+";;";
     filter.chop(2);
     return filter;
+}
+
+QString MeshImporterExporter::importFileDialogFilter()
+{
+    const QStringList parts =
+        Manager::getSingleton()->getValidFileExtention().split(' ', Qt::SkipEmptyParts);
+    QStringList globs;
+    globs.reserve(parts.size());
+    for (QString ext : parts) {
+        ext = ext.trimmed();
+        if (ext.startsWith('.'))
+            globs.append(QLatin1Char('*') + ext);
+    }
+    const QString allSupported = globs.join(QLatin1Char(' '));
+    return QStringLiteral(
+               "All supported (%1);;"
+               "PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply);;"
+               "All files (*.*)")
+        .arg(allSupported);
 }
 
 QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
@@ -1463,6 +1886,53 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             return -1;
         SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
             QStringLiteral("Exported PlayStation TMD: %1").arg(_uri));
+    } else if (_format == QStringLiteral("PlayStation RSD (*.rsd)")) {
+        const QFileInfo outFi(_uri);
+        const QString base = outFi.absolutePath() + QDir::separator() + outFi.completeBaseName();
+        const QString plyPath = base + QStringLiteral(".ply");
+        const QString matPath = base + QStringLiteral(".mat");
+
+        QVector<QColor> faceColors;
+        QString err;
+        if (!PS1PLY::exportPsyqPlyFromEntity(e, plyPath, &faceColors, &err)) {
+            Ogre::LogManager::getSingleton().logError("Failed to write Psy-Q PLY: " + err.toStdString());
+            return -1;
+        }
+
+        if (!faceColors.isEmpty()) {
+            QVector<PS1MAT::MatEntry> entries;
+            entries.reserve(faceColors.size());
+            for (const QColor& c : faceColors) {
+                PS1MAT::MatEntry me;
+                me.rgb = c;
+                entries.push_back(me);
+            }
+            if (!PS1MAT::writeMatFile(matPath, entries, &err)) {
+                Ogre::LogManager::getSingleton().logError("Failed to write MAT: " + err.toStdString());
+                return -1;
+            }
+        }
+
+        // Optional TIM sibling (best-effort, may not exist).
+        const QString timPath = base + QStringLiteral(".tim");
+
+        PS1RSD::RsdDescriptor rsd;
+        rsd.headerId = QStringLiteral("@RSD940102");
+        rsd.plyPath = QFileInfo(plyPath).fileName();
+        if (!faceColors.isEmpty())
+            rsd.matPath = QFileInfo(matPath).fileName();
+        if (QFileInfo::exists(timPath)) {
+            rsd.ntex = 1;
+            rsd.textures = { QFileInfo(timPath).fileName() };
+        }
+
+        if (!PS1RSD::writeRsdFile(_uri, rsd, &err)) {
+            Ogre::LogManager::getSingleton().logError("Failed to write RSD: " + err.toStdString());
+            return -1;
+        }
+
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("Exported PlayStation RSD: %1").arg(_uri));
     } else {
         // Export using Assimp — build aiScene directly from Ogre mesh data
         try {
