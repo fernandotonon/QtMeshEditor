@@ -42,7 +42,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <functional>
 #include <set>
 #include <vector>
 
@@ -128,7 +127,11 @@ static bool pathEndsWithInsensitive(const QString& p, QLatin1String suf)
     return p.endsWith(suf, Qt::CaseInsensitive);
 }
 
-static std::atomic<int> g_scanInspectMeshSeq{0};
+static int nextScanInspectMeshId()
+{
+    static std::atomic<int> seq{0};
+    return ++seq;
+}
 
 static void ensureBaseMaterialForScanInspect()
 {
@@ -183,7 +186,7 @@ static void fillAssetInfoFromOgreMesh(AssetInfo& info, const Ogre::MeshPtr& mesh
         info.vertexCount = mesh->sharedVertexData->vertexCount;
 
     for (unsigned i = 0; i < nSub; ++i) {
-        Ogre::SubMesh* sm = mesh->getSubMesh(i);
+        const Ogre::SubMesh* sm = mesh->getSubMesh(i);
         if (!sm || !sm->indexData)
             continue;
         if (!hasShared) {
@@ -197,7 +200,7 @@ static void fillAssetInfoFromOgreMesh(AssetInfo& info, const Ogre::MeshPtr& mesh
     }
 
     for (unsigned i = 0; i < nSub; ++i) {
-        if (Ogre::SubMesh* sm = mesh->getSubMesh(i)) {
+        if (const Ogre::SubMesh* sm = mesh->getSubMesh(i)) {
             const Ogre::String& mat = sm->getMaterialName();
             if (!mat.empty())
                 info.materialNames.append(QString::fromStdString(mat));
@@ -217,9 +220,8 @@ void ScanEngine::testApplyOgreMeshInspectCounts(AssetInfo& info, const Ogre::Mes
 }
 #endif
 
-static bool loadAndFillOgreInspect(AssetInfo& info,
-                                   const std::function<Ogre::MeshPtr(const std::string&)>& importFn,
-                                   QString* detailErr)
+template<typename ImportFn>
+static bool loadAndFillOgreInspect(AssetInfo& info, ImportFn&& importFn, QString* detailErr)
 {
     QString ogreErr;
     if (!ensureOgreMaterialsForScanInspect(&ogreErr)) {
@@ -229,7 +231,7 @@ static bool loadAndFillOgreInspect(AssetInfo& info,
             *detailErr = ogreErr;
         return false;
     }
-    const std::string meshName = std::string("_qtmesh_scan_") + std::to_string(++g_scanInspectMeshSeq);
+    const std::string meshName = std::string("_qtmesh_scan_") + std::to_string(nextScanInspectMeshId());
     Ogre::MeshPtr mesh = importFn(meshName);
     if (!mesh) {
         info.loadError = true;
@@ -609,7 +611,7 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         }
         const QFileInfo fiRsd(filePath);
         const QString rsdDir = fiRsd.absolutePath();
-        auto resolveGeom = [&](const QString& rel) -> QString {
+        auto resolveGeom = [rsdDir](const QString& rel) -> QString {
             if (rel.isEmpty())
                 return {};
             const QFileInfo r(rel);
@@ -626,12 +628,12 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         QString detailErr;
         if (gext == QLatin1String("tmd")) {
             loadAndFillOgreInspect(
-                info, [&](const std::string& mn) { return PS1TMD::importTmd(geomPath, mn); }, &detailErr);
+                info, [geomPath](const std::string& mn) { return PS1TMD::importTmd(geomPath, mn); }, &detailErr);
             return info;
         }
         if (gext == QLatin1String("ply") && PS1PLY::isPsyqPlyFile(geomPath)) {
             loadAndFillOgreInspect(
-                info, [&](const std::string& mn) { return PS1PLY::importPsyqPly(geomPath, mn); }, &detailErr);
+                info, [geomPath](const std::string& mn) { return PS1PLY::importPsyqPly(geomPath, mn); }, &detailErr);
             return info;
         }
         if (gext == QLatin1String("rsd")) {
@@ -670,14 +672,14 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
     if (extLower == QLatin1String("tmd")) {
         QString detailErr;
         loadAndFillOgreInspect(
-            info, [&](const std::string& mn) { return PS1TMD::importTmd(filePath, mn); }, &detailErr);
+            info, [filePath](const std::string& mn) { return PS1TMD::importTmd(filePath, mn); }, &detailErr);
         return info;
     }
 
     if (extLower == QLatin1String("ply") && PS1PLY::isPsyqPlyFile(filePath)) {
         QString detailErr;
         loadAndFillOgreInspect(
-            info, [&](const std::string& mn) { return PS1PLY::importPsyqPly(filePath, mn); }, &detailErr);
+            info, [filePath](const std::string& mn) { return PS1PLY::importPsyqPly(filePath, mn); }, &detailErr);
         return info;
     }
 
