@@ -13,7 +13,9 @@
 #include "PS1/PS1TIM.h"
 #include <OgreRTShaderSystem.h>
 #include <QDebug>
+#include <QBuffer>
 #include <QFileDialog>
+#include <algorithm>
 #include <QColorDialog>
 #include <QApplication>
 #include <QMainWindow>
@@ -2830,6 +2832,56 @@ QString MaterialEditorQML::savePackedTextureDialog()
         QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons
     );
     return selectedFile;
+}
+
+QString MaterialEditorQML::previewPackedTextureChannels(const QString& redPath,
+                                                         const QString& greenPath,
+                                                         const QString& bluePath,
+                                                         const QString& alphaPath,
+                                                         double redConstant,
+                                                         double greenConstant,
+                                                         double blueConstant,
+                                                         double alphaConstant,
+                                                         bool invertRed,
+                                                         bool invertGreen,
+                                                         bool invertBlue,
+                                                         bool invertAlpha,
+                                                         bool includeAlpha,
+                                                         int previewSize)
+{
+    TextureChannelPacker::PackingSpec spec;
+    spec.red.path        = redPath;
+    spec.red.constantValue   = static_cast<float>(redConstant);
+    spec.red.invert      = invertRed;
+    spec.green.path      = greenPath;
+    spec.green.constantValue = static_cast<float>(greenConstant);
+    spec.green.invert    = invertGreen;
+    spec.blue.path       = bluePath;
+    spec.blue.constantValue  = static_cast<float>(blueConstant);
+    spec.blue.invert     = invertBlue;
+    spec.alpha.path      = alphaPath;
+    spec.alpha.constantValue = static_cast<float>(alphaConstant);
+    spec.alpha.invert    = invertAlpha;
+    spec.includeAlpha    = includeAlpha;
+
+    // Cap preview size so it stays cheap on every input change. The
+    // packer scales smaller sources up to the largest source — by
+    // forcing the output dimensions here we both make this fast and
+    // guarantee a square thumbnail QML can show without flicker.
+    const int cappedSize = std::clamp(previewSize, 32, 512);
+    spec.outputWidth = cappedSize;
+    spec.outputHeight = cappedSize;
+
+    auto r = TextureChannelPacker::pack(spec);
+    if (!r.ok) return QString();
+
+    // Encode as a base64 PNG so QML can display via "data:" URL without
+    // touching the filesystem.
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    if (!r.image.save(&buf, "PNG")) return QString();
+    return QStringLiteral("data:image/png;base64,") + bytes.toBase64();
 }
 
 QString MaterialEditorQML::packTextureChannels(const QString& redPath,

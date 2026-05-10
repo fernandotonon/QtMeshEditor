@@ -387,6 +387,27 @@ public slots:
     /// output path. Returns the chosen path or empty if cancelled.
     Q_INVOKABLE QString savePackedTextureDialog();
 
+    /// Slice G2: render a small preview of the same packed texture
+    /// without writing to disk. Returns a `data:image/png;base64,…` URL
+    /// the QML Image element can show directly, or empty on failure.
+    /// `previewSize` is the largest edge in pixels; the packer's
+    /// natural aspect ratio is preserved (so for square sources, this
+    /// is the resulting side length).
+    Q_INVOKABLE QString previewPackedTextureChannels(const QString& redPath,
+                                                     const QString& greenPath,
+                                                     const QString& bluePath,
+                                                     const QString& alphaPath,
+                                                     double redConstant,
+                                                     double greenConstant,
+                                                     double blueConstant,
+                                                     double alphaConstant,
+                                                     bool invertRed,
+                                                     bool invertGreen,
+                                                     bool invertBlue,
+                                                     bool invertAlpha,
+                                                     bool includeAlpha,
+                                                     int previewSize);
+
     /// Slice G: pack 1-4 grayscale source images into a single RGBA
     /// texture and write it to disk. Returns an empty string on success
     /// or an error message on failure.
