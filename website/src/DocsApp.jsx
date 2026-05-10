@@ -6,6 +6,7 @@ const NAV = [
   { section: 'Getting Started', items: [
     { id: 'installation', label: 'Installation' },
     { id: 'quick-start', label: 'Quick Start' },
+    { id: 'playstation-rsd-ply', label: 'PlayStation RSD / Psy-Q PLY' },
   ]},
   { section: 'CLI Commands', items: [
     { id: 'cmd-info', label: 'info' },
@@ -230,6 +231,31 @@ qtmesh scan ./assets --fail-on error`}</CodeBlock>
             </table>
           </section>
 
+          <section className={s.section} id="playstation-rsd-ply">
+            <h2 className={s.sectionTitle}>PlayStation RSD, Psy-Q PLY, and MAT</h2>
+            <p className={s.para}>
+              <strong>RSD</strong> (<Code>.rsd</Code>) is a PlayStation-era descriptor that references a mesh (often <Code>.tmd</Code> or Psy-Q <Code>.ply</Code>) plus optional <Code>.tim</Code> textures and <Code>.mat</Code> sidecars.
+              Import resolves those paths, loads geometry, and applies TIM-driven materials when possible. Export writes the <Code>.rsd</Code> and companion filenames next to the output.
+            </p>
+            <p className={s.para}>
+              <strong>Psy-Q PLY</strong> is not Stanford PLY: it uses an <Code>@PLY…</Code> header, separate <strong>vertex</strong> and <strong>normal</strong> count lines (<Code>nV nN nF</Code>), then face lines where type <Code>0</Code> is a triangle and <Code>1</Code> is a quad with independent v/n indices.
+              Quads use the classic split <Code>(v0,v1,v2)</Code> + <Code>(v1,v2,v3)</Code> when expanded to triangles in the engine.
+            </p>
+            <p className={s.para}>
+              <strong>Import</strong> welds corners (position + normal ± colour) and stores quad/ngon topology as <Code>qtme.faces.*</Code> when the file encodes it, so artist intent is preserved.
+            </p>
+            <p className={s.para}>
+              <strong>Export</strong> writes welded <strong>position</strong> and <strong>normal</strong> pools separately (quantized floats). Many corners share one quantized normal, so <Code>nN</Code> is often <strong>smaller than</strong> <Code>nV</Code> and smaller than in a verbose original — that is deduplication, not loss of shading, for flat or smooth regions.
+            </p>
+            <p className={s.para}>
+              If <Code>qtme.faces</Code> exists, face lines follow those polygons. Otherwise coplanar triangle pairs matching the PS1 adjacency pattern with nearly parallel normals (dot ≥ 0.94) are <strong>merged back into quads</strong>, which often recovers cleaner layouts than triangle-only dumps.
+            </p>
+            <p className={s.para}>
+              Full write-up in the repository:{' '}
+              <a href="https://github.com/fernandotonon/QtMeshEditor/blob/master/documentation/playstation-rsd-ply.md" target="_blank" rel="noreferrer">documentation/playstation-rsd-ply.md</a>.
+            </p>
+          </section>
+
           {/* ─── CLI Commands ─── */}
 
           <CmdSection id="cmd-info" name="info" description="Show detailed mesh information: vertex/face counts, materials, textures, skeleton, animations, bounding box."
@@ -273,8 +299,9 @@ qtmesh scan ./assets --fail-on error`}</CodeBlock>
                   ['.dae', 'Collada', 'Yes', 'Yes'],
                   ['.obj', 'Wavefront OBJ', 'Yes', 'Yes'],
                   ['.stl', 'STL', 'Yes', 'Yes'],
-                  ['.ply', 'Stanford PLY', 'Yes', 'Yes'],
+                  ['.ply', 'Stanford PLY or Psy-Q PLY (by content)', 'Yes', 'Yes'],
                   ['.tmd', 'PlayStation TMD', 'Yes', 'Yes'],
+                  ['.rsd', 'PlayStation RSD (descriptor + sidecars)', 'Yes', 'Yes'],
                   ['.3ds', '3D Studio', 'Yes', 'No'],
                   ['.mesh', 'Ogre Mesh', 'Yes', 'No'],
                 ].map(([ext, fmt, imp, exp], i) => <tr key={i}><td><Code>{ext}</Code></td><td>{fmt}</td><td>{imp}</td><td>{exp}</td></tr>)}
