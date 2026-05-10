@@ -452,8 +452,9 @@ TEST_F(MainWindowTest, BottomToolContextConsoleAndDopeShareTabGroupAfterTabify)
     app->processEvents();
 
     // Reveal in an order that used to strand docks; tabify must still collapse
-    // into one group. QList order from tabifiedDockWidgets() is not guaranteed
-    // to match visual tab order across Qt versions, so only assert membership.
+    // into one group. Use pairwise tabifiedDockWidgets checks (same as
+    // BottomToolRevealTabsContextWithOtherBottomTools) — tab list APIs omit the
+    // queried dock on some Qt versions.
     window->revealBottomTool(QStringLiteral("console"));
     window->revealBottomTool(QStringLiteral("dopeSheet"));
     window->revealBottomTool(QStringLiteral("context"));
@@ -462,11 +463,12 @@ TEST_F(MainWindowTest, BottomToolContextConsoleAndDopeShareTabGroupAfterTabify)
     window->tabifyBottomToolDocks();
     app->processEvents();
 
-    const QList<QDockWidget*> tabs = window->tabifiedDockWidgets(window->m_bottomContextDock);
-    ASSERT_GT(tabs.size(), 1u);
-    EXPECT_TRUE(tabs.contains(window->m_bottomContextDock));
-    EXPECT_TRUE(tabs.contains(window->m_consoleDock));
-    EXPECT_TRUE(tabs.contains(window->m_dopeSheetDock));
+    const auto areTabified = [this](QDockWidget* first, QDockWidget* second) {
+        return window->tabifiedDockWidgets(first).contains(second)
+            || window->tabifiedDockWidgets(second).contains(first);
+    };
+    EXPECT_TRUE(areTabified(window->m_bottomContextDock, window->m_consoleDock));
+    EXPECT_TRUE(areTabified(window->m_bottomContextDock, window->m_dopeSheetDock));
 
     window->m_bottomContextDock->raise();
     app->processEvents();
