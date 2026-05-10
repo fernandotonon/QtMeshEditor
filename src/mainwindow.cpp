@@ -763,10 +763,19 @@ void MainWindow::initToolBar()
         else if (m_bottomContextDock)
             m_bottomContextDock->hide();
 
+        tabifyBottomToolDocks();
         if (wantContext && m_bottomContextDock)
             m_bottomContextDock->raise();
         else if (wantConsole && m_consoleDock)
             m_consoleDock->raise();
+        // After tabification, Qt may still pick another tab on the first layout pass;
+        // defer so Context stays selected when both docks are enabled.
+        if (wantContext && m_bottomContextDock) {
+            QTimer::singleShot(0, this, [this]() {
+                if (m_bottomContextDock && !m_bottomContextDock->isHidden())
+                    m_bottomContextDock->raise();
+            });
+        }
     }
 
     // Welcome Screen overlay — shown on first launch or when user hasn't opted out
@@ -1924,18 +1933,19 @@ void MainWindow::showBottomToolDock(QDockWidget* dock)
 void MainWindow::tabifyBottomToolDocks()
 {
     // Bottom tool surfaces are meant to collapse into one tab group
-    // (Dope Sheet / Curve Editor / Asset Browser / Context / Console), so ensure
+    // (Context / Console / Asset Browser / Dope Sheet / Curve Editor), so ensure
     // the shell actually allows tabbed docking before we call
     // QMainWindow::tabifyDockWidget().
     if (!(dockOptions() & QMainWindow::AllowTabbedDocks))
         setDockOptions(dockOptions() | QMainWindow::AllowTabbedDocks);
 
+    // Tab order (left-to-right): Context + Console first; animation/asset tools after.
     const QList<QDockWidget*> docks = {
-        m_dopeSheetDock,
-        m_curveEditorDock,
-        m_assetBrowserDock,
         m_bottomContextDock,
-        m_consoleDock
+        m_consoleDock,
+        m_assetBrowserDock,
+        m_dopeSheetDock,
+        m_curveEditorDock
     };
 
     QDockWidget* anchor = nullptr;

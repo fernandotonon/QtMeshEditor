@@ -686,6 +686,86 @@ TEST_F(SelectionSetTests, GetResolvedEntitiesSkipsNodesWithoutAttachedEntities)
     Manager::getSingleton()->destroySceneNode(entityNode);
 }
 
+TEST_F(SelectionSetTests, GetResolvedEntitiesResolvesAncestorNodeWithNestedMesh)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* parent = Manager::getSingleton()->addSceneNode(QStringLiteral("resolved_nested_parent"));
+    ASSERT_NE(parent, nullptr);
+    selectionSet->clear();
+
+    Ogre::SceneNode* child = parent->createChildSceneNode("resolved_nested_child");
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("resolved_nested_mesh_data");
+    ASSERT_NE(mesh, nullptr);
+    Ogre::SceneManager* sm = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* entity = sm->createEntity(child->getName(), mesh);
+    child->attachObject(entity);
+
+    selectionSet->append(parent);
+    const QList<Ogre::Entity*> resolved = selectionSet->getResolvedEntities();
+    ASSERT_EQ(resolved.size(), 1);
+    EXPECT_EQ(resolved.first(), entity);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(parent);
+}
+
+TEST_F(SelectionSetTests, GetResolvedEntitiesCollectsSeveralEntitiesUnderOneParent)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* parent = Manager::getSingleton()->addSceneNode(QStringLiteral("resolved_multi_parent"));
+    ASSERT_NE(parent, nullptr);
+    selectionSet->clear();
+
+    Ogre::SceneNode* c1 = parent->createChildSceneNode("resolved_multi_c1");
+    Ogre::SceneNode* c2 = parent->createChildSceneNode("resolved_multi_c2");
+    Ogre::MeshPtr m1 = createInMemoryTriangleMesh("resolved_multi_mesh_a");
+    Ogre::MeshPtr m2 = createInMemoryTriangleMesh("resolved_multi_mesh_b");
+    ASSERT_NE(m1, nullptr);
+    ASSERT_NE(m2, nullptr);
+    Ogre::SceneManager* sm = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* e1 = sm->createEntity(c1->getName(), m1);
+    Ogre::Entity* e2 = sm->createEntity(c2->getName(), m2);
+    c1->attachObject(e1);
+    c2->attachObject(e2);
+
+    selectionSet->append(parent);
+    const QList<Ogre::Entity*> resolved = selectionSet->getResolvedEntities();
+    EXPECT_EQ(resolved.size(), 2);
+    EXPECT_TRUE(resolved.contains(e1));
+    EXPECT_TRUE(resolved.contains(e2));
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(parent);
+}
+
+TEST_F(SelectionSetTests, GetResolvedEntitiesFromSubEntityOnlySelection)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* node = createNodeWithEntity("resolved_sub_only", "resolved_sub_only_mesh");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+    ASSERT_GT(entity->getNumSubEntities(), 0u);
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+
+    selectionSet->selectOne(subEntity);
+    const QList<Ogre::Entity*> resolved = selectionSet->getResolvedEntities();
+    ASSERT_EQ(resolved.size(), 1);
+    EXPECT_EQ(resolved.first(), entity);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
 TEST_F(SelectionSetTests, GetSelectionScaleAveragesMultipleNodes)
 {
     SelectionSet* selectionSet = SelectionSet::getSingleton();

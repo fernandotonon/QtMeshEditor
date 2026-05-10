@@ -356,7 +356,7 @@ Rectangle {
             CollapsibleSection {
                 title: "LOD Generation"
                 sectionVisible: root.modeToolSectionVisible(
-                    EditorModeController.ValidationMode,
+                    EditorModeController.ObjectMode,
                     MeshLodController.hasSelection)
                 expanded: false
 

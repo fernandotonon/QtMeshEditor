@@ -72,9 +72,12 @@ public :
     const QList<Ogre::Entity*>      getEntitiesSelectionList()      const;
     const QList<Ogre::SubEntity*>   getSubEntitiesSelectionList()   const;
 
-    /// Returns entities from the current selection. If entities are directly
-    /// selected, returns those. Otherwise resolves selected nodes to their
-    /// attached entities.
+    /// Returns entities from the current selection. Direct entity picks win;
+    /// otherwise submesh picks resolve to their parent entities; otherwise
+    /// selected scene nodes resolve to entities attached on that node or any
+    /// descendant (skips internal node names via Manager::isForbiddenNodeName),
+    /// plus the legacy case where SceneManager registers an entity under the
+    /// same name as the node.
     QList<Ogre::Entity*> getResolvedEntities() const;
 private:
     void hideBoundingBox(Ogre::SceneNode* node)  const;
