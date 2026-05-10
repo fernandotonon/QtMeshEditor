@@ -36,8 +36,11 @@ static void ensureBaseMaterialForPlyImport()
     m->getTechnique(0)->getPass(0)->setAmbient(1.0f, 1.0f, 1.0f);
 }
 
-/** Two triangles (0,1,2) and (1,2,3) — PS1 quad split; flat +Z normal. */
-static Ogre::MeshPtr createTwoTriQuadMesh(const std::string& name)
+static Ogre::MeshPtr createInterleavedPosNormalMesh(const std::string& name,
+                                                   const float (*vertexRows)[6],
+                                                   int nVerts,
+                                                   const uint16_t* indices,
+                                                   int indexCount)
 {
     if (auto old = Ogre::MeshManager::getSingleton().getByName(name))
         Ogre::MeshManager::getSingleton().remove(old);
@@ -50,7 +53,7 @@ static Ogre::MeshPtr createTwoTriQuadMesh(const std::string& name)
 
     Ogre::VertexData* vd = new Ogre::VertexData();
     sm->vertexData = vd;
-    vd->vertexCount = 4;
+    vd->vertexCount = static_cast<unsigned>(nVerts);
     Ogre::VertexDeclaration* decl = vd->vertexDeclaration;
     Ogre::VertexBufferBinding* bind = vd->vertexBufferBinding;
     size_t off = 0;
@@ -60,35 +63,29 @@ static Ogre::MeshPtr createTwoTriQuadMesh(const std::string& name)
     off += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
     const size_t vsize = decl->getVertexSize(0);
     auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-        vsize, 4, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+        vsize, static_cast<size_t>(nVerts), Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
     uint8_t* dst = static_cast<uint8_t*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-    const float corners[][6] = {
-        {0.f, 0.f, 0.f, 0.f, 0.f, 1.f},
-        {1.f, 0.f, 0.f, 0.f, 0.f, 1.f},
-        {1.f, 1.f, 0.f, 0.f, 0.f, 1.f},
-        {0.f, 1.f, 0.f, 0.f, 0.f, 1.f},
-    };
-    for (int i = 0; i < 4; ++i) {
-        uint8_t* row = dst + i * vsize;
+    for (int i = 0; i < nVerts; ++i) {
+        uint8_t* row = dst + static_cast<size_t>(i) * vsize;
         float* pf = nullptr;
         decl->findElementBySemantic(Ogre::VES_POSITION)->baseVertexPointerToElement(row, &pf);
-        pf[0] = corners[i][0];
-        pf[1] = corners[i][1];
-        pf[2] = corners[i][2];
+        pf[0] = vertexRows[i][0];
+        pf[1] = vertexRows[i][1];
+        pf[2] = vertexRows[i][2];
         decl->findElementBySemantic(Ogre::VES_NORMAL)->baseVertexPointerToElement(row, &pf);
-        pf[0] = corners[i][3];
-        pf[1] = corners[i][4];
-        pf[2] = corners[i][5];
+        pf[0] = vertexRows[i][3];
+        pf[1] = vertexRows[i][4];
+        pf[2] = vertexRows[i][5];
     }
     vbuf->unlock();
     bind->setBinding(0, vbuf);
 
     auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
-        Ogre::HardwareIndexBuffer::IT_16BIT, 6, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-    const uint16_t idx[] = {0, 1, 2, 1, 2, 3};
-    ibuf->writeData(0, sizeof(idx), idx);
+        Ogre::HardwareIndexBuffer::IT_16BIT, static_cast<size_t>(indexCount),
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    ibuf->writeData(0, static_cast<size_t>(indexCount) * sizeof(uint16_t), indices);
     sm->indexData->indexBuffer = ibuf;
-    sm->indexData->indexCount = 6;
+    sm->indexData->indexCount = static_cast<unsigned>(indexCount);
     sm->indexData->indexStart = 0;
 
     mesh->_setBounds(Ogre::AxisAlignedBox(0, 0, 0, 1, 1, 0));
@@ -97,33 +94,23 @@ static Ogre::MeshPtr createTwoTriQuadMesh(const std::string& name)
     return mesh;
 }
 
+/** Two triangles (0,1,2) and (1,2,3) — PS1 quad split; flat +Z normal. */
+static Ogre::MeshPtr createTwoTriQuadMesh(const std::string& name)
+{
+    static const float corners[][6] = {
+        {0.f, 0.f, 0.f, 0.f, 0.f, 1.f},
+        {1.f, 0.f, 0.f, 0.f, 0.f, 1.f},
+        {1.f, 1.f, 0.f, 0.f, 0.f, 1.f},
+        {0.f, 1.f, 0.f, 0.f, 0.f, 1.f},
+    };
+    static const uint16_t idx[] = {0, 1, 2, 1, 2, 3};
+    return createInterleavedPosNormalMesh(name, corners, 4, idx, 6);
+}
+
 /** Two coplanar tris sharing a geometric edge with different normals on that edge (6 verts). */
 static Ogre::MeshPtr createSplitNormalTwoTriMesh(const std::string& name)
 {
-    if (auto old = Ogre::MeshManager::getSingleton().getByName(name))
-        Ogre::MeshManager::getSingleton().remove(old);
-
-    Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().createManual(
-        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    Ogre::SubMesh* sm = mesh->createSubMesh();
-    sm->setMaterialName("BaseWhite");
-    sm->useSharedVertices = false;
-
-    Ogre::VertexData* vd = new Ogre::VertexData();
-    sm->vertexData = vd;
-    vd->vertexCount = 6;
-    Ogre::VertexDeclaration* decl = vd->vertexDeclaration;
-    Ogre::VertexBufferBinding* bind = vd->vertexBufferBinding;
-    size_t off = 0;
-    decl->addElement(0, off, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
-    off += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
-    decl->addElement(0, off, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
-    off += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
-    const size_t vsize = decl->getVertexSize(0);
-    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-        vsize, 6, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-    uint8_t* dst = static_cast<uint8_t*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-    const float rows[][6] = {
+    static const float rows[][6] = {
         {0.f, 0.f, 0.f, 0.f, 0.f, 1.f},
         {1.f, 0.f, 0.f, 0.f, 0.f, 1.f},
         {1.f, 1.f, 0.f, 0.f, 0.f, 1.f},
@@ -131,33 +118,8 @@ static Ogre::MeshPtr createSplitNormalTwoTriMesh(const std::string& name)
         {1.f, 1.f, 0.f, 1.f, 0.f, 0.f},
         {0.f, 1.f, 0.f, 0.f, 0.f, 1.f},
     };
-    for (int i = 0; i < 6; ++i) {
-        uint8_t* row = dst + i * vsize;
-        float* pf = nullptr;
-        decl->findElementBySemantic(Ogre::VES_POSITION)->baseVertexPointerToElement(row, &pf);
-        pf[0] = rows[i][0];
-        pf[1] = rows[i][1];
-        pf[2] = rows[i][2];
-        decl->findElementBySemantic(Ogre::VES_NORMAL)->baseVertexPointerToElement(row, &pf);
-        pf[0] = rows[i][3];
-        pf[1] = rows[i][4];
-        pf[2] = rows[i][5];
-    }
-    vbuf->unlock();
-    bind->setBinding(0, vbuf);
-
-    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
-        Ogre::HardwareIndexBuffer::IT_16BIT, 6, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-    const uint16_t idx[] = {0, 1, 2, 3, 4, 5};
-    ibuf->writeData(0, sizeof(idx), idx);
-    sm->indexData->indexBuffer = ibuf;
-    sm->indexData->indexCount = 6;
-    sm->indexData->indexStart = 0;
-
-    mesh->_setBounds(Ogre::AxisAlignedBox(0, 0, 0, 1, 1, 0));
-    mesh->_setBoundingSphereRadius(2.0f);
-    mesh->load();
-    return mesh;
+    static const uint16_t idx[] = {0, 1, 2, 3, 4, 5};
+    return createInterleavedPosNormalMesh(name, rows, 6, idx, 6);
 }
 
 static bool readPsyqPlyCountsAndFirstFace(const QString& path, int& nV, int& nN, int& nF, QString& firstFaceLine)
