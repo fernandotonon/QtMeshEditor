@@ -9,6 +9,18 @@
 #include <QDir>
 #include <QTemporaryDir>
 
+namespace {
+
+QList<Ogre::Entity*> validationTargetEntities()
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel)
+        return {};
+    return sel->getResolvedEntities();
+}
+
+} // namespace
+
 MeshValidator* MeshValidator::m_pSingleton = nullptr;
 
 MeshValidator* MeshValidator::instance()
@@ -57,8 +69,7 @@ MeshValidator::~MeshValidator()
 
 bool MeshValidator::hasSelection() const
 {
-    auto* sel = SelectionSet::getSingleton();
-    return sel && sel->hasEntities();
+    return !validationTargetEntities().isEmpty();
 }
 
 bool MeshValidator::hasFixableIssues() const
@@ -98,8 +109,7 @@ void MeshValidator::validate()
     m_validated = false;
     emit issuesChanged();
 
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities())
+    if (validationTargetEntities().isEmpty())
         return;
 
     SentryReporter::addBreadcrumb("ui.action", "Validate mesh");
@@ -137,8 +147,8 @@ void MeshValidator::doValidate()
     m_issues.clear();
     m_validated = false;
 
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities()) {
+    const QList<Ogre::Entity*> targets = validationTargetEntities();
+    if (targets.isEmpty()) {
         emit issuesChanged();
         return;
     }
@@ -147,7 +157,7 @@ void MeshValidator::doValidate()
     int totalNonFiniteUV = 0;
     int totalOutOfRangeUV = 0;
 
-    for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
+    for (Ogre::Entity* entity : targets) {
         Ogre::MeshPtr mesh = entity->getMesh();
         if (!mesh) continue;
 
@@ -286,8 +296,8 @@ void MeshValidator::doValidate()
 
 void MeshValidator::fixAll()
 {
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities()) {
+    const QList<Ogre::Entity*> targets = validationTargetEntities();
+    if (targets.isEmpty()) {
         emit error("No mesh selected.");
         return;
     }
@@ -309,7 +319,7 @@ void MeshValidator::fixAll()
     }
 
     QStringList reimportPaths;
-    for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
+    for (Ogre::Entity* entity : targets) {
         Ogre::SceneNode* sn = entity->getParentSceneNode();
         if (!sn) continue;
 

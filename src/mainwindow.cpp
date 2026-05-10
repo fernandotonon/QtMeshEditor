@@ -832,6 +832,23 @@ void MainWindow::initToolBar()
     m_pPrimitivesWidget = new PrimitivesWidget(this);
     m_pPrimitivesWidget->hide();
 
+    // AI Chat — first on the contextual rail in every mode (before Add Primitive).
+    auto aiChatButton = new QToolButton(ui->objectsToolbar);
+    aiChatButton->setObjectName("aiChatToolbarButton");
+    aiChatButton->setText("\u2728");  // ✨
+    aiChatButton->setToolTip(tr("Open AI Chat"));
+    QFont aiFont = aiChatButton->font();
+    aiFont.setPixelSize(15);
+    aiChatButton->setFont(aiFont);
+    connect(aiChatButton, &QToolButton::clicked, this, [this]() {
+        if (m_chatDock) {
+            m_chatDock->show();
+            m_chatDock->raise();
+        }
+    });
+    QAction* aiChatToolbarAction = ui->objectsToolbar->addWidget(aiChatButton);
+    aiChatToolbarAction->setObjectName("modeAnyAiChatAction");
+
     auto addPrimitiveButton = new QToolButton(ui->objectsToolbar);
     addPrimitiveButton->setIcon(QIcon(":/icones/cube.png"));
     addPrimitiveButton->setToolTip(tr("Add Primitive"));
@@ -867,23 +884,6 @@ void MainWindow::initToolBar()
     addPrimitiveButton->setMenu(addPrimitiveMenu);
     QAction* addPrimitiveAction = ui->objectsToolbar->addWidget(addPrimitiveButton);
     addPrimitiveAction->setObjectName("modeObjectPrimitiveAction");
-
-    // AI Chat button — star icon is the common AI shorthand
-    auto aiChatButton = new QToolButton(ui->objectsToolbar);
-    aiChatButton->setObjectName("aiChatToolbarButton");
-    aiChatButton->setText("\u2728");  // ✨
-    aiChatButton->setToolTip(tr("Open AI Chat"));
-    QFont aiFont = aiChatButton->font();
-    aiFont.setPixelSize(15);
-    aiChatButton->setFont(aiFont);
-    connect(aiChatButton, &QToolButton::clicked, this, [this]() {
-        if (m_chatDock) {
-            m_chatDock->show();
-            m_chatDock->raise();
-        }
-    });
-    QAction* aiChatToolbarAction = ui->objectsToolbar->addWidget(aiChatButton);
-    aiChatToolbarAction->setObjectName("modeAnyAiChatAction");
 
     // Topology tools — toolbar shortcuts for Extrude / Bevel. They
     // delegate to the same EditModeController actions the Inspector
