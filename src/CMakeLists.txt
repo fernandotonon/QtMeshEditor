@@ -76,6 +76,7 @@ ThemeManager.cpp
 BatchExporter.cpp
 MaterialPresetLibrary.cpp
 MeshLodController.cpp
+TextureChannelPacker.cpp
 MeshValidator.cpp
 AIChatManager.cpp
 WelcomeScreenController.cpp
@@ -159,6 +160,7 @@ ThemeManager.h
 BatchExporter.h
 MaterialPresetLibrary.h
 MeshLodController.h
+TextureChannelPacker.h
 MeshValidator.h
 AIChatManager.h
 WelcomeScreenController.h

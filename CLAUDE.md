@@ -71,9 +71,12 @@ qtmesh scan ./assets --sarif report.sarif      # write SARIF report to file
 qtmesh scan ./assets --fix --dry-run           # preview auto-fixes
 qtmesh scan ./assets --include "*.fbx,*.glb"   # filter by extension
 qtmesh scan ./assets --fail-on warning         # exit 1 on warnings or errors
+qtmesh pack-textures --r ao.png --g rough.png --b metal.png -o orm.png  # pack 3 grayscale maps into RGB (Unity ORM)
+qtmesh pack-textures --r metal.png --g rough.png --bc 0 --no-alpha -o mr.png  # Unreal MR (constant blue)
+qtmesh pack-textures --r rough.png --invert-r -o gloss.png  # invert: roughness → glossiness
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`, `material`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`, `material`, `pack-textures`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 
@@ -159,6 +162,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 
 - **BatchExporter** (`src/BatchExporter.h/cpp`): Multi-file conversion wrapping CLIPipeline. Supports progress reporting.
 - **MaterialPresetLibrary** (`src/MaterialPresetLibrary.h/cpp`): QML_SINGLETON providing one-click material presets (Plastic, Metal, Wood, Glass, Unlit, Wireframe).
+- **TextureChannelPacker** (`src/TextureChannelPacker.h/cpp`, slice G): pure-data packer that takes 1-4 grayscale source images (or constants) and writes a single packed RGBA texture (PNG/TGA/JPG). Each output channel is sampled via Rec.601 luminance from its source image, with an optional invert flag (useful for roughness↔glossiness). Smaller sources are bilinear-scaled up to match the largest input. Surfaced via the `qtmesh pack-textures` CLI subcommand, the `pack_textures` MCP tool, and the "Pack Channels…" button in the Material Editor.
 
 ### MCP Server
 
@@ -171,7 +175,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### CLI Pipeline
 
 - **CLIPipeline** (`src/CLIPipeline.h/cpp`): Headless command-line interface for mesh operations. All static methods — entry point is `CLIPipeline::run(argc, argv)`.
-- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`, `scan`.
+- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`, `scan`, `material`, `pack-textures`.
 - Activated via `qtmesh` symlink (created at build time), `--cli` flag, or recognized subcommand as first arg.
 - Redirects stdout to stderr (Ogre/Qt noise) and writes CLI output to the original stdout fd. Uses `_exit()` to avoid Ogre static destructor crashes on macOS.
 - **AnimationMerger** (`src/AnimationMerger.h/cpp`): Public `renameAnimation()` static method used by both CLI and GUI for animation renaming.

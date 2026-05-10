@@ -180,6 +180,9 @@ private:
     QJsonObject toolReparentNode(const QJsonObject &args);
     QJsonObject toolSetPivotMode(const QJsonObject &args);
     QJsonObject toolGetPivotMode(const QJsonObject &args);
+    /// Slice G: pack 1-4 grayscale source images into a single RGBA
+    /// output texture (e.g. ORM = AO+Roughness+Metallic).
+    QJsonObject toolPackTextures(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {

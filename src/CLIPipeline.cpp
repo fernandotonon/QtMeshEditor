@@ -10,6 +10,7 @@
 #include "ScanEngine.h"
 #include "FBX/FBXExporter.h"
 #include "MaterialPresetLibrary.h"
+#include "TextureChannelPacker.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -958,6 +959,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "pose") rc = cmdPose(argc, argv);
     else if (cmd == "scan") rc = cmdScan(argc, argv);
     else if (cmd == "material") rc = cmdMaterial(argc, argv);
+    else if (cmd == "pack-textures") rc = cmdPackTextures(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -2594,6 +2596,73 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
         .arg(selectedEntityCount == 1 ? "y" : "ies")
         .arg(outFi.fileName()));
 
+    return 0;
+}
+
+int CLIPipeline::cmdPackTextures(int argc, char* argv[])
+{
+    // Parse:
+    //   pack-textures --r ao.png --g rough.png --b metal.png [--a path]
+    //                 [--rc <0..1>] [--gc <0..1>] [--bc <0..1>] [--ac <0..1>]
+    //                 [--invert-r] [--invert-g] [--invert-b] [--invert-a]
+    //                 [--width N] [--height N] [--no-alpha] -o out.png
+    TextureChannelPacker::PackingSpec spec;
+    QString outputPath;
+
+    auto setPath = [](TextureChannelPacker::ChannelSource& dst, const QString& v) {
+        dst.path = v;
+    };
+    auto setConst = [](TextureChannelPacker::ChannelSource& dst, const QString& v) {
+        dst.constantValue = v.toFloat();
+    };
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "pack-textures" || arg == "--cli") continue;
+        if ((arg == "--r" || arg == "--red")     && i + 1 < argc) { setPath(spec.red,   QString(argv[++i])); continue; }
+        if ((arg == "--g" || arg == "--green")   && i + 1 < argc) { setPath(spec.green, QString(argv[++i])); continue; }
+        if ((arg == "--b" || arg == "--blue")    && i + 1 < argc) { setPath(spec.blue,  QString(argv[++i])); continue; }
+        if ((arg == "--a" || arg == "--alpha")   && i + 1 < argc) { setPath(spec.alpha, QString(argv[++i])); continue; }
+        if (arg == "--rc" && i + 1 < argc) { setConst(spec.red,   QString(argv[++i])); continue; }
+        if (arg == "--gc" && i + 1 < argc) { setConst(spec.green, QString(argv[++i])); continue; }
+        if (arg == "--bc" && i + 1 < argc) { setConst(spec.blue,  QString(argv[++i])); continue; }
+        if (arg == "--ac" && i + 1 < argc) { setConst(spec.alpha, QString(argv[++i])); continue; }
+        if (arg == "--invert-r") { spec.red.invert   = true; continue; }
+        if (arg == "--invert-g") { spec.green.invert = true; continue; }
+        if (arg == "--invert-b") { spec.blue.invert  = true; continue; }
+        if (arg == "--invert-a") { spec.alpha.invert = true; continue; }
+        if (arg == "--width"  && i + 1 < argc) { spec.outputWidth  = QString(argv[++i]).toInt(); continue; }
+        if (arg == "--height" && i + 1 < argc) { spec.outputHeight = QString(argv[++i]).toInt(); continue; }
+        if (arg == "--no-alpha") { spec.includeAlpha = false; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString(argv[++i]);
+            continue;
+        }
+    }
+
+    if (outputPath.isEmpty()) {
+        err() << "Error: missing -o/--output." << Qt::endl;
+        err() << "Usage: qtmesh pack-textures --r <img> [--g <img> --b <img> --a <img>]" << Qt::endl;
+        err() << "                            [--rc/--gc/--bc/--ac <0..1>]" << Qt::endl;
+        err() << "                            [--invert-r/g/b/a]" << Qt::endl;
+        err() << "                            [--width N --height N] [--no-alpha]" << Qt::endl;
+        err() << "                            -o <output.png>" << Qt::endl;
+        return 2;
+    }
+
+    SentryReporter::addBreadcrumb("cli.pack-textures",
+        QString("Pack textures -> %1").arg(QFileInfo(outputPath).fileName()));
+
+    auto r = TextureChannelPacker::packToFile(spec, outputPath);
+    if (!r.ok) {
+        err() << "Error: " << r.error << Qt::endl;
+        return 1;
+    }
+
+    cliWrite(QString("Packed %1x%2 -> %3\n")
+                 .arg(r.usedWidth)
+                 .arg(r.usedHeight)
+                 .arg(QFileInfo(outputPath).fileName()));
     return 0;
 }
 

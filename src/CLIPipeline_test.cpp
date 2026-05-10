@@ -2,6 +2,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -2958,4 +2959,81 @@ TEST(CLIPipelineCmdMaterial, ListPresetsExitsZero)
     // --list-presets is a standalone op: dump names, exit 0. No mesh
     // load needed, so this works without Ogre headless init.
     EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 0);
+}
+
+// -- cmdPackTextures (slice G) --
+
+TEST(CLIPipelineCmdPackTextures, MissingOutputFails)
+{
+    // No -o → usage error (2). Constants alone are fine; only the
+    // output path is required.
+    TestArgv args({"qtmesh", "pack-textures", "--rc", "0.5"});
+    EXPECT_EQ(CLIPipeline::cmdPackTextures(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdPackTextures, AllConstantsWritesPng)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray outPath = tmp.filePath("flat.png").toUtf8();
+
+    TestArgv args({"qtmesh", "pack-textures",
+                   "--rc", "1.0", "--gc", "0.5", "--bc", "0.0",
+                   "--width", "32", "--height", "32",
+                   "-o", outPath.constData()});
+    EXPECT_EQ(CLIPipeline::cmdPackTextures(args.argc(), args.argv()), 0);
+
+    // Verify the file actually exists and decodes to the requested size.
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 32);
+    EXPECT_EQ(img.height(), 32);
+}
+
+TEST(CLIPipelineCmdPackTextures, MissingSourceFileReturnsRuntimeError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray outPath = tmp.filePath("never.png").toUtf8();
+    TestArgv args({"qtmesh", "pack-textures",
+                   "--r", "/nonexistent/definitely_missing_for_test.png",
+                   "-o", outPath.constData()});
+    EXPECT_EQ(CLIPipeline::cmdPackTextures(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdPackTextures, NoAlphaProducesRgbPng)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray outPath = tmp.filePath("rgb.png").toUtf8();
+    TestArgv args({"qtmesh", "pack-textures",
+                   "--rc", "1.0", "--gc", "0.5", "--bc", "0.25",
+                   "--width", "16", "--height", "16",
+                   "--no-alpha",
+                   "-o", outPath.constData()});
+    EXPECT_EQ(CLIPipeline::cmdPackTextures(args.argc(), args.argv()), 0);
+
+    // QImage normalises to ARGB32 on load even from RGB888 PNGs, so we
+    // can't introspect the underlying format here; the smoke check is
+    // that the file decodes and is the expected size.
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 16);
+    EXPECT_EQ(img.height(), 16);
+}
+
+TEST(CLIPipelineCmdPackTextures, InvertFlagFlipsConstantSource)
+{
+    // Constant 1.0 with --invert-r should produce ~0 in the R channel.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray outPath = tmp.filePath("inv.png").toUtf8();
+    TestArgv args({"qtmesh", "pack-textures",
+                   "--rc", "1.0", "--invert-r",
+                   "--width", "8", "--height", "8",
+                   "-o", outPath.constData()});
+    EXPECT_EQ(CLIPipeline::cmdPackTextures(args.argc(), args.argv()), 0);
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(qRed(img.pixel(4, 4)), 0);
 }
