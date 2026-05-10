@@ -41,6 +41,13 @@ TEST(ConsoleLogSanitize, Utf8CompletePrefixExcludesIncompleteTrailingBytes)
     EXPECT_EQ(utf8CompletePrefixLength(incomplete), 1);
 }
 
+/// Bad continuation after a lead byte must not yield prefix length 0 (would stall streaming decode).
+TEST(ConsoleLogSanitize, Utf8CompletePrefixResyncsAfterBadContinuation)
+{
+    const QByteArray b = QByteArrayLiteral("\xc3 "); // U+00E9 lead + ASCII space
+    EXPECT_EQ(utf8CompletePrefixLength(b), 2);
+}
+
 /// Invalid UTF-8 lead bytes are skipped one byte at a time until the buffer end.
 TEST(ConsoleLogSanitize, Utf8CompletePrefixAdvancesPastInvalidBytes)
 {

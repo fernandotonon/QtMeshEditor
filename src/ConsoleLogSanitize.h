@@ -12,7 +12,9 @@ QString stripAnsiTerminalSequences(const QString& s);
 /// Strips ANSI and trims horizontal whitespace from one captured stdio line.
 QString sanitizeCapturedStdioLine(const QString& line);
 
-/// Length of the longest valid UTF-8 prefix of `b` (incomplete trailing bytes excluded).
+/// Length of the longest decodable prefix of `b` for streaming UTF-8: complete code points
+/// plus any truncated final sequence (returned length excludes incomplete tail). On malformed
+/// multibyte sequences, skips one byte and resyncs so callers never spin on a fixed carry.
 int utf8CompletePrefixLength(const QByteArray& b);
 
 } // namespace ConsoleLogSanitize

@@ -42,9 +42,18 @@ int utf8CompletePrefixLength(const QByteArray& b)
         }
         if (i + need > n)
             return i;
+        bool badContinuation = false;
         for (int j = 1; j < need; ++j) {
-            if ((static_cast<unsigned char>(b.at(i + j)) & 0xC0) != 0x80)
-                return i;
+            if ((static_cast<unsigned char>(b.at(i + j)) & 0xC0) != 0x80) {
+                badContinuation = true;
+                break;
+            }
+        }
+        if (badContinuation) {
+            // Resync: do not return i (that would leave the bad lead in carry forever in
+            // streaming decode). Skip one byte and continue like an invalid lead.
+            ++i;
+            continue;
         }
         i += need;
     }
