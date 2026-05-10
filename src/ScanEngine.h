@@ -99,7 +99,8 @@ public:
     /// Recursively enumerate asset files under scanRoot filtered by config patterns.
     static QStringList enumerateFiles(const ScanConfig& config, const QString& scanRoot);
 
-    /// Inspect a single asset file using Assimp (lightweight, no Ogre needed).
+    /// Inspect a single asset file (Assimp for most formats; PlayStation TMD / Psy-Q PLY / RSD
+    /// use the same Ogre importers as the editor, with a headless render target when needed).
     static AssetInfo inspectAsset(const QString& filePath, const QString& scanRoot);
 
     /// After `Assimp::Importer::ReadFile`, whether the result would make `inspectAsset` set

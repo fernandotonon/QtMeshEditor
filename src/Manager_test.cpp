@@ -55,6 +55,15 @@ protected:
 };
 
 // Test the forbidden name function without creating full Manager
+TEST_F(ManagerTest, DefaultImportExtensions_IncludesPlayStationFormats)
+{
+    const QString exts = Manager::defaultImportExtensions();
+    EXPECT_FALSE(exts.isEmpty());
+    EXPECT_TRUE(exts.contains(QStringLiteral(".tmd")));
+    EXPECT_TRUE(exts.contains(QStringLiteral(".rsd")));
+    EXPECT_TRUE(exts.contains(QStringLiteral(".ply")));
+}
+
 TEST_F(ManagerTest, Forbidden_Name)
 {
     // Test static functionality that doesn't require full initialization

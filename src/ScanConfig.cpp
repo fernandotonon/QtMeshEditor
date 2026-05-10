@@ -292,6 +292,41 @@ ScanConfig ScanConfig::withScopeOverrides(const QString& relativePath) const
 // ScanConfig loading
 // ---------------------------------------------------------------------------
 
+namespace {
+
+/**
+ * When a project sets `scan.include`, it replaces the default Assimp-based globs.
+ * PlayStation `.tmd` / `.rsd` and Psy-Q `.ply` are not Assimp extensions, so they
+ * would never be scanned unless we merge these patterns in when missing.
+ */
+void appendEditorOnlyMeshScanGlobsIfMissing(QStringList& patterns)
+{
+    if (patterns.isEmpty())
+        return;
+
+    const QLatin1String kExtras[] = {
+        QLatin1String("tmd"),
+        QLatin1String("rsd"),
+        QLatin1String("ply"),
+    };
+
+    auto hasExtensionGlob = [&](QLatin1String extNoDot) -> bool {
+        const QString token = QStringLiteral("*.") + QString(extNoDot);
+        for (const QString& p : patterns) {
+            if (p.contains(token, Qt::CaseInsensitive))
+                return true;
+        }
+        return false;
+    };
+
+    for (QLatin1String ext : kExtras) {
+        if (!hasExtensionGlob(ext))
+            patterns.append(QStringLiteral("**/*.") + QString(ext));
+    }
+}
+
+} // namespace
+
 ScanConfig::ScanConfig()
     : includePatterns(ScanConfig::defaultIncludePatternsForAssimpImports())
 {
@@ -321,6 +356,10 @@ QStringList ScanConfig::defaultIncludePatternsForAssimpImports()
         // Ogre mesh formats used by the editor (may or may not appear as separate Assimp importers)
         extSet.insert(QStringLiteral("mesh"));
         extSet.insert(QStringLiteral("mesh.xml"));
+
+        // PlayStation / Psy-Q sidecars — imported by QtMeshEditor, not Assimp extensions
+        extSet.insert(QStringLiteral("tmd"));
+        extSet.insert(QStringLiteral("rsd"));
 
         QStringList globs;
         globs.reserve(extSet.size());
@@ -374,6 +413,7 @@ ScanConfig ScanConfig::fromVariantMap(const QVariantMap& root)
             config.roots = scan.value("roots").toStringList();
         if (scan.contains("include")) {
             config.includePatterns = scan.value("include").toStringList();
+            appendEditorOnlyMeshScanGlobsIfMissing(config.includePatterns);
         }
         if (scan.contains("exclude"))
             config.excludePatterns = scan.value("exclude").toStringList();

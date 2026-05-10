@@ -2,6 +2,12 @@
 #include "ScanConfig.h"
 #include "ScanEngine.h"
 
+#include <algorithm>
+
+#include "Manager.h"
+#include "SelectionSet.h"
+#include "TestHelpers.h"
+
 #include <assimp/scene.h>
 
 #include <QCoreApplication>
@@ -11,6 +17,10 @@
 #include <QJsonDocument>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
+#include <QTextStream>
+#include <QThread>
+
+#include <cstring>
 
 namespace {
 QString writeMinimalObj(const QString& dirPath, const QString& fileName)
@@ -183,6 +193,45 @@ TEST(ScanConfigTest, LoadRedundantKeyframesRule)
     EXPECT_DOUBLE_EQ(config.redundantKeyframesScaleTol, 0.0005);
 }
 
+TEST(ScanConfigTest, YamlExplicitInclude_AddsPlayStationGlobsWhenMissing)
+{
+    const QString yaml =
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.fbx\"\n";
+
+    const ScanConfig c = ScanConfig::fromVariantMap(parseSimpleYaml(yaml));
+    EXPECT_TRUE(std::find(c.includePatterns.cbegin(), c.includePatterns.cend(),
+                          QStringLiteral("**/*.fbx"))
+                != c.includePatterns.cend());
+    EXPECT_TRUE(std::find(c.includePatterns.cbegin(), c.includePatterns.cend(),
+                          QStringLiteral("**/*.tmd"))
+                != c.includePatterns.cend());
+    EXPECT_TRUE(std::find(c.includePatterns.cbegin(), c.includePatterns.cend(),
+                          QStringLiteral("**/*.rsd"))
+                != c.includePatterns.cend());
+    EXPECT_TRUE(std::find(c.includePatterns.cbegin(), c.includePatterns.cend(),
+                          QStringLiteral("**/*.ply"))
+                != c.includePatterns.cend());
+}
+
+TEST(ScanConfigTest, YamlExplicitInclude_DoesNotDuplicatePly)
+{
+    const QString yaml =
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.ply\"\n"
+        "    - \"**/*.fbx\"\n";
+
+    const ScanConfig c = ScanConfig::fromVariantMap(parseSimpleYaml(yaml));
+    int plyCount = 0;
+    for (const QString& p : c.includePatterns) {
+        if (p.compare(QStringLiteral("**/*.ply"), Qt::CaseInsensitive) == 0)
+            ++plyCount;
+    }
+    EXPECT_EQ(plyCount, 1);
+}
+
 TEST(ScanConfigTest, DefaultConstructorIncludesAssimpGlobPatterns)
 {
     const ScanConfig c;
@@ -190,15 +239,23 @@ TEST(ScanConfigTest, DefaultConstructorIncludesAssimpGlobPatterns)
     EXPECT_GT(c.includePatterns.size(), 8);
     bool hasMeshGlob = false;
     bool hasFbxGlob = false;
+    bool hasTmdGlob = false;
+    bool hasRsdGlob = false;
     for (const QString& p : c.includePatterns) {
         if (p.endsWith(QStringLiteral("/mesh"), Qt::CaseInsensitive)
             || p.endsWith(QStringLiteral(".mesh"), Qt::CaseInsensitive))
             hasMeshGlob = true;
         if (p.contains(QStringLiteral("fbx"), Qt::CaseInsensitive))
             hasFbxGlob = true;
+        if (p.compare(QStringLiteral("**/*.tmd"), Qt::CaseInsensitive) == 0)
+            hasTmdGlob = true;
+        if (p.compare(QStringLiteral("**/*.rsd"), Qt::CaseInsensitive) == 0)
+            hasRsdGlob = true;
     }
     EXPECT_TRUE(hasFbxGlob);
     EXPECT_TRUE(hasMeshGlob);
+    EXPECT_TRUE(hasTmdGlob);
+    EXPECT_TRUE(hasRsdGlob);
 }
 
 // ---------------------------------------------------------------------------
@@ -1748,4 +1805,169 @@ TEST(ScanConfigLoadTest, LoadFromFile_InvalidJsonFallsBackToDefaults)
     ScanConfig c = ScanConfig::loadFromFile(file.fileName());
     ScanConfig d = ScanConfig::defaults();
     EXPECT_EQ(c.version, d.version);
+}
+
+namespace {
+
+static void writeU32le(uint8_t* p, uint32_t v)
+{
+    p[0] = uint8_t(v & 0xFF);
+    p[1] = uint8_t((v >> 8) & 0xFF);
+    p[2] = uint8_t((v >> 16) & 0xFF);
+    p[3] = uint8_t((v >> 24) & 0xFF);
+}
+
+static void writeU16le(uint8_t* p, uint16_t v)
+{
+    p[0] = uint8_t(v & 0xFF);
+    p[1] = uint8_t((v >> 8) & 0xFF);
+}
+
+static void writeVertex8(int16_t x, int16_t y, int16_t z, uint8_t* out8)
+{
+    writeU16le(out8 + 0, static_cast<uint16_t>(x));
+    writeU16le(out8 + 2, static_cast<uint16_t>(y));
+    writeU16le(out8 + 4, static_cast<uint16_t>(z));
+    writeU16le(out8 + 6, 0);
+}
+
+/** Minimal TMD: one G3 triangle (same layout as PS1TMD_test). */
+static QByteArray makeMinimalG3TmdBlob()
+{
+    constexpr uint32_t kTmdId = 0x41u;
+    constexpr size_t kHead = 12u;
+    constexpr size_t kObjH = 28u;
+    const size_t vAbs = kHead + kObjH;
+    const size_t nAbs = vAbs + 3u * 8u;
+    const size_t pAbs = nAbs + 3u * 8u;
+    const uint32_t vOff = static_cast<uint32_t>(vAbs - 12u);
+    const uint32_t nOff = static_cast<uint32_t>(nAbs - 12u);
+    const uint32_t pOff = static_cast<uint32_t>(pAbs - 12u);
+
+    QByteArray buf(static_cast<int>(pAbs + 20u), '\0');
+    uint8_t* d = reinterpret_cast<uint8_t*>(buf.data());
+
+    writeU32le(d, kTmdId);
+    writeU32le(d + 4, 0);
+    writeU32le(d + 8, 1);
+
+    uint8_t* oh = d + kHead;
+    writeU32le(oh, vOff);
+    writeU32le(oh + 4, 3);
+    writeU32le(oh + 8, nOff);
+    writeU32le(oh + 12, 3);
+    writeU32le(oh + 16, pOff);
+    writeU32le(oh + 20, 1);
+    writeU32le(oh + 24, 0);
+
+    writeVertex8(0, 0, 0, d + vAbs);
+    writeVertex8(4096, 0, 0, d + vAbs + 8);
+    writeVertex8(0, 4096, 0, d + vAbs + 16);
+
+    writeVertex8(0, 0, 4096, d + nAbs);
+    writeVertex8(0, 0, 4096, d + nAbs + 8);
+    writeVertex8(0, 0, 4096, d + nAbs + 16);
+
+    uint8_t* pkt = d + pAbs;
+    pkt[0] = 6;
+    pkt[1] = 4;
+    pkt[2] = 0;
+    pkt[3] = 0x30;
+    pkt[4] = 200;
+    pkt[5] = 200;
+    pkt[6] = 200;
+    pkt[7] = 0x30;
+    writeU16le(pkt + 8, 0);
+    writeU16le(pkt + 10, 0);
+    writeU16le(pkt + 12, 1);
+    writeU16le(pkt + 14, 1);
+    writeU16le(pkt + 16, 2);
+    writeU16le(pkt + 18, 2);
+
+    return buf;
+}
+
+} // namespace
+
+TEST(ScanEngineTest, InspectAsset_RsdWithObjGeometry_KeepsRsdFormatAndCounts)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ASSERT_FALSE(writeMinimalObj(tmpDir.path(), "child.obj").isEmpty());
+
+    const QString rsdPath = QDir(tmpDir.path()).filePath("pack.rsd");
+    QFile rf(rsdPath);
+    ASSERT_TRUE(rf.open(QIODevice::WriteOnly | QIODevice::Text));
+    rf.write("@RSD940102\nPLY=child.obj\n");
+    rf.close();
+
+    const AssetInfo info = ScanEngine::inspectAsset(rsdPath, tmpDir.path());
+    ASSERT_FALSE(info.loadError) << qPrintable(info.errorMessage);
+    EXPECT_EQ(info.format, QStringLiteral("rsd"));
+    EXPECT_EQ(info.relativePath, QStringLiteral("pack.rsd"));
+    EXPECT_EQ(info.vertexCount, 3u);
+    EXPECT_EQ(info.faceCount, 1u);
+}
+
+TEST(ScanEngineTest, InspectAsset_MinimalTmd_LoadsGeometry)
+{
+    SelectionSet::kill();
+    Manager::kill();
+    QThread::msleep(30);
+
+    ASSERT_TRUE(tryInitOgre());
+    createStandardOgreMaterials();
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString path = QDir(tmpDir.path()).filePath("scan_min.tmd");
+    QFile wf(path);
+    ASSERT_TRUE(wf.open(QIODevice::WriteOnly));
+    const QByteArray blob = makeMinimalG3TmdBlob();
+    ASSERT_EQ(wf.write(blob), blob.size());
+    wf.close();
+
+    const AssetInfo info = ScanEngine::inspectAsset(path, tmpDir.path());
+    ASSERT_FALSE(info.loadError) << qPrintable(info.errorMessage);
+    EXPECT_EQ(info.format, QStringLiteral("tmd"));
+    EXPECT_GE(info.vertexCount, 3u);
+    EXPECT_GE(info.faceCount, 1u);
+
+    Manager::kill();
+    SelectionSet::kill();
+    QThread::msleep(30);
+}
+
+TEST(ScanEngineTest, InspectAsset_PsyqPly_LoadsGeometry)
+{
+    SelectionSet::kill();
+    Manager::kill();
+    QThread::msleep(30);
+
+    ASSERT_TRUE(tryInitOgre());
+    createStandardOgreMaterials();
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString path = QDir(tmpDir.path()).filePath("scan_psyq.ply");
+    {
+        QFile wf(path);
+        ASSERT_TRUE(wf.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream ts(&wf);
+        ts << "@PLY940102\n";
+        ts << "4 4 1\n";
+        ts << "0 0 0\n1 0 0\n1 1 0\n0 1 0\n";
+        ts << "0 0 1\n0 0 1\n0 0 1\n0 0 1\n";
+        ts << "1 0 1 2 3 0 1 2 3\n";
+    }
+
+    const AssetInfo info = ScanEngine::inspectAsset(path, tmpDir.path());
+    ASSERT_FALSE(info.loadError) << qPrintable(info.errorMessage);
+    EXPECT_EQ(info.format, QStringLiteral("ply"));
+    EXPECT_GE(info.vertexCount, 4u);
+    EXPECT_GE(info.faceCount, 2u);
+
+    Manager::kill();
+    SelectionSet::kill();
+    QThread::msleep(30);
 }

@@ -2378,7 +2378,7 @@ void MainWindow::on_actionImport_triggered()
 
     QStringList fileNames = QFileDialog::getOpenFileNames(this, tr("Select a mesh file to import"),
                                                      "",
-                                                     QString("Model ( "+ Manager::getSingleton()->getValidFileExtention().replace(".","*.") + " )"),
+                                                     MeshImporterExporter::importFileDialogFilter(),
                                                      nullptr, QFileDialog::DontUseNativeDialog|QFileDialog::HideNameFilterDetails);
 
     for (const QString& f : fileNames)

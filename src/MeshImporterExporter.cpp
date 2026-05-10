@@ -1753,10 +1753,10 @@ QString MeshImporterExporter::exportFileDialogFilter()
     return filter;
 }
 
-QString MeshImporterExporter::importFileDialogFilter()
+QString MeshImporterExporter::importFileDialogFilterFromExtensionList(
+    const QString& spaceSeparatedDotExtensions)
 {
-    const QStringList parts =
-        Manager::getSingleton()->getValidFileExtention().split(' ', Qt::SkipEmptyParts);
+    const QStringList parts = spaceSeparatedDotExtensions.split(' ', Qt::SkipEmptyParts);
     QStringList globs;
     globs.reserve(parts.size());
     for (QString ext : parts) {
@@ -1770,6 +1770,11 @@ QString MeshImporterExporter::importFileDialogFilter()
                "PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply);;"
                "All files (*.*)")
         .arg(allSupported);
+}
+
+QString MeshImporterExporter::importFileDialogFilter()
+{
+    return importFileDialogFilterFromExtensionList(Manager::getSingleton()->getValidFileExtention());
 }
 
 QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)

@@ -1,4 +1,6 @@
 #include "WelcomeDialog.h"
+#include "Manager.h"
+#include "MeshImporterExporter.h"
 #include "SentryReporter.h"
 
 #include <QVBoxLayout>
@@ -66,9 +68,11 @@ WelcomeDialog::WelcomeDialog(QWidget* parent)
     auto* openFileBtn = new QPushButton("Open File...");
     openFileBtn->setMinimumHeight(36);
     connect(openFileBtn, &QPushButton::clicked, this, [this]() {
+        const QString filter = MeshImporterExporter::importFileDialogFilterFromExtensionList(
+            Manager::defaultImportExtensions());
         QString file = QFileDialog::getOpenFileName(
-            this, "Open 3D File", QString(),
-            "3D Files (*.fbx *.gltf *.glb *.vrm *.obj *.dae *.stl *.mesh *.3ds *.x *.ply *.tmd *.rsd);;All Files (*)");
+            this, tr("Open 3D File"), QString(), filter, nullptr,
+            QFileDialog::DontUseNativeDialog | QFileDialog::HideNameFilterDetails);
         if (!file.isEmpty()) {
             m_action = OpenFile;
             m_selectedFile = file;
