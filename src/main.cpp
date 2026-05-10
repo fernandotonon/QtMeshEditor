@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
                     continue;  // skip flags like --verbose
                 if (arg == "info" || arg == "fix" || arg == "convert" || arg == "anim"
                         || arg == "validate" || arg == "lod" || arg == "pose"
-                        || arg == "scan" || arg == "material")
+                        || arg == "scan" || arg == "material" || arg == "pack-textures")
                     cliMode = true;
                 break;  // first non-flag arg determines mode
             }

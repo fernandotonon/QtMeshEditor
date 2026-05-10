@@ -382,6 +382,28 @@ public slots:
     Q_INVOKABLE QString openMaterialExportDialog(const QString &materialName = "");
     Q_INVOKABLE QString showNativeFileDialog(QObject *parentWindow);
     Q_INVOKABLE QString testConnection();
+
+    /// Slice G: open a native save-as dialog for the packed-textures
+    /// output path. Returns the chosen path or empty if cancelled.
+    Q_INVOKABLE QString savePackedTextureDialog();
+
+    /// Slice G: pack 1-4 grayscale source images into a single RGBA
+    /// texture and write it to disk. Returns an empty string on success
+    /// or an error message on failure.
+    Q_INVOKABLE QString packTextureChannels(const QString& redPath,
+                                            const QString& greenPath,
+                                            const QString& bluePath,
+                                            const QString& alphaPath,
+                                            double redConstant,
+                                            double greenConstant,
+                                            double blueConstant,
+                                            double alphaConstant,
+                                            bool invertRed,
+                                            bool invertGreen,
+                                            bool invertBlue,
+                                            bool invertAlpha,
+                                            bool includeAlpha,
+                                            const QString& outputPath);
     
     // Color picker
     void openColorPicker(const QString &colorType);

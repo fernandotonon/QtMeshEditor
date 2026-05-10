@@ -9,6 +9,7 @@
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 #include "RTShaderHelper.h"
+#include "TextureChannelPacker.h"
 #include "PS1/PS1TIM.h"
 #include <OgreRTShaderSystem.h>
 #include <QDebug>
@@ -2805,6 +2806,66 @@ QString MaterialEditorQML::showNativeFileDialog(QObject *parentWindow)
 QString MaterialEditorQML::testConnection()
 {
     return "C++ method called successfully!";
+}
+
+QString MaterialEditorQML::savePackedTextureDialog()
+{
+    QString texturesPath = "./media/materials/textures";
+    QDir texturesDir(texturesPath);
+    QString startDir = texturesDir.exists() ? texturesDir.absolutePath() : QDir::currentPath();
+
+    QApplication::processEvents();
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+
+    QString selectedFile = QFileDialog::getSaveFileName(
+        QApplication::activeWindow(),
+        "Save Packed Texture",
+        startDir + "/packed.png",
+        "PNG (*.png);;TGA (*.tga);;JPEG (*.jpg *.jpeg);;BMP (*.bmp)",
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons
+    );
+    return selectedFile;
+}
+
+QString MaterialEditorQML::packTextureChannels(const QString& redPath,
+                                                const QString& greenPath,
+                                                const QString& bluePath,
+                                                const QString& alphaPath,
+                                                double redConstant,
+                                                double greenConstant,
+                                                double blueConstant,
+                                                double alphaConstant,
+                                                bool invertRed,
+                                                bool invertGreen,
+                                                bool invertBlue,
+                                                bool invertAlpha,
+                                                bool includeAlpha,
+                                                const QString& outputPath)
+{
+    SentryReporter::addBreadcrumb("ui.action", "Pack texture channels");
+
+    TextureChannelPacker::PackingSpec spec;
+    spec.red.path        = redPath;
+    spec.red.constantValue = static_cast<float>(redConstant);
+    spec.red.invert      = invertRed;
+    spec.green.path      = greenPath;
+    spec.green.constantValue = static_cast<float>(greenConstant);
+    spec.green.invert    = invertGreen;
+    spec.blue.path       = bluePath;
+    spec.blue.constantValue = static_cast<float>(blueConstant);
+    spec.blue.invert     = invertBlue;
+    spec.alpha.path      = alphaPath;
+    spec.alpha.constantValue = static_cast<float>(alphaConstant);
+    spec.alpha.invert    = invertAlpha;
+    spec.includeAlpha    = includeAlpha;
+
+    auto r = TextureChannelPacker::packToFile(spec, outputPath);
+    return r.ok ? QString() : r.error;
 }
 
 // Add a helper method to check if Ogre is available
