@@ -9,6 +9,7 @@
 #include <QSignalSpy>
 #include <QElapsedTimer>
 #include <QDir>
+#include <QImage>
 #include <QTemporaryDir>
 #include <memory>
 #include <QMainWindow>
@@ -5852,4 +5853,180 @@ TEST_F(MCPServerTest, ResampleAnimation_Valid)
     QJsonObject result = server->callTool("resample_animation", args);
     // May succeed or fail depending on skeleton state, but should not crash
     EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+// ==========================================================================
+// SLICE G: pack_textures tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, PackTextures_MissingOutputReturnsError)
+{
+    QJsonObject args;
+    args["red_constant"] = 0.5;
+    QJsonObject result = server->callTool("pack_textures", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("output", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, PackTextures_AllConstantsWritesPng)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outPath = tmp.filePath("packed_constants.png");
+
+    QJsonObject args;
+    args["red_constant"]   = 1.0;
+    args["green_constant"] = 0.5;
+    args["blue_constant"]  = 0.0;
+    args["alpha_constant"] = 1.0;
+    args["width"]  = 32;
+    args["height"] = 32;
+    args["output"] = outPath;
+    QJsonObject result = server->callTool("pack_textures", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_EQ(result["width"].toInt(), 32);
+    EXPECT_EQ(result["height"].toInt(), 32);
+
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 32);
+}
+
+TEST_F(MCPServerTest, PackTextures_MissingSourceReportsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    QJsonObject args;
+    args["red"] = "/nonexistent/should_not_resolve_for_test.png";
+    args["output"] = tmp.filePath("nope.png");
+    QJsonObject result = server->callTool("pack_textures", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, PackTextures_InvertFlagAppliesToConstant)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outPath = tmp.filePath("inv.png");
+    QJsonObject args;
+    args["red_constant"] = 1.0;
+    args["invert_red"]   = true;
+    args["width"]  = 8;
+    args["height"] = 8;
+    args["output"] = outPath;
+    QJsonObject result = server->callTool("pack_textures", args);
+    EXPECT_FALSE(isError(result));
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(qRed(img.pixel(4, 4)), 0);
+}
+
+TEST_F(MCPServerTest, PackTextures_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "pack_textures") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "pack_textures must be exposed in tools/list";
+}
+
+// ==========================================================================
+// SLICE H: generate_normal_map tool
+// ==========================================================================
+
+namespace {
+QString writeGreyPngForMcp(const QTemporaryDir& dir, const QString& name,
+                            int w, int h, int grey)
+{
+    QImage img(w, h, QImage::Format_RGBA8888);
+    img.fill(qRgba(grey, grey, grey, 255));
+    const QString path = dir.filePath(name);
+    img.save(path, "PNG");
+    return path;
+}
+} // namespace
+
+TEST_F(MCPServerTest, GenerateNormalMap_MissingArgsReturnsError)
+{
+    QJsonObject args;
+    QJsonObject result = server->callTool("generate_normal_map", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("source", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, GenerateNormalMap_FlatHeightWritesPng)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString src = writeGreyPngForMcp(tmp, "flat.png", 16, 16, 128);
+    const QString out = tmp.filePath("normal.png");
+
+    QJsonObject args;
+    args["source"] = src;
+    args["output"] = out;
+    args["strength"] = 2.0;
+    QJsonObject result = server->callTool("generate_normal_map", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_EQ(result["width"].toInt(), 16);
+    EXPECT_EQ(result["height"].toInt(), 16);
+
+    QImage img(out);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_NEAR(qRed(img.pixel(8, 8)),   128, 2);
+    EXPECT_EQ(qBlue(img.pixel(8, 8)),    255);
+}
+
+TEST_F(MCPServerTest, GenerateNormalMap_MissingSourceReportsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    QJsonObject args;
+    args["source"] = "/nonexistent/should_not_resolve.png";
+    args["output"] = tmp.filePath("nope.png");
+    QJsonObject result = server->callTool("generate_normal_map", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, GenerateNormalMap_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "generate_normal_map") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "generate_normal_map must be exposed in tools/list";
+}
+
+TEST_F(MCPServerTest, GenerateNormalMap_DirectxAliasInvertsGreen)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    // Vertical ramp — green channel goes <128 by default.
+    QImage img(16, 16, QImage::Format_RGBA8888);
+    for (int y = 0; y < 16; ++y) {
+        const int v = std::min(255, y * 16);
+        for (int x = 0; x < 16; ++x) img.setPixel(x, y, qRgba(v, v, v, 255));
+    }
+    const QString src = tmp.filePath("ramp_y.png");
+    img.save(src, "PNG");
+    const QString out = tmp.filePath("dx.png");
+
+    QJsonObject args;
+    args["source"] = src;
+    args["output"] = out;
+    args["strength"] = 2.0;
+    args["directx"] = true;   // alias for invert_g
+    QJsonObject result = server->callTool("generate_normal_map", args);
+    EXPECT_FALSE(isError(result));
+
+    QImage gen(out);
+    ASSERT_FALSE(gen.isNull());
+    EXPECT_GT(qGreen(gen.pixel(8, 8)), 135);
 }

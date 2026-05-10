@@ -77,6 +77,14 @@ public:
     static int cmdPose(int argc, char* argv[]);
     static int cmdScan(int argc, char* argv[]);
     static int cmdMaterial(int argc, char* argv[]);
+    /// Slice G: pack 1-4 grayscale source images into a single RGBA
+    /// output texture. Headless / scriptable equivalent of the GUI
+    /// "Pack Channels…" dialog.
+    static int cmdPackTextures(int argc, char* argv[]);
+    /// Slice H: generate a tangent-space normal map from a height/bump
+    /// source via Sobel filter. Headless equivalent of the GUI
+    /// "Generate Normal Map…" dialog.
+    static int cmdNormalFromHeight(int argc, char* argv[]);
 
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);

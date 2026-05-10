@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import PropertiesPanel 1.0
 import AnimationControl 1.0
 import EditorMode 1.0
+import MaterialEditorQML 1.0
 
 Rectangle {
     id: root
@@ -1683,6 +1684,112 @@ Rectangle {
                     onClicked: PropertiesPanelController.triggerMaterialEditor()
                 }
             }
+
+            // Slice G: Texture Channel Packer — utility for combining
+            // grayscale source images into a single packed RGBA texture
+            // (e.g. ORM = AO+Roughness+Metallic). Lives in Mode Tools
+            // because it operates on PNG/TGA files on disk, not on the
+            // currently-selected submesh's TUS.
+            Rectangle {
+                width: Math.min(parent.width - 16, packLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                color: packMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: packLabel
+                    anchors.centerIn: parent
+                    text: "Pack Texture Channels…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: packMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openTextureChannelPackerDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: "Pack 1–4 grayscale source images into a single RGBA texture (e.g. Unity ORM = AO+Roughness+Metallic, Unreal MR)."
+                }
+            }
+
+            // Slice H: Normal Map Generator — Sobel-filter a height/bump
+            // source into a tangent-space normal map. Same Mode-Tools
+            // placement as Pack Texture Channels (operates on disk
+            // files, not the selection's TUS).
+            Rectangle {
+                width: Math.min(parent.width - 16, normalLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                color: normalMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: normalLabel
+                    anchors.centerIn: parent
+                    text: "Generate Normal Map…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: normalMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openNormalMapGeneratorDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: "Generate a tangent-space normal map from a height/bump source via Sobel filter."
+                }
+            }
+        }
+    }
+
+    // The dialog is loaded by URL (rather than as a typed component)
+    // because the Properties Panel's QML engine doesn't have the
+    // MaterialEditorQML module's import path set up — only its singleton
+    // C++ type. Using a Loader with a qrc:// source bypasses module
+    // resolution while keeping the dialog as a top-level child so it
+    // overlays the viewport correctly.
+    Loader {
+        id: textureChannelPackerLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/TextureChannelPackerDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+
+    function openTextureChannelPackerDialog() {
+        if (!textureChannelPackerLoader.active) {
+            textureChannelPackerLoader.active = true
+        } else if (textureChannelPackerLoader.item) {
+            textureChannelPackerLoader.item.open()
+        }
+    }
+
+    // Slice H: Normal Map Generator dialog — same Loader pattern.
+    Loader {
+        id: normalMapGeneratorLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/NormalMapGeneratorDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+
+    function openNormalMapGeneratorDialog() {
+        if (!normalMapGeneratorLoader.active) {
+            normalMapGeneratorLoader.active = true
+        } else if (normalMapGeneratorLoader.item) {
+            normalMapGeneratorLoader.item.open()
         }
     }
 

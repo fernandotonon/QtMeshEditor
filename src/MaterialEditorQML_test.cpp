@@ -6,6 +6,7 @@
 #include <QThread>
 #include <QDir>
 #include <QFile>
+#include <QImage>
 #include <QTemporaryDir>
 #include "MaterialEditorQML.h"
 #include "Manager.h"
@@ -2578,4 +2579,184 @@ TEST_F(MaterialEditorQMLWithOgreTest, NewTechniqueAddPassAndSelectIt) {
     editor->setSelectedTechniqueIndex(0);
     editor->setSelectedPassIndex(0);
     EXPECT_TRUE(editor->lightingEnabled());
+}
+
+// ---------------------------------------------------------------------------
+// Slice G: Q_INVOKABLE wrappers for the texture channel packer
+// ---------------------------------------------------------------------------
+
+TEST_F(MaterialEditorQMLTest, PackTextureChannels_AllConstantsWritesPng) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outPath = tmp.filePath("packed_const.png");
+
+    QString err = editor->packTextureChannels(
+        QString(), QString(), QString(), QString(),
+        1.0, 0.5, 0.0, 1.0,
+        false, false, false, false,
+        true, outPath);
+    EXPECT_TRUE(err.isEmpty()) << err.toStdString();
+    EXPECT_TRUE(QFile::exists(outPath));
+}
+
+TEST_F(MaterialEditorQMLTest, PackTextureChannels_MissingPathReturnsError) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outPath = tmp.filePath("never.png");
+
+    QString err = editor->packTextureChannels(
+        "/nonexistent/missing_for_test.png", QString(), QString(), QString(),
+        0.0, 0.0, 0.0, 1.0,
+        false, false, false, false,
+        true, outPath);
+    EXPECT_FALSE(err.isEmpty());
+    EXPECT_FALSE(QFile::exists(outPath));
+}
+
+TEST_F(MaterialEditorQMLTest, PackTextureChannels_EmptyOutputPathReturnsError) {
+    QString err = editor->packTextureChannels(
+        QString(), QString(), QString(), QString(),
+        0.5, 0.0, 0.0, 1.0,
+        false, false, false, false,
+        true, QString());
+    EXPECT_FALSE(err.isEmpty());
+}
+
+TEST_F(MaterialEditorQMLTest, PackTextureChannels_InvertFlagFlipsConstant) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString outPath = tmp.filePath("inv.png");
+    QString err = editor->packTextureChannels(
+        QString(), QString(), QString(), QString(),
+        1.0, 0.0, 0.0, 1.0,
+        /*invertR=*/true, false, false, false,
+        true, outPath);
+    EXPECT_TRUE(err.isEmpty());
+    QImage img(outPath);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(qRed(img.pixel(0, 0)), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Slice G2: live preview wrapper
+// ---------------------------------------------------------------------------
+
+TEST_F(MaterialEditorQMLTest, PreviewPackedTextureChannels_AllConstantsReturnsDataUrl) {
+    QString url = editor->previewPackedTextureChannels(
+        QString(), QString(), QString(), QString(),
+        1.0, 0.5, 0.0, 1.0,
+        false, false, false, false,
+        true, /*previewSize=*/64);
+    ASSERT_TRUE(url.startsWith("data:image/png;base64,")) << url.toStdString();
+
+    // Decode the base64 payload back to a QImage and check the size.
+    const QByteArray payload = QByteArray::fromBase64(
+        url.mid(QString("data:image/png;base64,").size()).toLatin1());
+    QImage img;
+    ASSERT_TRUE(img.loadFromData(payload, "PNG"));
+    EXPECT_EQ(img.width(), 64);
+    EXPECT_EQ(img.height(), 64);
+    EXPECT_EQ(qRed(img.pixel(10, 10)), 255);
+    EXPECT_NEAR(qGreen(img.pixel(10, 10)), 128, 2);
+    EXPECT_EQ(qBlue(img.pixel(10, 10)), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, PreviewPackedTextureChannels_MissingFileReturnsEmpty) {
+    QString url = editor->previewPackedTextureChannels(
+        "/nonexistent/missing_for_preview_test.png",
+        QString(), QString(), QString(),
+        0.0, 0.0, 0.0, 1.0,
+        false, false, false, false,
+        true, 64);
+    EXPECT_TRUE(url.isEmpty());
+}
+
+TEST_F(MaterialEditorQMLTest, PreviewPackedTextureChannels_SizeIsClampedToBounds) {
+    // previewSize is clamped to [32, 512]. A request for 8 should bump
+    // up to 32 — the smallest sensible thumbnail.
+    QString url = editor->previewPackedTextureChannels(
+        QString(), QString(), QString(), QString(),
+        0.5, 0.5, 0.5, 1.0,
+        false, false, false, false,
+        true, 8);
+    ASSERT_TRUE(url.startsWith("data:image/png;base64,"));
+    const QByteArray payload = QByteArray::fromBase64(
+        url.mid(QString("data:image/png;base64,").size()).toLatin1());
+    QImage img;
+    ASSERT_TRUE(img.loadFromData(payload, "PNG"));
+    EXPECT_EQ(img.width(), 32);
+}
+
+// ---------------------------------------------------------------------------
+// Slice H: Q_INVOKABLE wrappers for the normal map generator
+// ---------------------------------------------------------------------------
+
+namespace {
+QString writeGreyPngForNormal(const QTemporaryDir& dir, const QString& name,
+                               int w, int h, int grey)
+{
+    QImage img(w, h, QImage::Format_RGBA8888);
+    img.fill(qRgba(grey, grey, grey, 255));
+    const QString path = dir.filePath(name);
+    img.save(path, "PNG");
+    return path;
+}
+} // namespace
+
+TEST_F(MaterialEditorQMLTest, GenerateNormalMap_FlatHeightWritesPng) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString src = writeGreyPngForNormal(tmp, "flat.png", 8, 8, 128);
+    const QString out = tmp.filePath("normal.png");
+
+    QString err = editor->generateNormalMap(src, 2.0, false, false, out);
+    EXPECT_TRUE(err.isEmpty()) << err.toStdString();
+    EXPECT_TRUE(QFile::exists(out));
+    QImage img(out);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(qBlue(img.pixel(4, 4)), 255);
+}
+
+TEST_F(MaterialEditorQMLTest, GenerateNormalMap_MissingSourceReturnsError) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    QString err = editor->generateNormalMap(
+        "/nonexistent/missing_for_test.png", 2.0, false, false,
+        tmp.filePath("never.png"));
+    EXPECT_FALSE(err.isEmpty());
+}
+
+TEST_F(MaterialEditorQMLTest, PreviewNormalMap_FlatHeightReturnsDataUrl) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString src = writeGreyPngForNormal(tmp, "flat.png", 32, 32, 128);
+
+    QString url = editor->previewNormalMap(src, 2.0, false, false, 64);
+    ASSERT_TRUE(url.startsWith("data:image/png;base64,")) << url.toStdString();
+
+    const QByteArray payload = QByteArray::fromBase64(
+        url.mid(QString("data:image/png;base64,").size()).toLatin1());
+    QImage img;
+    ASSERT_TRUE(img.loadFromData(payload, "PNG"));
+    EXPECT_EQ(img.width(), 64);
+    EXPECT_NEAR(qRed(img.pixel(32, 32)), 128, 2);
+}
+
+TEST_F(MaterialEditorQMLTest, PreviewNormalMap_MissingSourceReturnsEmpty) {
+    QString url = editor->previewNormalMap(
+        "/nonexistent/missing.png", 2.0, false, false, 64);
+    EXPECT_TRUE(url.isEmpty());
+}
+
+TEST_F(MaterialEditorQMLTest, PreviewNormalMap_SizeIsClampedToBounds) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString src = writeGreyPngForNormal(tmp, "flat.png", 8, 8, 128);
+    QString url = editor->previewNormalMap(src, 2.0, false, false, 8);
+    ASSERT_TRUE(url.startsWith("data:image/png;base64,"));
+    const QByteArray payload = QByteArray::fromBase64(
+        url.mid(QString("data:image/png;base64,").size()).toLatin1());
+    QImage img;
+    ASSERT_TRUE(img.loadFromData(payload, "PNG"));
+    EXPECT_EQ(img.width(), 32);  // clamped to lower bound
 }

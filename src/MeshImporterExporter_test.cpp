@@ -575,6 +575,14 @@ TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ContainsAllForma
     EXPECT_TRUE(filter.contains("glTF 2.0 Binary (*.glb)"));
 }
 
+TEST(MeshImporterExporterStandaloneTest, ImportFileDialogFilterFromExtensionList_BuildsRows)
+{
+    QString f = MeshImporterExporter::importFileDialogFilterFromExtensionList(QStringLiteral(".fbx .obj"));
+    EXPECT_TRUE(f.startsWith(QStringLiteral("All supported (*.fbx *.obj);;")));
+    EXPECT_TRUE(f.contains(QStringLiteral("PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply)")));
+    EXPECT_TRUE(f.endsWith(QStringLiteral("All files (*.*)")));
+}
+
 TEST(MeshImporterExporterStandaloneTest, FormatFileURI_FBXFormat) {
     QString result = MeshImporterExporter::formatFileURI("/path/to/model", "FBX Binary (*.fbx)");
     EXPECT_EQ(result, "/path/to/model.fbx");

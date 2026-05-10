@@ -3,6 +3,8 @@ MaterialEditorWindow 1.0 MaterialEditorWindow.qml
 PassPropertiesPanel 1.0 PassPropertiesPanel.qml
 TexturePropertiesPanel 1.0 TexturePropertiesPanel.qml
 AISettingsDialog 1.0 AISettingsDialog.qml
+TextureChannelPackerDialog 1.0 TextureChannelPackerDialog.qml
+NormalMapGeneratorDialog 1.0 NormalMapGeneratorDialog.qml
 MaterialListModal 1.0 MaterialListModal.qml
 ThemedButton 1.0 ThemedButton.qml
 ThemedComboBox 1.0 ThemedComboBox.qml

@@ -1,6 +1,8 @@
 #ifndef TEST_HELPERS_H
 #define TEST_HELPERS_H
 
+#include <array>
+
 #include <OgreMaterialManager.h>
 #include <OgreResourceGroupManager.h>
 #include <OgreRoot.h>
@@ -276,6 +278,79 @@ static inline Ogre::MeshPtr createInMemoryTriangleMesh(const std::string& name)
     mesh->_setBoundingSphereRadius(2.0);
     mesh->load();
 
+    return mesh;
+}
+
+/**
+ * Mesh with sharedVertexData (3 verts) on submesh 0 and a second submesh with its own
+ * vertex buffer (3 verts). Used to validate scan-style vertex totals (shared + local).
+ */
+static inline Ogre::MeshPtr createInMemoryMeshSharedVertsPlusLocalSubmesh(const std::string& name)
+{
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    mesh->sharedVertexData = new Ogre::VertexData(); // NOSONAR(cpp:S5025) — Ogre::Mesh owns VertexData
+    auto* sharedDecl = mesh->sharedVertexData->vertexDeclaration;
+    size_t sharedOffset = 0;
+    sharedDecl->addElement(0, sharedOffset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    sharedOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    sharedDecl->addElement(0, sharedOffset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+    sharedOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    sharedDecl->addElement(0, sharedOffset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+
+    auto sharedVbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        sharedDecl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    static constexpr std::array<float, 24> sharedVerts{{
+        0,0,0,   0,0,1,  0.0f,0.0f,
+        1,0,0,   0,0,1,  1.0f,0.0f,
+        0,1,0,   0,0,1,  0.0f,1.0f,
+    }};
+    sharedVbuf->writeData(0, sharedVerts.size() * sizeof(float), sharedVerts.data());
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, sharedVbuf);
+    mesh->sharedVertexData->vertexCount = 3;
+
+    auto* sub0 = mesh->createSubMesh();
+    auto sharedIbuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    static constexpr std::array<uint16_t, 3> sharedIdx{{0, 1, 2}};
+    sharedIbuf->writeData(0, sharedIdx.size() * sizeof(uint16_t), sharedIdx.data());
+    sub0->useSharedVertices = true;
+    sub0->indexData->indexBuffer = sharedIbuf;
+    sub0->indexData->indexCount = 3;
+
+    auto* sub1 = mesh->createSubMesh();
+    sub1->useSharedVertices = false;
+    sub1->vertexData = new Ogre::VertexData(); // NOSONAR(cpp:S5025) — Ogre::SubMesh owns VertexData
+    auto* decl1 = sub1->vertexData->vertexDeclaration;
+    size_t offset1 = 0;
+    decl1->addElement(0, offset1, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    offset1 += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl1->addElement(0, offset1, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+    offset1 += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl1->addElement(0, offset1, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+
+    auto sub1Vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl1->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    static constexpr std::array<float, 24> sub1Verts{{
+        10,0,0,  0,0,1,  0.0f,0.0f,
+        11,0,0,  0,0,1,  1.0f,0.0f,
+        10,1,0,  0,0,1,  0.0f,1.0f,
+    }};
+    sub1Vbuf->writeData(0, sub1Verts.size() * sizeof(float), sub1Verts.data());
+    sub1->vertexData->vertexBufferBinding->setBinding(0, sub1Vbuf);
+    sub1->vertexData->vertexCount = 3;
+
+    auto sub1Ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    static constexpr std::array<uint16_t, 3> sub1Idx{{0, 1, 2}};
+    sub1Ibuf->writeData(0, sub1Idx.size() * sizeof(uint16_t), sub1Idx.data());
+    sub1->indexData->indexBuffer = sub1Ibuf;
+    sub1->indexData->indexCount = 3;
+
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1, -1, -1, 12, 2, 2));
+    mesh->_setBoundingSphereRadius(12.0f);
+    mesh->load();
     return mesh;
 }
 

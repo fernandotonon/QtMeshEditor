@@ -18,7 +18,8 @@ struct ScanConfig {
 
     // scan section
     QStringList roots;
-    /// Glob patterns; default ctor fills with all Assimp import extensions (plus Ogre .mesh / .mesh.xml).
+    /// Glob patterns; default ctor fills with Assimp import extensions plus Ogre `.mesh` / `.mesh.xml`
+    /// and PlayStation `.tmd` / `.rsd` (same set the editor can import).
     QStringList includePatterns;
     QStringList excludePatterns = {
         "**/node_modules/**", "**/.git/**", "**/build/**", "**/Build/**",
@@ -78,7 +79,8 @@ struct ScanConfig {
 
     ScanConfig();
 
-    /// `**/*.<ext>` for every file extension registered by Assimp importers, plus `mesh` / `mesh.xml`.
+    /// `**/*.<ext>` for every file extension registered by Assimp importers, plus `mesh` / `mesh.xml`,
+    /// and PlayStation `tmd` / `rsd` (not Assimp-registered).
     static QStringList defaultIncludePatternsForAssimpImports();
 
     static ScanConfig defaults();

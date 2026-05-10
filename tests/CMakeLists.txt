@@ -85,6 +85,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ThemeManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BatchExporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureChannelPacker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp

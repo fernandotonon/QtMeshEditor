@@ -13,6 +13,10 @@ scan:
     - "**/*.vrm"
     - "**/*.obj"
     - "**/*.mesh"
+    # PlayStation / Psy-Q (QtMeshEditor importers; not Assimp extensions)
+    - "**/*.tmd"
+    - "**/*.rsd"
+    - "**/*.ply"
   exclude:
     # robot.mesh uses Ogre MeshSerializer v1.40 which Assimp cannot read
     - "**/robot.mesh"

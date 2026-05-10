@@ -111,6 +111,11 @@ void Manager::kill()
     }
 }
 
+QString Manager::defaultImportExtensions()
+{
+    return mValidFileExtention;
+}
+
 ////////////////////////////////////////
 // Constructor & Destructor
 

@@ -9,10 +9,14 @@
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 #include "RTShaderHelper.h"
+#include "TextureChannelPacker.h"
+#include "NormalMapGenerator.h"
 #include "PS1/PS1TIM.h"
 #include <OgreRTShaderSystem.h>
 #include <QDebug>
+#include <QBuffer>
 #include <QFileDialog>
+#include <algorithm>
 #include <QColorDialog>
 #include <QApplication>
 #include <QMainWindow>
@@ -2805,6 +2809,184 @@ QString MaterialEditorQML::showNativeFileDialog(QObject *parentWindow)
 QString MaterialEditorQML::testConnection()
 {
     return "C++ method called successfully!";
+}
+
+QString MaterialEditorQML::savePackedTextureDialog()
+{
+    QString texturesPath = "./media/materials/textures";
+    QDir texturesDir(texturesPath);
+    QString startDir = texturesDir.exists() ? texturesDir.absolutePath() : QDir::currentPath();
+
+    QApplication::processEvents();
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+
+    QString selectedFile = QFileDialog::getSaveFileName(
+        QApplication::activeWindow(),
+        "Save Packed Texture",
+        startDir + "/packed.png",
+        "PNG (*.png);;TGA (*.tga);;JPEG (*.jpg *.jpeg);;BMP (*.bmp)",
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons
+    );
+    return selectedFile;
+}
+
+QString MaterialEditorQML::previewPackedTextureChannels(const QString& redPath,
+                                                         const QString& greenPath,
+                                                         const QString& bluePath,
+                                                         const QString& alphaPath,
+                                                         double redConstant,
+                                                         double greenConstant,
+                                                         double blueConstant,
+                                                         double alphaConstant,
+                                                         bool invertRed,
+                                                         bool invertGreen,
+                                                         bool invertBlue,
+                                                         bool invertAlpha,
+                                                         bool includeAlpha,
+                                                         int previewSize)
+{
+    TextureChannelPacker::PackingSpec spec;
+    spec.red.path        = redPath;
+    spec.red.constantValue   = static_cast<float>(redConstant);
+    spec.red.invert      = invertRed;
+    spec.green.path      = greenPath;
+    spec.green.constantValue = static_cast<float>(greenConstant);
+    spec.green.invert    = invertGreen;
+    spec.blue.path       = bluePath;
+    spec.blue.constantValue  = static_cast<float>(blueConstant);
+    spec.blue.invert     = invertBlue;
+    spec.alpha.path      = alphaPath;
+    spec.alpha.constantValue = static_cast<float>(alphaConstant);
+    spec.alpha.invert    = invertAlpha;
+    spec.includeAlpha    = includeAlpha;
+
+    // Cap preview size so it stays cheap on every input change. The
+    // packer scales smaller sources up to the largest source — by
+    // forcing the output dimensions here we both make this fast and
+    // guarantee a square thumbnail QML can show without flicker.
+    const int cappedSize = std::clamp(previewSize, 32, 512);
+    spec.outputWidth = cappedSize;
+    spec.outputHeight = cappedSize;
+
+    auto r = TextureChannelPacker::pack(spec);
+    if (!r.ok) return QString();
+
+    // Encode as a base64 PNG so QML can display via "data:" URL without
+    // touching the filesystem.
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    if (!r.image.save(&buf, "PNG")) return QString();
+    return QStringLiteral("data:image/png;base64,") + bytes.toBase64();
+}
+
+QString MaterialEditorQML::packTextureChannels(const QString& redPath,
+                                                const QString& greenPath,
+                                                const QString& bluePath,
+                                                const QString& alphaPath,
+                                                double redConstant,
+                                                double greenConstant,
+                                                double blueConstant,
+                                                double alphaConstant,
+                                                bool invertRed,
+                                                bool invertGreen,
+                                                bool invertBlue,
+                                                bool invertAlpha,
+                                                bool includeAlpha,
+                                                const QString& outputPath)
+{
+    SentryReporter::addBreadcrumb("ui.action", "Pack texture channels");
+
+    TextureChannelPacker::PackingSpec spec;
+    spec.red.path        = redPath;
+    spec.red.constantValue = static_cast<float>(redConstant);
+    spec.red.invert      = invertRed;
+    spec.green.path      = greenPath;
+    spec.green.constantValue = static_cast<float>(greenConstant);
+    spec.green.invert    = invertGreen;
+    spec.blue.path       = bluePath;
+    spec.blue.constantValue = static_cast<float>(blueConstant);
+    spec.blue.invert     = invertBlue;
+    spec.alpha.path      = alphaPath;
+    spec.alpha.constantValue = static_cast<float>(alphaConstant);
+    spec.alpha.invert    = invertAlpha;
+    spec.includeAlpha    = includeAlpha;
+
+    auto r = TextureChannelPacker::packToFile(spec, outputPath);
+    return r.ok ? QString() : r.error;
+}
+
+QString MaterialEditorQML::saveNormalMapDialog()
+{
+    QString texturesPath = "./media/materials/textures";
+    QDir texturesDir(texturesPath);
+    QString startDir = texturesDir.exists() ? texturesDir.absolutePath() : QDir::currentPath();
+
+    QApplication::processEvents();
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+
+    QString selectedFile = QFileDialog::getSaveFileName(
+        QApplication::activeWindow(),
+        "Save Normal Map",
+        startDir + "/normal.png",
+        "PNG (*.png);;TGA (*.tga);;JPEG (*.jpg *.jpeg);;BMP (*.bmp)",
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons
+    );
+    return selectedFile;
+}
+
+QString MaterialEditorQML::previewNormalMap(const QString& sourcePath,
+                                             double strength,
+                                             bool invertR,
+                                             bool invertG,
+                                             int previewSize)
+{
+    NormalMapGenerator::GenSpec spec;
+    spec.sourcePath = sourcePath;
+    spec.strength = static_cast<float>(strength);
+    spec.invertR = invertR;
+    spec.invertG = invertG;
+    // Cap preview size so live updates are cheap.
+    const int cappedSize = std::clamp(previewSize, 32, 512);
+    spec.outputWidth = cappedSize;
+    spec.outputHeight = cappedSize;
+
+    auto r = NormalMapGenerator::generate(spec);
+    if (!r.ok) return QString();
+
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    if (!r.image.save(&buf, "PNG")) return QString();
+    return QStringLiteral("data:image/png;base64,") + bytes.toBase64();
+}
+
+QString MaterialEditorQML::generateNormalMap(const QString& sourcePath,
+                                              double strength,
+                                              bool invertR,
+                                              bool invertG,
+                                              const QString& outputPath)
+{
+    SentryReporter::addBreadcrumb("ui.action", "Generate normal map");
+
+    NormalMapGenerator::GenSpec spec;
+    spec.sourcePath = sourcePath;
+    spec.strength = static_cast<float>(strength);
+    spec.invertR = invertR;
+    spec.invertG = invertG;
+
+    auto r = NormalMapGenerator::generateToFile(spec, outputPath);
+    return r.ok ? QString() : r.error;
 }
 
 // Add a helper method to check if Ogre is available

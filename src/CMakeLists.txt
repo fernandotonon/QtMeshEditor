@@ -76,6 +76,8 @@ ThemeManager.cpp
 BatchExporter.cpp
 MaterialPresetLibrary.cpp
 MeshLodController.cpp
+TextureChannelPacker.cpp
+NormalMapGenerator.cpp
 MeshValidator.cpp
 AIChatManager.cpp
 WelcomeScreenController.cpp
@@ -159,6 +161,8 @@ ThemeManager.h
 BatchExporter.h
 MaterialPresetLibrary.h
 MeshLodController.h
+TextureChannelPacker.h
+NormalMapGenerator.h
 MeshValidator.h
 AIChatManager.h
 WelcomeScreenController.h
@@ -488,7 +492,7 @@ if(BUILD_TESTS)
     ${QML_RESOURCE_SRCS}
     ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp
     )
-    target_compile_definitions(UnitTests PRIVATE BATCH_EXPORTER_TEST_SEAM
+    target_compile_definitions(UnitTests PRIVATE BATCH_EXPORTER_TEST_SEAM QTMESH_UNIT_TESTS
         "QTMESH_UT_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\"")
 
     # Link against Google Test libraries (no gtest_main - we provide our own main)

@@ -180,6 +180,12 @@ private:
     QJsonObject toolReparentNode(const QJsonObject &args);
     QJsonObject toolSetPivotMode(const QJsonObject &args);
     QJsonObject toolGetPivotMode(const QJsonObject &args);
+    /// Slice G: pack 1-4 grayscale source images into a single RGBA
+    /// output texture (e.g. ORM = AO+Roughness+Metallic).
+    QJsonObject toolPackTextures(const QJsonObject &args);
+    /// Slice H: generate a tangent-space normal map from a height/bump
+    /// source via Sobel filter.
+    QJsonObject toolGenerateNormalMap(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {
@@ -234,7 +240,7 @@ private:
     // 1.4.0 — added simplify_animation / analyze_animation tools
     // 1.5.0 — added bake_animation_fps tool
     // 1.6.0 — added list_material_presets / apply_material_preset (incl. PBR templates)
-    static constexpr const char* SERVER_VERSION = "1.6.0";
+    static constexpr const char* SERVER_VERSION = "1.7.0";
 };
 
 #endif // MCPSERVER_H

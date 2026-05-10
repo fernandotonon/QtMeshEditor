@@ -382,6 +382,70 @@ public slots:
     Q_INVOKABLE QString openMaterialExportDialog(const QString &materialName = "");
     Q_INVOKABLE QString showNativeFileDialog(QObject *parentWindow);
     Q_INVOKABLE QString testConnection();
+
+    /// Slice G: open a native save-as dialog for the packed-textures
+    /// output path. Returns the chosen path or empty if cancelled.
+    Q_INVOKABLE QString savePackedTextureDialog();
+
+    /// Slice G2: render a small preview of the same packed texture
+    /// without writing to disk. Returns a `data:image/png;base64,…` URL
+    /// the QML Image element can show directly, or empty on failure.
+    /// `previewSize` is the largest edge in pixels; the packer's
+    /// natural aspect ratio is preserved (so for square sources, this
+    /// is the resulting side length).
+    Q_INVOKABLE QString previewPackedTextureChannels(const QString& redPath,
+                                                     const QString& greenPath,
+                                                     const QString& bluePath,
+                                                     const QString& alphaPath,
+                                                     double redConstant,
+                                                     double greenConstant,
+                                                     double blueConstant,
+                                                     double alphaConstant,
+                                                     bool invertRed,
+                                                     bool invertGreen,
+                                                     bool invertBlue,
+                                                     bool invertAlpha,
+                                                     bool includeAlpha,
+                                                     int previewSize);
+
+    /// Slice G: pack 1-4 grayscale source images into a single RGBA
+    /// texture and write it to disk. Returns an empty string on success
+    /// or an error message on failure.
+    Q_INVOKABLE QString packTextureChannels(const QString& redPath,
+                                            const QString& greenPath,
+                                            const QString& bluePath,
+                                            const QString& alphaPath,
+                                            double redConstant,
+                                            double greenConstant,
+                                            double blueConstant,
+                                            double alphaConstant,
+                                            bool invertRed,
+                                            bool invertGreen,
+                                            bool invertBlue,
+                                            bool invertAlpha,
+                                            bool includeAlpha,
+                                            const QString& outputPath);
+
+    /// Slice H: open a native save-as dialog for the generated normal
+    /// map output path. Mirrors savePackedTextureDialog().
+    Q_INVOKABLE QString saveNormalMapDialog();
+
+    /// Slice H: render a small preview of the generated normal map
+    /// without writing to disk. Returns a `data:image/png;base64,…`
+    /// URL or empty on failure. Mirrors previewPackedTextureChannels.
+    Q_INVOKABLE QString previewNormalMap(const QString& sourcePath,
+                                         double strength,
+                                         bool invertR,
+                                         bool invertG,
+                                         int previewSize);
+
+    /// Slice H: generate a tangent-space normal map and write it to
+    /// disk. Returns empty string on success or an error message.
+    Q_INVOKABLE QString generateNormalMap(const QString& sourcePath,
+                                          double strength,
+                                          bool invertR,
+                                          bool invertG,
+                                          const QString& outputPath);
     
     // Color picker
     void openColorPicker(const QString &colorType);
