@@ -178,17 +178,20 @@ static void fillAssetInfoFromOgreMesh(AssetInfo& info, const Ogre::MeshPtr& mesh
     info.redundantKeyframes = 0;
 
     const unsigned nSub = mesh->getNumSubMeshes();
-    const bool useShared = mesh->sharedVertexData != nullptr;
-    if (useShared && mesh->sharedVertexData)
+    const bool hasShared = mesh->sharedVertexData != nullptr;
+    if (hasShared && mesh->sharedVertexData)
         info.vertexCount = mesh->sharedVertexData->vertexCount;
 
     for (unsigned i = 0; i < nSub; ++i) {
         Ogre::SubMesh* sm = mesh->getSubMesh(i);
         if (!sm || !sm->indexData)
             continue;
-        if (!useShared) {
+        if (!hasShared) {
             if (sm->vertexData)
                 info.vertexCount += sm->vertexData->vertexCount;
+        } else if (!sm->useSharedVertices && sm->vertexData) {
+            // Shared pool is already counted; add submesh-local vertex buffers.
+            info.vertexCount += sm->vertexData->vertexCount;
         }
         info.faceCount += sm->indexData->indexCount / 3;
     }
@@ -201,6 +204,18 @@ static void fillAssetInfoFromOgreMesh(AssetInfo& info, const Ogre::MeshPtr& mesh
         }
     }
 }
+
+#ifdef QTMESH_UNIT_TESTS
+void ScanEngine::testApplyOgreMeshInspectCounts(AssetInfo& info, const Ogre::MeshPtr& mesh)
+{
+    if (!mesh) {
+        info.vertexCount = 0;
+        info.faceCount = 0;
+        return;
+    }
+    fillAssetInfoFromOgreMesh(info, mesh);
+}
+#endif
 
 static bool loadAndFillOgreInspect(AssetInfo& info,
                                    const std::function<Ogre::MeshPtr(const std::string&)>& importFn,

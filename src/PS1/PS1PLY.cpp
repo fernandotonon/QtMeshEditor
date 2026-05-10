@@ -882,6 +882,44 @@ struct PsyqExportFace {
     bool hasColor = false;
 };
 
+static uint32_t weldedNormalAtWeldPos(uint32_t wpos,
+                                      uint32_t w0,
+                                      uint32_t w1,
+                                      uint32_t w2,
+                                      uint32_t n0,
+                                      uint32_t n1,
+                                      uint32_t n2)
+{
+    if (w0 == wpos)
+        return n0;
+    if (w1 == wpos)
+        return n1;
+    if (w2 == wpos)
+        return n2;
+    return std::numeric_limits<uint32_t>::max();
+}
+
+static bool weldedNormalsAgreeOnInteriorEdge(uint32_t e0,
+                                              uint32_t e1,
+                                              uint32_t Aw0,
+                                              uint32_t Aw1,
+                                              uint32_t Aw2,
+                                              uint32_t An0,
+                                              uint32_t An1,
+                                              uint32_t An2,
+                                              uint32_t Bw0,
+                                              uint32_t Bw1,
+                                              uint32_t Bw2,
+                                              uint32_t Bn0,
+                                              uint32_t Bn1,
+                                              uint32_t Bn2)
+{
+    return weldedNormalAtWeldPos(e0, Aw0, Aw1, Aw2, An0, An1, An2)
+               == weldedNormalAtWeldPos(e0, Bw0, Bw1, Bw2, Bn0, Bn1, Bn2)
+        && weldedNormalAtWeldPos(e1, Aw0, Aw1, Aw2, An0, An1, An2)
+               == weldedNormalAtWeldPos(e1, Bw0, Bw1, Bw2, Bn0, Bn1, Bn2);
+}
+
 static uint32_t normalIndexForWeldedPos(uint32_t posIdx,
                                          uint32_t Ap0,
                                          uint32_t Ap1,
@@ -944,6 +982,12 @@ static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
 
             std::array<uint32_t, 4> q{};
             if (!tryMergeTrisToQuad({I0[i], I1[i], I2[i]}, {I0[j], I1[j], I2[j]}, weldPos, minDot, q))
+                continue;
+
+            // Do not merge if the two triangles disagree on welded normal indices along the
+            // shared interior edge (split / hard-edge shading must stay as two tris).
+            if (!weldedNormalsAgreeOnInteriorEdge(q[1], q[2], I0[i], I1[i], I2[i], N0[i], N1[i], N2[i], I0[j], I1[j],
+                                                  I2[j], N0[j], N1[j], N2[j]))
                 continue;
 
             PsyqExportFace f;

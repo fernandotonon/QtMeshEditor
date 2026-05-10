@@ -20,6 +20,8 @@
 #include <QTextStream>
 #include <QThread>
 
+#include <OgreMeshManager.h>
+
 #include <cstring>
 
 namespace {
@@ -1932,6 +1934,34 @@ TEST(ScanEngineTest, InspectAsset_MinimalTmd_LoadsGeometry)
     EXPECT_EQ(info.format, QStringLiteral("tmd"));
     EXPECT_GE(info.vertexCount, 3u);
     EXPECT_GE(info.faceCount, 1u);
+
+    Manager::kill();
+    SelectionSet::kill();
+    QThread::msleep(30);
+}
+
+TEST(ScanEngineTest, TestApplyOgreMeshInspectCounts_IncludesLocalSubmeshWithSharedPool)
+{
+    SelectionSet::kill();
+    Manager::kill();
+    QThread::msleep(30);
+
+    ASSERT_TRUE(tryInitOgre());
+
+    const std::string meshName = "ScanEngineInspectSharedLocalUT";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    Ogre::MeshPtr mesh = createInMemoryMeshSharedVertsPlusLocalSubmesh(meshName);
+    ASSERT_TRUE(mesh);
+
+    AssetInfo info;
+    ScanEngine::testApplyOgreMeshInspectCounts(info, mesh);
+
+    EXPECT_EQ(info.vertexCount, 6u);
+    EXPECT_EQ(info.faceCount, 2u);
+
+    Ogre::MeshManager::getSingleton().remove(meshName);
 
     Manager::kill();
     SelectionSet::kill();

@@ -8,6 +8,10 @@
 #include <QStringList>
 #include <functional>
 
+#ifdef QTMESH_UNIT_TESTS
+#include <OgreMesh.h>
+#endif
+
 struct aiScene;
 
 enum class Severity { Info, Warning, Error };
@@ -137,6 +141,11 @@ public:
     static bool matchesWildcard(const QString& text, const QString& pattern);
     static bool checkNameCase(const QString& fileName, const QString& convention);
     static QString convertNameToCase(const QString& fileName, const QString& convention);
+
+#ifdef QTMESH_UNIT_TESTS
+    /// Fills \a info geometry fields from an in-memory Ogre mesh (same logic as scan Ogre inspect).
+    static void testApplyOgreMeshInspectCounts(AssetInfo& info, const Ogre::MeshPtr& mesh);
+#endif
 };
 
 #endif // SCANENGINE_H

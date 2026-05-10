@@ -97,6 +97,69 @@ static Ogre::MeshPtr createTwoTriQuadMesh(const std::string& name)
     return mesh;
 }
 
+/** Two coplanar tris sharing a geometric edge with different normals on that edge (6 verts). */
+static Ogre::MeshPtr createSplitNormalTwoTriMesh(const std::string& name)
+{
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(name))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    Ogre::SubMesh* sm = mesh->createSubMesh();
+    sm->setMaterialName("BaseWhite");
+    sm->useSharedVertices = false;
+
+    Ogre::VertexData* vd = new Ogre::VertexData();
+    sm->vertexData = vd;
+    vd->vertexCount = 6;
+    Ogre::VertexDeclaration* decl = vd->vertexDeclaration;
+    Ogre::VertexBufferBinding* bind = vd->vertexBufferBinding;
+    size_t off = 0;
+    decl->addElement(0, off, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    off += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl->addElement(0, off, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+    off += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    const size_t vsize = decl->getVertexSize(0);
+    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        vsize, 6, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    uint8_t* dst = static_cast<uint8_t*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+    const float rows[][6] = {
+        {0.f, 0.f, 0.f, 0.f, 0.f, 1.f},
+        {1.f, 0.f, 0.f, 0.f, 0.f, 1.f},
+        {1.f, 1.f, 0.f, 0.f, 0.f, 1.f},
+        {1.f, 0.f, 0.f, 1.f, 0.f, 0.f},
+        {1.f, 1.f, 0.f, 1.f, 0.f, 0.f},
+        {0.f, 1.f, 0.f, 0.f, 0.f, 1.f},
+    };
+    for (int i = 0; i < 6; ++i) {
+        uint8_t* row = dst + i * vsize;
+        float* pf = nullptr;
+        decl->findElementBySemantic(Ogre::VES_POSITION)->baseVertexPointerToElement(row, &pf);
+        pf[0] = rows[i][0];
+        pf[1] = rows[i][1];
+        pf[2] = rows[i][2];
+        decl->findElementBySemantic(Ogre::VES_NORMAL)->baseVertexPointerToElement(row, &pf);
+        pf[0] = rows[i][3];
+        pf[1] = rows[i][4];
+        pf[2] = rows[i][5];
+    }
+    vbuf->unlock();
+    bind->setBinding(0, vbuf);
+
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 6, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    const uint16_t idx[] = {0, 1, 2, 3, 4, 5};
+    ibuf->writeData(0, sizeof(idx), idx);
+    sm->indexData->indexBuffer = ibuf;
+    sm->indexData->indexCount = 6;
+    sm->indexData->indexStart = 0;
+
+    mesh->_setBounds(Ogre::AxisAlignedBox(0, 0, 0, 1, 1, 0));
+    mesh->_setBoundingSphereRadius(2.0f);
+    mesh->load();
+    return mesh;
+}
+
 static bool readPsyqPlyCountsAndFirstFace(const QString& path, int& nV, int& nN, int& nF, QString& firstFaceLine)
 {
     QFile file(path);
@@ -253,6 +316,39 @@ TEST_F(PS1PLYOgreTest, ExportHeuristicMergeProducesOneQuadAndSharedNormalPool)
     EXPECT_EQ(nV, 4);
     EXPECT_EQ(nN, 1);
     EXPECT_TRUE(face0.startsWith(QLatin1String("1 ")));
+}
+
+TEST_F(PS1PLYOgreTest, ExportHeuristicSkipsQuadMergeWhenSharedEdgeNormalsDisagree)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    const std::string meshName = "PS1PlySplitNormalHeuristicMesh";
+    Ogre::MeshPtr mesh = createSplitNormalTwoTriMesh(meshName);
+    ASSERT_TRUE(mesh);
+
+    auto* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode(QStringLiteral("PS1PlySplitNormalHeuristicNode"));
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* ent = mgr->createEntity(node, mesh);
+    ASSERT_NE(ent, nullptr);
+
+    QTemporaryFile outPly(QDir::tempPath() + QStringLiteral("/qtmesh_ps1ply_splitnorm_XXXXXX.ply"));
+    outPly.setAutoRemove(true);
+    ASSERT_TRUE(outPly.open());
+    outPly.close();
+    const QString path = outPly.fileName();
+
+    QString err;
+    ASSERT_TRUE(PS1PLY::exportPsyqPlyFromEntity(ent, path, nullptr, &err)) << err.toUtf8().constData();
+
+    mgr->destroySceneNode(QStringLiteral("PS1PlySplitNormalHeuristicNode"));
+    Ogre::MeshManager::getSingleton().remove(meshName);
+
+    int nV = 0, nN = 0, nF = 0;
+    QString face0;
+    ASSERT_TRUE(readPsyqPlyCountsAndFirstFace(path, nV, nN, nF, face0));
+    EXPECT_EQ(nF, 2);
+    EXPECT_TRUE(face0.startsWith(QLatin1String("0 ")));
 }
 
 TEST_F(PS1PLYOgreTest, ImportQuadThenExportKeepsSingleQuadFaceLine)
