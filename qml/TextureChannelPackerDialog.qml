@@ -14,10 +14,10 @@ import PropertiesPanel 1.0
 Window {
     id: dialog
     title: "Pack Texture Channels"
-    width: 580
-    height: 380
-    minimumWidth: 480
-    minimumHeight: 350
+    width: 760
+    height: 460
+    minimumWidth: 640
+    minimumHeight: 420
     flags: Qt.Dialog
     modality: Qt.ApplicationModal
     color: PropertiesPanelController.panelColor
@@ -38,10 +38,131 @@ Window {
     property bool includeAlpha: true
     property string outputPath: ""
 
+    // Slice G2: live preview of the pack output. Holds a base64 PNG
+    // data URL produced by MaterialEditorQML.previewPackedTextureChannels.
+    property string previewDataUrl: ""
+
     function open() {
         dialog.show()
         dialog.raise()
         dialog.requestActivate()
+        refreshPreview()
+    }
+
+    // Strip the `file://` scheme some drag/drop sources prepend so the
+    // packer's QImageReader sees a plain filesystem path.
+    function normaliseDroppedPath(url) {
+        const s = url.toString()
+        return s.startsWith("file://") ? s.substring(7) : s
+    }
+
+    function refreshPreview() {
+        previewDataUrl = MaterialEditorQML.previewPackedTextureChannels(
+            redPath, greenPath, bluePath, alphaPath,
+            redConstant, greenConstant, blueConstant, alphaConstant,
+            invertRed, invertGreen, invertBlue, invertAlpha,
+            includeAlpha, 256)
+    }
+
+    onRedPathChanged:     refreshPreview()
+    onGreenPathChanged:   refreshPreview()
+    onBluePathChanged:    refreshPreview()
+    onAlphaPathChanged:   refreshPreview()
+    onRedConstantChanged:   refreshPreview()
+    onGreenConstantChanged: refreshPreview()
+    onBlueConstantChanged:  refreshPreview()
+    onAlphaConstantChanged: refreshPreview()
+    onInvertRedChanged:     refreshPreview()
+    onInvertGreenChanged:   refreshPreview()
+    onInvertBlueChanged:    refreshPreview()
+    onInvertAlphaChanged:   refreshPreview()
+    onIncludeAlphaChanged:  refreshPreview()
+
+    // Slice G3: one-click presets that wire the typical channel mapping
+    // for the named convention. The user still picks the source files;
+    // presets only set which file goes in which channel + invert flags
+    // + include-alpha. Each preset is idempotent — calling it overrides
+    // the current channel layout.
+    function applyUnityOrmPreset() {
+        // Unity ORM: AO → R, Roughness → G, Metallic → B. Alpha slot
+        // typically unused; keep alpha included with constant 1.0.
+        const oldAo = redPath, oldRough = greenPath, oldMetal = bluePath
+        // The user may have placed sources under any of the three
+        // channels — try to detect by filename heuristic, otherwise
+        // leave them where they are.
+        const lower = function(p) { return p.toLowerCase() }
+        const all = [oldAo, oldRough, oldMetal, alphaPath]
+        const find = function(needle) {
+            for (var i = 0; i < all.length; ++i)
+                if (all[i] && lower(all[i]).indexOf(needle) >= 0) return all[i]
+            return ""
+        }
+        const ao = find("ao") || find("occlusion") || oldAo
+        const rough = find("rough") || oldRough
+        const metal = find("metal") || oldMetal
+        redPath = ao
+        greenPath = rough
+        bluePath = metal
+        alphaPath = ""
+        redConstant = 1.0   // sensible default if AO source is missing
+        greenConstant = 0.5
+        blueConstant = 0.0
+        alphaConstant = 1.0
+        invertRed = false
+        invertGreen = false
+        invertBlue = false
+        invertAlpha = false
+        includeAlpha = true
+    }
+
+    function applyUnrealMrPreset() {
+        // Unreal MR: Metallic → R, Roughness → G, no alpha.
+        const lower = function(p) { return p.toLowerCase() }
+        const all = [redPath, greenPath, bluePath, alphaPath]
+        const find = function(needle) {
+            for (var i = 0; i < all.length; ++i)
+                if (all[i] && lower(all[i]).indexOf(needle) >= 0) return all[i]
+            return ""
+        }
+        redPath = find("metal") || redPath
+        greenPath = find("rough") || greenPath
+        bluePath = ""
+        alphaPath = ""
+        redConstant = 0.0
+        greenConstant = 0.5
+        blueConstant = 0.0
+        alphaConstant = 1.0
+        invertRed = false
+        invertGreen = false
+        invertBlue = false
+        invertAlpha = false
+        includeAlpha = false
+    }
+
+    function applySpecGlossInvertPreset() {
+        // Convert a Roughness map to a Glossiness map by inverting R.
+        // Common spec-gloss → metal-rough conversion.
+        const lower = function(p) { return p.toLowerCase() }
+        const all = [redPath, greenPath, bluePath, alphaPath]
+        const find = function(needle) {
+            for (var i = 0; i < all.length; ++i)
+                if (all[i] && lower(all[i]).indexOf(needle) >= 0) return all[i]
+            return ""
+        }
+        const rough = find("rough") || redPath || greenPath
+        redPath = rough
+        greenPath = ""
+        bluePath = ""
+        alphaPath = ""
+        redConstant = 0.0
+        greenConstant = 0.0
+        blueConstant = 0.0
+        alphaConstant = 1.0
+        invertRed = true     // ← the actual conversion
+        invertGreen = false
+        invertBlue = false
+        invertAlpha = false
+        includeAlpha = false
     }
 
     // ── Inline styled primitives ───────────────────────────────────
@@ -315,30 +436,60 @@ Window {
 
     // ── Layout ────────────────────────────────────────────────────
 
-    ColumnLayout {
+    // Two-column split: channel rows on the left, live preview on the right.
+    RowLayout {
         anchors.fill: parent
         anchors.margins: 16
-        spacing: 10
+        spacing: 16
 
-        InspectorLabel {
-            text: "Pack 1–4 grayscale source images into a single RGBA texture. " +
-                  "Each output channel takes either a source image (sampled as luminance) " +
-                  "or a constant 0–100% value when no path is set."
-            wrapMode: Text.WordWrap
+        // ── Left column: presets + channel rows + output ─────────
+        ColumnLayout {
             Layout.fillWidth: true
-            opacity: 0.85
-        }
+            Layout.fillHeight: true
+            spacing: 10
 
-        // Header row labels — column widths must match the rows below.
-        RowLayout {
-            spacing: 8
-            Layout.fillWidth: true
-            InspectorLabel { text: "Ch.";       Layout.preferredWidth: 24; font.bold: true }
-            InspectorLabel { text: "Source";    Layout.fillWidth: true; font.bold: true }
-            Item {                              Layout.preferredWidth: 80 }
-            InspectorLabel { text: "Const";     Layout.preferredWidth: 92; horizontalAlignment: Text.AlignHCenter; font.bold: true }
-            InspectorLabel { text: "Invert";    Layout.preferredWidth: 56; horizontalAlignment: Text.AlignHCenter; font.bold: true }
-        }
+            InspectorLabel {
+                text: "Pack 1–4 grayscale source images into a single RGBA texture. " +
+                      "Drag files onto a row, click Browse, or use a preset below."
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                opacity: 0.85
+            }
+
+            // Slice G3: one-click presets
+            RowLayout {
+                spacing: 8
+                Layout.fillWidth: true
+                InspectorLabel { text: "Presets:"; Layout.preferredWidth: 64; font.bold: true }
+                InspectorButton {
+                    label: "Unity ORM"
+                    Layout.preferredWidth: 100
+                    onClicked: dialog.applyUnityOrmPreset()
+                }
+                InspectorButton {
+                    label: "Unreal MR"
+                    Layout.preferredWidth: 100
+                    onClicked: dialog.applyUnrealMrPreset()
+                }
+                InspectorButton {
+                    label: "Spec → Gloss"
+                    Layout.preferredWidth: 110
+                    onClicked: dialog.applySpecGlossInvertPreset()
+                }
+                Item { Layout.fillWidth: true }
+            }
+
+            // Header row labels — column widths must match the rows below.
+            RowLayout {
+                spacing: 8
+                Layout.fillWidth: true
+                InspectorLabel { text: "Ch.";       Layout.preferredWidth: 24; font.bold: true }
+                InspectorLabel { text: "Source";    Layout.fillWidth: true; font.bold: true }
+                Item {                              Layout.preferredWidth: 80 }
+                InspectorLabel { text: "Const";     Layout.preferredWidth: 92; horizontalAlignment: Text.AlignHCenter; font.bold: true }
+                InspectorLabel { text: "Invert";    Layout.preferredWidth: 56; horizontalAlignment: Text.AlignHCenter; font.bold: true }
+                Item {                              Layout.preferredWidth: 28 }
+            }
 
         // Red row
         RowLayout {
@@ -354,7 +505,14 @@ Window {
             InspectorReadOnlyField {
                 Layout.fillWidth: true
                 text: dialog.redPath
-                placeholderText: "(empty → use constant)"
+                placeholderText: "(empty → use constant or drop a file)"
+                DropArea {
+                    anchors.fill: parent
+                    onDropped: drop => {
+                        if (drop.hasUrls && drop.urls.length > 0)
+                            dialog.redPath = dialog.normaliseDroppedPath(drop.urls[0])
+                    }
+                }
             }
             InspectorButton {
                 label: "Browse…"
@@ -375,6 +533,16 @@ Window {
                 checked: dialog.invertRed
                 onToggled: dialog.invertRed = newChecked
             }
+            InspectorButton {
+                label: "🗑"
+                Layout.preferredWidth: 28
+                buttonEnabled: dialog.redPath !== "" || dialog.redConstant > 0 || dialog.invertRed
+                onClicked: {
+                    dialog.redPath = ""
+                    dialog.redConstant = 0.0
+                    dialog.invertRed = false
+                }
+            }
         }
 
         // Green row
@@ -391,7 +559,14 @@ Window {
             InspectorReadOnlyField {
                 Layout.fillWidth: true
                 text: dialog.greenPath
-                placeholderText: "(empty → use constant)"
+                placeholderText: "(empty → use constant or drop a file)"
+                DropArea {
+                    anchors.fill: parent
+                    onDropped: drop => {
+                        if (drop.hasUrls && drop.urls.length > 0)
+                            dialog.greenPath = dialog.normaliseDroppedPath(drop.urls[0])
+                    }
+                }
             }
             InspectorButton {
                 label: "Browse…"
@@ -412,6 +587,16 @@ Window {
                 checked: dialog.invertGreen
                 onToggled: dialog.invertGreen = newChecked
             }
+            InspectorButton {
+                label: "🗑"
+                Layout.preferredWidth: 28
+                buttonEnabled: dialog.greenPath !== "" || dialog.greenConstant > 0 || dialog.invertGreen
+                onClicked: {
+                    dialog.greenPath = ""
+                    dialog.greenConstant = 0.0
+                    dialog.invertGreen = false
+                }
+            }
         }
 
         // Blue row
@@ -428,7 +613,14 @@ Window {
             InspectorReadOnlyField {
                 Layout.fillWidth: true
                 text: dialog.bluePath
-                placeholderText: "(empty → use constant)"
+                placeholderText: "(empty → use constant or drop a file)"
+                DropArea {
+                    anchors.fill: parent
+                    onDropped: drop => {
+                        if (drop.hasUrls && drop.urls.length > 0)
+                            dialog.bluePath = dialog.normaliseDroppedPath(drop.urls[0])
+                    }
+                }
             }
             InspectorButton {
                 label: "Browse…"
@@ -449,6 +641,16 @@ Window {
                 checked: dialog.invertBlue
                 onToggled: dialog.invertBlue = newChecked
             }
+            InspectorButton {
+                label: "🗑"
+                Layout.preferredWidth: 28
+                buttonEnabled: dialog.bluePath !== "" || dialog.blueConstant > 0 || dialog.invertBlue
+                onClicked: {
+                    dialog.bluePath = ""
+                    dialog.blueConstant = 0.0
+                    dialog.invertBlue = false
+                }
+            }
         }
 
         // Alpha row
@@ -468,8 +670,16 @@ Window {
             InspectorReadOnlyField {
                 Layout.fillWidth: true
                 text: dialog.alphaPath
-                placeholderText: "(empty → use constant)"
+                placeholderText: "(empty → use constant or drop a file)"
                 fieldEnabled: dialog.includeAlpha
+                DropArea {
+                    anchors.fill: parent
+                    enabled: dialog.includeAlpha
+                    onDropped: drop => {
+                        if (drop.hasUrls && drop.urls.length > 0)
+                            dialog.alphaPath = dialog.normaliseDroppedPath(drop.urls[0])
+                    }
+                }
             }
             InspectorButton {
                 label: "Browse…"
@@ -491,6 +701,19 @@ Window {
                 checked: dialog.invertAlpha
                 boxEnabled: dialog.includeAlpha
                 onToggled: dialog.invertAlpha = newChecked
+            }
+            InspectorButton {
+                label: "🗑"
+                Layout.preferredWidth: 28
+                buttonEnabled: dialog.includeAlpha &&
+                    (dialog.alphaPath !== "" || dialog.alphaConstant !== 1.0 || dialog.invertAlpha)
+                onClicked: {
+                    dialog.alphaPath = ""
+                    // Alpha defaults to 1.0 (opaque) — that's the "neutral"
+                    // value for the alpha channel, distinct from R/G/B's 0.
+                    dialog.alphaConstant = 1.0
+                    dialog.invertAlpha = false
+                }
             }
         }
 
@@ -566,6 +789,66 @@ Window {
                     }
                 }
             }
+        }
+        }   // ── end left column ──
+
+        // ── Right column: live preview thumbnail ─────────────────
+        ColumnLayout {
+            Layout.preferredWidth: 256
+            Layout.fillHeight: true
+            spacing: 8
+            InspectorLabel {
+                text: "Preview"
+                font.bold: true
+                Layout.alignment: Qt.AlignHCenter
+            }
+            Rectangle {
+                Layout.preferredWidth: 256
+                Layout.preferredHeight: 256
+                Layout.alignment: Qt.AlignHCenter
+                color: PropertiesPanelController.inputColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                radius: 3
+
+                // Subtle checkerboard so transparent pixels are obvious.
+                Image {
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    source: "qrc:/MaterialEditorQML/checker_bg.png"
+                    fillMode: Image.Tile
+                    visible: false   // (no checker asset shipped — left for a future iteration)
+                }
+
+                Image {
+                    id: previewImage
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    source: dialog.previewDataUrl
+                    fillMode: Image.PreserveAspectFit
+                    smooth: false   // crisp 1:1 channel preview
+                    cache: false    // re-decode every time the data URL flips
+                    asynchronous: true
+                }
+
+                InspectorLabel {
+                    visible: dialog.previewDataUrl.length === 0
+                    anchors.centerIn: parent
+                    text: "(no preview)"
+                    opacity: 0.5
+                }
+            }
+            InspectorLabel {
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignHCenter
+                horizontalAlignment: Text.AlignHCenter
+                text: "Updates live as inputs change. " +
+                      "Output written when you click Pack."
+                opacity: 0.7
+                font.pixelSize: 10
+            }
+            Item { Layout.fillHeight: true }
         }
     }
 }

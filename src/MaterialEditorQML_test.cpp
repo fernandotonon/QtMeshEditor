@@ -2636,3 +2636,53 @@ TEST_F(MaterialEditorQMLTest, PackTextureChannels_InvertFlagFlipsConstant) {
     ASSERT_FALSE(img.isNull());
     EXPECT_EQ(qRed(img.pixel(0, 0)), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Slice G2: live preview wrapper
+// ---------------------------------------------------------------------------
+
+TEST_F(MaterialEditorQMLTest, PreviewPackedTextureChannels_AllConstantsReturnsDataUrl) {
+    QString url = editor->previewPackedTextureChannels(
+        QString(), QString(), QString(), QString(),
+        1.0, 0.5, 0.0, 1.0,
+        false, false, false, false,
+        true, /*previewSize=*/64);
+    ASSERT_TRUE(url.startsWith("data:image/png;base64,")) << url.toStdString();
+
+    // Decode the base64 payload back to a QImage and check the size.
+    const QByteArray payload = QByteArray::fromBase64(
+        url.mid(QString("data:image/png;base64,").size()).toLatin1());
+    QImage img;
+    ASSERT_TRUE(img.loadFromData(payload, "PNG"));
+    EXPECT_EQ(img.width(), 64);
+    EXPECT_EQ(img.height(), 64);
+    EXPECT_EQ(qRed(img.pixel(10, 10)), 255);
+    EXPECT_NEAR(qGreen(img.pixel(10, 10)), 128, 2);
+    EXPECT_EQ(qBlue(img.pixel(10, 10)), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, PreviewPackedTextureChannels_MissingFileReturnsEmpty) {
+    QString url = editor->previewPackedTextureChannels(
+        "/nonexistent/missing_for_preview_test.png",
+        QString(), QString(), QString(),
+        0.0, 0.0, 0.0, 1.0,
+        false, false, false, false,
+        true, 64);
+    EXPECT_TRUE(url.isEmpty());
+}
+
+TEST_F(MaterialEditorQMLTest, PreviewPackedTextureChannels_SizeIsClampedToBounds) {
+    // previewSize is clamped to [32, 512]. A request for 8 should bump
+    // up to 32 — the smallest sensible thumbnail.
+    QString url = editor->previewPackedTextureChannels(
+        QString(), QString(), QString(), QString(),
+        0.5, 0.5, 0.5, 1.0,
+        false, false, false, false,
+        true, 8);
+    ASSERT_TRUE(url.startsWith("data:image/png;base64,"));
+    const QByteArray payload = QByteArray::fromBase64(
+        url.mid(QString("data:image/png;base64,").size()).toLatin1());
+    QImage img;
+    ASSERT_TRUE(img.loadFromData(payload, "PNG"));
+    EXPECT_EQ(img.width(), 32);
+}
