@@ -425,6 +425,27 @@ public slots:
                                             bool invertAlpha,
                                             bool includeAlpha,
                                             const QString& outputPath);
+
+    /// Slice H: open a native save-as dialog for the generated normal
+    /// map output path. Mirrors savePackedTextureDialog().
+    Q_INVOKABLE QString saveNormalMapDialog();
+
+    /// Slice H: render a small preview of the generated normal map
+    /// without writing to disk. Returns a `data:image/png;base64,…`
+    /// URL or empty on failure. Mirrors previewPackedTextureChannels.
+    Q_INVOKABLE QString previewNormalMap(const QString& sourcePath,
+                                         double strength,
+                                         bool invertR,
+                                         bool invertG,
+                                         int previewSize);
+
+    /// Slice H: generate a tangent-space normal map and write it to
+    /// disk. Returns empty string on success or an error message.
+    Q_INVOKABLE QString generateNormalMap(const QString& sourcePath,
+                                          double strength,
+                                          bool invertR,
+                                          bool invertG,
+                                          const QString& outputPath);
     
     // Color picker
     void openColorPicker(const QString &colorType);

@@ -74,9 +74,11 @@ qtmesh scan ./assets --fail-on warning         # exit 1 on warnings or errors
 qtmesh pack-textures --r ao.png --g rough.png --b metal.png -o orm.png  # pack 3 grayscale maps into RGB (Unity ORM)
 qtmesh pack-textures --r metal.png --g rough.png --bc 0 --no-alpha -o mr.png  # Unreal MR (constant blue)
 qtmesh pack-textures --r rough.png --invert-r -o gloss.png  # invert: roughness → glossiness
+qtmesh normal-from-height --src bump.png -o normal.png  # Sobel: height/bump → tangent-space normal map
+qtmesh normal-from-height --src bump.png --strength 4 --invert-g -o dx_normal.png  # DirectX +Y-down convention
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`, `material`, `pack-textures`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`, `material`, `pack-textures`, `normal-from-height`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 
@@ -163,6 +165,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - **BatchExporter** (`src/BatchExporter.h/cpp`): Multi-file conversion wrapping CLIPipeline. Supports progress reporting.
 - **MaterialPresetLibrary** (`src/MaterialPresetLibrary.h/cpp`): QML_SINGLETON providing one-click material presets (Plastic, Metal, Wood, Glass, Unlit, Wireframe).
 - **TextureChannelPacker** (`src/TextureChannelPacker.h/cpp`, slice G): pure-data packer that takes 1-4 grayscale source images (or constants) and writes a single packed RGBA texture (PNG/TGA/JPG). Each output channel is sampled via Rec.601 luminance from its source image, with an optional invert flag (useful for roughness↔glossiness). Smaller sources are bilinear-scaled up to match the largest input. Surfaced via the `qtmesh pack-textures` CLI subcommand, the `pack_textures` MCP tool, and the "Pack Texture Channels…" button in Material Mode → Mode Tools (slice G/G2/G3). The dialog (`qml/TextureChannelPackerDialog.qml`) is a top-level Inspector-styled `Window` with a 256×256 live preview thumbnail (slice G2 — `MaterialEditorQML::previewPackedTextureChannels` returns a `data:image/png;base64,…` URL the QML Image element shows directly), `DropArea` on each channel row for drag-and-drop from Finder/Explorer, three one-click presets (Unity ORM, Unreal MR, Spec→Gloss invert) that filename-heuristically wire existing source paths to the right channels, and per-row trash-can reset buttons (slice G3).
+- **NormalMapGenerator** (`src/NormalMapGenerator.h/cpp`, slice H): pure-data generator that produces a tangent-space normal map from a grayscale height/bump source via a 3×3 Sobel filter. `strength` scales the gradient (clamped to [0..32]); `invertR` and `invertG` flip the corresponding channels — `invertG` is the OpenGL (+Y up, default) ↔ DirectX (+Y down) switch. Output is RGB8. Surfaced via `qtmesh normal-from-height` CLI subcommand, the `generate_normal_map` MCP tool, and the "Generate Normal Map…" button in Material Mode → Mode Tools. Dialog (`qml/NormalMapGeneratorDialog.qml`) reuses the Inspector primitive style from the channel packer with a strength slider, OpenGL/DirectX toggle, source DropArea, and 256×256 live preview thumbnail.
 
 ### MCP Server
 
@@ -175,7 +178,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### CLI Pipeline
 
 - **CLIPipeline** (`src/CLIPipeline.h/cpp`): Headless command-line interface for mesh operations. All static methods — entry point is `CLIPipeline::run(argc, argv)`.
-- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`, `scan`, `material`, `pack-textures`.
+- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`, `scan`, `material`, `pack-textures`, `normal-from-height`.
 - Activated via `qtmesh` symlink (created at build time), `--cli` flag, or recognized subcommand as first arg.
 - Redirects stdout to stderr (Ogre/Qt noise) and writes CLI output to the original stdout fd. Uses `_exit()` to avoid Ogre static destructor crashes on macOS.
 - **AnimationMerger** (`src/AnimationMerger.h/cpp`): Public `renameAnimation()` static method used by both CLI and GUI for animation renaming.
