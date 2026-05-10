@@ -1,6 +1,8 @@
 #ifndef TEST_HELPERS_H
 #define TEST_HELPERS_H
 
+#include <array>
+
 #include <OgreMaterialManager.h>
 #include <OgreResourceGroupManager.h>
 #include <OgreRoot.h>
@@ -288,7 +290,7 @@ static inline Ogre::MeshPtr createInMemoryMeshSharedVertsPlusLocalSubmesh(const 
     auto mesh = Ogre::MeshManager::getSingleton().createManual(
         name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
-    mesh->sharedVertexData = new Ogre::VertexData();
+    mesh->sharedVertexData = new Ogre::VertexData(); // NOSONAR(cpp:S5025) — Ogre::Mesh owns VertexData
     auto* sharedDecl = mesh->sharedVertexData->vertexDeclaration;
     size_t sharedOffset = 0;
     sharedDecl->addElement(0, sharedOffset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
@@ -299,27 +301,27 @@ static inline Ogre::MeshPtr createInMemoryMeshSharedVertsPlusLocalSubmesh(const 
 
     auto sharedVbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
         sharedDecl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-    float sharedVerts[] = {
+    static constexpr std::array<float, 24> sharedVerts{{
         0,0,0,   0,0,1,  0.0f,0.0f,
         1,0,0,   0,0,1,  1.0f,0.0f,
         0,1,0,   0,0,1,  0.0f,1.0f,
-    };
-    sharedVbuf->writeData(0, sizeof(sharedVerts), sharedVerts);
+    }};
+    sharedVbuf->writeData(0, sharedVerts.size() * sizeof(float), sharedVerts.data());
     mesh->sharedVertexData->vertexBufferBinding->setBinding(0, sharedVbuf);
     mesh->sharedVertexData->vertexCount = 3;
 
     auto* sub0 = mesh->createSubMesh();
     auto sharedIbuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
         Ogre::HardwareIndexBuffer::IT_16BIT, 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-    uint16_t sharedIdx[] = {0, 1, 2};
-    sharedIbuf->writeData(0, sizeof(sharedIdx), sharedIdx);
+    static constexpr std::array<uint16_t, 3> sharedIdx{{0, 1, 2}};
+    sharedIbuf->writeData(0, sharedIdx.size() * sizeof(uint16_t), sharedIdx.data());
     sub0->useSharedVertices = true;
     sub0->indexData->indexBuffer = sharedIbuf;
     sub0->indexData->indexCount = 3;
 
     auto* sub1 = mesh->createSubMesh();
     sub1->useSharedVertices = false;
-    sub1->vertexData = new Ogre::VertexData();
+    sub1->vertexData = new Ogre::VertexData(); // NOSONAR(cpp:S5025) — Ogre::SubMesh owns VertexData
     auto* decl1 = sub1->vertexData->vertexDeclaration;
     size_t offset1 = 0;
     decl1->addElement(0, offset1, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
@@ -330,19 +332,19 @@ static inline Ogre::MeshPtr createInMemoryMeshSharedVertsPlusLocalSubmesh(const 
 
     auto sub1Vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
         decl1->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-    float sub1Verts[] = {
+    static constexpr std::array<float, 24> sub1Verts{{
         10,0,0,  0,0,1,  0.0f,0.0f,
         11,0,0,  0,0,1,  1.0f,0.0f,
         10,1,0,  0,0,1,  0.0f,1.0f,
-    };
-    sub1Vbuf->writeData(0, sizeof(sub1Verts), sub1Verts);
+    }};
+    sub1Vbuf->writeData(0, sub1Verts.size() * sizeof(float), sub1Verts.data());
     sub1->vertexData->vertexBufferBinding->setBinding(0, sub1Vbuf);
     sub1->vertexData->vertexCount = 3;
 
     auto sub1Ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
         Ogre::HardwareIndexBuffer::IT_16BIT, 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-    uint16_t sub1Idx[] = {0, 1, 2};
-    sub1Ibuf->writeData(0, sizeof(sub1Idx), sub1Idx);
+    static constexpr std::array<uint16_t, 3> sub1Idx{{0, 1, 2}};
+    sub1Ibuf->writeData(0, sub1Idx.size() * sizeof(uint16_t), sub1Idx.data());
     sub1->indexData->indexBuffer = sub1Ibuf;
     sub1->indexData->indexCount = 3;
 

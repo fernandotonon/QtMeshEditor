@@ -882,71 +882,33 @@ struct PsyqExportFace {
     bool hasColor = false;
 };
 
-static uint32_t weldedNormalAtWeldPos(uint32_t wpos,
-                                      uint32_t w0,
-                                      uint32_t w1,
-                                      uint32_t w2,
-                                      uint32_t n0,
-                                      uint32_t n1,
-                                      uint32_t n2)
+struct PsyqWeldedTri {
+    std::array<uint32_t, 3> pw{};
+    std::array<uint32_t, 3> nw{};
+};
+
+uint32_t weldedNormalAtWeldPos(uint32_t wpos, const PsyqWeldedTri& t)
 {
-    if (w0 == wpos)
-        return n0;
-    if (w1 == wpos)
-        return n1;
-    if (w2 == wpos)
-        return n2;
+    for (int c = 0; c < 3; ++c) {
+        if (t.pw[static_cast<size_t>(c)] == wpos)
+            return t.nw[static_cast<size_t>(c)];
+    }
     return std::numeric_limits<uint32_t>::max();
 }
 
-static bool weldedNormalsAgreeOnInteriorEdge(uint32_t e0,
-                                              uint32_t e1,
-                                              uint32_t Aw0,
-                                              uint32_t Aw1,
-                                              uint32_t Aw2,
-                                              uint32_t An0,
-                                              uint32_t An1,
-                                              uint32_t An2,
-                                              uint32_t Bw0,
-                                              uint32_t Bw1,
-                                              uint32_t Bw2,
-                                              uint32_t Bn0,
-                                              uint32_t Bn1,
-                                              uint32_t Bn2)
+bool weldedNormalsAgreeOnInteriorEdge(uint32_t e0, uint32_t e1, const PsyqWeldedTri& A, const PsyqWeldedTri& B)
 {
-    return weldedNormalAtWeldPos(e0, Aw0, Aw1, Aw2, An0, An1, An2)
-               == weldedNormalAtWeldPos(e0, Bw0, Bw1, Bw2, Bn0, Bn1, Bn2)
-        && weldedNormalAtWeldPos(e1, Aw0, Aw1, Aw2, An0, An1, An2)
-               == weldedNormalAtWeldPos(e1, Bw0, Bw1, Bw2, Bn0, Bn1, Bn2);
+    return weldedNormalAtWeldPos(e0, A) == weldedNormalAtWeldPos(e0, B)
+        && weldedNormalAtWeldPos(e1, A) == weldedNormalAtWeldPos(e1, B);
 }
 
-static uint32_t normalIndexForWeldedPos(uint32_t posIdx,
-                                         uint32_t Ap0,
-                                         uint32_t Ap1,
-                                         uint32_t Ap2,
-                                         uint32_t An0,
-                                         uint32_t An1,
-                                         uint32_t An2,
-                                         uint32_t Bp0,
-                                         uint32_t Bp1,
-                                         uint32_t Bp2,
-                                         uint32_t Bn0,
-                                         uint32_t Bn1,
-                                         uint32_t Bn2)
+uint32_t normalIndexForWeldedPos(uint32_t posIdx, const PsyqWeldedTri& A, const PsyqWeldedTri& B)
 {
-    if (Ap0 == posIdx)
-        return An0;
-    if (Ap1 == posIdx)
-        return An1;
-    if (Ap2 == posIdx)
-        return An2;
-    if (Bp0 == posIdx)
-        return Bn0;
-    if (Bp1 == posIdx)
-        return Bn1;
-    if (Bp2 == posIdx)
-        return Bn2;
-    return 0;
+    const uint32_t na = weldedNormalAtWeldPos(posIdx, A);
+    if (na != std::numeric_limits<uint32_t>::max())
+        return na;
+    const uint32_t nb = weldedNormalAtWeldPos(posIdx, B);
+    return nb != std::numeric_limits<uint32_t>::max() ? nb : 0u;
 }
 
 static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
@@ -984,10 +946,12 @@ static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
             if (!tryMergeTrisToQuad({I0[i], I1[i], I2[i]}, {I0[j], I1[j], I2[j]}, weldPos, minDot, q))
                 continue;
 
+            const PsyqWeldedTri triA{{I0[i], I1[i], I2[i]}, {N0[i], N1[i], N2[i]}};
+            const PsyqWeldedTri triB{{I0[j], I1[j], I2[j]}, {N0[j], N1[j], N2[j]}};
+
             // Do not merge if the two triangles disagree on welded normal indices along the
             // shared interior edge (split / hard-edge shading must stay as two tris).
-            if (!weldedNormalsAgreeOnInteriorEdge(q[1], q[2], I0[i], I1[i], I2[i], N0[i], N1[i], N2[i], I0[j], I1[j],
-                                                  I2[j], N0[j], N1[j], N2[j]))
+            if (!weldedNormalsAgreeOnInteriorEdge(q[1], q[2], triA, triB))
                 continue;
 
             PsyqExportFace f;
@@ -997,9 +961,7 @@ static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
             f.v[2] = q[2];
             f.v[3] = q[3];
             for (int k = 0; k < 4; ++k) {
-                f.n[static_cast<size_t>(k)] = normalIndexForWeldedPos(
-                    q[static_cast<size_t>(k)], I0[i], I1[i], I2[i], N0[i], N1[i], N2[i], I0[j], I1[j], I2[j], N0[j], N1[j],
-                    N2[j]);
+                f.n[static_cast<size_t>(k)] = normalIndexForWeldedPos(q[static_cast<size_t>(k)], triA, triB);
             }
             if (haveTriColors) {
                 const QColor a = triRgb(i);
