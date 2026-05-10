@@ -161,6 +161,7 @@ Column {
                                 - 14 - 10 - 4
                                 - (treeNode.impactBadgeText() !== "" ? badgeText.implicitWidth + 12 : 0)
                                 - (matSelector.visible ? matSelector.width + 4 : 0)
+                                - (treeNode.isNodeType ? 26 : 0)
                                 - 8)
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -218,6 +219,27 @@ Column {
                             }
                         }
                     }
+                }
+            }
+
+            Item {
+                width: treeNode.isNodeType ? 22 : 0
+                height: 22
+                visible: treeNode.isNodeType
+                anchors.verticalCenter: parent.verticalCenter
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "\uD83D\uDDD1"
+                    font.pixelSize: 12
+                    color: treeNode.selected ? "white" : PropertiesPanelController.textColor
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    z: 20
+                    onClicked: PropertiesPanelController.deleteSceneTreeNode(treeNode.nodeName)
                 }
             }
         }

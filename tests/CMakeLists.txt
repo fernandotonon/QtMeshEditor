@@ -15,6 +15,8 @@ if(BUILD_TESTS)
     # Basic source files (excluding main.cpp for tests)
     set(TEST_SRC_FILES 
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/about.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AppConsoleLog.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ConsoleLogSanitize.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationBlender.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationControlController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CurveEditModel.cpp

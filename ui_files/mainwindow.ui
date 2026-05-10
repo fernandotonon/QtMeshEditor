@@ -59,7 +59,6 @@
      </property>
      <addaction name="actionObjects_Toolbar"/>
      <addaction name="actionTools_Toolbar"/>
-     <addaction name="actionView_Toolbar"/>
      <addaction name="actionMeshEditor"/>
      <addaction name="separator"/>
      <addaction name="actionShow_Grid"/>
@@ -167,21 +166,6 @@
    <addaction name="actionScale_Object"/>
    <addaction name="separator"/>
    <addaction name="actionToggle_Transform_Space"/>
-   <addaction name="separator"/>
-   <addaction name="actionRemove_Object"/>
-   <addaction name="actionMaterial_Editor"/>
-   <addaction name="actionMerge_Animations"/>
-  </widget>
-  <widget class="QToolBar" name="viewToolbar">
-   <property name="windowTitle">
-    <string>View</string>
-   </property>
-   <attribute name="toolBarArea">
-    <enum>TopToolBarArea</enum>
-   </attribute>
-   <attribute name="toolBarBreak">
-    <bool>false</bool>
-   </attribute>
   </widget>
   <widget class="QDockWidget" name="meshEditorWidget">
    <property name="sizePolicy">
@@ -337,17 +321,6 @@
    </property>
    <property name="text">
     <string>Tools</string>
-   </property>
-  </action>
-  <action name="actionView_Toolbar">
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="checked">
-    <bool>true</bool>
-   </property>
-   <property name="text">
-    <string>View Toolbar</string>
    </property>
   </action>
   <action name="actionMeshEditor">
