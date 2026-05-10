@@ -37,6 +37,7 @@ class PropertiesPanelController : public QObject
 
     // Selection state
     Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY selectionChanged)
+    Q_PROPERTY(bool mergeAnimationsEnabled READ mergeAnimationsEnabled NOTIFY selectionChanged)
     Q_PROPERTY(bool hasEntitySelection READ hasEntitySelection NOTIFY selectionChanged)
     Q_PROPERTY(QString selectionName READ selectionName NOTIFY selectionChanged)
     Q_PROPERTY(QString transformTargetKind READ transformTargetKind NOTIFY transformTargetMetadataChanged)
@@ -141,6 +142,7 @@ public:
 
     // Selection state
     bool hasSelection() const;
+    bool mergeAnimationsEnabled() const;
     bool hasEntitySelection() const;
     QString selectionName() const;
     QString transformTargetKind() const;
@@ -192,6 +194,14 @@ public:
     // Generic QSettings accessors for Preferences dialog
     Q_INVOKABLE QVariant getSetting(const QString& key, const QVariant& defaultValue) const;
     Q_INVOKABLE void setSetting(const QString& key, const QVariant& value);
+
+    Q_INVOKABLE void triggerMergeAnimations();
+    Q_INVOKABLE void triggerMaterialEditor();
+
+    /// Delete one scene node by name (scene-tree trash control).
+    Q_INVOKABLE void deleteSceneTreeNode(const QString& nodeName);
+    /// Remove all user objects from the scene (after confirmation).
+    Q_INVOKABLE void clearSceneTreeAllNodes();
 
     Q_INVOKABLE void selectNodeByName(const QString& name);
     Q_INVOKABLE bool canReparentNode(const QString& nodeName, const QString& newParentName);

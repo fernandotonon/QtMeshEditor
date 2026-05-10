@@ -68,7 +68,7 @@ WelcomeDialog::WelcomeDialog(QWidget* parent)
     connect(openFileBtn, &QPushButton::clicked, this, [this]() {
         QString file = QFileDialog::getOpenFileName(
             this, "Open 3D File", QString(),
-            "3D Files (*.fbx *.gltf *.glb *.vrm *.obj *.dae *.stl *.mesh *.3ds *.x *.tmd);;All Files (*)");
+            "3D Files (*.fbx *.gltf *.glb *.vrm *.obj *.dae *.stl *.mesh *.3ds *.x *.ply *.tmd *.rsd);;All Files (*)");
         if (!file.isEmpty()) {
             m_action = OpenFile;
             m_selectedFile = file;

@@ -28,6 +28,7 @@
 #include "MCPServer.h"
 #include "SentryReporter.h"
 #include "CLIPipeline.h"
+#include "AppConsoleLog.h"
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -163,6 +164,12 @@ int main(int argc, char *argv[])
     QQuickStyle::setStyle("Basic");
 
     QApplication a(argc, argv);
+
+    // Capture qDebug/qWarning/etc. from the rest of startup into the in-app console
+    // (MainWindow attaches and drains the backlog when its console exists).
+    AppConsoleLog::install();
+    (void)AppConsoleLog::installStdioCapture();
+    auto appConsoleShutdown = qScopeGuard([] { AppConsoleLog::shutdown(); });
 
     // Ensure Qt can find QML modules when running from an installed location.
     // When Qt libraries are bundled with the app, Qt may not find system QML modules

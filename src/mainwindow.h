@@ -22,8 +22,10 @@ class EditorModeController;
 class WelcomeScreenController;
 class AssetBrowserController;
 class QQuickWidget;
+class QPlainTextEdit;
 class QLabel;
 class QToolBar;
+class QAction;
 class OgreWidget;
 
 namespace Ui {
@@ -47,7 +49,7 @@ class MainWindow : public QMainWindow, public Ogre::FrameListener
 
 public:
     /// Pixel height applied to bottom-docked tool widgets (Asset Browser,
-    /// Dope Sheet, Curve Editor, Context Panel) when docked. Floating
+    /// Dope Sheet, Curve Editor, Context Panel, Console) when docked. Floating
     /// instances expand freely to QWIDGETSIZE_MAX.
     static constexpr int kDefaultDockedHeight = 180;
     /// Slightly larger than kDefaultDockedHeight so the dock title bar fits
@@ -62,6 +64,12 @@ public:
 
     /// Recreate Ogre render windows (e.g. after MSAA samples change in Preferences).
     void rebuildAllOgreViewports();
+
+    /// Invokes the same merge flow as the menu action (Scene panel button).
+    void triggerMergeAnimations();
+
+    /// Invokes the same flow as Options → Material Editor (Mode Tools button).
+    void triggerMaterialEditor();
 
     void keyPressEvent(QKeyEvent *event) override;
     void dropEvent(QDropEvent *event) override;
@@ -80,7 +88,6 @@ private slots:
 
     void on_actionObjects_Toolbar_toggled(bool arg1);
     void on_actionTools_Toolbar_toggled(bool arg1);
-    void on_actionView_Toolbar_toggled(bool arg1);
     void on_actionMeshEditor_toggled(bool arg1);
     void on_actionExport_Selected_triggered();
 
@@ -117,6 +124,7 @@ private slots:
 
 public slots:
     void setPlaying(bool playing);
+    void appendConsoleLine(const QString& line);
 
 public:
     /// Accessors for the viewport display QActions so per-viewport
@@ -174,8 +182,17 @@ private:
     QDockWidget* m_dopeSheetDock = nullptr;
     QDockWidget* m_curveEditorDock = nullptr;
     QDockWidget* m_bottomContextDock = nullptr;
+    QDockWidget* m_consoleDock = nullptr;
+    QPlainTextEdit* m_consoleEdit = nullptr;
     QToolBar* m_modeBarShell = nullptr;
+    QToolBar* m_topBarStretch = nullptr;
     QQuickWidget* m_modeBar = nullptr;
+
+    /// View menu entries for bottom tabbed docks — checked state follows user
+    /// preference, not QDockWidget::isVisible() (inactive tabs would otherwise
+    /// appear unchecked).
+    QAction* m_contextPanelViewAction = nullptr;
+    QAction* m_consoleViewAction = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
     void addToRecentFiles(const QString& filePath);
