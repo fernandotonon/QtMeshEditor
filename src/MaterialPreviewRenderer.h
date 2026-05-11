@@ -72,6 +72,13 @@ private:
     /// Slice I: ensure the procedural mesh for `shape` is created and
     /// return its name. Lazily creates each mesh on first use.
     Ogre::String ensureShapeMesh(Shape shape);
+    /// Slice I: restore the shared preview scene to the canonical
+    /// "Sphere + default light" state before the thumbnail path
+    /// renders. renderInteractivePreview can leave the entity on a
+    /// Cube/Plane mesh or rotate the light; without this, the cached
+    /// thumbnails would pick up that interactive state and violate
+    /// the documented thumbnail-always-Sphere invariant.
+    void resetToCanonicalThumbnailState();
 
     static MaterialPreviewRenderer* m_pSingleton;
 

@@ -1880,6 +1880,11 @@ Rectangle {
                                             : ""
                                         fillMode: Image.PreserveAspectFit
                                         asynchronous: true
+                                        // The data: URI is deterministic per
+                                        // material name — QML would otherwise
+                                        // hand back the stale bitmap after a
+                                        // material edit. Mirror previewImage.
+                                        cache: false
                                         sourceSize.width: 52
                                         sourceSize.height: 52
                                         smooth: true

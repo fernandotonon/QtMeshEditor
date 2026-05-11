@@ -1068,3 +1068,43 @@ TEST_F(PropertiesPanelControllerTests, ApplyMaterialToSelection_EmitsSelectionCh
     EXPECT_GT(controller->applyMaterialToSelection("BaseWhite"), 0);
     EXPECT_GE(spy.count(), 1);
 }
+
+TEST_F(PropertiesPanelControllerTests, ApplyMaterialToSelection_IsUndoable)
+{
+    // Apply must record the previous material binding so an accidental
+    // click can be reverted. The undo stack should grow by one entry
+    // per applyMaterialToSelection call, and undo must restore the
+    // pre-apply material on every touched sub-entity.
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    createStandardOgreMaterials();
+
+    Ogre::SceneNode* node = Manager::getSingleton()->addSceneNode("ApplyMatUndoable");
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("ApplyMatUndoMesh");
+    Ogre::Entity* entity = Manager::getSingleton()->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+    ASSERT_GE(entity->getNumSubEntities(), 1u);
+    Ogre::SubEntity* sub0 = entity->getSubEntity(0);
+
+    // Force a known starting material so the assertions below have a
+    // stable name to compare against.
+    sub0->setMaterialName("BaseWhiteNoLighting");
+    const std::string before = sub0->getMaterial()->getName();
+    EXPECT_EQ(before, "BaseWhiteNoLighting");
+
+    SelectionSet::getSingleton()->selectOne(entity);
+    controller->clearUndoHistory();
+
+    auto* stack = UndoManager::getSingleton()->stack();
+    const int beforeCount = stack->count();
+    EXPECT_GT(controller->applyMaterialToSelection("BaseWhite"), 0);
+    EXPECT_EQ(stack->count(), beforeCount + 1) << "apply must push exactly one undo entry";
+    EXPECT_EQ(sub0->getMaterial()->getName(), "BaseWhite");
+
+    stack->undo();
+    EXPECT_EQ(sub0->getMaterial()->getName(), before)
+        << "undo did not restore the pre-apply material";
+
+    stack->redo();
+    EXPECT_EQ(sub0->getMaterial()->getName(), "BaseWhite")
+        << "redo did not re-apply the material";
+}

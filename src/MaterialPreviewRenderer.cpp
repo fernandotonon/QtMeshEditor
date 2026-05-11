@@ -73,12 +73,43 @@ MaterialPreviewRenderer::~MaterialPreviewRenderer()
 
 bool MaterialPreviewRenderer::ensureScene()
 {
+    auto* root = Ogre::Root::getSingletonPtr();
+    if (!root || !root->getRenderSystem()) {
+        // Ogre torn down underneath us (e.g. Manager::kill() in tests).
+        // Clear our cached pointers so we don't dereference them later.
+        m_sceneMgr = nullptr;
+        m_camera = nullptr;
+        m_light = nullptr;
+        m_lightNode = nullptr;
+        m_sphere = nullptr;
+        m_sphereNode = nullptr;
+        m_rttTexture.reset();
+        m_renderTarget = nullptr;
+        m_interactiveRtt.reset();
+        m_interactiveRenderTarget = nullptr;
+        m_initialized = false;
+        return false;
+    }
+
+    // The scene manager pointer can be left dangling when Ogre::Root
+    // is destroyed and re-created (test fixtures Manager::kill()).
+    // Treat "ours is not registered with Root" as "not initialised".
+    if (m_initialized && m_sceneMgr && !root->hasSceneManager("MaterialPreviewSM")) {
+        m_sceneMgr = nullptr;
+        m_camera = nullptr;
+        m_light = nullptr;
+        m_lightNode = nullptr;
+        m_sphere = nullptr;
+        m_sphereNode = nullptr;
+        m_rttTexture.reset();
+        m_renderTarget = nullptr;
+        m_interactiveRtt.reset();
+        m_interactiveRenderTarget = nullptr;
+        m_initialized = false;
+    }
+
     if (m_initialized)
         return true;
-
-    auto* root = Ogre::Root::getSingletonPtr();
-    if (!root || !root->getRenderSystem())
-        return false;
 
     try {
         // Create a dedicated scene manager for previews
@@ -201,10 +232,41 @@ Ogre::String MaterialPreviewRenderer::ensureShapeMesh(Shape shape)
     }
 }
 
+void MaterialPreviewRenderer::resetToCanonicalThumbnailState()
+{
+    // Swap the preview entity back to the sphere mesh if the
+    // interactive path left it on a Cube/Plane. The entity has to be
+    // destroyed and recreated against the same scene node — Ogre
+    // doesn't expose a "change mesh" on an attached Entity.
+    if (!m_sceneMgr || !m_sphereNode) return;
+    const Ogre::String sphereMesh = ensureShapeMesh(ShapeSphere);
+    if (!m_sphere || m_interactiveCurrentShape != ShapeSphere) {
+        if (m_sphere) {
+            m_sphereNode->detachObject(m_sphere);
+            m_sceneMgr->destroyEntity(m_sphere);
+            m_sphere = nullptr;
+        }
+        m_sphere = m_sceneMgr->createEntity("PreviewSphereEntity", sphereMesh);
+        m_sphereNode->attachObject(m_sphere);
+        m_interactiveCurrentShape = ShapeSphere;
+    }
+    // The plane preview tilts the entity node; reset to identity so
+    // the sphere renders straight-on as the cached preview expects.
+    m_sphereNode->setOrientation(Ogre::Quaternion::IDENTITY);
+    if (m_lightNode) {
+        m_lightNode->setDirection(Ogre::Vector3(-1, -1, -1).normalisedCopy());
+    }
+}
+
 QImage MaterialPreviewRenderer::renderPreview(const QString& materialName)
 {
     if (!ensureScene())
         return {};
+
+    // Slice I: the interactive preview shares the same Ogre scene
+    // (entity, node, light). Restore the canonical "Sphere + default
+    // light" pose so the thumbnail cache always reflects that state.
+    resetToCanonicalThumbnailState();
 
     // Check that the material exists
     auto* matMgr = Ogre::MaterialManager::getSingletonPtr();

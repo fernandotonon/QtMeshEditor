@@ -397,6 +397,39 @@ TEST_F(MaterialPreviewRendererTests, InteractivePreviewReusesRttOnSameSize) {
     EXPECT_EQ(first, second);
 }
 
+TEST_F(MaterialPreviewRendererTests, ThumbnailIsCanonicalAfterInteractivePreview) {
+    // Regression: renderInteractivePreview mutates the shared entity
+    // (Cube/Plane mesh) and rotates the light. The cached thumbnail
+    // path must reset both back to "Sphere + default light" so the
+    // material card preview stays canonical regardless of what the
+    // user just rendered in the interactive pane.
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    auto* renderer = MaterialPreviewRenderer::instance();
+
+    // Capture the canonical thumbnail BEFORE any interactive call.
+    renderer->clearCache();
+    const QString canonical = renderer->renderPreviewAsDataUri("BaseWhite");
+    ASSERT_FALSE(canonical.isEmpty());
+
+    // Render an interactive preview on a different shape with a
+    // non-zero yaw — guaranteed to mutate the shared scene state.
+    QString cube = renderer->renderInteractivePreview(
+        "BaseWhite", 128, MaterialPreviewRenderer::ShapeCube, 90.0);
+    ASSERT_FALSE(cube.isEmpty());
+
+    // The thumbnail path must still produce the canonical sphere image
+    // after the interactive call — confirms the shared scene state was
+    // reset before rendering. Bypass the C++ cache to actually re-render.
+    renderer->clearCache();
+    const QString afterInteractive = renderer->renderPreviewAsDataUri("BaseWhite");
+    ASSERT_FALSE(afterInteractive.isEmpty());
+    EXPECT_EQ(canonical, afterInteractive)
+        << "thumbnail picked up interactive scene state (cube mesh or yawed light)";
+}
+
 TEST_F(MaterialPreviewRendererTests, InteractivePreviewResizesRttBetweenCalls) {
     // Different size on the second call must trigger the
     // "remove + recreate" branch in renderInteractivePreview and still

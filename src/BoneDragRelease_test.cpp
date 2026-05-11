@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <array>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QThread>
@@ -369,20 +370,20 @@ TEST_F(BoneDragReleaseTest, MultiMoveSetUpdateSequenceRevertsCleanly) {
 }
 
 // Stress variant: 20 setUpdate events per drag, three consecutive
-// auto-key-off drags. Asserts both local and derived positions return
-// to bind exactly after each drag's revert, with tolerance only on the
-// derived side (where parent-frame conversion accrues bit-noise).
+// auto-key-off drags. The local TRS must return to the press-time
+// baseline after each revert. Derived position is NOT asserted here:
+// BoneDragRelease::apply calls entity->_updateAnimation() which runs
+// Skeleton::reset() and wipes any pose we set up on other bones —
+// derived drift across iterations reflects that reset, not bone
+// accumulation. The local-equals-baseline invariant is what guards
+// against the reported "down before going right" teleport.
 TEST_F(BoneDragReleaseTest, ThreeStressDragsNoAccumulationAfterRevert) {
     Ogre::Entity* entity = createAnimatedTestEntity("BDR_StressDrags");
     ASSERT_NE(entity, nullptr);
     Ogre::Bone* root = entity->getSkeleton()->getBone("Root");
     Ogre::Bone* child = entity->getSkeleton()->getBone("Child");
 
-    root->setOrientation(Ogre::Quaternion(Ogre::Radian(0.7f), Ogre::Vector3::UNIT_Z));
-    root->setManuallyControlled(true);
-
-    const Ogre::Vector3 origLocal   = child->getPosition();
-    const Ogre::Vector3 origDerived = child->_getDerivedPosition();
+    const Ogre::Vector3 origLocal = child->getPosition();
 
     const std::array<Ogre::Vector3, 3> targets = {
         Ogre::Vector3(0.0f, -0.5f, 0.0f),  // drag down
@@ -391,6 +392,14 @@ TEST_F(BoneDragReleaseTest, ThreeStressDragsNoAccumulationAfterRevert) {
     };
 
     for (size_t d = 0; d < targets.size(); ++d) {
+        // Re-apply the parent rotation each iteration. _updateAnimation
+        // (called inside BoneDragRelease::apply) runs Skeleton::reset
+        // which wipes it; manualControlled keeps tracks from being
+        // re-played onto root but does NOT survive reset itself.
+        root->setOrientation(Ogre::Quaternion(Ogre::Radian(0.7f),
+                                              Ogre::Vector3::UNIT_Z));
+        root->setManuallyControlled(true);
+
         const Ogre::Vector3 beforeLocal   = child->getPosition();
         const Ogre::Vector3 beforeDerived = child->_getDerivedPosition();
         ASSERT_EQ(beforeLocal, origLocal)
@@ -411,8 +420,6 @@ TEST_F(BoneDragReleaseTest, ThreeStressDragsNoAccumulationAfterRevert) {
             << "Drag " << d << " did not produce Revert";
         EXPECT_EQ(child->getPosition(), origLocal)
             << "Drag " << d << " did not revert local to origLocal";
-        EXPECT_NEAR((child->_getDerivedPosition() - origDerived).length(), 0.0f, 1e-4f)
-            << "Drag " << d << " derived drifted";
     }
 }
 
