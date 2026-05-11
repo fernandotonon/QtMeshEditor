@@ -97,7 +97,7 @@ function CmdSection({ id, name, synopsis, description, examples, options, childr
 export default function DocsApp() {
   const [active, setActive] = useState('installation');
   const [menuOpen, setMenuOpen] = useState(false);
-  const qtmeshActionRef = useQtmeshActionRef();
+  const { actionRef: qtmeshActionRef, imageTag: qtmeshImageTag } = useQtmeshActionRef();
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -793,7 +793,9 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
           <section className={s.section} id="github-actions">
             <h2 className={s.sectionTitle}>GitHub Actions</h2>
             <p className={s.para}>
-              The <Code>qtmesh</Code> action is available on the <a href="https://github.com/marketplace/actions/qtmesheditor" className={s.link}>GitHub Actions Marketplace</a>. This page resolves the latest release ref automatically: <Code>{qtmeshActionRef}</Code>.
+              The <Code>qtmesh</Code> action is available on the <a href="https://github.com/marketplace/actions/qtmesheditor" className={s.link}>GitHub Actions Marketplace</a>.
+              The snippets below substitute the latest GitHub release tag via the GitHub API (cached in the browser). Offline or rate-limited fallbacks use the semver pinned in <Code>CMakeLists.txt</Code> and kept in sync by <Code>scripts/sync-doc-versions-from-cmake.sh</Code>.
+              Current resolved ref: <Code>{qtmeshActionRef}</Code>.
             </p>
 
             <h3 className={s.subsection}>Onboarding Step 3 template</h3>
@@ -813,6 +815,7 @@ jobs:
         uses: ${qtmeshActionRef}
         with:
           command: scan
+          image-tag: '${qtmeshImageTag}'
         env:
           QTMESH_CLOUD_TOKEN: \${{ secrets.QTMESH_CLOUD_TOKEN }}`}</CodeBlock>
             <p className={s.para}>
@@ -825,19 +828,22 @@ jobs:
   with:
     command: validate
     input-file: ./models/character.fbx
+    image-tag: '${qtmeshImageTag}'
 
 - uses: ${qtmeshActionRef}
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.glb2
+    image-tag: '${qtmeshImageTag}'
 
 - uses: ${qtmeshActionRef}
   with:
     command: anim
     input-file: ./animations/dance.fbx
     output-file: ./output/dance_optimized.fbx
-    options: --resample 30`}</CodeBlock>
+    options: --resample 30
+    image-tag: '${qtmeshImageTag}'`}</CodeBlock>
 
             <h3 className={s.subsection}>Get mesh info as JSON</h3>
             <CodeBlock lang="yaml">{`- uses: ${qtmeshActionRef}
@@ -846,6 +852,7 @@ jobs:
     command: info
     input-file: ./models/character.fbx
     options: --json
+    image-tag: '${qtmeshImageTag}'
 
 - run: echo "\${{ steps.info.outputs.result }}"`}</CodeBlock>
 
@@ -856,6 +863,7 @@ jobs:
     command: scan
     input-file: .
     options: --config /workspace/qtmesh.yml --json
+    image-tag: '${qtmeshImageTag}'
     generate-badges: true
     badge-output-dir: badges
     badge-label-prefix: qtmesh
@@ -899,7 +907,7 @@ jobs:
 
 asset_scan:
   stage: lint
-  image: ghcr.io/fernandotonon/qtmesh:2.32.0
+  image: ghcr.io/fernandotonon/qtmesh:latest
   entrypoint: [""]
   script:
     - qtmesheditor --cli scan \${CI_PROJECT_DIR}/assets \\

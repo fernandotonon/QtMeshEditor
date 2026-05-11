@@ -240,7 +240,9 @@ All other version references are auto-generated from this via CMake template sub
 
 **To bump the version**, only edit the `VERSION` in `CMakeLists.txt` line 16. The rest updates automatically on rebuild.
 
-**Version format: `X.Y.Z` only — never prepend `v`.** GitHub release tags, update check comparisons, and all version strings use plain `X.Y.Z` (e.g., `2.21.0`, not `v2.21.0`). The update check feature compares the runtime version against the latest GitHub release tag, so a `v` prefix would break the comparison.
+**Version format: `X.Y.Z` only — never prepend `v`.** GitHub release tags, update check comparisons, and all version strings use plain `X.Y.Z` (e.g., `3.0.0`, not `v3.0.0`). The update check feature compares the runtime version against the latest GitHub release tag, so a `v` prefix would break the comparison.
+
+**Pinned CI doc examples:** After changing `project(QtMeshEditor VERSION …)`, run `./scripts/sync-doc-versions-from-cmake.sh` so `README.md` and `website/src/hooks/useQtmeshActionRef.js` stay aligned. CI runs `./scripts/sync-doc-versions-from-cmake.sh --check` in the `verify-doc-versions` job.
 
 Note: `MCPServer.h` has a separate `SERVER_VERSION` ("1.0.0") for the MCP protocol — only bump that if the MCP interface changes.
 
@@ -302,7 +304,7 @@ The `qtmesh` CLI is published as a GitHub Action on the [GitHub Actions Marketpl
 - Docker image name/registry changes → update the `docker run` command
 - **No update needed** for: bug fixes, GUI changes, MCP tools, or features that don't change CLI interface
 
-The action uses `image-tag: latest` by default, so users automatically get fixes without version bumps.
+The action uses `image-tag: latest` by default, so users automatically get fixes without version bumps. For reproducible CI, pin both `uses: fernandotonon/QtMeshEditor@X.Y.Z` and `image-tag: 'X.Y.Z'` to the same semver as `CMakeLists.txt` (kept in sync via `scripts/sync-doc-versions-from-cmake.sh`).
 
 **Marketplace publishing:** When creating a GitHub Release, check "Publish this Action to the GitHub Marketplace". The `v1` tag should be kept pointing to the latest stable commit (force-push tag on each release).
 

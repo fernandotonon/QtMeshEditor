@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 const QTMESH_RELEASES_LATEST_API = 'https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest';
-const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@2.32.1';
+const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@3.0.0';
 const CACHE_KEY = 'qtmesh.actionRef.cache.v1';
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -12,6 +12,13 @@ function actionRefFromTag(tagName) {
   const tag = String(tagName || '').trim();
   if (!tag || !/^v?\d/.test(tag)) return QTMESH_ACTION_REF_FALLBACK;
   return `fernandotonon/QtMeshEditor@${tag}`;
+}
+
+/** Semver-ish action refs pin the ghcr image; everything else (e.g. @v1) tracks :latest. */
+export function imageTagFromActionRef(ref) {
+  const m = /^fernandotonon\/QtMeshEditor@(v?\d+\.\d+\.\d+)$/.exec(String(ref || ''));
+  if (!m) return 'latest';
+  return m[1].replace(/^v/, '');
 }
 
 function isValidCache(payload, now) {
@@ -105,5 +112,8 @@ export default function useQtmeshActionRef() {
     };
   }, []);
 
-  return qtmeshActionRef;
+  return {
+    actionRef: qtmeshActionRef,
+    imageTag: imageTagFromActionRef(qtmeshActionRef),
+  };
 }

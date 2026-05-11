@@ -30,7 +30,12 @@ Available on the [GitHub Actions Marketplace](https://github.com/marketplace/act
 
 [![Latest action release](https://img.shields.io/github/v/release/fernandotonon/QtMeshEditor?label=latest%20action)](https://github.com/fernandotonon/QtMeshEditor/releases/latest)
 
-Use this workflow template:
+**Versioning**
+
+- **Always follow the latest GitHub release** — use the Marketplace floating tag `fernandotonon/QtMeshEditor@v1` (same pattern as the [Marketplace example](https://github.com/marketplace/actions/qtmesheditor)). The composite action defaults to `image-tag: latest`, so the Docker CLI tracks the newest published `ghcr.io/fernandotonon/qtmesh` image.
+- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.0.0**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
+
+Pinned workflow template (action + `ghcr.io` image aligned):
 
 ```yaml
 name: QtMesh Scan
@@ -46,54 +51,68 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run QtMesh scan
-        uses: fernandotonon/QtMeshEditor@2.32.1
+        uses: fernandotonon/QtMeshEditor@3.0.0
         with:
           command: scan
+          image-tag: "3.0.0"
         env:
           QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
+```
+
+Floating ref (auto-updates when the `v1` tag moves on release):
+
+```yaml
+      - name: Run QtMesh scan
+        uses: fernandotonon/QtMeshEditor@v1
+        with:
+          command: scan
 ```
 
 `QTMESH_CLOUD_TOKEN` is forwarded into the container and used by `scan` upload. GitHub Actions metadata (`GITHUB_*`) is also forwarded so uploads include `meta` fields (branch/commit/run and context used by QtMesh Cloud).
 
 To fail CI when upload fails, add `qtmesh-strict-upload: true` (or pass `--strict-upload` in `options`).
 
-Use the latest action release tag from the [releases page](https://github.com/fernandotonon/QtMeshEditor/releases/latest) (also shown in QtMesh Cloud onboarding step 3) when updating this workflow.
+Release tags are listed on the [releases page](https://github.com/fernandotonon/QtMeshEditor/releases/latest) (also referenced in QtMesh Cloud onboarding).
 
 <details>
 <summary>More CI examples</summary>
 
 ```yaml
 # Validate a specific mesh
-- uses: fernandotonon/QtMeshEditor@2.32.1
+- uses: fernandotonon/QtMeshEditor@3.0.0
   with:
     command: validate
     input-file: ./models/character.fbx
+    image-tag: "3.0.0"
 
 # Convert FBX → glTF
-- uses: fernandotonon/QtMeshEditor@2.32.1
+- uses: fernandotonon/QtMeshEditor@3.0.0
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.gltf2
+    image-tag: "3.0.0"
 
 # Resample Mixamo animations (200+ keyframes → 30)
-- uses: fernandotonon/QtMeshEditor@2.32.1
+- uses: fernandotonon/QtMeshEditor@3.0.0
   with:
     command: anim
     input-file: ./animations/dance.fbx
     output-file: ./output/dance_optimized.fbx
     options: --resample 30
+    image-tag: "3.0.0"
 
 # Get mesh info as JSON
-- uses: fernandotonon/QtMeshEditor@2.32.1
+- uses: fernandotonon/QtMeshEditor@3.0.0
   id: info
   with:
     command: info
     input-file: ./models/character.fbx
     options: --json
+    image-tag: "3.0.0"
 
-# Docker (alternative)
-docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh scan ./assets --fail-on error
+# Docker (alternative — :latest tracks newest image; pin :3.0.0 to match semver action ref)
+docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh:latest scan ./assets --fail-on error
 ```
 
 </details>

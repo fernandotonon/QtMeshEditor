@@ -108,7 +108,7 @@ export const pipelineExamples = {
   convert: `qtmesh convert model.fbx -o model.glb2\nqtmesh convert model.dae -o model.mesh`,
   merge: `qtmesh anim base.fbx \\\n  --merge walk.fbx run.fbx jump.fbx idle.fbx \\\n  -o merged.fbx`,
   docker: `docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \\\n  ghcr.io/fernandotonon/qtmesh scan ./assets --fail-on error`,
-  githubAction: `name: QtMesh Scan\n\non:\n  push:\n    branches: [ "master" ]\n\njobs:\n  scan-assets-qtmesh:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n\n      - name: Run QtMesh scan\n        uses: __QTMESH_ACTION_REF__\n        with:\n          command: scan\n        env:\n          QTMESH_CLOUD_TOKEN: \${{ secrets.QTMESH_CLOUD_TOKEN }}`,
+  githubAction: `name: QtMesh Scan\n\non:\n  push:\n    branches: [ "master" ]\n\njobs:\n  scan-assets-qtmesh:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n\n      - name: Run QtMesh scan\n        uses: __QTMESH_ACTION_REF__\n        with:\n          command: scan\n          image-tag: "__QTMESH_IMAGE_TAG__"\n        env:\n          QTMESH_CLOUD_TOKEN: \${{ secrets.QTMESH_CLOUD_TOKEN }}`,
   scanFixConvert: `qtmesh scan ./assets --fail-on error\nqtmesh fix character.fbx --all -o character_fixed.fbx\nqtmesh convert character_fixed.fbx -o character.glb2`
 };
 
