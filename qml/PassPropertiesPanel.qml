@@ -5,41 +5,45 @@ import MaterialEditorQML 1.0
 
 GroupBox {
     title: "Pass Properties"
-    
-    // Apply theme colors to GroupBox
+
+    // Slice I: flat Inspector-style header (matches the inner Lighting
+    // & Depth / Colors / etc. GroupBoxes below).
+    topPadding: 22
+    leftPadding: 6
+    rightPadding: 6
+    bottomPadding: 6
     background: Rectangle {
-        color: panelColor
-        border.color: borderColor
-        border.width: 1
-        radius: 4
+        color: "transparent"
+        Rectangle {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: 1
+            color: borderColor
+        }
     }
-    
-    label: Label {
+    label: ThemedLabel {
         text: parent.title
-        color: textColor
         font.bold: true
-        x: parent.leftPadding
-        width: parent.availableWidth
+        topPadding: 4
     }
     
     Component.onCompleted: {
         console.log("PassPropertiesPanel: loaded successfully")
     }
 
-    // Enhanced dynamic theme colors based on system palette
-    readonly property color backgroundColor: palette.window
-    readonly property color panelColor: palette.base
-    readonly property color textColor: palette.windowText
-    readonly property color borderColor: palette.mid
-    readonly property color highlightColor: palette.highlight
-    readonly property color buttonColor: palette.button
-    readonly property color buttonTextColor: palette.buttonText
-    readonly property color disabledTextColor: palette.placeholderText
-    
-    SystemPalette {
-        id: palette
-        colorGroup: SystemPalette.Active
-    }
+    // Slice I: align local color references with MaterialEditorQML so
+    // all GroupBox surfaces use the same Window-tone background as the
+    // outer Material Editor pane. The previous binding to `palette.base`
+    // produced a visibly darker inner panel on macOS dark mode.
+    readonly property color backgroundColor: MaterialEditorQML.backgroundColor
+    readonly property color panelColor: MaterialEditorQML.panelColor
+    readonly property color textColor: MaterialEditorQML.textColor
+    readonly property color borderColor: MaterialEditorQML.borderColor
+    readonly property color highlightColor: MaterialEditorQML.highlightColor
+    readonly property color buttonColor: MaterialEditorQML.buttonColor
+    readonly property color buttonTextColor: MaterialEditorQML.buttonTextColor
+    readonly property color disabledTextColor: MaterialEditorQML.disabledTextColor
 
     ColumnLayout {
         anchors.fill: parent
@@ -48,15 +52,27 @@ GroupBox {
         // Lighting and Depth Settings
         GroupBox {
             title: "Lighting & Depth"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             Layout.fillWidth: true
 
@@ -69,7 +85,7 @@ GroupBox {
                     Layout.fillWidth: true
                     spacing: 15
 
-                    CheckBox {
+                    ThemedCheckBox {
 
                         text: "Lighting"
 
@@ -89,7 +105,7 @@ GroupBox {
                         onCheckedChanged: MaterialEditorQML.setLightingEnabled(checked)
                     }
 
-                    CheckBox {
+                    ThemedCheckBox {
 
                         text: "Depth Write"
 
@@ -109,7 +125,7 @@ GroupBox {
                         onCheckedChanged: MaterialEditorQML.setDepthWriteEnabled(checked)
                     }
 
-                    CheckBox {
+                    ThemedCheckBox {
 
                         text: "Depth Check"
 
@@ -170,15 +186,27 @@ GroupBox {
         // Colors
         GroupBox {
             title: "Colors"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             Layout.fillWidth: true
 
@@ -210,7 +238,7 @@ GroupBox {
                         cursorShape: Qt.PointingHandCursor
                     }
                 }
-                CheckBox {
+                ThemedCheckBox {
 
                     text: "Use Vertex Color"
 
@@ -252,7 +280,7 @@ GroupBox {
                         cursorShape: Qt.PointingHandCursor
                     }
                 }
-                CheckBox {
+                ThemedCheckBox {
 
                     text: "Use Vertex Color"
 
@@ -294,7 +322,7 @@ GroupBox {
                         cursorShape: Qt.PointingHandCursor
                     }
                 }
-                CheckBox {
+                ThemedCheckBox {
 
                     text: "Use Vertex Color"
 
@@ -336,7 +364,7 @@ GroupBox {
                         cursorShape: Qt.PointingHandCursor
                     }
                 }
-                CheckBox {
+                ThemedCheckBox {
 
                     text: "Use Vertex Color"
 
@@ -361,15 +389,27 @@ GroupBox {
         // Alpha and Material Properties
         GroupBox {
             title: "Alpha & Material"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             Layout.fillWidth: true
 
@@ -467,15 +507,27 @@ GroupBox {
         // Blending
         GroupBox {
             title: "Blending"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             Layout.fillWidth: true
 
@@ -506,15 +558,27 @@ GroupBox {
         // Advanced Rendering Properties Group
         GroupBox {
             title: "Advanced Rendering"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -593,15 +657,27 @@ GroupBox {
         // Depth Testing Group
         GroupBox {
             title: "Depth Testing"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -684,15 +760,27 @@ GroupBox {
         // Alpha Testing Group
         GroupBox {
             title: "Alpha Testing"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -701,7 +789,7 @@ GroupBox {
                 spacing: 8
                 
                 // Alpha Rejection Enabled
-                CheckBox {
+                ThemedCheckBox {
                     id: alphaRejectionEnabledCheck
                     text: "Enable Alpha Rejection"
                     checked: MaterialEditorQML.alphaRejectionEnabled
@@ -801,7 +889,7 @@ GroupBox {
                 }
                 
                 // Alpha to Coverage
-                CheckBox {
+                ThemedCheckBox {
                     id: alphaToCoverageCheck
                     text: "Alpha to Coverage"
                     checked: MaterialEditorQML.alphaToCoverageEnabled
@@ -850,15 +938,27 @@ GroupBox {
         // Color Writing Group
         GroupBox {
             title: "Color Writing"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -867,7 +967,7 @@ GroupBox {
                 spacing: 8
                 
                 RowLayout {
-                    CheckBox {
+                    ThemedCheckBox {
                         id: colourWriteRedCheck
                         text: "Red"
                         checked: MaterialEditorQML.colourWriteRed
@@ -911,7 +1011,7 @@ GroupBox {
                         }
                     }
                     
-                    CheckBox {
+                    ThemedCheckBox {
                         id: colourWriteGreenCheck
                         text: "Green"
                         checked: MaterialEditorQML.colourWriteGreen
@@ -955,7 +1055,7 @@ GroupBox {
                         }
                     }
                     
-                    CheckBox {
+                    ThemedCheckBox {
                         id: colourWriteBlueCheck
                         text: "Blue"
                         checked: MaterialEditorQML.colourWriteBlue
@@ -999,7 +1099,7 @@ GroupBox {
                         }
                     }
                     
-                    CheckBox {
+                    ThemedCheckBox {
                         id: colourWriteAlphaCheck
                         text: "Alpha"
                         checked: MaterialEditorQML.colourWriteAlpha
@@ -1049,15 +1149,27 @@ GroupBox {
         // Blending & Effects Group
         GroupBox {
             title: "Blending & Effects"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -1136,7 +1248,7 @@ GroupBox {
                 }
                 
                 // Point Sprites
-                CheckBox {
+                ThemedCheckBox {
                     id: pointSpritesCheck
                     text: "Point Sprites"
                     checked: MaterialEditorQML.pointSpritesEnabled
@@ -1185,15 +1297,27 @@ GroupBox {
         // Lighting Control Group
         GroupBox {
             title: "Lighting Control"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -1252,15 +1376,27 @@ GroupBox {
         // Fog Properties Group
         GroupBox {
             title: "Fog Properties"
+            // Slice I: flat Inspector-style header. Transparent
+            // background with a hairline top separator; the title sits
+            // bold above the content.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -1269,7 +1405,7 @@ GroupBox {
                 spacing: 8
                 
                 // Fog Override
-                CheckBox {
+                ThemedCheckBox {
                     id: fogOverrideCheck
                     text: "Override Fog Settings"
                     checked: MaterialEditorQML.fogOverride

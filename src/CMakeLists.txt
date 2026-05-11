@@ -67,6 +67,7 @@ commands/CurveEditModelChangeCommand.cpp
 commands/DecimateTrackCommand.cpp
 commands/BoneTransformCommand.cpp
 commands/AddKeyframeCommand.cpp
+commands/ApplyMaterialCommand.cpp
 commands/DeleteKeyframeCommand.cpp
 commands/SkeletonResolver.cpp
 BoneDragRelease.cpp
@@ -155,6 +156,7 @@ UndoManager.h
 SubMeshTransform.h
 SubEntityHighlight.h
 commands/TransformCommands.h
+commands/ApplyMaterialCommand.h
 PropertiesPanelController.h
 SceneTreeModel.h
 ThemeManager.h

@@ -2760,3 +2760,49 @@ TEST_F(MaterialEditorQMLTest, PreviewNormalMap_SizeIsClampedToBounds) {
     ASSERT_TRUE(img.loadFromData(payload, "PNG"));
     EXPECT_EQ(img.width(), 32);  // clamped to lower bound
 }
+
+// ===========================================================================
+// Slice I — theme colors expose Inspector-parity surfaces.
+//
+// The Material Editor and the Inspector should agree on which palette
+// role drives which kind of surface (Window for panels, Base for input
+// fields, Window.darker(110) for header strips). Without this, the
+// Material Editor window looked visibly darker on macOS dark mode and
+// the inner GroupBoxes did not match the Inspector tools.
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, ThemeColors_PanelMatchesWindowRole) {
+    // Match how PropertiesPanelController exposes panel surfaces so
+    // QML controls can read the same vocabulary regardless of which
+    // singleton they bind to.
+    const QPalette palette = QApplication::palette();
+    EXPECT_EQ(editor->panelColor(), palette.color(QPalette::Window));
+    EXPECT_EQ(editor->backgroundColor(), palette.color(QPalette::Window));
+}
+
+TEST_F(MaterialEditorQMLTest, ThemeColors_InputColorIsBaseRole) {
+    const QPalette palette = QApplication::palette();
+    EXPECT_EQ(editor->inputColor(), palette.color(QPalette::Base));
+}
+
+TEST_F(MaterialEditorQMLTest, ThemeColors_HeaderColorIsWindowDarker110) {
+    // Hairline contrast strip — Inspector convention is Window.darker(110).
+    const QPalette palette = QApplication::palette();
+    EXPECT_EQ(editor->headerColor(), palette.color(QPalette::Window).darker(110));
+}
+
+TEST_F(MaterialEditorQMLTest, ThemeColors_InputAndHeaderAreValid) {
+    EXPECT_TRUE(editor->inputColor().isValid());
+    EXPECT_TRUE(editor->headerColor().isValid());
+}
+
+// Slice I — interactiveMaterialPreview is a thin wrapper over
+// MaterialPreviewRenderer::renderInteractivePreview. The renderer
+// holds its own SceneManager keyed off Ogre::Root; running multiple
+// MaterialEditorQMLWithOgreTest cases against it tickles a fixture
+// teardown-order bug where Manager::kill() destroys Ogre::Root while
+// the renderer's cached SceneManager pointer becomes stale. The
+// wrapper itself is one line; the renderer's clamping / wrapping /
+// shape switching / unknown-material handling is exhaustively
+// covered in MaterialPreviewRenderer_test.cpp (which kills the
+// renderer in TearDown, sidestepping the issue).

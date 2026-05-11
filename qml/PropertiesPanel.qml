@@ -1641,47 +1641,379 @@ Rectangle {
         }
     }
 
-    // ---- Material Editor shortcut (Material mode, Mode Tools tab) ----
+    // ---- Material Library + Mode-Tools tools (Material mode) ----
+    //
+    // Slice I: this column replaces the old "Open Material Editor"
+    // button + the modal Material List window. The library now lives
+    // inline in the Inspector: New/Import at the top, a scrollable
+    // list of materials, then the live preview + per-material actions.
     Component {
         id: materialEditorToolComponent
 
         Column {
+            id: materialToolCol
             width: parent ? parent.width : 200
             padding: 8
             spacing: 8
 
-            Text {
-                width: parent.width - 16
-                wrapMode: Text.WordWrap
-                text: "Open the full material editor window for the current submesh selection."
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 10
-                opacity: 0.85
+            // The currently-selected material in the library list.
+            // Drives the preview thumbnail and the action buttons.
+            property string selectedMaterialName: ""
+            property var materialNames: []
+
+            // Refresh the list when materials are imported/created.
+            function refreshMaterialList() {
+                materialNames = MaterialEditorQML.getMaterialList()
             }
 
+            // Defer the model load by one event-loop tick so the
+            // GridView's delegate instantiation (each of which triggers
+            // a synchronous Ogre RTT preview render) doesn't fire while
+            // the host QQuickWidget is still completing its own first
+            // frame. Hitting the Ogre GL context from inside Qt's first
+            // paint pass crashes on macOS.
+            property bool gridReady: false
+            Component.onCompleted: deferTimer.start()
+            Timer {
+                id: deferTimer
+                interval: 100
+                repeat: false
+                onTriggered: {
+                    materialToolCol.refreshMaterialList()
+                    materialToolCol.gridReady = true
+                }
+            }
+
+            // Re-pull the list when the Material Editor's current
+            // material name changes (New / Import / Apply paths).
+            Connections {
+                target: MaterialEditorQML
+                function onMaterialNameChanged() { materialToolCol.refreshMaterialList() }
+            }
+
+            // ── Material Library header: New / Import / Refresh ──
+
+            Text {
+                width: parent.width - 16
+                text: "Material Library"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+
+            Row {
+                spacing: 4
+                width: parent.width - 16
+
+                Rectangle {
+                    width: (parent.width - 8) / 3
+                    height: 24
+                    radius: 3
+                    color: newMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "+ New"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: newMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            // Create a uniquely-named material and open the
+                            // editor window with it. The new name is generated
+                            // by MaterialEditorQML to avoid collisions.
+                            MaterialEditorQML.createNewMaterial("")
+                            materialToolCol.refreshMaterialList()
+                            MaterialEditorQML.openMaterialEditorWindow(
+                                MaterialEditorQML.materialName)
+                            materialToolCol.selectedMaterialName =
+                                MaterialEditorQML.materialName
+                        }
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: "Create a new empty material and open it in the editor."
+                    }
+                }
+
+                Rectangle {
+                    width: (parent.width - 8) / 3
+                    height: 24
+                    radius: 3
+                    color: importMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "↓ Import"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: importMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            const picked = MaterialEditorQML.openMaterialImportDialog()
+                            if (picked && picked.length > 0) {
+                                MaterialEditorQML.importMaterialFile(picked)
+                                materialToolCol.refreshMaterialList()
+                            }
+                        }
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: "Import a .material script from disk."
+                    }
+                }
+
+                Rectangle {
+                    width: (parent.width - 8) / 3
+                    height: 24
+                    radius: 3
+                    color: refreshMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "↻ Refresh"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: refreshMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: materialToolCol.refreshMaterialList()
+                    }
+                }
+            }
+
+            // ── Material card grid ──
+            //
+            // Cards mirror the old MaterialListModal layout: 90x100 cell,
+            // 52x52 RTT preview thumbnail (Sphere, 64x64), name below.
+            // GridView packs as many columns as the panel width allows.
             Rectangle {
-                width: Math.min(parent.width - 16, matEdLabel.implicitWidth + 16)
-                height: 26
-                radius: 3
-                color: matEdMa.containsMouse
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
+                width: parent.width - 16
+                // ~2 rows visible by default; ScrollView handles overflow.
+                height: 220
+                color: PropertiesPanelController.inputColor
                 border.color: PropertiesPanelController.borderColor
                 border.width: 1
+                radius: 3
 
                 Text {
-                    id: matEdLabel
                     anchors.centerIn: parent
-                    text: "Open Material Editor"
+                    visible: !materialToolCol.gridReady
+                    text: "Loading materials…"
                     color: PropertiesPanelController.textColor
+                    opacity: 0.5
                     font.pixelSize: 11
                 }
-                MouseArea {
-                    id: matEdMa
+
+                ScrollView {
                     anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: PropertiesPanelController.triggerMaterialEditor()
+                    anchors.margins: 1
+                    clip: true
+                    visible: materialToolCol.gridReady
+
+                    GridView {
+                        id: matGrid
+                        cellWidth: Math.max(90,
+                            (width - 4) / Math.max(1, Math.floor((width - 4) / 90)))
+                        cellHeight: 100
+                        model: materialToolCol.materialNames
+                        delegate: Item {
+                            width: matGrid.cellWidth
+                            height: matGrid.cellHeight
+
+                            Rectangle {
+                                id: matCard
+                                anchors.centerIn: parent
+                                width: parent.width - 6
+                                height: parent.height - 6
+                                radius: 5
+                                property bool isSelected:
+                                    materialToolCol.selectedMaterialName === modelData
+                                color: isSelected
+                                    ? Qt.lighter(PropertiesPanelController.highlightColor, 1.5)
+                                    : (cardMa.containsMouse
+                                        ? Qt.lighter(PropertiesPanelController.panelColor, 1.3)
+                                        : PropertiesPanelController.panelColor)
+                                border.color: isSelected
+                                    ? PropertiesPanelController.highlightColor
+                                    : PropertiesPanelController.borderColor
+                                border.width: isSelected ? 2 : 1
+
+                                Column {
+                                    anchors.centerIn: parent
+                                    spacing: 4
+
+                                    Image {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        width: 52; height: 52
+                                        source: (modelData && modelData.length > 0)
+                                            ? MaterialEditorQML.materialPreview(modelData)
+                                            : ""
+                                        fillMode: Image.PreserveAspectFit
+                                        asynchronous: true
+                                        // The data: URI is deterministic per
+                                        // material name — QML would otherwise
+                                        // hand back the stale bitmap after a
+                                        // material edit. Mirror previewImage.
+                                        cache: false
+                                        sourceSize.width: 52
+                                        sourceSize.height: 52
+                                        smooth: true
+
+                                        // Fallback dot if the RTT preview
+                                        // isn't ready yet (no GL context,
+                                        // first-frame load, etc.).
+                                        Rectangle {
+                                            anchors.centerIn: parent
+                                            width: 40; height: 40; radius: 20
+                                            visible: parent.status !== Image.Ready
+                                            color: Qt.darker(
+                                                PropertiesPanelController.highlightColor, 1.5)
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: "🔵"
+                                                font.pixelSize: 20
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        width: matCard.width - 8
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        text: modelData
+                                        color: PropertiesPanelController.textColor
+                                        font.pixelSize: 9
+                                        elide: Text.ElideMiddle
+                                        horizontalAlignment: Text.AlignHCenter
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: cardMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: materialToolCol.selectedMaterialName = modelData
+                                    onDoubleClicked: {
+                                        materialToolCol.selectedMaterialName = modelData
+                                        MaterialEditorQML.openMaterialEditorWindow(modelData)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Per-material action buttons (Apply / Edit / Export) ──
+
+            Row {
+                spacing: 4
+                width: parent.width - 16
+                visible: materialToolCol.selectedMaterialName.length > 0
+
+                Rectangle {
+                    width: (parent.width - 8) / 3
+                    height: 24
+                    radius: 3
+                    color: applyMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Apply to selection"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: applyMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            PropertiesPanelController.applyMaterialToSelection(
+                                materialToolCol.selectedMaterialName)
+                        }
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: "Assign this material to the selected entity/submesh(es)."
+                    }
+                }
+
+                Rectangle {
+                    width: (parent.width - 8) / 3
+                    height: 24
+                    radius: 3
+                    color: editMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Edit"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: editMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: MaterialEditorQML.openMaterialEditorWindow(
+                            materialToolCol.selectedMaterialName)
+                    }
+                }
+
+                Rectangle {
+                    width: (parent.width - 8) / 3
+                    height: 24
+                    radius: 3
+                    color: exportMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Export"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: exportMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            const out = MaterialEditorQML.openMaterialExportDialog(
+                                materialToolCol.selectedMaterialName)
+                            if (out && out.length > 0) {
+                                MaterialEditorQML.exportMaterial(
+                                    out, materialToolCol.selectedMaterialName)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1749,6 +2081,161 @@ Rectangle {
                     ToolTip.visible: containsMouse
                     ToolTip.delay: 500
                     ToolTip.text: "Generate a tangent-space normal map from a height/bump source via Sobel filter."
+                }
+            }
+
+            // Slice I: Material Preview Environment — interactive
+            // preview of the currently-selected material on Sphere/Cube
+            // shapes. Drag horizontally on the thumbnail to rotate the
+            // environment (yaw the directional light). Bound to the
+            // library list selection.
+            Item { height: 8; width: 1 }   // spacer
+            Text {
+                width: parent.width - 16
+                text: "Material Preview"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+
+            // The preview thumbnail itself. Square, scales with the
+            // panel width up to 256 px.
+            Item {
+                id: previewHost
+                width: parent.width - 16
+                height: Math.min(width, 256)
+
+                property int previewShape: 0   // 0=Sphere, 1=Cube, 2=Plane
+                property real previewYaw: 0.0
+                property real dragStartX: 0
+                property real dragStartYaw: 0
+
+                Rectangle {
+                    id: previewBg
+                    anchors.fill: parent
+                    color: PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    radius: 3
+
+                    Image {
+                        id: previewImage
+                        anchors.fill: parent
+                        anchors.margins: 1
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
+                        cache: false
+                        asynchronous: true
+                        source: {
+                            const mat = materialToolCol.selectedMaterialName
+                            if (!mat || mat.length === 0) return ""
+                            return MaterialEditorQML.interactiveMaterialPreview(
+                                mat,
+                                Math.min(Math.floor(previewHost.width), 256),
+                                previewHost.previewShape,
+                                previewHost.previewYaw)
+                        }
+                    }
+                    Text {
+                        visible: previewImage.source.toString().length === 0
+                        anchors.centerIn: parent
+                        text: "(select a material from the list)"
+                        color: PropertiesPanelController.textColor
+                        opacity: 0.5
+                        font.pixelSize: 10
+                    }
+
+                    // Drag horizontally to yaw the environment light.
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.OpenHandCursor
+                        onPressed: mouse => {
+                            previewHost.dragStartX = mouse.x
+                            previewHost.dragStartYaw = previewHost.previewYaw
+                            cursorShape = Qt.ClosedHandCursor
+                        }
+                        onReleased: cursorShape = Qt.OpenHandCursor
+                        onPositionChanged: mouse => {
+                            if (pressed) {
+                                // 360° drag spans the panel width.
+                                const dx = mouse.x - previewHost.dragStartX
+                                previewHost.previewYaw =
+                                    previewHost.dragStartYaw + dx * (360.0 / previewHost.width)
+                            }
+                        }
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: "Drag horizontally to rotate the environment around the model."
+                    }
+                }
+            }
+
+            // Shape switcher row — Sphere / Cube / Plane.
+            Row {
+                spacing: 4
+                width: parent.width - 16
+
+                Repeater {
+                    // Slice I: Plane was removed — its lit shading had no
+                    // visible specular response and added little to a
+                    // material reading.
+                    model: [
+                        { name: "Sphere", id: 0 },
+                        { name: "Cube",   id: 1 }
+                    ]
+                    delegate: Rectangle {
+                        property bool isSelected: previewHost.previewShape === modelData.id
+                        width: (parent.width - 4) / 2
+                        height: 22
+                        radius: 3
+                        color: isSelected
+                            ? PropertiesPanelController.highlightColor
+                            : (shapeMa.containsMouse
+                                ? Qt.lighter(PropertiesPanelController.headerColor, 1.1)
+                                : PropertiesPanelController.headerColor)
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.name
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                            font.bold: parent.isSelected
+                        }
+                        MouseArea {
+                            id: shapeMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: previewHost.previewShape = modelData.id
+                        }
+                    }
+                }
+            }
+
+            // Reset-yaw button — useful when the user has dragged far
+            // around and wants the default lighting back.
+            Rectangle {
+                width: 90
+                height: 22
+                radius: 3
+                color: resetMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    anchors.centerIn: parent
+                    text: "Reset yaw"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                }
+                MouseArea {
+                    id: resetMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: previewHost.previewYaw = 0
                 }
             }
         }

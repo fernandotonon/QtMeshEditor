@@ -5,41 +5,42 @@ import MaterialEditorQML 1.0
 
 GroupBox {
     title: "Texture Properties"
-    
-    // Apply theme colors to GroupBox
+
+    // Slice I: flat Inspector-style header.
+    topPadding: 22
+    leftPadding: 6
+    rightPadding: 6
+    bottomPadding: 6
     background: Rectangle {
-        color: panelColor
-        border.color: borderColor
-        border.width: 1
-        radius: 4
+        color: "transparent"
+        Rectangle {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: 1
+            color: borderColor
+        }
     }
-    
-    label: Label {
+    label: ThemedLabel {
         text: parent.title
-        color: textColor
         font.bold: true
-        x: parent.leftPadding
-        width: parent.availableWidth
+        topPadding: 4
     }
     
     Component.onCompleted: {
         console.log("TexturePropertiesPanel: loaded successfully")
     }
 
-    // Enhanced dynamic theme colors based on system palette
-    readonly property color backgroundColor: palette.window
-    readonly property color panelColor: palette.base
-    readonly property color textColor: palette.windowText
-    readonly property color borderColor: palette.mid
-    readonly property color highlightColor: palette.highlight
-    readonly property color buttonColor: palette.button
-    readonly property color buttonTextColor: palette.buttonText
-    readonly property color disabledTextColor: palette.placeholderText
-    
-    SystemPalette {
-        id: palette
-        colorGroup: SystemPalette.Active
-    }
+    // Slice I: align local colors with MaterialEditorQML so the
+    // GroupBox surfaces match the outer Material Editor pane.
+    readonly property color backgroundColor: MaterialEditorQML.backgroundColor
+    readonly property color panelColor: MaterialEditorQML.panelColor
+    readonly property color textColor: MaterialEditorQML.textColor
+    readonly property color borderColor: MaterialEditorQML.borderColor
+    readonly property color highlightColor: MaterialEditorQML.highlightColor
+    readonly property color buttonColor: MaterialEditorQML.buttonColor
+    readonly property color buttonTextColor: MaterialEditorQML.buttonTextColor
+    readonly property color disabledTextColor: MaterialEditorQML.disabledTextColor
     
     ColumnLayout {
         anchors.fill: parent
@@ -49,15 +50,25 @@ GroupBox {
         GroupBox {
             title: "Texture Selection"
             Layout.fillWidth: true
+            // Slice I: flat Inspector-style header.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: panelColor
-                border.color: borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
 
             ColumnLayout {
@@ -135,15 +146,25 @@ GroupBox {
             title: "Preview"
             Layout.fillWidth: true
             Layout.preferredHeight: 200
+            // Slice I: flat Inspector-style header.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: panelColor
-                border.color: borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             Rectangle {
@@ -214,15 +235,25 @@ GroupBox {
         // Texture Coordinates Group
         GroupBox {
             title: "Texture Coordinates"
+            // Slice I: flat Inspector-style header.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -303,15 +334,25 @@ GroupBox {
         // Texture Filtering Group
         GroupBox {
             title: "Texture Filtering"
+            // Slice I: flat Inspector-style header.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -370,15 +411,25 @@ GroupBox {
         // Texture Transform Group
         GroupBox {
             title: "Texture Transform"
+            // Slice I: flat Inspector-style header.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -511,15 +562,25 @@ GroupBox {
         // Environment Mapping Group
         GroupBox {
             title: "Environment Mapping"
+            // Slice I: flat Inspector-style header.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -554,15 +615,25 @@ GroupBox {
         // Texture Animation Group  
         GroupBox {
             title: "Texture Animation"
+            // Slice I: flat Inspector-style header.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
             
             ColumnLayout {
@@ -686,15 +757,25 @@ GroupBox {
             visible: MaterialEditorQML.stableDiffusionEnabled
             Layout.fillWidth: true
 
+            // Slice I: flat Inspector-style header.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: MaterialEditorQML.panelColor
-                border.color: MaterialEditorQML.borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
 
             ColumnLayout {
@@ -791,15 +872,25 @@ GroupBox {
         GroupBox {
             title: "Information"
             Layout.fillWidth: true
+            // Slice I: flat Inspector-style header.
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
             background: Rectangle {
-                color: panelColor
-                border.color: borderColor
-                border.width: 1
-                radius: 4
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: borderColor
+                }
             }
             label: ThemedLabel {
                 text: parent.title
                 font.bold: true
+                topPadding: 4
             }
 
             ColumnLayout {

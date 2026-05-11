@@ -13,6 +13,7 @@
 #include "SentryReporter.h"
 #include "MeshImporterExporter.h"
 #include "UndoManager.h"
+#include "commands/ApplyMaterialCommand.h"
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "OgreWidget.h"
@@ -257,6 +258,52 @@ void PropertiesPanelController::triggerMaterialEditor()
             return;
         }
     }
+}
+
+int PropertiesPanelController::applyMaterialToSelection(const QString& materialName)
+{
+    if (materialName.isEmpty()) return 0;
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Apply material '%1' to selection").arg(materialName));
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return 0;
+
+    const std::string stdName = materialName.toStdString();
+    std::vector<ApplyMaterialCommand::Target> targets;
+
+    // Collect (sub-entity, oldMaterialName) for every touched binding
+    // before we mutate anything. The undo command stores these pairs
+    // and restores them one-for-one on undo. Per-sub-entity selections
+    // take precedence (the user has picked a specific submesh);
+    // otherwise every sub-entity of every selected entity is touched.
+    auto subs = sel->getSubEntitiesSelectionList();
+    if (!subs.isEmpty()) {
+        for (Ogre::SubEntity* se : subs) {
+            if (!se) continue;
+            targets.emplace_back(se, se->getMaterialName());
+        }
+    } else {
+        auto entities = sel->getResolvedEntities();
+        for (Ogre::Entity* ent : entities) {
+            if (!ent) continue;
+            for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
+                Ogre::SubEntity* se = ent->getSubEntity(i);
+                targets.emplace_back(se, se->getMaterialName());
+            }
+        }
+    }
+
+    const int touched = static_cast<int>(targets.size());
+    if (touched == 0) return 0;
+
+    // Push pre-populated and call redo() via the stack so the apply
+    // path stays consistent with manual user undo/redo cycles.
+    auto* cmd = new ApplyMaterialCommand(std::move(targets), stdName);
+    UndoManager::getSingleton()->stack()->push(cmd);
+
+    emit selectionChanged();   // refresh scene-tree material columns
+    return touched;
 }
 
 void PropertiesPanelController::deleteSceneTreeNode(const QString& nodeName)
