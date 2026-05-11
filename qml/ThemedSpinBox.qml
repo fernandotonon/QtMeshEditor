@@ -53,8 +53,8 @@ SpinBox {
     
     background: Rectangle {
         implicitWidth: 100
-        implicitHeight: 30
-        color: MaterialEditorQML.panelColor
+        implicitHeight: 24
+        color: MaterialEditorQML.inputColor
         border.color: MaterialEditorQML.borderColor
         border.width: 1
         radius: 3

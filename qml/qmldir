@@ -7,6 +7,7 @@ TextureChannelPackerDialog 1.0 TextureChannelPackerDialog.qml
 NormalMapGeneratorDialog 1.0 NormalMapGeneratorDialog.qml
 MaterialListModal 1.0 MaterialListModal.qml
 ThemedButton 1.0 ThemedButton.qml
+ThemedCheckBox 1.0 ThemedCheckBox.qml
 ThemedComboBox 1.0 ThemedComboBox.qml
 ThemedSpinBox 1.0 ThemedSpinBox.qml
 ThemedLabel 1.0 ThemedLabel.qml

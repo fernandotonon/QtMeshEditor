@@ -5,31 +5,36 @@ import MaterialEditorQML 1.0
 
 ApplicationWindow {
     id: window
-    width: 1400
-    height: 900
+    // Slice I redesign: single-pane Form-or-Script toggle + form sub-
+    // tabs means we no longer need a giant window. Default to a
+    // compact 780x680 which fits comfortably on a 13" laptop screen
+    // and leaves the main app visible behind.
+    width: 820
+    height: 700
+    minimumWidth: 640
+    minimumHeight: 520
     visible: true
     title: "QML Material Editor"
     color: backgroundColor
 
     property bool isLoading: true
     
-    // Enhanced dynamic theme colors based on system palette
-    readonly property color backgroundColor: palette.window
-    readonly property color panelColor: palette.base
-    readonly property color textColor: palette.windowText
-    readonly property color borderColor: palette.mid
-    readonly property color highlightColor: palette.highlight
-    readonly property color buttonColor: palette.button
-    readonly property color buttonTextColor: palette.buttonText
-    readonly property color alternateColor: palette.alternateBase
-    readonly property color lightColor: palette.light
-    readonly property color darkColor: palette.dark
-    readonly property color disabledTextColor: palette.placeholderText
-    
-    SystemPalette {
-        id: palette
-        colorGroup: SystemPalette.Active
-    }
+    // Slice I: route local color references through MaterialEditorQML
+    // so the Material Editor and the Inspector share one palette
+    // vocabulary (Window for surfaces, Base only for input fields).
+    readonly property color backgroundColor: MaterialEditorQML.backgroundColor
+    readonly property color panelColor: MaterialEditorQML.panelColor
+    readonly property color textColor: MaterialEditorQML.textColor
+    readonly property color borderColor: MaterialEditorQML.borderColor
+    readonly property color highlightColor: MaterialEditorQML.highlightColor
+    readonly property color buttonColor: MaterialEditorQML.buttonColor
+    readonly property color buttonTextColor: MaterialEditorQML.buttonTextColor
+    readonly property color disabledTextColor: MaterialEditorQML.disabledTextColor
+
+    // Slice I: redesign — toggle between the script view and the form
+    // view. Both panes still exist in the QML tree (so their state is
+    // preserved across switches), but only one is visible at a time.
+    property string viewMode: "form"   // "form" | "script"
 
     // AI Status Management
     QtObject {
@@ -576,15 +581,97 @@ ApplicationWindow {
             }
         }
 
-        SplitView {
+        ColumnLayout {
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 10
+            spacing: 8
 
-            // Left Panel - Text Editor
+            // Slice I: top toolbar with the Script | Form segmented
+            // toggle. Default starts on Form view; the script view is
+            // available via the Script tab (or Cmd-/ if a shortcut is
+            // wired later).
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Text {
+                    text: "Material:"
+                    color: textColor
+                    font.pixelSize: 12
+                    font.bold: true
+                    Layout.alignment: Qt.AlignVCenter
+                }
+                Text {
+                    text: MaterialEditorQML.materialName || "(none)"
+                    color: textColor
+                    font.pixelSize: 12
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.maximumWidth: 240
+                    elide: Text.ElideMiddle
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // Segmented toggle: Form | Script
+                Row {
+                    spacing: 0
+                    Rectangle {
+                        width: 90
+                        height: 26
+                        color: window.viewMode === "form"
+                            ? MaterialEditorQML.highlightColor
+                            : MaterialEditorQML.headerColor
+                        border.color: MaterialEditorQML.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Form"
+                            color: textColor
+                            font.pixelSize: 12
+                            font.bold: window.viewMode === "form"
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: window.viewMode = "form"
+                        }
+                    }
+                    Rectangle {
+                        width: 90
+                        height: 26
+                        color: window.viewMode === "script"
+                            ? MaterialEditorQML.highlightColor
+                            : MaterialEditorQML.headerColor
+                        border.color: MaterialEditorQML.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Script"
+                            color: textColor
+                            font.pixelSize: 12
+                            font.bold: window.viewMode === "script"
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: window.viewMode = "script"
+                        }
+                    }
+                }
+            }
+
+            SplitView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 10
+
+            // Left Panel - Text Editor (visible only in Script mode)
             Rectangle {
+                visible: window.viewMode === "script"
                 SplitView.minimumWidth: 400
-                SplitView.preferredWidth: 600
+                SplitView.preferredWidth: parent.width
                 SplitView.fillWidth: true
                 color: panelColor
                 border.color: borderColor
@@ -998,50 +1085,243 @@ ApplicationWindow {
                 }
             }
 
-            // Right Panel - Properties Form
+            // Right Panel - Properties Form (visible only in Form mode)
             Rectangle {
-                SplitView.minimumWidth: 410
-                SplitView.preferredWidth: 410
+                id: formPane
+                visible: window.viewMode === "form"
+                SplitView.minimumWidth: 360
+                SplitView.preferredWidth: parent.width
+                SplitView.fillWidth: true
+
+                // Slice I redesign: two sub-tabs in the Form view —
+                // Pass / Texture. The hierarchy (Technique / Pass / TU)
+                // is shown as a sticky context bar above the tabs so
+                // the user always sees which parent they're editing.
+                property string formTab: "pass"
                 color: panelColor
                 border.color: borderColor
                 border.width: 1
                 radius: 4
 
+                // Sticky context strip — Technique / Pass / Texture
+                // Unit selectors. Each combo's first row is
+                // "+ Add new…" which opens the matching New… dialog;
+                // picking it then restores the previous selection
+                // (the dialog's onAccepted handler advances to the new
+                // item once it's appended to the list).
+                //
+                // Property "addNewLabel" is the sentinel text we
+                // prepend to each combo's model.
+                property string addNewLabel: "+ Add new…"
+                Column {
+                    id: contextStrip
+                    anchors.top: parent.top
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.topMargin: 8
+                    width: parent.width - 16
+                    spacing: 6
+
+                    // Technique row
+                    Row {
+                        width: parent.width
+                        spacing: 8
+                        Text {
+                            text: "Technique:"
+                            color: textColor
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 92
+                            horizontalAlignment: Text.AlignRight
+                        }
+                        ThemedComboBox {
+                            id: ctxTechCombo
+                            width: parent.width - 100
+                            anchors.verticalCenter: parent.verticalCenter
+                            model: [formPane.addNewLabel].concat(MaterialEditorQML.techniqueList)
+                            // Display index is +1 vs the underlying selectedTechniqueIndex
+                            // because of the sentinel row.
+                            currentIndex: MaterialEditorQML.selectedTechniqueIndex + 1
+                            onActivated: function(idx) {
+                                if (idx === 0) {
+                                    newTechniqueDialog.open()
+                                    // Snap back to whatever was selected before.
+                                    currentIndex = MaterialEditorQML.selectedTechniqueIndex + 1
+                                } else {
+                                    MaterialEditorQML.setSelectedTechniqueIndex(idx - 1)
+                                }
+                            }
+                        }
+                    }
+
+                    // Pass row
+                    Row {
+                        width: parent.width
+                        spacing: 8
+                        Text {
+                            text: "Pass:"
+                            color: textColor
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 92
+                            horizontalAlignment: Text.AlignRight
+                        }
+                        ThemedComboBox {
+                            id: ctxPassCombo
+                            width: parent.width - 100
+                            anchors.verticalCenter: parent.verticalCenter
+                            enabled: MaterialEditorQML.selectedTechniqueIndex >= 0
+                            model: [formPane.addNewLabel].concat(MaterialEditorQML.passList)
+                            currentIndex: MaterialEditorQML.selectedPassIndex + 1
+                            onActivated: function(idx) {
+                                if (idx === 0) {
+                                    newPassDialog.open()
+                                    currentIndex = MaterialEditorQML.selectedPassIndex + 1
+                                } else {
+                                    MaterialEditorQML.setSelectedPassIndex(idx - 1)
+                                }
+                            }
+                        }
+                    }
+
+                }
+
+                // Sub-tab row — Pass | Texture. Centered with the
+                // same max width as the context strip and form
+                // content below.
+                Row {
+                    id: formTabBar
+                    anchors.top: contextStrip.bottom
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.topMargin: 8
+                    width: parent.width - 16
+                    spacing: 0
+                    height: 28
+
+                    Repeater {
+                        model: [
+                            { id: "pass",    label: "Pass" },
+                            { id: "texture", label: "Texture" }
+                        ]
+                        delegate: Rectangle {
+                            width: formTabBar.width / 2
+                            height: 28
+                            property bool isActive: formPane.formTab === modelData.id
+                            color: isActive
+                                ? MaterialEditorQML.highlightColor
+                                : (tabMa.containsMouse
+                                    ? Qt.lighter(MaterialEditorQML.headerColor, 1.1)
+                                    : MaterialEditorQML.headerColor)
+                            border.color: MaterialEditorQML.borderColor
+                            border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                color: textColor
+                                font.pixelSize: 12
+                                font.bold: parent.isActive
+                            }
+                            MouseArea {
+                                id: tabMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: formPane.formTab = modelData.id
+                            }
+                        }
+                    }
+                }
+
+                // Texture Unit selector — sits below the tab bar so
+                // switching tabs only adds/removes this single row at
+                // the same vertical position; no layout shift in the
+                // sticky context strip above.
+                Row {
+                    id: tuRow
+                    anchors.top: formTabBar.bottom
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.topMargin: 6
+                    width: parent.width - 16
+                    height: visible ? 24 : 0
+                    spacing: 8
+                    visible: formPane.formTab === "texture"
+
+                    Text {
+                        text: "Texture Unit:"
+                        color: textColor
+                        font.pixelSize: 11
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 92
+                        horizontalAlignment: Text.AlignRight
+                    }
+                    ThemedComboBox {
+                        id: ctxTuCombo
+                        width: parent.width - 100
+                        anchors.verticalCenter: parent.verticalCenter
+                        enabled: MaterialEditorQML.selectedPassIndex >= 0
+                        model: [formPane.addNewLabel].concat(MaterialEditorQML.textureUnitList)
+                        currentIndex: MaterialEditorQML.selectedTextureUnitIndex + 1
+                        onActivated: function(idx) {
+                            if (idx === 0) {
+                                newTextureUnitDialog.open()
+                                currentIndex = MaterialEditorQML.selectedTextureUnitIndex + 1
+                            } else {
+                                MaterialEditorQML.setSelectedTextureUnitIndex(idx - 1)
+                            }
+                        }
+                    }
+                }
+
                 ScrollView {
-                    anchors.fill: parent
-                    anchors.margins: 15
+                    id: formScrollView
+                    anchors.top: tuRow.bottom
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 8
+                    anchors.topMargin: 4
                     clip: true
 
+                    // Let the form content fill the full scroll-view
+                    // width so the property sections (Lighting & Depth,
+                    // Colors, Alpha & Material, Blending, …) cover the
+                    // available horizontal space instead of sitting in
+                    // a narrow centered column.
                     ColumnLayout {
-                        width: parent.width - 30
-                        spacing: 20
+                        width: formScrollView.availableWidth
+                        spacing: 8
 
-                        // Header
-                        Text {
-                            text: "Material Properties"
-                            font.pointSize: 16
-                            font.bold: true
-                            color: textColor
-                        }
-
-                        // Technique Management
+                        // Technique Management — superseded by the
+                        // sticky context strip above the tabs. Kept in
+                        // the QML tree so existing tests / external
+                        // tools can still reference its bindings, but
+                        // never visible.
                         GroupBox {
                             title: "Techniques"
                             Layout.fillWidth: true
+                            visible: false
                             
+                            // Flat Inspector-style header — solid top
+                            // separator instead of a boxed border.
+                            topPadding: 22
+                            leftPadding: 6
+                            rightPadding: 6
+                            bottomPadding: 6
                             background: Rectangle {
-                                color: panelColor
-                                border.color: borderColor
-                                border.width: 1
-                                radius: 4
+                                color: "transparent"
+                                Rectangle {
+                                    anchors.top: parent.top
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    height: 1
+                                    color: borderColor
+                                }
                             }
-                            
                             label: Label {
                                 text: parent.title
                                 color: textColor
+                                font.pixelSize: 11
                                 font.bold: true
-                                x: parent.leftPadding
-                                width: parent.availableWidth
+                                topPadding: 4
                             }
 
                             ColumnLayout {
@@ -1069,25 +1349,36 @@ ApplicationWindow {
                             }
                         }
 
-                        // Pass Management
+                        // Pass Management — superseded by the context
+                        // strip. Hidden but kept for binding stability.
                         GroupBox {
                             title: "Passes"
                             Layout.fillWidth: true
+                            visible: false
                             enabled: MaterialEditorQML.selectedTechniqueIndex >= 0
                             
+                            // Flat Inspector-style header — solid top
+                            // separator instead of a boxed border.
+                            topPadding: 22
+                            leftPadding: 6
+                            rightPadding: 6
+                            bottomPadding: 6
                             background: Rectangle {
-                                color: panelColor
-                                border.color: borderColor
-                                border.width: 1
-                                radius: 4
+                                color: "transparent"
+                                Rectangle {
+                                    anchors.top: parent.top
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    height: 1
+                                    color: borderColor
+                                }
                             }
-                            
                             label: Label {
                                 text: parent.title
                                 color: textColor
+                                font.pixelSize: 11
                                 font.bold: true
-                                x: parent.leftPadding
-                                width: parent.availableWidth
+                                topPadding: 4
                             }
 
                             ColumnLayout {
@@ -1120,28 +1411,40 @@ ApplicationWindow {
                         // Pass Properties Panel
                         PassPropertiesPanel {
                             Layout.fillWidth: true
+                            visible: formPane.formTab === "pass"
                             enabled: MaterialEditorQML.selectedPassIndex >= 0
                         }
 
-                        // Texture Unit Management
+                        // Texture Unit Management — superseded by the
+                        // context strip TU row. Hidden but kept.
                         GroupBox {
                             title: "Texture Units"
                             Layout.fillWidth: true
+                            visible: false
                             enabled: MaterialEditorQML.selectedPassIndex >= 0
                             
+                            // Flat Inspector-style header — solid top
+                            // separator instead of a boxed border.
+                            topPadding: 22
+                            leftPadding: 6
+                            rightPadding: 6
+                            bottomPadding: 6
                             background: Rectangle {
-                                color: panelColor
-                                border.color: borderColor
-                                border.width: 1
-                                radius: 4
+                                color: "transparent"
+                                Rectangle {
+                                    anchors.top: parent.top
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    height: 1
+                                    color: borderColor
+                                }
                             }
-                            
                             label: Label {
                                 text: parent.title
                                 color: textColor
+                                font.pixelSize: 11
                                 font.bold: true
-                                x: parent.leftPadding
-                                width: parent.availableWidth
+                                topPadding: 4
                             }
 
                             ColumnLayout {
@@ -1173,11 +1476,13 @@ ApplicationWindow {
                         // Texture Properties Panel
                         TexturePropertiesPanel {
                             Layout.fillWidth: true
+                            visible: formPane.formTab === "texture"
                             enabled: MaterialEditorQML.selectedTextureUnitIndex >= 0
                         }
                     }
                 }
             }
+            }   // ── end SplitView (slice I redesign wrapper) ──
         }
     }
 

@@ -980,3 +980,91 @@ TEST_F(PropertiesPanelControllerTests, UndoIndexTracksPushAndUndoOperations)
     stack->redo();
     EXPECT_EQ(controller->undoIndex(), 2);
 }
+
+// ===========================================================================
+// Slice I — applyMaterialToSelection: applies a named Ogre material to
+// the currently selected sub-entities. Per-sub-entity selection takes
+// precedence; otherwise every sub-entity of every selected entity is
+// touched. Returns the affected count.
+// ===========================================================================
+
+TEST_F(PropertiesPanelControllerTests, ApplyMaterialToSelection_EmptyNameIsNoOp)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    Ogre::SceneNode* meshNode = Manager::getSingleton()->addSceneNode("ApplyMatEmpty");
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("ApplyMatEmptyMesh");
+    Ogre::Entity* entity = Manager::getSingleton()->createEntity(meshNode, mesh);
+    ASSERT_NE(entity, nullptr);
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    EXPECT_EQ(controller->applyMaterialToSelection(QString()), 0);
+    EXPECT_EQ(controller->applyMaterialToSelection(QString("")), 0);
+}
+
+TEST_F(PropertiesPanelControllerTests, ApplyMaterialToSelection_NoSelectionReturnsZero)
+{
+    SelectionSet::getSingleton()->clear();
+    EXPECT_EQ(controller->applyMaterialToSelection("BaseWhite"), 0);
+}
+
+TEST_F(PropertiesPanelControllerTests, ApplyMaterialToSelection_SubEntityTakesPrecedence)
+{
+    // When the user has explicitly picked a submesh, the helper must
+    // touch *only* that submesh — even if the parent entity has more.
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    createStandardOgreMaterials();
+
+    Ogre::SceneNode* node = Manager::getSingleton()->addSceneNode("ApplyMatSubSel");
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("ApplyMatSubMesh");
+    Ogre::Entity* entity = Manager::getSingleton()->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+    ASSERT_GE(entity->getNumSubEntities(), 1u);
+    Ogre::SubEntity* sub0 = entity->getSubEntity(0);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(sub0);
+
+    EXPECT_EQ(controller->applyMaterialToSelection("BaseWhite"), 1);
+    EXPECT_EQ(sub0->getMaterial()->getName(), "BaseWhite");
+}
+
+TEST_F(PropertiesPanelControllerTests, ApplyMaterialToSelection_EntitySelectionTouchesAllSubmeshes)
+{
+    // No sub-entity is explicitly selected — every sub-entity of every
+    // selected entity must receive the new material. The triangle mesh
+    // has one submesh, so the count is the entity count (1 here).
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    createStandardOgreMaterials();
+
+    Ogre::SceneNode* node = Manager::getSingleton()->addSceneNode("ApplyMatEntSel");
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("ApplyMatEntMesh");
+    Ogre::Entity* entity = Manager::getSingleton()->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    const int touched = controller->applyMaterialToSelection("BaseWhite");
+    EXPECT_EQ(touched, static_cast<int>(entity->getNumSubEntities()));
+    EXPECT_EQ(entity->getSubEntity(0)->getMaterial()->getName(), "BaseWhite");
+}
+
+TEST_F(PropertiesPanelControllerTests, ApplyMaterialToSelection_EmitsSelectionChangedSignal)
+{
+    // selectionChanged is the signal QML watches to refresh the
+    // scene-tree material column. Without it, applying a material to
+    // a selected sub-entity would leave the tree displaying the old
+    // value until the next selection change.
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    createStandardOgreMaterials();
+
+    Ogre::SceneNode* node = Manager::getSingleton()->addSceneNode("ApplyMatSignal");
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("ApplyMatSignalMesh");
+    Ogre::Entity* entity = Manager::getSingleton()->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    QSignalSpy spy(controller, &PropertiesPanelController::selectionChanged);
+    ASSERT_TRUE(spy.isValid());
+
+    EXPECT_GT(controller->applyMaterialToSelection("BaseWhite"), 0);
+    EXPECT_GE(spy.count(), 1);
+}

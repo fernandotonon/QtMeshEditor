@@ -259,6 +259,43 @@ void PropertiesPanelController::triggerMaterialEditor()
     }
 }
 
+int PropertiesPanelController::applyMaterialToSelection(const QString& materialName)
+{
+    if (materialName.isEmpty()) return 0;
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Apply material '%1' to selection").arg(materialName));
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return 0;
+
+    const std::string stdName = materialName.toStdString();
+    int touched = 0;
+
+    // Per-sub-entity selections take precedence (the user has picked a
+    // specific submesh).
+    auto subs = sel->getSubEntitiesSelectionList();
+    if (!subs.isEmpty()) {
+        for (Ogre::SubEntity* se : subs) {
+            if (!se) continue;
+            se->setMaterialName(stdName);
+            ++touched;
+        }
+    } else {
+        auto entities = sel->getResolvedEntities();
+        for (Ogre::Entity* ent : entities) {
+            if (!ent) continue;
+            for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
+                ent->getSubEntity(i)->setMaterialName(stdName);
+                ++touched;
+            }
+        }
+    }
+
+    if (touched > 0)
+        emit selectionChanged();   // refresh scene-tree material columns
+    return touched;
+}
+
 void PropertiesPanelController::deleteSceneTreeNode(const QString& nodeName)
 {
     if (nodeName.isEmpty() || Manager::getSingleton()->isForbiddenNodeName(nodeName))

@@ -304,6 +304,146 @@ TEST_F(BoneDragReleaseTest, NeedUpdateBetweenDragsDoesNotAccumulate) {
     EXPECT_EQ(bone->getPosition(), origLocal);
 }
 
+// Reproduces the actual TransformOperator drag flow: each mouse-move
+// event drives _setDerivedPosition + needUpdate(true) anchored to the
+// SAME press-time derived position with a different incremental delta.
+// A realistic drag is 5–20 such events before release. Without a clean
+// revert that uses the press-anchored before-state (not the
+// last-move-event state), the second drag would inherit micro-drift
+// accumulated across the first drag's update chain.
+TEST_F(BoneDragReleaseTest, MultiMoveSetUpdateSequenceRevertsCleanly) {
+    Ogre::Entity* entity = createAnimatedTestEntity("BDR_MultiMoveSeq");
+    ASSERT_NE(entity, nullptr);
+    Ogre::Bone* root = entity->getSkeleton()->getBone("Root");
+    Ogre::Bone* child = entity->getSkeleton()->getBone("Child");
+
+    // Rotate parent so derived/local math is non-trivial.
+    root->setOrientation(Ogre::Quaternion(Ogre::Radian(0.5f), Ogre::Vector3::UNIT_Y));
+    root->setManuallyControlled(true);
+
+    const Ogre::Vector3 origLocal   = child->getPosition();
+    const Ogre::Vector3 origDerived = child->_getDerivedPosition();
+
+    // Drag 1: 5 mouse-move events, each rewriting derived position to
+    // (anchor + frac * targetDelta) — same pattern as the TransformOperator
+    // move handler (anchored, not incremental).
+    child->setManuallyControlled(true);
+    const Ogre::Vector3 drag1Target(0.0f, 0.6f, 0.0f);
+    for (int i = 1; i <= 5; ++i) {
+        const float frac = static_cast<float>(i) / 5.0f;
+        child->_setDerivedPosition(origDerived + drag1Target * frac);
+        child->needUpdate(true);
+    }
+    auto outcome1 = BoneDragRelease::apply(child, origLocal,
+                                           child->getInitialOrientation(),
+                                           child->getInitialScale(),
+                                           /*hasAnim=*/true, /*autoKey=*/false,
+                                           entity);
+    EXPECT_EQ(outcome1, BoneDragRelease::Result::Revert);
+    EXPECT_EQ(child->getPosition(), origLocal)
+        << "5-event drag 1 did not revert to origLocal";
+
+    // Drag 2: another 5-event sequence on a different axis.
+    const Ogre::Vector3 drag2Before = child->getPosition();
+    EXPECT_EQ(drag2Before, origLocal)
+        << "After drag 1 revert, child's local pos leaked across the multi-event update chain";
+
+    const Ogre::Vector3 drag2DerivedAnchor = child->_getDerivedPosition();
+    child->setManuallyControlled(true);
+    const Ogre::Vector3 drag2Target(0.7f, 0.0f, 0.0f);
+    for (int i = 1; i <= 5; ++i) {
+        const float frac = static_cast<float>(i) / 5.0f;
+        child->_setDerivedPosition(drag2DerivedAnchor + drag2Target * frac);
+        child->needUpdate(true);
+    }
+    auto outcome2 = BoneDragRelease::apply(child, drag2Before,
+                                           child->getInitialOrientation(),
+                                           child->getInitialScale(),
+                                           /*hasAnim=*/true, /*autoKey=*/false,
+                                           entity);
+    EXPECT_EQ(outcome2, BoneDragRelease::Result::Revert);
+    EXPECT_EQ(child->getPosition(), origLocal)
+        << "5-event drag 2 did not revert to origLocal (accumulation across multi-event drags)";
+    EXPECT_NEAR((child->_getDerivedPosition() - origDerived).length(), 0.0f, 1e-4f)
+        << "derived position drifted across two 5-event drags";
+}
+
+// Stress variant: 20 setUpdate events per drag, three consecutive
+// auto-key-off drags. Asserts both local and derived positions return
+// to bind exactly after each drag's revert, with tolerance only on the
+// derived side (where parent-frame conversion accrues bit-noise).
+TEST_F(BoneDragReleaseTest, ThreeStressDragsNoAccumulationAfterRevert) {
+    Ogre::Entity* entity = createAnimatedTestEntity("BDR_StressDrags");
+    ASSERT_NE(entity, nullptr);
+    Ogre::Bone* root = entity->getSkeleton()->getBone("Root");
+    Ogre::Bone* child = entity->getSkeleton()->getBone("Child");
+
+    root->setOrientation(Ogre::Quaternion(Ogre::Radian(0.7f), Ogre::Vector3::UNIT_Z));
+    root->setManuallyControlled(true);
+
+    const Ogre::Vector3 origLocal   = child->getPosition();
+    const Ogre::Vector3 origDerived = child->_getDerivedPosition();
+
+    const std::array<Ogre::Vector3, 3> targets = {
+        Ogre::Vector3(0.0f, -0.5f, 0.0f),  // drag down
+        Ogre::Vector3(0.5f,  0.0f, 0.0f),  // drag right
+        Ogre::Vector3(0.0f,  0.0f, 0.3f),  // drag forward
+    };
+
+    for (size_t d = 0; d < targets.size(); ++d) {
+        const Ogre::Vector3 beforeLocal   = child->getPosition();
+        const Ogre::Vector3 beforeDerived = child->_getDerivedPosition();
+        ASSERT_EQ(beforeLocal, origLocal)
+            << "Drag " << d << " starting before-state shifted (accumulation across drags)";
+
+        child->setManuallyControlled(true);
+        for (int i = 1; i <= 20; ++i) {
+            const float frac = static_cast<float>(i) / 20.0f;
+            child->_setDerivedPosition(beforeDerived + targets[d] * frac);
+            child->needUpdate(true);
+        }
+        auto outcome = BoneDragRelease::apply(child, beforeLocal,
+                                              child->getInitialOrientation(),
+                                              child->getInitialScale(),
+                                              /*hasAnim=*/true, /*autoKey=*/false,
+                                              entity);
+        ASSERT_EQ(outcome, BoneDragRelease::Result::Revert)
+            << "Drag " << d << " did not produce Revert";
+        EXPECT_EQ(child->getPosition(), origLocal)
+            << "Drag " << d << " did not revert local to origLocal";
+        EXPECT_NEAR((child->_getDerivedPosition() - origDerived).length(), 0.0f, 1e-4f)
+            << "Drag " << d << " derived drifted";
+    }
+}
+
+// Reproduces a subtle variant of the bug: a mouse-move event with a
+// near-zero delta (sub-epsilon) happens at press time, but the helper
+// must still treat the bone as "touched" if the manualControlled flag
+// was set, and clear it on release — otherwise subsequent ticks see
+// stale manual control and produce visible compound rotation.
+TEST_F(BoneDragReleaseTest, ZeroDeltaSetUpdateClearsManualControlled) {
+    Ogre::Entity* entity = createAnimatedTestEntity("BDR_ZeroDelta");
+    ASSERT_NE(entity, nullptr);
+    Ogre::Bone* child = entity->getSkeleton()->getBone("Child");
+
+    const Ogre::Vector3 origLocal = child->getPosition();
+
+    // Simulate a press that flipped manualControlled but produced
+    // zero motion (the user clicked then released without dragging).
+    child->setManuallyControlled(true);
+    child->_setDerivedPosition(child->_getDerivedPosition());
+    child->needUpdate(true);
+
+    auto outcome = BoneDragRelease::apply(child, origLocal,
+                                          child->getInitialOrientation(),
+                                          child->getInitialScale(),
+                                          /*hasAnim=*/true, /*autoKey=*/false,
+                                          entity);
+    EXPECT_EQ(outcome, BoneDragRelease::Result::NoOp);
+    EXPECT_FALSE(child->isManuallyControlled())
+        << "Zero-delta drag left manualControlled set — animation playback would freeze the bone";
+}
+
 // Documents Ogre's parentless-bone behavior that drove the
 // TransformOperator move-handler fix: _setDerivedPosition is a no-op on
 // nodes with no parent, so the bone-drag handler falls back to

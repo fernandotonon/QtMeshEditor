@@ -9,6 +9,7 @@
     <file alias="NormalMapGeneratorDialog.qml">../qml/NormalMapGeneratorDialog.qml</file>
     <file alias="qmldir">../qml/qmldir</file>
     <file alias="ThemedButton.qml">../qml/ThemedButton.qml</file>
+    <file alias="ThemedCheckBox.qml">../qml/ThemedCheckBox.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
     <file alias="ThemedSpinBox.qml">../qml/ThemedSpinBox.qml</file>
     <file alias="ThemedLabel.qml">../qml/ThemedLabel.qml</file>

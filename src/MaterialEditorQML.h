@@ -111,6 +111,8 @@ class MaterialEditorQML : public QObject
     // Theme color properties
     Q_PROPERTY(QColor backgroundColor READ backgroundColor CONSTANT)
     Q_PROPERTY(QColor panelColor READ panelColor CONSTANT)
+    Q_PROPERTY(QColor inputColor READ inputColor CONSTANT)
+    Q_PROPERTY(QColor headerColor READ headerColor CONSTANT)
     Q_PROPERTY(QColor textColor READ textColor CONSTANT)
     Q_PROPERTY(QColor borderColor READ borderColor CONSTANT)
     Q_PROPERTY(QColor highlightColor READ highlightColor CONSTANT)
@@ -222,6 +224,8 @@ public:
     // Theme color getters
     QColor backgroundColor() const { return m_backgroundColor; }
     QColor panelColor() const { return m_panelColor; }
+    QColor inputColor() const { return m_inputColor; }
+    QColor headerColor() const { return m_headerColor; }
     QColor textColor() const { return m_textColor; }
     QColor borderColor() const { return m_borderColor; }
     QColor highlightColor() const { return m_highlightColor; }
@@ -364,6 +368,15 @@ public slots:
     // Material list operations
     Q_INVOKABLE QStringList getMaterialList() const;
     Q_INVOKABLE QString materialPreview(const QString& materialName) const;
+
+    /// Slice I: interactive material preview. Renders the named material
+    /// onto one of three shapes (0=Sphere, 1=Cube, 2=Plane) with the
+    /// environment light yawed by `yawDegrees`. Returns a base64 PNG
+    /// data URL the QML Image element can show directly.
+    Q_INVOKABLE QString interactiveMaterialPreview(const QString& materialName,
+                                                    int size,
+                                                    int shape,
+                                                    double yawDegrees) const;
     Q_INVOKABLE void importMaterialFile(const QString &filePath);
     Q_INVOKABLE void exportMaterial(const QString &fileName, const QString &materialName);
     Q_INVOKABLE void openMaterialEditorWindow(const QString &materialName = "");
@@ -708,6 +721,11 @@ private:
     // Theme color properties (defaults used if palette read fails or in tests)
     QColor m_backgroundColor{240, 240, 240};
     QColor m_panelColor{255, 255, 255};
+    // Slice I: input field background — matches the Inspector's "inputColor".
+    QColor m_inputColor{255, 255, 255};
+    // Slice I: section/button header surface — matches the Inspector's
+    // "headerColor" (panel background, slightly darker for hairline contrast).
+    QColor m_headerColor{220, 220, 220};
     QColor m_textColor{0, 0, 0};
     QColor m_borderColor{128, 128, 128};
     QColor m_highlightColor{0, 120, 215};

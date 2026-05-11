@@ -2760,3 +2760,71 @@ TEST_F(MaterialEditorQMLTest, PreviewNormalMap_SizeIsClampedToBounds) {
     ASSERT_TRUE(img.loadFromData(payload, "PNG"));
     EXPECT_EQ(img.width(), 32);  // clamped to lower bound
 }
+
+// ===========================================================================
+// Slice I — theme colors expose Inspector-parity surfaces.
+//
+// The Material Editor and the Inspector should agree on which palette
+// role drives which kind of surface (Window for panels, Base for input
+// fields, Window.darker(110) for header strips). Without this, the
+// Material Editor window looked visibly darker on macOS dark mode and
+// the inner GroupBoxes did not match the Inspector tools.
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, ThemeColors_PanelMatchesWindowRole) {
+    // Match how PropertiesPanelController exposes panel surfaces so
+    // QML controls can read the same vocabulary regardless of which
+    // singleton they bind to.
+    const QPalette palette = QApplication::palette();
+    EXPECT_EQ(editor->panelColor(), palette.color(QPalette::Window));
+    EXPECT_EQ(editor->backgroundColor(), palette.color(QPalette::Window));
+}
+
+TEST_F(MaterialEditorQMLTest, ThemeColors_InputColorIsBaseRole) {
+    const QPalette palette = QApplication::palette();
+    EXPECT_EQ(editor->inputColor(), palette.color(QPalette::Base));
+}
+
+TEST_F(MaterialEditorQMLTest, ThemeColors_HeaderColorIsWindowDarker110) {
+    // Hairline contrast strip — Inspector convention is Window.darker(110).
+    const QPalette palette = QApplication::palette();
+    EXPECT_EQ(editor->headerColor(), palette.color(QPalette::Window).darker(110));
+}
+
+TEST_F(MaterialEditorQMLTest, ThemeColors_InputAndHeaderAreValid) {
+    EXPECT_TRUE(editor->inputColor().isValid());
+    EXPECT_TRUE(editor->headerColor().isValid());
+}
+
+// ===========================================================================
+// Slice I — interactiveMaterialPreview is a thin wrapper over
+// MaterialPreviewRenderer::renderInteractivePreview. We exercise the
+// wrapper here; the renderer's clamping / wrapping / shape switching
+// has dedicated coverage in MaterialPreviewRenderer_test.cpp.
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, InteractivePreview_UnknownMaterialReturnsEmpty) {
+    QString url = editor->interactiveMaterialPreview(
+        "DefinitelyDoesNotExist_XYZ", 96, /*shape=*/0, /*yaw=*/0.0);
+    EXPECT_TRUE(url.isEmpty());
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, InteractivePreview_KnownMaterialReturnsDataUri) {
+    QString url = editor->interactiveMaterialPreview(
+        "BaseWhite", 96, /*shape=*/0, /*yaw=*/0.0);
+    ASSERT_FALSE(url.isEmpty()) << "interactive preview RTT failed (headless GL required)";
+    EXPECT_TRUE(url.startsWith("data:image/png;base64,"));
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, InteractivePreview_ShapeSwitchProducesDifferentImage) {
+    // Sphere vs Plane render through different procedural meshes — the
+    // raw pixels must differ. Confirms the shape parameter actually
+    // reaches the renderer.
+    QString sphere = editor->interactiveMaterialPreview(
+        "BaseWhite", 96, /*shape=*/0, /*yaw=*/0.0);
+    QString plane  = editor->interactiveMaterialPreview(
+        "BaseWhite", 96, /*shape=*/2, /*yaw=*/0.0);
+    ASSERT_FALSE(sphere.isEmpty());
+    ASSERT_FALSE(plane.isEmpty());
+    EXPECT_NE(sphere, plane);
+}

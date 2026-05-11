@@ -197,6 +197,11 @@ public:
 
     Q_INVOKABLE void triggerMergeAnimations();
     Q_INVOKABLE void triggerMaterialEditor();
+    /// Slice I: apply the named Ogre material to every selected
+    /// sub-entity (or every sub-entity of selected entities). Returns
+    /// the number of sub-entities affected; 0 means nothing was
+    /// selected.
+    Q_INVOKABLE int applyMaterialToSelection(const QString& materialName);
 
     /// Delete one scene node by name (scene-tree trash control).
     Q_INVOKABLE void deleteSceneTreeNode(const QString& nodeName);

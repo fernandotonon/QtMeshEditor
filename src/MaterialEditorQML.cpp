@@ -48,8 +48,16 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     // Initialize theme colors from system palette
     // (member defaults in header provide fallback values)
     QPalette palette = QApplication::palette();
+    // Slice I: align panelColor with PropertiesPanelController so the
+    // Material Editor surfaces visually match the Inspector. Both now
+    // use QPalette::Window for the surface and QPalette::Base only for
+    // input fields. inputColor / headerColor mirror the Inspector's
+    // PropertiesPanelController API so themed controls (ThemedTextField,
+    // ThemedComboBox, ThemedCheckBox) read from the same vocabulary.
     m_backgroundColor = palette.color(QPalette::Window);
-    m_panelColor = palette.color(QPalette::Base);
+    m_panelColor = palette.color(QPalette::Window);
+    m_inputColor = palette.color(QPalette::Base);
+    m_headerColor = palette.color(QPalette::Window).darker(110);
     m_textColor = palette.color(QPalette::WindowText);
     m_borderColor = palette.color(QPalette::Mid);
     m_highlightColor = palette.color(QPalette::Highlight);
@@ -3490,6 +3498,15 @@ QStringList MaterialEditorQML::getMaterialList() const
 QString MaterialEditorQML::materialPreview(const QString& materialName) const
 {
     return MaterialPreviewRenderer::instance()->renderPreviewAsDataUri(materialName);
+}
+
+QString MaterialEditorQML::interactiveMaterialPreview(const QString& materialName,
+                                                       int size,
+                                                       int shape,
+                                                       double yawDegrees) const
+{
+    return MaterialPreviewRenderer::instance()
+        ->renderInteractivePreview(materialName, size, shape, yawDegrees);
 }
 
 void MaterialEditorQML::importMaterialFile(const QString &filePath)
