@@ -19,7 +19,14 @@ Rectangle {
     function issueSummary() {
         if (!MeshValidator.validated)
             return "Not run"
-        return String(MeshValidator.issues.length)
+        var n = 0
+        for (var i = 0; i < MeshValidator.issues.length; ++i) {
+            var item = MeshValidator.issues[i]
+            var typ = item.type !== undefined ? item.type : item["type"]
+            if (typ === "error" || typ === "warning")
+                ++n
+        }
+        return String(n)
     }
 
     function fileSummary() {

@@ -4537,6 +4537,36 @@ TEST_F(MCPServerTest, ValidateMesh_WithSelectionReturnsReport)
                 text.contains("[WARN]") || text.contains("[OK]"));
 }
 
+TEST_F(MCPServerTest, ValidateMesh_WithSceneNodeSelectionSucceeds)
+{
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MCPValidateNode");
+    ASSERT_NE(entity, nullptr);
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+    ASSERT_TRUE(SelectionSet::getSingleton()->hasNodes());
+    ASSERT_FALSE(SelectionSet::getSingleton()->hasEntities());
+
+    QJsonObject result = server->callTool("validate_mesh", QJsonObject());
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+}
+
+TEST_F(MCPServerTest, ValidateMesh_WithSubEntitySelectionSucceeds)
+{
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MCPValidateSubEnt");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_GE(entity->getNumSubEntities(), 1u);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(entity->getSubEntity(0));
+    ASSERT_TRUE(SelectionSet::getSingleton()->hasSubEntities());
+
+    QJsonObject result = server->callTool("validate_mesh", QJsonObject());
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+}
+
 TEST_F(MCPServerTest, GenerateLods_WithSelectionProducesLodInfo)
 {
     Ogre::Entity* entity = createAndSelectTriangleEntity("MCPLodGenerate");

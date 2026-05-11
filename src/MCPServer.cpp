@@ -1742,7 +1742,7 @@ static Ogre::Entity* findEntityByName(const QString &entityName)
 static bool hasSelectedEntities()
 {
     SelectionSet* sel = SelectionSet::getSingleton();
-    return sel && sel->hasEntities();
+    return sel && !sel->getResolvedEntities().isEmpty();
 }
 
 static QString captureLodControllerError(const std::function<void()> &operation)

@@ -7,6 +7,7 @@
 #include <QKeyEvent>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMetaObject>
 #include <QMimeData>
 #include <QMessageBox>
 #include <QQuickItem>
@@ -35,6 +36,7 @@
 #include "EditModeController.h"
 #include "EditorModeController.h"
 #include "MeshInfoOverlay.h"
+#include "MeshValidator.h"
 #include "TestHelpers.h"
 #include "EditorViewport.h"
 #include "ViewportSettingsKeys.h"
@@ -335,6 +337,21 @@ TEST_F(MainWindowTest, ContextualToolRailSwitchesActionsByMode)
     EXPECT_FALSE(validationAction->isEnabled());
 }
 
+TEST_F(MainWindowTest, ContextualToolRailAiChatPrecedesAddPrimitive)
+{
+    QAction* aiChat = findActionByObjectName(QStringLiteral("modeAnyAiChatAction"));
+    QAction* primitive = findActionByObjectName(QStringLiteral("modeObjectPrimitiveAction"));
+    ASSERT_NE(aiChat, nullptr);
+    ASSERT_NE(primitive, nullptr);
+
+    const QList<QAction*> actions = window->ui->objectsToolbar->actions();
+    const int aiIdx = actions.indexOf(aiChat);
+    const int primIdx = actions.indexOf(primitive);
+    EXPECT_GE(aiIdx, 0);
+    EXPECT_GE(primIdx, 0);
+    EXPECT_LT(aiIdx, primIdx) << "Open AI Chat should appear before Add Primitive on the rail";
+}
+
 TEST_F(MainWindowTest, ContextualToolRailKeepsSharedMenuActionsReachable)
 {
     auto* modeController = EditorModeController::instance();
@@ -399,6 +416,46 @@ TEST_F(MainWindowTest, BottomContextPanelLoadsAndTracksCurrentMode)
     app->processEvents();
     EXPECT_EQ(root->property("currentSummaryObjectName").toString(),
               QStringLiteral("validationSummaryRoot"));
+}
+
+TEST_F(MainWindowTest, BottomContextValidationFindingsCountsErrorsAndWarningsOnly)
+{
+    ASSERT_NE(window->m_bottomContextDock, nullptr);
+    window->showBottomToolDock(window->m_bottomContextDock);
+    app->processEvents();
+
+    auto* quickWidget = qobject_cast<QQuickWidget*>(window->m_bottomContextDock->widget());
+    ASSERT_NE(quickWidget, nullptr);
+    ASSERT_EQ(quickWidget->status(), QQuickWidget::Ready);
+    QObject* qmlRoot = quickWidget->rootObject();
+    ASSERT_NE(qmlRoot, nullptr);
+
+    EditorModeController::instance()->requestMode(EditorModeController::ValidationMode);
+    app->processEvents();
+
+    QVariant beforeRun;
+    ASSERT_TRUE(QMetaObject::invokeMethod(qmlRoot, "issueSummary", Q_RETURN_ARG(QVariant, beforeRun)));
+    EXPECT_EQ(beforeRun.toString(), QStringLiteral("Not run"));
+
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("BottomCtxFindings_mesh");
+    ASSERT_TRUE(static_cast<bool>(mesh));
+    auto* mgr = Manager::getSingleton();
+    ASSERT_NE(mgr, nullptr);
+    Ogre::SceneNode* node = mgr->addSceneNode("BottomCtxFindingsNode");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* ent = mgr->getSceneMgr()->createEntity("BottomCtxFindingsNode", mesh);
+    ASSERT_NE(ent, nullptr);
+    node->attachObject(ent);
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(ent);
+
+    MeshValidator::instance()->doValidate();
+    app->processEvents();
+
+    QVariant afterOk;
+    ASSERT_TRUE(QMetaObject::invokeMethod(qmlRoot, "issueSummary", Q_RETURN_ARG(QVariant, afterOk)));
+    EXPECT_EQ(afterOk.toString(), QStringLiteral("0"))
+        << "Clean validation should not count the informational ok row as a finding.";
 }
 
 TEST_F(MainWindowTest, BottomToolRevealTabsContextWithOtherBottomTools)

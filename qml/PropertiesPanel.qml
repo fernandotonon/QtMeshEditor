@@ -286,10 +286,8 @@ Rectangle {
                 title: "Workspace Panels"
                 sectionVisible: root.currentTab === root.modeToolsTab
                     && (root.showAllModeTools
-                        || EditorModeController.currentMode === EditorModeController.EditMode
                         || EditorModeController.currentMode === EditorModeController.AnimationMode
-                        || EditorModeController.currentMode === EditorModeController.MaterialMode
-                        || EditorModeController.currentMode === EditorModeController.ValidationMode)
+                        || EditorModeController.currentMode === EditorModeController.MaterialMode)
                 expanded: false
 
                 Component.onCompleted: content = workspacePanelsComponent
@@ -358,7 +356,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ObjectMode,
                     MeshLodController.hasSelection)
-                expanded: false
+                expanded: true
 
                 Component.onCompleted: content = lodComponent
             }
@@ -391,7 +389,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ValidationMode,
                     MeshValidator.hasSelection)
-                expanded: false
+                expanded: true
 
                 Component.onCompleted: content = validationComponent
             }
@@ -400,7 +398,7 @@ Rectangle {
             CollapsibleSection {
                 title: "Undo History"
                 sectionVisible: root.currentTab === root.historyTab
-                expanded: false
+                expanded: true
 
                 Component.onCompleted: content = undoHistoryComponent
             }
@@ -936,15 +934,6 @@ Rectangle {
             Flow {
                 width: parent.width - 16
                 spacing: 6
-
-                ModeToolShortcutButton {
-                    objectName: "workspaceContextButton"
-                    visible: root.showAllModeTools
-                        || EditorModeController.currentMode === EditorModeController.EditMode
-                        || EditorModeController.currentMode === EditorModeController.ValidationMode
-                    text: "Context"
-                    onClicked: root.revealBottomTool("context")
-                }
 
                 ModeToolShortcutButton {
                     objectName: "workspaceAssetBrowserButton"

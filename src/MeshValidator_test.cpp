@@ -211,6 +211,40 @@ TEST_F(MeshValidatorTest, HasSelectionReflectsSelectionSet)
     EXPECT_TRUE(validator->hasSelection());
 }
 
+TEST_F(MeshValidatorTest, HasSelectionTrueWhenSceneNodeSelected)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    auto mesh = createValidUvMesh("MeshValidatorNodeSelMesh");
+    auto* entity = createEntityFromMesh("MeshValidatorNodeSelNode", mesh);
+    ASSERT_NE(entity, nullptr);
+
+    auto* sel = SelectionSet::getSingleton();
+    EXPECT_TRUE(sel->hasNodes());
+    EXPECT_FALSE(sel->hasEntities());
+    EXPECT_TRUE(validator->hasSelection());
+}
+
+TEST_F(MeshValidatorTest, HasSelectionTrueWhenSubEntitySelected)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    auto mesh = createValidUvMesh("MeshValidatorSubSelMesh");
+    auto* entity = createEntityFromMesh("MeshValidatorSubSelNode", mesh);
+    ASSERT_NE(entity, nullptr);
+
+    ASSERT_GE(entity->getNumSubEntities(), 1u);
+    SelectionSet::getSingleton()->selectOne(entity->getSubEntity(0));
+    EXPECT_FALSE(SelectionSet::getSingleton()->hasEntities());
+    EXPECT_TRUE(validator->hasSelection());
+
+    validator->doValidate();
+    EXPECT_TRUE(validator->validated());
+    const QVariantList issues = validator->issues();
+    ASSERT_EQ(issues.size(), 1);
+    EXPECT_EQ(issues.first().toMap().value("type").toString(), QStringLiteral("ok"));
+}
+
 TEST_F(MeshValidatorTest, ValidateWithoutSelectionDoesNotEnterPending)
 {
     QSignalSpy validatingSpy(validator, &MeshValidator::validatingChanged);
