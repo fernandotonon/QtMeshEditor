@@ -34,10 +34,22 @@ jobs:
 #             SLACK_MESSAGE: "Building QtMeshEditor in GitHub Actions - works! :D"
 
 ####################################################################
+# Doc pins (README + website hook) must match CMakeLists project() VERSION
+####################################################################
+
+ verify-doc-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pinned GitHub Action refs match CMakeLists.txt
+        run: ./scripts/sync-doc-versions-from-cmake.sh --check
+
+####################################################################
 # Asset Scan (runs first, before all builds)
 ####################################################################
 
  scan-assets-qtmesh:
+    needs: verify-doc-versions
     # Validate repo assets using the published Docker image (latest).
     # Runs on PRs, pushes to master, and releases.
     runs-on: ubuntu-latest

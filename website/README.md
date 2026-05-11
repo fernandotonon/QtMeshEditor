@@ -34,6 +34,7 @@ npm run build:docs
 
 ## Notes
 
+- Pinned GitHub Action examples in the docs app fall back to the semver in `CMakeLists.txt` (`website/src/hooks/useQtmeshActionRef.js`). Run `../scripts/sync-doc-versions-from-cmake.sh` from the repo root after bumping `project(QtMeshEditor VERSION …)`; GitHub Pages runs the same script before `npm run build`.
 - `vite.config.js` uses `base: './'` so assets resolve correctly for static hosting.
 - SEO/social metadata and JSON-LD structured data live in `website/index.html`.
 - Most media is referenced from existing GitHub-hosted assets to keep repo size small.

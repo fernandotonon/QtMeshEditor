@@ -98,7 +98,7 @@ async function copyText(text) {
 function App() {
   const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
   const [copyState, setCopyState] = useState('idle');
-  const qtmeshActionRef = useQtmeshActionRef();
+  const { actionRef: qtmeshActionRef, imageTag: qtmeshImageTag } = useQtmeshActionRef();
   const [activeCliTab, setActiveCliTab] = useState('scan');
   const portalDialogRef = useRef(null);
   const portalTriggerRef = useRef(null);
@@ -111,8 +111,10 @@ function App() {
   );
   const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
   const githubActionExample = useMemo(
-    () => pipelineExamples.githubAction.replace('__QTMESH_ACTION_REF__', qtmeshActionRef),
-    [qtmeshActionRef]
+    () => pipelineExamples.githubAction
+      .replace('__QTMESH_ACTION_REF__', qtmeshActionRef)
+      .replace('__QTMESH_IMAGE_TAG__', qtmeshImageTag),
+    [qtmeshActionRef, qtmeshImageTag]
   );
 
   const cliTabs = useMemo(
