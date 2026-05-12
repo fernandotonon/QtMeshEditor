@@ -1672,9 +1672,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     continue;
                 }
 
-                // Decide whether to use the textured import path. We do so when MAT entries were
-                // parsed AND at least one of them is textured (T/H/D) — otherwise we fall back to
-                // the simpler vertex-color path for performance and to keep submesh count low.
+                // `useTexturedMatPath`: after import, bind TIM slots to `_texN` submesh materials.
                 bool useTexturedMatPath = false;
                 if (!rsdMatEntries.isEmpty()) {
                     for (const auto& me : rsdMatEntries) {
@@ -1686,6 +1684,12 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                         }
                     }
                 }
+                // Psy-Q `G` / `H` carry per-corner RGB. Those live in `MatEntry::vertColors`, while
+                // `MatEntry::rgb` is only the first corner (back-compat / flat preview). If we skip
+                // `importPsyqPlyWithFaceMaterials` whenever no face is textured, untextured smooth
+                // MAT rows collapse to `importPsyqPlyWithFaceColors(rsdFaceColors)` — one flat colour
+                // per face — which is wrong for Blender's Example Project cube (all `F G` rows).
+                const bool useFaceMaterialsImport = !rsdMatEntries.isEmpty();
 
                 Ogre::MeshPtr mesh;
                 const QFileInfo geomFi(geomPath);
@@ -1695,10 +1699,9 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 } else if (!geomFi.suffix().compare(QStringLiteral("ply"), Qt::CaseInsensitive)
                            && PS1PLY::isPsyqPlyFile(geomPath)) {
                     const std::string meshName = (file.baseName() + QStringLiteral("_rsd_ply")).toStdString();
-                    if (useTexturedMatPath) {
-                        // Convert the Psy-Q MAT entries into per-face PLY material bindings: each MAT
-                        // entry maps 1:1 to a PLY face (in declaration order). UVs are normalised by
-                        // the bound texture's width/height; colours retain the PS1 corner ordering.
+                    if (useFaceMaterialsImport) {
+                        // Each MAT entry maps 1:1 to a PLY face (declaration order). UVs are
+                        // normalised by the bound texture's width/height when textured.
                         QVector<PS1PLY::FaceMaterial> faceMats(rsdMatEntries.size());
                         for (int fi = 0; fi < rsdMatEntries.size(); ++fi) {
                             const PS1MAT::MatEntry& me = rsdMatEntries[fi];
@@ -1735,8 +1738,6 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                             faceMats[fi] = fm;
                         }
                         mesh = PS1PLY::importPsyqPlyWithFaceMaterials(geomPath, meshName, faceMats);
-                        // Fall back to the simpler vertex-colour path if the textured importer
-                        // rejected the file (e.g. face-count mismatch).
                         if (!mesh)
                             mesh = rsdFaceColors.isEmpty()
                                 ? PS1PLY::importPsyqPly(geomPath, meshName)
