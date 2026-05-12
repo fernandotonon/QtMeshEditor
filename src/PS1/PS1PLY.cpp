@@ -1237,6 +1237,54 @@ struct TexturedSubmeshSoup {
     std::vector<TexturedTriProvenance> triProv; ///< One entry per tri (corners.size() / 3).
 };
 
+/// Walk the per-tri provenance metadata and reconstruct the source Psy-Q polygon
+/// list (tris and quads in original corner order) from the welded indices the
+/// `buildMeshFromTexturedSoups` weld step produced. Factored out of the build
+/// loop so the latter stays under SonarQube's nesting / complexity ceilings.
+static EditableSubMesh recoverPolygonsFromProvenance(const TexturedSubmeshSoup& soup,
+                                                    const std::vector<uint32_t>& weldedIndices)
+{
+    EditableSubMesh editable;
+    if (soup.triProv.size() * 3 != soup.corners.size() || soup.triProv.empty())
+        return editable;
+
+    std::unordered_map<int, EditableFace> faceByParent;
+    faceByParent.reserve(soup.triProv.size());
+    std::vector<int> faceOrder;
+    faceOrder.reserve(soup.triProv.size());
+
+    for (size_t ti = 0; ti < soup.triProv.size(); ++ti) {
+        const TexturedTriProvenance& prov = soup.triProv[ti];
+        if (prov.parentFaceIdx < 0)
+            continue;
+        EditableFace& ef = faceByParent.try_emplace(prov.parentFaceIdx).first->second;
+        if (ef.indices.empty()) {
+            ef.indices.assign(prov.parentCorners, std::numeric_limits<unsigned int>::max());
+            faceOrder.push_back(prov.parentFaceIdx);
+        }
+        for (int k = 0; k < 3; ++k) {
+            const uint8_t slot = prov.parentCornerSlots[static_cast<size_t>(k)];
+            if (slot < ef.indices.size())
+                ef.indices[slot] = weldedIndices[ti * 3 + static_cast<size_t>(k)];
+        }
+    }
+
+    const auto isComplete = [](const EditableFace& ef) {
+        return std::none_of(ef.indices.begin(), ef.indices.end(),
+                            [](unsigned int vi) {
+                                return vi == std::numeric_limits<unsigned int>::max();
+                            });
+    };
+
+    editable.faces.reserve(faceOrder.size());
+    for (int parent : faceOrder) {
+        EditableFace& ef = faceByParent[parent];
+        if (isComplete(ef) && ef.isValid())
+            editable.faces.push_back(std::move(ef));
+    }
+    return editable;
+}
+
 static Ogre::RGBA qColorToRgba(const QColor& c)
 {
     const float r = qBound(0, c.red(),   255) / 255.0f;
@@ -1403,53 +1451,11 @@ static Ogre::MeshPtr buildMeshFromTexturedSoups(
         const size_t nVert = uniqCorners.size();
         const size_t nIdx = indices.size();
 
-        // Recover the original Psy-Q face polygons by walking `triProv` in tri order:
-        // for each parent face we collect the welded vertex index that landed in each
-        // corner slot (0..2 for tris, 0..3 for quads). The resulting `EditableFace`
-        // list is persisted as `qtme.faces.<si>` after the submesh is added below, so
-        // the RSD/PS1 exporter can re-emit the source tri/quad shape verbatim instead
-        // of running the heuristic tri→quad merger (which fails to restore adjacent
-        // coplanar quads — e.g. flat room walls in the Blender RSD sample).
-        EditableSubMesh editable;
-        if (soup.triProv.size() * 3 == soup.corners.size() && !soup.triProv.empty()) {
-            std::unordered_map<int, EditableFace> faceByParent;
-            faceByParent.reserve(soup.triProv.size());
-            std::vector<int> faceOrder; // Preserve first-seen parent order for stable output.
-            faceOrder.reserve(soup.triProv.size());
-            for (size_t ti = 0; ti < soup.triProv.size(); ++ti) {
-                const TexturedTriProvenance& prov = soup.triProv[ti];
-                if (prov.parentFaceIdx < 0)
-                    continue;
-                auto it = faceByParent.find(prov.parentFaceIdx);
-                if (it == faceByParent.end()) {
-                    EditableFace ef;
-                    ef.indices.assign(prov.parentCorners, std::numeric_limits<unsigned int>::max());
-                    auto [ins, _] = faceByParent.emplace(prov.parentFaceIdx, std::move(ef));
-                    it = ins;
-                    faceOrder.push_back(prov.parentFaceIdx);
-                }
-                EditableFace& ef = it->second;
-                for (int k = 0; k < 3; ++k) {
-                    const uint8_t slot = prov.parentCornerSlots[static_cast<size_t>(k)];
-                    if (slot < ef.indices.size())
-                        ef.indices[slot] = indices[ti * 3 + static_cast<size_t>(k)];
-                }
-            }
-            editable.faces.reserve(faceOrder.size());
-            for (int parent : faceOrder) {
-                EditableFace& ef = faceByParent[parent];
-                bool complete = true;
-                for (unsigned int vi : ef.indices) {
-                    if (vi == std::numeric_limits<unsigned int>::max()) {
-                        complete = false;
-                        break;
-                    }
-                }
-                if (complete && ef.isValid())
-                    editable.faces.push_back(std::move(ef));
-            }
-        }
-        editableSubMeshes.push_back(std::move(editable));
+        // Recover the original Psy-Q face polygons (tris and quads in source corner
+        // order) so the export path can re-emit them verbatim via `qtme.faces.<si>`,
+        // instead of running the heuristic tri→quad merger (which fails to restore
+        // adjacent coplanar quads — e.g. flat room walls in the Blender RSD sample).
+        editableSubMeshes.push_back(recoverPolygonsFromProvenance(soup, indices));
 
         Ogre::SubMesh* sm = mesh->createSubMesh();
         const std::string slotSuffix = textured
@@ -1776,29 +1782,23 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
     // exporter writes quads with per-corner shading. Without this the heuristic
     // tri→quad merger reconstructs the wrong diagonals on flat coplanar surfaces
     // (e.g. room walls) and the round-trip shows diagonal seams.
+    const auto ngonFacesValid = [](const std::vector<std::vector<unsigned int>>& faces,
+                                   uint32_t maxVid) {
+        const auto polyValid = [maxVid](const std::vector<unsigned int>& poly) {
+            return poly.size() >= 3
+                && std::all_of(poly.begin(), poly.end(),
+                               [maxVid](unsigned int vid) { return vid < maxVid; });
+        };
+        return std::all_of(faces.begin(), faces.end(), polyValid);
+    };
+
     std::vector<std::vector<std::vector<unsigned int>>> perSubNgonFaces(subs.size());
     bool useNgonExport = !subs.empty();
     for (size_t si = 0; si < subs.size() && useNgonExport; ++si) {
-        if (!readNgonFacesFromMesh(mesh.get(),
-                                   static_cast<size_t>(subs[si].sourceIndex),
-                                   perSubNgonFaces[si])) {
-            useNgonExport = false;
-            break;
-        }
-        for (const auto& poly : perSubNgonFaces[si]) {
-            if (poly.size() < 3) {
-                useNgonExport = false;
-                break;
-            }
-            for (unsigned int vid : poly) {
-                if (vid >= subs[si].vCount) {
-                    useNgonExport = false;
-                    break;
-                }
-            }
-            if (!useNgonExport)
-                break;
-        }
+        const bool gotBinding = readNgonFacesFromMesh(mesh.get(),
+                                                     static_cast<size_t>(subs[si].sourceIndex),
+                                                     perSubNgonFaces[si]);
+        useNgonExport = gotBinding && ngonFacesValid(perSubNgonFaces[si], subs[si].vCount);
     }
 
     std::vector<Ogre::Vector3> weldedPos;

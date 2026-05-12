@@ -2235,13 +2235,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 // different imports both shipping a `Wood.jpg`). Detect collisions against
                 // previously-claimed outFiles and fall back to the scoped resource name so
                 // each RSD TEX[] slot writes to its own sidecar instead of clobbering it.
-                auto basenameAlreadyUsed = [&candidate, &rsdOutTextures] {
-                    for (const auto& prev : rsdOutTextures)
-                        if (prev.outFile == candidate)
-                            return true;
-                    return false;
+                const auto collides = [&candidate](const OutTex& prev) {
+                    return prev.outFile == candidate;
                 };
-                if (basenameAlreadyUsed())
+                if (std::any_of(rsdOutTextures.begin(), rsdOutTextures.end(), collides))
                     candidate = QFileInfo(ot.resourceName).fileName();
                 ot.outFile = candidate;
                 auto tex = Ogre::TextureManager::getSingleton().getByName(texName);
@@ -2365,76 +2362,86 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // A sidecar write failure must abort the whole RSD export: writing the descriptor
         // anyway would leave TEX[] entries pointing to nonexistent / stale files, breaking
         // any later round-trip through the RSD importer or third-party tools.
+        const auto writePngFallback = [](const Ogre::Image& img, const QString& pngPath) {
+            std::vector<uint8_t> rgba;
+            if (img.getFormat() != Ogre::PF_BYTE_RGBA) {
+                const size_t pixels = static_cast<size_t>(img.getWidth()) * img.getHeight();
+                rgba.resize(pixels * 4);
+                Ogre::PixelBox src(img.getWidth(), img.getHeight(), 1,
+                                   img.getFormat(),
+                                   const_cast<uint8_t*>(img.getData()));
+                Ogre::PixelBox dst(img.getWidth(), img.getHeight(), 1,
+                                   Ogre::PF_BYTE_RGBA, rgba.data());
+                Ogre::PixelUtil::bulkPixelConversion(src, dst);
+            }
+            const uint8_t* rgbaData = rgba.empty() ? img.getData() : rgba.data();
+            const QImage qi(rgbaData,
+                            static_cast<int>(img.getWidth()),
+                            static_cast<int>(img.getHeight()),
+                            static_cast<int>(img.getWidth()) * 4,
+                            QImage::Format_RGBA8888);
+            return qi.copy().save(pngPath, "PNG");
+        };
+
+        // Returns true on success and updates ot.outFile to the actual on-disk filename.
+        // Returns false when both the TIM and PNG fallback writes fail — caller must abort.
+        const auto writeSidecar = [&](OutTex& ot) -> bool {
+            auto tex = Ogre::TextureManager::getSingleton().getByName(ot.resourceName.toStdString());
+            if (!tex)
+                return true; // No bound texture — leave ot.outFile alone, descriptor still references the previous file.
+            Ogre::Image img;
+            tex->convertToImage(img, true);
+            if (img.getWidth() == 0 || img.getHeight() == 0)
+                return true;
+
+            const QString basename = QFileInfo(ot.outFile).completeBaseName();
+            const QString dirSep = QDir::separator();
+
+            // Primary: 16bpp PS1 TIM. PS1 emulators / hardware can't decode JPG/PNG, so
+            // this is what every well-formed RSD ships next to the descriptor.
+            const QString tim = outFi.absolutePath() + dirSep + basename + QStringLiteral(".tim");
+            QString timErr;
+            if (PS1TIM::saveOgreImageToTim16(img, tim, &timErr)) {
+                ot.outFile = QFileInfo(tim).fileName();
+                return true;
+            }
+            Ogre::LogManager::getSingleton().logError(
+                "RSD TIM sidecar write failed: " + timErr.toStdString()
+                + " — falling back to PNG so the .rsd still references a real file.");
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("file.export"),
+                QStringLiteral("RSD TIM sidecar write failed, falling back to PNG: %1")
+                    .arg(timErr));
+
+            const QString png = outFi.absolutePath() + dirSep + basename + QStringLiteral(".png");
+            if (writePngFallback(img, png)) {
+                ot.outFile = QFileInfo(png).fileName();
+                return true;
+            }
+            Ogre::LogManager::getSingleton().logError(
+                "Failed to write RSD texture sidecar (TIM and PNG both failed): "
+                + png.toStdString());
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("file.export"),
+                QStringLiteral("RSD texture sidecar write failed: %1")
+                    .arg(QFileInfo(png).fileName()));
+            return false;
+        };
+
         bool sidecarWriteFailed = false;
         for (auto& ot : rsdOutTextures) {
+            bool ok = false;
             try {
-                auto tex = Ogre::TextureManager::getSingleton().getByName(ot.resourceName.toStdString());
-                if (!tex)
-                    continue;
-                Ogre::Image img;
-                tex->convertToImage(img, true);
-                if (img.getWidth() == 0 || img.getHeight() == 0)
-                    continue;
-
-                const QString basename = QFileInfo(ot.outFile).completeBaseName();
-                const QString dirSep = QDir::separator();
-
-                // Primary: 16bpp PS1 TIM. PS1 emulators / hardware can't decode JPG/PNG, so
-                // this is what every well-formed RSD ships next to the descriptor.
-                const QString tim = outFi.absolutePath() + dirSep + basename + QStringLiteral(".tim");
-                QString timErr;
-                if (PS1TIM::saveOgreImageToTim16(img, tim, &timErr)) {
-                    ot.outFile = QFileInfo(tim).fileName();
-                    continue;
-                }
+                ok = writeSidecar(ot);
+            } catch (const Ogre::Exception& ex) {
                 Ogre::LogManager::getSingleton().logError(
-                    "RSD TIM sidecar write failed: " + timErr.toStdString()
-                    + " — falling back to PNG so the .rsd still references a real file.");
+                    std::string("RSD texture sidecar Ogre exception: ") + ex.what());
                 SentryReporter::addBreadcrumb(
                     QStringLiteral("file.export"),
-                    QStringLiteral("RSD TIM sidecar write failed, falling back to PNG: %1")
-                        .arg(timErr));
-
-                // Defensive fallback: write a PNG so the .rsd at least references something
-                // a future re-import can decode (the original PNG sidecar path).
-                std::vector<uint8_t> rgba;
-                if (img.getFormat() != Ogre::PF_BYTE_RGBA) {
-                    const size_t pixels = static_cast<size_t>(img.getWidth()) * img.getHeight();
-                    rgba.resize(pixels * 4);
-                    Ogre::PixelBox src(img.getWidth(), img.getHeight(), 1,
-                                       img.getFormat(),
-                                       const_cast<uint8_t*>(img.getData()));
-                    Ogre::PixelBox dst(img.getWidth(), img.getHeight(), 1,
-                                       Ogre::PF_BYTE_RGBA, rgba.data());
-                    Ogre::PixelUtil::bulkPixelConversion(src, dst);
-                }
-                const uint8_t* rgbaData = rgba.empty() ? img.getData() : rgba.data();
-                const QImage qi(rgbaData,
-                                static_cast<int>(img.getWidth()),
-                                static_cast<int>(img.getHeight()),
-                                static_cast<int>(img.getWidth()) * 4,
-                                QImage::Format_RGBA8888);
-                const QString png = outFi.absolutePath() + dirSep + basename + QStringLiteral(".png");
-                if (qi.copy().save(png, "PNG")) {
-                    ot.outFile = QFileInfo(png).fileName();
-                } else {
-                    Ogre::LogManager::getSingleton().logError(
-                        "Failed to write RSD texture sidecar (TIM and PNG both failed): "
-                        + png.toStdString());
-                    SentryReporter::addBreadcrumb(
-                        QStringLiteral("file.export"),
-                        QStringLiteral("RSD texture sidecar write failed: %1")
-                            .arg(QFileInfo(png).fileName()));
-                    sidecarWriteFailed = true;
-                    break;
-                }
-            } catch (const std::exception& ex) {
-                Ogre::LogManager::getSingleton().logError(
-                    std::string("RSD texture sidecar export exception: ") + ex.what());
-                SentryReporter::addBreadcrumb(
-                    QStringLiteral("file.export"),
-                    QStringLiteral("RSD texture sidecar export exception: %1")
+                    QStringLiteral("RSD texture sidecar Ogre exception: %1")
                         .arg(QString::fromUtf8(ex.what())));
+            }
+            if (!ok) {
                 sidecarWriteFailed = true;
                 break;
             }
