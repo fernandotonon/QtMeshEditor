@@ -1703,12 +1703,20 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                         for (int fi = 0; fi < rsdMatEntries.size(); ++fi) {
                             const PS1MAT::MatEntry& me = rsdMatEntries[fi];
                             PS1PLY::FaceMaterial fm;
-                            fm.textured = me.textured;
-                            fm.textureIndex = me.textureIndex;
-                            int texW = 256, texH = 256;
-                            if (me.textured
+                            // Sanitise per-face texture references: a single MAT entry that
+                            // claims to be textured but points at a missing slot would force
+                            // importPsyqPlyWithFaceMaterials() to bin every face from that
+                            // batch into a malformed submesh. Downgrade such faces to solid
+                            // so the rest of the mesh still gets its proper textures.
+                            const bool hasValidTexture =
+                                me.textured
                                 && me.textureIndex >= 0
-                                && me.textureIndex < static_cast<int>(rsdTexSlots.size())) {
+                                && me.textureIndex < static_cast<int>(rsdTexSlots.size())
+                                && !rsdTexSlots[me.textureIndex].resourceName.isEmpty();
+                            fm.textured = hasValidTexture;
+                            fm.textureIndex = hasValidTexture ? me.textureIndex : -1;
+                            int texW = 256, texH = 256;
+                            if (hasValidTexture) {
                                 if (rsdTexSlots[me.textureIndex].width > 0)
                                     texW = rsdTexSlots[me.textureIndex].width;
                                 if (rsdTexSlots[me.textureIndex].height > 0)
@@ -2325,10 +2333,21 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                                 static_cast<int>(img.getWidth()) * 4,
                                 QImage::Format_RGBA8888);
                 // Always save a PNG copy with the same basename (lossless, widely supported).
+                // QImage::save() returns false on failure without throwing — only commit the
+                // updated outFile name when the write succeeded, otherwise the .rsd would
+                // reference a sidecar that was never created.
                 const QString png = outFi.absolutePath() + QDir::separator()
                     + QFileInfo(ot.outFile).completeBaseName() + QStringLiteral(".png");
-                qi.copy().save(png, "PNG");
-                ot.outFile = QFileInfo(png).fileName();
+                if (qi.copy().save(png, "PNG")) {
+                    ot.outFile = QFileInfo(png).fileName();
+                } else {
+                    Ogre::LogManager::getSingleton().logError(
+                        "Failed to write RSD texture sidecar: " + png.toStdString());
+                    SentryReporter::addBreadcrumb(
+                        QStringLiteral("file.export"),
+                        QStringLiteral("RSD texture sidecar write failed: %1")
+                            .arg(QFileInfo(png).fileName()));
+                }
             } catch (const std::exception&) {
                 // ignored — texture remains referenced by its original resource name.
             }
