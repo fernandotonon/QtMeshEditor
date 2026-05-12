@@ -241,8 +241,12 @@ TEST_F(MeshValidatorTest, HasSelectionTrueWhenSubEntitySelected)
     validator->doValidate();
     EXPECT_TRUE(validator->validated());
     const QVariantList issues = validator->issues();
-    ASSERT_EQ(issues.size(), 1);
+    // Phase 6: validation now emits a checklist (geometry/UVs/draws/memory)
+    // instead of a single "No issues found." row.  At minimum the geometry
+    // row must be present and be "ok" for this valid mesh.
+    ASSERT_GE(issues.size(), 1);
     EXPECT_EQ(issues.first().toMap().value("type").toString(), QStringLiteral("ok"));
+    EXPECT_TRUE(issues.first().toMap().value("description").toString().startsWith("Geometry:"));
 }
 
 TEST_F(MeshValidatorTest, ValidateWithoutSelectionDoesNotEnterPending)
@@ -266,7 +270,7 @@ TEST_F(MeshValidatorTest, DoValidateWithoutSelectionKeepsStateUnvalidated)
     EXPECT_FALSE(validator->hasFixableIssues());
 }
 
-TEST_F(MeshValidatorTest, DoValidateValidMeshReturnsOkIssue)
+TEST_F(MeshValidatorTest, DoValidateValidMeshReportsChecklist)
 {
     ASSERT_TRUE(canLoadMeshFiles());
 
@@ -281,14 +285,35 @@ TEST_F(MeshValidatorTest, DoValidateValidMeshReturnsOkIssue)
     EXPECT_FALSE(validator->validating());
     EXPECT_FALSE(validator->hasFixableIssues());
 
+    // Phase 6: the validator now emits a per-dimension checklist for a valid
+    // mesh — at minimum a Geometry-ok row, a UVs row, plus the new Draws/GPU
+    // info rows from slices A+B. The user sees what was actually checked
+    // instead of a bare "No issues found." line.
     const QVariantList issues = validator->issues();
-    ASSERT_EQ(issues.size(), 1);
+    ASSERT_GE(issues.size(), 2);
 
-    const QVariantMap issue = issues.first().toMap();
-    EXPECT_EQ(issue.value("type").toString(), QStringLiteral("ok"));
-    EXPECT_EQ(issue.value("description").toString(), QStringLiteral("No issues found."));
-    EXPECT_EQ(issue.value("count").toInt(), 0);
-    EXPECT_FALSE(issue.value("fixable").toBool());
+    bool sawGeometryOk = false;
+    bool sawUvsOk = false;
+    bool sawDraws = false;
+    bool sawGpu = false;
+    for (const QVariant& issueVariant : issues) {
+        const QVariantMap issue = issueVariant.toMap();
+        const QString type = issue.value("type").toString();
+        const QString description = issue.value("description").toString();
+
+        // No row may be an error or warning on a clean mesh.
+        EXPECT_NE(type, QStringLiteral("error")) << description.toStdString();
+        EXPECT_NE(type, QStringLiteral("warning")) << description.toStdString();
+
+        if (description.startsWith("Geometry:") && type == "ok") sawGeometryOk = true;
+        if (description.startsWith("UVs:")      && type == "ok") sawUvsOk = true;
+        if (description.startsWith("Draws:"))                    sawDraws = true;
+        if (description.startsWith("GPU:"))                      sawGpu = true;
+    }
+    EXPECT_TRUE(sawGeometryOk);
+    EXPECT_TRUE(sawUvsOk);
+    EXPECT_TRUE(sawDraws);
+    EXPECT_TRUE(sawGpu);
 }
 
 TEST_F(MeshValidatorTest, DoValidateDetectsDegeneratesAndUvProblems)
@@ -311,9 +336,10 @@ TEST_F(MeshValidatorTest, DoValidateDetectsDegeneratesAndUvProblems)
     for (const QVariant& issueVariant : validator->issues()) {
         const QVariantMap issue = issueVariant.toMap();
         const QString description = issue.value("description").toString();
+        // Phase 6: rows now have "Geometry:" / "UVs:" prefixes.
         sawDegenerate |= description.contains("degenerate triangle");
-        sawNonFinite |= description.contains("non-finite UV");
-        sawExtremeUv |= description.contains("extreme UV values");
+        sawNonFinite |= description.contains("non-finite");
+        sawExtremeUv |= description.contains("extreme values");
     }
 
     EXPECT_TRUE(sawDegenerate);
