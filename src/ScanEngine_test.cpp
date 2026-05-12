@@ -237,7 +237,10 @@ TEST(ScanConfigTest, YamlExplicitInclude_DoesNotDuplicatePly)
 TEST(ScanConfigTest, DefaultConstructorIncludesAssimpGlobPatterns)
 {
     const ScanConfig c;
-    EXPECT_DOUBLE_EQ(c.redundantKeyframesPctThreshold, 40.0);
+    // Redundant-keyframe / simplify rule is opt-in by default — the
+    // auto-fix is destructive (rewrites the FBX), so it should never
+    // run unless the user explicitly enables it in qtmesh.yml.
+    EXPECT_DOUBLE_EQ(c.redundantKeyframesPctThreshold, 0.0);
     EXPECT_GT(c.includePatterns.size(), 8);
     bool hasMeshGlob = false;
     bool hasFbxGlob = false;
