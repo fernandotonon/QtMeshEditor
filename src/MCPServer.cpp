@@ -2736,14 +2736,15 @@ QJsonObject MCPServer::toolGetLodInfo(const QJsonObject &args)
 
 QJsonObject MCPServer::toolGetMemoryUsage(const QJsonObject &args)
 {
+    // NOTE: cannot be `const` — ToolHandler is a non-const member-fn pointer
+    // (matching every other tool in this class).
     try {
-        Manager* mgr = Manager::getSingletonPtr();
-        if (!mgr)
+        if (const Manager* mgr = Manager::getSingletonPtr(); !mgr)
             return makeErrorResult("Error: Manager not available");
 
         quint64 budget = 0;
         if (args.contains("budget")) {
-            QString spec = args.value("budget").toString();
+            const QString spec = args.value("budget").toString();
             if (!spec.isEmpty()) {
                 budget = MemoryEstimator::parseBudget(spec);
                 if (budget == 0)

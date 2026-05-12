@@ -35,16 +35,16 @@ quint64 MemoryEstimator::textureBytes(unsigned int width, unsigned int height,
 
 QString MemoryEstimator::formatBytes(quint64 bytes)
 {
-    constexpr double KB = 1024.0;
-    constexpr double MB = 1024.0 * 1024.0;
-    constexpr double GB = 1024.0 * 1024.0 * 1024.0;
+    constexpr quint64 KB = 1024ULL;
+    constexpr quint64 MB = 1024ULL * 1024ULL;
+    constexpr quint64 GB = 1024ULL * 1024ULL * 1024ULL;
 
-    if (bytes >= static_cast<quint64>(GB))
-        return QString::number(bytes / GB, 'f', 2) + " GB";
-    if (bytes >= static_cast<quint64>(MB))
-        return QString::number(bytes / MB, 'f', 2) + " MB";
-    if (bytes >= static_cast<quint64>(KB))
-        return QString::number(bytes / KB, 'f', 1) + " KB";
+    if (bytes >= GB)
+        return QString::number(static_cast<double>(bytes) / GB, 'f', 2) + " GB";
+    if (bytes >= MB)
+        return QString::number(static_cast<double>(bytes) / MB, 'f', 2) + " MB";
+    if (bytes >= KB)
+        return QString::number(static_cast<double>(bytes) / KB, 'f', 1) + " KB";
     return QString::number(bytes) + " B";
 }
 
@@ -82,7 +82,7 @@ MeshMemoryEstimate MemoryEstimator::estimateEntity(const Ogre::Entity* entity)
 
     est.name = QString::fromStdString(mesh->getName());
 
-    auto accumulateVertexData = [&](Ogre::VertexData* vd) {
+    auto accumulateVertexData = [&](const Ogre::VertexData* vd) {
         if (!vd) return;
         est.vertexCount += vd->vertexCount;
         // Sum the stride from every bound vertex buffer in the declaration.
@@ -92,7 +92,7 @@ MeshMemoryEstimate MemoryEstimator::estimateEntity(const Ogre::Entity* entity)
             unsigned short source = elem.getSource();
             if (seen.contains(source)) continue;
             seen.insert(source);
-            unsigned int stride = vd->vertexDeclaration->getVertexSize(source);
+            const size_t stride = vd->vertexDeclaration->getVertexSize(source);
             est.vertexBytes += static_cast<quint64>(vd->vertexCount) * stride;
         }
     };
@@ -164,13 +164,13 @@ SceneMemoryReport MemoryEstimator::estimateScene(quint64 budgetBytes)
     if (!mgr) return report;
 
     QSet<QString> seenMeshes;
-    for (Ogre::SceneNode* node : mgr->getSceneNodes()) {
+    for (const Ogre::SceneNode* node : mgr->getSceneNodes()) {
         if (!node) continue;
         for (unsigned int i = 0; i < node->numAttachedObjects(); ++i) {
-            Ogre::MovableObject* obj = node->getAttachedObject(i);
+            const Ogre::MovableObject* obj = node->getAttachedObject(i);
             if (!obj || obj->getMovableType() != "Entity") continue;
 
-            auto* entity = static_cast<Ogre::Entity*>(obj);
+            const auto* entity = static_cast<const Ogre::Entity*>(obj);
             MeshMemoryEstimate est = estimateEntity(entity);
             // De-duplicate identical mesh instances so totals reflect unique
             // GPU residents, not draw-call counts.
