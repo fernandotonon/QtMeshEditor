@@ -2754,19 +2754,12 @@ QJsonObject MCPServer::toolGetMemoryUsage(const QJsonObject &args)
 
         SceneMemoryReport report = MemoryEstimator::estimateScene(budget);
 
-        // Return human-readable text in the standard success envelope so the
-        // MCP client sees a useful summary; JSON consumers should call the
-        // CLI (`qtmesh memory --json`) or inspect the structured fields below.
-        QString summary = MemoryEstimator::toText(report);
-
-        // Append a one-line numeric summary so LLM clients can extract totals
-        // without parsing the table.
-        summary += QString("\nTotals JSON: %1")
-                       .arg(QString::fromUtf8(
-                           QJsonDocument(MemoryEstimator::toJson(report))
-                               .toJson(QJsonDocument::Compact)));
-
-        return makeSuccessResult(summary);
+        // Human-readable text goes in the standard `content` field; machine
+        // consumers (LLM tool wrappers, CI scripts) read the structured
+        // `memory` payload alongside it.
+        QJsonObject result = makeSuccessResult(MemoryEstimator::toText(report));
+        result["memory"] = MemoryEstimator::toJson(report);
+        return result;
     } catch (Ogre::Exception& e) {
         return makeErrorResult(
             QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));

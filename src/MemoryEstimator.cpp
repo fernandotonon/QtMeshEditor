@@ -166,7 +166,7 @@ SceneMemoryReport MemoryEstimator::estimateScene(quint64 budgetBytes)
     QSet<QString> seenMeshes;
     for (Ogre::SceneNode* node : mgr->getSceneNodes()) {
         if (!node) continue;
-        for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
+        for (unsigned int i = 0; i < node->numAttachedObjects(); ++i) {
             Ogre::MovableObject* obj = node->getAttachedObject(i);
             if (!obj || obj->getMovableType() != "Entity") continue;
 
