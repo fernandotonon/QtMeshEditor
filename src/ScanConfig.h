@@ -60,8 +60,8 @@ struct ScanConfig {
     // destructive (it rewrites the FBX with a new keyframe distribution
     // and drops redundant samples), so the rule only fires — and the
     // `--fix` path only runs — when the user explicitly sets the
-    // threshold in their `qtmesh.yml`/`.json` config. To enable the
-    // default behavior, set `redundant_keyframes_pct: 40` in the config.
+    // threshold in their `qtmesh.yml`/`.json` config. To restore the
+    // previous behavior, set `redundant_keyframes_pct: 40` in the config.
     double redundantKeyframesPctThreshold = 0.0; // 0 = disabled; opt in via qtmesh.yml to warn / auto-simplify
     double redundantKeyframesTranslationTol = 1e-3;  // Balanced preset (~1mm)
     double redundantKeyframesRotationDegTol = 0.5;
