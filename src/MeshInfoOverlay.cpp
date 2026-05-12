@@ -5,6 +5,7 @@
 #include "OgreWidget.h"
 #include "CLIPipeline.h"
 #include "MemoryEstimator.h"
+#include "DrawCallAnalyzer.h"
 #include "mainwindow.h"
 
 #include <QEvent>
@@ -163,6 +164,18 @@ QString MeshInfoOverlay::formatStats(const QList<Ogre::Entity*>& entities, bool 
 
     if (totalGpuBytes > 0) {
         text += QString("\nGPU: %1").arg(MemoryEstimator::formatBytes(totalGpuBytes));
+    }
+
+    // Phase 6 slice B: draw-call cost and merge potential. We deliberately
+    // run analyze() over the same `valid` list so the overlay's draw-call
+    // count stays in sync with whatever the user has selected.
+    const DrawCallReport drawReport = DrawCallAnalyzer::analyze(valid);
+    if (drawReport.totalDrawCalls > 0) {
+        text += QString("\nDraws: %1").arg(drawReport.totalDrawCalls);
+        if (drawReport.totalSavings > 0) {
+            text += QString(" (save %1 by merging)")
+                        .arg(drawReport.totalSavings);
+        }
     }
 
     return text;

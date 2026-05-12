@@ -13,6 +13,7 @@
 #include "TextureChannelPacker.h"
 #include "NormalMapGenerator.h"
 #include "MemoryEstimator.h"
+#include "DrawCallAnalyzer.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -608,6 +609,8 @@ void CLIPipeline::printUsage()
         "                                    If --budget omitted and a token is set, the project's\n"
         "                                    memory_budget_mb is fetched from QtMesh Cloud rules.\n"
         "                                    --no-cloud opts out.\n"
+        "  analyze <file> [--json]           Analyze draw calls: per-material grouping plus\n"
+        "                                    merge suggestions for entities sharing a material.\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -971,6 +974,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "pack-textures") rc = cmdPackTextures(argc, argv);
     else if (cmd == "normal-from-height") rc = cmdNormalFromHeight(argc, argv);
     else if (cmd == "memory") rc = cmdMemory(argc, argv);
+    else if (cmd == "analyze") rc = cmdAnalyze(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -3416,4 +3420,53 @@ int CLIPipeline::cmdMemory(int argc, char* argv[])
     const SceneMemoryReport report = MemoryEstimator::estimateScene(cmdArgs.budgetBytes);
     emitMemoryReport(report, fi, budgetSource, cmdArgs.jsonOutput);
     return report.overBudget() ? 1 : 0;
+}
+
+int CLIPipeline::cmdAnalyze(int argc, char* argv[])
+{
+    // Parse: analyze <file> [--json]
+    QString filePath;
+    bool jsonOutput = false;
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg(argv[i]);
+        if (arg == "analyze" || arg == "--cli") continue;
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if (!arg.startsWith("-") && filePath.isEmpty()) filePath = arg;
+    }
+
+    if (filePath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh analyze <file> [--json]" << Qt::endl;
+        return 2;
+    }
+
+    const QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.analyze",
+        QString("Analyze .%1").arg(fi.suffix()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0);
+    const auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    const DrawCallReport report = DrawCallAnalyzer::analyze(entities);
+
+    if (jsonOutput) {
+        QJsonObject obj = DrawCallAnalyzer::toJson(report);
+        obj["file"] = fi.fileName();
+        cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(DrawCallAnalyzer::toText(report));
+    }
+    return 0;
 }

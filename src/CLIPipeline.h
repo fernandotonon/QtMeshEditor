@@ -88,6 +88,9 @@ public:
     /// Phase 6 slice A: estimate GPU memory & VRAM for a mesh file
     /// (per-submesh + per-texture, optional --json, optional --budget).
     static int cmdMemory(int argc, char* argv[]);
+    /// Phase 6 slice B: analyze draw calls and surface merge opportunities
+    /// (per-material grouping, optional --json).
+    static int cmdAnalyze(int argc, char* argv[]);
 
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);

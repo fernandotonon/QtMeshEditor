@@ -17,6 +17,7 @@
 #include "MeshValidator.h"
 #include "MeshLodController.h"
 #include "MemoryEstimator.h"
+#include "DrawCallAnalyzer.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -432,6 +433,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("remove_lods"), &MCPServer::toolRemoveLods},
         {QStringLiteral("get_lod_info"), &MCPServer::toolGetLodInfo},
         {QStringLiteral("get_memory_usage"), &MCPServer::toolGetMemoryUsage},
+        {QStringLiteral("analyze_draw_calls"), &MCPServer::toolAnalyzeDrawCalls},
         {QStringLiteral("list_files"), &MCPServer::toolListFiles},
         {QStringLiteral("search_files"), &MCPServer::toolSearchFiles},
         {QStringLiteral("read_file"), &MCPServer::toolReadFile},
@@ -2768,6 +2770,26 @@ QJsonObject MCPServer::toolGetMemoryUsage(const QJsonObject &args)
     }
 }
 
+// NOSONAR(cpp:S5817) — ToolHandler is a non-const member-fn pointer (matching
+// every other tool method in this class); marking just this one const would
+// break the registry signature in MCPServer.h.
+QJsonObject MCPServer::toolAnalyzeDrawCalls(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    try {
+        if (const Manager* mgr = Manager::getSingletonPtr(); !mgr)
+            return makeErrorResult("Error: Manager not available");
+
+        const DrawCallReport report = DrawCallAnalyzer::analyzeScene();
+        QJsonObject result = makeSuccessResult(DrawCallAnalyzer::toText(report));
+        result["drawCalls"] = DrawCallAnalyzer::toJson(report);
+        return result;
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(
+            QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
 // Helper methods
 
 QJsonObject MCPServer::toolListFiles(const QJsonObject &args)
@@ -4117,6 +4139,20 @@ QJsonArray MCPServer::buildToolsList()
             "per-texture, totals, and optional budget fields for machine consumers. "
             "Use to spot heavy meshes/textures before exporting to a memory-constrained target.",
             props
+        );
+    }
+
+    // analyze_draw_calls
+    {
+        appendTool(
+            "analyze_draw_calls",
+            "Estimate scene draw-call cost and surface merge opportunities. Groups every "
+            "loaded entity by the materials its submeshes use, counts one draw call per "
+            "SubEntity, and lists the materials shared by multiple entities (the merge "
+            "candidates that would reduce draw-call count). The response includes a "
+            "human-readable summary in 'content' and a structured 'drawCalls' object with "
+            "totals, clusters, and ranked suggestions for machine consumers.",
+            QJsonObject()
         );
     }
 
