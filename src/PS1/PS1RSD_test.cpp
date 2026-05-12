@@ -68,3 +68,35 @@ TEST(PS1RSD, WriteAndParse_RoundTrip)
     EXPECT_EQ(out.textures[0], "T0.TIM");
 }
 
+TEST(PS1RSD, ParseBlenderExporterTextureLayout)
+{
+    // Reproduces the descriptor produced by the PlayStation-RSD-Blender exporter when
+    // a single texture is bound (e.g. Wood.jpg). The parser must accept .jpg / .png
+    // entries even though the historical Psy-Q toolchain emitted .tim.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString rsdPath = QDir(dir.path()).filePath(QStringLiteral("blender.rsd"));
+    const QByteArray rsdBytes =
+        "#RSD data describing the relationships to the PLY, MAT, and texture files\n"
+        "@RSD940102 \n"
+        "PLY=Example Project.ply\n"
+        "MAT=Example Project.mat\n"
+        "NTEX=1\n"
+        "TEX[0]=Wood.jpg\n";
+
+    QFile f(rsdPath);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    ASSERT_EQ(f.write(rsdBytes), rsdBytes.size());
+    f.close();
+
+    PS1RSD::RsdDescriptor d;
+    QString err;
+    ASSERT_TRUE(PS1RSD::parseRsdFile(rsdPath, d, &err)) << err.toStdString();
+    EXPECT_EQ(d.ntex, 1);
+    ASSERT_EQ(d.textures.size(), 1);
+    EXPECT_EQ(d.textures[0], "Wood.jpg");
+    EXPECT_EQ(d.plyPath, "Example Project.ply");
+    EXPECT_EQ(d.matPath, "Example Project.mat");
+}
+

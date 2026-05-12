@@ -59,6 +59,14 @@ static void testMessageHandler(QtMsgType type, const QMessageLogContext& ctx, co
 
 int main(int argc, char **argv)
 {
+#ifdef Q_OS_LINUX
+    // Force xcb on Linux so that Ogre's externalWindowHandle path
+    // receives a real X11 XID (Wayland's wl_surface handle is incompatible
+    // and silently breaks createRenderWindow under Xvfb / desktop sessions).
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM"))
+        qputenv("QT_QPA_PLATFORM", "xcb");
+#endif
+
     QApplication app(argc, argv);
 
     // Suppress Ogre log output (debug spam from Root, RenderSystem, plugins).
