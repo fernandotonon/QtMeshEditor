@@ -79,8 +79,14 @@ bool MeshValidator::hasSelection() const
 
 bool MeshValidator::hasFixableIssues() const
 {
+    // Only error/warning rows trigger the red "Fix All (re-import with
+    // cleanup)" button — info-tier fixable rows (e.g. vertex cache) have
+    // their own dedicated buttons and reading list (hasCacheOptimization).
     for (const QVariant& v : m_issues) {
-        if (v.toMap().value("fixable").toBool())
+        const QVariantMap m = v.toMap();
+        if (!m.value("fixable").toBool()) continue;
+        const QString type = m.value("type").toString();
+        if (type == QLatin1String("error") || type == QLatin1String("warning"))
             return true;
     }
     return false;
@@ -395,14 +401,17 @@ void MeshValidator::doValidate()
                     .arg(QString::number(cacheReport.weightedAcmrBefore, 'f', 3),
                          QString::number(cacheReport.weightedAcmrAfter,  'f', 3),
                          QString::number(improvementPct, 'f', 1));
+            // The row is actionable from the UI — context panel reads this to
+            // surface "Fixable: Yes" + the new "Suggestions" tier counter.
+            issue["fixable"] = true;
         } else {
             issue["type"] = "ok";
             issue["description"] = QString("Vertex cache: ACMR %1 — already optimal "
                                            "(no meaningful gain from reordering)")
                                        .arg(QString::number(cacheReport.weightedAcmrBefore, 'f', 3));
+            issue["fixable"] = false;
         }
         issue["count"] = 0;
-        issue["fixable"] = false;
         m_issues.append(issue);
     }
 
