@@ -256,6 +256,7 @@ void ScanConfig::applyRuleOverrides(const QVariantMap& r)
     if (r.contains("min_material_count"))    minMaterialCount     = r["min_material_count"].toInt();
     if (r.contains("max_vertex_count"))      maxVertexCount       = r["max_vertex_count"].toInt();
     if (r.contains("min_vertex_count"))      minVertexCount       = r["min_vertex_count"].toInt();
+    if (r.contains("max_acmr"))              maxAcmr              = r["max_acmr"].toDouble();
     if (r.contains("require_skeleton"))      requireSkeleton      = r["require_skeleton"].toBool();
     if (r.contains("require_animations"))    requireAnimations    = r["require_animations"].toBool();
     if (r.contains("allow_embedded_textures")) allowEmbeddedTextures = r["allow_embedded_textures"].toBool();
@@ -434,6 +435,7 @@ ScanConfig ScanConfig::fromVariantMap(const QVariantMap& root)
         config.minMaterialCount      = rules.value("min_material_count",       config.minMaterialCount).toInt();
         config.maxVertexCount        = rules.value("max_vertex_count",         config.maxVertexCount).toInt();
         config.minVertexCount        = rules.value("min_vertex_count",         config.minVertexCount).toInt();
+        config.maxAcmr               = rules.value("max_acmr",                 config.maxAcmr).toDouble();
         config.requireSkeleton       = rules.value("require_skeleton",         config.requireSkeleton).toBool();
         config.requireAnimations     = rules.value("require_animations",       config.requireAnimations).toBool();
         config.allowEmbeddedTextures = rules.value("allow_embedded_textures",  config.allowEmbeddedTextures).toBool();

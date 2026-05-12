@@ -216,7 +216,9 @@ Rectangle {
                 SummaryText { label: "Selection"; value: MeshValidator.hasSelection ? PropertiesPanelController.selectionName : "None" }
                 SummaryText { label: "Findings"; value: root.issueSummary() }
                 SummaryText { label: "Suggestions"; value: root.suggestionSummary() }
-                SummaryText { label: "Fixable"; value: MeshValidator.hasFixableIssues ? "Yes" : "No" }
+                SummaryText { label: "Fixable"
+                              value: (MeshValidator.hasFixableIssues
+                                      || MeshValidator.hasCacheOptimization) ? "Yes" : "No" }
                 SummaryText { label: "Status"; value: MeshValidator.validating ? "Running" : (MeshValidator.validated ? "Ready" : "Idle") }
                 Item { Layout.fillWidth: true }
             }

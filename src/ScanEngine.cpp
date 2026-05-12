@@ -27,6 +27,7 @@
 #include "MeshImporterExporter.h"
 #include "AnimationMerger.h"
 #include "FBX/FBXExporter.h"
+#include "VertexCacheOptimizer.h"
 
 #include <OgreLogManager.h>
 #include <OgreMaterialManager.h>
@@ -712,8 +713,10 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
     info.materialCount = scene->mNumMaterials;
     info.animationCount = scene->mNumAnimations;
 
-    // Vertex & face counts + skeleton detection
+    // Vertex & face counts + skeleton detection + weighted ACMR
     std::set<std::string> uniqueBones;
+    double acmrTriWeightedSum = 0.0;
+    unsigned int acmrTotalTris = 0;
     for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
         const aiMesh* mesh = scene->mMeshes[i];
         if (!mesh)
@@ -725,7 +728,29 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
                 continue;
             uniqueBones.insert(mesh->mBones[b]->mName.C_Str());
         }
+
+        // Phase 6 slice C: ACMR for cache friendliness. Flatten Assimp's
+        // per-face indices into a flat uint32 vector and run the same
+        // pure-data primitive the editor / CLI use. Skip non-triangle
+        // primitives (point clouds, lines, strips).
+        std::vector<uint32_t> idxFlat;
+        idxFlat.reserve(static_cast<size_t>(mesh->mNumFaces) * 3);
+        for (unsigned f = 0; f < mesh->mNumFaces; ++f) {
+            const aiFace& face = mesh->mFaces[f];
+            if (face.mNumIndices != 3) continue;
+            idxFlat.push_back(face.mIndices[0]);
+            idxFlat.push_back(face.mIndices[1]);
+            idxFlat.push_back(face.mIndices[2]);
+        }
+        if (!idxFlat.empty()) {
+            const double acmr = VertexCacheOptimizer::computeAcmr(idxFlat);
+            const unsigned int tris = static_cast<unsigned int>(idxFlat.size() / 3);
+            acmrTriWeightedSum += acmr * tris;
+            acmrTotalTris += tris;
+        }
     }
+    if (acmrTotalTris > 0)
+        info.weightedAcmr = acmrTriWeightedSum / acmrTotalTris;
     info.boneCount  = static_cast<unsigned int>(uniqueBones.size());
     info.hasSkeleton = !uniqueBones.empty();
     for (const auto& boneName : uniqueBones)
@@ -956,6 +981,23 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
         findings.append({asset.relativePath, "min_vertex_count", Severity::Warning,
                          QString("%1 vertices is below minimum of %2")
                              .arg(asset.vertexCount).arg(config.minVertexCount)});
+
+    // ---- max_acmr ---- (Phase 6 slice C)
+    //
+    // ACMR is measured on Assimp's flattened triangle list, which does not
+    // perfectly match the order Ogre's MeshSerializer produces — Assimp's
+    // numbers tend to run higher than the editor's report. The rule still
+    // catches the meshes that need a reorder; the exact threshold needs
+    // calibration to the Assimp pipeline (1.5 is a reasonable starting
+    // point for "this asset should be reordered"). The Ogre-backed scan
+    // backend (slice C2) will produce matching numbers when available.
+    if (config.maxAcmr > 0.0 && asset.weightedAcmr > config.maxAcmr) {
+        findings.append({asset.relativePath, "max_acmr", Severity::Warning,
+                         QString("ACMR %1 exceeds limit of %2 — reorder index buffer for "
+                                 "GPU vertex cache (qtmesh vertex-cache -o <out>)")
+                             .arg(QString::number(asset.weightedAcmr, 'f', 3))
+                             .arg(QString::number(config.maxAcmr, 'f', 3))});
+    }
 
     // ---- require_skeleton ----
     if (config.requireSkeleton && !asset.hasSkeleton) {
@@ -1766,6 +1808,8 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
         ao["textureRefCount"] = static_cast<int>(asset.textureRefCount);
         if (asset.animationRedundantKeyframeRatio > 0.0)
             ao["animationRedundantKeyframeRatio"] = asset.animationRedundantKeyframeRatio;
+        if (asset.weightedAcmr > 0.0)
+            ao["weightedAcmr"] = asset.weightedAcmr;
 
         if (!asset.animationNames.isEmpty()) {
             QJsonArray anims;
@@ -1873,6 +1917,7 @@ QString ScanEngine::formatSarif(const ScanResult& result)
     ruleDescriptions["max_mesh_count"]          = "Asset exceeds maximum mesh count";
     ruleDescriptions["max_material_count"]      = "Asset exceeds maximum material count";
     ruleDescriptions["max_vertex_count"]        = "Asset exceeds maximum vertex count";
+    ruleDescriptions["max_acmr"]                = "Asset's vertex-cache ACMR exceeds the configured ceiling — reorder for GPU efficiency";
     ruleDescriptions["require_skeleton"]        = "Asset is missing a required skeleton";
     ruleDescriptions["require_animations"]      = "Asset is missing required animations";
     ruleDescriptions["allow_embedded_textures"] = "Asset contains embedded textures";

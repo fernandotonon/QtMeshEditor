@@ -570,6 +570,7 @@ void CLIPipeline::printUsage()
         "  --min-materials <n>       Override min_material_count (0 = no limit)\n"
         "  --max-vertices <n>        Override max_vertex_count (0 = no limit)\n"
         "  --min-vertices <n>        Override min_vertex_count (0 = no limit)\n"
+        "  --max-acmr <n>            Override max_acmr (0 = no limit, e.g. 1.5)\n"
         "  --require-skeleton / --no-require-skeleton\n"
         "                            Override require_skeleton\n"
         "  --require-animations / --no-require-animations\n"
@@ -2766,6 +2767,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
 
     int maxVerticesOverride = -1;
     int minVerticesOverride = -1;
+    double maxAcmrOverride = -1.0;
     int maxMeshesOverride = -1;
     int minMeshesOverride = -1;
     int maxMaterialsOverride = -1;
@@ -2909,6 +2911,12 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (parseResult == ParseValueResult::Error) return 2;
         if (parseResult == ParseValueResult::Matched) {
             if (!parseNonNegativeInt("--min-vertices", value, minVerticesOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-acmr", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeDouble("--max-acmr", value, maxAcmrOverride)) return 2;
             continue;
         }
         parseResult = parseValueArg(arg, "--max-meshes", i, value);
@@ -3069,6 +3077,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (minMaterialsOverride >= 0) config.minMaterialCount = minMaterialsOverride;
     if (maxVerticesOverride >= 0) config.maxVertexCount = maxVerticesOverride;
     if (minVerticesOverride >= 0) config.minVertexCount = minVerticesOverride;
+    if (maxAcmrOverride >= 0.0)   config.maxAcmr        = maxAcmrOverride;
     if (maxAnimKeyframesOverride >= 0) config.maxAnimKeyframes = maxAnimKeyframesOverride;
     if (minAnimKeyframesOverride >= 0) config.minAnimKeyframes = minAnimKeyframesOverride;
     if (maxAnimDurationOverride >= 0.0) config.maxAnimDuration = maxAnimDurationOverride;

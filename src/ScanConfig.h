@@ -37,6 +37,10 @@ struct ScanConfig {
     int minMaterialCount = 0;
     int maxVertexCount = 0;
     int minVertexCount = 0;
+    // Phase 6 slice C: ACMR (Average Cache Miss Ratio) ceiling for vertex
+    // cache friendliness. 0 = disabled. A typical post-T&L cache (32 entries)
+    // hits ~0.6 on a well-ordered mesh and ~2.0-3.0 on a shuffled one.
+    double maxAcmr = 0.0;
     bool requireSkeleton = false;     // true = error if no skeleton
     bool requireAnimations = false;   // true = error if no animations
     bool allowEmbeddedTextures = true;
