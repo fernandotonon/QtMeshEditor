@@ -256,6 +256,30 @@ TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsWithSkeleton)
     Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
 }
 
+TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsIncludesGpuBytes)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
+    auto meshPtr = createInMemoryTriangleMesh("MeshInfoGpuMesh");
+    ASSERT_TRUE(meshPtr);
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("MeshInfoGpuNode");
+    auto* entity = sceneMgr->createEntity("MeshInfoGpuEntity", meshPtr);
+    node->attachObject(entity);
+
+    QList<Ogre::Entity*> entities;
+    entities << entity;
+
+    QString result = MeshInfoOverlay::formatStats(entities, false);
+    // Phase 6 slice A: GPU memory line is appended when a mesh contributes bytes.
+    EXPECT_TRUE(result.contains("GPU:"))
+        << "Result: " << result.toStdString();
+
+    node->detachObject(entity);
+    sceneMgr->destroyEntity(entity);
+    sceneMgr->destroySceneNode(node);
+}
+
 TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsMixedNullAndValid)
 {
     ASSERT_TRUE(canLoadMeshFiles());

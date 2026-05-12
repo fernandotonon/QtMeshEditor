@@ -4,6 +4,7 @@
 #include "EditorViewport.h"
 #include "OgreWidget.h"
 #include "CLIPipeline.h"
+#include "MemoryEstimator.h"
 #include "mainwindow.h"
 
 #include <QEvent>
@@ -110,6 +111,8 @@ QString MeshInfoOverlay::formatStats(const QList<Ogre::Entity*>& entities, bool 
     unsigned int totalSubmeshes = 0;
     unsigned short totalBones = 0;
     int totalAnims = 0;
+    quint64 totalGpuBytes = 0;
+    QSet<QString> seenMeshes;
     QSet<QString> materialSet;
 
     for (Ogre::Entity* entity : valid) {
@@ -121,6 +124,14 @@ QString MeshInfoOverlay::formatStats(const QList<Ogre::Entity*>& entities, bool 
         totalAnims += info.animations.size();
         for (const QString& mat : info.materials)
             materialSet.insert(mat);
+
+        // De-duplicate GPU bytes by mesh name so we count each unique mesh
+        // resident once, not per-instance.
+        MeshMemoryEstimate mem = MemoryEstimator::estimateEntity(entity);
+        if (!mem.name.isEmpty() && !seenMeshes.contains(mem.name)) {
+            seenMeshes.insert(mem.name);
+            totalGpuBytes += mem.totalBytes();
+        }
     }
 
     QString header;
@@ -148,6 +159,10 @@ QString MeshInfoOverlay::formatStats(const QList<Ogre::Entity*>& entities, bool 
         text += QString("\nBones: %1  Anims: %2")
                     .arg(totalBones)
                     .arg(totalAnims);
+    }
+
+    if (totalGpuBytes > 0) {
+        text += QString("\nGPU: %1").arg(MemoryEstimator::formatBytes(totalGpuBytes));
     }
 
     return text;

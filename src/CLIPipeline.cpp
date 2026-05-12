@@ -12,6 +12,7 @@
 #include "MaterialPresetLibrary.h"
 #include "TextureChannelPacker.h"
 #include "NormalMapGenerator.h"
+#include "MemoryEstimator.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -601,6 +602,10 @@ void CLIPipeline::printUsage()
         "  --all                 Apply all extra fixes\n"
         "  (no flags)            Standard import/export (joins vertices, smooths normals, optimizes)\n"
         "\n"
+        "  memory <file> [--json] [--budget <size>]\n"
+        "                                    Report per-mesh GPU bytes and per-texture VRAM bytes\n"
+        "                                    --budget accepts e.g. 50MB, 1GB; exit 1 if exceeded\n"
+        "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
         "  --version, -v         Show version\n"
@@ -962,6 +967,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "material") rc = cmdMaterial(argc, argv);
     else if (cmd == "pack-textures") rc = cmdPackTextures(argc, argv);
     else if (cmd == "normal-from-height") rc = cmdNormalFromHeight(argc, argv);
+    else if (cmd == "memory") rc = cmdMemory(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -3271,4 +3277,64 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (strictUpload && !uploadOk)
         return 1;
     return scanExit;
+}
+
+int CLIPipeline::cmdMemory(int argc, char* argv[])
+{
+    // Parse: memory <file> [--json] [--budget <size>]
+    QString filePath;
+    bool jsonOutput = false;
+    quint64 budgetBytes = 0;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "memory" || arg == "--cli") continue;
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if (arg == "--budget" && i + 1 < argc) {
+            budgetBytes = MemoryEstimator::parseBudget(argv[++i]);
+            if (budgetBytes == 0) {
+                err() << "Error: Invalid --budget value (use e.g. 50MB, 1GB)" << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (!arg.startsWith("-") && filePath.isEmpty()) { filePath = arg; continue; }
+    }
+
+    if (filePath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh memory <file> [--json] [--budget <size>]" << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.memory",
+        QString("Memory .%1%2").arg(fi.suffix(),
+                                    budgetBytes > 0 ? QString(" budget=%1B").arg(budgetBytes) : QString()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0);
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    SceneMemoryReport report = MemoryEstimator::estimateScene(budgetBytes);
+
+    if (jsonOutput) {
+        QJsonObject obj = MemoryEstimator::toJson(report);
+        obj["file"] = fi.fileName();
+        cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(MemoryEstimator::toText(report));
+    }
+
+    return report.overBudget() ? 1 : 0;
 }
