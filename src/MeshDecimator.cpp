@@ -64,6 +64,23 @@ void MeshDecimator::countBaseline(const Ogre::Entity* entity,
 
 namespace {
 
+// Ogre::MeshLodGenerator is a Singleton<> — only one instance may exist per
+// process. The GUI's MeshLodController owns one; the CLI / MCP / tests don't.
+// This helper hands back the live instance, lazily constructing the singleton
+// the first time it's needed. The leaked instance is reclaimed by Ogre's
+// teardown when the process exits.
+Ogre::MeshLodGenerator& sharedLodGenerator()
+{
+    if (Ogre::MeshLodGenerator* p = Ogre::MeshLodGenerator::getSingletonPtr())
+        return *p;
+    // The singleton self-registers in its constructor; intentional leak —
+    // matches Ogre's standard "singleton lives for the process lifetime"
+    // expectation.
+    return *(new Ogre::MeshLodGenerator());
+}
+
+
+
 int countTrianglesInMesh(const Ogre::Mesh* mesh)
 {
     if (!mesh) return 0;
@@ -156,8 +173,9 @@ DecimationReport MeshDecimator::decimateEntity(Ogre::Entity* entity, double redu
                                       Ogre::LodLevel::VRM_PROPORTIONAL);
 
     try {
-        Ogre::MeshLodGenerator generator;
-        generator.generateLodLevels(lodConfig);
+        // Use the shared singleton — lazy-construct if no MeshLodController
+        // has been instantiated yet (CLI / MCP / test contexts).
+        sharedLodGenerator().generateLodLevels(lodConfig);
     } catch (const Ogre::Exception& /*e*/) {
         // Keep totals consistent on failure: per-submesh trianglesAfter
         // already mirrors trianglesBefore (from collectSubmeshTriCounts),

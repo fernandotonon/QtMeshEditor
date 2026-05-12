@@ -112,8 +112,15 @@ void MeshDecimatorController::previewReduction(double reduction)
     lodConfig.createGeneratedLodLevel(0.0f, static_cast<float>(r),
                                       Ogre::LodLevel::VRM_PROPORTIONAL);
     try {
-        // Use the shared Ogre singleton — MeshLodController constructed it.
-        Ogre::MeshLodGenerator::getSingleton().generateLodLevels(lodConfig);
+        // Use the shared Ogre singleton — MeshLodController normally owns it.
+        // getSingletonPtr() is null only in CLI/test contexts where neither
+        // controller has been instantiated; in the editor it's always set.
+        auto* gen = Ogre::MeshLodGenerator::getSingletonPtr();
+        if (!gen) {
+            emit error(QStringLiteral("Internal error: MeshLodGenerator not initialised."));
+            return;
+        }
+        gen->generateLodLevels(lodConfig);
     } catch (const Ogre::Exception& e) {
         emit error(QString("Preview failed: %1").arg(e.what()));
         return;
