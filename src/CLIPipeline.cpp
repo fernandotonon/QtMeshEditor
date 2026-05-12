@@ -3643,6 +3643,33 @@ bool parseStrictDouble(const QString& flag, const QString& raw, double& out)
     return true;
 }
 
+// Apply one argv[i] token to `out`. `i` is updated when a value-taking flag
+// consumes its successor. Returns 1 on success, 0 on parse error.
+int applyDecimateArg(const QString& arg, int argc, char* argv[], int& i,
+                     DecimateCmdArgs& out)
+{
+    if (arg == "decimate" || arg == "--cli") return 1;
+    if (arg == "--json")          { out.jsonOutput = true; return 1; }
+    if (arg == "-o" && i < argc)  { out.outputPath = argv[i++]; return 1; }
+    if (arg == "--reduction" && i < argc) {
+        return parseStrictDouble("--reduction",
+                                 QString::fromLocal8Bit(argv[i++]),
+                                 out.reduction) ? 1 : 0;
+    }
+    if (arg == "--target-tris" && i < argc) {
+        return parseStrictInt("--target-tris",
+                              QString::fromLocal8Bit(argv[i++]),
+                              out.targetTris) ? 1 : 0;
+    }
+    if (arg == "--target-verts" && i < argc) {
+        return parseStrictInt("--target-verts",
+                              QString::fromLocal8Bit(argv[i++]),
+                              out.targetVerts) ? 1 : 0;
+    }
+    if (!arg.startsWith("-") && out.filePath.isEmpty()) out.filePath = arg;
+    return 1;
+}
+
 // Returns 1 on success, 0 on usage error (callers should return 2).
 int parseDecimateArgs(int argc, char* argv[], DecimateCmdArgs& out)
 {
@@ -3650,37 +3677,16 @@ int parseDecimateArgs(int argc, char* argv[], DecimateCmdArgs& out)
     while (i < argc) {
         const QString arg(argv[i]);
         ++i;
-        if (arg == "decimate" || arg == "--cli") continue;
-        if (arg == "--json")               { out.jsonOutput = true; continue; }
-        if (arg == "-o" && i < argc)       { out.outputPath = argv[i++]; continue; }
-        if (arg == "--reduction" && i < argc) {
-            if (!parseStrictDouble("--reduction",
-                                   QString::fromLocal8Bit(argv[i++]),
-                                   out.reduction)) return 0;
-            continue;
-        }
-        if (arg == "--target-tris" && i < argc) {
-            if (!parseStrictInt("--target-tris",
-                                QString::fromLocal8Bit(argv[i++]),
-                                out.targetTris)) return 0;
-            continue;
-        }
-        if (arg == "--target-verts" && i < argc) {
-            if (!parseStrictInt("--target-verts",
-                                QString::fromLocal8Bit(argv[i++]),
-                                out.targetVerts)) return 0;
-            continue;
-        }
-        if (!arg.startsWith("-") && out.filePath.isEmpty()) out.filePath = arg;
+        if (applyDecimateArg(arg, argc, argv, i, out) == 0) return 0;
     }
     if (out.filePath.isEmpty()) return 0;
 
     // Enforce exactly one target mode — "at least one" lets the user pass
     // ambiguous combinations like --reduction 0.5 --target-tris 1000.
-    const int modesProvided = (out.reduction >= 0.0 ? 1 : 0)
-                            + (out.targetTris >= 0 ? 1 : 0)
-                            + (out.targetVerts >= 0 ? 1 : 0);
-    if (modesProvided > 1) {
+    if (const int modesProvided = (out.reduction >= 0.0 ? 1 : 0)
+                                + (out.targetTris >= 0 ? 1 : 0)
+                                + (out.targetVerts >= 0 ? 1 : 0);
+        modesProvided > 1) {
         err() << "Error: pass exactly one of --reduction / --target-tris / --target-verts."
               << Qt::endl;
         return 0;

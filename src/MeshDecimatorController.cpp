@@ -16,7 +16,7 @@ namespace {
 
 QList<Ogre::Entity*> decimateTargets()
 {
-    auto* sel = SelectionSet::getSingleton();
+    const auto* sel = SelectionSet::getSingleton();
     if (!sel) return {};
     return sel->getResolvedEntities();
 }
@@ -66,15 +66,10 @@ bool MeshDecimatorController::hasSelection() const
     return !decimateTargets().isEmpty();
 }
 
-int MeshDecimatorController::baseTriangleCount() const
+void MeshDecimatorController::primeBaseline()
 {
-    // Lazy refresh: if we don't have a cached count but a selection exists,
-    // populate now. Cast away const — m_baseTriangleCount is metadata, not
-    // observable state from outside the controller's invariants.
-    if (m_baseTriangleCount == 0 && hasSelection()) {
-        const_cast<MeshDecimatorController*>(this)->refreshBaseline();
-    }
-    return m_baseTriangleCount;
+    refreshBaseline();
+    emit baseChanged();
 }
 
 void MeshDecimatorController::refreshBaseline()

@@ -2867,7 +2867,7 @@ QJsonObject MCPServer::toolDecimateMesh(const QJsonObject &args)
         // Decimation is destructive — operate on the user's selection, not
         // an arbitrary scene entity. The previous "first entity in scene"
         // path could mutate the wrong asset in multi-mesh scenes.
-        SelectionSet* sel = SelectionSet::getSingleton();
+        const SelectionSet* sel = SelectionSet::getSingleton();
         const QList<Ogre::Entity*> selected = sel ? sel->getResolvedEntities()
                                                   : QList<Ogre::Entity*>{};
         if (selected.isEmpty())

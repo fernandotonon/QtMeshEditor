@@ -38,12 +38,16 @@ public:
     static void kill();
 
     bool hasSelection() const;
-    // Counts are refreshed on selection change; the lazy-init case
-    // (singleton instantiated after initial selection) is handled by
-    // refreshing in the getter when the cache is 0.
-    int baseTriangleCount() const;
+    // Counts are refreshed on selection change; refresh once at first read
+    // via the Q_INVOKABLE primeBaseline() entry point (QML calls it in
+    // Component.onCompleted to handle the singleton-after-selection case
+    // without const_cast tricks in the getter).
+    int baseTriangleCount() const { return m_baseTriangleCount; }
     int previewTriangleCount() const { return m_previewTriangleCount; }
     bool hasActivePreview() const { return m_hasPreview; }
+
+    // Force a baseline recount + signal. QML calls this on section load.
+    Q_INVOKABLE void primeBaseline();
 
     // Generate a temporary LOD at fraction `reduction` and swap display
     // to it. Cheap-ish but not free — debounce on the QML side so we don't

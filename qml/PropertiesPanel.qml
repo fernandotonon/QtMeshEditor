@@ -1668,6 +1668,12 @@ Rectangle {
             // Slider state — 0..0.95. Default 0.5 = halve the mesh.
             property real reduction: 0.5
 
+            // Ensure baseTriangleCount is populated when the section is opened
+            // for the first time — the controller's selectionChanged hook
+            // doesn't fire if the user had a selection before the singleton
+            // was instantiated.
+            Component.onCompleted: MeshDecimatorController.primeBaseline()
+
             // Debounce the preview regenerator so the slider doesn't melt
             // Ogre with a per-pixel LOD rebuild.
             Timer {
