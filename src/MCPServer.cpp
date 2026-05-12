@@ -2806,27 +2806,17 @@ QJsonObject MCPServer::toolOptimizeVertexCache(const QJsonObject &args)
         const bool rewrite = args.value("rewrite").toBool(false);
 
         VertexCacheReport aggregate;
-        for (Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes()) {
+        for (const Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes()) {
             if (!node) continue;
             for (unsigned i = 0; i < node->numAttachedObjects(); ++i) {
                 Ogre::MovableObject* obj = node->getAttachedObject(i);
                 if (!obj || obj->getMovableType() != "Entity") continue;
                 auto* entity = static_cast<Ogre::Entity*>(obj);
-                const VertexCacheReport partial =
-                    VertexCacheOptimizer::analyzeEntity(entity, rewrite);
-                for (const SubMeshCacheReport& sr : partial.submeshes) {
-                    aggregate.submeshes.append(sr);
-                    aggregate.totalTriangles += sr.triangleCount;
-                    aggregate.weightedAcmrBefore += sr.acmrBefore * sr.triangleCount;
-                    aggregate.weightedAcmrAfter  += sr.acmrAfter  * sr.triangleCount;
-                    if (sr.reordered) ++aggregate.totalReordered;
-                }
+                VertexCacheOptimizer::mergeReport(
+                    aggregate, VertexCacheOptimizer::analyzeEntity(entity, rewrite));
             }
         }
-        if (aggregate.totalTriangles > 0) {
-            aggregate.weightedAcmrBefore /= aggregate.totalTriangles;
-            aggregate.weightedAcmrAfter  /= aggregate.totalTriangles;
-        }
+        VertexCacheOptimizer::finalize(aggregate);
 
         QJsonObject result = makeSuccessResult(VertexCacheOptimizer::toText(aggregate));
         result["vertexCache"] = VertexCacheOptimizer::toJson(aggregate);

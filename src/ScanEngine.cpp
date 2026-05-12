@@ -744,7 +744,7 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         }
         if (!idxFlat.empty()) {
             const double acmr = VertexCacheOptimizer::computeAcmr(idxFlat);
-            const unsigned int tris = static_cast<unsigned int>(idxFlat.size() / 3);
+            const auto tris = static_cast<unsigned int>(idxFlat.size() / 3);
             acmrTriWeightedSum += acmr * tris;
             acmrTotalTris += tris;
         }

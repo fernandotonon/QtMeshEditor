@@ -67,6 +67,16 @@ public:
     // and reports — pure analysis.
     static VertexCacheReport analyzeEntity(Ogre::Entity* entity, bool rewrite);
 
+    // Merge `partial` into `aggregate` and recompute the running tri-
+    // weighted ACMR totals. Used by every caller that walks multiple
+    // entities (CLI cmdVertexCache + MCP toolOptimizeVertexCache).
+    static void mergeReport(VertexCacheReport& aggregate,
+                            const VertexCacheReport& partial);
+
+    // Final post-merge step: divide weighted-ACMR sums by total triangles.
+    // Idempotent on empty reports.
+    static void finalize(VertexCacheReport& report);
+
     // Serialize a VertexCacheReport as JSON (CLI / MCP).
     static QJsonObject toJson(const VertexCacheReport& report);
 
