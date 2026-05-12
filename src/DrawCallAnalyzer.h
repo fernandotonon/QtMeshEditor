@@ -19,7 +19,9 @@ struct MaterialCluster {
     QStringList entityNames;       // names of entities that use this material
     // Merge potential: every additional entity past the first is a draw call
     // we could save by merging — provided the geometry is compatible.
-    int mergeSavings() const { return entityNames.isEmpty() ? 0 : entityNames.size() - 1; }
+    int mergeSavings() const {
+        return entityNames.isEmpty() ? 0 : static_cast<int>(entityNames.size()) - 1;
+    }
 };
 
 struct MergeSuggestion {

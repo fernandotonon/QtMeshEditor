@@ -8,6 +8,7 @@
 
 #include <QHash>
 #include <QJsonArray>
+#include <QSet>
 #include <algorithm>
 
 namespace {
@@ -35,7 +36,7 @@ DrawCallReport DrawCallAnalyzer::analyze(const QList<Ogre::Entity*>& entities)
         if (!entity) continue;
         report.totalEntities++;
         const QString entityName = QString::fromStdString(entity->getName());
-        const unsigned int numSubs = entity->getNumSubEntities();
+        const size_t numSubs = entity->getNumSubEntities();
         report.totalSubmeshes += static_cast<int>(numSubs);
 
         // Per-entity material set: a single entity that has 3 submeshes all
@@ -43,7 +44,7 @@ DrawCallReport DrawCallAnalyzer::analyze(const QList<Ogre::Entity*>& entities)
         // batch them), but the merge-suggestion grouping should count the
         // entity once per unique material it uses.
         QSet<QString> entityMaterials;
-        for (unsigned int i = 0; i < numSubs; ++i) {
+        for (size_t i = 0; i < numSubs; ++i) {
             const Ogre::SubEntity* sub = entity->getSubEntity(i);
             const QString matName = materialNameOrPlaceholder(sub);
             report.totalDrawCalls++; // one draw call per SubEntity
@@ -65,7 +66,7 @@ DrawCallReport DrawCallAnalyzer::analyze(const QList<Ogre::Entity*>& entities)
         }
     }
 
-    report.uniqueMaterials = materialOrder.size();
+    report.uniqueMaterials = static_cast<int>(materialOrder.size());
     for (const QString& matName : materialOrder)
         report.clusters.append(byMaterial.value(matName));
 
@@ -91,7 +92,7 @@ DrawCallReport DrawCallAnalyzer::analyzeScene()
     Manager* mgr = Manager::getSingletonPtr();
     if (!mgr) return analyze(entities);
 
-    for (Ogre::SceneNode* node : mgr->getSceneNodes()) {
+    for (const Ogre::SceneNode* node : mgr->getSceneNodes()) {
         if (!node) continue;
         for (unsigned int i = 0; i < node->numAttachedObjects(); ++i) {
             Ogre::MovableObject* obj = node->getAttachedObject(i);

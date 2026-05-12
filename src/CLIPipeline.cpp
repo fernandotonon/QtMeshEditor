@@ -3451,6 +3451,8 @@ int CLIPipeline::cmdAnalyze(int argc, char* argv[])
 
     SentryReporter::addBreadcrumb("cli.analyze",
         QString("Analyze .%1").arg(fi.suffix()));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1").arg(fi.absoluteFilePath()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()}, 0);
     const auto& entities = Manager::getSingleton()->getEntities();
@@ -3466,6 +3468,7 @@ int CLIPipeline::cmdAnalyze(int argc, char* argv[])
         obj["file"] = fi.fileName();
         cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
     } else {
+        cliWrite(QString("File: %1\n").arg(fi.fileName()));
         cliWrite(DrawCallAnalyzer::toText(report));
     }
     return 0;
