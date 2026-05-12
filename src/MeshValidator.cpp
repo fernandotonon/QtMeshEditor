@@ -150,6 +150,7 @@ void MeshValidator::doValidate()
 {
     m_issues.clear();
     m_validated = false;
+    m_cacheOptimizationAvailable = false;
 
     const QList<Ogre::Entity*> targets = validationTargetEntities();
     if (targets.isEmpty()) {
@@ -385,11 +386,11 @@ void MeshValidator::doValidate()
 
         QVariantMap issue;
         if (meaningfulGain) {
+            m_cacheOptimizationAvailable = true;
             issue["type"] = "info";
             issue["description"] =
                 QString("Vertex cache: ACMR %1 → %2 (%3% improvement available — "
-                        "run `qtmesh vertex-cache -o <out>` or the MCP "
-                        "optimize_vertex_cache tool with rewrite=true)")
+                        "click \"Optimize Vertex Cache\" below)")
                     .arg(QString::number(cacheReport.weightedAcmrBefore, 'f', 3),
                          QString::number(cacheReport.weightedAcmrAfter,  'f', 3),
                          QString::number(improvementPct, 'f', 1));
@@ -473,5 +474,46 @@ void MeshValidator::fixAll()
                     .arg(reimportPaths.size()));
 
     // Re-validate the newly imported entities
+    validate();
+}
+
+void MeshValidator::optimizeVertexCache()
+{
+    const QList<Ogre::Entity*> targets = validationTargetEntities();
+    if (targets.isEmpty()) {
+        emit error("No mesh selected.");
+        return;
+    }
+
+    SentryReporter::addBreadcrumb("ui.action", "Optimize vertex cache (Forsyth, in place)");
+
+    VertexCacheReport aggregate;
+    for (Ogre::Entity* entity : targets) {
+        const VertexCacheReport partial =
+            VertexCacheOptimizer::analyzeEntity(entity, /*rewrite=*/true);
+        for (const SubMeshCacheReport& sr : partial.submeshes) {
+            aggregate.submeshes.append(sr);
+            aggregate.totalTriangles += sr.triangleCount;
+            aggregate.weightedAcmrBefore += sr.acmrBefore * sr.triangleCount;
+            aggregate.weightedAcmrAfter  += sr.acmrAfter  * sr.triangleCount;
+            if (sr.reordered) ++aggregate.totalReordered;
+        }
+    }
+    if (aggregate.totalTriangles > 0) {
+        aggregate.weightedAcmrBefore /= aggregate.totalTriangles;
+        aggregate.weightedAcmrAfter  /= aggregate.totalTriangles;
+    }
+
+    if (aggregate.totalReordered == 0) {
+        emit fixApplied("Vertex cache was already optimal — no submeshes were reordered.");
+    } else {
+        emit fixApplied(QString("Reordered %1 submesh(es). ACMR %2 → %3 (%4% improvement).")
+                            .arg(aggregate.totalReordered)
+                            .arg(QString::number(aggregate.weightedAcmrBefore, 'f', 3),
+                                 QString::number(aggregate.weightedAcmrAfter,  'f', 3),
+                                 QString::number(aggregate.improvement(), 'f', 1)));
+    }
+
+    // Refresh the checklist — the row should flip to "already optimal".
     validate();
 }
