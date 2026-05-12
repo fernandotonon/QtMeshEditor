@@ -38,6 +38,28 @@ double MeshDecimator::clampReduction(double r)
     return r;
 }
 
+// LCOV_EXCL_START — exercised via CLI / MCP integration paths
+void MeshDecimator::countBaseline(const Ogre::Entity* entity,
+                                  int& outTris, int& outVerts)
+{
+    outTris = 0;
+    outVerts = 0;
+    if (!entity) return;
+    const Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return;
+    for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+        const Ogre::SubMesh* sub = mesh->getSubMesh(s);
+        if (!sub) continue;
+        if (sub->indexData)
+            outTris += static_cast<int>(sub->indexData->indexCount / 3);
+        if (sub->vertexData)
+            outVerts += static_cast<int>(sub->vertexData->vertexCount);
+    }
+    if (mesh->sharedVertexData)
+        outVerts += static_cast<int>(mesh->sharedVertexData->vertexCount);
+}
+// LCOV_EXCL_STOP
+
 // ----- Helpers --------------------------------------------------------------
 
 namespace {
@@ -88,11 +110,16 @@ DecimationReport MeshDecimator::projectEntity(const Ogre::Entity* entity, double
 
     collectSubmeshTriCounts(mesh.get(), report.submeshes, report.meshName);
     for (auto& sr : report.submeshes) {
-        // Predicted after = before * (1 - reduction), rounded but capped at 1
-        // (Ogre won't drop a submesh below a single triangle in practice).
-        const double predicted = std::round(sr.trianglesBefore
-                                            * (1.0 - report.appliedReduction));
-        sr.trianglesAfter = std::max(1, static_cast<int>(predicted));
+        // Predicted after = before * (1 - reduction), rounded. Cap at 1 only
+        // when the submesh has triangles to begin with — empty submeshes stay
+        // at 0 in the projection (we don't invent triangles).
+        if (sr.trianglesBefore <= 0) {
+            sr.trianglesAfter = 0;
+        } else {
+            const double predicted = std::round(sr.trianglesBefore
+                                                * (1.0 - report.appliedReduction));
+            sr.trianglesAfter = std::max(1, static_cast<int>(predicted));
+        }
         report.totalTrianglesBefore += sr.trianglesBefore;
         report.totalTrianglesAfter  += sr.trianglesAfter;
     }
@@ -132,7 +159,11 @@ DecimationReport MeshDecimator::decimateEntity(Ogre::Entity* entity, double redu
         Ogre::MeshLodGenerator generator;
         generator.generateLodLevels(lodConfig);
     } catch (const Ogre::Exception& /*e*/) {
-        return report; // applied = false
+        // Keep totals consistent on failure: per-submesh trianglesAfter
+        // already mirrors trianglesBefore (from collectSubmeshTriCounts),
+        // so the total should match. applied stays false.
+        report.totalTrianglesAfter = report.totalTrianglesBefore;
+        return report;
     }
 
     // Promote LOD 1 (the reduced level) into the base mesh by swapping its

@@ -2829,72 +2829,77 @@ QJsonObject MCPServer::toolOptimizeVertexCache(const QJsonObject &args)
     }
 }
 
+namespace {
+
+// Translate the JSON args into a reduction fraction. Returns -1.0 when the
+// caller forgot to provide one of the three target keys; caller turns that
+// into a user-facing error.
+double resolveMcpReduction(const QJsonObject& args,
+                           int currentTris, int currentVerts)
+{
+    if (args.contains("reduction"))
+        return MeshDecimator::clampReduction(args.value("reduction").toDouble());
+    if (args.contains("target_tris"))
+        return MeshDecimator::reductionFromTargetTris(
+            currentTris, args.value("target_tris").toInt());
+    if (args.contains("target_verts"))
+        return MeshDecimator::reductionFromTargetVerts(
+            currentVerts, args.value("target_verts").toInt());
+    return -1.0;
+}
+
+} // namespace
+
 // NOSONAR(cpp:S5817) — ToolHandler is a non-const member-fn pointer (matching
 // every other tool method in this class); marking just this one const would
 // break the registry signature in MCPServer.h.
 QJsonObject MCPServer::toolDecimateMesh(const QJsonObject &args)
 {
     // Args (one wins, in priority order):
-    //   reduction (double 0..1) — drop this fraction of triangles
-    //   target_tris (int)       — reduce to approximately this many tris
-    //   target_verts (int)      — reduce to approximately this many verts
+    //   reduction (double 0..1)       — drop this fraction of triangles
+    //   target_tris (int)             — reduce to approximately this many tris
+    //   target_verts (int)            — reduce to approximately this many verts
     //   dry_run (bool, default false) — projected report only, no mutation
     try {
         if (const Manager* mgr = Manager::getSingletonPtr(); !mgr)
             return makeErrorResult("Error: Manager not available");
-        if (!hasSelectedEntities())
-            return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+        // Decimation is destructive — operate on the user's selection, not
+        // an arbitrary scene entity. The previous "first entity in scene"
+        // path could mutate the wrong asset in multi-mesh scenes.
+        SelectionSet* sel = SelectionSet::getSingleton();
+        const QList<Ogre::Entity*> selected = sel ? sel->getResolvedEntities()
+                                                  : QList<Ogre::Entity*>{};
+        if (selected.isEmpty())
+            return makeErrorResult(
+                "No mesh selected. Select the entity to decimate (load_mesh + click) first.");
+        Ogre::Entity* target = selected.first();
+        if (!target)
+            return makeErrorResult("Selected entity is null.");
 
         const bool dryRun = args.value("dry_run").toBool(false);
 
-        // Resolve the reduction. We need a target entity to convert target-
-        // tris/target-verts into a reduction fraction, so grab the first one.
-        Ogre::Entity* target = nullptr;
-        for (Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes()) {
-            if (!node) continue;
-            for (unsigned i = 0; i < node->numAttachedObjects(); ++i) {
-                Ogre::MovableObject* obj = node->getAttachedObject(i);
-                if (obj && obj->getMovableType() == "Entity") {
-                    target = static_cast<Ogre::Entity*>(obj);
-                    break;
-                }
-            }
-            if (target) break;
-        }
-        if (!target)
-            return makeErrorResult("No entity in scene to decimate.");
+        int currentTris = 0;
+        int currentVerts = 0;
+        MeshDecimator::countBaseline(target, currentTris, currentVerts);
 
-        // Count baseline tris/verts (mirrors cmdDecimate's count loop).
-        int currentTris = 0, currentVerts = 0;
-        if (Ogre::MeshPtr mesh = target->getMesh()) {
-            for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
-                const Ogre::SubMesh* sub = mesh->getSubMesh(s);
-                if (!sub) continue;
-                if (sub->indexData)
-                    currentTris += static_cast<int>(sub->indexData->indexCount / 3);
-                if (sub->vertexData)
-                    currentVerts += static_cast<int>(sub->vertexData->vertexCount);
-            }
-            if (mesh->sharedVertexData)
-                currentVerts += static_cast<int>(mesh->sharedVertexData->vertexCount);
-        }
-
-        double reduction = 0.0;
-        if (args.contains("reduction"))
-            reduction = MeshDecimator::clampReduction(args.value("reduction").toDouble());
-        else if (args.contains("target_tris"))
-            reduction = MeshDecimator::reductionFromTargetTris(
-                currentTris, args.value("target_tris").toInt());
-        else if (args.contains("target_verts"))
-            reduction = MeshDecimator::reductionFromTargetVerts(
-                currentVerts, args.value("target_verts").toInt());
-        else
+        const double reduction = resolveMcpReduction(args, currentTris, currentVerts);
+        if (reduction < 0.0)
             return makeErrorResult(
                 "Pass one of: reduction (0..1), target_tris, or target_verts.");
 
         const DecimationReport report = dryRun
             ? MeshDecimator::projectEntity(target, reduction)
             : MeshDecimator::decimateEntity(target, reduction);
+
+        // A real (non-dry-run) decimation that didn't apply means the
+        // generator failed — automation should treat that as an error, not
+        // assume the mesh was modified.
+        if (!dryRun && !report.applied && reduction > 0.0) {
+            return makeErrorResult(
+                "Decimation failed: MeshLodGenerator could not produce a reduced mesh. "
+                "The mesh may not be suitable (e.g. zero index data).");
+        }
 
         QJsonObject result = makeSuccessResult(MeshDecimator::toText(report));
         result["decimation"] = MeshDecimator::toJson(report);

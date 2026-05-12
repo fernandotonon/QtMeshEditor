@@ -3615,7 +3615,36 @@ struct DecimateCmdArgs {
     int targetVerts = -1;
 };
 
-bool parseDecimateArgs(int argc, char* argv[], DecimateCmdArgs& out)
+// Parse a numeric --target-* flag strictly: any non-numeric input (e.g. a
+// typo like `--target-tris foo`) is rejected with an error rather than
+// silently falling through to 0 (which clampReduction would interpret as a
+// 95% reduction — a destructive mismatch). Returns true on success.
+bool parseStrictInt(const QString& flag, const QString& raw, int& out)
+{
+    bool ok = false;
+    const int v = raw.toInt(&ok);
+    if (!ok) {
+        err() << "Error: " << flag << " expects an integer, got: " << raw << Qt::endl;
+        return false;
+    }
+    out = v;
+    return true;
+}
+
+bool parseStrictDouble(const QString& flag, const QString& raw, double& out)
+{
+    bool ok = false;
+    const double v = raw.toDouble(&ok);
+    if (!ok) {
+        err() << "Error: " << flag << " expects a number, got: " << raw << Qt::endl;
+        return false;
+    }
+    out = v;
+    return true;
+}
+
+// Returns 1 on success, 0 on usage error (callers should return 2).
+int parseDecimateArgs(int argc, char* argv[], DecimateCmdArgs& out)
 {
     int i = 1;
     while (i < argc) {
@@ -3625,20 +3654,38 @@ bool parseDecimateArgs(int argc, char* argv[], DecimateCmdArgs& out)
         if (arg == "--json")               { out.jsonOutput = true; continue; }
         if (arg == "-o" && i < argc)       { out.outputPath = argv[i++]; continue; }
         if (arg == "--reduction" && i < argc) {
-            out.reduction = QString::fromLocal8Bit(argv[i++]).toDouble();
+            if (!parseStrictDouble("--reduction",
+                                   QString::fromLocal8Bit(argv[i++]),
+                                   out.reduction)) return 0;
             continue;
         }
         if (arg == "--target-tris" && i < argc) {
-            out.targetTris = QString::fromLocal8Bit(argv[i++]).toInt();
+            if (!parseStrictInt("--target-tris",
+                                QString::fromLocal8Bit(argv[i++]),
+                                out.targetTris)) return 0;
             continue;
         }
         if (arg == "--target-verts" && i < argc) {
-            out.targetVerts = QString::fromLocal8Bit(argv[i++]).toInt();
+            if (!parseStrictInt("--target-verts",
+                                QString::fromLocal8Bit(argv[i++]),
+                                out.targetVerts)) return 0;
             continue;
         }
         if (!arg.startsWith("-") && out.filePath.isEmpty()) out.filePath = arg;
     }
-    return !out.filePath.isEmpty();
+    if (out.filePath.isEmpty()) return 0;
+
+    // Enforce exactly one target mode — "at least one" lets the user pass
+    // ambiguous combinations like --reduction 0.5 --target-tris 1000.
+    const int modesProvided = (out.reduction >= 0.0 ? 1 : 0)
+                            + (out.targetTris >= 0 ? 1 : 0)
+                            + (out.targetVerts >= 0 ? 1 : 0);
+    if (modesProvided > 1) {
+        err() << "Error: pass exactly one of --reduction / --target-tris / --target-verts."
+              << Qt::endl;
+        return 0;
+    }
+    return 1;
 }
 
 double resolveReduction(const DecimateCmdArgs& args, int currentTris, int currentVerts)
@@ -3669,11 +3716,15 @@ void emitDecimationReport(const DecimationReport& report, const QFileInfo& fi,
 int CLIPipeline::cmdDecimate(int argc, char* argv[])
 {
     DecimateCmdArgs cmdArgs;
-    if (!parseDecimateArgs(argc, argv, cmdArgs)) {
-        err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh decimate <file> -o <output> "
-                 "(--reduction <r> | --target-tris N | --target-verts N) [--json]"
-              << Qt::endl;
+    if (parseDecimateArgs(argc, argv, cmdArgs) == 0) {
+        // parseDecimateArgs already printed a specific error to err() — only
+        // emit the generic usage banner when no file was given at all.
+        if (cmdArgs.filePath.isEmpty()) {
+            err() << "Error: No input file specified." << Qt::endl;
+            err() << "Usage: qtmesh decimate <file> -o <output> "
+                     "(--reduction <r> | --target-tris N | --target-verts N) [--json]"
+                  << Qt::endl;
+        }
         return 2;
     }
     if (cmdArgs.outputPath.isEmpty()) {
@@ -3709,16 +3760,9 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
     Ogre::Entity* entity = entities.first();
 
     // Count current tris / verts to resolve target-based reductions.
-    int currentTris = 0, currentVerts = 0;
-    if (Ogre::MeshPtr mesh = entity->getMesh()) {
-        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
-            const Ogre::SubMesh* sub = mesh->getSubMesh(s);
-            if (!sub) continue;
-            if (sub->indexData) currentTris += static_cast<int>(sub->indexData->indexCount / 3);
-            if (sub->vertexData) currentVerts += static_cast<int>(sub->vertexData->vertexCount);
-        }
-        if (mesh->sharedVertexData) currentVerts += static_cast<int>(mesh->sharedVertexData->vertexCount);
-    }
+    int currentTris = 0;
+    int currentVerts = 0;
+    MeshDecimator::countBaseline(entity, currentTris, currentVerts);
 
     const double reduction = resolveReduction(cmdArgs, currentTris, currentVerts);
     if (reduction <= 0.0) {
@@ -3733,7 +3777,7 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
         return 1;
     }
 
-    auto* node = entity->getParentSceneNode();
+    const auto* node = entity->getParentSceneNode();
     const QFileInfo outFi(cmdArgs.outputPath);
     const QString fmt = formatForExtension(cmdArgs.outputPath);
     SentryReporter::addBreadcrumb("file.export",

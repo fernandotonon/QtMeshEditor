@@ -73,6 +73,12 @@ public:
     // Cheap — does not call into MeshLodGenerator.
     static DecimationReport projectEntity(const Ogre::Entity* entity, double reduction);
 
+    // Count base-mesh triangles and vertices across all submeshes of an
+    // entity. Used to resolve target-tris / target-verts targets into a
+    // reduction fraction in both the CLI and MCP wrappers.
+    static void countBaseline(const Ogre::Entity* entity,
+                              int& outTris, int& outVerts);
+
     static QJsonObject toJson(const DecimationReport& report);
     static QString toText(const DecimationReport& report);
 };
