@@ -2235,10 +2235,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 // different imports both shipping a `Wood.jpg`). Detect collisions against
                 // previously-claimed outFiles and fall back to the scoped resource name so
                 // each RSD TEX[] slot writes to its own sidecar instead of clobbering it.
-                const auto collides = [&candidate](const OutTex& prev) {
-                    return prev.outFile == candidate;
-                };
-                if (std::any_of(rsdOutTextures.begin(), rsdOutTextures.end(), collides))
+                if (std::any_of(rsdOutTextures.begin(), rsdOutTextures.end(),
+                                [&candidate](const OutTex& prev) {
+                                    return prev.outFile == candidate;
+                                }))
                     candidate = QFileInfo(ot.resourceName).fileName();
                 ot.outFile = candidate;
                 auto tex = Ogre::TextureManager::getSingleton().getByName(texName);

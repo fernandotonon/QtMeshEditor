@@ -1840,7 +1840,7 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
         // shared across submeshes so identical positions/normals collapse to one
         // PLY vertex/normal index regardless of which submesh produced them.
         for (size_t subIdx = 0; subIdx < subs.size(); ++subIdx) {
-        SubData& sd = subs[subIdx];
+        const SubData& sd = subs[subIdx];
         const std::vector<std::vector<unsigned int>>& ngonFaces = perSubNgonFaces[subIdx];
         const uint8_t* posBase = static_cast<const uint8_t*>(sd.posBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
         const uint8_t* nrmBase = nullptr;
