@@ -31,6 +31,7 @@ THE SOFTWARE.
 #include <assimp/Exporter.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
+#include <QCryptographicHash>
 #include <QFileDialog>
 #include <QImage>
 #include <QMessageBox>
@@ -1211,6 +1212,40 @@ static QString firstMaterialNameInOgreMaterialScript(const QByteArray& script)
 }
 
 /// Load `texPath` into Ogre as a manual texture under `resourceName`, replacing any existing
+/// Builds an Ogre texture resource name scoped to the source asset path so that two RSDs
+/// referencing different files that happen to share a basename (e.g. `Wood.jpg`) don't
+/// collide in Ogre's global texture registry. Returns a name of the form
+/// `<basename>__<8charHashOfAbsPath>.<suffix>` which preserves the human-readable basename
+/// for inspection while guaranteeing uniqueness across assets. The `__<hash>` portion is
+/// stripped by `rsdResourceNameToBasename()` on export.
+static QString scopedRsdResourceName(const QString& texPath)
+{
+    const QFileInfo fi(texPath);
+    const QString abs = fi.absoluteFilePath();
+    const QString hash = QString::fromLatin1(
+        QCryptographicHash::hash(abs.toUtf8(), QCryptographicHash::Sha1).toHex()).left(8);
+    QString suffix = fi.suffix().toLower();
+    if (suffix.isEmpty())
+        suffix = QStringLiteral("tex");
+    return fi.completeBaseName() + QStringLiteral("__") + hash
+           + QStringLiteral(".") + suffix;
+}
+
+/// Inverse of `scopedRsdResourceName()` — strips the `__<8hexchars>` segment a scoped
+/// resource name carries so we can recover the original `Wood.jpg`-style basename when
+/// writing sidecar files next to an exported RSD. Names that don't match the scoped
+/// pattern are returned as `QFileInfo::fileName(name)` (i.e. a best-effort basename) so
+/// non-RSD textures still get a sensible filename.
+static QString rsdResourceNameToBasename(const QString& resName)
+{
+    static const QRegularExpression scoped(
+        QStringLiteral("^(.+)__[0-9a-f]{8}\\.([^.]+)$"));
+    const auto m = scoped.match(resName);
+    if (m.hasMatch())
+        return m.captured(1) + QStringLiteral(".") + m.captured(2);
+    return QFileInfo(resName).fileName();
+}
+
 /// entry. Handles common 2D formats (PNG/JPG/BMP/TGA/...) by leaning on Qt's QImage decoder
 /// when the file extension is not one Ogre's built-in codecs already register. Returns true
 /// on success.
@@ -1508,21 +1543,29 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 for (int ti = 0; ti < rsd.textures.size(); ++ti) {
                     const QString texRel = rsd.textures[ti];
                     const QString texPath = resolve(texRel);
-                    if (texPath.isEmpty() || !QFileInfo::exists(texPath))
+                    if (texPath.isEmpty() || !QFileInfo::exists(texPath)) {
+                        SentryReporter::addBreadcrumb(
+                            QStringLiteral("file.import"),
+                            QStringLiteral("RSD TEX[%1] missing: %2").arg(ti).arg(texRel));
                         continue;
+                    }
 
                     Ogre::Image img;
                     bool loaded = false;
                     const QString suffix = QFileInfo(texPath).suffix().toLower();
-                    if (suffix == QStringLiteral("tim")) {
-                        QString timErr;
+                    QString timErr;
+                    if (suffix == QStringLiteral("tim"))
                         loaded = PS1TIM::loadTimToOgreImage(texPath, img, &timErr);
-                    }
 
-                    const QString resName = QFileInfo(texPath).completeBaseName()
-                        + QStringLiteral(".")
-                        + (suffix.isEmpty() ? QStringLiteral("tex") : suffix);
+                    // Resource name is scoped by the absolute texture path so two RSDs that
+                    // both ship a "Wood.jpg" do not clobber each other in Ogre's global
+                    // TextureManager registry.
+                    const QString resName = scopedRsdResourceName(texPath);
                     const Ogre::String ogreName = resName.toStdString();
+
+                    SentryReporter::addBreadcrumb(
+                        QStringLiteral("file.import"),
+                        QStringLiteral("RSD TEX[%1] load: %2").arg(ti).arg(QFileInfo(texPath).fileName()));
 
                     if (loaded) {
                         if (Ogre::TextureManager::getSingleton().resourceExists(
@@ -1536,6 +1579,14 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                         rsdTexSlots[ti].resourceName = resName;
                         rsdTexSlots[ti].width = static_cast<int>(img.getWidth());
                         rsdTexSlots[ti].height = static_cast<int>(img.getHeight());
+                        SentryReporter::addBreadcrumb(
+                            QStringLiteral("file.import"),
+                            QStringLiteral("RSD TEX[%1] TIM loaded (%2x%3)")
+                                .arg(ti).arg(rsdTexSlots[ti].width).arg(rsdTexSlots[ti].height));
+                    } else if (suffix == QStringLiteral("tim")) {
+                        SentryReporter::addBreadcrumb(
+                            QStringLiteral("file.import"),
+                            QStringLiteral("RSD TEX[%1] TIM load failed: %2").arg(ti).arg(timErr));
                     } else {
                         // Non-TIM raster format (PNG/JPG/BMP/TGA…)
                         QString extErr;
@@ -1549,10 +1600,17 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                                 rsdTexSlots[ti].width = static_cast<int>(tex->getWidth());
                                 rsdTexSlots[ti].height = static_cast<int>(tex->getHeight());
                             }
+                            SentryReporter::addBreadcrumb(
+                                QStringLiteral("file.import"),
+                                QStringLiteral("RSD TEX[%1] external loaded (%2x%3)")
+                                    .arg(ti).arg(rsdTexSlots[ti].width).arg(rsdTexSlots[ti].height));
                         } else {
                             Ogre::LogManager::getSingleton().logMessage(
                                 "Warning: RSD texture load failed for "
                                 + texPath.toStdString() + ": " + extErr.toStdString());
+                            SentryReporter::addBreadcrumb(
+                                QStringLiteral("file.import"),
+                                QStringLiteral("RSD TEX[%1] external load failed: %2").arg(ti).arg(extErr));
                         }
                     }
                     if (firstTimResource.isEmpty() && !rsdTexSlots[ti].resourceName.isEmpty())
@@ -1743,7 +1801,17 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                         pass->setLightingEnabled(true);
                         pass->setAmbient(1.0f, 1.0f, 1.0f);
                         pass->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
-                        pass->setVertexColourTracking(Ogre::TVC_NONE);
+                        // Preserve per-corner colours that the textured PLY import already baked
+                        // into the submesh (Psy-Q H/D/G shaded materials encode their tint via
+                        // vertex colour). Force TVC_NONE only when the submesh has no VES_DIFFUSE
+                        // stream, otherwise the texture would render as a plain unshaded image.
+                        const Ogre::SubMesh* sm = en->getMesh()->getSubMesh(si);
+                        const Ogre::VertexData* vdSm =
+                            (sm && sm->useSharedVertices) ? en->getMesh()->sharedVertexData
+                                                          : (sm ? sm->vertexData : nullptr);
+                        const bool hasVC = vdSm && vdSm->vertexDeclaration
+                            && vdSm->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
+                        pass->setVertexColourTracking(hasVC ? Ogre::TVC_DIFFUSE : Ogre::TVC_NONE);
                         mat->compile();
                     }
                 }
@@ -2150,7 +2218,11 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             } else {
                 OutTex ot;
                 ot.resourceName = QString::fromStdString(texName);
-                ot.outFile = ot.resourceName;
+                // Strip any asset-scoping (`__<hash>`) we may have added at import time so
+                // the sidecar lands next to the .rsd with a clean, human-readable filename.
+                // For non-RSD textures this is a best-effort basename of whatever the
+                // texture resource was registered under.
+                ot.outFile = rsdResourceNameToBasename(ot.resourceName);
                 auto tex = Ogre::TextureManager::getSingleton().getByName(texName);
                 if (tex) {
                     ot.width = static_cast<int>(tex->getWidth());
@@ -2219,11 +2291,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
 
         // Copy referenced textures next to the .rsd so the descriptor stays self-contained.
         // We use Ogre's in-memory image (Image::loadDynamicImage from the bound texture) and
-        // write a PNG when the original encoding is unknown.
+        // write a PNG when the original encoding is unknown. We do not short-circuit on
+        // existing files: re-exporting should always refresh the sidecar so the new .rsd
+        // never references stale image content from a previous export.
         for (auto& ot : rsdOutTextures) {
-            const QString outPath = outFi.absolutePath() + QDir::separator() + ot.outFile;
-            if (QFileInfo::exists(outPath))
-                continue; // Skip if a file with that name already lives in the output dir.
             try {
                 auto tex = Ogre::TextureManager::getSingleton().getByName(ot.resourceName.toStdString());
                 if (!tex)
