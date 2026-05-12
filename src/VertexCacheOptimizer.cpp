@@ -250,12 +250,18 @@ VertexCacheReport VertexCacheOptimizer::analyzeEntity(Ogre::Entity* entity, bool
         sr.triangleCount = static_cast<int>(indices.size() / 3);
         sr.acmrBefore = computeAcmr(indices);
 
-        if (rewrite && vertexCount > 0) {
-            std::vector<uint32_t> reordered = indices; // forsyth() mutates in place
+        // Always run Forsyth on a local copy so we know what the optimized
+        // ACMR would be. This lets the validator / analyze-only mode report
+        // the projected improvement without mutating the index buffer.
+        // `reordered` stays false unless we actually write back below.
+        if (vertexCount > 0) {
+            std::vector<uint32_t> reordered = indices;
             if (forsyth(reordered, vertexCount)) {
                 sr.acmrAfter = computeAcmr(reordered);
-                // Only write back if it actually improved — never regress.
-                if (sr.acmrAfter < sr.acmrBefore) {
+
+                // Only write back when the caller asked AND the reorder
+                // improves ACMR — never regress.
+                if (rewrite && sr.acmrAfter < sr.acmrBefore) {
                     void* dst = id->indexBuffer->lock(Ogre::HardwareBuffer::HBL_NORMAL);
                     if (use16) {
                         auto* out = static_cast<uint16_t*>(dst);
@@ -269,8 +275,6 @@ VertexCacheReport VertexCacheOptimizer::analyzeEntity(Ogre::Entity* entity, bool
                     id->indexBuffer->unlock();
                     sr.reordered = true;
                     ++report.totalReordered;
-                } else {
-                    sr.acmrAfter = sr.acmrBefore;
                 }
             } else {
                 sr.acmrAfter = sr.acmrBefore;

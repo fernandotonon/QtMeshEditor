@@ -379,12 +379,26 @@ void MeshValidator::doValidate()
         cacheReport.weightedAcmrBefore /= cacheReport.totalTriangles;
         cacheReport.weightedAcmrAfter  /= cacheReport.totalTriangles;
 
+        const double improvementPct = cacheReport.improvement();
+        const bool meaningfulGain = improvementPct >= 1.0;
+        // Round to 1 dp to avoid surfacing 0.4% as a "fix me" call to action.
+
         QVariantMap issue;
-        issue["type"] = "info";
-        issue["description"] = QString("Vertex cache: ACMR %1 (lower is better; "
-                                       "run `qtmesh vertex-cache --rewrite` or the MCP "
-                                       "optimize_vertex_cache tool to improve)")
-                                   .arg(QString::number(cacheReport.weightedAcmrBefore, 'f', 3));
+        if (meaningfulGain) {
+            issue["type"] = "info";
+            issue["description"] =
+                QString("Vertex cache: ACMR %1 → %2 (%3% improvement available — "
+                        "run `qtmesh vertex-cache -o <out>` or the MCP "
+                        "optimize_vertex_cache tool with rewrite=true)")
+                    .arg(QString::number(cacheReport.weightedAcmrBefore, 'f', 3),
+                         QString::number(cacheReport.weightedAcmrAfter,  'f', 3),
+                         QString::number(improvementPct, 'f', 1));
+        } else {
+            issue["type"] = "ok";
+            issue["description"] = QString("Vertex cache: ACMR %1 — already optimal "
+                                           "(no meaningful gain from reordering)")
+                                       .arg(QString::number(cacheReport.weightedAcmrBefore, 'f', 3));
+        }
         issue["count"] = 0;
         issue["fixable"] = false;
         m_issues.append(issue);
