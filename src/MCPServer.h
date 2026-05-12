@@ -166,6 +166,7 @@ private:
     QJsonObject toolRemoveLods(const QJsonObject &args);
     QJsonObject toolGetLodInfo(const QJsonObject &args);
     QJsonObject toolGetMemoryUsage(const QJsonObject &args);
+    QJsonObject toolAnalyzeDrawCalls(const QJsonObject &args);
     QJsonObject toolListFiles(const QJsonObject &args);
     QJsonObject toolSearchFiles(const QJsonObject &args);
     QJsonObject toolReadFile(const QJsonObject &args);

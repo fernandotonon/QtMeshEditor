@@ -2535,9 +2535,11 @@ Rectangle {
                         Text {
                             text: modelData.type === "error" ? "\u2718"
                                 : modelData.type === "warning" ? "\u26A0"
+                                : modelData.type === "info" ? "\u2139"
                                 : "\u2714"
                             color: modelData.type === "error" ? "#e05050"
                                  : modelData.type === "warning" ? "#e0a030"
+                                 : modelData.type === "info" ? "#5090d0"
                                  : "#60c060"
                             font.pixelSize: 13
                             anchors.verticalCenter: parent.verticalCenter

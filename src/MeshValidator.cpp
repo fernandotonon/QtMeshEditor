@@ -3,10 +3,13 @@
 #include "SelectionSet.h"
 #include "MeshImporterExporter.h"
 #include "SentryReporter.h"
+#include "DrawCallAnalyzer.h"
+#include "MemoryEstimator.h"
 #include <Ogre.h>
 #include <assimp/postprocess.h>
 #include <cmath>
 #include <QDir>
+#include <QLocale>
 #include <QTemporaryDir>
 
 namespace {
@@ -156,6 +159,11 @@ void MeshValidator::doValidate()
     int totalDegenerates = 0;
     int totalNonFiniteUV = 0;
     int totalOutOfRangeUV = 0;
+    int totalTris = 0;
+    int totalVerts = 0;
+    int totalSubmeshes = 0;
+    int meshesWithUVs = 0;
+    int meshesWithoutUVs = 0;
 
     for (Ogre::Entity* entity : targets) {
         Ogre::MeshPtr mesh = entity->getMesh();
@@ -167,10 +175,17 @@ void MeshValidator::doValidate()
             Ogre::IndexData* id = sub->indexData;
             if (!vd || !id || !id->indexBuffer) continue;
 
+            ++totalSubmeshes;
+            totalVerts += static_cast<int>(vd->vertexCount);
+            totalTris  += static_cast<int>(id->indexCount / 3);
+
             const Ogre::VertexElement* posElem =
                 vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
             const Ogre::VertexElement* texElem =
                 vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
+
+            if (texElem) ++meshesWithUVs;
+            else         ++meshesWithoutUVs;
 
             // ---- lock position buffer ----
             Ogre::HardwareVertexBufferSharedPtr vbuf;
@@ -255,39 +270,113 @@ void MeshValidator::doValidate()
         }
     }
 
-    // ---- build issues list ----
+    // ---- build the checklist ----
+    //
+    // Every checked dimension produces a row: errors/warnings when something is
+    // wrong, an "ok" row when the check passed, an "info" row for neutral
+    // observations (draw calls / memory — neither pass nor fail, just data).
+    // This way the user always sees what was actually analyzed rather than a
+    // bare "No issues found." that hides the scope of the validation.
+    QLocale locale;
+
+    // 1. Geometry — degenerate triangles
     if (totalDegenerates > 0) {
         QVariantMap issue;
         issue["type"] = "error";
-        issue["description"] = QString("%1 degenerate triangle(s) — zero-area faces").arg(totalDegenerates);
+        issue["description"] = QString("Geometry: %1 degenerate triangle(s) — zero-area faces")
+                                   .arg(totalDegenerates);
         issue["count"] = totalDegenerates;
         issue["fixable"] = true;
         m_issues.append(issue);
-    }
-    if (totalNonFiniteUV > 0) {
+    } else {
         QVariantMap issue;
-        issue["type"] = "error";
-        issue["description"] = QString("%1 vertex(es) with non-finite UV coordinates (NaN/Inf)").arg(totalNonFiniteUV);
-        issue["count"] = totalNonFiniteUV;
-        issue["fixable"] = true;
-        m_issues.append(issue);
-    }
-    if (totalOutOfRangeUV > 0) {
-        QVariantMap issue;
-        issue["type"] = "warning";
-        issue["description"] = QString("%1 vertex(es) with extreme UV values (outside ±10)").arg(totalOutOfRangeUV);
-        issue["count"] = totalOutOfRangeUV;
+        issue["type"] = "ok";
+        issue["description"] = QString("Geometry: %1 triangle(s) across %2 submesh(es), no degenerate faces")
+                                   .arg(locale.toString(totalTris))
+                                   .arg(totalSubmeshes);
+        issue["count"] = 0;
         issue["fixable"] = false;
         m_issues.append(issue);
     }
 
-    if (m_issues.isEmpty()) {
-        QVariantMap ok;
-        ok["type"] = "ok";
-        ok["description"] = "No issues found.";
-        ok["count"] = 0;
-        ok["fixable"] = false;
-        m_issues.append(ok);
+    // 2. UVs — finite / range. Skip the check entirely when the mesh has no UVs.
+    if (meshesWithUVs == 0 && meshesWithoutUVs > 0) {
+        QVariantMap issue;
+        issue["type"] = "info";
+        issue["description"] = QStringLiteral("UVs: no texture coordinates on this mesh — skipped");
+        issue["count"] = 0;
+        issue["fixable"] = false;
+        m_issues.append(issue);
+    } else {
+        if (totalNonFiniteUV > 0) {
+            QVariantMap issue;
+            issue["type"] = "error";
+            issue["description"] = QString("UVs: %1 vertex(es) with non-finite coordinates (NaN/Inf)")
+                                       .arg(totalNonFiniteUV);
+            issue["count"] = totalNonFiniteUV;
+            issue["fixable"] = true;
+            m_issues.append(issue);
+        }
+        if (totalOutOfRangeUV > 0) {
+            QVariantMap issue;
+            issue["type"] = "warning";
+            issue["description"] = QString("UVs: %1 vertex(es) with extreme values (outside ±10)")
+                                       .arg(totalOutOfRangeUV);
+            issue["count"] = totalOutOfRangeUV;
+            issue["fixable"] = false;
+            m_issues.append(issue);
+        }
+        if (totalNonFiniteUV == 0 && totalOutOfRangeUV == 0) {
+            QVariantMap issue;
+            issue["type"] = "ok";
+            issue["description"] = QStringLiteral("UVs: all finite, all within ±10 range");
+            issue["count"] = 0;
+            issue["fixable"] = false;
+            m_issues.append(issue);
+        }
+    }
+
+    // 3. Draw-call analysis (Phase 6 slice B). Neutral observation: flag merge
+    // opportunities as "info" so they show up in the report without looking
+    // like a failure.
+    const DrawCallReport drawReport = DrawCallAnalyzer::analyze(targets);
+    if (drawReport.totalDrawCalls > 0) {
+        QVariantMap issue;
+        issue["count"] = drawReport.totalDrawCalls;
+        issue["fixable"] = false;
+        if (drawReport.totalSavings > 0) {
+            issue["type"] = "info";
+            issue["description"] = QString("Draws: %1 across %2 material(s) — save %3 by merging "
+                                           "entities that share a material")
+                                       .arg(drawReport.totalDrawCalls)
+                                       .arg(drawReport.uniqueMaterials)
+                                       .arg(drawReport.totalSavings);
+        } else {
+            issue["type"] = "ok";
+            issue["description"] = QString("Draws: %1 across %2 material(s) — no merge opportunities")
+                                       .arg(drawReport.totalDrawCalls)
+                                       .arg(drawReport.uniqueMaterials);
+        }
+        m_issues.append(issue);
+    }
+
+    // 4. Memory / VRAM (Phase 6 slice A). Always info — no pass/fail without
+    // a configured budget; we just report what the asset costs on the GPU.
+    quint64 meshBytes = 0;
+    for (Ogre::Entity* entity : targets) {
+        const MeshMemoryEstimate est = MemoryEstimator::estimateEntity(entity);
+        meshBytes += est.totalBytes();
+    }
+    if (meshBytes > 0) {
+        QVariantMap issue;
+        issue["type"] = "info";
+        issue["description"] = QString("GPU: ~%1 of vertex + index buffers (%2 vert / %3 tri)")
+                                   .arg(MemoryEstimator::formatBytes(meshBytes))
+                                   .arg(locale.toString(totalVerts))
+                                   .arg(locale.toString(totalTris));
+        issue["count"] = 0;
+        issue["fixable"] = false;
+        m_issues.append(issue);
     }
 
     m_validated = true;

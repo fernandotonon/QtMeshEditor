@@ -256,6 +256,30 @@ TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsWithSkeleton)
     Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
 }
 
+TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsIncludesDrawCalls)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
+    auto meshPtr = createInMemoryTriangleMesh("MeshInfoDrawCallMesh");
+    ASSERT_TRUE(meshPtr);
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("MeshInfoDrawCallNode");
+    auto* entity = sceneMgr->createEntity("MeshInfoDrawCallEntity", meshPtr);
+    node->attachObject(entity);
+
+    QList<Ogre::Entity*> entities;
+    entities << entity;
+
+    QString result = MeshInfoOverlay::formatStats(entities, false);
+    // Phase 6 slice B: draw-call line appears when at least one SubEntity exists.
+    EXPECT_TRUE(result.contains("Draws:"))
+        << "Result: " << result.toStdString();
+
+    node->detachObject(entity);
+    sceneMgr->destroyEntity(entity);
+    sceneMgr->destroySceneNode(node);
+}
+
 TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsIncludesGpuBytes)
 {
     ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";

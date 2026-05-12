@@ -80,6 +80,7 @@ MeshLodController.cpp
 TextureChannelPacker.cpp
 NormalMapGenerator.cpp
 MemoryEstimator.cpp
+DrawCallAnalyzer.cpp
 MeshValidator.cpp
 AIChatManager.cpp
 WelcomeScreenController.cpp
@@ -167,6 +168,7 @@ MeshLodController.h
 TextureChannelPacker.h
 NormalMapGenerator.h
 MemoryEstimator.h
+DrawCallAnalyzer.h
 MeshValidator.h
 AIChatManager.h
 WelcomeScreenController.h
