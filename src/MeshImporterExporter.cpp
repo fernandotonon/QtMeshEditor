@@ -2357,10 +2357,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         }
 
         // Copy referenced textures next to the .rsd so the descriptor stays self-contained.
-        // We use Ogre's in-memory image (Image::loadDynamicImage from the bound texture) and
-        // write a PNG when the original encoding is unknown. We do not short-circuit on
-        // existing files: re-exporting should always refresh the sidecar so the new .rsd
-        // never references stale image content from a previous export.
+        // PS1 hardware/emulators only consume TIM, so always emit a 16bpp TIM regardless of
+        // the source image format (JPG/PNG/BMP/TGA/etc.) — the legacy PNG sidecar code is
+        // kept only as a defensive fallback when the TIM writer fails (e.g. zero-byte
+        // image, exception in pixel conversion).
         //
         // A sidecar write failure must abort the whole RSD export: writing the descriptor
         // anyway would leave TEX[] entries pointing to nonexistent / stale files, breaking
@@ -2375,10 +2375,28 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 tex->convertToImage(img, true);
                 if (img.getWidth() == 0 || img.getHeight() == 0)
                     continue;
-                // Force RGBA8 layout — Ogre textures may live in PF_A8R8G8B8 / BGRA / DXT /
-                // float formats and feeding any of those into QImage::Format_RGBA8888 would
-                // either misorder channels or, for compressed/non-byte formats, walk past
-                // the buffer end during the save.
+
+                const QString basename = QFileInfo(ot.outFile).completeBaseName();
+                const QString dirSep = QDir::separator();
+
+                // Primary: 16bpp PS1 TIM. PS1 emulators / hardware can't decode JPG/PNG, so
+                // this is what every well-formed RSD ships next to the descriptor.
+                const QString tim = outFi.absolutePath() + dirSep + basename + QStringLiteral(".tim");
+                QString timErr;
+                if (PS1TIM::saveOgreImageToTim16(img, tim, &timErr)) {
+                    ot.outFile = QFileInfo(tim).fileName();
+                    continue;
+                }
+                Ogre::LogManager::getSingleton().logError(
+                    "RSD TIM sidecar write failed: " + timErr.toStdString()
+                    + " — falling back to PNG so the .rsd still references a real file.");
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("file.export"),
+                    QStringLiteral("RSD TIM sidecar write failed, falling back to PNG: %1")
+                        .arg(timErr));
+
+                // Defensive fallback: write a PNG so the .rsd at least references something
+                // a future re-import can decode (the original PNG sidecar path).
                 std::vector<uint8_t> rgba;
                 if (img.getFormat() != Ogre::PF_BYTE_RGBA) {
                     const size_t pixels = static_cast<size_t>(img.getWidth()) * img.getHeight();
@@ -2396,17 +2414,13 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                                 static_cast<int>(img.getHeight()),
                                 static_cast<int>(img.getWidth()) * 4,
                                 QImage::Format_RGBA8888);
-                // Always save a PNG copy with the same basename (lossless, widely supported).
-                // QImage::save() returns false on failure without throwing — only commit the
-                // updated outFile name when the write succeeded, otherwise the .rsd would
-                // reference a sidecar that was never created.
-                const QString png = outFi.absolutePath() + QDir::separator()
-                    + QFileInfo(ot.outFile).completeBaseName() + QStringLiteral(".png");
+                const QString png = outFi.absolutePath() + dirSep + basename + QStringLiteral(".png");
                 if (qi.copy().save(png, "PNG")) {
                     ot.outFile = QFileInfo(png).fileName();
                 } else {
                     Ogre::LogManager::getSingleton().logError(
-                        "Failed to write RSD texture sidecar: " + png.toStdString());
+                        "Failed to write RSD texture sidecar (TIM and PNG both failed): "
+                        + png.toStdString());
                     SentryReporter::addBreadcrumb(
                         QStringLiteral("file.export"),
                         QStringLiteral("RSD texture sidecar write failed: %1")
