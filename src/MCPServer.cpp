@@ -4106,11 +4106,13 @@ QJsonArray MCPServer::buildToolsList()
     {
         QJsonObject props;
         props["budget"] = QJsonObject{{"type", "string"},
-            {"description", "Optional memory budget (e.g. '50MB', '1GB'). When the report exceeds the budget the response flags 'overBudget'."}};
+            {"description", "Optional memory budget (e.g. '50MB', '1GB'). When the report exceeds the budget the response flags 'overBudget' under the structured 'memory' field."}};
         appendTool(
             "get_memory_usage",
             "Report estimated GPU memory for every loaded mesh (vertex + index buffers) "
-            "and VRAM for every resident texture. Includes per-asset breakdown and scene totals. "
+            "and VRAM for every resident texture. The response includes a human-readable summary "
+            "in the standard content field and a structured 'memory' object with per-mesh, "
+            "per-texture, totals, and optional budget fields for machine consumers. "
             "Use to spot heavy meshes/textures before exporting to a memory-constrained target.",
             props
         );
