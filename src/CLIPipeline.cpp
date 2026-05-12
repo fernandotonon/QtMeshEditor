@@ -14,6 +14,7 @@
 #include "NormalMapGenerator.h"
 #include "MemoryEstimator.h"
 #include "DrawCallAnalyzer.h"
+#include "VertexCacheOptimizer.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -611,6 +612,9 @@ void CLIPipeline::printUsage()
         "                                    --no-cloud opts out.\n"
         "  analyze <file> [--json]           Analyze draw calls: per-material grouping plus\n"
         "                                    merge suggestions for entities sharing a material.\n"
+        "  vertex-cache <file> [-o <output>] [--json]\n"
+        "                                    Reorder index buffers via Forsyth's algorithm; reports\n"
+        "                                    before/after ACMR. Without -o, only analyzes (read-only).\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -975,6 +979,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "normal-from-height") rc = cmdNormalFromHeight(argc, argv);
     else if (cmd == "memory") rc = cmdMemory(argc, argv);
     else if (cmd == "analyze") rc = cmdAnalyze(argc, argv);
+    else if (cmd == "vertex-cache") rc = cmdVertexCache(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -3470,6 +3475,102 @@ int CLIPipeline::cmdAnalyze(int argc, char* argv[])
     } else {
         cliWrite(QString("File: %1\n").arg(fi.fileName()));
         cliWrite(DrawCallAnalyzer::toText(report));
+    }
+    return 0;
+}
+
+int CLIPipeline::cmdVertexCache(int argc, char* argv[])
+{
+    // Parse: vertex-cache <file> [-o <output>] [--json]
+    QString filePath;
+    QString outputPath;
+    bool jsonOutput = false;
+
+    int i = 1;
+    while (i < argc) {
+        const QString arg(argv[i]);
+        ++i;
+        if (arg == "vertex-cache" || arg == "--cli") continue;
+        if (arg == "--json")     { jsonOutput = true; continue; }
+        if (arg == "-o" && i < argc) { outputPath = argv[i++]; continue; }
+        if (!arg.startsWith("-") && filePath.isEmpty()) filePath = arg;
+    }
+
+    if (filePath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh vertex-cache <file> [-o <output>] [--json]" << Qt::endl;
+        return 2;
+    }
+
+    const QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    const bool rewrite = !outputPath.isEmpty();
+    SentryReporter::addBreadcrumb("cli.vertex-cache",
+        QString("Vertex-cache .%1%2").arg(fi.suffix(), rewrite ? " rewrite" : " analyze"));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0);
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    VertexCacheReport aggregate;
+    for (Ogre::Entity* entity : entities) {
+        const VertexCacheReport partial =
+            VertexCacheOptimizer::analyzeEntity(entity, rewrite);
+        // Merge into aggregate (preserve per-submesh rows; recompute the
+        // weighted ACMR from the running tri/total sums).
+        for (const SubMeshCacheReport& sr : partial.submeshes) {
+            aggregate.submeshes.append(sr);
+            aggregate.totalTriangles += sr.triangleCount;
+            aggregate.weightedAcmrBefore += sr.acmrBefore * sr.triangleCount;
+            aggregate.weightedAcmrAfter  += sr.acmrAfter  * sr.triangleCount;
+            if (sr.reordered) ++aggregate.totalReordered;
+        }
+    }
+    if (aggregate.totalTriangles > 0) {
+        aggregate.weightedAcmrBefore /= aggregate.totalTriangles;
+        aggregate.weightedAcmrAfter  /= aggregate.totalTriangles;
+    }
+
+    if (rewrite) {
+        Ogre::Entity* entity = entities.first();
+        auto* node = entity->getParentSceneNode();
+        const QFileInfo outFi(outputPath);
+        const QString fmt = formatForExtension(outputPath);
+        SentryReporter::addBreadcrumb("file.export",
+            QString("Exporting %1").arg(outFi.absoluteFilePath()));
+        const int result = MeshImporterExporter::exporter(
+            node, outFi.absoluteFilePath(), fmt);
+        if (result != 0) {
+            SentryReporter::captureMessage(
+                QString("CLI vertex-cache: export failed (.%1 -> .%2)")
+                    .arg(fi.suffix(), outFi.suffix()), "error");
+            err() << "Error: Export failed." << Qt::endl;
+            return 1;
+        }
+    }
+
+    if (jsonOutput) {
+        QJsonObject obj = VertexCacheOptimizer::toJson(aggregate);
+        obj["file"] = fi.fileName();
+        if (rewrite) obj["output"] = QFileInfo(outputPath).fileName();
+        cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(QString("File: %1%2\n")
+                     .arg(fi.fileName(),
+                          rewrite ? QString(" -> %1").arg(QFileInfo(outputPath).fileName())
+                                  : QString()));
+        cliWrite(VertexCacheOptimizer::toText(aggregate));
     }
     return 0;
 }

@@ -81,6 +81,7 @@ TextureChannelPacker.cpp
 NormalMapGenerator.cpp
 MemoryEstimator.cpp
 DrawCallAnalyzer.cpp
+VertexCacheOptimizer.cpp
 MeshValidator.cpp
 AIChatManager.cpp
 WelcomeScreenController.cpp
@@ -169,6 +170,7 @@ TextureChannelPacker.h
 NormalMapGenerator.h
 MemoryEstimator.h
 DrawCallAnalyzer.h
+VertexCacheOptimizer.h
 MeshValidator.h
 AIChatManager.h
 WelcomeScreenController.h

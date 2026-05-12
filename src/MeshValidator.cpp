@@ -5,6 +5,7 @@
 #include "SentryReporter.h"
 #include "DrawCallAnalyzer.h"
 #include "MemoryEstimator.h"
+#include "VertexCacheOptimizer.h"
 #include <Ogre.h>
 #include <assimp/postprocess.h>
 #include <cmath>
@@ -360,7 +361,36 @@ void MeshValidator::doValidate()
         m_issues.append(issue);
     }
 
-    // 4. Memory / VRAM (Phase 6 slice A). Always info — no pass/fail without
+    // 4. Vertex cache ACMR (Phase 6 slice C). Pure analysis — never rewrites
+    // the index buffer from validation. The qtmesh CLI / MCP / future inspector
+    // button does the actual reorder when the user opts in.
+    VertexCacheReport cacheReport;
+    for (Ogre::Entity* entity : targets) {
+        const VertexCacheReport partial =
+            VertexCacheOptimizer::analyzeEntity(entity, /*rewrite=*/false);
+        for (const SubMeshCacheReport& sr : partial.submeshes) {
+            cacheReport.submeshes.append(sr);
+            cacheReport.totalTriangles += sr.triangleCount;
+            cacheReport.weightedAcmrBefore += sr.acmrBefore * sr.triangleCount;
+            cacheReport.weightedAcmrAfter  += sr.acmrAfter  * sr.triangleCount;
+        }
+    }
+    if (cacheReport.totalTriangles > 0) {
+        cacheReport.weightedAcmrBefore /= cacheReport.totalTriangles;
+        cacheReport.weightedAcmrAfter  /= cacheReport.totalTriangles;
+
+        QVariantMap issue;
+        issue["type"] = "info";
+        issue["description"] = QString("Vertex cache: ACMR %1 (lower is better; "
+                                       "run `qtmesh vertex-cache --rewrite` or the MCP "
+                                       "optimize_vertex_cache tool to improve)")
+                                   .arg(QString::number(cacheReport.weightedAcmrBefore, 'f', 3));
+        issue["count"] = 0;
+        issue["fixable"] = false;
+        m_issues.append(issue);
+    }
+
+    // 5. Memory / VRAM (Phase 6 slice A). Always info — no pass/fail without
     // a configured budget; we just report what the asset costs on the GPU.
     quint64 meshBytes = 0;
     for (Ogre::Entity* entity : targets) {
