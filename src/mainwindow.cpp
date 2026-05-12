@@ -63,6 +63,7 @@
 #include "commands/TransformCommands.h"
 #include "PropertiesPanelController.h"
 #include "MeshLodController.h"
+#include "MeshDecimatorController.h"
 #include "MeshValidator.h"
 #include "MaterialPresetLibrary.h"
 #include "MaterialPreviewRenderer.h"
@@ -485,6 +486,11 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<MeshLodController>("PropertiesPanel", 1, 0, "MeshLodController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MeshLodController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<MeshDecimatorController>(
+            "PropertiesPanel", 1, 0, "MeshDecimatorController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return MeshDecimatorController::qmlInstance(engine, nullptr);
             });
         // Open the LOD export directory picker from MainWindow so the dialog has a
         // proper parent widget — QFileDialog invoked from a QML context doesn't
