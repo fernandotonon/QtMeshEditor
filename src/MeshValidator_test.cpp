@@ -295,6 +295,7 @@ TEST_F(MeshValidatorTest, DoValidateValidMeshReportsChecklist)
     bool sawGeometryOk = false;
     bool sawUvsOk = false;
     bool sawDraws = false;
+    bool sawCache = false;
     bool sawGpu = false;
     for (const QVariant& issueVariant : issues) {
         const QVariantMap issue = issueVariant.toMap();
@@ -305,14 +306,16 @@ TEST_F(MeshValidatorTest, DoValidateValidMeshReportsChecklist)
         EXPECT_NE(type, QStringLiteral("error")) << description.toStdString();
         EXPECT_NE(type, QStringLiteral("warning")) << description.toStdString();
 
-        if (description.startsWith("Geometry:") && type == "ok") sawGeometryOk = true;
-        if (description.startsWith("UVs:")      && type == "ok") sawUvsOk = true;
-        if (description.startsWith("Draws:"))                    sawDraws = true;
-        if (description.startsWith("GPU:"))                      sawGpu = true;
+        if (description.startsWith("Geometry:")     && type == "ok") sawGeometryOk = true;
+        if (description.startsWith("UVs:")          && type == "ok") sawUvsOk = true;
+        if (description.startsWith("Draws:"))                        sawDraws = true;
+        if (description.startsWith("Vertex cache:"))                 sawCache = true;
+        if (description.startsWith("GPU:"))                          sawGpu = true;
     }
     EXPECT_TRUE(sawGeometryOk);
     EXPECT_TRUE(sawUvsOk);
     EXPECT_TRUE(sawDraws);
+    EXPECT_TRUE(sawCache);
     EXPECT_TRUE(sawGpu);
 }
 

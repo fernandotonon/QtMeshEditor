@@ -16,6 +16,8 @@ Rectangle {
     property var materialEditorAction: null
     readonly property string currentSummaryObjectName: summaryLoader.item ? summaryLoader.item.objectName : ""
 
+    // Count error+warning rows (the "must fix" tier). Info rows are
+    // perf observations and counted separately via suggestionSummary().
     function issueSummary() {
         if (!MeshValidator.validated)
             return "Not run"
@@ -24,6 +26,23 @@ Rectangle {
             var item = MeshValidator.issues[i]
             var typ = item.type !== undefined ? item.type : item["type"]
             if (typ === "error" || typ === "warning")
+                ++n
+        }
+        return String(n)
+    }
+
+    // Phase 6: count info rows that carry a one-click fix (e.g. vertex
+    // cache reorder). These aren't errors but the user has an in-UI
+    // action available, so surface them as "Suggestions" in the panel.
+    function suggestionSummary() {
+        if (!MeshValidator.validated)
+            return "Not run"
+        var n = 0
+        for (var i = 0; i < MeshValidator.issues.length; ++i) {
+            var item = MeshValidator.issues[i]
+            var typ = item.type !== undefined ? item.type : item["type"]
+            var fixable = item.fixable === true
+            if (typ === "info" && fixable)
                 ++n
         }
         return String(n)
@@ -196,7 +215,10 @@ Rectangle {
 
                 SummaryText { label: "Selection"; value: MeshValidator.hasSelection ? PropertiesPanelController.selectionName : "None" }
                 SummaryText { label: "Findings"; value: root.issueSummary() }
-                SummaryText { label: "Fixable"; value: MeshValidator.hasFixableIssues ? "Yes" : "No" }
+                SummaryText { label: "Suggestions"; value: root.suggestionSummary() }
+                SummaryText { label: "Fixable"
+                              value: (MeshValidator.hasFixableIssues
+                                      || MeshValidator.hasCacheOptimization) ? "Yes" : "No" }
                 SummaryText { label: "Status"; value: MeshValidator.validating ? "Running" : (MeshValidator.validated ? "Ready" : "Idle") }
                 Item { Layout.fillWidth: true }
             }

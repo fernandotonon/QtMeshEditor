@@ -14,6 +14,7 @@
 #include "NormalMapGenerator.h"
 #include "MemoryEstimator.h"
 #include "DrawCallAnalyzer.h"
+#include "VertexCacheOptimizer.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -569,6 +570,7 @@ void CLIPipeline::printUsage()
         "  --min-materials <n>       Override min_material_count (0 = no limit)\n"
         "  --max-vertices <n>        Override max_vertex_count (0 = no limit)\n"
         "  --min-vertices <n>        Override min_vertex_count (0 = no limit)\n"
+        "  --max-acmr <n>            Override max_acmr (0 = no limit, e.g. 1.5)\n"
         "  --require-skeleton / --no-require-skeleton\n"
         "                            Override require_skeleton\n"
         "  --require-animations / --no-require-animations\n"
@@ -611,6 +613,9 @@ void CLIPipeline::printUsage()
         "                                    --no-cloud opts out.\n"
         "  analyze <file> [--json]           Analyze draw calls: per-material grouping plus\n"
         "                                    merge suggestions for entities sharing a material.\n"
+        "  vertex-cache <file> [-o <output>] [--json]\n"
+        "                                    Reorder index buffers via Forsyth's algorithm; reports\n"
+        "                                    before/after ACMR. Without -o, only analyzes (read-only).\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -975,6 +980,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "normal-from-height") rc = cmdNormalFromHeight(argc, argv);
     else if (cmd == "memory") rc = cmdMemory(argc, argv);
     else if (cmd == "analyze") rc = cmdAnalyze(argc, argv);
+    else if (cmd == "vertex-cache") rc = cmdVertexCache(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -2761,6 +2767,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
 
     int maxVerticesOverride = -1;
     int minVerticesOverride = -1;
+    double maxAcmrOverride = -1.0;
     int maxMeshesOverride = -1;
     int minMeshesOverride = -1;
     int maxMaterialsOverride = -1;
@@ -2904,6 +2911,12 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (parseResult == ParseValueResult::Error) return 2;
         if (parseResult == ParseValueResult::Matched) {
             if (!parseNonNegativeInt("--min-vertices", value, minVerticesOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-acmr", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeDouble("--max-acmr", value, maxAcmrOverride)) return 2;
             continue;
         }
         parseResult = parseValueArg(arg, "--max-meshes", i, value);
@@ -3064,6 +3077,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (minMaterialsOverride >= 0) config.minMaterialCount = minMaterialsOverride;
     if (maxVerticesOverride >= 0) config.maxVertexCount = maxVerticesOverride;
     if (minVerticesOverride >= 0) config.minVertexCount = minVerticesOverride;
+    if (maxAcmrOverride >= 0.0)   config.maxAcmr        = maxAcmrOverride;
     if (maxAnimKeyframesOverride >= 0) config.maxAnimKeyframes = maxAnimKeyframesOverride;
     if (minAnimKeyframesOverride >= 0) config.minAnimKeyframes = minAnimKeyframesOverride;
     if (maxAnimDurationOverride >= 0.0) config.maxAnimDuration = maxAnimDurationOverride;
@@ -3471,5 +3485,115 @@ int CLIPipeline::cmdAnalyze(int argc, char* argv[])
         cliWrite(QString("File: %1\n").arg(fi.fileName()));
         cliWrite(DrawCallAnalyzer::toText(report));
     }
+    return 0;
+}
+
+namespace {
+
+struct VertexCacheCmdArgs {
+    QString filePath;
+    QString outputPath;
+    bool jsonOutput = false;
+};
+
+// Parse argv for cmdVertexCache. Returns true on success.
+bool parseVertexCacheArgs(int argc, char* argv[], VertexCacheCmdArgs& out)
+{
+    int i = 1;
+    while (i < argc) {
+        const QString arg(argv[i]);
+        ++i;
+        if (arg == "vertex-cache" || arg == "--cli") continue;
+        if (arg == "--json")              { out.jsonOutput = true; continue; }
+        if (arg == "-o" && i < argc)      { out.outputPath = argv[i++]; continue; }
+        if (!arg.startsWith("-") && out.filePath.isEmpty()) out.filePath = arg;
+    }
+    return !out.filePath.isEmpty();
+}
+
+// Export the (potentially mutated) scene rooted at `entities.first()` to
+// `outputPath`. Returns 0 on success, 1 on export failure.
+int exportRewrittenMesh(const QList<Ogre::Entity*>& entities,
+                        const QFileInfo& srcFi, const QString& outputPath)
+{
+    const Ogre::Entity* entity = entities.first();
+    const auto* node = entity->getParentSceneNode();
+    const QFileInfo outFi(outputPath);
+    const QString fmt = CLIPipeline::formatForExtension(outputPath);
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Exporting %1").arg(outFi.absoluteFilePath()));
+    if (MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), fmt) != 0) {
+        SentryReporter::captureMessage(
+            QString("CLI vertex-cache: export failed (.%1 -> .%2)")
+                .arg(srcFi.suffix(), outFi.suffix()), "error");
+        err() << "Error: Export failed." << Qt::endl;
+        return 1;
+    }
+    return 0;
+}
+
+void emitVertexCacheReport(const VertexCacheReport& report, const QFileInfo& fi,
+                           const QString& outputPath, bool jsonOutput)
+{
+    const bool rewrite = !outputPath.isEmpty();
+    if (jsonOutput) {
+        QJsonObject obj = VertexCacheOptimizer::toJson(report);
+        obj["file"] = fi.fileName();
+        if (rewrite) obj["output"] = QFileInfo(outputPath).fileName();
+        cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(QString("File: %1%2\n")
+                     .arg(fi.fileName(),
+                          rewrite ? QString(" -> %1").arg(QFileInfo(outputPath).fileName())
+                                  : QString()));
+        cliWrite(VertexCacheOptimizer::toText(report));
+    }
+}
+
+} // namespace
+
+int CLIPipeline::cmdVertexCache(int argc, char* argv[])
+{
+    VertexCacheCmdArgs cmdArgs;
+    if (!parseVertexCacheArgs(argc, argv, cmdArgs)) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh vertex-cache <file> [-o <output>] [--json]" << Qt::endl;
+        return 2;
+    }
+
+    const QFileInfo fi(cmdArgs.filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << cmdArgs.filePath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    const bool rewrite = !cmdArgs.outputPath.isEmpty();
+    SentryReporter::addBreadcrumb("cli.vertex-cache",
+        QString("Vertex-cache .%1%2").arg(fi.suffix(), rewrite ? " rewrite" : " analyze"));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0);
+    const auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        err() << "Error: Failed to load file: " << cmdArgs.filePath << Qt::endl;
+        return 1;
+    }
+
+    VertexCacheReport aggregate;
+    for (Ogre::Entity* entity : entities) {
+        VertexCacheOptimizer::mergeReport(
+            aggregate, VertexCacheOptimizer::analyzeEntity(entity, rewrite));
+    }
+    VertexCacheOptimizer::finalize(aggregate);
+
+    if (rewrite) {
+        if (const int rc = exportRewrittenMesh(entities, fi, cmdArgs.outputPath); rc != 0)
+            return rc;
+    }
+
+    emitVertexCacheReport(aggregate, fi, cmdArgs.outputPath, cmdArgs.jsonOutput);
     return 0;
 }

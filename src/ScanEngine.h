@@ -59,6 +59,11 @@ struct AssetInfo {
     /// Fraction of atomic node keys that are redundant under balanced simplify tolerances (0..1), file-level aggregate.
     double animationRedundantKeyframeRatio = 0.0;
 
+    /// Phase 6 slice C: weighted ACMR across all triangulated meshes (0 = unknown / no indices).
+    /// Computed via VertexCacheOptimizer::computeAcmr on Assimp's flattened
+    /// per-face indices, weighted by triangle count.
+    double weightedAcmr = 0.0;
+
     // Redundant-keyframe analysis (filled when scan rule is active).
     // Total keyframes summed across all tracks of all animations.
     int totalKeyframes = 0;

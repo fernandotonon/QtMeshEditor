@@ -90,6 +90,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MemoryEstimator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DrawCallAnalyzer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexCacheOptimizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp

@@ -5,6 +5,7 @@
 #include "SentryReporter.h"
 #include "DrawCallAnalyzer.h"
 #include "MemoryEstimator.h"
+#include "VertexCacheOptimizer.h"
 #include <Ogre.h>
 #include <assimp/postprocess.h>
 #include <cmath>
@@ -55,6 +56,7 @@ MeshValidator::MeshValidator() : QObject(nullptr)
         // Clear stale results when selection changes; cancel any pending validation.
         m_issues.clear();
         m_validated = false;
+        m_cacheOptimizationAvailable = false;
         if (m_pendingValidate) {
             m_pendingValidate = false;
             emit validatingChanged();
@@ -77,8 +79,14 @@ bool MeshValidator::hasSelection() const
 
 bool MeshValidator::hasFixableIssues() const
 {
+    // Only error/warning rows trigger the red "Fix All (re-import with
+    // cleanup)" button — info-tier fixable rows (e.g. vertex cache) have
+    // their own dedicated buttons and reading list (hasCacheOptimization).
     for (const QVariant& v : m_issues) {
-        if (v.toMap().value("fixable").toBool())
+        const QVariantMap m = v.toMap();
+        if (!m.value("fixable").toBool()) continue;
+        const QString type = m.value("type").toString();
+        if (type == QLatin1String("error") || type == QLatin1String("warning"))
             return true;
     }
     return false;
@@ -149,6 +157,7 @@ void MeshValidator::doValidate()
 {
     m_issues.clear();
     m_validated = false;
+    m_cacheOptimizationAvailable = false;
 
     const QList<Ogre::Entity*> targets = validationTargetEntities();
     if (targets.isEmpty()) {
@@ -360,7 +369,53 @@ void MeshValidator::doValidate()
         m_issues.append(issue);
     }
 
-    // 4. Memory / VRAM (Phase 6 slice A). Always info — no pass/fail without
+    // 4. Vertex cache ACMR (Phase 6 slice C). Pure analysis — never rewrites
+    // the index buffer from validation. The qtmesh CLI / MCP / future inspector
+    // button does the actual reorder when the user opts in.
+    VertexCacheReport cacheReport;
+    for (Ogre::Entity* entity : targets) {
+        const VertexCacheReport partial =
+            VertexCacheOptimizer::analyzeEntity(entity, /*rewrite=*/false);
+        for (const SubMeshCacheReport& sr : partial.submeshes) {
+            cacheReport.submeshes.append(sr);
+            cacheReport.totalTriangles += sr.triangleCount;
+            cacheReport.weightedAcmrBefore += sr.acmrBefore * sr.triangleCount;
+            cacheReport.weightedAcmrAfter  += sr.acmrAfter  * sr.triangleCount;
+        }
+    }
+    if (cacheReport.totalTriangles > 0) {
+        cacheReport.weightedAcmrBefore /= cacheReport.totalTriangles;
+        cacheReport.weightedAcmrAfter  /= cacheReport.totalTriangles;
+
+        const double improvementPct = cacheReport.improvement();
+        const bool meaningfulGain = improvementPct >= 1.0;
+        // Round to 1 dp to avoid surfacing 0.4% as a "fix me" call to action.
+
+        QVariantMap issue;
+        if (meaningfulGain) {
+            m_cacheOptimizationAvailable = true;
+            issue["type"] = "info";
+            issue["description"] =
+                QString("Vertex cache: ACMR %1 → %2 (%3% improvement available — "
+                        "click \"Optimize Vertex Cache\" below)")
+                    .arg(QString::number(cacheReport.weightedAcmrBefore, 'f', 3),
+                         QString::number(cacheReport.weightedAcmrAfter,  'f', 3),
+                         QString::number(improvementPct, 'f', 1));
+            // The row is actionable from the UI — context panel reads this to
+            // surface "Fixable: Yes" + the new "Suggestions" tier counter.
+            issue["fixable"] = true;
+        } else {
+            issue["type"] = "ok";
+            issue["description"] = QString("Vertex cache: ACMR %1 — already optimal "
+                                           "(no meaningful gain from reordering)")
+                                       .arg(QString::number(cacheReport.weightedAcmrBefore, 'f', 3));
+            issue["fixable"] = false;
+        }
+        issue["count"] = 0;
+        m_issues.append(issue);
+    }
+
+    // 5. Memory / VRAM (Phase 6 slice A). Always info — no pass/fail without
     // a configured budget; we just report what the asset costs on the GPU.
     quint64 meshBytes = 0;
     for (Ogre::Entity* entity : targets) {
@@ -429,5 +484,46 @@ void MeshValidator::fixAll()
                     .arg(reimportPaths.size()));
 
     // Re-validate the newly imported entities
+    validate();
+}
+
+void MeshValidator::optimizeVertexCache()
+{
+    const QList<Ogre::Entity*> targets = validationTargetEntities();
+    if (targets.isEmpty()) {
+        emit error("No mesh selected.");
+        return;
+    }
+
+    SentryReporter::addBreadcrumb("ui.action", "Optimize vertex cache (Forsyth, in place)");
+
+    VertexCacheReport aggregate;
+    for (Ogre::Entity* entity : targets) {
+        const VertexCacheReport partial =
+            VertexCacheOptimizer::analyzeEntity(entity, /*rewrite=*/true);
+        for (const SubMeshCacheReport& sr : partial.submeshes) {
+            aggregate.submeshes.append(sr);
+            aggregate.totalTriangles += sr.triangleCount;
+            aggregate.weightedAcmrBefore += sr.acmrBefore * sr.triangleCount;
+            aggregate.weightedAcmrAfter  += sr.acmrAfter  * sr.triangleCount;
+            if (sr.reordered) ++aggregate.totalReordered;
+        }
+    }
+    if (aggregate.totalTriangles > 0) {
+        aggregate.weightedAcmrBefore /= aggregate.totalTriangles;
+        aggregate.weightedAcmrAfter  /= aggregate.totalTriangles;
+    }
+
+    if (aggregate.totalReordered == 0) {
+        emit fixApplied("Vertex cache was already optimal — no submeshes were reordered.");
+    } else {
+        emit fixApplied(QString("Reordered %1 submesh(es). ACMR %2 → %3 (%4% improvement).")
+                            .arg(aggregate.totalReordered)
+                            .arg(QString::number(aggregate.weightedAcmrBefore, 'f', 3),
+                                 QString::number(aggregate.weightedAcmrAfter,  'f', 3),
+                                 QString::number(aggregate.improvement(), 'f', 1)));
+    }
+
+    // Refresh the checklist — the row should flip to "already optimal".
     validate();
 }

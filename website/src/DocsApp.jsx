@@ -18,6 +18,12 @@ const NAV = [
     { id: 'cmd-pose', label: 'pose' },
     { id: 'cmd-scan', label: 'scan' },
   ]},
+  { section: 'Performance', items: [
+    { id: 'perf-overview', label: 'Concepts' },
+    { id: 'cmd-memory', label: 'memory' },
+    { id: 'cmd-analyze', label: 'analyze' },
+    { id: 'cmd-vertex-cache', label: 'vertex-cache' },
+  ]},
   { section: 'Scan Reference', items: [
     { id: 'scan-config', label: 'Configuration (qtmesh.yml)' },
     { id: 'scan-rules', label: 'Rules Reference' },
@@ -409,6 +415,7 @@ qtmesh pose <file> --animation <name> --count N -o <pattern>`}
               ['--min-materials <n>', 'Override min_material_count for this run (0 = no limit)'],
               ['--max-vertices <n>', 'Override max_vertex_count for this run (0 = no limit)'],
               ['--min-vertices <n>', 'Override min_vertex_count for this run (0 = no limit)'],
+              ['--max-acmr <n>', 'Override max_acmr for this run (e.g. 1.5; 0 = no limit)'],
               ['--require-skeleton / --no-require-skeleton', 'Enable/disable require_skeleton for this run'],
               ['--require-animations / --no-require-animations', 'Enable/disable require_animations for this run'],
               ['--allow-embedded-textures / --disallow-embedded-textures', 'Enable/disable embedded textures for this run'],
@@ -456,6 +463,223 @@ Summary:
   ⏱ Time:     0.3s`}</CodeBlock>
           </CmdSection>
 
+          {/* ─── Performance ─── */}
+
+          <section className={s.section} id="perf-overview">
+            <h2 className={s.sectionTitle}>Performance Concepts</h2>
+            <p className={s.para}>
+              QtMeshEditor ships three first-class performance analyses, all accessible from the
+              CLI, the MCP server, and the Inspector's <Code>Run Validation</Code> checklist.
+              They never modify your source files unless you explicitly ask — analysis is
+              read-only by default, rewrites are opt-in.
+            </p>
+
+            <h3 className={s.subsection}>GPU memory (VRAM)</h3>
+            <p className={s.para}>
+              The bytes a mesh occupies on the GPU once it's resident, broken into two pieces:
+            </p>
+            <ul className={s.para} style={{ paddingLeft: '1.4rem' }}>
+              <li><strong>Mesh bytes</strong>: <Code>vertexCount × stride + indexCount × indexSize</Code>.
+                  Stride is determined by the vertex declaration (positions + normals + UVs + bone weights, etc.).
+                  Index size is 2 bytes for 16-bit buffers and 4 bytes for 32-bit.</li>
+              <li><strong>Texture bytes</strong>: <Code>width × height × bytesPerPixel</Code>, multiplied by
+                  <Code>4/3</Code> when a mipmap chain is present (the chain converges to a third of the base).</li>
+            </ul>
+            <p className={s.para}>
+              The validator's <Code>GPU:</Code> row sums both, deduplicating shared meshes so totals reflect
+              actual GPU residents (not draw-call counts). <Code>qtmesh memory</Code> exposes the same numbers
+              from a file path. The <Code>--budget</Code> flag (or the <Code>memory_budget_mb</Code> rule on a
+              QtMesh Cloud project) flips the command's exit code to <Code>1</Code> when the scene exceeds the
+              configured ceiling — useful as a CI gate.
+            </p>
+
+            <h3 className={s.subsection}>Draw calls</h3>
+            <p className={s.para}>
+              One draw call per <Code>SubEntity</Code>. Ogre cannot batch SubEntities that share a material
+              into a single draw call automatically, so two cubes with the same wood material still cost two
+              calls. <Code>qtmesh analyze</Code> groups every loaded entity by the materials its SubEntities
+              use and reports two numbers:
+            </p>
+            <ul className={s.para} style={{ paddingLeft: '1.4rem' }}>
+              <li><strong>Draw calls</strong>: today's cost.</li>
+              <li><strong>After merges</strong>: the cost if all <em>N</em> entities sharing a material were
+                  combined into one — saving <em>N−1</em> calls per cluster.</li>
+            </ul>
+            <p className={s.para}>
+              The validator surfaces this as a <Code>Draws:</Code> info row with the merge-savings count.
+              The merge itself isn't done from the validator yet (it's a write op crossing the undo stack);
+              the suggestion in the JSON tells you which entities to combine in Edit Mode or via a future
+              <Code>qtmesh optimize</Code> command.
+            </p>
+
+            <h3 className={s.subsection}>Vertex cache (ACMR)</h3>
+            <p className={s.para}>
+              Modern GPUs cache the last ~32 transformed vertices (the "post-T&amp;L cache"). Triangles that
+              reference recently-emitted vertices skip the per-vertex pipeline cost. <strong>ACMR</strong>
+              (Average Cache Miss Ratio) measures how friendly a mesh's index order is to that cache —
+              cache misses divided by triangle count.
+            </p>
+            <table className={s.table}>
+              <thead><tr><th>ACMR range</th><th>Meaning</th></tr></thead>
+              <tbody>
+                <tr><td><Code>~0.5</Code></td><td>Theoretical optimum (each triangle reuses two cached verts).</td></tr>
+                <tr><td><Code>0.5 – 1.0</Code></td><td>Well-ordered strips; no reorder needed.</td></tr>
+                <tr><td><Code>1.0 – 2.0</Code></td><td>Typical for unoptimized exporters. Worth a reorder pass.</td></tr>
+                <tr><td><Code>&gt; 2.0</Code></td><td>Random-ish topology. Reorder cuts vertex-shader load substantially.</td></tr>
+              </tbody>
+            </table>
+            <p className={s.para}>
+              <Code>qtmesh vertex-cache</Code> runs <a href="http://eelpi.gotdns.org/papers/fast_vert_cache_opt.html" className={s.link}>Tom Forsyth's linear-time algorithm</a>
+              on every submesh. Without <Code>-o</Code> it's analyze-only and reports what the projected
+              ACMR would be after a reorder. With <Code>-o &lt;out&gt;</Code> it rewrites the index buffer in
+              place — but only when the new order strictly improves ACMR (never regresses). The Inspector's
+              <Code>Optimize Vertex Cache</Code> button does the same in-memory rewrite without writing back
+              to disk.
+            </p>
+            <p className={s.para}>
+              The scan command's <Code>max_acmr</Code> rule flags assets above a configured ceiling.
+              Heads-up: scan computes ACMR from Assimp's flattened triangle list, which doesn't match
+              Ogre's index order — scan numbers run higher than the in-app validator's on the same asset.
+              <Code>1.5</Code> is a reasonable scan-side ceiling. A future Ogre-backed scan backend will
+              reconcile the numbers.
+            </p>
+          </section>
+
+          <CmdSection id="cmd-memory" name="memory" description="Estimate per-mesh GPU bytes plus per-texture VRAM. Returns a non-zero exit when an optional budget is exceeded — the CI gate for asset memory regressions."
+            synopsis={`qtmesh memory <file> [--json] [--budget <size>] [--token <t>] [--no-cloud]`}
+            options={[
+              ['--json', 'Output the structured report as JSON'],
+              ['--budget <size>', 'Memory ceiling. Accepts plain bytes or units: 50MB, 1.5GB, 2048KB. Exit 1 if exceeded.'],
+              ['--token <t>', 'QtMesh Cloud ingest token. When set and --budget is omitted, the project\'s memory_budget_mb rule is fetched and used.'],
+              ['--no-cloud', 'Opt out of the cloud-budget lookup (use the local default).'],
+            ]}
+            examples={[
+              'qtmesh memory character.fbx',
+              'qtmesh memory character.fbx --json',
+              'qtmesh memory character.fbx --budget 50MB',
+              'qtmesh memory character.fbx --budget 1.5GB --json',
+              'QTMESH_TOKEN=… qtmesh memory character.fbx',
+            ]}
+          >
+            <h3 className={s.subsection}>Example Output</h3>
+            <CodeBlock>{`Memory Report
+=============
+
+Meshes (1):
+  character.mesh  v=12,584  i=58,002  524.3 KB
+  TOTAL: 524.3 KB
+
+Textures (3):
+  diffuse.png       1024x1024   4Bpp  +mips   5.33 MB
+  normal.png        1024x1024   4Bpp  +mips   5.33 MB
+  metallicRough.png 512x512     4Bpp  +mips   1.33 MB
+  TOTAL: 12.00 MB
+
+Scene total: 12.51 MB
+Budget:      50.00 MB`}</CodeBlock>
+            <h3 className={s.subsection}>JSON shape</h3>
+            <p className={s.para}>
+              The JSON payload has <Code>meshes[]</Code>, <Code>textures[]</Code>, a <Code>totals</Code>
+              object with <Code>meshBytes</Code>/<Code>textureBytes</Code>/<Code>totalBytes</Code>, and (when
+              a budget is set) a <Code>budget</Code> object with <Code>bytes</Code> and <Code>overBudget</Code>.
+              The same shape comes back from the MCP <Code>get_memory_usage</Code> tool under the
+              <Code>memory</Code> key.
+            </p>
+          </CmdSection>
+
+          <CmdSection id="cmd-analyze" name="analyze" description="Group every entity by the materials its submeshes use, count draw calls (one per SubEntity), and rank merge opportunities. Read-only — never modifies geometry."
+            synopsis={`qtmesh analyze <file> [--json]`}
+            options={[
+              ['--json', 'Output the structured report as JSON'],
+            ]}
+            examples={[
+              'qtmesh analyze level_environment.glb',
+              'qtmesh analyze level_environment.glb --json',
+            ]}
+          >
+            <h3 className={s.subsection}>Example Output</h3>
+            <CodeBlock>{`Draw Call Analysis
+==================
+
+Entities:       12
+Submeshes:      18
+Draw calls:     18
+Unique mats:    5
+After merges:   8 (saves 10)
+
+Materials:
+  Foliage         submeshes=4  entities=4
+  Stone.Wall      submeshes=6  entities=5
+  Stone.Floor     submeshes=4  entities=2
+  Lantern         submeshes=2  entities=1
+  Water           submeshes=2  entities=0
+
+Merge suggestions (saves >0 draw calls):
+  Stone.Wall  merge 5 entities → save 4 draw calls
+    - wall_north
+    - wall_south
+    - wall_west_a
+    - wall_west_b
+    - wall_east
+  Foliage     merge 4 entities → save 3 draw calls
+    - tree_1
+    - tree_2
+    - bush_a
+    - bush_b
+  Stone.Floor merge 2 entities → save 1 draw calls
+    - floor_main
+    - floor_alcove`}</CodeBlock>
+            <p className={s.para}>
+              <strong>Reading the report:</strong> "Draw calls" is today's cost. "After merges" is the cost
+              if every shared-material cluster were combined. The gap is what you'd save with batching.
+              In the validator, the <Code>Draws:</Code> info row shows the same totals; in MCP the
+              <Code>analyze_draw_calls</Code> tool returns the structured payload under the
+              <Code>drawCalls</Code> key.
+            </p>
+          </CmdSection>
+
+          <CmdSection id="cmd-vertex-cache" name="vertex-cache" description="Run Tom Forsyth's linear-time vertex-cache optimization on every submesh. Reports per-submesh ACMR before/after. Analyze-only by default; pass -o to rewrite the index buffer and export."
+            synopsis={`qtmesh vertex-cache <file> [-o <output>] [--json]`}
+            options={[
+              ['-o <output>', 'Output file. When omitted, runs in analyze-only mode (index buffer is not modified).'],
+              ['--json', 'Output the structured report as JSON'],
+            ]}
+            examples={[
+              'qtmesh vertex-cache character.fbx                      # analyze-only',
+              'qtmesh vertex-cache character.fbx -o optimized.fbx     # rewrite + export',
+              'qtmesh vertex-cache character.fbx --json',
+            ]}
+          >
+            <h3 className={s.subsection}>Example Output</h3>
+            <CodeBlock>{`File: ninja.mesh -> ninja_opt.mesh
+Vertex Cache Analysis
+=====================
+
+  ninja.mesh [0]  tris=904  ACMR 0.971 → 0.871  (reordered)
+  ninja.mesh [1]  tris=104  ACMR 0.587 → 0.587
+
+Total triangles: 1,008
+Weighted ACMR:   0.932 → 0.841  (9.7% improvement)
+Submeshes rewritten: 1 of 2`}</CodeBlock>
+            <p className={s.para}>
+              <strong>Never regresses:</strong> the rewrite only happens when the new ACMR is strictly
+              lower than the original. Submesh 1 above is already near-optimal (0.587), so it's not
+              rewritten — the &quot;analyze-only&quot; column matches the &quot;after&quot; column for it.
+            </p>
+            <p className={s.para}>
+              <strong>Inspector workflow:</strong> click <Code>Run Validation</Code>. If the cache row
+              reports a meaningful improvement (≥1%), an <Code>Optimize Vertex Cache</Code> button appears.
+              That button runs the reorder on Ogre's in-memory index buffer without writing to disk —
+              export the scene to persist. The Inspector also shows the projected ACMR delta on the row
+              even before you click.
+            </p>
+            <p className={s.para}>
+              <strong>MCP:</strong> the <Code>optimize_vertex_cache</Code> tool takes a <Code>rewrite</Code>
+              bool (default <Code>false</Code>) and returns the structured payload under the
+              <Code>vertexCache</Code> key.
+            </p>
+          </CmdSection>
+
           {/* ─── Scan Reference ─── */}
 
           <section className={s.section} id="scan-config">
@@ -494,6 +718,9 @@ rules:
   min_material_count: 0
   max_vertex_count: 100000
   min_vertex_count: 3           # Catch degenerate geometry
+
+  # Vertex-cache friendliness (ACMR — see Performance Concepts)
+  max_acmr: 1.5                 # Warn when ACMR exceeds this; 0 = disabled
 
   # Skeleton & animation existence
   require_skeleton: false
@@ -570,6 +797,16 @@ report:
             ].map(([name, type, sev, desc, ex]) => (
               <RuleCard key={name} name={name} type={type} severity={sev} description={desc} example={ex} />
             ))}
+
+            <h3 className={s.subsection}>Performance Rules</h3>
+            <RuleCard name="max_acmr" type="number" severity="warning"
+              description={<>Maximum acceptable <strong>Average Cache Miss Ratio</strong>. Flags meshes whose
+                            index buffer reorders poorly for the GPU vertex cache. See the <a href="#perf-overview" className={s.link}>Performance Concepts</a> page
+                            for the formula. <strong>Note:</strong> scan computes ACMR from Assimp's flattened triangle list, not
+                            Ogre's index order, so the numbers run higher than the in-app validator on the same asset —
+                            <Code>1.5</Code> is a reasonable starting ceiling on the scan side. Fix with
+                            <Code>qtmesh vertex-cache &lt;in&gt; -o &lt;out&gt;</Code>.</>}
+              example={`max_acmr: 1.5    # 0 = disabled`} />
 
             <h3 className={s.subsection}>Skeleton & Animation Existence</h3>
             <RuleCard name="require_skeleton" type="boolean" severity="error"

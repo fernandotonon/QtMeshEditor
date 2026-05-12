@@ -91,6 +91,9 @@ public:
     /// Phase 6 slice B: analyze draw calls and surface merge opportunities
     /// (per-material grouping, optional --json).
     static int cmdAnalyze(int argc, char* argv[]);
+    /// Phase 6 slice C: vertex-cache (Forsyth) optimization. With -o, write
+    /// the reordered mesh; without -o, analyze only.
+    static int cmdVertexCache(int argc, char* argv[]);
 
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);

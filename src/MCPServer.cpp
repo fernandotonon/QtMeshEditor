@@ -18,6 +18,7 @@
 #include "MeshLodController.h"
 #include "MemoryEstimator.h"
 #include "DrawCallAnalyzer.h"
+#include "VertexCacheOptimizer.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -434,6 +435,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("get_lod_info"), &MCPServer::toolGetLodInfo},
         {QStringLiteral("get_memory_usage"), &MCPServer::toolGetMemoryUsage},
         {QStringLiteral("analyze_draw_calls"), &MCPServer::toolAnalyzeDrawCalls},
+        {QStringLiteral("optimize_vertex_cache"), &MCPServer::toolOptimizeVertexCache},
         {QStringLiteral("list_files"), &MCPServer::toolListFiles},
         {QStringLiteral("search_files"), &MCPServer::toolSearchFiles},
         {QStringLiteral("read_file"), &MCPServer::toolReadFile},
@@ -2790,6 +2792,41 @@ QJsonObject MCPServer::toolAnalyzeDrawCalls(const QJsonObject &args)
     }
 }
 
+// NOSONAR(cpp:S5817) — ToolHandler is a non-const member-fn pointer (matching
+// every other tool method in this class); marking just this one const would
+// break the registry signature in MCPServer.h.
+QJsonObject MCPServer::toolOptimizeVertexCache(const QJsonObject &args)
+{
+    // Args: rewrite (bool, default false). When true, the in-memory index
+    // buffers are rewritten; otherwise the tool only reports ACMR.
+    try {
+        if (const Manager* mgr = Manager::getSingletonPtr(); !mgr)
+            return makeErrorResult("Error: Manager not available");
+
+        const bool rewrite = args.value("rewrite").toBool(false);
+
+        VertexCacheReport aggregate;
+        for (const Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes()) {
+            if (!node) continue;
+            for (unsigned i = 0; i < node->numAttachedObjects(); ++i) {
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if (!obj || obj->getMovableType() != "Entity") continue;
+                auto* entity = static_cast<Ogre::Entity*>(obj);
+                VertexCacheOptimizer::mergeReport(
+                    aggregate, VertexCacheOptimizer::analyzeEntity(entity, rewrite));
+            }
+        }
+        VertexCacheOptimizer::finalize(aggregate);
+
+        QJsonObject result = makeSuccessResult(VertexCacheOptimizer::toText(aggregate));
+        result["vertexCache"] = VertexCacheOptimizer::toJson(aggregate);
+        return result;
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(
+            QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
 // Helper methods
 
 QJsonObject MCPServer::toolListFiles(const QJsonObject &args)
@@ -4153,6 +4190,22 @@ QJsonArray MCPServer::buildToolsList()
             "human-readable summary in 'content' and a structured 'drawCalls' object with "
             "totals, clusters, and ranked suggestions for machine consumers.",
             QJsonObject()
+        );
+    }
+
+    // optimize_vertex_cache
+    {
+        QJsonObject props;
+        props["rewrite"] = QJsonObject{{"type", "boolean"},
+            {"description", "When true, rewrite each submesh's index buffer in place with Forsyth's optimal order. When false (default), only report ACMR — no mutation."}};
+        appendTool(
+            "optimize_vertex_cache",
+            "Run Tom Forsyth's linear-time vertex-cache optimization on every loaded mesh. "
+            "Reports per-submesh and weighted ACMR (Average Cache Miss Ratio) before / after. "
+            "Pass `rewrite: true` to actually reorder the index buffers (analysis-only otherwise). "
+            "The response includes a human-readable summary in 'content' and a structured "
+            "'vertexCache' object with per-submesh ACMR plus totals for machine consumers.",
+            props
         );
     }
 
