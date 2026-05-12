@@ -266,7 +266,7 @@ TEST_F(PS1PLYOgreTest, ExportHeuristicMergeProducesOneQuadAndSharedNormalPool)
     const QString path = outPly.fileName();
 
     QString err;
-    ASSERT_TRUE(PS1PLY::exportPsyqPlyFromEntity(ent, path, nullptr, &err)) << err.toUtf8().constData();
+    ASSERT_TRUE(PS1PLY::exportPsyqPlyFromEntity(ent, path, nullptr, nullptr, &err)) << err.toUtf8().constData();
 
     mgr->destroySceneNode(QStringLiteral("PS1PlyQuadHeuristicNode"));
     Ogre::MeshManager::getSingleton().remove(meshName);
@@ -301,7 +301,7 @@ TEST_F(PS1PLYOgreTest, ExportHeuristicSkipsQuadMergeWhenSharedEdgeNormalsDisagre
     const QString path = outPly.fileName();
 
     QString err;
-    ASSERT_TRUE(PS1PLY::exportPsyqPlyFromEntity(ent, path, nullptr, &err)) << err.toUtf8().constData();
+    ASSERT_TRUE(PS1PLY::exportPsyqPlyFromEntity(ent, path, nullptr, nullptr, &err)) << err.toUtf8().constData();
 
     mgr->destroySceneNode(QStringLiteral("PS1PlySplitNormalHeuristicNode"));
     Ogre::MeshManager::getSingleton().remove(meshName);
@@ -311,6 +311,242 @@ TEST_F(PS1PLYOgreTest, ExportHeuristicSkipsQuadMergeWhenSharedEdgeNormalsDisagre
     ASSERT_TRUE(readPsyqPlyCountsAndFirstFace(path, nV, nN, nF, face0));
     EXPECT_EQ(nF, 2);
     EXPECT_TRUE(face0.startsWith(QLatin1String("0 ")));
+}
+
+TEST_F(PS1PLYOgreTest, ImportWithFaceMaterials_SplitsTexturedAndSolidIntoSubmeshes)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    // Two triangles sharing an edge: face 0 is textured (TEX[0]), face 1 is solid.
+    // PLY layout: 4 verts, 1 normal (+Z), 2 triangle face lines.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString plyIn = QDir(dir.path()).filePath(QStringLiteral("mixed.ply"));
+    {
+        QFile wf(plyIn);
+        ASSERT_TRUE(wf.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream ts(&wf);
+        ts << "@PLY940102\n";
+        ts << "4 1 2\n";
+        ts << "0 0 0\n1 0 0\n1 1 0\n0 1 0\n";
+        ts << "0 0 1\n";
+        // Psy-Q triangle face format: "0 v0 v1 v2 0 n0 n1 n2 0".
+        ts << "0 0 1 2 0 0 0 0 0\n";
+        ts << "0 0 2 3 0 0 0 0 0\n";
+    }
+
+    const std::string meshName = "PS1PlyMixedImportMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    QVector<PS1PLY::FaceMaterial> faceMats(2);
+    // Textured face: full UV square (0..1).
+    faceMats[0].textured = true;
+    faceMats[0].textureIndex = 0;
+    faceMats[0].u = {0.0f, 1.0f, 1.0f, 0.0f};
+    faceMats[0].v = {0.0f, 0.0f, 1.0f, 0.0f};
+    // Solid face: red.
+    faceMats[1].textured = false;
+    faceMats[1].color = QColor(255, 0, 0);
+
+    Ogre::MeshPtr mesh = PS1PLY::importPsyqPlyWithFaceMaterials(plyIn, meshName, faceMats);
+    ASSERT_TRUE(mesh);
+    // One submesh per bucket: textured (tex0) + untextured (solid) = 2.
+    ASSERT_EQ(mesh->getNumSubMeshes(), 2u);
+
+    bool foundTex = false;
+    bool foundSolid = false;
+    for (unsigned int si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sm = mesh->getSubMesh(si);
+        const std::string matName = sm->getMaterialName();
+        const bool isTex = (matName.find("_tex0") != std::string::npos);
+        const bool isSolid = (matName.find("_solid") != std::string::npos);
+        EXPECT_TRUE(isTex || isSolid) << "Unexpected submesh material: " << matName;
+        if (isTex)   foundTex = true;
+        if (isSolid) foundSolid = true;
+
+        // Each submesh has its own vertex data with at least position+normal.
+        ASSERT_NE(sm->vertexData, nullptr);
+        EXPECT_GE(sm->vertexData->vertexCount, 3u);
+
+        const Ogre::VertexElement* uvEl =
+            sm->vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
+        if (isTex)
+            EXPECT_NE(uvEl, nullptr) << "Textured submesh missing UV element";
+        else
+            EXPECT_EQ(uvEl, nullptr) << "Solid submesh should not carry UVs";
+    }
+    EXPECT_TRUE(foundTex);
+    EXPECT_TRUE(foundSolid);
+
+    Ogre::MeshManager::getSingleton().remove(meshName);
+}
+
+TEST_F(PS1PLYOgreTest, TexturedPlyRoundTrip_ExportRecoversPerFaceUvAndTextureFlag)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    // Same mixed (1 textured + 1 solid) PLY as the import test above. We
+    // import, then export through exportPsyqPlyFromEntity with the texture
+    // metadata sink and verify per-face UVs/submesh indices survive.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString plyIn = QDir(dir.path()).filePath(QStringLiteral("mixed_rt.ply"));
+    {
+        QFile wf(plyIn);
+        ASSERT_TRUE(wf.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream ts(&wf);
+        ts << "@PLY940102\n";
+        ts << "4 1 2\n";
+        ts << "0 0 0\n1 0 0\n1 1 0\n0 1 0\n";
+        ts << "0 0 1\n";
+        ts << "0 0 1 2 0 0 0 0 0\n";
+        ts << "0 0 2 3 0 0 0 0 0\n";
+    }
+
+    QVector<PS1PLY::FaceMaterial> faceMats(2);
+    faceMats[0].textured = true;
+    faceMats[0].textureIndex = 0;
+    faceMats[0].u = {0.0f, 1.0f, 1.0f, 0.0f};
+    faceMats[0].v = {0.0f, 0.0f, 1.0f, 0.0f};
+    faceMats[1].textured = false;
+    faceMats[1].color = QColor(0, 200, 0);
+
+    const std::string meshName = "PS1PlyMixedRoundTripMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+    Ogre::MeshPtr mesh = PS1PLY::importPsyqPlyWithFaceMaterials(plyIn, meshName, faceMats);
+    ASSERT_TRUE(mesh);
+    ASSERT_EQ(mesh->getNumSubMeshes(), 2u);
+
+    auto* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode(QStringLiteral("PS1PlyMixedRoundTripNode"));
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* ent = mgr->createEntity(node, mesh);
+    ASSERT_NE(ent, nullptr);
+
+    QTemporaryFile outPly(QDir::tempPath() + QStringLiteral("/qtmesh_ps1ply_rt_XXXXXX.ply"));
+    outPly.setAutoRemove(true);
+    ASSERT_TRUE(outPly.open());
+    outPly.close();
+
+    QVector<QColor> faceColors;
+    QVector<PS1PLY::ExportFaceTexture> faceTex;
+    QString err;
+    ASSERT_TRUE(PS1PLY::exportPsyqPlyFromEntity(ent, outPly.fileName(), &faceColors, &faceTex, &err))
+        << err.toUtf8().constData();
+
+    // Two faces in -> two faces out (the exporter disables quad merging for textured
+    // submeshes so each triangle survives independently).
+    ASSERT_EQ(faceTex.size(), 2);
+
+    int texturedFaces = 0;
+    int untexturedFaces = 0;
+    for (const auto& f : faceTex) {
+        if (f.textured) {
+            ++texturedFaces;
+            // UVs are written in the welded-corner order — verify the textured face's
+            // UV envelope is the full [0..1] square we configured on import.
+            float minU = 1.f, maxU = 0.f, minV = 1.f, maxV = 0.f;
+            for (int k = 0; k < f.cornerCount; ++k) {
+                minU = std::min(minU, f.u[k]);
+                maxU = std::max(maxU, f.u[k]);
+                minV = std::min(minV, f.v[k]);
+                maxV = std::max(maxV, f.v[k]);
+            }
+            EXPECT_NEAR(minU, 0.0f, 1e-3f);
+            EXPECT_NEAR(maxU, 1.0f, 1e-3f);
+            EXPECT_NEAR(minV, 0.0f, 1e-3f);
+            EXPECT_NEAR(maxV, 1.0f, 1e-3f);
+            EXPECT_GE(f.submeshIndex, 0);
+        } else {
+            ++untexturedFaces;
+        }
+    }
+    EXPECT_EQ(texturedFaces, 1);
+    EXPECT_EQ(untexturedFaces, 1);
+
+    mgr->destroySceneNode(QStringLiteral("PS1PlyMixedRoundTripNode"));
+    Ogre::MeshManager::getSingleton().remove(meshName);
+}
+
+TEST_F(PS1PLYOgreTest, ExportSurfacesPerCornerVertexColours)
+{
+    // Build a single-quad PLY imported through the textured-face-material path with three
+    // *different* per-corner colours. The exporter must surface those colours via
+    // ExportFaceTexture::cornerColors (not the legacy averaged faceColors path) so the
+    // caller can emit Psy-Q G/H smooth-shaded MAT entries instead of collapsing to flat C.
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString plyIn = QDir(dir.path()).filePath(QStringLiteral("smooth_quad.ply"));
+    {
+        QFile wf(plyIn);
+        ASSERT_TRUE(wf.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream ts(&wf);
+        ts << "@PLY940102\n";
+        ts << "4 1 1\n";
+        ts << "0 0 0\n1 0 0\n1 1 0\n0 1 0\n";
+        ts << "0 0 1\n";
+        ts << "1 0 1 2 3 0 0 0 0\n";
+    }
+
+    QVector<PS1PLY::FaceMaterial> faceMats(1);
+    faceMats[0].textured = false;
+    faceMats[0].vertColors = { QColor(40, 40, 40),
+                                QColor(120, 120, 120),
+                                QColor(200, 200, 200),
+                                QColor(160, 160, 160) };
+
+    const std::string meshName = "PS1PlySmoothQuadMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+    Ogre::MeshPtr mesh = PS1PLY::importPsyqPlyWithFaceMaterials(plyIn, meshName, faceMats);
+    ASSERT_TRUE(mesh);
+
+    auto* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode(QStringLiteral("PS1PlySmoothQuadNode"));
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* ent = mgr->createEntity(node, mesh);
+    ASSERT_NE(ent, nullptr);
+
+    QTemporaryFile outPly(QDir::tempPath() + QStringLiteral("/qtmesh_ps1ply_smooth_XXXXXX.ply"));
+    outPly.setAutoRemove(true);
+    ASSERT_TRUE(outPly.open());
+    outPly.close();
+
+    QVector<QColor> faceColors;
+    QVector<PS1PLY::ExportFaceTexture> faceTex;
+    QString err;
+    ASSERT_TRUE(PS1PLY::exportPsyqPlyFromEntity(ent, outPly.fileName(), &faceColors, &faceTex, &err))
+        << err.toUtf8().constData();
+
+    // The untextured path goes through the heuristic merge — a single coplanar quad can
+    // either come back as 1 quad or 2 tris depending on whether normals agree on the seam.
+    // In either shape the exporter must emit per-corner colours, *and* at least one
+    // corner of one output face must differ from the others (i.e. the gradient survives).
+    ASSERT_FALSE(faceTex.isEmpty());
+
+    bool anyCornerColors = false;
+    bool anyGradient = false;
+    for (const auto& f : faceTex) {
+        if (!f.hasCornerColors)
+            continue;
+        anyCornerColors = true;
+        const int n = std::min(f.cornerCount, 4);
+        for (int k = 1; k < n; ++k) {
+            const QColor& a = f.cornerColors[0];
+            const QColor& b = f.cornerColors[static_cast<size_t>(k)];
+            if (a.red() != b.red() || a.green() != b.green() || a.blue() != b.blue())
+                anyGradient = true;
+        }
+    }
+    EXPECT_TRUE(anyCornerColors) << "Exporter did not surface per-corner vertex colours.";
+    EXPECT_TRUE(anyGradient) << "Per-corner colour gradient was collapsed during export.";
+
+    mgr->destroySceneNode(QStringLiteral("PS1PlySmoothQuadNode"));
+    Ogre::MeshManager::getSingleton().remove(meshName);
 }
 
 TEST_F(PS1PLYOgreTest, ImportQuadThenExportKeepsSingleQuadFaceLine)
@@ -350,7 +586,7 @@ TEST_F(PS1PLYOgreTest, ImportQuadThenExportKeepsSingleQuadFaceLine)
     outPly.close();
 
     QString err;
-    ASSERT_TRUE(PS1PLY::exportPsyqPlyFromEntity(ent, outPly.fileName(), nullptr, &err)) << err.toUtf8().constData();
+    ASSERT_TRUE(PS1PLY::exportPsyqPlyFromEntity(ent, outPly.fileName(), nullptr, nullptr, &err)) << err.toUtf8().constData();
 
     mgr->destroySceneNode(QStringLiteral("PS1PlyQuadImportNode"));
     Ogre::MeshManager::getSingleton().remove(meshName);

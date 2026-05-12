@@ -31,13 +31,17 @@ THE SOFTWARE.
 #include <assimp/Exporter.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
+#include <QCryptographicHash>
 #include <QFileDialog>
+#include <QImage>
 #include <QMessageBox>
 #include <QDebug>
 #include <QFile>
 #include <QDir>
+#include <QRegularExpression>
 #include <set>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 
 #include "OgreXML/OgreXMLMeshSerializer.h"
@@ -64,6 +68,7 @@ THE SOFTWARE.
 #include "EditModeController.h"
 #include <OgreMaterialManager.h>
 #include <OgreDataStream.h>
+#include <OgrePixelFormat.h>
 
 #ifndef WIN32
     #include <unistd.h>
@@ -1206,6 +1211,113 @@ static QString firstMaterialNameInOgreMaterialScript(const QByteArray& script)
     return {};
 }
 
+/// Load `texPath` into Ogre as a manual texture under `resourceName`, replacing any existing
+/// Builds an Ogre texture resource name scoped to the source asset path so that two RSDs
+/// referencing different files that happen to share a basename (e.g. `Wood.jpg`) don't
+/// collide in Ogre's global texture registry. Returns a name of the form
+/// `<basename>__<8charHashOfAbsPath>.<suffix>` which preserves the human-readable basename
+/// for inspection while guaranteeing uniqueness across assets. The `__<hash>` portion is
+/// stripped by `rsdResourceNameToBasename()` on export.
+static QString scopedRsdResourceName(const QString& texPath)
+{
+    const QFileInfo fi(texPath);
+    const QString abs = fi.absoluteFilePath();
+    const QString hash = QString::fromLatin1(
+        QCryptographicHash::hash(abs.toUtf8(), QCryptographicHash::Sha1).toHex()).left(8);
+    QString suffix = fi.suffix().toLower();
+    if (suffix.isEmpty())
+        suffix = QStringLiteral("tex");
+    return fi.completeBaseName() + QStringLiteral("__") + hash
+           + QStringLiteral(".") + suffix;
+}
+
+/// Inverse of `scopedRsdResourceName()` — strips the `__<8hexchars>` segment a scoped
+/// resource name carries so we can recover the original `Wood.jpg`-style basename when
+/// writing sidecar files next to an exported RSD. Names that don't match the scoped
+/// pattern are returned as `QFileInfo::fileName(name)` (i.e. a best-effort basename) so
+/// non-RSD textures still get a sensible filename.
+static QString rsdResourceNameToBasename(const QString& resName)
+{
+    static const QRegularExpression scoped(
+        QStringLiteral("^(.+)__[0-9a-f]{8}\\.([^.]+)$"));
+    const auto m = scoped.match(resName);
+    if (m.hasMatch())
+        return m.captured(1) + QStringLiteral(".") + m.captured(2);
+    return QFileInfo(resName).fileName();
+}
+
+/// entry. Handles common 2D formats (PNG/JPG/BMP/TGA/...) by leaning on Qt's QImage decoder
+/// when the file extension is not one Ogre's built-in codecs already register. Returns true
+/// on success.
+static bool loadExternalTextureForRsd(const QString& texPath,
+                                      const Ogre::String& resourceName,
+                                      QString* outError = nullptr)
+{
+    if (texPath.isEmpty() || !QFileInfo::exists(texPath)) {
+        if (outError) *outError = QStringLiteral("Texture file not found: %1").arg(texPath);
+        return false;
+    }
+    Ogre::Image img;
+
+    // Try Ogre's native codecs first via the file extension (cheap, no QImage decode).
+    const QString ext = QFileInfo(texPath).suffix().toLower();
+    bool loaded = false;
+    if (!ext.isEmpty()) {
+        try {
+            QFile f(texPath);
+            if (f.open(QIODevice::ReadOnly)) {
+                const QByteArray bytes = f.readAll();
+                Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
+                    const_cast<char*>(bytes.constData()),
+                    static_cast<size_t>(bytes.size()),
+                    /*freeOnClose*/ false,
+                    /*readOnly*/ true));
+                img.load(ds, ext.toStdString());
+                loaded = (img.getWidth() > 0 && img.getHeight() > 0);
+            }
+        } catch (const Ogre::Exception&) {
+            loaded = false;
+        }
+    }
+
+    if (!loaded) {
+        // Fall back to QImage so e.g. .jpg works even when no codec plugin is registered.
+        QImage qi(texPath);
+        if (qi.isNull()) {
+            if (outError) *outError = QStringLiteral("Could not decode image: %1").arg(texPath);
+            return false;
+        }
+        QImage rgba = qi.convertToFormat(QImage::Format_RGBA8888);
+        const size_t bytes = static_cast<size_t>(rgba.sizeInBytes());
+        // Ogre takes ownership of `data` when autoDelete=true (loadDynamicImage with autoDelete).
+        Ogre::uchar* data = OGRE_ALLOC_T(Ogre::uchar, bytes, Ogre::MEMCATEGORY_GENERAL);
+        std::memcpy(data, rgba.constBits(), bytes);
+        try {
+            img.loadDynamicImage(data,
+                                 static_cast<uint32_t>(rgba.width()),
+                                 static_cast<uint32_t>(rgba.height()),
+                                 1, // depth
+                                 Ogre::PF_BYTE_RGBA,
+                                 true /* autoDelete: Ogre owns `data` */);
+        } catch (const Ogre::Exception& e) {
+            OGRE_FREE(data, Ogre::MEMCATEGORY_GENERAL);
+            if (outError) *outError = QString::fromStdString(e.getFullDescription());
+            return false;
+        }
+    }
+
+    auto& tm = Ogre::TextureManager::getSingleton();
+    if (tm.resourceExists(resourceName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+        tm.remove(resourceName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    try {
+        tm.loadImage(resourceName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, img);
+    } catch (const Ogre::Exception& e) {
+        if (outError) *outError = QString::fromStdString(e.getFullDescription());
+        return false;
+    }
+    return true;
+}
+
 static void applyTextureMaterialToEntity(Ogre::Entity* entity,
                                               const QString& materialName,
                                               const QString& textureResourceNameOrEmpty)
@@ -1411,8 +1523,9 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     continue;
                 }
 
-                // Preload referenced TIM textures (best-effort). Geometry import below may also load TIMs
-                // (e.g. PS1TMD sibling auto-load), but RSD frequently points to differently named TIMs.
+                // Preload referenced textures. RSD/TEX[] may point at PS1 TIMs (Psy-Q toolchains)
+                // OR at modern raster formats like JPG/PNG (Blender-RSD exporter pipeline) — we
+                // try TIM first, then fall back to QImage-decoded loaders.
                 const QString rsdDir = file.absolutePath();
                 const auto resolve = [&rsdDir](const QString& rel) -> QString {
                     if (rel.isEmpty()) return {};
@@ -1420,36 +1533,97 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     return fi.isAbsolute() ? fi.absoluteFilePath() : QDir(rsdDir).filePath(rel);
                 };
 
+                struct RsdTextureSlot {
+                    QString resourceName;   ///< Ogre resource name (or empty when not loaded).
+                    int width = 0;
+                    int height = 0;
+                };
+                std::vector<RsdTextureSlot> rsdTexSlots(rsd.textures.size());
                 QString firstTimResource;
-                for (const QString& texRel : rsd.textures) {
-                    const QString timPath = resolve(texRel);
-                    if (timPath.isEmpty() || !QFileInfo::exists(timPath))
+                for (int ti = 0; ti < rsd.textures.size(); ++ti) {
+                    const QString texRel = rsd.textures[ti];
+                    const QString texPath = resolve(texRel);
+                    if (texPath.isEmpty() || !QFileInfo::exists(texPath)) {
+                        SentryReporter::addBreadcrumb(
+                            QStringLiteral("file.import"),
+                            QStringLiteral("RSD TEX[%1] missing: %2").arg(ti).arg(texRel));
                         continue;
-                    Ogre::Image img;
-                    QString timErr;
-                    if (!PS1TIM::loadTimToOgreImage(timPath, img, &timErr))
-                        continue;
+                    }
 
-                    const QString resName = QFileInfo(timPath).completeBaseName() + QStringLiteral(".tim");
-                    // Create/replace in the default group so TMD materials can reference it.
+                    Ogre::Image img;
+                    bool loaded = false;
+                    const QString suffix = QFileInfo(texPath).suffix().toLower();
+                    QString timErr;
+                    if (suffix == QStringLiteral("tim"))
+                        loaded = PS1TIM::loadTimToOgreImage(texPath, img, &timErr);
+
+                    // Resource name is scoped by the absolute texture path so two RSDs that
+                    // both ship a "Wood.jpg" do not clobber each other in Ogre's global
+                    // TextureManager registry.
+                    const QString resName = scopedRsdResourceName(texPath);
                     const Ogre::String ogreName = resName.toStdString();
-                    if (Ogre::TextureManager::getSingleton().resourceExists(ogreName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
-                        Ogre::TextureManager::getSingleton().remove(ogreName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-                    Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().loadImage(
-                        ogreName,
-                        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
-                        img);
-                    if (!firstTimResource.isEmpty())
-                        continue;
-                    firstTimResource = resName;
+
+                    SentryReporter::addBreadcrumb(
+                        QStringLiteral("file.import"),
+                        QStringLiteral("RSD TEX[%1] load: %2").arg(ti).arg(QFileInfo(texPath).fileName()));
+
+                    if (loaded) {
+                        if (Ogre::TextureManager::getSingleton().resourceExists(
+                                ogreName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+                            Ogre::TextureManager::getSingleton().remove(
+                                ogreName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                        Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().loadImage(
+                            ogreName,
+                            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                            img);
+                        rsdTexSlots[ti].resourceName = resName;
+                        rsdTexSlots[ti].width = static_cast<int>(img.getWidth());
+                        rsdTexSlots[ti].height = static_cast<int>(img.getHeight());
+                        SentryReporter::addBreadcrumb(
+                            QStringLiteral("file.import"),
+                            QStringLiteral("RSD TEX[%1] TIM loaded (%2x%3)")
+                                .arg(ti).arg(rsdTexSlots[ti].width).arg(rsdTexSlots[ti].height));
+                    } else if (suffix == QStringLiteral("tim")) {
+                        SentryReporter::addBreadcrumb(
+                            QStringLiteral("file.import"),
+                            QStringLiteral("RSD TEX[%1] TIM load failed: %2").arg(ti).arg(timErr));
+                    } else {
+                        // Non-TIM raster format (PNG/JPG/BMP/TGA…)
+                        QString extErr;
+                        if (loadExternalTextureForRsd(texPath, ogreName, &extErr)) {
+                            rsdTexSlots[ti].resourceName = resName;
+                            // Reuse the texture we just loaded — no need to redecode the
+                            // file with QImage just to measure dimensions.
+                            if (auto tex = Ogre::TextureManager::getSingleton().getByName(
+                                    ogreName,
+                                    Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+                                rsdTexSlots[ti].width = static_cast<int>(tex->getWidth());
+                                rsdTexSlots[ti].height = static_cast<int>(tex->getHeight());
+                            }
+                            SentryReporter::addBreadcrumb(
+                                QStringLiteral("file.import"),
+                                QStringLiteral("RSD TEX[%1] external loaded (%2x%3)")
+                                    .arg(ti).arg(rsdTexSlots[ti].width).arg(rsdTexSlots[ti].height));
+                        } else {
+                            Ogre::LogManager::getSingleton().logMessage(
+                                "Warning: RSD texture load failed for "
+                                + texPath.toStdString() + ": " + extErr.toStdString());
+                            SentryReporter::addBreadcrumb(
+                                QStringLiteral("file.import"),
+                                QStringLiteral("RSD TEX[%1] external load failed: %2").arg(ti).arg(extErr));
+                        }
+                    }
+                    if (firstTimResource.isEmpty() && !rsdTexSlots[ti].resourceName.isEmpty())
+                        firstTimResource = rsdTexSlots[ti].resourceName;
                 }
 
                 // If a MAT sidecar exists, try to interpret it.
                 // - If it looks like an Ogre material script, load it into the RSD directory group.
-                // - Otherwise, treat it as a PS1/Psy-Q descriptor and fall back to a simple unlit textured material.
+                // - Otherwise, treat it as a PS1/Psy-Q descriptor (typed entries with UVs and colours).
                 const QString matPath = resolve(rsd.matPath);
                 QString rsdMaterialFromScript;
-                QVector<QColor> rsdFaceColors;
+                QVector<PS1MAT::MatEntry> rsdMatEntries; ///< Full Psy-Q MAT entries (UVs + colours + texIdx).
+                QVector<QColor> rsdFaceColors;          ///< Per-face flat colour fallback (back-compat).
                 if (!matPath.isEmpty() && QFileInfo::exists(matPath)) {
                     QFile matFile(matPath);
                     if (matFile.open(QIODevice::ReadOnly)) {
@@ -1475,13 +1649,13 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                         }
                     }
 
-                    // Psy-Q MAT (not an Ogre script): extract a representative color so the mesh isn't blank.
+                    // Psy-Q MAT (not an Ogre script): keep the full per-face descriptor so we can
+                    // route UVs + texture indices into the textured PLY import path.
                     if (rsdMaterialFromScript.isEmpty()) {
-                        QVector<PS1MAT::MatEntry> mats;
                         QString matErr;
-                        if (PS1MAT::parseMatFile(matPath, mats, &matErr) && !mats.isEmpty()) {
-                            rsdFaceColors.reserve(mats.size());
-                            for (const auto& me : mats)
+                        if (PS1MAT::parseMatFile(matPath, rsdMatEntries, &matErr) && !rsdMatEntries.isEmpty()) {
+                            rsdFaceColors.reserve(rsdMatEntries.size());
+                            for (const auto& me : rsdMatEntries)
                                 rsdFaceColors.push_back(me.rgb);
                         }
                     }
@@ -1498,6 +1672,21 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     continue;
                 }
 
+                // Decide whether to use the textured import path. We do so when MAT entries were
+                // parsed AND at least one of them is textured (T/H/D) — otherwise we fall back to
+                // the simpler vertex-color path for performance and to keep submesh count low.
+                bool useTexturedMatPath = false;
+                if (!rsdMatEntries.isEmpty()) {
+                    for (const auto& me : rsdMatEntries) {
+                        if (me.textured && me.textureIndex >= 0
+                            && me.textureIndex < static_cast<int>(rsdTexSlots.size())
+                            && !rsdTexSlots[me.textureIndex].resourceName.isEmpty()) {
+                            useTexturedMatPath = true;
+                            break;
+                        }
+                    }
+                }
+
                 Ogre::MeshPtr mesh;
                 const QFileInfo geomFi(geomPath);
                 if (!geomFi.suffix().compare(QStringLiteral("tmd"), Qt::CaseInsensitive)) {
@@ -1506,9 +1695,57 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 } else if (!geomFi.suffix().compare(QStringLiteral("ply"), Qt::CaseInsensitive)
                            && PS1PLY::isPsyqPlyFile(geomPath)) {
                     const std::string meshName = (file.baseName() + QStringLiteral("_rsd_ply")).toStdString();
-                    mesh = rsdFaceColors.isEmpty()
-                        ? PS1PLY::importPsyqPly(geomPath, meshName)
-                        : PS1PLY::importPsyqPlyWithFaceColors(geomPath, meshName, rsdFaceColors);
+                    if (useTexturedMatPath) {
+                        // Convert the Psy-Q MAT entries into per-face PLY material bindings: each MAT
+                        // entry maps 1:1 to a PLY face (in declaration order). UVs are normalised by
+                        // the bound texture's width/height; colours retain the PS1 corner ordering.
+                        QVector<PS1PLY::FaceMaterial> faceMats(rsdMatEntries.size());
+                        for (int fi = 0; fi < rsdMatEntries.size(); ++fi) {
+                            const PS1MAT::MatEntry& me = rsdMatEntries[fi];
+                            PS1PLY::FaceMaterial fm;
+                            // Sanitise per-face texture references: a single MAT entry that
+                            // claims to be textured but points at a missing slot would force
+                            // importPsyqPlyWithFaceMaterials() to bin every face from that
+                            // batch into a malformed submesh. Downgrade such faces to solid
+                            // so the rest of the mesh still gets its proper textures.
+                            const bool hasValidTexture =
+                                me.textured
+                                && me.textureIndex >= 0
+                                && me.textureIndex < static_cast<int>(rsdTexSlots.size())
+                                && !rsdTexSlots[me.textureIndex].resourceName.isEmpty();
+                            fm.textured = hasValidTexture;
+                            fm.textureIndex = hasValidTexture ? me.textureIndex : -1;
+                            int texW = 256, texH = 256;
+                            if (hasValidTexture) {
+                                if (rsdTexSlots[me.textureIndex].width > 0)
+                                    texW = rsdTexSlots[me.textureIndex].width;
+                                if (rsdTexSlots[me.textureIndex].height > 0)
+                                    texH = rsdTexSlots[me.textureIndex].height;
+                            }
+                            for (int k = 0; k < me.uvs.size() && k < 4; ++k) {
+                                fm.u[k] = float(me.uvs[k].u) / float(texW);
+                                fm.v[k] = float(me.uvs[k].v) / float(texH);
+                            }
+                            if (!me.vertColors.isEmpty()) {
+                                fm.vertColors = me.vertColors;
+                                fm.color = me.vertColors.first();
+                            } else if (me.rgb.isValid()) {
+                                fm.color = me.rgb;
+                            }
+                            faceMats[fi] = fm;
+                        }
+                        mesh = PS1PLY::importPsyqPlyWithFaceMaterials(geomPath, meshName, faceMats);
+                        // Fall back to the simpler vertex-colour path if the textured importer
+                        // rejected the file (e.g. face-count mismatch).
+                        if (!mesh)
+                            mesh = rsdFaceColors.isEmpty()
+                                ? PS1PLY::importPsyqPly(geomPath, meshName)
+                                : PS1PLY::importPsyqPlyWithFaceColors(geomPath, meshName, rsdFaceColors);
+                    } else {
+                        mesh = rsdFaceColors.isEmpty()
+                            ? PS1PLY::importPsyqPly(geomPath, meshName)
+                            : PS1PLY::importPsyqPlyWithFaceColors(geomPath, meshName, rsdFaceColors);
+                    }
                 } else {
                     AssimpToOgreImporter importer;
                     bool convertLH = (geomFi.suffix().compare("x", Qt::CaseInsensitive) != 0);
@@ -1539,13 +1776,58 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                         if (auto* se = const_cast<Ogre::SubEntity*>(en->getSubEntity(si)))
                             se->setMaterialName(rsdMaterialFromScript.toStdString(), rsdDir.toStdString());
                     }
-                } else if (!rsdFaceColors.isEmpty()) {
-                    // Colors were baked into vertex colors; keep lighting on and let vertex colors drive diffuse.
+                } else if (useTexturedMatPath) {
+                    // Textured PLY path emits one submesh per texture group with material names
+                    // shaped `PLY/<meshName>_texN` or `PLY/<meshName>_solid`. Bind the matching
+                    // RSD texture slot to each textured submesh's first texture unit; untextured
+                    // submeshes keep their vertex-colour material.
+                    for (unsigned int si = 0; si < en->getNumSubEntities(); ++si) {
+                        Ogre::SubEntity* se = const_cast<Ogre::SubEntity*>(en->getSubEntity(si));
+                        Ogre::MaterialPtr mat = se->getMaterial();
+                        if (mat.isNull() || mat->getNumTechniques() == 0
+                            || mat->getTechnique(0)->getNumPasses() == 0)
+                            continue;
+                        Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+                        if (!pass)
+                            continue;
+
+                        const QString mname = QString::fromStdString(mat->getName());
+                        static const QRegularExpression kTexSlotRe(
+                            QStringLiteral("_tex(\\d+)$"));
+                        const auto m = kTexSlotRe.match(mname);
+                        if (!m.hasMatch())
+                            continue; // untextured submesh — leave as is.
+                        bool ok = false;
+                        const int slot = m.captured(1).toInt(&ok);
+                        if (!ok || slot < 0 || slot >= static_cast<int>(rsdTexSlots.size())
+                            || rsdTexSlots[slot].resourceName.isEmpty())
+                            continue;
+
+                        // Replace any existing texture unit states so re-imports refresh cleanly.
+                        pass->removeAllTextureUnitStates();
+                        pass->createTextureUnitState(rsdTexSlots[slot].resourceName.toStdString());
+                        pass->setLightingEnabled(true);
+                        pass->setAmbient(1.0f, 1.0f, 1.0f);
+                        pass->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+                        // Preserve per-corner colours that the textured PLY import already baked
+                        // into the submesh (Psy-Q H/D/G shaded materials encode their tint via
+                        // vertex colour). Force TVC_NONE only when the submesh has no VES_DIFFUSE
+                        // stream, otherwise the texture would render as a plain unshaded image.
+                        const Ogre::SubMesh* sm = en->getMesh()->getSubMesh(si);
+                        const Ogre::VertexData* vdSm =
+                            (sm && sm->useSharedVertices) ? en->getMesh()->sharedVertexData
+                                                          : (sm ? sm->vertexData : nullptr);
+                        const bool hasVC = vdSm && vdSm->vertexDeclaration
+                            && vdSm->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
+                        pass->setVertexColourTracking(hasVC ? Ogre::TVC_DIFFUSE : Ogre::TVC_NONE);
+                        mat->compile();
+                    }
                 }
 
-                // Best-effort: if we loaded a TIM, bind it as the first texture on materials that have UVs
-                // but no explicit texture yet.
-                if (!firstTimResource.isEmpty()) {
+                // Single-texture legacy fallback: if no per-face MAT routing happened but a TIM
+                // is available, bind it on materials lacking explicit texture units. Skipped when
+                // the textured MAT path already produced per-submesh materials.
+                if (!useTexturedMatPath && !firstTimResource.isEmpty()) {
                     for (unsigned int si = 0; si < en->getNumSubEntities(); ++si) {
                         Ogre::SubEntity* se = const_cast<Ogre::SubEntity*>(en->getSubEntity(si));
                         Ogre::MaterialPtr mat = se->getMaterial();
@@ -1565,7 +1847,8 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
 
                 // Final fallback: if MAT exists but we couldn't parse it (no script, no per-face colours) and the mesh
                 // is still effectively untextured, force a simple unlit textured material so the asset isn't blank.
-                if (!firstTimResource.isEmpty() && rsdMaterialFromScript.isEmpty() && rsdFaceColors.isEmpty()
+                if (!useTexturedMatPath && !firstTimResource.isEmpty()
+                    && rsdMaterialFromScript.isEmpty() && rsdFaceColors.isEmpty()
                     && !matPath.isEmpty() && QFileInfo::exists(matPath)) {
                     applyTextureMaterialToEntity(const_cast<Ogre::Entity*>(en),
                                                       QStringLiteral("PS1/RSD/") + file.baseName(),
@@ -1898,37 +2181,291 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         const QString matPath = base + QStringLiteral(".mat");
 
         QVector<QColor> faceColors;
+        QVector<PS1PLY::ExportFaceTexture> faceTexInfos;
         QString err;
-        if (!PS1PLY::exportPsyqPlyFromEntity(e, plyPath, &faceColors, &err)) {
+        if (!PS1PLY::exportPsyqPlyFromEntity(e, plyPath, &faceColors, &faceTexInfos, &err)) {
             Ogre::LogManager::getSingleton().logError("Failed to write Psy-Q PLY: " + err.toStdString());
             return -1;
         }
 
-        if (!faceColors.isEmpty()) {
-            QVector<PS1MAT::MatEntry> entries;
-            entries.reserve(faceColors.size());
-            for (const QColor& c : faceColors) {
+        // Build the RSD texture table from textured submeshes' first texture unit. Each
+        // unique texture name gets one RSD slot; we copy the source image next to the
+        // .rsd output so the descriptor stays self-contained.
+        struct OutTex {
+            QString resourceName; ///< Ogre resource name (e.g. "Wood.jpg" or "tex.tim").
+            QString outFile;       ///< File name written next to the .rsd.
+            int width = 0;
+            int height = 0;
+        };
+        std::vector<OutTex> rsdOutTextures;
+        std::unordered_map<int, int> submeshToTexSlot; ///< submeshIndex -> rsd slot.
+        std::unordered_map<std::string, int> resourceToSlot;
+
+        for (unsigned int si = 0; si < e->getNumSubEntities(); ++si) {
+            const Ogre::SubEntity* se = e->getSubEntity(si);
+            if (!se)
+                continue;
+            Ogre::MaterialPtr mat = se->getMaterial();
+            if (mat.isNull() || mat->getNumTechniques() == 0
+                || mat->getTechnique(0)->getNumPasses() == 0)
+                continue;
+            Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+            if (!pass || pass->getNumTextureUnitStates() == 0)
+                continue;
+            const Ogre::TextureUnitState* tus = pass->getTextureUnitState(0);
+            if (!tus || tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                continue;
+            const std::string texName = tus->getTextureName();
+            if (texName.empty())
+                continue;
+
+            auto rit = resourceToSlot.find(texName);
+            int slot = -1;
+            if (rit != resourceToSlot.end()) {
+                slot = rit->second;
+            } else {
+                OutTex ot;
+                ot.resourceName = QString::fromStdString(texName);
+                // Strip any asset-scoping (`__<hash>`) we may have added at import time so
+                // the sidecar lands next to the .rsd with a clean, human-readable filename.
+                // For non-RSD textures this is a best-effort basename of whatever the
+                // texture resource was registered under.
+                QString candidate = rsdResourceNameToBasename(ot.resourceName);
+                // Two distinct textures can collapse to the same stripped basename (e.g. two
+                // different imports both shipping a `Wood.jpg`). Detect collisions against
+                // previously-claimed outFiles and fall back to the scoped resource name so
+                // each RSD TEX[] slot writes to its own sidecar instead of clobbering it.
+                if (std::any_of(rsdOutTextures.begin(), rsdOutTextures.end(),
+                                [&candidate](const OutTex& prev) {
+                                    return prev.outFile == candidate;
+                                }))
+                    candidate = QFileInfo(ot.resourceName).fileName();
+                ot.outFile = candidate;
+                auto tex = Ogre::TextureManager::getSingleton().getByName(texName);
+                if (tex) {
+                    ot.width = static_cast<int>(tex->getWidth());
+                    ot.height = static_cast<int>(tex->getHeight());
+                }
+                slot = static_cast<int>(rsdOutTextures.size());
+                rsdOutTextures.push_back(ot);
+                resourceToSlot.emplace(texName, slot);
+            }
+            submeshToTexSlot[static_cast<int>(si)] = slot;
+        }
+
+        // Synthesise MAT entries: one per output PLY face. Pick the most specific Psy-Q
+        // type that preserves the source data:
+        //   * Textured + smooth corner colours -> 'H' (textured smooth, per-corner tint)
+        //   * Textured + uniform corner colour -> 'D' (textured flat colour)
+        //   * Textured + no colour              -> 'T' (textured, no colour)
+        //   * Untextured + smooth corner colours -> 'G' (smooth Gouraud)
+        //   * Untextured + uniform colour       -> 'C' (flat colour)
+        // Without this, every face would collapse to 'T' or 'C', losing baked AO / vertex-
+        // shading gradients (e.g. the wall corners in the Blender RSD example).
+        const bool haveColors  = !faceColors.isEmpty()
+                               && faceColors.size() == static_cast<int>(faceTexInfos.size());
+        const bool haveTexInfo = !faceTexInfos.isEmpty();
+
+        // Two corner colours are considered the same when their 8-bit channels match exactly.
+        // Tolerance kept tight so PS1's 8-bit-per-channel input doesn't degrade Gouraud info.
+        auto cornersUniform = [](const PS1PLY::ExportFaceTexture& eft) {
+            if (!eft.hasCornerColors)
+                return true;
+            const int n = std::clamp(eft.cornerCount, 1, 4);
+            const QColor& c0 = eft.cornerColors[0];
+            for (int k = 1; k < n; ++k) {
+                const QColor& ck = eft.cornerColors[static_cast<size_t>(k)];
+                if (c0.red() != ck.red() || c0.green() != ck.green() || c0.blue() != ck.blue())
+                    return false;
+            }
+            return true;
+        };
+
+        QVector<PS1MAT::MatEntry> entries;
+        if (haveTexInfo || haveColors) {
+            const int nFaces = haveTexInfo ? faceTexInfos.size() : faceColors.size();
+            entries.reserve(nFaces);
+            for (int fi = 0; fi < nFaces; ++fi) {
                 PS1MAT::MatEntry me;
-                me.rgb = c;
+
+                const PS1PLY::ExportFaceTexture& eft = haveTexInfo
+                    ? faceTexInfos[fi]
+                    : PS1PLY::ExportFaceTexture{};
+                const QColor faceColor = haveColors ? faceColors[fi] : QColor(255, 255, 255);
+                const int corners = (eft.cornerCount == 4) ? 4 : 3;
+                const bool gotCornerColors = eft.hasCornerColors;
+                const bool smoothShade = gotCornerColors && !cornersUniform(eft);
+
+                const int slotIt = (eft.textured && submeshToTexSlot.count(eft.submeshIndex))
+                    ? submeshToTexSlot[eft.submeshIndex]
+                    : -1;
+                // shadingChar stays 'F' (flat normals) to match the Blender RSD exporter
+                // convention: Psy-Q PLY stores per-face normals, so Gouraud-style smoothness
+                // is encoded purely via the typeChar (G/H), not via normal interpolation.
+                me.shadingChar = 'F';
+                if (eft.textured && slotIt >= 0) {
+                    me.textured = true;
+                    me.textureIndex = slotIt;
+                    const OutTex& ot = rsdOutTextures[slotIt];
+                    const int texW = ot.width > 0 ? ot.width : 256;
+                    const int texH = ot.height > 0 ? ot.height : 256;
+                    me.uvs.resize(corners);
+                    for (int k = 0; k < corners; ++k) {
+                        me.uvs[k].u = static_cast<int>(std::lround(double(eft.u[k]) * double(texW)));
+                        me.uvs[k].v = static_cast<int>(std::lround(double(eft.v[k]) * double(texH)));
+                    }
+                    if (smoothShade) {
+                        me.typeChar = 'H';                    // textured smooth (per-corner tint)
+                        me.vertColors.reserve(corners);
+                        for (int k = 0; k < corners; ++k)
+                            me.vertColors.push_back(eft.cornerColors[static_cast<size_t>(k)]);
+                        me.rgb = me.vertColors.first();
+                    } else if (gotCornerColors) {
+                        me.typeChar = 'D';                    // textured flat colour
+                        const QColor c = eft.cornerColors[0].isValid() ? eft.cornerColors[0]
+                                                                       : QColor(255, 255, 255);
+                        me.vertColors.push_back(c);
+                        me.rgb = c;
+                    } else {
+                        me.typeChar = 'T';                    // textured, no colour
+                        me.rgb = QColor(255, 255, 255);
+                    }
+                } else if (smoothShade) {
+                    me.typeChar = 'G';                        // smooth Gouraud
+                    me.vertColors.reserve(corners);
+                    for (int k = 0; k < corners; ++k)
+                        me.vertColors.push_back(eft.cornerColors[static_cast<size_t>(k)]);
+                    me.rgb = me.vertColors.first();
+                } else {
+                    me.typeChar = 'C';                        // flat colour
+                    const QColor c = gotCornerColors ? eft.cornerColors[0] : faceColor;
+                    me.vertColors.push_back(c.isValid() ? c : QColor(255, 255, 255));
+                    me.rgb = me.vertColors.first();
+                }
                 entries.push_back(me);
             }
+        }
+
+        if (!entries.isEmpty()) {
             if (!PS1MAT::writeMatFile(matPath, entries, &err)) {
                 Ogre::LogManager::getSingleton().logError("Failed to write MAT: " + err.toStdString());
                 return -1;
             }
         }
 
-        // Optional TIM sibling (best-effort, may not exist).
-        const QString timPath = base + QStringLiteral(".tim");
+        // Copy referenced textures next to the .rsd so the descriptor stays self-contained.
+        // PS1 hardware/emulators only consume TIM, so always emit a 16bpp TIM regardless of
+        // the source image format (JPG/PNG/BMP/TGA/etc.) — the legacy PNG sidecar code is
+        // kept only as a defensive fallback when the TIM writer fails (e.g. zero-byte
+        // image, exception in pixel conversion).
+        //
+        // A sidecar write failure must abort the whole RSD export: writing the descriptor
+        // anyway would leave TEX[] entries pointing to nonexistent / stale files, breaking
+        // any later round-trip through the RSD importer or third-party tools.
+        const auto writePngFallback = [](const Ogre::Image& img, const QString& pngPath) {
+            std::vector<uint8_t> rgba;
+            if (img.getFormat() != Ogre::PF_BYTE_RGBA) {
+                const size_t pixels = static_cast<size_t>(img.getWidth()) * img.getHeight();
+                rgba.resize(pixels * 4);
+                Ogre::PixelBox src(img.getWidth(), img.getHeight(), 1,
+                                   img.getFormat(),
+                                   const_cast<uint8_t*>(img.getData()));
+                Ogre::PixelBox dst(img.getWidth(), img.getHeight(), 1,
+                                   Ogre::PF_BYTE_RGBA, rgba.data());
+                Ogre::PixelUtil::bulkPixelConversion(src, dst);
+            }
+            const uint8_t* rgbaData = rgba.empty() ? img.getData() : rgba.data();
+            const QImage qi(rgbaData,
+                            static_cast<int>(img.getWidth()),
+                            static_cast<int>(img.getHeight()),
+                            static_cast<int>(img.getWidth()) * 4,
+                            QImage::Format_RGBA8888);
+            return qi.copy().save(pngPath, "PNG");
+        };
+
+        // Returns true on success and updates ot.outFile to the actual on-disk filename.
+        // Returns false when both the TIM and PNG fallback writes fail — caller must abort.
+        const auto writeSidecar = [&](OutTex& ot) -> bool {
+            auto tex = Ogre::TextureManager::getSingleton().getByName(ot.resourceName.toStdString());
+            if (!tex)
+                return true; // No bound texture — leave ot.outFile alone, descriptor still references the previous file.
+            Ogre::Image img;
+            tex->convertToImage(img, true);
+            if (img.getWidth() == 0 || img.getHeight() == 0)
+                return true;
+
+            const QString basename = QFileInfo(ot.outFile).completeBaseName();
+            const QString dirSep = QDir::separator();
+
+            // Primary: 16bpp PS1 TIM. PS1 emulators / hardware can't decode JPG/PNG, so
+            // this is what every well-formed RSD ships next to the descriptor.
+            const QString tim = outFi.absolutePath() + dirSep + basename + QStringLiteral(".tim");
+            QString timErr;
+            if (PS1TIM::saveOgreImageToTim16(img, tim, &timErr)) {
+                ot.outFile = QFileInfo(tim).fileName();
+                return true;
+            }
+            Ogre::LogManager::getSingleton().logError(
+                "RSD TIM sidecar write failed: " + timErr.toStdString()
+                + " — falling back to PNG so the .rsd still references a real file.");
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("file.export"),
+                QStringLiteral("RSD TIM sidecar write failed, falling back to PNG: %1")
+                    .arg(timErr));
+
+            const QString png = outFi.absolutePath() + dirSep + basename + QStringLiteral(".png");
+            if (writePngFallback(img, png)) {
+                ot.outFile = QFileInfo(png).fileName();
+                return true;
+            }
+            Ogre::LogManager::getSingleton().logError(
+                "Failed to write RSD texture sidecar (TIM and PNG both failed): "
+                + png.toStdString());
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("file.export"),
+                QStringLiteral("RSD texture sidecar write failed: %1")
+                    .arg(QFileInfo(png).fileName()));
+            return false;
+        };
+
+        bool sidecarWriteFailed = false;
+        for (auto& ot : rsdOutTextures) {
+            bool ok = false;
+            try {
+                ok = writeSidecar(ot);
+            } catch (const Ogre::Exception& ex) {
+                Ogre::LogManager::getSingleton().logError(
+                    std::string("RSD texture sidecar Ogre exception: ") + ex.what());
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("file.export"),
+                    QStringLiteral("RSD texture sidecar Ogre exception: %1")
+                        .arg(QString::fromUtf8(ex.what())));
+            }
+            if (!ok) {
+                sidecarWriteFailed = true;
+                break;
+            }
+        }
+        if (sidecarWriteFailed)
+            return -1;
 
         PS1RSD::RsdDescriptor rsd;
         rsd.headerId = QStringLiteral("@RSD940102");
         rsd.plyPath = QFileInfo(plyPath).fileName();
-        if (!faceColors.isEmpty())
+        if (!entries.isEmpty())
             rsd.matPath = QFileInfo(matPath).fileName();
-        if (QFileInfo::exists(timPath)) {
-            rsd.ntex = 1;
-            rsd.textures = { QFileInfo(timPath).fileName() };
+        if (!rsdOutTextures.empty()) {
+            rsd.ntex = static_cast<int>(rsdOutTextures.size());
+            rsd.textures.reserve(static_cast<int>(rsdOutTextures.size()));
+            for (const auto& ot : rsdOutTextures)
+                rsd.textures.push_back(ot.outFile);
+        } else {
+            // Legacy fallback: if a same-basename .tim already sits next to the output, reference it.
+            const QString timPath = base + QStringLiteral(".tim");
+            if (QFileInfo::exists(timPath)) {
+                rsd.ntex = 1;
+                rsd.textures = { QFileInfo(timPath).fileName() };
+            }
         }
 
         if (!PS1RSD::writeRsdFile(_uri, rsd, &err)) {

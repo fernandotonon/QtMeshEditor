@@ -15,6 +15,9 @@ The MIT License
 #include <OgreEntity.h>
 #include <QColor>
 #include <QString>
+#include <QVector>
+
+#include <array>
 
 /**
  * Sony Psy-Q "PLY" polygon mesh (ASCII) — not Stanford PLY.
@@ -42,6 +45,45 @@ Ogre::MeshPtr importPsyqPlyWithFaceColors(const QString& filePath,
                                          const std::string& meshName,
                                          const QVector<QColor>& faceColors);
 
+/** Per-face material binding for the textured import path. */
+struct FaceMaterial {
+    bool textured = false;        ///< true when the face references a texture slot.
+    int textureIndex = -1;        ///< RSD TEX[] index (only used when `textured` is true).
+    std::array<float, 4> u{};     ///< per-corner U (normalised 0..1, in PLY corner order v0..vN).
+    std::array<float, 4> v{};     ///< per-corner V (normalised 0..1, top-origin).
+    QColor color;                  ///< per-face flat colour fallback (used when no vertex colours are supplied).
+    QVector<QColor> vertColors;   ///< 0, 3 or 4 per-corner colours (in PLY corner order); empty when N/A.
+};
+
+/**
+ * Import with per-face material binding (UVs + texture index + colours).
+ *
+ * The mesh is split into one submesh per `textureIndex` group, plus one
+ * submesh for untextured faces. The caller is responsible for binding a
+ * texture-aware material to each submesh after creation; this routine
+ * only stores UVs on textured submesh vertices.
+ *
+ * `faceMaterials` length must match the PLY face count.
+ */
+Ogre::MeshPtr importPsyqPlyWithFaceMaterials(const QString& filePath,
+                                             const std::string& meshName,
+                                             const QVector<FaceMaterial>& faceMaterials);
+
+/// Per-output-face UV + texture-slot info gathered alongside the PLY export.
+struct ExportFaceTexture {
+    bool textured = false;          ///< Source submesh has UVs + a bound texture.
+    int  submeshIndex = -1;          ///< Submesh that produced this face (for RSD slot lookup).
+    int  cornerCount = 3;            ///< 3 or 4 — matches the written PLY face shape.
+    std::array<float, 4> u{};       ///< Per-corner U (0..1), zero-padded for tris.
+    std::array<float, 4> v{};       ///< Per-corner V (0..1), zero-padded for tris.
+    /// Per-corner colours (matches PLY corner order). Populated when the source submesh has
+    /// a VES_DIFFUSE stream. Slots beyond `cornerCount` are default-constructed. Lets the
+    /// caller emit smooth-shaded MAT entries (Psy-Q `G` / `H`) instead of averaging the
+    /// corners into a single flat colour — preserves baked AO / vertex shading on round-trip.
+    bool hasCornerColors = false;
+    std::array<QColor, 4> cornerColors{};
+};
+
 /// Export an Ogre entity as Psy-Q PLY. Writes separate vertex and normal tables (counts
 /// `nV` and `nN` may differ): positions and normals are welded independently by quantized
 /// float, so shared 3D points can reuse one vertex index with distinct per-corner normals.
@@ -49,10 +91,12 @@ Ogre::MeshPtr importPsyqPlyWithFaceColors(const QString& filePath,
 /// follow those polygons
 /// (tri / quad / n-gon fanned to tris); otherwise coplanar triangle pairs are merged heuristically.
 /// If outFaceColors is provided and vertex colours exist on all submeshes, one RGB per
-/// written face is filled (for a MAT sidecar).
+/// written face is filled (for a MAT sidecar). If outFaceTextures is provided, per-face
+/// UV + submesh metadata is filled (for the textured MAT/RSD export path).
 bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                              const QString& plyPath,
                              QVector<QColor>* outFaceColors = nullptr,
+                             QVector<ExportFaceTexture>* outFaceTextures = nullptr,
                              QString* outError = nullptr);
 
 } // namespace PS1PLY
