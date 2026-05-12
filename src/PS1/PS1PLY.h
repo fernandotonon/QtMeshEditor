@@ -76,6 +76,12 @@ struct ExportFaceTexture {
     int  cornerCount = 3;            ///< 3 or 4 — matches the written PLY face shape.
     std::array<float, 4> u{};       ///< Per-corner U (0..1), zero-padded for tris.
     std::array<float, 4> v{};       ///< Per-corner V (0..1), zero-padded for tris.
+    /// Per-corner colours (matches PLY corner order). Populated when the source submesh has
+    /// a VES_DIFFUSE stream. Slots beyond `cornerCount` are default-constructed. Lets the
+    /// caller emit smooth-shaded MAT entries (Psy-Q `G` / `H`) instead of averaging the
+    /// corners into a single flat colour — preserves baked AO / vertex shading on round-trip.
+    bool hasCornerColors = false;
+    std::array<QColor, 4> cornerColors{};
 };
 
 /// Export an Ogre entity as Psy-Q PLY. Writes separate vertex and normal tables (counts

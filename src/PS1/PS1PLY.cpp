@@ -886,6 +886,11 @@ struct PsyqExportFace {
     int   submeshIndex = -1;  ///< Source submesh index (for RSD texture-slot lookup).
     std::array<float, 4> u{}; ///< Per-corner UV (PLY corner order); zero-padded for tris.
     std::array<float, 4> v_uv{};
+    /// Per-corner vertex colours (matches v[] order). Populated when the source submesh
+    /// exposes a VES_DIFFUSE stream — drives smooth-shaded MAT entries on the RSD export
+    /// path. Slots beyond the active corner count are default-constructed.
+    bool hasCornerColors = false;
+    std::array<QColor, 4> cornerColors{};
 };
 
 struct PsyqWeldedTri {
@@ -917,6 +922,26 @@ uint32_t normalIndexForWeldedPos(uint32_t posIdx, const PsyqWeldedTri& A, const 
     return nb != std::numeric_limits<uint32_t>::max() ? nb : 0u;
 }
 
+/// Resolve the per-corner colour for a merged quad vertex by looking up which of the
+/// two source triangles touched the welded position index. Falls back to triangle B's
+/// match, then to a default QColor when neither tri references the index.
+static QColor cornerColorForWeldedPos(uint32_t posIdx,
+                                      const std::array<uint32_t, 3>& triAPos,
+                                      const std::array<uint32_t, 3>& triBPos,
+                                      const std::array<QColor, 3>& triAColors,
+                                      const std::array<QColor, 3>& triBColors)
+{
+    for (int c = 0; c < 3; ++c) {
+        if (triAPos[static_cast<size_t>(c)] == posIdx)
+            return triAColors[static_cast<size_t>(c)];
+    }
+    for (int c = 0; c < 3; ++c) {
+        if (triBPos[static_cast<size_t>(c)] == posIdx)
+            return triBColors[static_cast<size_t>(c)];
+    }
+    return QColor();
+}
+
 static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
                                     const std::vector<uint32_t>& I1,
                                     const std::vector<uint32_t>& I2,
@@ -925,6 +950,7 @@ static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
                                     const std::vector<uint32_t>& N2,
                                     const std::vector<Ogre::Vector3>& weldPos,
                                     const QVector<QColor>* triFaceColors,
+                                    const std::vector<std::array<QColor, 3>>* triCornerColors,
                                     std::vector<PsyqExportFace>& outFaces)
 {
     const size_t n = I0.size();
@@ -934,6 +960,7 @@ static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
     std::vector<char> used(n, 0);
     const float minDot = 0.94f;
     const bool haveTriColors = (triFaceColors && triFaceColors->size() == static_cast<int>(n));
+    const bool haveCornerColors = (triCornerColors && triCornerColors->size() == n);
 
     auto triRgb = [&](size_t i) -> QColor {
         return haveTriColors ? (*triFaceColors)[static_cast<int>(i)] : QColor();
@@ -975,6 +1002,15 @@ static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
                 f.color = QColor((a.red() + b.red()) / 2, (a.green() + b.green()) / 2, (a.blue() + b.blue()) / 2);
                 f.hasColor = true;
             }
+            if (haveCornerColors) {
+                f.hasCornerColors = true;
+                for (int k = 0; k < 4; ++k) {
+                    f.cornerColors[static_cast<size_t>(k)] = cornerColorForWeldedPos(
+                        q[static_cast<size_t>(k)],
+                        triA.pw, triB.pw,
+                        (*triCornerColors)[i], (*triCornerColors)[j]);
+                }
+            }
             outFaces.push_back(f);
             used[i] = used[j] = 1;
             merged = true;
@@ -992,6 +1028,12 @@ static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
             if (haveTriColors) {
                 f.color = triRgb(i);
                 f.hasColor = true;
+            }
+            if (haveCornerColors) {
+                f.hasCornerColors = true;
+                f.cornerColors[0] = (*triCornerColors)[i][0];
+                f.cornerColors[1] = (*triCornerColors)[i][1];
+                f.cornerColors[2] = (*triCornerColors)[i][2];
             }
             outFaces.push_back(f);
             used[i] = 1;
@@ -1768,6 +1810,13 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
             mc.nrmIdx = weldNrmOnly(n);
         };
 
+        auto readCornerColor = [&](uint32_t vi) -> QColor {
+            const Ogre::ColourValue cv =
+                decodePackedColour(sd.colEl, static_cast<Ogre::RGBA>(cornerCrgba(vi)));
+            return QColor::fromRgbF(std::clamp(cv.r, 0.0f, 1.0f),
+                                    std::clamp(cv.g, 0.0f, 1.0f),
+                                    std::clamp(cv.b, 0.0f, 1.0f), 1.0f);
+        };
         auto avgRgbCorners = [&](const std::vector<unsigned int>& corners) -> QColor {
             Ogre::ColourValue acc(0, 0, 0, 1.0f);
             for (unsigned int vi : corners) {
@@ -1779,6 +1828,15 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
             }
             const float inv = 1.0f / float(corners.size());
             return QColor::fromRgbF(acc.r * inv, acc.g * inv, acc.b * inv, 1.0f);
+        };
+        auto setPsyqCornerColors = [&](PsyqExportFace& pf,
+                                       const std::vector<unsigned int>& corners) {
+            if (!collectFaceColors)
+                return;
+            pf.hasCornerColors = true;
+            const size_t cn = std::min<size_t>(corners.size(), 4u);
+            for (size_t k = 0; k < cn; ++k)
+                pf.cornerColors[k] = readCornerColor(corners[k]);
         };
 
         allExportFaces.reserve(ngonFaces.size() * 2);
@@ -1802,6 +1860,7 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                     f.hasColor = true;
                 }
                 setPsyqUv(f, poly);
+                setPsyqCornerColors(f, poly);
                 allExportFaces.push_back(f);
             } else if (ps == 4) {
                 for (unsigned int c : poly)
@@ -1821,6 +1880,7 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                     f.hasColor = true;
                 }
                 setPsyqUv(f, poly);
+                setPsyqCornerColors(f, poly);
                 allExportFaces.push_back(f);
             } else {
                 ensureMeshCorner(poly[0]);
@@ -1846,6 +1906,7 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                     const std::vector<unsigned int> triCorners{poly[0], poly[static_cast<size_t>(k)],
                                                                 poly[static_cast<size_t>(k + 1)]};
                     setPsyqUv(t, triCorners);
+                    setPsyqCornerColors(t, triCorners);
                     allExportFaces.push_back(t);
                 }
             }
@@ -1916,6 +1977,7 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
             std::vector<uint32_t> smN1;
             std::vector<uint32_t> smN2;
             QVector<QColor> smFaceCols;
+            std::vector<std::array<QColor, 3>> smCornerCols; ///< Per-tri-corner colours (v0,v1,v2) when colBase available.
             std::vector<std::array<float, 6>> smUv; ///< (u0,v0,u1,v1,u2,v2) per tri when subHasUv.
             smI0.reserve(triCount);
             smI1.reserve(triCount);
@@ -1926,6 +1988,9 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
             if (subHasUv)
                 smUv.reserve(triCount);
             const bool collectFaceColors = (outFaceColors != nullptr && sd.colEl && colBase);
+            const bool collectCornerColors = (outFaceTextures != nullptr && sd.colEl && colBase);
+            if (collectCornerColors)
+                smCornerCols.reserve(triCount);
 
             for (size_t t = 0; t < triCount; ++t) {
                 uint32_t i0, i1, i2;
@@ -1998,21 +2063,38 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                     smUv.push_back({uv0.first, uv0.second, uv1.first, uv1.second, uv2.first, uv2.second});
                 }
 
-                if (collectFaceColors) {
+                if (collectFaceColors || collectCornerColors) {
                     const Ogre::ColourValue cv0 = decodePackedColour(sd.colEl, static_cast<Ogre::RGBA>(c0));
                     const Ogre::ColourValue cv1 = decodePackedColour(sd.colEl, static_cast<Ogre::RGBA>(c1));
                     const Ogre::ColourValue cv2 = decodePackedColour(sd.colEl, static_cast<Ogre::RGBA>(c2));
-                    const Ogre::ColourValue ca((cv0.r + cv1.r + cv2.r) / 3.0f,
-                                               (cv0.g + cv1.g + cv2.g) / 3.0f,
-                                               (cv0.b + cv1.b + cv2.b) / 3.0f,
-                                               1.0f);
-                    smFaceCols.push_back(QColor::fromRgbF(ca.r, ca.g, ca.b, 1.0));
+                    if (collectFaceColors) {
+                        const Ogre::ColourValue ca((cv0.r + cv1.r + cv2.r) / 3.0f,
+                                                   (cv0.g + cv1.g + cv2.g) / 3.0f,
+                                                   (cv0.b + cv1.b + cv2.b) / 3.0f,
+                                                   1.0f);
+                        smFaceCols.push_back(QColor::fromRgbF(ca.r, ca.g, ca.b, 1.0));
+                    }
+                    if (collectCornerColors) {
+                        std::array<QColor, 3> cc{
+                            QColor::fromRgbF(std::clamp(cv0.r, 0.0f, 1.0f),
+                                             std::clamp(cv0.g, 0.0f, 1.0f),
+                                             std::clamp(cv0.b, 0.0f, 1.0f), 1.0f),
+                            QColor::fromRgbF(std::clamp(cv1.r, 0.0f, 1.0f),
+                                             std::clamp(cv1.g, 0.0f, 1.0f),
+                                             std::clamp(cv1.b, 0.0f, 1.0f), 1.0f),
+                            QColor::fromRgbF(std::clamp(cv2.r, 0.0f, 1.0f),
+                                             std::clamp(cv2.g, 0.0f, 1.0f),
+                                             std::clamp(cv2.b, 0.0f, 1.0f), 1.0f)};
+                        smCornerCols.push_back(cc);
+                    }
                 }
             }
 
             std::vector<PsyqExportFace> subFaces;
             QVector<QColor>* colorMerge =
                 collectFaceColors && smFaceCols.size() == static_cast<int>(smI0.size()) ? &smFaceCols : nullptr;
+            const std::vector<std::array<QColor, 3>>* cornerColorMerge =
+                (collectCornerColors && smCornerCols.size() == smI0.size()) ? &smCornerCols : nullptr;
 
             if (subHasUv) {
                 // Textured submesh: do not merge tris to quads — UV merge is ambiguous and
@@ -2037,10 +2119,17 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                         pf.color = (*colorMerge)[static_cast<int>(ti)];
                         pf.hasColor = true;
                     }
+                    if (cornerColorMerge && ti < cornerColorMerge->size()) {
+                        pf.hasCornerColors = true;
+                        pf.cornerColors[0] = (*cornerColorMerge)[ti][0];
+                        pf.cornerColors[1] = (*cornerColorMerge)[ti][1];
+                        pf.cornerColors[2] = (*cornerColorMerge)[ti][2];
+                    }
                     subFaces.push_back(pf);
                 }
             } else {
-                mergeSubmeshTrisToQuads(smI0, smI1, smI2, smN0, smN1, smN2, weldedPos, colorMerge, subFaces);
+                mergeSubmeshTrisToQuads(smI0, smI1, smI2, smN0, smN1, smN2, weldedPos,
+                                       colorMerge, cornerColorMerge, subFaces);
                 for (auto& pf : subFaces)
                     pf.submeshIndex = sd.sourceIndex;
             }
@@ -2093,6 +2182,8 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
             eft.cornerCount = ef.isQuad ? 4 : 3;
             eft.u = ef.u;
             eft.v = ef.v_uv;
+            eft.hasCornerColors = ef.hasCornerColors;
+            eft.cornerColors = ef.cornerColors;
             outFaceTextures->push_back(eft);
         }
     }

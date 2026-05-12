@@ -2243,13 +2243,33 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             submeshToTexSlot[static_cast<int>(si)] = slot;
         }
 
-        // Synthesise MAT entries: one per output PLY face. Mix textured (T) and untextured (C)
-        // types based on whether the source submesh provided UVs + a texture. Texture indices
-        // map through `submeshToTexSlot` so a single texture used by multiple submeshes still
-        // collapses to a single RSD slot.
+        // Synthesise MAT entries: one per output PLY face. Pick the most specific Psy-Q
+        // type that preserves the source data:
+        //   * Textured + smooth corner colours -> 'H' (textured smooth, per-corner tint)
+        //   * Textured + uniform corner colour -> 'D' (textured flat colour)
+        //   * Textured + no colour              -> 'T' (textured, no colour)
+        //   * Untextured + smooth corner colours -> 'G' (smooth Gouraud)
+        //   * Untextured + uniform colour       -> 'C' (flat colour)
+        // Without this, every face would collapse to 'T' or 'C', losing baked AO / vertex-
+        // shading gradients (e.g. the wall corners in the Blender RSD example).
         const bool haveColors  = !faceColors.isEmpty()
                                && faceColors.size() == static_cast<int>(faceTexInfos.size());
         const bool haveTexInfo = !faceTexInfos.isEmpty();
+
+        // Two corner colours are considered the same when their 8-bit channels match exactly.
+        // Tolerance kept tight so PS1's 8-bit-per-channel input doesn't degrade Gouraud info.
+        auto cornersUniform = [](const PS1PLY::ExportFaceTexture& eft) {
+            if (!eft.hasCornerColors)
+                return true;
+            const int n = std::clamp(eft.cornerCount, 1, 4);
+            const QColor& c0 = eft.cornerColors[0];
+            for (int k = 1; k < n; ++k) {
+                const QColor& ck = eft.cornerColors[static_cast<size_t>(k)];
+                if (c0.red() != ck.red() || c0.green() != ck.green() || c0.blue() != ck.blue())
+                    return false;
+            }
+            return true;
+        };
 
         QVector<PS1MAT::MatEntry> entries;
         if (haveTexInfo || haveColors) {
@@ -2257,34 +2277,60 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             entries.reserve(nFaces);
             for (int fi = 0; fi < nFaces; ++fi) {
                 PS1MAT::MatEntry me;
-                me.shadingChar = 'F';
 
                 const PS1PLY::ExportFaceTexture& eft = haveTexInfo
                     ? faceTexInfos[fi]
                     : PS1PLY::ExportFaceTexture{};
                 const QColor faceColor = haveColors ? faceColors[fi] : QColor(255, 255, 255);
+                const int corners = (eft.cornerCount == 4) ? 4 : 3;
+                const bool gotCornerColors = eft.hasCornerColors;
+                const bool smoothShade = gotCornerColors && !cornersUniform(eft);
 
                 const int slotIt = (eft.textured && submeshToTexSlot.count(eft.submeshIndex))
                     ? submeshToTexSlot[eft.submeshIndex]
                     : -1;
+                // shadingChar stays 'F' (flat normals) to match the Blender RSD exporter
+                // convention: Psy-Q PLY stores per-face normals, so Gouraud-style smoothness
+                // is encoded purely via the typeChar (G/H), not via normal interpolation.
+                me.shadingChar = 'F';
                 if (eft.textured && slotIt >= 0) {
-                    me.typeChar = 'T';
                     me.textured = true;
                     me.textureIndex = slotIt;
                     const OutTex& ot = rsdOutTextures[slotIt];
                     const int texW = ot.width > 0 ? ot.width : 256;
                     const int texH = ot.height > 0 ? ot.height : 256;
-                    const int corners = (eft.cornerCount == 4) ? 4 : 3;
                     me.uvs.resize(corners);
                     for (int k = 0; k < corners; ++k) {
                         me.uvs[k].u = static_cast<int>(std::lround(double(eft.u[k]) * double(texW)));
                         me.uvs[k].v = static_cast<int>(std::lround(double(eft.v[k]) * double(texH)));
                     }
-                    me.rgb = QColor(255, 255, 255);
+                    if (smoothShade) {
+                        me.typeChar = 'H';                    // textured smooth (per-corner tint)
+                        me.vertColors.reserve(corners);
+                        for (int k = 0; k < corners; ++k)
+                            me.vertColors.push_back(eft.cornerColors[static_cast<size_t>(k)]);
+                        me.rgb = me.vertColors.first();
+                    } else if (gotCornerColors) {
+                        me.typeChar = 'D';                    // textured flat colour
+                        const QColor c = eft.cornerColors[0].isValid() ? eft.cornerColors[0]
+                                                                       : QColor(255, 255, 255);
+                        me.vertColors.push_back(c);
+                        me.rgb = c;
+                    } else {
+                        me.typeChar = 'T';                    // textured, no colour
+                        me.rgb = QColor(255, 255, 255);
+                    }
+                } else if (smoothShade) {
+                    me.typeChar = 'G';                        // smooth Gouraud
+                    me.vertColors.reserve(corners);
+                    for (int k = 0; k < corners; ++k)
+                        me.vertColors.push_back(eft.cornerColors[static_cast<size_t>(k)]);
+                    me.rgb = me.vertColors.first();
                 } else {
-                    me.typeChar = 'C';
-                    me.vertColors.push_back(faceColor);
-                    me.rgb = faceColor;
+                    me.typeChar = 'C';                        // flat colour
+                    const QColor c = gotCornerColors ? eft.cornerColors[0] : faceColor;
+                    me.vertColors.push_back(c.isValid() ? c : QColor(255, 255, 255));
+                    me.rgb = me.vertColors.first();
                 }
                 entries.push_back(me);
             }
