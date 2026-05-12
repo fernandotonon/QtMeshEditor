@@ -195,6 +195,47 @@ TEST(PS1MAT, WriteAndRoundTrip_MixedEntries)
     EXPECT_EQ(out[2].vertColors[2], QColor(0, 0, 255));
 }
 
+TEST(PS1MAT, WritesGouraudTriWithFourCornerPadding)
+{
+    // Repro for Example Project.rsd round-trip: the Blender RSD exporter pads tri G
+    // entries with a trailing `0 0 0` so every G row has 12 colour ints. Match that
+    // convention so PS1 emulators and third-party tools see a stable layout.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    QVector<PS1MAT::MatEntry> in;
+    {
+        PS1MAT::MatEntry g;
+        g.typeChar = 'G';
+        g.shadingChar = 'F';
+        g.vertColors = {
+            QColor(245, 245, 245), QColor(107, 107, 107), QColor(84, 84, 84)
+        };
+        g.rgb = g.vertColors.first();
+        in.push_back(g);
+    }
+
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("triG.mat"));
+    QString err;
+    ASSERT_TRUE(PS1MAT::writeMatFile(path, in, &err)) << err.toStdString();
+
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString text = QString::fromLatin1(f.readAll());
+    EXPECT_TRUE(text.contains(QStringLiteral("0 1 F G 245 245 245 107 107 107 84 84 84 0 0 0")))
+        << "tri G entry must be padded to 4 corners with a trailing 0 0 0 -- got:\n"
+        << text.toStdString();
+
+    // Round-trip should still parse the padding back into a 4-colour vector; the
+    // importer is responsible for truncating to the PLY face shape.
+    QVector<PS1MAT::MatEntry> out;
+    ASSERT_TRUE(PS1MAT::parseMatFile(path, out, &err)) << err.toStdString();
+    ASSERT_EQ(out.size(), 1);
+    EXPECT_EQ(out[0].typeChar, 'G');
+    ASSERT_EQ(out[0].vertColors.size(), 4);
+    EXPECT_EQ(out[0].vertColors[3], QColor(0, 0, 0));
+}
+
 TEST(PS1MAT, RejectsMissingHeader)
 {
     QTemporaryDir dir;

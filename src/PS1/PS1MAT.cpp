@@ -357,6 +357,12 @@ bool writeMatFile(const QString& matPath, const QVector<MatEntry>& entries, QStr
                 } else {
                     for (int k = 0; k < nC; ++k)
                         writeColor(e.vertColors[k]);
+                    // Match the Blender RSD exporter convention: pad tri G entries to a
+                    // 4-corner layout with a trailing `0 0 0` so downstream tooling that
+                    // assumes a fixed 4-colour stride (PS1 emulators, third-party loaders)
+                    // can read every G line with the same parsing path.
+                    if (nC == 3)
+                        ts << " 0 0 0";
                 }
                 break;
             }
