@@ -33,18 +33,20 @@ quint64 MemoryEstimator::textureBytes(unsigned int width, unsigned int height,
     return base;
 }
 
+namespace {
+constexpr quint64 kKB = 1024ULL;
+constexpr quint64 kMB = 1024ULL * 1024ULL;
+constexpr quint64 kGB = 1024ULL * 1024ULL * 1024ULL;
+} // namespace
+
 QString MemoryEstimator::formatBytes(quint64 bytes)
 {
-    constexpr quint64 KB = 1024ULL;
-    constexpr quint64 MB = 1024ULL * 1024ULL;
-    constexpr quint64 GB = 1024ULL * 1024ULL * 1024ULL;
-
-    if (bytes >= GB)
-        return QString::number(static_cast<double>(bytes) / GB, 'f', 2) + " GB";
-    if (bytes >= MB)
-        return QString::number(static_cast<double>(bytes) / MB, 'f', 2) + " MB";
-    if (bytes >= KB)
-        return QString::number(static_cast<double>(bytes) / KB, 'f', 1) + " KB";
+    if (bytes >= kGB)
+        return QString::number(static_cast<double>(bytes) / kGB, 'f', 2) + " GB";
+    if (bytes >= kMB)
+        return QString::number(static_cast<double>(bytes) / kMB, 'f', 2) + " MB";
+    if (bytes >= kKB)
+        return QString::number(static_cast<double>(bytes) / kKB, 'f', 1) + " KB";
     return QString::number(bytes) + " B";
 }
 
@@ -100,7 +102,7 @@ MeshMemoryEstimate MemoryEstimator::estimateEntity(const Ogre::Entity* entity)
     accumulateVertexData(mesh->sharedVertexData);
 
     for (unsigned int i = 0; i < mesh->getNumSubMeshes(); ++i) {
-        Ogre::SubMesh* sub = mesh->getSubMesh(i);
+        const Ogre::SubMesh* sub = mesh->getSubMesh(i);
         if (!sub) continue;
 
         if (!sub->useSharedVertices)

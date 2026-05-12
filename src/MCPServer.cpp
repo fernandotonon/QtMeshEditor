@@ -2734,10 +2734,11 @@ QJsonObject MCPServer::toolGetLodInfo(const QJsonObject &args)
     return makeSuccessResult(lines.join("\n"));
 }
 
+// NOSONAR(cpp:S5817) — ToolHandler is a non-const member-fn pointer (matching
+// every other tool method in this class); marking just this one const would
+// break the registry signature in MCPServer.h.
 QJsonObject MCPServer::toolGetMemoryUsage(const QJsonObject &args)
 {
-    // NOTE: cannot be `const` — ToolHandler is a non-const member-fn pointer
-    // (matching every other tool in this class).
     try {
         if (const Manager* mgr = Manager::getSingletonPtr(); !mgr)
             return makeErrorResult("Error: Manager not available");

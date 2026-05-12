@@ -3299,17 +3299,19 @@ struct MemoryCmdArgs {
 //   2 = print "invalid budget" + exit 2
 int parseMemoryArgs(int argc, char* argv[], MemoryCmdArgs& out)
 {
-    for (int i = 1; i < argc; ++i) {
+    int i = 1;
+    while (i < argc) {
         const QString arg(argv[i]);
+        ++i;
         if (arg == "memory" || arg == "--cli") continue;
-        if (arg == "--json") { out.jsonOutput = true; continue; }
-        if (arg == "--no-cloud") { out.noCloud = true; continue; }
-        if (arg == "--token" && i + 1 < argc) {
-            out.tokenArg = QString::fromLocal8Bit(argv[++i]);
+        if (arg == "--json")     { out.jsonOutput = true; continue; }
+        if (arg == "--no-cloud") { out.noCloud    = true; continue; }
+        if (arg == "--token" && i < argc) {
+            out.tokenArg = QString::fromLocal8Bit(argv[i++]);
             continue;
         }
-        if (arg == "--budget" && i + 1 < argc) {
-            out.budgetBytes = MemoryEstimator::parseBudget(argv[++i]);
+        if (arg == "--budget" && i < argc) {
+            out.budgetBytes = MemoryEstimator::parseBudget(argv[i++]);
             if (out.budgetBytes == 0) return 2;
             out.budgetExplicit = true;
             continue;
