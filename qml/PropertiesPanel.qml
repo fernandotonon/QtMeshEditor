@@ -2599,6 +2599,13 @@ Rectangle {
                         fixFeedback.color = "#c06060"
                         fixFeedback.text = msg
                     }
+                    // Clear the fix feedback whenever the validation result is
+                    // invalidated — selection-change, or any other reason the
+                    // validator resets `validated` to false.
+                    function onIssuesChanged() {
+                        if (!MeshValidator.validated)
+                            fixFeedback.text = ""
+                    }
                 }
             }
         }

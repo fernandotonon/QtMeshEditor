@@ -56,6 +56,7 @@ MeshValidator::MeshValidator() : QObject(nullptr)
         // Clear stale results when selection changes; cancel any pending validation.
         m_issues.clear();
         m_validated = false;
+        m_cacheOptimizationAvailable = false;
         if (m_pendingValidate) {
             m_pendingValidate = false;
             emit validatingChanged();
