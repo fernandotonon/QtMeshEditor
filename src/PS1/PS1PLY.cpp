@@ -432,6 +432,31 @@ static bool buildNgonPayloadFromWeldedTriangles(const std::vector<uint32_t>& tri
     return triIdx == nTri;
 }
 
+/// Psy-Q MAT `G` / `H` carry per-corner colours for Gouraud shading on the PS1. In the editor
+/// we want the same readable look as Blender's **vertex colour** viewport: diffuse × vertex
+/// colour with **lighting off**, so corners interpolate smoothly on each polygon. A lit FFP
+/// pass (ambient + diffuse tracking) modulates by N·L and can make smooth vertex paint look
+/// almost flat on simple primitives even when the MAT payload is correct.
+static void configurePsyqPlyPassForVertexColour(Ogre::Pass* p0, bool hasVertexColour)
+{
+    if (!p0)
+        return;
+    if (hasVertexColour) {
+        p0->setLightingEnabled(false);
+        p0->setAmbient(0.0f, 0.0f, 0.0f);
+        p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+        p0->setSpecular(0.0f, 0.0f, 0.0f, 0.0f);
+        p0->setEmissive(0.0f, 0.0f, 0.0f);
+        p0->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+    } else {
+        p0->setLightingEnabled(true);
+        p0->setAmbient(1.0f, 1.0f, 1.0f);
+        p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+        p0->setEmissive(0.0f, 0.0f, 0.0f);
+        p0->setVertexColourTracking(Ogre::TVC_NONE);
+    }
+}
+
 static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const TriSoup& soup,
                                           const std::vector<uint8_t>* psyqFaceLayoutForNgons = nullptr)
 {
@@ -537,13 +562,8 @@ static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const Tri
                 mat->load();
             if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
                 Ogre::Pass* p0 = mat->getTechnique(0)->getPass(0);
-                if (p0) {
-                    p0->setLightingEnabled(true);
-                    p0->setAmbient(1.0f, 1.0f, 1.0f);
-                    p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
-                    p0->setEmissive(0.0f, 0.0f, 0.0f);
-                    p0->setVertexColourTracking(haveColors ? (Ogre::TVC_AMBIENT | Ogre::TVC_DIFFUSE) : Ogre::TVC_NONE);
-                }
+                if (p0)
+                    configurePsyqPlyPassForVertexColour(p0, haveColors);
             }
         }
     } catch (...) {
@@ -1528,21 +1548,16 @@ static Ogre::MeshPtr buildMeshFromTexturedSoups(
         vbuf->unlock();
         bind->setBinding(0, vbuf);
 
-        // Configure cloned material so vertex colours track diffuse (matches buildMeshFromTriSoup).
+        // Configure cloned material: shadeless when vertex colours are present so the
+        // editor matches Blender's vertex-colour viewport (see configurePsyqPlyPassForVertexColour).
         try {
             if (auto mat = Ogre::MaterialManager::getSingleton().getByName(matName)) {
                 if (!mat->isLoaded())
                     mat->load();
                 if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
                     Ogre::Pass* p0 = mat->getTechnique(0)->getPass(0);
-                    if (p0) {
-                        p0->setLightingEnabled(true);
-                        p0->setAmbient(1.0f, 1.0f, 1.0f);
-                        p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
-                        p0->setEmissive(0.0f, 0.0f, 0.0f);
-                        p0->setVertexColourTracking(hasColor ? (Ogre::TVC_AMBIENT | Ogre::TVC_DIFFUSE)
-                                                             : Ogre::TVC_NONE);
-                    }
+                    if (p0)
+                        configurePsyqPlyPassForVertexColour(p0, hasColor);
                 }
             }
         } catch (...) {}

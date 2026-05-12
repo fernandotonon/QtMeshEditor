@@ -1806,20 +1806,25 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                         // Replace any existing texture unit states so re-imports refresh cleanly.
                         pass->removeAllTextureUnitStates();
                         pass->createTextureUnitState(rsdTexSlots[slot].resourceName.toStdString());
-                        pass->setLightingEnabled(true);
-                        pass->setAmbient(1.0f, 1.0f, 1.0f);
-                        pass->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
-                        // Preserve per-corner colours that the textured PLY import already baked
-                        // into the submesh (Psy-Q H/D/G shaded materials encode their tint via
-                        // vertex colour). Force TVC_NONE only when the submesh has no VES_DIFFUSE
-                        // stream, otherwise the texture would render as a plain unshaded image.
                         const Ogre::SubMesh* sm = en->getMesh()->getSubMesh(si);
                         const Ogre::VertexData* vdSm =
                             (sm && sm->useSharedVertices) ? en->getMesh()->sharedVertexData
                                                           : (sm ? sm->vertexData : nullptr);
                         const bool hasVC = vdSm && vdSm->vertexDeclaration
                             && vdSm->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
-                        pass->setVertexColourTracking(hasVC ? Ogre::TVC_DIFFUSE : Ogre::TVC_NONE);
+                        if (hasVC) {
+                            pass->setLightingEnabled(false);
+                            pass->setAmbient(0.0f, 0.0f, 0.0f);
+                            pass->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+                            pass->setSpecular(0.0f, 0.0f, 0.0f, 0.0f);
+                            pass->setEmissive(0.0f, 0.0f, 0.0f);
+                            pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+                        } else {
+                            pass->setLightingEnabled(true);
+                            pass->setAmbient(1.0f, 1.0f, 1.0f);
+                            pass->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+                            pass->setVertexColourTracking(Ogre::TVC_NONE);
+                        }
                         mat->compile();
                     }
                 }
