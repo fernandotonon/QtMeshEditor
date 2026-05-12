@@ -2230,7 +2230,20 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 // the sidecar lands next to the .rsd with a clean, human-readable filename.
                 // For non-RSD textures this is a best-effort basename of whatever the
                 // texture resource was registered under.
-                ot.outFile = rsdResourceNameToBasename(ot.resourceName);
+                QString candidate = rsdResourceNameToBasename(ot.resourceName);
+                // Two distinct textures can collapse to the same stripped basename (e.g. two
+                // different imports both shipping a `Wood.jpg`). Detect collisions against
+                // previously-claimed outFiles and fall back to the scoped resource name so
+                // each RSD TEX[] slot writes to its own sidecar instead of clobbering it.
+                auto basenameAlreadyUsed = [&candidate, &rsdOutTextures] {
+                    for (const auto& prev : rsdOutTextures)
+                        if (prev.outFile == candidate)
+                            return true;
+                    return false;
+                };
+                if (basenameAlreadyUsed())
+                    candidate = QFileInfo(ot.resourceName).fileName();
+                ot.outFile = candidate;
                 auto tex = Ogre::TextureManager::getSingleton().getByName(texName);
                 if (tex) {
                     ot.width = static_cast<int>(tex->getWidth());
@@ -2348,6 +2361,11 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // write a PNG when the original encoding is unknown. We do not short-circuit on
         // existing files: re-exporting should always refresh the sidecar so the new .rsd
         // never references stale image content from a previous export.
+        //
+        // A sidecar write failure must abort the whole RSD export: writing the descriptor
+        // anyway would leave TEX[] entries pointing to nonexistent / stale files, breaking
+        // any later round-trip through the RSD importer or third-party tools.
+        bool sidecarWriteFailed = false;
         for (auto& ot : rsdOutTextures) {
             try {
                 auto tex = Ogre::TextureManager::getSingleton().getByName(ot.resourceName.toStdString());
@@ -2393,11 +2411,22 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                         QStringLiteral("file.export"),
                         QStringLiteral("RSD texture sidecar write failed: %1")
                             .arg(QFileInfo(png).fileName()));
+                    sidecarWriteFailed = true;
+                    break;
                 }
-            } catch (const std::exception&) {
-                // ignored — texture remains referenced by its original resource name.
+            } catch (const std::exception& ex) {
+                Ogre::LogManager::getSingleton().logError(
+                    std::string("RSD texture sidecar export exception: ") + ex.what());
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("file.export"),
+                    QStringLiteral("RSD texture sidecar export exception: %1")
+                        .arg(QString::fromUtf8(ex.what())));
+                sidecarWriteFailed = true;
+                break;
             }
         }
+        if (sidecarWriteFailed)
+            return -1;
 
         PS1RSD::RsdDescriptor rsd;
         rsd.headerId = QStringLiteral("@RSD940102");
