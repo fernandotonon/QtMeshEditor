@@ -45,27 +45,18 @@
 MaterialEditorQML::MaterialEditorQML(QObject *parent)
     : QObject(parent)
 {
-    // Initialize theme colors from system palette
-    // (member defaults in header provide fallback values)
-    QPalette palette = QApplication::palette();
-    // Slice I: align panelColor with PropertiesPanelController so the
-    // Material Editor surfaces visually match the Inspector. Both now
-    // use QPalette::Window for the surface and QPalette::Base only for
-    // input fields. inputColor / headerColor mirror the Inspector's
-    // PropertiesPanelController API so themed controls (ThemedTextField,
-    // ThemedComboBox, ThemedCheckBox) read from the same vocabulary.
-    m_backgroundColor = palette.color(QPalette::Window);
-    m_panelColor = palette.color(QPalette::Window);
-    m_inputColor = palette.color(QPalette::Base);
-    m_headerColor = palette.color(QPalette::Window).darker(110);
-    m_textColor = palette.color(QPalette::WindowText);
-    m_borderColor = palette.color(QPalette::Mid);
-    m_highlightColor = palette.color(QPalette::Highlight);
-    m_buttonColor = palette.color(QPalette::Button);
-    m_buttonTextColor = palette.color(QPalette::ButtonText);
-    m_disabledTextColor = palette.color(QPalette::PlaceholderText);
-    m_accentColor = palette.color(QPalette::Highlight);
-    
+    // Track runtime palette swaps (Options → Theme: Light/Dark/Custom).
+    // Without this, opening the Material Editor in a separate
+    // QQmlApplicationEngine left the window stuck on whatever palette
+    // existed when the singleton was first cached — most visibly broken
+    // on Linux/Fusion where the Material Editor opened light while the
+    // rest of the app was dark.
+    if (qApp) {
+        connect(qApp, &QApplication::paletteChanged, this, [this]() {
+            emit themeChanged();
+        });
+    }
+
     // Initialize material color properties with defaults
     m_ambientColor = QColor(128, 128, 128);  // Gray
     m_diffuseColor = QColor(255, 255, 255);  // White
@@ -127,6 +118,67 @@ MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine 
     // independently, and without this a later engine could delete the shared instance
     QQmlEngine::setObjectOwnership(instance, QQmlEngine::CppOwnership);
     return instance;
+}
+
+// -----------------------------------------------------------------------
+// Theme color getters — derive live from QApplication::palette() so the
+// Material Editor follows runtime Light/Dark/Custom palette swaps. The
+// role mapping matches PropertiesPanelController / ThemeManager so the
+// Material Editor and the Inspector keep a single palette vocabulary.
+// -----------------------------------------------------------------------
+QColor MaterialEditorQML::backgroundColor() const
+{
+    return QApplication::palette().color(QPalette::Window);
+}
+
+QColor MaterialEditorQML::panelColor() const
+{
+    return QApplication::palette().color(QPalette::Window);
+}
+
+QColor MaterialEditorQML::inputColor() const
+{
+    return QApplication::palette().color(QPalette::Base);
+}
+
+QColor MaterialEditorQML::headerColor() const
+{
+    return QApplication::palette().color(QPalette::Window).darker(110);
+}
+
+QColor MaterialEditorQML::textColor() const
+{
+    return QApplication::palette().color(QPalette::WindowText);
+}
+
+QColor MaterialEditorQML::borderColor() const
+{
+    return QApplication::palette().color(QPalette::Mid);
+}
+
+QColor MaterialEditorQML::highlightColor() const
+{
+    return QApplication::palette().color(QPalette::Highlight);
+}
+
+QColor MaterialEditorQML::buttonColor() const
+{
+    return QApplication::palette().color(QPalette::Button);
+}
+
+QColor MaterialEditorQML::buttonTextColor() const
+{
+    return QApplication::palette().color(QPalette::ButtonText);
+}
+
+QColor MaterialEditorQML::disabledTextColor() const
+{
+    return QApplication::palette().color(QPalette::PlaceholderText);
+}
+
+QColor MaterialEditorQML::accentColor() const
+{
+    return QApplication::palette().color(QPalette::Highlight);
 }
 
 void MaterialEditorQML::loadMaterial(const QString &materialName)

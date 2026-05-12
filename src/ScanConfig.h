@@ -54,8 +54,15 @@ struct ScanConfig {
 
     // Redundant-keyframe detection. When enabled, the scanner analyzes each
     // animation's keyframes and warns if a meaningful share could be safely
-    // removed via tolerance-based simplification. Defaults disable the check.
-    double redundantKeyframesPctThreshold = 40.0; // 0 = disabled; default warns at >=40% redundant keys
+    // removed via tolerance-based simplification.
+    //
+    // Opt-in: defaults to 0.0 (disabled). The simplify auto-fix is
+    // destructive (it rewrites the FBX with a new keyframe distribution
+    // and drops redundant samples), so the rule only fires — and the
+    // `--fix` path only runs — when the user explicitly sets the
+    // threshold in their `qtmesh.yml`/`.json` config. To enable the
+    // default behavior, set `redundant_keyframes_pct: 40` in the config.
+    double redundantKeyframesPctThreshold = 0.0; // 0 = disabled; opt in via qtmesh.yml to warn / auto-simplify
     double redundantKeyframesTranslationTol = 1e-3;  // Balanced preset (~1mm)
     double redundantKeyframesRotationDegTol = 0.5;
     double redundantKeyframesScaleTol = 1e-3;

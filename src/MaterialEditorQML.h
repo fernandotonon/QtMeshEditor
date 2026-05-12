@@ -108,18 +108,23 @@ class MaterialEditorQML : public QObject
     Q_PROPERTY(int environmentMapping READ environmentMapping WRITE setEnvironmentMapping NOTIFY environmentMappingChanged)
     Q_PROPERTY(double rotateAnimSpeed READ rotateAnimSpeed WRITE setRotateAnimSpeed NOTIFY rotateAnimSpeedChanged)
 
-    // Theme color properties
-    Q_PROPERTY(QColor backgroundColor READ backgroundColor CONSTANT)
-    Q_PROPERTY(QColor panelColor READ panelColor CONSTANT)
-    Q_PROPERTY(QColor inputColor READ inputColor CONSTANT)
-    Q_PROPERTY(QColor headerColor READ headerColor CONSTANT)
-    Q_PROPERTY(QColor textColor READ textColor CONSTANT)
-    Q_PROPERTY(QColor borderColor READ borderColor CONSTANT)
-    Q_PROPERTY(QColor highlightColor READ highlightColor CONSTANT)
-    Q_PROPERTY(QColor buttonColor READ buttonColor CONSTANT)
-    Q_PROPERTY(QColor buttonTextColor READ buttonTextColor CONSTANT)
-    Q_PROPERTY(QColor disabledTextColor READ disabledTextColor CONSTANT)
-    Q_PROPERTY(QColor accentColor READ accentColor CONSTANT)
+    // Theme color properties — derived live from QApplication::palette()
+    // so the Material Editor follows runtime dark/light/custom switches
+    // (the previous CONSTANT variant cached colors at first construction,
+    // which left a separate-engine ApplicationWindow stuck on whatever
+    // palette was active when the singleton was first instantiated and
+    // broke dark mode on Linux + Fusion).
+    Q_PROPERTY(QColor backgroundColor READ backgroundColor NOTIFY themeChanged)
+    Q_PROPERTY(QColor panelColor READ panelColor NOTIFY themeChanged)
+    Q_PROPERTY(QColor inputColor READ inputColor NOTIFY themeChanged)
+    Q_PROPERTY(QColor headerColor READ headerColor NOTIFY themeChanged)
+    Q_PROPERTY(QColor textColor READ textColor NOTIFY themeChanged)
+    Q_PROPERTY(QColor borderColor READ borderColor NOTIFY themeChanged)
+    Q_PROPERTY(QColor highlightColor READ highlightColor NOTIFY themeChanged)
+    Q_PROPERTY(QColor buttonColor READ buttonColor NOTIFY themeChanged)
+    Q_PROPERTY(QColor buttonTextColor READ buttonTextColor NOTIFY themeChanged)
+    Q_PROPERTY(QColor disabledTextColor READ disabledTextColor NOTIFY themeChanged)
+    Q_PROPERTY(QColor accentColor READ accentColor NOTIFY themeChanged)
 
     // Undo/Redo properties
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY undoRedoStateChanged)
@@ -221,18 +226,19 @@ public:
     int environmentMapping() const { return m_environmentMapping; }
     double rotateAnimSpeed() const { return m_rotateAnimSpeed; }
 
-    // Theme color getters
-    QColor backgroundColor() const { return m_backgroundColor; }
-    QColor panelColor() const { return m_panelColor; }
-    QColor inputColor() const { return m_inputColor; }
-    QColor headerColor() const { return m_headerColor; }
-    QColor textColor() const { return m_textColor; }
-    QColor borderColor() const { return m_borderColor; }
-    QColor highlightColor() const { return m_highlightColor; }
-    QColor buttonColor() const { return m_buttonColor; }
-    QColor buttonTextColor() const { return m_buttonTextColor; }
-    QColor disabledTextColor() const { return m_disabledTextColor; }
-    QColor accentColor() const { return m_accentColor; }
+    // Theme color getters — read the live QApplication::palette() so the
+    // Material Editor tracks runtime palette swaps (Light/Dark/Custom).
+    QColor backgroundColor() const;
+    QColor panelColor() const;
+    QColor inputColor() const;
+    QColor headerColor() const;
+    QColor textColor() const;
+    QColor borderColor() const;
+    QColor highlightColor() const;
+    QColor buttonColor() const;
+    QColor buttonTextColor() const;
+    QColor disabledTextColor() const;
+    QColor accentColor() const;
 
     // Undo/Redo getters
     bool canUndo() const { return m_undoStack.size() > 0; }
@@ -582,6 +588,10 @@ signals:
     void sdGenerationError(const QString &error);
     void sdPendingForMaterialChanged();
 
+    // Theme palette signal — fired when QApplication::paletteChanged so
+    // QML bindings on backgroundColor/panelColor/textColor/… refresh.
+    void themeChanged();
+
 private:
     void updateTechniqueList();
     void updatePassList();
@@ -717,22 +727,6 @@ private slots:
     void onSDModelLoadedChanged();
 #endif
 
-private:
-    // Theme color properties (defaults used if palette read fails or in tests)
-    QColor m_backgroundColor{240, 240, 240};
-    QColor m_panelColor{255, 255, 255};
-    // Slice I: input field background — matches the Inspector's "inputColor".
-    QColor m_inputColor{255, 255, 255};
-    // Slice I: section/button header surface — matches the Inspector's
-    // "headerColor" (panel background, slightly darker for hairline contrast).
-    QColor m_headerColor{220, 220, 220};
-    QColor m_textColor{0, 0, 0};
-    QColor m_borderColor{128, 128, 128};
-    QColor m_highlightColor{0, 120, 215};
-    QColor m_buttonColor{225, 225, 225};
-    QColor m_buttonTextColor{0, 0, 0};
-    QColor m_disabledTextColor{128, 128, 128};
-    QColor m_accentColor{0, 120, 215};
 };
 
 #endif // MATERIALEDITORQML_H 

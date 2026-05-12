@@ -50,6 +50,18 @@ rules:
   max_anim_keyframes: 500
   max_anim_duration: 30.0
 
+  # Redundant-keyframe / animation simplification (opt-in)
+  # Walks each animation's atomic node keys under the configured tolerances
+  # and warns when >= N% of keyframes could be folded out (same maths as
+  # `qtmesh anim --simplify`). `qtmesh scan ... --fix` will then rewrite
+  # the asset (currently FBX) to drop those keys — this is destructive,
+  # so the rule is disabled by default. Set the threshold to any positive
+  # value to enable. Recommended starting point: 40 (warns at >=40%).
+  # redundant_keyframes_pct: 40
+  # redundant_keyframes_translation_tol: 0.001   # ~1mm
+  # redundant_keyframes_rotation_deg_tol: 0.5
+  # redundant_keyframes_scale_tol: 0.001
+
   # Animation & bone name requirements (wildcard: * = any, ? = one char)
   # These are checked globally. Use scopes for path-specific requirements.
   # require_animation_names: [idle, walk, run]
