@@ -85,6 +85,9 @@ public:
     /// source via Sobel filter. Headless equivalent of the GUI
     /// "Generate Normal Map…" dialog.
     static int cmdNormalFromHeight(int argc, char* argv[]);
+    /// Phase 6 slice A: estimate GPU memory & VRAM for a mesh file
+    /// (per-submesh + per-texture, optional --json, optional --budget).
+    static int cmdMemory(int argc, char* argv[]);
 
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);

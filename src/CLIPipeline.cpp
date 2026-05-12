@@ -12,6 +12,7 @@
 #include "MaterialPresetLibrary.h"
 #include "TextureChannelPacker.h"
 #include "NormalMapGenerator.h"
+#include "MemoryEstimator.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -601,6 +602,13 @@ void CLIPipeline::printUsage()
         "  --all                 Apply all extra fixes\n"
         "  (no flags)            Standard import/export (joins vertices, smooths normals, optimizes)\n"
         "\n"
+        "  memory <file> [--json] [--budget <size>] [--token <t>] [--no-cloud]\n"
+        "                                    Report per-mesh GPU bytes and per-texture VRAM bytes\n"
+        "                                    --budget accepts e.g. 50MB, 1GB; exit 1 if exceeded\n"
+        "                                    If --budget omitted and a token is set, the project's\n"
+        "                                    memory_budget_mb is fetched from QtMesh Cloud rules.\n"
+        "                                    --no-cloud opts out.\n"
+        "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
         "  --version, -v         Show version\n"
@@ -962,6 +970,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "material") rc = cmdMaterial(argc, argv);
     else if (cmd == "pack-textures") rc = cmdPackTextures(argc, argv);
     else if (cmd == "normal-from-height") rc = cmdNormalFromHeight(argc, argv);
+    else if (cmd == "memory") rc = cmdMemory(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -3271,4 +3280,140 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (strictUpload && !uploadOk)
         return 1;
     return scanExit;
+}
+
+namespace {
+
+struct MemoryCmdArgs {
+    QString filePath;
+    QString tokenArg;
+    bool jsonOutput = false;
+    bool noCloud = false;
+    quint64 budgetBytes = 0;
+    bool budgetExplicit = false;
+};
+
+// Parse argv into MemoryCmdArgs. Returns:
+//   0 = parsed ok, run command
+//   1 = print usage + exit 2 (missing file / bad value)
+//   2 = print "invalid budget" + exit 2
+int parseMemoryArgs(int argc, char* argv[], MemoryCmdArgs& out)
+{
+    int i = 1;
+    while (i < argc) {
+        const QString arg(argv[i]);
+        ++i;
+        if (arg == "memory" || arg == "--cli") continue;
+        if (arg == "--json")     { out.jsonOutput = true; continue; }
+        if (arg == "--no-cloud") { out.noCloud    = true; continue; }
+        if (arg == "--token" && i < argc) {
+            out.tokenArg = QString::fromLocal8Bit(argv[i++]);
+            continue;
+        }
+        if (arg == "--budget" && i < argc) {
+            out.budgetBytes = MemoryEstimator::parseBudget(argv[i++]);
+            if (out.budgetBytes == 0) return 2;
+            out.budgetExplicit = true;
+            continue;
+        }
+        if (!arg.startsWith("-") && out.filePath.isEmpty()) {
+            out.filePath = arg;
+        }
+    }
+    return out.filePath.isEmpty() ? 1 : 0;
+}
+
+// Apply QtMesh Cloud's rules.memory_budget_mb when no explicit --budget was
+// given. Mutates budgetBytes and budgetSource; never fails the command.
+void applyCloudBudget(const QString& tokenArg, quint64& budgetBytes, QString& budgetSource)
+{
+    const QString ingest = resolveIngestToken(tokenArg);
+    if (ingest.isEmpty()) return;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cli.memory"),
+        QStringLiteral("QtMesh Cloud fetchRules: requested"));
+    const auto rules = QtMeshCloudClient::fetchRules(ingest);
+    if (!rules.ok) {
+        err() << "Warning: Could not load QtMesh Cloud rules ("
+              << rules.errorString << "). Continuing without remote budget." << Qt::endl;
+        SentryReporter::addBreadcrumb(QStringLiteral("cli.memory"),
+            QStringLiteral("QtMesh Cloud fetchRules: failed %1").arg(rules.errorString),
+            QStringLiteral("warning"));
+        return;
+    }
+
+    const QJsonObject rulesObj = rules.config.value("rules").toObject();
+    const double mb = rulesObj.value("memory_budget_mb").toDouble(0.0);
+    if (mb > 0.0) {
+        budgetBytes = static_cast<quint64>(mb * 1024.0 * 1024.0);
+        budgetSource = QStringLiteral("cloud:%1").arg(rules.source);
+        err() << "Note: Using QtMesh Cloud memory_budget_mb="
+              << mb << " (source: " << rules.source << ")." << Qt::endl;
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("cli.memory"),
+        QStringLiteral("QtMesh Cloud fetchRules: ok source=%1 budget_mb=%2")
+            .arg(rules.source).arg(mb));
+}
+
+void emitMemoryReport(const SceneMemoryReport& report, const QFileInfo& fi,
+                      const QString& budgetSource, bool jsonOutput)
+{
+    if (jsonOutput) {
+        QJsonObject obj = MemoryEstimator::toJson(report);
+        obj["file"] = fi.fileName();
+        if (!budgetSource.isEmpty())
+            obj["budgetSource"] = budgetSource;
+        cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(MemoryEstimator::toText(report));
+    }
+}
+
+} // namespace
+
+int CLIPipeline::cmdMemory(int argc, char* argv[])
+{
+    // Parse: memory <file> [--json] [--budget <size>] [--token <t>] [--no-cloud]
+    MemoryCmdArgs cmdArgs;
+    const int parseRc = parseMemoryArgs(argc, argv, cmdArgs);
+    if (parseRc == 2) {
+        err() << "Error: Invalid --budget value. Use a positive size "
+                 "(e.g. 50MB, 1GB) or omit --budget for unlimited." << Qt::endl;
+        return 2;
+    }
+    if (parseRc == 1) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh memory <file> [--json] [--budget <size>] [--token <t>] [--no-cloud]"
+              << Qt::endl;
+        return 2;
+    }
+
+    const QFileInfo fi(cmdArgs.filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << cmdArgs.filePath << Qt::endl;
+        return 1;
+    }
+
+    // No explicit --budget: try QtMesh Cloud's memory_budget_mb (token gated).
+    QString budgetSource = cmdArgs.budgetExplicit ? QStringLiteral("cli") : QString();
+    if (!cmdArgs.budgetExplicit && !cmdArgs.noCloud)
+        applyCloudBudget(cmdArgs.tokenArg, cmdArgs.budgetBytes, budgetSource);
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.memory",
+        QString("Memory .%1%2 source=%3").arg(
+            fi.suffix(),
+            cmdArgs.budgetBytes > 0 ? QString(" budget=%1B").arg(cmdArgs.budgetBytes) : QString(),
+            budgetSource.isEmpty() ? QStringLiteral("none") : budgetSource));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0);
+    if (const auto& entities = Manager::getSingleton()->getEntities(); entities.isEmpty()) {
+        err() << "Error: Failed to load file: " << cmdArgs.filePath << Qt::endl;
+        return 1;
+    }
+
+    const SceneMemoryReport report = MemoryEstimator::estimateScene(cmdArgs.budgetBytes);
+    emitMemoryReport(report, fi, budgetSource, cmdArgs.jsonOutput);
+    return report.overBudget() ? 1 : 0;
 }

@@ -16,6 +16,7 @@
 #include "MeshInfoOverlay.h"
 #include "MeshValidator.h"
 #include "MeshLodController.h"
+#include "MemoryEstimator.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -430,6 +431,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("generate_auto_lods"), &MCPServer::toolGenerateAutoLods},
         {QStringLiteral("remove_lods"), &MCPServer::toolRemoveLods},
         {QStringLiteral("get_lod_info"), &MCPServer::toolGetLodInfo},
+        {QStringLiteral("get_memory_usage"), &MCPServer::toolGetMemoryUsage},
         {QStringLiteral("list_files"), &MCPServer::toolListFiles},
         {QStringLiteral("search_files"), &MCPServer::toolSearchFiles},
         {QStringLiteral("read_file"), &MCPServer::toolReadFile},
@@ -2732,6 +2734,40 @@ QJsonObject MCPServer::toolGetLodInfo(const QJsonObject &args)
     return makeSuccessResult(lines.join("\n"));
 }
 
+// NOSONAR(cpp:S5817) — ToolHandler is a non-const member-fn pointer (matching
+// every other tool method in this class); marking just this one const would
+// break the registry signature in MCPServer.h.
+QJsonObject MCPServer::toolGetMemoryUsage(const QJsonObject &args)
+{
+    try {
+        if (const Manager* mgr = Manager::getSingletonPtr(); !mgr)
+            return makeErrorResult("Error: Manager not available");
+
+        quint64 budget = 0;
+        if (args.contains("budget")) {
+            const QString spec = args.value("budget").toString();
+            if (!spec.isEmpty()) {
+                budget = MemoryEstimator::parseBudget(spec);
+                if (budget == 0)
+                    return makeErrorResult(
+                        QString("Invalid budget '%1' — use e.g. '50MB', '1GB'").arg(spec));
+            }
+        }
+
+        SceneMemoryReport report = MemoryEstimator::estimateScene(budget);
+
+        // Human-readable text goes in the standard `content` field; machine
+        // consumers (LLM tool wrappers, CI scripts) read the structured
+        // `memory` payload alongside it.
+        QJsonObject result = makeSuccessResult(MemoryEstimator::toText(report));
+        result["memory"] = MemoryEstimator::toJson(report);
+        return result;
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(
+            QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
 // Helper methods
 
 QJsonObject MCPServer::toolListFiles(const QJsonObject &args)
@@ -4065,6 +4101,22 @@ QJsonArray MCPServer::buildToolsList()
             "Shows the base mesh (LOD 0) and all reduced LOD levels. "
             "Select a mesh first with load_mesh.",
             QJsonObject()
+        );
+    }
+
+    // get_memory_usage
+    {
+        QJsonObject props;
+        props["budget"] = QJsonObject{{"type", "string"},
+            {"description", "Optional memory budget (e.g. '50MB', '1GB'). When the report exceeds the budget the response flags 'overBudget' under the structured 'memory' field."}};
+        appendTool(
+            "get_memory_usage",
+            "Report estimated GPU memory for every loaded mesh (vertex + index buffers) "
+            "and VRAM for every resident texture. The response includes a human-readable summary "
+            "in the standard content field and a structured 'memory' object with per-mesh, "
+            "per-texture, totals, and optional budget fields for machine consumers. "
+            "Use to spot heavy meshes/textures before exporting to a memory-constrained target.",
+            props
         );
     }
 

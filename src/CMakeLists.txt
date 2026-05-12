@@ -79,6 +79,7 @@ MaterialPresetLibrary.cpp
 MeshLodController.cpp
 TextureChannelPacker.cpp
 NormalMapGenerator.cpp
+MemoryEstimator.cpp
 MeshValidator.cpp
 AIChatManager.cpp
 WelcomeScreenController.cpp
@@ -165,6 +166,7 @@ MaterialPresetLibrary.h
 MeshLodController.h
 TextureChannelPacker.h
 NormalMapGenerator.h
+MemoryEstimator.h
 MeshValidator.h
 AIChatManager.h
 WelcomeScreenController.h
