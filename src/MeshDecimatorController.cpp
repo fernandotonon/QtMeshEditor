@@ -46,11 +46,12 @@ void MeshDecimatorController::kill()
     m_pSingleton = nullptr;
 }
 
-MeshDecimatorController::~MeshDecimatorController() = default;
-
 MeshDecimatorController::MeshDecimatorController() : QObject(nullptr)
 {
-    m_generator = std::make_unique<Ogre::MeshLodGenerator>();
+    // Ogre::MeshLodGenerator is a singleton (Ogre's Singleton<> CRTP).
+    // MeshLodController already owns one — we do NOT construct a second
+    // instance; we use Ogre::MeshLodGenerator::getSingleton() at the use
+    // sites instead.
 
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
             this, [this]() {
@@ -111,7 +112,8 @@ void MeshDecimatorController::previewReduction(double reduction)
     lodConfig.createGeneratedLodLevel(0.0f, static_cast<float>(r),
                                       Ogre::LodLevel::VRM_PROPORTIONAL);
     try {
-        m_generator->generateLodLevels(lodConfig);
+        // Use the shared Ogre singleton — MeshLodController constructed it.
+        Ogre::MeshLodGenerator::getSingleton().generateLodLevels(lodConfig);
     } catch (const Ogre::Exception& e) {
         emit error(QString("Preview failed: %1").arg(e.what()));
         return;

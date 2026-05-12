@@ -3,9 +3,6 @@
 
 #include <QObject>
 #include <QQmlEngine>
-#include <memory>
-
-namespace Ogre { class MeshLodGenerator; }
 
 // Inspector-side decimation singleton. Parallels MeshLodController but for
 // single-pass (base-mesh) reduction rather than the LOD chain.
@@ -70,14 +67,11 @@ signals:
 
 private:
     MeshDecimatorController();
-    // Defined out-of-line so the unique_ptr<MeshLodGenerator> destructor
-    // sees the complete type (header-only forward decl is insufficient).
-    ~MeshDecimatorController() override;
+    ~MeshDecimatorController() override = default;
 
     void refreshBaseline();
 
     static MeshDecimatorController* m_pSingleton;
-    std::unique_ptr<Ogre::MeshLodGenerator> m_generator;
     int m_baseTriangleCount = 0;
     int m_previewTriangleCount = 0;
     bool m_hasPreview = false;
