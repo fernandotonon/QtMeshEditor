@@ -19,6 +19,7 @@
 #include "MemoryEstimator.h"
 #include "DrawCallAnalyzer.h"
 #include "VertexCacheOptimizer.h"
+#include "MeshDecimator.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -436,6 +437,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("get_memory_usage"), &MCPServer::toolGetMemoryUsage},
         {QStringLiteral("analyze_draw_calls"), &MCPServer::toolAnalyzeDrawCalls},
         {QStringLiteral("optimize_vertex_cache"), &MCPServer::toolOptimizeVertexCache},
+        {QStringLiteral("decimate_mesh"), &MCPServer::toolDecimateMesh},
         {QStringLiteral("list_files"), &MCPServer::toolListFiles},
         {QStringLiteral("search_files"), &MCPServer::toolSearchFiles},
         {QStringLiteral("read_file"), &MCPServer::toolReadFile},
@@ -2827,6 +2829,82 @@ QJsonObject MCPServer::toolOptimizeVertexCache(const QJsonObject &args)
     }
 }
 
+// NOSONAR(cpp:S5817) — ToolHandler is a non-const member-fn pointer (matching
+// every other tool method in this class); marking just this one const would
+// break the registry signature in MCPServer.h.
+QJsonObject MCPServer::toolDecimateMesh(const QJsonObject &args)
+{
+    // Args (one wins, in priority order):
+    //   reduction (double 0..1) — drop this fraction of triangles
+    //   target_tris (int)       — reduce to approximately this many tris
+    //   target_verts (int)      — reduce to approximately this many verts
+    //   dry_run (bool, default false) — projected report only, no mutation
+    try {
+        if (const Manager* mgr = Manager::getSingletonPtr(); !mgr)
+            return makeErrorResult("Error: Manager not available");
+        if (!hasSelectedEntities())
+            return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+        const bool dryRun = args.value("dry_run").toBool(false);
+
+        // Resolve the reduction. We need a target entity to convert target-
+        // tris/target-verts into a reduction fraction, so grab the first one.
+        Ogre::Entity* target = nullptr;
+        for (Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes()) {
+            if (!node) continue;
+            for (unsigned i = 0; i < node->numAttachedObjects(); ++i) {
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if (obj && obj->getMovableType() == "Entity") {
+                    target = static_cast<Ogre::Entity*>(obj);
+                    break;
+                }
+            }
+            if (target) break;
+        }
+        if (!target)
+            return makeErrorResult("No entity in scene to decimate.");
+
+        // Count baseline tris/verts (mirrors cmdDecimate's count loop).
+        int currentTris = 0, currentVerts = 0;
+        if (Ogre::MeshPtr mesh = target->getMesh()) {
+            for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+                const Ogre::SubMesh* sub = mesh->getSubMesh(s);
+                if (!sub) continue;
+                if (sub->indexData)
+                    currentTris += static_cast<int>(sub->indexData->indexCount / 3);
+                if (sub->vertexData)
+                    currentVerts += static_cast<int>(sub->vertexData->vertexCount);
+            }
+            if (mesh->sharedVertexData)
+                currentVerts += static_cast<int>(mesh->sharedVertexData->vertexCount);
+        }
+
+        double reduction = 0.0;
+        if (args.contains("reduction"))
+            reduction = MeshDecimator::clampReduction(args.value("reduction").toDouble());
+        else if (args.contains("target_tris"))
+            reduction = MeshDecimator::reductionFromTargetTris(
+                currentTris, args.value("target_tris").toInt());
+        else if (args.contains("target_verts"))
+            reduction = MeshDecimator::reductionFromTargetVerts(
+                currentVerts, args.value("target_verts").toInt());
+        else
+            return makeErrorResult(
+                "Pass one of: reduction (0..1), target_tris, or target_verts.");
+
+        const DecimationReport report = dryRun
+            ? MeshDecimator::projectEntity(target, reduction)
+            : MeshDecimator::decimateEntity(target, reduction);
+
+        QJsonObject result = makeSuccessResult(MeshDecimator::toText(report));
+        result["decimation"] = MeshDecimator::toJson(report);
+        return result;
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(
+            QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
 // Helper methods
 
 QJsonObject MCPServer::toolListFiles(const QJsonObject &args)
@@ -4205,6 +4283,28 @@ QJsonArray MCPServer::buildToolsList()
             "Pass `rewrite: true` to actually reorder the index buffers (analysis-only otherwise). "
             "The response includes a human-readable summary in 'content' and a structured "
             "'vertexCache' object with per-submesh ACMR plus totals for machine consumers.",
+            props
+        );
+    }
+
+    // decimate_mesh
+    {
+        QJsonObject props;
+        props["reduction"] = QJsonObject{{"type", "number"},
+            {"description", "Fraction of triangles to drop (0..0.95). Pass one of reduction / target_tris / target_verts."}};
+        props["target_tris"] = QJsonObject{{"type", "integer"},
+            {"description", "Reduce until total triangle count is approximately this value."}};
+        props["target_verts"] = QJsonObject{{"type", "integer"},
+            {"description", "Reduce until total vertex count is approximately this value."}};
+        props["dry_run"] = QJsonObject{{"type", "boolean"},
+            {"description", "When true, return a projected report without mutating the mesh."}};
+        appendTool(
+            "decimate_mesh",
+            "Single-pass mesh decimation via edge-collapse. Reduces the base mesh in place "
+            "(unlike generate_lods which builds a discrete LOD chain). Pass one of "
+            "`reduction` (0..0.95), `target_tris`, or `target_verts`. The response includes "
+            "a human-readable summary in 'content' and a structured 'decimation' object with "
+            "per-submesh and total triangle counts before / after.",
             props
         );
     }

@@ -15,6 +15,7 @@
 #include "MemoryEstimator.h"
 #include "DrawCallAnalyzer.h"
 #include "VertexCacheOptimizer.h"
+#include "MeshDecimator.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -616,6 +617,10 @@ void CLIPipeline::printUsage()
         "  vertex-cache <file> [-o <output>] [--json]\n"
         "                                    Reorder index buffers via Forsyth's algorithm; reports\n"
         "                                    before/after ACMR. Without -o, only analyzes (read-only).\n"
+        "  decimate <file> -o <output> (--reduction <r> | --target-tris N | --target-verts N) [--json]\n"
+        "                                    Single-pass mesh decimation. Choose one target:\n"
+        "                                    --reduction 0.5 (drop half the triangles),\n"
+        "                                    --target-tris 5000, or --target-verts 2500.\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -981,6 +986,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "memory") rc = cmdMemory(argc, argv);
     else if (cmd == "analyze") rc = cmdAnalyze(argc, argv);
     else if (cmd == "vertex-cache") rc = cmdVertexCache(argc, argv);
+    else if (cmd == "decimate") rc = cmdDecimate(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -3595,5 +3601,151 @@ int CLIPipeline::cmdVertexCache(int argc, char* argv[])
     }
 
     emitVertexCacheReport(aggregate, fi, cmdArgs.outputPath, cmdArgs.jsonOutput);
+    return 0;
+}
+
+namespace {
+
+struct DecimateCmdArgs {
+    QString filePath;
+    QString outputPath;
+    bool jsonOutput = false;
+    double reduction = -1.0;  // -1 = unset (only one of reduction / targetTris / targetVerts wins)
+    int targetTris = -1;
+    int targetVerts = -1;
+};
+
+bool parseDecimateArgs(int argc, char* argv[], DecimateCmdArgs& out)
+{
+    int i = 1;
+    while (i < argc) {
+        const QString arg(argv[i]);
+        ++i;
+        if (arg == "decimate" || arg == "--cli") continue;
+        if (arg == "--json")               { out.jsonOutput = true; continue; }
+        if (arg == "-o" && i < argc)       { out.outputPath = argv[i++]; continue; }
+        if (arg == "--reduction" && i < argc) {
+            out.reduction = QString::fromLocal8Bit(argv[i++]).toDouble();
+            continue;
+        }
+        if (arg == "--target-tris" && i < argc) {
+            out.targetTris = QString::fromLocal8Bit(argv[i++]).toInt();
+            continue;
+        }
+        if (arg == "--target-verts" && i < argc) {
+            out.targetVerts = QString::fromLocal8Bit(argv[i++]).toInt();
+            continue;
+        }
+        if (!arg.startsWith("-") && out.filePath.isEmpty()) out.filePath = arg;
+    }
+    return !out.filePath.isEmpty();
+}
+
+double resolveReduction(const DecimateCmdArgs& args, int currentTris, int currentVerts)
+{
+    if (args.reduction >= 0.0)      return MeshDecimator::clampReduction(args.reduction);
+    if (args.targetTris >= 0)       return MeshDecimator::reductionFromTargetTris(currentTris, args.targetTris);
+    if (args.targetVerts >= 0)      return MeshDecimator::reductionFromTargetVerts(currentVerts, args.targetVerts);
+    return 0.0;
+}
+
+void emitDecimationReport(const DecimationReport& report, const QFileInfo& fi,
+                          const QString& outputPath, bool jsonOutput)
+{
+    if (jsonOutput) {
+        QJsonObject obj = MeshDecimator::toJson(report);
+        obj["file"] = fi.fileName();
+        obj["output"] = QFileInfo(outputPath).fileName();
+        cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(QString("File: %1 -> %2\n")
+                     .arg(fi.fileName(), QFileInfo(outputPath).fileName()));
+        cliWrite(MeshDecimator::toText(report));
+    }
+}
+
+} // namespace
+
+int CLIPipeline::cmdDecimate(int argc, char* argv[])
+{
+    DecimateCmdArgs cmdArgs;
+    if (!parseDecimateArgs(argc, argv, cmdArgs)) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh decimate <file> -o <output> "
+                 "(--reduction <r> | --target-tris N | --target-verts N) [--json]"
+              << Qt::endl;
+        return 2;
+    }
+    if (cmdArgs.outputPath.isEmpty()) {
+        err() << "Error: --output (-o) is required for decimate (this is a destructive op; "
+                 "we never overwrite the input)." << Qt::endl;
+        return 2;
+    }
+    if (cmdArgs.reduction < 0 && cmdArgs.targetTris < 0 && cmdArgs.targetVerts < 0) {
+        err() << "Error: provide one of --reduction <r>, --target-tris N, --target-verts N." << Qt::endl;
+        return 2;
+    }
+
+    const QFileInfo fi(cmdArgs.filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << cmdArgs.filePath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.decimate",
+        QString("Decimate .%1").arg(fi.suffix()));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0);
+    const auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        err() << "Error: Failed to load file: " << cmdArgs.filePath << Qt::endl;
+        return 1;
+    }
+
+    Ogre::Entity* entity = entities.first();
+
+    // Count current tris / verts to resolve target-based reductions.
+    int currentTris = 0, currentVerts = 0;
+    if (Ogre::MeshPtr mesh = entity->getMesh()) {
+        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+            const Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            if (!sub) continue;
+            if (sub->indexData) currentTris += static_cast<int>(sub->indexData->indexCount / 3);
+            if (sub->vertexData) currentVerts += static_cast<int>(sub->vertexData->vertexCount);
+        }
+        if (mesh->sharedVertexData) currentVerts += static_cast<int>(mesh->sharedVertexData->vertexCount);
+    }
+
+    const double reduction = resolveReduction(cmdArgs, currentTris, currentVerts);
+    if (reduction <= 0.0) {
+        err() << "Note: target equals or exceeds current count; nothing to do." << Qt::endl;
+        // Still produce a no-op output file so callers can rely on the path existing.
+    }
+
+    const DecimationReport report = MeshDecimator::decimateEntity(entity, reduction);
+    if (!report.applied && reduction > 0.0) {
+        err() << "Error: Decimation failed (MeshLodGenerator). The mesh may not be "
+                 "suitable for in-place reduction (e.g. zero index data)." << Qt::endl;
+        return 1;
+    }
+
+    auto* node = entity->getParentSceneNode();
+    const QFileInfo outFi(cmdArgs.outputPath);
+    const QString fmt = formatForExtension(cmdArgs.outputPath);
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Exporting %1").arg(outFi.absoluteFilePath()));
+    if (MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), fmt) != 0) {
+        SentryReporter::captureMessage(
+            QString("CLI decimate: export failed (.%1 -> .%2)")
+                .arg(fi.suffix(), outFi.suffix()), "error");
+        err() << "Error: Export failed." << Qt::endl;
+        return 1;
+    }
+
+    emitDecimationReport(report, fi, cmdArgs.outputPath, cmdArgs.jsonOutput);
     return 0;
 }
