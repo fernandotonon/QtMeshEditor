@@ -3516,8 +3516,8 @@ bool parseVertexCacheArgs(int argc, char* argv[], VertexCacheCmdArgs& out)
 int exportRewrittenMesh(const QList<Ogre::Entity*>& entities,
                         const QFileInfo& srcFi, const QString& outputPath)
 {
-    Ogre::Entity* entity = entities.first();
-    auto* node = entity->getParentSceneNode();
+    const Ogre::Entity* entity = entities.first();
+    const auto* node = entity->getParentSceneNode();
     const QFileInfo outFi(outputPath);
     const QString fmt = CLIPipeline::formatForExtension(outputPath);
     SentryReporter::addBreadcrumb("file.export",
@@ -3576,7 +3576,7 @@ int CLIPipeline::cmdVertexCache(int argc, char* argv[])
         QString("Importing %1").arg(fi.absoluteFilePath()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()}, 0);
-    auto& entities = Manager::getSingleton()->getEntities();
+    const auto& entities = Manager::getSingleton()->getEntities();
     if (entities.isEmpty()) {
         err() << "Error: Failed to load file: " << cmdArgs.filePath << Qt::endl;
         return 1;

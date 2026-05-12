@@ -260,8 +260,9 @@ double VertexCacheOptimizer::computeAcmr(const std::vector<uint32_t>& indices, i
 namespace {
 
 // Read an Ogre IndexData into a uint32 vector. Handles 16/32-bit index types
-// transparently so the optimizer sees a single uniform format.
-std::vector<uint32_t> readIndexBuffer(Ogre::IndexData* id)
+// transparently so the optimizer sees a single uniform format. The buffer is
+// locked HBL_READ_ONLY, so a pointer-to-const is sufficient.
+std::vector<uint32_t> readIndexBuffer(const Ogre::IndexData* id)
 {
     std::vector<uint32_t> indices(id->indexCount);
     const bool use16 = (id->indexBuffer->getType() == Ogre::HardwareIndexBuffer::IT_16BIT);
