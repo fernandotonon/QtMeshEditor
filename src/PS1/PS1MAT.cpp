@@ -10,11 +10,14 @@ The MIT License
 #include "PS1/PS1MAT.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QStringConverter>
 #include <QTextStream>
 
 #include <algorithm>
+
+#include "SentryReporter.h"
 
 namespace PS1MAT {
 
@@ -231,9 +234,12 @@ bool parseMatFile(const QString& matPath, QVector<MatEntry>& outEntries, QString
 {
     outEntries.clear();
 
+    const QString matName = QFileInfo(matPath).fileName();
     QFile f(matPath);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
         if (outError) *outError = QStringLiteral("Could not open MAT file.");
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+            QStringLiteral("PS1 MAT open failed: %1").arg(matName));
         return false;
     }
 
@@ -280,14 +286,19 @@ bool parseMatFile(const QString& matPath, QVector<MatEntry>& outEntries, QString
         return false;
     }
 
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QStringLiteral("PS1 MAT parsed: %1 (%2 entries)").arg(matName).arg(outEntries.size()));
     return true;
 }
 
 bool writeMatFile(const QString& matPath, const QVector<MatEntry>& entries, QString* outError)
 {
+    const QString matName = QFileInfo(matPath).fileName();
     QFile f(matPath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
         if (outError) *outError = QStringLiteral("Could not open MAT file for writing.");
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("PS1 MAT write open failed: %1").arg(matName));
         return false;
     }
 
@@ -386,8 +397,12 @@ bool writeMatFile(const QString& matPath, const QVector<MatEntry>& entries, QStr
 
     if (ts.status() != QTextStream::Ok) {
         if (outError) *outError = QStringLiteral("Write failed.");
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("PS1 MAT write failed: %1").arg(matName));
         return false;
     }
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QStringLiteral("PS1 MAT written: %1 (%2 entries)").arg(matName).arg(entries.size()));
     return true;
 }
 

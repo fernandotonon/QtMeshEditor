@@ -11,6 +11,7 @@ The MIT License
 #include "PS1/PS1PLY.h"
 
 #include "EditableMesh.h"
+#include "SentryReporter.h"
 
 #include <OgreHardwareBufferManager.h>
 #include <OgreLogManager.h>
@@ -23,6 +24,7 @@ The MIT License
 
 #include <QColor>
 #include <QFile>
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QStringConverter>
 #include <QTextStream>
@@ -1456,9 +1458,13 @@ Ogre::MeshPtr importPsyqPlyWithFaceMaterials(const QString& filePath,
                                              const std::string& meshName,
                                              const QVector<FaceMaterial>& faceMaterials)
 {
+    const QString fileName = QFileInfo(filePath).fileName();
     QFile f(filePath);
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+            QStringLiteral("PS1 PLY open failed: %1").arg(fileName));
         return {};
+    }
     const QString text = QString::fromLatin1(f.readAll());
     const QStringList lines = readNonEmptyLines(text);
 
@@ -1490,7 +1496,9 @@ Ogre::MeshPtr importPsyqPlyWithFaceMaterials(const QString& filePath,
     for (size_t fi = 0; fi < faces.size(); ++fi) {
         const PsyqFace& pf = faces[fi];
         const FaceMaterial& fm = faceMaterials[static_cast<int>(fi)];
-        const int submeshKey = fm.textured ? std::max(0, fm.textureIndex) : -1;
+        // Treat textured-with-invalid-index as untextured to avoid silently binding
+        // every malformed face to slot 0; -1 routes the face to the solid bucket.
+        const int submeshKey = (fm.textured && fm.textureIndex >= 0) ? fm.textureIndex : -1;
         TexturedSubmeshSoup& soup = getSoup(submeshKey);
 
         const bool hasFaceColors = (fm.vertColors.size() == pf.corners);
@@ -1530,7 +1538,13 @@ Ogre::MeshPtr importPsyqPlyWithFaceMaterials(const QString& filePath,
         }
     }
 
-    return buildMeshFromTexturedSoups(meshName, soups);
+    Ogre::MeshPtr outMesh = buildMeshFromTexturedSoups(meshName, soups);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QStringLiteral("PS1 PLY (textured) imported: %1 (%2 faces, %3 submeshes)")
+            .arg(fileName)
+            .arg(faces.size())
+            .arg(static_cast<int>(soups.size())));
+    return outMesh;
 }
 
 bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
@@ -1681,8 +1695,39 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                 colBase = static_cast<const uint8_t*>(sd.colBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
             }
         }
+        const uint8_t* uvBase = nullptr;
+        if (sd.uvBuf) {
+            const unsigned short uvSrc = sd.uvEl->getSource();
+            if (uvSrc == sd.posEl->getSource())
+                uvBase = posBase;
+            else if (uvSrc == sd.nrmEl->getSource() && sd.nrmEl->getSource() != sd.posEl->getSource())
+                uvBase = nrmBase;
+            else if (sd.colBuf && uvSrc == sd.colEl->getSource()
+                     && sd.colEl->getSource() != sd.posEl->getSource()
+                     && sd.colEl->getSource() != sd.nrmEl->getSource())
+                uvBase = colBase;
+            else
+                uvBase = static_cast<const uint8_t*>(sd.uvBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        }
+        const bool subHasUv = (uvBase != nullptr);
 
         const bool collectFaceColors = (outFaceColors != nullptr && sd.colEl && colBase);
+        auto readUv = [&](uint32_t vi, float& outU, float& outV) {
+            const uint8_t* row = uvBase + size_t(vi) * sd.uvStride;
+            Ogre::Real* uvf = nullptr;
+            sd.uvEl->baseVertexPointerToElement(const_cast<uint8_t*>(row), &uvf);
+            outU = static_cast<float>(uvf[0]);
+            outV = static_cast<float>(uvf[1]);
+        };
+        auto setPsyqUv = [&](PsyqExportFace& pf, const std::vector<unsigned int>& corners) {
+            if (!subHasUv)
+                return;
+            pf.hasUv = true;
+            pf.submeshIndex = sd.sourceIndex;
+            const size_t n = std::min<size_t>(corners.size(), 4u);
+            for (size_t k = 0; k < n; ++k)
+                readUv(corners[k], pf.u[k], pf.v_uv[k]);
+        };
 
         auto readPN = [&](uint32_t ii, Ogre::Vector3& p, Ogre::Vector3& n) {
             const uint8_t* prow = posBase + size_t(ii) * sd.posStride;
@@ -1756,6 +1801,7 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                     f.color = avgRgbCorners(poly);
                     f.hasColor = true;
                 }
+                setPsyqUv(f, poly);
                 allExportFaces.push_back(f);
             } else if (ps == 4) {
                 for (unsigned int c : poly)
@@ -1774,6 +1820,7 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                     f.color = avgRgbCorners(poly);
                     f.hasColor = true;
                 }
+                setPsyqUv(f, poly);
                 allExportFaces.push_back(f);
             } else {
                 ensureMeshCorner(poly[0]);
@@ -1796,11 +1843,22 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
                         t.color = avgRgbCorners(tri);
                         t.hasColor = true;
                     }
+                    const std::vector<unsigned int> triCorners{poly[0], poly[static_cast<size_t>(k)],
+                                                                poly[static_cast<size_t>(k + 1)]};
+                    setPsyqUv(t, triCorners);
                     allExportFaces.push_back(t);
                 }
             }
         }
 
+        if (sd.uvBuf && uvBase
+            && sd.uvEl->getSource() != sd.posEl->getSource()
+            && !(sd.uvEl->getSource() == sd.nrmEl->getSource() && sd.nrmEl->getSource() != sd.posEl->getSource())
+            && !(sd.colBuf && sd.colEl->getSource() != sd.posEl->getSource()
+                 && sd.colEl->getSource() != sd.nrmEl->getSource()
+                 && sd.uvEl->getSource() == sd.colEl->getSource())) {
+            sd.uvBuf->unlock();
+        }
         if (sd.colBuf && colBase && sd.colEl->getSource() != sd.posEl->getSource()
             && !(sd.colEl->getSource() == sd.nrmEl->getSource() && sd.nrmEl->getSource() != sd.posEl->getSource())) {
             sd.colBuf->unlock();
@@ -2043,9 +2101,12 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
     const uint32_t nN = static_cast<uint32_t>(weldedNrm.size());
     const uint32_t nWrittenFaces = static_cast<uint32_t>(allExportFaces.size());
 
+    const QString plyName = QFileInfo(plyPath).fileName();
     QFile f(plyPath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
         if (outError) *outError = QStringLiteral("Could not open PLY file for writing.");
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("PS1 PLY write open failed: %1").arg(plyName));
         return false;
     }
 
@@ -2071,8 +2132,13 @@ bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,
 
     if (ts.status() != QTextStream::Ok) {
         if (outError) *outError = QStringLiteral("Write failed.");
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("PS1 PLY write failed: %1").arg(plyName));
         return false;
     }
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QStringLiteral("PS1 PLY written: %1 (%2 faces, %3 verts)")
+            .arg(plyName).arg(nWrittenFaces).arg(nV));
     return true;
 }
 

@@ -67,6 +67,7 @@ THE SOFTWARE.
 #include "EditModeController.h"
 #include <OgreMaterialManager.h>
 #include <OgreDataStream.h>
+#include <OgrePixelFormat.h>
 
 #ifndef WIN32
     #include <unistd.h>
@@ -1539,10 +1540,15 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                         // Non-TIM raster format (PNG/JPG/BMP/TGA…)
                         QString extErr;
                         if (loadExternalTextureForRsd(texPath, ogreName, &extErr)) {
-                            const QImage qprobe(texPath);
                             rsdTexSlots[ti].resourceName = resName;
-                            rsdTexSlots[ti].width = qprobe.isNull() ? 0 : qprobe.width();
-                            rsdTexSlots[ti].height = qprobe.isNull() ? 0 : qprobe.height();
+                            // Reuse the texture we just loaded — no need to redecode the
+                            // file with QImage just to measure dimensions.
+                            if (auto tex = Ogre::TextureManager::getSingleton().getByName(
+                                    ogreName,
+                                    Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+                                rsdTexSlots[ti].width = static_cast<int>(tex->getWidth());
+                                rsdTexSlots[ti].height = static_cast<int>(tex->getHeight());
+                            }
                         } else {
                             Ogre::LogManager::getSingleton().logMessage(
                                 "Warning: RSD texture load failed for "
@@ -2226,9 +2232,26 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 tex->convertToImage(img, true);
                 if (img.getWidth() == 0 || img.getHeight() == 0)
                     continue;
-                const QImage qi(img.getData(),
+                // Force RGBA8 layout — Ogre textures may live in PF_A8R8G8B8 / BGRA / DXT /
+                // float formats and feeding any of those into QImage::Format_RGBA8888 would
+                // either misorder channels or, for compressed/non-byte formats, walk past
+                // the buffer end during the save.
+                std::vector<uint8_t> rgba;
+                if (img.getFormat() != Ogre::PF_BYTE_RGBA) {
+                    const size_t pixels = static_cast<size_t>(img.getWidth()) * img.getHeight();
+                    rgba.resize(pixels * 4);
+                    Ogre::PixelBox src(img.getWidth(), img.getHeight(), 1,
+                                       img.getFormat(),
+                                       const_cast<uint8_t*>(img.getData()));
+                    Ogre::PixelBox dst(img.getWidth(), img.getHeight(), 1,
+                                       Ogre::PF_BYTE_RGBA, rgba.data());
+                    Ogre::PixelUtil::bulkPixelConversion(src, dst);
+                }
+                const uint8_t* rgbaData = rgba.empty() ? img.getData() : rgba.data();
+                const QImage qi(rgbaData,
                                 static_cast<int>(img.getWidth()),
                                 static_cast<int>(img.getHeight()),
+                                static_cast<int>(img.getWidth()) * 4,
                                 QImage::Format_RGBA8888);
                 // Always save a PNG copy with the same basename (lossless, widely supported).
                 const QString png = outFi.absolutePath() + QDir::separator()
