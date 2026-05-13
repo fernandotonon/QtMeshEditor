@@ -22,6 +22,7 @@
 #include "ViewportGrid.h"
 #include "ViewportSettingsKeys.h"
 #include "AppSettingsKeys.h"
+#include "ThemeManager.h"
 #include "mainwindow.h"
 #include <QApplication>
 #include <QMessageBox>
@@ -1314,30 +1315,6 @@ bool tryApplyViewportSetting(const QString& key, const QVariant& value)
     return false;
 }
 
-void applyEditorThemeFromString(const QString& themeLower)
-{
-    if (themeLower == QStringLiteral("dark")) {
-        QPalette dark;
-        dark.setColor(QPalette::Window, QColor(53, 53, 53));
-        dark.setColor(QPalette::WindowText, Qt::white);
-        dark.setColor(QPalette::Base, QColor(35, 35, 35));
-        dark.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
-        dark.setColor(QPalette::ToolTipBase, QColor(25, 25, 25));
-        dark.setColor(QPalette::ToolTipText, Qt::white);
-        dark.setColor(QPalette::Text, Qt::white);
-        dark.setColor(QPalette::Button, QColor(53, 53, 53));
-        dark.setColor(QPalette::ButtonText, Qt::white);
-        dark.setColor(QPalette::Link, QColor(42, 130, 218));
-        dark.setColor(QPalette::Highlight, QColor(42, 130, 218));
-        dark.setColor(QPalette::HighlightedText, Qt::black);
-        QApplication::setPalette(dark);
-        return;
-    }
-    if (themeLower == QStringLiteral("light")) {
-        QApplication::setPalette(QColor(QStringLiteral("ghostwhite")));
-    }
-    // "system" = use platform default (may require restart)
-}
 } // namespace
 
 // Generic QSettings accessors for Preferences dialog
@@ -1362,6 +1339,6 @@ void PropertiesPanelController::setSetting(const QString& key, const QVariant& v
         return;
     }
     if (key == AppSettingsKeys::appearanceTheme() || key == AppSettingsKeys::palette()) {
-        applyEditorThemeFromString(value.toString().toLower());
+        ThemeManager::applyThemePreference(value.toString());
     }
 }

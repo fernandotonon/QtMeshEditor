@@ -198,6 +198,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
 
     a.setStyle(QStyleFactory::create("Fusion"));
+    ThemeManager::applySavedThemeFromSettings();
 
     // Sentry crash reporting: show consent dialog on first launch
     // (requires QApplication to exist for QMessageBox)

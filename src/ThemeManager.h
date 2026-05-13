@@ -39,6 +39,8 @@ public:
     static ThemeManager* instance();
     static ThemeManager* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
     static void kill();
+    static void applyThemePreference(const QString& themeValue);
+    static void applySavedThemeFromSettings();
 
     QColor windowColor() const;
     QColor panelColor() const;

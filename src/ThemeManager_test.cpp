@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QPalette>
 #include <QSignalSpy>
+#include <QSettings>
 
 class ThemeManagerTests : public ::testing::Test {
 protected:
@@ -21,6 +22,8 @@ protected:
             app->setPalette(originalPalette);
             app->processEvents();
         }
+        QSettings settings;
+        settings.clear();
     }
 };
 
@@ -201,4 +204,28 @@ TEST_F(ThemeManagerTests, ThemeNameTracksPaletteLightness) {
     palette.setColor(QPalette::Window, QColor(20, 20, 20));
     app->setPalette(palette);
     EXPECT_EQ(tm->themeName(), QString("dark"));
+}
+
+TEST_F(ThemeManagerTests, ApplySavedThemeFromSettingsUsesAppearanceTheme)
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("palette"), QStringLiteral("light"));
+    settings.setValue(QStringLiteral("Appearance/theme"), QStringLiteral("Dark"));
+
+    ThemeManager::applySavedThemeFromSettings();
+
+    EXPECT_EQ(app->palette().color(QPalette::Window), QColor(53, 53, 53));
+    EXPECT_EQ(app->palette().color(QPalette::Text), QColor(Qt::white));
+}
+
+TEST_F(ThemeManagerTests, ApplySavedThemeFromSettingsUsesCustomLegacyPalette)
+{
+    QSettings settings;
+    const QColor custom(12, 34, 56);
+    settings.setValue(QStringLiteral("palette"), QStringLiteral("custom"));
+    settings.setValue(QStringLiteral("customPalette"), custom);
+
+    ThemeManager::applySavedThemeFromSettings();
+
+    EXPECT_EQ(app->palette().color(QPalette::Window), custom);
 }

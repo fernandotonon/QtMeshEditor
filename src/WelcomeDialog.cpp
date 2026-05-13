@@ -24,14 +24,9 @@ bool WelcomeDialog::shouldShow()
 
 QFileDialog::Options WelcomeDialog::openFileDialogOptions()
 {
-    QFileDialog::Options options = QFileDialog::HideNameFilterDetails;
-#ifdef Q_OS_LINUX
-    // On Ubuntu/Linux, prefer the platform picker so the welcome screen
-    // follows the active desktop dark theme instead of Qt's fallback dialog.
-    return options;
-#else
-    return options | QFileDialog::DontUseNativeDialog;
-#endif
+    // Keep the welcome dialog on the Qt file picker so it inherits the
+    // application's selected palette instead of the desktop theme.
+    return QFileDialog::DontUseNativeDialog | QFileDialog::HideNameFilterDetails;
 }
 
 WelcomeDialog::WelcomeDialog(QWidget* parent)

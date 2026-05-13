@@ -73,11 +73,7 @@ TEST_F(WelcomeDialogTests, OpenFileDialogOptionsHonorsPlatformBehavior)
     const QFileDialog::Options options = WelcomeDialog::openFileDialogOptions();
 
     EXPECT_TRUE(options.testFlag(QFileDialog::HideNameFilterDetails));
-#ifdef Q_OS_LINUX
-    EXPECT_FALSE(options.testFlag(QFileDialog::DontUseNativeDialog));
-#else
     EXPECT_TRUE(options.testFlag(QFileDialog::DontUseNativeDialog));
-#endif
 }
 
 TEST_F(WelcomeDialogTests, ShouldShowRespectsDontShowAgainSetting) {
