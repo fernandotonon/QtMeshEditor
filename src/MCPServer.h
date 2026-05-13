@@ -193,6 +193,10 @@ private:
     /// Phase 6 slice E: pack N input textures into a single atlas image
     /// + JSON manifest of per-tile UV remaps. Shelf bin-pack, deterministic.
     QJsonObject toolPackAtlas(const QJsonObject &args);
+    /// Phase 6 slice G: batch optimize pipeline. Runs the slice A–E
+    /// optimizations end-to-end on a single asset and writes the result.
+    /// Per-stage applied/summary report on success.
+    QJsonObject toolOptimizeMesh(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {

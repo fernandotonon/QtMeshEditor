@@ -102,6 +102,11 @@ public:
     /// Phase 6 slice D: single-pass mesh decimation. Reduce the base mesh
     /// to a target triangle count, vertex budget, or percent reduction.
     static int cmdDecimate(int argc, char* argv[]);
+    /// Phase 6 slice G: batch optimize pipeline. Runs the slice A–E
+    /// optimizations end-to-end on a single asset: vertex-cache reorder,
+    /// optional decimation, optional animation simplify. Emits a
+    /// per-stage before/after report (text or --json).
+    static int cmdOptimize(int argc, char* argv[]);
 
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);

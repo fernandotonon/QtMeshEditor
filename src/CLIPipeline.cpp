@@ -637,6 +637,12 @@ void CLIPipeline::printUsage()
         "                                    per-tile UV remaps. Shelf bin-pack; deterministic. Useful\n"
         "                                    for consolidating per-prop textures into one binding to\n"
         "                                    reduce GPU draw-call count.\n"
+        "  optimize <file> -o <output> [flags] [--json]\n"
+        "                                    Batch-optimize a single asset. Defaults to\n"
+        "                                    --vertex-cache --simplify-anim when no flags are given.\n"
+        "                                    Add --reduction <r> / --target-tris N / --target-verts N\n"
+        "                                    to also decimate. --all enables vertex-cache + simplify-anim\n"
+        "                                    together (decimation still requires an explicit target).\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -1004,6 +1010,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "analyze") rc = cmdAnalyze(argc, argv);
     else if (cmd == "vertex-cache") rc = cmdVertexCache(argc, argv);
     else if (cmd == "decimate") rc = cmdDecimate(argc, argv);
+    else if (cmd == "optimize") rc = cmdOptimize(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -3939,5 +3946,378 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
     }
 
     emitDecimationReport(report, fi, cmdArgs.outputPath, cmdArgs.jsonOutput);
+    return 0;
+}
+
+// ─── Phase 6 slice G: qtmesh optimize ────────────────────────────────
+//
+// Sequences the slice C / C4 / D optimizations end-to-end on a single
+// asset and writes the result to `-o <path>`. Reuses the same Ogre
+// scene the rest of the CLI flows through, so each stage operates on
+// the output of the previous one with no intermediate file I/O.
+
+namespace {
+
+struct OptimizeCmdArgs {
+    QString filePath;
+    QString outputPath;
+    bool jsonOutput = false;
+    bool vertexCache = false;       // explicit toggle (-= --vertex-cache)
+    bool simplifyAnim = false;      // explicit toggle (-= --simplify-anim)
+    bool decimateRequested = false; // any of --reduction/--target-tris/--target-verts
+    double reduction = -1.0;
+    int targetTris = -1;
+    int targetVerts = -1;
+    // Animation simplify tolerances (defaults match AnimationMerger Balanced)
+    float animTranslationTol = 1e-3f;
+    float animRotationDegTol = 0.5f;
+    float animScaleTol       = 1e-3f;
+    bool explicitFlags = false;     // any optimization flag was supplied?
+};
+
+int applyOptimizeArg(const QString& arg, int argc, char* argv[], int& i,
+                     OptimizeCmdArgs& out)
+{
+    if (arg == "optimize" || arg == "--cli") return 1;
+    if (arg == "--json")            { out.jsonOutput = true; return 1; }
+    if (arg == "-o" && i < argc)    { out.outputPath = argv[i++]; return 1; }
+    if (arg == "--vertex-cache")    { out.vertexCache = true; out.explicitFlags = true; return 1; }
+    if (arg == "--simplify-anim")   { out.simplifyAnim = true; out.explicitFlags = true; return 1; }
+    if (arg == "--all") {
+        out.vertexCache = true;
+        out.simplifyAnim = true;
+        out.explicitFlags = true;
+        return 1;
+    }
+    if (arg == "--reduction" && i < argc) {
+        out.decimateRequested = true; out.explicitFlags = true;
+        return parseStrictDouble("--reduction",
+                                 QString::fromLocal8Bit(argv[i++]),
+                                 out.reduction) ? 1 : 0;
+    }
+    if (arg == "--target-tris" && i < argc) {
+        out.decimateRequested = true; out.explicitFlags = true;
+        return parseStrictInt("--target-tris",
+                              QString::fromLocal8Bit(argv[i++]),
+                              out.targetTris) ? 1 : 0;
+    }
+    if (arg == "--target-verts" && i < argc) {
+        out.decimateRequested = true; out.explicitFlags = true;
+        return parseStrictInt("--target-verts",
+                              QString::fromLocal8Bit(argv[i++]),
+                              out.targetVerts) ? 1 : 0;
+    }
+    if (arg == "--simplify-translation-tol" && i < argc) {
+        double v = 0.0;
+        if (!parseStrictDouble("--simplify-translation-tol",
+                               QString::fromLocal8Bit(argv[i++]), v)) return 0;
+        out.animTranslationTol = static_cast<float>(v);
+        return 1;
+    }
+    if (arg == "--simplify-rotation-deg-tol" && i < argc) {
+        double v = 0.0;
+        if (!parseStrictDouble("--simplify-rotation-deg-tol",
+                               QString::fromLocal8Bit(argv[i++]), v)) return 0;
+        out.animRotationDegTol = static_cast<float>(v);
+        return 1;
+    }
+    if (arg == "--simplify-scale-tol" && i < argc) {
+        double v = 0.0;
+        if (!parseStrictDouble("--simplify-scale-tol",
+                               QString::fromLocal8Bit(argv[i++]), v)) return 0;
+        out.animScaleTol = static_cast<float>(v);
+        return 1;
+    }
+    if (!arg.startsWith("-") && out.filePath.isEmpty()) out.filePath = arg;
+    return 1;
+}
+
+int parseOptimizeArgs(int argc, char* argv[], OptimizeCmdArgs& out)
+{
+    int i = 1;
+    while (i < argc) {
+        const QString arg(argv[i]);
+        ++i;
+        if (applyOptimizeArg(arg, argc, argv, i, out) == 0) return 0;
+    }
+    if (out.filePath.isEmpty()) return 0;
+
+    // Same exactly-one-target rule the decimate subcommand enforces.
+    if (const int modes = (out.reduction >= 0.0 ? 1 : 0)
+                        + (out.targetTris  >= 0 ? 1 : 0)
+                        + (out.targetVerts >= 0 ? 1 : 0);
+        modes > 1) {
+        err() << "Error: pass at most one of --reduction / --target-tris / --target-verts."
+              << Qt::endl;
+        return 0;
+    }
+
+    // Default selection. The non-destructive optimizations
+    // (vertex-cache + simplify-anim) run by default unless the user
+    // explicitly disabled them by listing only --vertex-cache or only
+    // --simplify-anim. Decimation always requires an explicit target.
+    //
+    // Heuristic: when at least one *non-decimate* flag was given, we
+    // honor the user's exact selection. When only --reduction /
+    // --target-* was given (with no --vertex-cache / --simplify-anim /
+    // --all), enable the non-destructive defaults too — "decimate this
+    // and clean it up" is what users mean.
+    const bool anyNonDecimateFlag = out.vertexCache || out.simplifyAnim;
+    if (!anyNonDecimateFlag) {
+        out.vertexCache = true;
+        out.simplifyAnim = true;
+    }
+    return 1;
+}
+
+struct StageReport {
+    QString name;
+    bool applied = false;
+    QString summary;
+    QJsonObject details;
+};
+
+void emitOptimizeReport(const QFileInfo& srcFi, const QString& outputPath,
+                        qint64 srcBytes, qint64 outBytes,
+                        const QList<StageReport>& stages, bool jsonOutput)
+{
+    if (jsonOutput) {
+        QJsonObject root;
+        root["file"] = srcFi.fileName();
+        root["output"] = QFileInfo(outputPath).fileName();
+        root["inputBytes"] = srcBytes;
+        root["outputBytes"] = outBytes;
+        const qint64 delta = srcBytes - outBytes;
+        root["bytesDelta"] = delta;
+        if (srcBytes > 0)
+            root["bytesDeltaPct"] = 100.0 * static_cast<double>(delta) / static_cast<double>(srcBytes);
+        QJsonArray stagesArr;
+        for (const auto& s : stages) {
+            QJsonObject o;
+            o["name"] = s.name;
+            o["applied"] = s.applied;
+            if (!s.summary.isEmpty()) o["summary"] = s.summary;
+            if (!s.details.isEmpty()) o["details"] = s.details;
+            stagesArr.append(o);
+        }
+        root["stages"] = stagesArr;
+        cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        return;
+    }
+    cliWrite(QString("File: %1 -> %2\n")
+                 .arg(srcFi.fileName(), QFileInfo(outputPath).fileName()));
+    cliWrite(QString("Mesh Optimization\n=================\n\n"));
+    for (const auto& s : stages) {
+        cliWrite(QString("  [%1] %2: %3\n")
+                     .arg(s.applied ? QStringLiteral("OK") : QStringLiteral("--"))
+                     .arg(s.name)
+                     .arg(s.summary.isEmpty() ? QStringLiteral("skipped") : s.summary));
+    }
+    const qint64 delta = srcBytes - outBytes;
+    const double pct = (srcBytes > 0)
+        ? 100.0 * static_cast<double>(delta) / static_cast<double>(srcBytes)
+        : 0.0;
+    cliWrite(QString("\n  %1 KB -> %2 KB  (%3 KB %4, %5%)\n")
+                 .arg(srcBytes / 1024)
+                 .arg(outBytes / 1024)
+                 .arg(qAbs(delta) / 1024)
+                 .arg(delta >= 0 ? QStringLiteral("saved") : QStringLiteral("grew"))
+                 .arg(QString::number(pct, 'f', 1)));
+}
+
+} // namespace
+
+int CLIPipeline::cmdOptimize(int argc, char* argv[])
+{
+    OptimizeCmdArgs cmdArgs;
+    if (parseOptimizeArgs(argc, argv, cmdArgs) == 0) {
+        if (cmdArgs.filePath.isEmpty()) {
+            err() << "Error: No input file specified." << Qt::endl;
+            err() << "Usage: qtmesh optimize <file> -o <output> [flags] [--json]" << Qt::endl;
+            err() << "  Flags: --vertex-cache  --simplify-anim  --all" << Qt::endl;
+            err() << "         --reduction <r> | --target-tris N | --target-verts N" << Qt::endl;
+            err() << "         --simplify-translation-tol T  --simplify-rotation-deg-tol D  --simplify-scale-tol S" << Qt::endl;
+        }
+        return 2;
+    }
+    if (cmdArgs.outputPath.isEmpty()) {
+        err() << "Error: --output (-o) is required for optimize." << Qt::endl;
+        return 2;
+    }
+    const QFileInfo fi(cmdArgs.filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << cmdArgs.filePath << Qt::endl;
+        return 1;
+    }
+
+    // Refuse to overwrite the source asset (same guard as decimate; the
+    // optimize pipeline is at least as destructive when --reduction is set).
+    const QFileInfo outFi(cmdArgs.outputPath);
+    const QString inCanon = fi.canonicalFilePath().isEmpty()
+                                ? fi.absoluteFilePath() : fi.canonicalFilePath();
+    const QString outCanon = outFi.canonicalFilePath().isEmpty()
+                                ? outFi.absoluteFilePath() : outFi.canonicalFilePath();
+    if (inCanon == outCanon) {
+        err() << "Error: -o points to the input file. optimize is potentially "
+                 "destructive (decimation, anim simplify) — choose a different output path." << Qt::endl;
+        return 2;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.optimize",
+        QString("Optimize .%1 vertex_cache=%2 simplify_anim=%3 decimate=%4")
+            .arg(fi.suffix())
+            .arg(cmdArgs.vertexCache).arg(cmdArgs.simplifyAnim)
+            .arg(cmdArgs.decimateRequested));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1").arg(fi.absoluteFilePath()));
+
+    QList<Ogre::SkeletonPtr> animOnlySkeletons;
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0, &animOnlySkeletons);
+    const auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        err() << "Error: Failed to load file: " << cmdArgs.filePath << Qt::endl;
+        return 1;
+    }
+    // Same one-entity contract as decimate — multi-entity scene support is
+    // deferred to a future slice (issue tracker pickup).
+    if (cmdArgs.decimateRequested && entities.size() > 1) {
+        err() << "Error: " << cmdArgs.filePath << " contains "
+              << entities.size() << " mesh entities. qtmesh optimize with "
+              << "--reduction / --target-* currently supports one entity per file." << Qt::endl;
+        return 1;
+    }
+
+    QList<StageReport> stages;
+
+    // Stage 1: vertex-cache reorder (per submesh, every entity in the scene).
+    if (cmdArgs.vertexCache) {
+        StageReport s;
+        s.name = "vertex-cache";
+        VertexCacheReport aggregate;
+        for (Ogre::Entity* entity : entities) {
+            VertexCacheOptimizer::mergeReport(
+                aggregate, VertexCacheOptimizer::analyzeEntity(entity, /*rewrite=*/true));
+        }
+        VertexCacheOptimizer::finalize(aggregate);
+        s.applied = aggregate.totalReordered > 0 || aggregate.totalTriangles > 0;
+        s.summary = QString("ACMR %1 -> %2 across %3 triangles, %4 submeshes rewritten")
+                        .arg(QString::number(aggregate.weightedAcmrBefore, 'f', 3))
+                        .arg(QString::number(aggregate.weightedAcmrAfter, 'f', 3))
+                        .arg(aggregate.totalTriangles)
+                        .arg(aggregate.totalReordered);
+        s.details = VertexCacheOptimizer::toJson(aggregate);
+        stages.append(s);
+    }
+
+    // Stage 2: decimation (single entity, slice D code path).
+    if (cmdArgs.decimateRequested) {
+        StageReport s;
+        s.name = "decimate";
+        Ogre::Entity* entity = entities.first();
+        int currentTris = 0, currentVerts = 0;
+        MeshDecimator::countBaseline(entity, currentTris, currentVerts);
+
+        double reduction = 0.0;
+        if (cmdArgs.reduction >= 0.0)
+            reduction = MeshDecimator::clampReduction(cmdArgs.reduction);
+        else if (cmdArgs.targetTris >= 0)
+            reduction = MeshDecimator::reductionFromTargetTris(currentTris, cmdArgs.targetTris);
+        else if (cmdArgs.targetVerts >= 0)
+            reduction = MeshDecimator::reductionFromTargetVerts(currentVerts, cmdArgs.targetVerts);
+
+        if (reduction <= 0.0) {
+            s.applied = false;
+            s.summary = "target equals or exceeds current count; nothing to do";
+        } else {
+            const DecimationReport report = MeshDecimator::decimateEntity(entity, reduction);
+            s.applied = report.applied;
+            s.summary = QString("%1% triangle reduction (%2 -> %3)")
+                            .arg(QString::number(100.0 * report.effectiveReduction(), 'f', 1))
+                            .arg(report.totalTrianglesBefore)
+                            .arg(report.totalTrianglesAfter);
+            s.details = MeshDecimator::toJson(report);
+        }
+        stages.append(s);
+    }
+
+    // Stage 3: animation simplify (same analyzer + same tolerances as
+    // `qtmesh anim --simplify` and the Inspector "Simplify" button).
+    if (cmdArgs.simplifyAnim) {
+        StageReport s;
+        s.name = "simplify-anim";
+        AnimationMerger::SimplifyTolerances tol;
+        tol.translation = cmdArgs.animTranslationTol;
+        tol.rotationDeg = cmdArgs.animRotationDegTol;
+        tol.scale       = cmdArgs.animScaleTol;
+
+        int totalRemoved = 0;
+        long long totalKeysBefore = 0;
+        Ogre::SkeletonPtr skel;
+        for (Ogre::Entity* entity : entities) {
+            if (!entity || !entity->hasSkeleton()) continue;
+            if (auto* mesh = entity->getMesh().get())
+                skel = mesh->getSkeleton();
+            if (skel) break;
+        }
+        if (!skel && !animOnlySkeletons.isEmpty())
+            skel = animOnlySkeletons.last();
+
+        if (skel) {
+            for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+                const Ogre::Animation* a = skel->getAnimation(ai);
+                if (!a) continue;
+                for (const auto& [handle, track] : a->_getNodeTrackList()) {
+                    Q_UNUSED(handle);
+                    if (track) totalKeysBefore += track->getNumKeyFrames();
+                }
+            }
+            // Snapshot names first — simplifyAnimation invalidates the
+            // animation pointers when it rewrites tracks in place.
+            std::vector<std::string> names;
+            names.reserve(skel->getNumAnimations());
+            for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai)
+                names.push_back(skel->getAnimation(ai)->getName());
+            for (const auto& n : names)
+                totalRemoved += AnimationMerger::simplifyAnimation(skel.get(), n, tol);
+        }
+
+        s.applied = totalRemoved > 0;
+        if (!skel)
+            s.summary = "no skeleton / animations to simplify";
+        else if (totalRemoved <= 0)
+            s.summary = "no additional simplification within configured tolerances";
+        else
+            s.summary = QString("removed %1 / %2 keyframes (%3%)")
+                            .arg(totalRemoved).arg(totalKeysBefore)
+                            .arg(totalKeysBefore > 0
+                                ? QString::number(100.0 * totalRemoved / static_cast<double>(totalKeysBefore), 'f', 1)
+                                : QString("0.0"));
+        QJsonObject d;
+        d["removed"] = totalRemoved;
+        d["totalKeyframesBefore"] = static_cast<qint64>(totalKeysBefore);
+        s.details = d;
+        stages.append(s);
+    }
+
+    // Export the (possibly mutated) scene rooted at the first entity. The
+    // anim-simplify stage rewrites the skeleton's animation tracks in
+    // place; refreshAvailableAnimationState() picks up the new tracks for
+    // any per-entity AnimationState cache.
+    Ogre::Entity* entity = entities.first();
+    if (entity) entity->refreshAvailableAnimationState();
+    const auto* node = entity->getParentSceneNode();
+    const QString fmt = formatForExtension(cmdArgs.outputPath);
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Exporting %1").arg(outFi.absoluteFilePath()));
+    if (MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), fmt) != 0) {
+        err() << "Error: Export failed." << Qt::endl;
+        return 1;
+    }
+
+    const qint64 srcBytes = fi.size();
+    const qint64 outBytes = QFileInfo(cmdArgs.outputPath).size();
+    emitOptimizeReport(fi, cmdArgs.outputPath, srcBytes, outBytes, stages, cmdArgs.jsonOutput);
     return 0;
 }
