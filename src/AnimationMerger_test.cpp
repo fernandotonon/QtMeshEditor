@@ -855,17 +855,22 @@ TEST(AnimationMergerStandaloneTest, TolerancesForPresetMapping)
     EXPECT_FLOAT_EQ(agg.rotationDeg, 1.0f);
 
     // Empty string falls back to conservative (the safe default — simplify
-    // is destructive) and is reported as OK
+    // is destructive) and is reported as OK. Assert the full tuple — a
+    // partial check would let rotationDeg / scale regress silently.
     bool ok = false;
     auto def = AnimationMerger::tolerancesForPreset("", &ok);
     EXPECT_TRUE(ok);
     EXPECT_FLOAT_EQ(def.translation, 1e-4f);
+    EXPECT_FLOAT_EQ(def.rotationDeg, 0.05f);
+    EXPECT_FLOAT_EQ(def.scale,       1e-4f);
 
     // Unknown preset reports !ok but still returns conservative defaults
     bool ok2 = true;
     auto bad = AnimationMerger::tolerancesForPreset("garbage", &ok2);
     EXPECT_FALSE(ok2);
     EXPECT_FLOAT_EQ(bad.translation, 1e-4f);
+    EXPECT_FLOAT_EQ(bad.rotationDeg, 0.05f);
+    EXPECT_FLOAT_EQ(bad.scale,       1e-4f);
 
     // Case-insensitive
     bool ok3 = false;

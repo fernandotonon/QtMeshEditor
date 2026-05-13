@@ -235,7 +235,7 @@ public:
     /// `preset` is one of: "conservative", "balanced", "aggressive".
     Q_INVOKABLE int simplifyAnimation(const QString& entityName,
                                       const QString& animName,
-                                      const QString& preset = QStringLiteral("balanced"));
+                                      const QString& preset = QStringLiteral("conservative"));
 
     /// Bake every bone track in `animName` at the given density level
     /// (mirrors AnimationControlController::resampleAllSegmentsForBone:

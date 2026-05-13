@@ -649,7 +649,10 @@ private:
         int animCurveNodeCount = 0;
         int animCurveCount = 0;
 
-        // Count unique materials and textures
+        // Count unique materials and textures. Mirrors the texname collection
+        // in writeTextureObjects() — including the qtme.normal_map UOB fallback
+        // — so Definitions/ObjectType counts always match the Texture/Video
+        // objects we actually emit (issue #508).
         std::set<std::string> matNames;
         std::set<std::string> texNames;
         if (m_entity) {
@@ -665,6 +668,14 @@ private:
                         auto texName = pass->getTextureUnitState(ti)->getTextureName();
                         if (!texName.empty())
                             texNames.insert(texName);
+                    }
+                    const Ogre::Any& normalHint =
+                        pass->getUserObjectBindings().getUserAny("qtme.normal_map");
+                    if (normalHint.has_value()) {
+                        try {
+                            const Ogre::String n = Ogre::any_cast<Ogre::String>(normalHint);
+                            if (!n.empty()) texNames.insert(n);
+                        } catch (const std::bad_cast&) {}
                     }
                 }
             }
