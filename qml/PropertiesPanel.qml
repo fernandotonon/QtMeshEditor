@@ -1665,8 +1665,9 @@ Rectangle {
             padding: 8
             spacing: 6
 
-            // Slider state — 0..0.95. Default 0.5 = halve the mesh.
-            property real reduction: 0.5
+            // Slider state — 0..0.95. Default 0 = no change, so opening the
+            // section doesn't already preview a reduction.
+            property real reduction: 0.0
 
             // Ensure baseTriangleCount is populated when the section is opened
             // for the first time — the controller's selectionChanged hook
@@ -1688,7 +1689,7 @@ Rectangle {
             Connections {
                 target: MeshDecimatorController
                 function onSelectionChanged() {
-                    decimateContent.reduction = 0.5
+                    decimateContent.reduction = 0.0
                     decimateFeedback.text = ""
                 }
                 function onApplied(before, after) {
