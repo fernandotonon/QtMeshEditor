@@ -69,6 +69,27 @@ struct AssetInfo {
     int totalKeyframes = 0;
     int redundantKeyframes = 0;
 
+    // Phase 6 slice C4 — populated by the Ogre scene walk.
+    // Maximum dimension (max(width, height)) of any texture bound through
+    // any SubEntity's material. 0 when the asset has no bound textures.
+    int maxTextureDimension = 0;
+    // Per-submesh minimum UV-set count. Number of VES_TEXTURE_COORDINATES
+    // elements in the vertex declaration of the *least*-equipped submesh.
+    // 0 when no submeshes carry UVs at all (or the asset has no entities).
+    int minUvChannelCount = 0;
+    // Skeleton bones with no vertex-bone-assignment influence on any
+    // submesh. Empty when the asset has no skeleton or every bone is used.
+    QStringList zeroWeightBoneNames;
+    // Fraction (0..1) of triangles whose UV0 AABB overlaps another
+    // triangle's UV0 AABB. -1 when UV0 isn't present or the asset has no
+    // entities. Conservative upper bound on true UV overlap.
+    double overlappingUvsRatio = -1.0;
+    // Fraction (0..1) of edges shared by something other than exactly
+    // two triangulated faces. -1 when the asset has no triangulated
+    // submeshes. Non-manifold input breaks boolean ops / fluid sims /
+    // 3D printing.
+    double nonManifoldEdgesRatio = -1.0;
+
     bool loadError = false;
     QString errorMessage;
 };

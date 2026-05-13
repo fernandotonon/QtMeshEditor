@@ -195,6 +195,39 @@ TEST(ScanConfigTest, LoadRedundantKeyframesRule)
     EXPECT_DOUBLE_EQ(config.redundantKeyframesScaleTol, 0.0005);
 }
 
+TEST(ScanConfigTest, LoadC4QualityRules)
+{
+    QString yaml =
+        "rules:\n"
+        "  max_texture_resolution: 4096\n"
+        "  require_uv_channels: 2\n"
+        "  detect_zero_weight_bones: true\n"
+        "  detect_overlapping_uvs_pct: 7.5\n"
+        "  detect_non_manifold_edges_pct: 2.0\n";
+
+    ScanConfig config = ScanConfig::fromVariantMap(parseSimpleYaml(yaml));
+    EXPECT_EQ(config.maxTextureResolution, 4096);
+    EXPECT_EQ(config.requireUvChannels, 2);
+    EXPECT_TRUE(config.detectZeroWeightBones);
+    EXPECT_DOUBLE_EQ(config.detectOverlappingUvsPct, 7.5);
+    EXPECT_DOUBLE_EQ(config.detectNonManifoldEdgesPct, 2.0);
+}
+
+TEST(ScanConfigTest, C4QualityRulesScopeOverrides)
+{
+    // Scope overrides should apply C4 rule keys too. Smoke-test that
+    // applyRuleOverrides picks up max_texture_resolution from a scope.
+    QVariantMap rules;
+    rules["max_texture_resolution"] = 1024;
+    rules["detect_zero_weight_bones"] = true;
+
+    ScanConfig config = ScanConfig::defaults();
+    EXPECT_EQ(config.maxTextureResolution, 0);
+    config.applyRuleOverrides(rules);
+    EXPECT_EQ(config.maxTextureResolution, 1024);
+    EXPECT_TRUE(config.detectZeroWeightBones);
+}
+
 TEST(ScanConfigTest, YamlExplicitInclude_AddsPlayStationGlobsWhenMissing)
 {
     const QString yaml =
@@ -561,6 +594,168 @@ TEST(ScanEngineTest, EvaluateRules_PassesClean)
 
     auto findings = ScanEngine::evaluateRules(asset, config);
     EXPECT_EQ(findings.size(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 slice C4 — quality rule evaluator tests.
+//
+// These are pure AssetInfo + ScanConfig → findings unit tests. The data
+// fields are populated by the inspectAssetViaOgre walk in production; here
+// we synthesize them directly so the tests don't depend on a working Ogre
+// headless context.
+// ---------------------------------------------------------------------------
+
+TEST(ScanEngineTest, EvaluateRules_MaxTextureResolution_FiresOverLimit)
+{
+    AssetInfo asset;
+    asset.relativePath = "char.fbx";
+    asset.format = "fbx";
+    asset.maxTextureDimension = 4096;
+
+    ScanConfig config = ScanConfig::defaults();
+    config.maxTextureResolution = 2048;
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    bool found = false;
+    for (const auto& f : findings)
+        if (f.rule == "max_texture_resolution") { found = true; break; }
+    EXPECT_TRUE(found);
+}
+
+TEST(ScanEngineTest, EvaluateRules_MaxTextureResolution_DisabledWhenZero)
+{
+    AssetInfo asset;
+    asset.maxTextureDimension = 8192;
+    ScanConfig config = ScanConfig::defaults();
+    config.maxTextureResolution = 0;   // disabled
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule, "max_texture_resolution");
+}
+
+TEST(ScanEngineTest, EvaluateRules_RequireUvChannels_FiresWhenUnder)
+{
+    AssetInfo asset;
+    asset.relativePath = "static.obj";
+    asset.format = "obj";
+    asset.faceCount = 100;
+    asset.minUvChannelCount = 1;    // only UV0
+
+    ScanConfig config = ScanConfig::defaults();
+    config.requireUvChannels = 2;   // wants UV0 + UV1 for lightmap
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    bool found = false;
+    for (const auto& f : findings)
+        if (f.rule == "require_uv_channels") { found = true; break; }
+    EXPECT_TRUE(found);
+}
+
+TEST(ScanEngineTest, EvaluateRules_RequireUvChannels_SkipsZeroFaceAssets)
+{
+    AssetInfo asset;
+    asset.relativePath = "anim-only.fbx";
+    asset.format = "fbx";
+    asset.faceCount = 0;            // animation-only — no geometry to UV
+    asset.minUvChannelCount = 0;
+
+    ScanConfig config = ScanConfig::defaults();
+    config.requireUvChannels = 1;
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule, "require_uv_channels");
+}
+
+TEST(ScanEngineTest, EvaluateRules_DetectZeroWeightBones_FiresWhenAny)
+{
+    AssetInfo asset;
+    asset.relativePath = "mixamo.fbx";
+    asset.format = "fbx";
+    asset.zeroWeightBoneNames = {"mixamorig:LeftEye", "mixamorig:RightEye"};
+
+    ScanConfig config = ScanConfig::defaults();
+    config.detectZeroWeightBones = true;
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    bool found = false;
+    for (const auto& f : findings) {
+        if (f.rule == "detect_zero_weight_bones") {
+            found = true;
+            EXPECT_EQ(f.severity, Severity::Info);
+            EXPECT_TRUE(f.message.contains("LeftEye"));
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(ScanEngineTest, EvaluateRules_DetectOverlappingUvs_FiresOverThreshold)
+{
+    AssetInfo asset;
+    asset.relativePath = "stacked.fbx";
+    asset.format = "fbx";
+    asset.overlappingUvsRatio = 0.50;   // 50% overlap
+
+    ScanConfig config = ScanConfig::defaults();
+    config.detectOverlappingUvsPct = 5.0;
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    bool found = false;
+    for (const auto& f : findings)
+        if (f.rule == "detect_overlapping_uvs_pct") { found = true; break; }
+    EXPECT_TRUE(found);
+}
+
+TEST(ScanEngineTest, EvaluateRules_DetectOverlappingUvs_SkipsWhenUv0Missing)
+{
+    AssetInfo asset;
+    asset.overlappingUvsRatio = -1.0;   // sentinel: no UV0 to test
+    ScanConfig config = ScanConfig::defaults();
+    config.detectOverlappingUvsPct = 1.0;
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule, "detect_overlapping_uvs_pct");
+}
+
+TEST(ScanEngineTest, EvaluateRules_DetectNonManifoldEdges_FiresOverThreshold)
+{
+    AssetInfo asset;
+    asset.relativePath = "open-clothing.fbx";
+    asset.format = "fbx";
+    asset.nonManifoldEdgesRatio = 0.30;   // 30%
+
+    ScanConfig config = ScanConfig::defaults();
+    config.detectNonManifoldEdgesPct = 1.0;
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    bool found = false;
+    for (const auto& f : findings)
+        if (f.rule == "detect_non_manifold_edges_pct") { found = true; break; }
+    EXPECT_TRUE(found);
+}
+
+TEST(ScanEngineTest, EvaluateRules_C4Rules_AllDisabledByDefault)
+{
+    AssetInfo asset;
+    asset.relativePath = "any.fbx";
+    asset.format = "fbx";
+    asset.maxTextureDimension = 8192;
+    asset.minUvChannelCount = 0;
+    asset.zeroWeightBoneNames = {"a", "b"};
+    asset.overlappingUvsRatio = 0.9;
+    asset.nonManifoldEdgesRatio = 0.5;
+
+    ScanConfig config = ScanConfig::defaults();
+    // No C4 rule enabled.
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    for (const auto& f : findings) {
+        EXPECT_NE(f.rule, "max_texture_resolution");
+        EXPECT_NE(f.rule, "require_uv_channels");
+        EXPECT_NE(f.rule, "detect_zero_weight_bones");
+        EXPECT_NE(f.rule, "detect_overlapping_uvs_pct");
+        EXPECT_NE(f.rule, "detect_non_manifold_edges_pct");
+    }
 }
 
 TEST(ScanEngineTest, EvaluateRules_MissingMaterials)

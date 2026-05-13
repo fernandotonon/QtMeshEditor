@@ -277,6 +277,17 @@ void ScanConfig::applyRuleOverrides(const QVariantMap& r)
         redundantKeyframesRotationDegTol = r["redundant_keyframes_rotation_deg_tol"].toDouble();
     if (r.contains("redundant_keyframes_scale_tol"))
         redundantKeyframesScaleTol = r["redundant_keyframes_scale_tol"].toDouble();
+    // C4 quality rules
+    if (r.contains("max_texture_resolution"))
+        maxTextureResolution = r["max_texture_resolution"].toInt();
+    if (r.contains("require_uv_channels"))
+        requireUvChannels = r["require_uv_channels"].toInt();
+    if (r.contains("detect_zero_weight_bones"))
+        detectZeroWeightBones = r["detect_zero_weight_bones"].toBool();
+    if (r.contains("detect_overlapping_uvs_pct"))
+        detectOverlappingUvsPct = r["detect_overlapping_uvs_pct"].toDouble();
+    if (r.contains("detect_non_manifold_edges_pct"))
+        detectNonManifoldEdgesPct = r["detect_non_manifold_edges_pct"].toDouble();
 }
 
 ScanConfig ScanConfig::withScopeOverrides(const QString& relativePath) const
@@ -458,6 +469,12 @@ ScanConfig ScanConfig::fromVariantMap(const QVariantMap& root)
             "redundant_keyframes_rotation_deg_tol", config.redundantKeyframesRotationDegTol).toDouble();
         config.redundantKeyframesScaleTol = rules.value(
             "redundant_keyframes_scale_tol", config.redundantKeyframesScaleTol).toDouble();
+        // C4 quality rules
+        config.maxTextureResolution    = rules.value("max_texture_resolution",    config.maxTextureResolution).toInt();
+        config.requireUvChannels       = rules.value("require_uv_channels",       config.requireUvChannels).toInt();
+        config.detectZeroWeightBones   = rules.value("detect_zero_weight_bones",  config.detectZeroWeightBones).toBool();
+        config.detectOverlappingUvsPct = rules.value("detect_overlapping_uvs_pct",  config.detectOverlappingUvsPct).toDouble();
+        config.detectNonManifoldEdgesPct = rules.value("detect_non_manifold_edges_pct", config.detectNonManifoldEdgesPct).toDouble();
     }
 
     // scopes section — map of path patterns to rule override maps
