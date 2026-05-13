@@ -36,6 +36,10 @@ The MIT License
 #include <unordered_set>
 #include <vector>
 
+namespace PS1PLY {
+void configurePsyqRsdMaterialPass(Ogre::Pass* pass, bool hasVertexColour, bool matUnlit);
+}
+
 namespace {
 
 struct TriSoup {
@@ -432,31 +436,6 @@ static bool buildNgonPayloadFromWeldedTriangles(const std::vector<uint32_t>& tri
     return triIdx == nTri;
 }
 
-/// Psy-Q MAT `G` / `H` carry per-corner colours for Gouraud shading on the PS1. In the editor
-/// we want the same readable look as Blender's **vertex colour** viewport: diffuse × vertex
-/// colour with **lighting off**, so corners interpolate smoothly on each polygon. A lit FFP
-/// pass (ambient + diffuse tracking) modulates by N·L and can make smooth vertex paint look
-/// almost flat on simple primitives even when the MAT payload is correct.
-static void configurePsyqPlyPassForVertexColour(Ogre::Pass* p0, bool hasVertexColour)
-{
-    if (!p0)
-        return;
-    if (hasVertexColour) {
-        p0->setLightingEnabled(false);
-        p0->setAmbient(0.0f, 0.0f, 0.0f);
-        p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
-        p0->setSpecular(0.0f, 0.0f, 0.0f, 0.0f);
-        p0->setEmissive(0.0f, 0.0f, 0.0f);
-        p0->setVertexColourTracking(Ogre::TVC_DIFFUSE);
-    } else {
-        p0->setLightingEnabled(true);
-        p0->setAmbient(1.0f, 1.0f, 1.0f);
-        p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
-        p0->setEmissive(0.0f, 0.0f, 0.0f);
-        p0->setVertexColourTracking(Ogre::TVC_NONE);
-    }
-}
-
 static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const TriSoup& soup,
                                           const std::vector<uint8_t>* psyqFaceLayoutForNgons = nullptr)
 {
@@ -563,7 +542,7 @@ static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const Tri
             if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
                 Ogre::Pass* p0 = mat->getTechnique(0)->getPass(0);
                 if (p0)
-                    configurePsyqPlyPassForVertexColour(p0, haveColors);
+                    PS1PLY::configurePsyqRsdMaterialPass(p0, haveColors, true);
             }
         }
     } catch (...) {
@@ -1065,6 +1044,45 @@ static void mergeSubmeshTrisToQuads(const std::vector<uint32_t>& I0,
 
 namespace PS1PLY {
 
+void configurePsyqRsdMaterialPass(Ogre::Pass* p0, bool hasVertexColour, bool matUnlit)
+{
+    if (!p0)
+        return;
+    if (!hasVertexColour) {
+        if (matUnlit) {
+            p0->setLightingEnabled(false);
+            p0->setAmbient(0.0f, 0.0f, 0.0f);
+            p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+            p0->setSpecular(0.0f, 0.0f, 0.0f, 0.0f);
+            p0->setEmissive(0.0f, 0.0f, 0.0f);
+            p0->setVertexColourTracking(Ogre::TVC_NONE);
+        } else {
+            p0->setLightingEnabled(true);
+            p0->setAmbient(1.0f, 1.0f, 1.0f);
+            p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+            p0->setSpecular(0.0f, 0.0f, 0.0f, 0.0f);
+            p0->setEmissive(0.0f, 0.0f, 0.0f);
+            p0->setVertexColourTracking(Ogre::TVC_NONE);
+        }
+        return;
+    }
+    if (matUnlit) {
+        p0->setLightingEnabled(false);
+        p0->setAmbient(0.0f, 0.0f, 0.0f);
+        p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+        p0->setSpecular(0.0f, 0.0f, 0.0f, 0.0f);
+        p0->setEmissive(0.0f, 0.0f, 0.0f);
+        p0->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+    } else {
+        p0->setLightingEnabled(true);
+        p0->setAmbient(1.0f, 1.0f, 1.0f);
+        p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+        p0->setSpecular(0.0f, 0.0f, 0.0f, 0.0f);
+        p0->setEmissive(0.0f, 0.0f, 0.0f);
+        p0->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+    }
+}
+
 bool isPsyqPlyFile(const QString& filePath)
 {
     QFile f(filePath);
@@ -1252,6 +1270,7 @@ struct TexturedTriProvenance {
 
 struct TexturedSubmeshSoup {
     int textureIndex = -1;       ///< -1 = untextured submesh
+    bool unlit = false;          ///< MAT / Blender no-light bit (material name `_nl` suffix).
     bool hasColor = false;
     std::vector<TexturedCorner> corners;       ///< multiple of 3 (triangle list).
     std::vector<TexturedTriProvenance> triProv; ///< One entry per tri (corners.size() / 3).
@@ -1478,12 +1497,13 @@ static Ogre::MeshPtr buildMeshFromTexturedSoups(
         editableSubMeshes.push_back(recoverPolygonsFromProvenance(soup, indices));
 
         Ogre::SubMesh* sm = mesh->createSubMesh();
+        const bool nl = soup.unlit;
         const std::string slotSuffix = textured
-            ? std::string("_tex") + std::to_string(soup.textureIndex)
-            : std::string("_solid");
+            ? (std::string("_tex") + std::to_string(soup.textureIndex) + (nl ? std::string("_nl") : std::string()))
+            : (std::string("_solid") + (nl ? std::string("_nl") : std::string()));
         const std::string matName = std::string("PLY/") + meshName + slotSuffix;
         // Ensure a fresh material exists with this name so the post-import RSD texture-binding
-        // pass (in MeshImporterExporter) can resolve `_texN` submeshes by regex. Clone from
+        // pass (in MeshImporterExporter) can resolve `_texN` / `_texN_nl` submesh materials.
         // BaseMaterial when available, otherwise create one outright so the CLI path (which
         // does not preload BaseMaterial) still gets unique submesh materials.
         try {
@@ -1548,8 +1568,7 @@ static Ogre::MeshPtr buildMeshFromTexturedSoups(
         vbuf->unlock();
         bind->setBinding(0, vbuf);
 
-        // Configure cloned material: shadeless when vertex colours are present so the
-        // editor matches Blender's vertex-colour viewport (see configurePsyqPlyPassForVertexColour).
+        // Configure cloned material from MAT lit/unlit + vertex colour presence.
         try {
             if (auto mat = Ogre::MaterialManager::getSingleton().getByName(matName)) {
                 if (!mat->isLoaded())
@@ -1557,7 +1576,7 @@ static Ogre::MeshPtr buildMeshFromTexturedSoups(
                 if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
                     Ogre::Pass* p0 = mat->getTechnique(0)->getPass(0);
                     if (p0)
-                        configurePsyqPlyPassForVertexColour(p0, hasColor);
+                        configurePsyqRsdMaterialPass(p0, hasColor, soup.unlit);
                 }
             }
         } catch (...) {}
@@ -1602,11 +1621,9 @@ static Ogre::MeshPtr buildMeshFromTexturedSoups(
     return mesh;
 }
 
-} // namespace
-
-Ogre::MeshPtr importPsyqPlyWithFaceMaterials(const QString& filePath,
-                                             const std::string& meshName,
-                                             const QVector<FaceMaterial>& faceMaterials)
+Ogre::MeshPtr importPsyqPlyWithFaceMaterialsImpl(const QString& filePath,
+                                                 const std::string& meshName,
+                                                 const QVector<FaceMaterial>& faceMaterials)
 {
     const QString fileName = QFileInfo(filePath).fileName();
     QFile f(filePath);
@@ -1627,19 +1644,37 @@ Ogre::MeshPtr importPsyqPlyWithFaceMaterials(const QString& filePath,
     if (faceMaterials.size() != static_cast<int>(faces.size()))
         return {};
 
-    // Bucket faces by texture index (-1 = untextured). Keep insertion order so untextured
-    // submesh appears first when present and material assignment is deterministic.
     std::vector<TexturedSubmeshSoup> soups;
-    std::unordered_map<int, size_t> texToSoup;
-    auto getSoup = [&](int texIndex) -> TexturedSubmeshSoup& {
-        const auto it = texToSoup.find(texIndex);
+    // Bucket faces by texture index (-1 = untextured) and MAT lit/unlit (material `_nl`).
+    // submesh appears first when present and material assignment is deterministic.
+    struct SoupKey {
+        int texIndex = -1;
+        bool unlit = false;
+        bool operator==(const SoupKey& o) const noexcept
+        {
+            return texIndex == o.texIndex && unlit == o.unlit;
+        }
+    };
+    struct SoupKeyHash {
+        size_t operator()(const SoupKey& k) const noexcept
+        {
+            const uint64_t u = (static_cast<uint64_t>(static_cast<uint32_t>(k.texIndex + 0x8000)) << 1u)
+                               | (k.unlit ? 1ull : 0ull);
+            return static_cast<size_t>(u);
+        }
+    };
+    std::unordered_map<SoupKey, size_t, SoupKeyHash> texToSoup;
+    auto getSoup = [&](int texIndex, bool unlitFace) -> TexturedSubmeshSoup& {
+        const SoupKey key{texIndex, unlitFace};
+        const auto it = texToSoup.find(key);
         if (it != texToSoup.end())
             return soups[it->second];
         TexturedSubmeshSoup s;
         s.textureIndex = texIndex;
+        s.unlit = unlitFace;
         const size_t idx = soups.size();
         soups.push_back(std::move(s));
-        texToSoup.emplace(texIndex, idx);
+        texToSoup.emplace(key, idx);
         return soups[idx];
     };
 
@@ -1649,7 +1684,7 @@ Ogre::MeshPtr importPsyqPlyWithFaceMaterials(const QString& filePath,
         // Treat textured-with-invalid-index as untextured to avoid silently binding
         // every malformed face to slot 0; -1 routes the face to the solid bucket.
         const int submeshKey = (fm.textured && fm.textureIndex >= 0) ? fm.textureIndex : -1;
-        TexturedSubmeshSoup& soup = getSoup(submeshKey);
+        TexturedSubmeshSoup& soup = getSoup(submeshKey, fm.unlit);
 
         // Psy-Q MAT G/H entries are typically written with 4 RGB triples regardless
         // of face shape — the Blender RSD exporter pads triangles with a trailing
@@ -1713,6 +1748,15 @@ Ogre::MeshPtr importPsyqPlyWithFaceMaterials(const QString& filePath,
             .arg(faces.size())
             .arg(static_cast<int>(soups.size())));
     return outMesh;
+}
+
+} // namespace
+
+Ogre::MeshPtr importPsyqPlyWithFaceMaterials(const QString& filePath,
+                                             const std::string& meshName,
+                                             const QVector<FaceMaterial>& faceMaterials)
+{
+    return importPsyqPlyWithFaceMaterialsImpl(filePath, meshName, faceMaterials);
 }
 
 bool exportPsyqPlyFromEntity(const Ogre::Entity* entity,

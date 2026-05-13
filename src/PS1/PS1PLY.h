@@ -13,6 +13,10 @@ The MIT License
 
 #include <OgreMesh.h>
 #include <OgreEntity.h>
+
+namespace Ogre {
+class Pass;
+}
 #include <QColor>
 #include <QString>
 #include <QVector>
@@ -38,6 +42,9 @@ constexpr float kPsyqPlyEditorUniformScale = 1.0f;
 
 bool isPsyqPlyFile(const QString& filePath);
 
+/** FFP pass for Psy-Q PLY / RSD materials (`matUnlit` = Blender MAT flag LSB). */
+void configurePsyqRsdMaterialPass(Ogre::Pass* pass, bool hasVertexColour, bool matUnlit);
+
 Ogre::MeshPtr importPsyqPly(const QString& filePath, const std::string& meshName);
 
 /** Import with optional per-face colors (size must match face count). */
@@ -53,15 +60,16 @@ struct FaceMaterial {
     std::array<float, 4> v{};     ///< per-corner V (normalised 0..1, top-origin).
     QColor color;                  ///< per-face flat colour fallback (used when no vertex colours are supplied).
     QVector<QColor> vertColors;   ///< 0, 3 or 4 per-corner colours (in PLY corner order); empty when N/A.
+    bool unlit = false;            ///< Blender MAT flag LSB: no scene lighting (full-bright / PS1 no-light).
 };
 
 /**
  * Import with per-face material binding (UVs + texture index + colours).
  *
- * The mesh is split into one submesh per `textureIndex` group, plus one
- * submesh for untextured faces. The caller is responsible for binding a
- * texture-aware material to each submesh after creation; this routine
- * only stores UVs on textured submesh vertices.
+ * The mesh is split into one submesh per distinct (`textureIndex`, `unlit`) group.
+ * Material names use suffix `_nl` when the MAT no-light (Blender "Unlit") bit is set.
+ * The caller binds RSD textures to `_texN` / `_texN_nl` submeshes after import; this
+ * routine only stores UVs on textured submesh vertices.
  *
  * `faceMaterials` length must match the PLY face count.
  */

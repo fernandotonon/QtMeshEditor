@@ -1735,6 +1735,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                             } else if (me.rgb.isValid()) {
                                 fm.color = me.rgb;
                             }
+                            fm.unlit = me.unlit;
                             faceMats[fi] = fm;
                         }
                         mesh = PS1PLY::importPsyqPlyWithFaceMaterials(geomPath, meshName, faceMats);
@@ -1779,9 +1780,8 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     }
                 } else if (useTexturedMatPath) {
                     // Textured PLY path emits one submesh per texture group with material names
-                    // shaped `PLY/<meshName>_texN` or `PLY/<meshName>_solid`. Bind the matching
-                    // RSD texture slot to each textured submesh's first texture unit; untextured
-                    // submeshes keep their vertex-colour material.
+                    // shaped `PLY/<meshName>_texN` or `_texN_nl` (unlit); untextured use `_solid` / `_solid_nl`.
+                    // Bind the matching RSD texture slot to each textured submesh's first texture unit.
                     for (unsigned int si = 0; si < en->getNumSubEntities(); ++si) {
                         Ogre::SubEntity* se = const_cast<Ogre::SubEntity*>(en->getSubEntity(si));
                         Ogre::MaterialPtr mat = se->getMaterial();
@@ -1794,12 +1794,13 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
 
                         const QString mname = QString::fromStdString(mat->getName());
                         static const QRegularExpression kTexSlotRe(
-                            QStringLiteral("_tex(\\d+)$"));
+                            QStringLiteral("_tex(\\d+)(_nl)?$"));
                         const auto m = kTexSlotRe.match(mname);
                         if (!m.hasMatch())
                             continue; // untextured submesh — leave as is.
                         bool ok = false;
                         const int slot = m.captured(1).toInt(&ok);
+                        const bool slotUnlit = m.captured(2) == QStringLiteral("_nl");
                         if (!ok || slot < 0 || slot >= static_cast<int>(rsdTexSlots.size())
                             || rsdTexSlots[slot].resourceName.isEmpty())
                             continue;
@@ -1813,19 +1814,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                                                           : (sm ? sm->vertexData : nullptr);
                         const bool hasVC = vdSm && vdSm->vertexDeclaration
                             && vdSm->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
-                        if (hasVC) {
-                            pass->setLightingEnabled(false);
-                            pass->setAmbient(0.0f, 0.0f, 0.0f);
-                            pass->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
-                            pass->setSpecular(0.0f, 0.0f, 0.0f, 0.0f);
-                            pass->setEmissive(0.0f, 0.0f, 0.0f);
-                            pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
-                        } else {
-                            pass->setLightingEnabled(true);
-                            pass->setAmbient(1.0f, 1.0f, 1.0f);
-                            pass->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
-                            pass->setVertexColourTracking(Ogre::TVC_NONE);
-                        }
+                        PS1PLY::configurePsyqRsdMaterialPass(pass, hasVC, slotUnlit);
                         mat->compile();
                     }
                 }
@@ -2206,6 +2195,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         std::vector<OutTex> rsdOutTextures;
         std::unordered_map<int, int> submeshToTexSlot; ///< submeshIndex -> rsd slot.
         std::unordered_map<std::string, int> resourceToSlot;
+        std::unordered_map<int, bool> submeshUnlit; ///< Psy-Q MAT no-light bit per submesh.
 
         for (unsigned int si = 0; si < e->getNumSubEntities(); ++si) {
             const Ogre::SubEntity* se = e->getSubEntity(si);
@@ -2259,6 +2249,36 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             submeshToTexSlot[static_cast<int>(si)] = slot;
         }
 
+        static const QRegularExpression kPsyqTexUnlitSuffix(
+            QStringLiteral("_tex\\d+(_nl)?$"));
+        static const QRegularExpression kPsyqSolidUnlitSuffix(
+            QStringLiteral("_solid(_nl)?$"));
+        for (unsigned int si = 0; si < e->getNumSubEntities(); ++si) {
+            const Ogre::SubEntity* se = e->getSubEntity(si);
+            if (!se)
+                continue;
+            bool unlit = false;
+            const QString mname = QString::fromStdString(se->getMaterialName());
+            const auto texM = kPsyqTexUnlitSuffix.match(mname);
+            if (texM.hasMatch() && texM.captured(1) == QStringLiteral("_nl"))
+                unlit = true;
+            else {
+                const auto solM = kPsyqSolidUnlitSuffix.match(mname);
+                if (solM.hasMatch() && solM.captured(1) == QStringLiteral("_nl"))
+                    unlit = true;
+            }
+            if (!unlit) {
+                Ogre::MaterialPtr mat = se->getMaterial();
+                if (!mat.isNull() && mat->getNumTechniques() > 0
+                    && mat->getTechnique(0)->getNumPasses() > 0) {
+                    const Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+                    if (pass && !pass->getLightingEnabled())
+                        unlit = true;
+                }
+            }
+            submeshUnlit[static_cast<int>(si)] = unlit;
+        }
+
         // Synthesise MAT entries: one per output PLY face. Pick the most specific Psy-Q
         // type that preserves the source data:
         //   * Textured + smooth corner colours -> 'H' (textured smooth, per-corner tint)
@@ -2301,6 +2321,13 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 const int corners = (eft.cornerCount == 4) ? 4 : 3;
                 const bool gotCornerColors = eft.hasCornerColors;
                 const bool smoothShade = gotCornerColors && !cornersUniform(eft);
+
+                const int smIdx = (fi < faceTexInfos.size()) ? faceTexInfos[fi].submeshIndex : -1;
+                if (smIdx >= 0) {
+                    const auto uit = submeshUnlit.find(smIdx);
+                    if (uit != submeshUnlit.end())
+                        me.unlit = uit->second;
+                }
 
                 const int slotIt = (eft.textured && submeshToTexSlot.count(eft.submeshIndex))
                     ? submeshToTexSlot[eft.submeshIndex]

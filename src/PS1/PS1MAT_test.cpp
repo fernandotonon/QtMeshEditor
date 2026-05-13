@@ -28,9 +28,9 @@ TEST(PS1MAT, ParseFlatColorEntries)
     const QByteArray body =
         "@MAT940801\n"
         "3\n"
-        "0 1 F C 207 207 207\n"
-        "1 1 F C 58 58 58\n"
-        "2 1 F C 152 152 152\n";
+        "0 0 F C 207 207 207\n"
+        "1 0 F C 58 58 58\n"
+        "2 0 F C 152 152 152\n";
 
     const QString path = writeMatFile(dir.path(), body);
     QVector<PS1MAT::MatEntry> entries;
@@ -45,6 +45,9 @@ TEST(PS1MAT, ParseFlatColorEntries)
     ASSERT_EQ(entries[0].vertColors.size(), 1);
     EXPECT_EQ(entries[0].vertColors[0], QColor(207, 207, 207));
     EXPECT_EQ(entries[0].rgb,           QColor(207, 207, 207));
+    EXPECT_FALSE(entries[0].unlit);
+    EXPECT_FALSE(entries[1].unlit);
+    EXPECT_FALSE(entries[2].unlit);
 }
 
 TEST(PS1MAT, ParseSmoothColorQuadEntries)
@@ -56,7 +59,7 @@ TEST(PS1MAT, ParseSmoothColorQuadEntries)
     const QByteArray body =
         "@MAT940801\n"
         "1\n"
-        "0 1 F G 152 152 152 197 197 197 84 84 84 120 120 120\n";
+        "0 0 F G 152 152 152 197 197 197 84 84 84 120 120 120\n";
 
     const QString path = writeMatFile(dir.path(), body);
     QVector<PS1MAT::MatEntry> entries;
@@ -74,6 +77,27 @@ TEST(PS1MAT, ParseSmoothColorQuadEntries)
     EXPECT_EQ(e.vertColors[3], QColor(120, 120, 120));
     // Back-compat rgb is the first vert colour.
     EXPECT_EQ(e.rgb, QColor(152, 152, 152));
+    EXPECT_FALSE(e.unlit);
+}
+
+TEST(PS1MAT, ParseMaterialFlag_UnlitUsesLsb)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QByteArray body =
+        "@MAT940801\n"
+        "2\n"
+        "0 0 F C 255 0 0\n"
+        "1 1 F C 0 255 0\n";
+
+    const QString path = writeMatFile(dir.path(), body);
+    QVector<PS1MAT::MatEntry> entries;
+    QString err;
+    ASSERT_TRUE(PS1MAT::parseMatFile(path, entries, &err)) << err.toStdString();
+    ASSERT_EQ(entries.size(), 2);
+    EXPECT_FALSE(entries[0].unlit);
+    EXPECT_TRUE(entries[1].unlit);
 }
 
 TEST(PS1MAT, ParseTexturedQuadEntry_HType)
@@ -85,7 +109,7 @@ TEST(PS1MAT, ParseTexturedQuadEntry_HType)
     const QByteArray body =
         "@MAT940801\n"
         "1\n"
-        "0 1 F H 0 0 127 0 0 127 127 127 0 72 72 72 72 72 72 79 79 79 80 80 80\n";
+        "0 0 F H 0 0 127 0 0 127 127 127 0 72 72 72 72 72 72 79 79 79 80 80 80\n";
 
     const QString path = writeMatFile(dir.path(), body);
     QVector<PS1MAT::MatEntry> entries;
@@ -116,7 +140,7 @@ TEST(PS1MAT, ParseTexturedTriEntry_TType)
     const QByteArray body =
         "@MAT940801\n"
         "1\n"
-        "0 1 F T 2 10 20 30 40 50 60 0 0\n";
+        "0 0 F T 2 10 20 30 40 50 60 0 0\n";
 
     const QString path = writeMatFile(dir.path(), body);
     QVector<PS1MAT::MatEntry> entries;
@@ -155,6 +179,7 @@ TEST(PS1MAT, WriteAndRoundTrip_MixedEntries)
         t.textured = true;
         t.textureIndex = 1;
         t.uvs = { {0, 0}, {127, 0}, {127, 127}, {0, 127} };
+        t.unlit = true;
         in.push_back(t);
     }
     {
@@ -193,6 +218,9 @@ TEST(PS1MAT, WriteAndRoundTrip_MixedEntries)
     ASSERT_EQ(out[2].vertColors.size(), 4);
     EXPECT_EQ(out[2].vertColors[0], QColor(255, 0, 0));
     EXPECT_EQ(out[2].vertColors[2], QColor(0, 0, 255));
+    EXPECT_FALSE(out[0].unlit);
+    EXPECT_TRUE(out[1].unlit);
+    EXPECT_FALSE(out[2].unlit);
 }
 
 TEST(PS1MAT, WritesGouraudTriWithFourCornerPadding)
@@ -222,7 +250,7 @@ TEST(PS1MAT, WritesGouraudTriWithFourCornerPadding)
     QFile f(path);
     ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
     const QString text = QString::fromLatin1(f.readAll());
-    EXPECT_TRUE(text.contains(QStringLiteral("0 1 F G 245 245 245 107 107 107 84 84 84 0 0 0")))
+    EXPECT_TRUE(text.contains(QStringLiteral("0 0 F G 245 245 245 107 107 107 84 84 84 0 0 0")))
         << "tri G entry must be padded to 4 corners with a trailing 0 0 0 -- got:\n"
         << text.toStdString();
 
