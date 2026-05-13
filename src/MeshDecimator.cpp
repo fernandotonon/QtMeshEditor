@@ -163,9 +163,18 @@ DecimationReport MeshDecimator::decimateEntity(Ogre::Entity* entity, double redu
         return report;
     }
 
-    // Wipe any existing LOD chain — the base mesh itself is being reduced,
-    // so old LODs would point at stale index data after the generator runs.
-    mesh->removeLodLevels();
+    // Snapshot the existing LOD face list per submesh so we can roll back
+    // if the generator throws. Then wipe — the base mesh is being reduced,
+    // and the new chain has to start fresh so the LOD-1 index data we
+    // promote into the base is the one we asked for.
+    std::vector<std::vector<Ogre::IndexData*>> savedLodFaceLists;
+    savedLodFaceLists.reserve(mesh->getNumSubMeshes());
+    for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(s);
+        savedLodFaceLists.push_back(sub ? sub->mLodFaceList
+                                        : std::vector<Ogre::IndexData*>{});
+        if (sub) sub->mLodFaceList.clear();
+    }
 
     Ogre::LodConfig lodConfig(mesh);
     lodConfig.createGeneratedLodLevel(0.0f, // distance — meaningless when collapsing in place
@@ -177,12 +186,22 @@ DecimationReport MeshDecimator::decimateEntity(Ogre::Entity* entity, double redu
         // has been instantiated yet (CLI / MCP / test contexts).
         sharedLodGenerator().generateLodLevels(lodConfig);
     } catch (const Ogre::Exception& /*e*/) {
-        // Keep totals consistent on failure: per-submesh trianglesAfter
-        // already mirrors trianglesBefore (from collectSubmeshTriCounts),
-        // so the total should match. applied stays false.
+        // Restore the snapshotted LOD chain so a reported failure is not
+        // destructive for in-memory callers — the mesh comes back exactly
+        // as it was before decimateEntity ran.
+        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+            Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            if (sub && s < savedLodFaceLists.size())
+                sub->mLodFaceList = savedLodFaceLists[s];
+        }
         report.totalTrianglesAfter = report.totalTrianglesBefore;
         return report;
     }
+    // Generator succeeded — free the old IndexData* we'd snapshotted, since
+    // the base mesh is about to swap to the new LOD's index data and the
+    // old per-LOD buffers are no longer referenced.
+    for (auto& list : savedLodFaceLists)
+        for (Ogre::IndexData* idx : list) delete idx;
 
     // Promote LOD 1 (the reduced level) into the base mesh by swapping its
     // index data with the original submesh index data. This is the same

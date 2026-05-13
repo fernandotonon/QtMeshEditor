@@ -3749,6 +3749,21 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
         return 1;
     }
 
+    // Refuse to overwrite the source asset. The earlier error promises we
+    // never do this; enforce it by comparing canonical paths (handles
+    // symlinks and relative paths). When the output file doesn't exist yet,
+    // QFileInfo::canonicalFilePath() returns empty — fall back to absolute.
+    const QFileInfo outFi(cmdArgs.outputPath);
+    const QString inCanon = fi.canonicalFilePath().isEmpty()
+                                ? fi.absoluteFilePath() : fi.canonicalFilePath();
+    const QString outCanon = outFi.canonicalFilePath().isEmpty()
+                                ? outFi.absoluteFilePath() : outFi.canonicalFilePath();
+    if (inCanon == outCanon) {
+        err() << "Error: -o points to the input file. Decimation is destructive; "
+                 "choose a different output path." << Qt::endl;
+        return 2;
+    }
+
     if (!initOgreHeadless()) return 1;
 
     SentryReporter::addBreadcrumb("cli.decimate",
@@ -3760,6 +3775,16 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
     const auto& entities = Manager::getSingleton()->getEntities();
     if (entities.isEmpty()) {
         err() << "Error: Failed to load file: " << cmdArgs.filePath << Qt::endl;
+        return 1;
+    }
+    // Multi-entity scenes: refuse rather than silently decimate the first
+    // entity and exporting a partially-reduced scene. Whole-scene decimation
+    // is a future-slice feature; today's contract is one entity, one output.
+    if (entities.size() > 1) {
+        err() << "Error: " << cmdArgs.filePath << " contains "
+              << entities.size() << " mesh entities. qtmesh decimate currently "
+              << "supports one entity per file — split the source or run a "
+              << "follow-up scene-decimation slice when that lands." << Qt::endl;
         return 1;
     }
 
@@ -3784,7 +3809,7 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
     }
 
     const auto* node = entity->getParentSceneNode();
-    const QFileInfo outFi(cmdArgs.outputPath);
+    // outFi already declared earlier (canonical-path guard); reuse it.
     const QString fmt = formatForExtension(cmdArgs.outputPath);
     SentryReporter::addBreadcrumb("file.export",
         QString("Exporting %1").arg(outFi.absoluteFilePath()));
