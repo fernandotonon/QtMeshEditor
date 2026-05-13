@@ -89,7 +89,8 @@ int main(int argc, char *argv[])
                         || arg == "validate" || arg == "lod" || arg == "pose"
                         || arg == "scan" || arg == "material" || arg == "pack-textures"
                         || arg == "normal-from-height" || arg == "memory"
-                        || arg == "analyze" || arg == "vertex-cache")
+                        || arg == "analyze" || arg == "vertex-cache"
+                        || arg == "decimate")
                     cliMode = true;
                 break;  // first non-flag arg determines mode
             }

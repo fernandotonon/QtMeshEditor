@@ -23,6 +23,7 @@ const NAV = [
     { id: 'cmd-memory', label: 'memory' },
     { id: 'cmd-analyze', label: 'analyze' },
     { id: 'cmd-vertex-cache', label: 'vertex-cache' },
+    { id: 'cmd-decimate', label: 'decimate' },
   ]},
   { section: 'Scan Reference', items: [
     { id: 'scan-config', label: 'Configuration (qtmesh.yml)' },
@@ -512,6 +513,34 @@ Summary:
               <Code>qtmesh optimize</Code> command.
             </p>
 
+            <h3 className={s.subsection}>Decimation (poly reduction)</h3>
+            <p className={s.para}>
+              Cutting an asset's triangle count is two very different things in this tool:
+            </p>
+            <ul className={s.para} style={{ paddingLeft: '1.4rem' }}>
+              <li><strong><Code>qtmesh lod</Code></strong> generates a <em>chain</em> of LOD
+                  levels (LOD 0/1/2/3) for distance-based rendering. The original mesh is the
+                  base, the reduced versions sit alongside as additional levels.</li>
+              <li><strong><Code>qtmesh decimate</Code></strong> performs a <em>single-pass</em>
+                  reduction that rewrites the base mesh itself. There's no LOD chain afterwards
+                  — the mesh just has fewer triangles. Use this when you want an asset to
+                  ship at, say, 5,000 triangles instead of 50,000, regardless of camera distance.</li>
+            </ul>
+            <p className={s.para}>
+              Both backends use Ogre's <Code>MeshLodGenerator</Code> (edge-collapse based,
+              respects submesh boundaries). Decimation accepts three target modes: a raw
+              reduction fraction (<Code>--reduction 0.5</Code> = drop half the tris), a target
+              triangle count (<Code>--target-tris 5000</Code>), or a target vertex budget
+              (<Code>--target-verts 2500</Code>). All three clamp to 95% max so we don't
+              degenerate the mesh into a single triangle.
+            </p>
+            <p className={s.para}>
+              The validator emits a "Tri budget" suggestion row when the active selection has
+              more than ~10,000 triangles. It's a nudge, not a hard rule — desktop pipelines
+              routinely ship higher poly counts. Set a stricter scan rule
+              (<Code>max_vertex_count</Code>) if you need CI enforcement.
+            </p>
+
             <h3 className={s.subsection}>Vertex cache (ACMR)</h3>
             <p className={s.para}>
               Modern GPUs cache the last ~32 transformed vertices (the "post-T&amp;L cache"). Triangles that
@@ -677,6 +706,56 @@ Submeshes rewritten: 1 of 2`}</CodeBlock>
               <strong>MCP:</strong> the <Code>optimize_vertex_cache</Code> tool takes a <Code>rewrite</Code>
               bool (default <Code>false</Code>) and returns the structured payload under the
               <Code>vertexCache</Code> key.
+            </p>
+          </CmdSection>
+
+          <CmdSection id="cmd-decimate" name="decimate" description="Single-pass mesh decimation. Reduces the base mesh itself (unlike `lod` which builds a discrete LOD chain). Pick one of three target modes — by fraction, by triangle count, or by vertex budget. Always requires -o; never overwrites the input."
+            synopsis={`qtmesh decimate <file> -o <output> --reduction <r> [--json]
+qtmesh decimate <file> -o <output> --target-tris N [--json]
+qtmesh decimate <file> -o <output> --target-verts N [--json]`}
+            options={[
+              ['-o <output>', 'Output file (required — decimation is destructive)'],
+              ['--reduction <r>', 'Drop this fraction of triangles (0..0.95). 0.5 = 50% reduction.'],
+              ['--target-tris N', 'Reduce to approximately N triangles total.'],
+              ['--target-verts N', 'Reduce to approximately N vertices total.'],
+              ['--json', 'Output the structured report as JSON'],
+            ]}
+            examples={[
+              'qtmesh decimate character.fbx -o character_lo.fbx --reduction 0.5',
+              'qtmesh decimate character.fbx -o character_mobile.glb2 --target-tris 5000',
+              'qtmesh decimate character.fbx -o tiny.fbx --target-verts 1500 --json',
+            ]}
+          >
+            <h3 className={s.subsection}>Example Output</h3>
+            <CodeBlock>{`File: ninja.mesh -> ninja_dec.mesh
+Mesh Decimation
+===============
+
+Mesh: ninja.mesh
+Reduction requested: 50.4%  (applied)
+
+  [0] tris 904 → 456
+  [1] tris 104 → 36
+
+Total: 1,008 → 492 (51.2% effective reduction)`}</CodeBlock>
+            <p className={s.para}>
+              <strong>Caps at 95%</strong> — the slider / API never lets you drop below 5% of the
+              original triangle count, which would degenerate the mesh into a single triangle in
+              most cases. If you need to go further, run a second pass.
+            </p>
+            <p className={s.para}>
+              <strong>UV seams / material boundaries:</strong> the underlying
+              <Code>Ogre::MeshLodGenerator</Code> decimates each submesh independently and
+              respects index-buffer boundaries, so a mesh split across multiple materials keeps its
+              UV-island seams. True per-vertex weight locking (so you can mark cap edges as
+              "never collapse this") is its own future slice — the current path uses uniform weights.
+            </p>
+            <p className={s.para}>
+              <strong>MCP:</strong> the <Code>decimate_mesh</Code> tool takes one of
+              <Code>reduction</Code> / <Code>target_tris</Code> / <Code>target_verts</Code> plus an
+              optional <Code>dry_run</Code> bool (default <Code>false</Code>; when true, returns a
+              projected report without mutating the scene). Response carries the structured
+              payload under the <Code>decimation</Code> key.
             </p>
           </CmdSection>
 

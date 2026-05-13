@@ -19,6 +19,7 @@
 #include "MemoryEstimator.h"
 #include "DrawCallAnalyzer.h"
 #include "VertexCacheOptimizer.h"
+#include "MeshDecimator.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -436,6 +437,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("get_memory_usage"), &MCPServer::toolGetMemoryUsage},
         {QStringLiteral("analyze_draw_calls"), &MCPServer::toolAnalyzeDrawCalls},
         {QStringLiteral("optimize_vertex_cache"), &MCPServer::toolOptimizeVertexCache},
+        {QStringLiteral("decimate_mesh"), &MCPServer::toolDecimateMesh},
         {QStringLiteral("list_files"), &MCPServer::toolListFiles},
         {QStringLiteral("search_files"), &MCPServer::toolSearchFiles},
         {QStringLiteral("read_file"), &MCPServer::toolReadFile},
@@ -2827,6 +2829,87 @@ QJsonObject MCPServer::toolOptimizeVertexCache(const QJsonObject &args)
     }
 }
 
+namespace {
+
+// Translate the JSON args into a reduction fraction. Returns -1.0 when the
+// caller forgot to provide one of the three target keys; caller turns that
+// into a user-facing error.
+double resolveMcpReduction(const QJsonObject& args,
+                           int currentTris, int currentVerts)
+{
+    if (args.contains("reduction"))
+        return MeshDecimator::clampReduction(args.value("reduction").toDouble());
+    if (args.contains("target_tris"))
+        return MeshDecimator::reductionFromTargetTris(
+            currentTris, args.value("target_tris").toInt());
+    if (args.contains("target_verts"))
+        return MeshDecimator::reductionFromTargetVerts(
+            currentVerts, args.value("target_verts").toInt());
+    return -1.0;
+}
+
+} // namespace
+
+// NOSONAR(cpp:S5817) — ToolHandler is a non-const member-fn pointer (matching
+// every other tool method in this class); marking just this one const would
+// break the registry signature in MCPServer.h.
+QJsonObject MCPServer::toolDecimateMesh(const QJsonObject &args)
+{
+    // Args (one wins, in priority order):
+    //   reduction (double 0..1)       — drop this fraction of triangles
+    //   target_tris (int)             — reduce to approximately this many tris
+    //   target_verts (int)            — reduce to approximately this many verts
+    //   dry_run (bool, default false) — projected report only, no mutation
+    try {
+        if (const Manager* mgr = Manager::getSingletonPtr(); !mgr)
+            return makeErrorResult("Error: Manager not available");
+
+        // Decimation is destructive — operate on the user's selection, not
+        // an arbitrary scene entity. The previous "first entity in scene"
+        // path could mutate the wrong asset in multi-mesh scenes.
+        const SelectionSet* sel = SelectionSet::getSingleton();
+        const QList<Ogre::Entity*> selected = sel ? sel->getResolvedEntities()
+                                                  : QList<Ogre::Entity*>{};
+        if (selected.isEmpty())
+            return makeErrorResult(
+                "No mesh selected. Select the entity to decimate (load_mesh + click) first.");
+        Ogre::Entity* target = selected.first();
+        if (!target)
+            return makeErrorResult("Selected entity is null.");
+
+        const bool dryRun = args.value("dry_run").toBool(false);
+
+        int currentTris = 0;
+        int currentVerts = 0;
+        MeshDecimator::countBaseline(target, currentTris, currentVerts);
+
+        const double reduction = resolveMcpReduction(args, currentTris, currentVerts);
+        if (reduction < 0.0)
+            return makeErrorResult(
+                "Pass one of: reduction (0..1), target_tris, or target_verts.");
+
+        const DecimationReport report = dryRun
+            ? MeshDecimator::projectEntity(target, reduction)
+            : MeshDecimator::decimateEntity(target, reduction);
+
+        // A real (non-dry-run) decimation that didn't apply means the
+        // generator failed — automation should treat that as an error, not
+        // assume the mesh was modified.
+        if (!dryRun && !report.applied && reduction > 0.0) {
+            return makeErrorResult(
+                "Decimation failed: MeshLodGenerator could not produce a reduced mesh. "
+                "The mesh may not be suitable (e.g. zero index data).");
+        }
+
+        QJsonObject result = makeSuccessResult(MeshDecimator::toText(report));
+        result["decimation"] = MeshDecimator::toJson(report);
+        return result;
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(
+            QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
 // Helper methods
 
 QJsonObject MCPServer::toolListFiles(const QJsonObject &args)
@@ -4205,6 +4288,28 @@ QJsonArray MCPServer::buildToolsList()
             "Pass `rewrite: true` to actually reorder the index buffers (analysis-only otherwise). "
             "The response includes a human-readable summary in 'content' and a structured "
             "'vertexCache' object with per-submesh ACMR plus totals for machine consumers.",
+            props
+        );
+    }
+
+    // decimate_mesh
+    {
+        QJsonObject props;
+        props["reduction"] = QJsonObject{{"type", "number"},
+            {"description", "Fraction of triangles to drop (0..0.95). Pass one of reduction / target_tris / target_verts."}};
+        props["target_tris"] = QJsonObject{{"type", "integer"},
+            {"description", "Reduce until total triangle count is approximately this value."}};
+        props["target_verts"] = QJsonObject{{"type", "integer"},
+            {"description", "Reduce until total vertex count is approximately this value."}};
+        props["dry_run"] = QJsonObject{{"type", "boolean"},
+            {"description", "When true, return a projected report without mutating the mesh."}};
+        appendTool(
+            "decimate_mesh",
+            "Single-pass mesh decimation via edge-collapse. Reduces the base mesh in place "
+            "(unlike generate_lods which builds a discrete LOD chain). Pass one of "
+            "`reduction` (0..0.95), `target_tris`, or `target_verts`. The response includes "
+            "a human-readable summary in 'content' and a structured 'decimation' object with "
+            "per-submesh and total triangle counts before / after.",
             props
         );
     }

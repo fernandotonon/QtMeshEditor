@@ -82,6 +82,8 @@ NormalMapGenerator.cpp
 MemoryEstimator.cpp
 DrawCallAnalyzer.cpp
 VertexCacheOptimizer.cpp
+MeshDecimator.cpp
+MeshDecimatorController.cpp
 MeshValidator.cpp
 AIChatManager.cpp
 WelcomeScreenController.cpp
@@ -171,6 +173,8 @@ NormalMapGenerator.h
 MemoryEstimator.h
 DrawCallAnalyzer.h
 VertexCacheOptimizer.h
+MeshDecimator.h
+MeshDecimatorController.h
 MeshValidator.h
 AIChatManager.h
 WelcomeScreenController.h
