@@ -720,7 +720,7 @@ void AnimationMerger::analyzeRedundantKeyframes(const Ogre::Animation* anim,
 AnimationMerger::SimplifyTolerances AnimationMerger::tolerancesForPreset(
     const std::string& preset, bool* outOk)
 {
-    SimplifyTolerances tol; // balanced default
+    SimplifyTolerances tol; // conservative default (since simplify is destructive)
 
     // Lowercase comparison without bringing in QString — keeps this header
     // safe to call from any TU that already pulls in AnimationMerger.h.
@@ -728,18 +728,18 @@ AnimationMerger::SimplifyTolerances AnimationMerger::tolerancesForPreset(
     for (auto& c : p) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
     bool ok = true;
-    if (p.empty() || p == "balanced") {
-        // tol already holds the balanced defaults from SimplifyTolerances{}.
-    } else if (p == "conservative") {
-        tol.translation = 1e-4f;
-        tol.rotationDeg = 0.05f;
-        tol.scale       = 1e-4f;
+    if (p.empty() || p == "conservative") {
+        // tol already holds the conservative defaults from SimplifyTolerances{}.
+    } else if (p == "balanced") {
+        tol.translation = 1e-3f;
+        tol.rotationDeg = 0.5f;
+        tol.scale       = 1e-3f;
     } else if (p == "aggressive") {
         tol.translation = 1e-2f;
         tol.rotationDeg = 1.0f;
         tol.scale       = 1e-2f;
     } else {
-        ok = false; // tol stays at balanced so callers that ignore outOk still get something usable
+        ok = false; // tol stays at conservative so callers that ignore outOk still get something usable
     }
 
     if (outOk) *outOk = ok;

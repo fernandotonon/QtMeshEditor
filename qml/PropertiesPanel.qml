@@ -3145,7 +3145,7 @@ Rectangle {
                         // Per-entity tolerance preset for the Simplify button.
                         // Stored on the column so every animation row in this group reads
                         // the same value.
-                        property string simplifyPreset: "balanced"
+                        property string simplifyPreset: "conservative"
 
                         // Tolerance preset row
                         Row {
@@ -3159,7 +3159,11 @@ Rectangle {
                                 id: simplifyPresetCombo
                                 width: 130; height: 22
                                 model: ["Conservative", "Balanced", "Aggressive"]
-                                currentIndex: 1
+                                // Default is Conservative since simplify is
+                                // destructive — Balanced/Aggressive trade
+                                // fidelity for compression and should be an
+                                // opt-in choice.
+                                currentIndex: 0
                                 font.pixelSize: 10
                                 onActivated: {
                                     var v = ["conservative", "balanced", "aggressive"][currentIndex]

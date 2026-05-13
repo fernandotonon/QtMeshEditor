@@ -387,4 +387,20 @@ Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, co
 void MaterialProcessor::applyRTSSNormalMap(Ogre::MaterialPtr mat, const Ogre::String& normalMapName)
 {
     RTShaderHelper::applyNormalMap(mat, normalMapName);
+
+    // Stash the normal-map texture name on the material's first pass user-
+    // object bindings so the FBX exporter can find it on round-trip. Without
+    // this, when MaterialProcessor and the export pipeline reach the
+    // material through different resource-group instances of the same name
+    // (common when a .material script and an FBX both define the material),
+    // the export-side `sub->getMaterial()` returns the script-loaded
+    // instance — which never had the RTSS normal-map TUS added — and the
+    // normal map is silently dropped on export. The UOB hint survives the
+    // resource-group disagreement because it's keyed on the *material* name
+    // and re-applied by the importer on every load. Issue #508.
+    if (mat && mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
+        Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+        pass->getUserObjectBindings().setUserAny(
+            "qtme.normal_map", Ogre::Any(normalMapName));
+    }
 }

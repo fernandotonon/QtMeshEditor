@@ -228,14 +228,14 @@ public:
     /// Returns a map with: total, redundant, percent.
     Q_INVOKABLE QVariantMap analyzeAnimationKeyframes(const QString& entityName,
                                                       const QString& animName,
-                                                      const QString& preset = QStringLiteral("balanced"));
+                                                      const QString& preset = QStringLiteral("conservative"));
 
     /// Remove redundant keyframes from an animation in-place. Returns the
     /// number of keyframes removed (0 on no-op or failure).
     /// `preset` is one of: "conservative", "balanced", "aggressive".
     Q_INVOKABLE int simplifyAnimation(const QString& entityName,
                                       const QString& animName,
-                                      const QString& preset = QStringLiteral("balanced"));
+                                      const QString& preset = QStringLiteral("conservative"));
 
     /// Bake every bone track in `animName` at the given density level
     /// (mirrors AnimationControlController::resampleAllSegmentsForBone:

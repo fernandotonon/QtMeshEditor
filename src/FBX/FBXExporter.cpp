@@ -649,7 +649,10 @@ private:
         int animCurveNodeCount = 0;
         int animCurveCount = 0;
 
-        // Count unique materials and textures
+        // Count unique materials and textures. Mirrors the texname collection
+        // in writeTextureObjects() — including the qtme.normal_map UOB fallback
+        // — so Definitions/ObjectType counts always match the Texture/Video
+        // objects we actually emit (issue #508).
         std::set<std::string> matNames;
         std::set<std::string> texNames;
         if (m_entity) {
@@ -665,6 +668,14 @@ private:
                         auto texName = pass->getTextureUnitState(ti)->getTextureName();
                         if (!texName.empty())
                             texNames.insert(texName);
+                    }
+                    const Ogre::Any& normalHint =
+                        pass->getUserObjectBindings().getUserAny("qtme.normal_map");
+                    if (normalHint.has_value()) {
+                        try {
+                            const Ogre::String n = Ogre::any_cast<Ogre::String>(normalHint);
+                            if (!n.empty()) texNames.insert(n);
+                        } catch (const std::bad_cast&) {}
                     }
                 }
             }
@@ -1805,19 +1816,40 @@ private:
     void writeTextureObjects()
     {
         std::set<std::string> seen;
-        for (const auto* sub : m_entity->getSubEntities())
-        {
+
+        // Collect every texture name we need to write: the TUS-bound
+        // textures on each pass, plus any normal map the importer
+        // stashed in the pass UOBs (issue #508 mitigation — see comment
+        // below the loop).
+        std::vector<std::string> texNames;
+        for (const auto* sub : m_entity->getSubEntities()) {
             auto mat = sub->getMaterial();
             if (mat->getNumTechniques() == 0 || mat->getTechnique(0)->getNumPasses() == 0)
                 continue;
-
             auto* pass = mat->getTechnique(0)->getPass(0);
-            for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
-            {
-                std::string texName = pass->getTextureUnitState(ti)->getTextureName();
-                if (texName.empty() || !seen.insert(texName).second)
-                    continue;
+            for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti) {
+                std::string n = pass->getTextureUnitState(ti)->getTextureName();
+                if (!n.empty()) texNames.push_back(n);
+            }
+            // UOB hint: MaterialProcessor::applyRTSSNormalMap leaves the
+            // normal-map texture name here so the export can recover it
+            // even when RTSS's runtime TUS evaporated under a
+            // resource-group disagreement (issue #508).
+            const Ogre::Any& normalHint =
+                pass->getUserObjectBindings().getUserAny("qtme.normal_map");
+            if (normalHint.has_value()) {
+                try {
+                    const Ogre::String n = Ogre::any_cast<Ogre::String>(normalHint);
+                    if (!n.empty()) texNames.push_back(n);
+                } catch (const std::bad_cast&) {}
+            }
+        }
 
+        for (const std::string& texName : texNames) {
+            if (!seen.insert(texName).second)
+                continue;
+
+            {
                 int64_t texId = nextId();
                 int64_t vidId = nextId();
                 m_textureIds[texName] = texId;
@@ -1958,6 +1990,30 @@ private:
                         // `albedo` slots).
                         if (slot == "albedo") {
                             texMatPairs.insert({texName, mat->getName(), "DiffuseColor"});
+                        }
+                    }
+                    // Issue #508 mitigation: the import path
+                    // (MaterialProcessor::applyRTSSNormalMap) stashes the
+                    // normal-map texture name on this pass's UOBs. RTSS's
+                    // own TUS creation can disappear when the material is
+                    // pulled from a different resource group at export
+                    // time (e.g. when a .material script and an FBX both
+                    // register the material name), so reading the UOB
+                    // here is the only reliable round-trip path. Walking
+                    // the UOB after the TUS sweep lets the UOB-recorded
+                    // texture fill in as a fallback when no normal_map /
+                    // NormalMap TUS was found on the visited pass.
+                    const Ogre::Any& normalHint =
+                        pass->getUserObjectBindings().getUserAny("qtme.normal_map");
+                    if (normalHint.has_value()) {
+                        try {
+                            const Ogre::String texName =
+                                Ogre::any_cast<Ogre::String>(normalHint);
+                            if (!texName.empty()) {
+                                texMatPairs.insert({texName, mat->getName(), "NormalMap"});
+                            }
+                        } catch (const std::bad_cast&) {
+                            // Stored type mismatch — silently skip.
                         }
                     }
                 }

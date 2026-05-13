@@ -25,6 +25,7 @@ const NAV = [
     { id: 'cmd-vertex-cache', label: 'vertex-cache' },
     { id: 'cmd-decimate', label: 'decimate' },
     { id: 'cmd-atlas', label: 'atlas' },
+    { id: 'cmd-optimize', label: 'optimize' },
   ]},
   { section: 'Scan Reference', items: [
     { id: 'scan-config', label: 'Configuration (qtmesh.yml)' },
@@ -809,6 +810,60 @@ qtmesh atlas --inputs a.png,b.png -o atlas.png --manifest atlas.json`}
               single string. Response carries <Code>tiles_packed</Code>, <Code>atlas_width</Code>,
               <Code>atlas_height</Code>, <Code>used_width</Code>, <Code>used_height</Code>, and
               the <Code>output</Code>/<Code>manifest</Code> paths.
+            </p>
+          </CmdSection>
+
+          <CmdSection id="cmd-optimize" name="optimize" description={<>Batch-optimize a single mesh asset end-to-end. Sequences the slice C / C4 / D optimizations on the same loaded Ogre scene with no intermediate file I/O: <a href="#cmd-vertex-cache" className={s.link}>vertex-cache reorder</a> → optional <a href="#cmd-decimate" className={s.link}>decimation</a> → animation keyframe simplify. Defaults to <Code>--vertex-cache --simplify-anim</Code> when no flags are given. Add <Code>--reduction</Code> / <Code>--target-tris</Code> / <Code>--target-verts</Code> to also decimate. Each stage emits an applied/summary report (text or <Code>--json</Code>).</>}
+            synopsis={`qtmesh optimize <file> -o <output>
+qtmesh optimize <file> -o <output> --all
+qtmesh optimize <file> -o <output> --reduction 0.5
+qtmesh optimize <file> -o <output> --target-tris 5000 --simplify-rotation-deg-tol 1.0
+qtmesh optimize <file> -o <output> --vertex-cache  # just vertex-cache, skip anim simplify`}
+            options={[
+              ['-o <output>', 'Output file (required — optimize is potentially destructive when decimation is enabled)'],
+              ['--vertex-cache', 'Forsyth reorder every triangulated submesh (default on)'],
+              ['--simplify-anim', 'Strip redundant animation keyframes (default on)'],
+              ['--all', 'Convenience: --vertex-cache + --simplify-anim (does not enable decimation)'],
+              ['--reduction <r>', 'Drop this fraction of triangles (0..0.95). 0.5 = 50% reduction'],
+              ['--target-tris N', 'Reduce to approximately N triangles total'],
+              ['--target-verts N', 'Reduce to approximately N vertices total'],
+              ['--simplify-translation-tol T', 'Anim simplify translation tolerance in world units (default 0.0001 = Conservative — simplify is destructive, so the safe choice)'],
+              ['--simplify-rotation-deg-tol D', 'Anim simplify rotation tolerance in degrees (default 0.05 = Conservative)'],
+              ['--simplify-scale-tol S', 'Anim simplify scale tolerance (default 0.0001 = Conservative)'],
+              ['--json', 'Emit the per-stage report as JSON instead of text'],
+            ]}
+            examples={[
+              'qtmesh optimize character.fbx -o character_opt.fbx',
+              'qtmesh optimize character.fbx --reduction 0.5 -o character_lo.fbx',
+              'qtmesh optimize character.fbx --target-tris 5000 --simplify-rotation-deg-tol 1.0 -o lo.fbx',
+              'qtmesh optimize prop.glb --vertex-cache -o prop_reordered.glb',
+            ]}
+          >
+            <h3 className={s.subsection}>Example Output</h3>
+            <CodeBlock>{`File: Rumba Dancing.fbx -> rumba_opt.fbx
+Mesh Optimization
+=================
+
+  [OK] vertex-cache: ACMR 0.822 -> 0.648 across 10220 triangles, 9 submeshes rewritten
+  [OK] simplify-anim: removed 1156 / 2750 keyframes (42.0%)
+
+  6310 KB -> 1405 KB  (4904 KB saved, 77.7%)`}</CodeBlock>
+            <p className={s.para}>
+              <strong>Same code paths everywhere.</strong> The vertex-cache stage runs
+              <Code>VertexCacheOptimizer::analyzeEntity</Code> (the slice C optimizer), the
+              decimate stage runs <Code>MeshDecimator::decimateEntity</Code> (the slice D
+              one-pass reducer), and the simplify-anim stage runs
+              <Code>AnimationMerger::simplifyAnimation</Code> (the same analyzer behind
+              <Code> qtmesh anim --simplify</Code> and the Inspector "Simplify" button). So
+              `optimize` reports match the per-stage CLI commands one-for-one.
+            </p>
+            <p className={s.para}>
+              <strong>MCP:</strong> the <Code>optimize_mesh</Code> tool takes
+              <Code>file</Code> + <Code>output</Code> plus the same flag set as keys
+              (<Code>vertex_cache</Code>, <Code>simplify_anim</Code>, <Code>reduction</Code>,
+              <Code>target_tris</Code>, <Code>target_verts</Code>, <Code>simplify_*_tol</Code>).
+              Response carries per-stage <Code>applied</Code>/<Code>summary</Code>/<Code>details</Code>
+              plus <Code>inputBytes</Code>/<Code>outputBytes</Code>/<Code>bytesDelta</Code>.
             </p>
           </CmdSection>
 

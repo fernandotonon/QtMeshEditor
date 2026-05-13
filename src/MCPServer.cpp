@@ -456,7 +456,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("get_pivot_mode"), &MCPServer::toolGetPivotMode},
         {QStringLiteral("pack_textures"), &MCPServer::toolPackTextures},
         {QStringLiteral("generate_normal_map"), &MCPServer::toolGenerateNormalMap},
-        {QStringLiteral("pack_atlas"), &MCPServer::toolPackAtlas}
+        {QStringLiteral("pack_atlas"), &MCPServer::toolPackAtlas},
+        {QStringLiteral("optimize_mesh"), &MCPServer::toolOptimizeMesh}
     };
     return handlers;
 }
@@ -3690,6 +3691,285 @@ QJsonObject MCPServer::toolPackAtlas(const QJsonObject &args)
     return result;
 }
 
+QJsonObject MCPServer::toolOptimizeMesh(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "optimize_mesh");
+
+    const QString filePath = args.value("file").toString();
+    const QString outputPath = args.value("output").toString();
+    if (filePath.isEmpty() || outputPath.isEmpty())
+        return makeErrorResult("Error: missing required 'file' and 'output' arguments");
+    if (!QFileInfo::exists(filePath))
+        return makeErrorResult(QString("Error: file not found: %1").arg(filePath));
+    if (QFileInfo(filePath).canonicalFilePath()
+        == QFileInfo(outputPath).canonicalFilePath()
+        && !QFileInfo(filePath).canonicalFilePath().isEmpty())
+        return makeErrorResult("Error: output points to the input file; choose a different path.");
+
+    // The flag set mirrors the CLI: by default the non-destructive
+    // optimizations run; a decimation knob triggers the slice D pass.
+    bool vertexCache  = args.value("vertex_cache").toBool(true);
+    bool simplifyAnim = args.value("simplify_anim").toBool(true);
+    // "all" — convenience: enable everything except decimation (which still
+    // needs an explicit target).
+    if (args.contains("all") && args.value("all").toBool()) {
+        vertexCache  = true;
+        simplifyAnim = true;
+    }
+    const bool hasReduction   = args.contains("reduction");
+    const bool hasTargetTris  = args.contains("target_tris");
+    const bool hasTargetVerts = args.contains("target_verts");
+    if ((hasReduction ? 1 : 0) + (hasTargetTris ? 1 : 0) + (hasTargetVerts ? 1 : 0) > 1)
+        return makeErrorResult("Error: pass at most one of reduction / target_tris / target_verts.");
+    const bool decimate = hasReduction || hasTargetTris || hasTargetVerts;
+
+    // Anim simplify tolerances (default to AnimationMerger Balanced).
+    AnimationMerger::SimplifyTolerances tol;
+    if (args.contains("simplify_translation_tol"))
+        tol.translation = static_cast<float>(args.value("simplify_translation_tol").toDouble());
+    if (args.contains("simplify_rotation_deg_tol"))
+        tol.rotationDeg = static_cast<float>(args.value("simplify_rotation_deg_tol").toDouble());
+    if (args.contains("simplify_scale_tol"))
+        tol.scale       = static_cast<float>(args.value("simplify_scale_tol").toDouble());
+
+    // Ensure Ogre headless. Reuse the CLI initOgreHeadless via a direct
+    // singleton check — MCP runs inside the editor and Ogre is already up.
+    if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingletonPtr()->getRenderSystem())
+        return makeErrorResult("Ogre render system not initialized");
+
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr) return makeErrorResult("Manager unavailable");
+
+    // The MCP server runs inside the editor process, so the importer
+    // appends into the user's currently-loaded scene rather than into a
+    // fresh one. Snapshot which entities existed before the import so the
+    // optimize stages only touch the newly-loaded asset and never mutate
+    // the user's other meshes.
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Optimize importing %1").arg(QFileInfo(filePath).fileName()));
+    const QList<Ogre::Entity*> beforeEntities = mgr->getEntities();
+    QSet<Ogre::Entity*> beforeSet;
+    for (Ogre::Entity* e : beforeEntities) beforeSet.insert(e);
+
+    QList<Ogre::SkeletonPtr> animOnlySkeletons;
+    try {
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()}, 0,
+                                       &animOnlySkeletons);
+    } catch (const std::exception& e) {
+        return makeErrorResult(QString("Importer threw: %1").arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        return makeErrorResult("Importer threw (unknown exception type)");
+    }
+
+    QList<Ogre::Entity*> entities;
+    for (Ogre::Entity* e : mgr->getEntities()) {
+        if (!beforeSet.contains(e))
+            entities.append(e);
+    }
+    if (entities.isEmpty())
+        return makeErrorResult(QString("Failed to load any entities from %1").arg(filePath));
+    if (decimate && entities.size() > 1)
+        return makeErrorResult(
+            QString("%1 contains %2 entities; optimize_mesh + decimation supports one entity per file.")
+                .arg(filePath).arg(entities.size()));
+
+    // Cleanup: when we leave this function (success or error), destroy
+    // the entities we just imported so the user's live scene returns to
+    // exactly the state it was in before. The optimize result is already
+    // serialized to the output path; no in-scene state needs to survive.
+    struct ImportCleanup {
+        Manager* mgr;
+        QList<Ogre::Entity*> imported;
+        ~ImportCleanup() {
+            if (!mgr) return;
+            // Walk scene-node parents and destroy via Manager so the
+            // SelectionSet / SceneTreeModel signals fire correctly. Drop
+            // exceptions — best-effort cleanup, the original failure
+            // (if any) is the one the caller cares about.
+            try {
+                std::set<Ogre::SceneNode*> nodes;
+                for (Ogre::Entity* e : imported) {
+                    if (e && e->getParentSceneNode())
+                        nodes.insert(e->getParentSceneNode());
+                }
+                for (Ogre::SceneNode* sn : nodes)
+                    mgr->destroySceneNode(sn);
+            } catch (...) {}
+        }
+    } cleanup{mgr, entities};
+
+    QJsonArray stagesArr;
+    try {
+
+    if (vertexCache) {
+        VertexCacheReport aggregate;
+        for (Ogre::Entity* e : entities)
+            VertexCacheOptimizer::mergeReport(aggregate,
+                VertexCacheOptimizer::analyzeEntity(e, /*rewrite=*/true));
+        VertexCacheOptimizer::finalize(aggregate);
+        QJsonObject s;
+        s["name"] = "vertex-cache";
+        s["applied"] = aggregate.totalReordered > 0 || aggregate.totalTriangles > 0;
+        s["summary"] = QString("ACMR %1 -> %2 across %3 triangles, %4 submeshes rewritten")
+                           .arg(QString::number(aggregate.weightedAcmrBefore, 'f', 3))
+                           .arg(QString::number(aggregate.weightedAcmrAfter, 'f', 3))
+                           .arg(aggregate.totalTriangles)
+                           .arg(aggregate.totalReordered);
+        s["details"] = VertexCacheOptimizer::toJson(aggregate);
+        stagesArr.append(s);
+    }
+
+    if (decimate) {
+        Ogre::Entity* entity = entities.first();
+        int currentTris = 0, currentVerts = 0;
+        MeshDecimator::countBaseline(entity, currentTris, currentVerts);
+        double reduction = 0.0;
+        if (hasReduction)
+            reduction = MeshDecimator::clampReduction(args.value("reduction").toDouble());
+        else if (hasTargetTris)
+            reduction = MeshDecimator::reductionFromTargetTris(currentTris, args.value("target_tris").toInt());
+        else if (hasTargetVerts)
+            reduction = MeshDecimator::reductionFromTargetVerts(currentVerts, args.value("target_verts").toInt());
+        QJsonObject s;
+        s["name"] = "decimate";
+        if (reduction <= 0.0) {
+            s["applied"] = false;
+            s["summary"] = "target equals or exceeds current count; nothing to do";
+            stagesArr.append(s);
+        } else {
+            const DecimationReport report = MeshDecimator::decimateEntity(entity, reduction);
+            s["applied"] = report.applied;
+            s["summary"] = QString("%1% triangle reduction (%2 -> %3)")
+                               .arg(QString::number(100.0 * report.effectiveReduction(), 'f', 1))
+                               .arg(report.totalTrianglesBefore)
+                               .arg(report.totalTrianglesAfter);
+            s["details"] = MeshDecimator::toJson(report);
+            stagesArr.append(s);
+            // A positive reduction that didn't apply means the generator
+            // failed — surface as an error instead of silent "success".
+            if (!report.applied)
+                return makeErrorResult(
+                    "Decimation failed: MeshLodGenerator could not produce a reduced mesh. "
+                    "The mesh may not be suitable (e.g. zero index data).");
+        }
+    }
+
+    if (simplifyAnim) {
+        QJsonObject s;
+        s["name"] = "simplify-anim";
+        // Walk every skeleton in the imported asset (mesh-level + animation-
+        // only). Multi-entity scenes with multiple skeletons get the same
+        // simplification treatment everywhere — matches the CLI fix.
+        QList<Ogre::SkeletonPtr> skels;
+        std::set<std::string> seenSkelNames;
+        for (Ogre::Entity* e : entities) {
+            if (!e || !e->hasSkeleton() || !e->getMesh()) continue;
+            const Ogre::SkeletonPtr s2 = e->getMesh()->getSkeleton();
+            if (s2 && seenSkelNames.insert(s2->getName()).second)
+                skels.append(s2);
+        }
+        for (const auto& s2 : animOnlySkeletons) {
+            if (s2 && seenSkelNames.insert(s2->getName()).second)
+                skels.append(s2);
+        }
+        int totalRemoved = 0;
+        long long totalKeysBefore = 0;
+        for (const Ogre::SkeletonPtr& skel : skels) {
+            for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+                const Ogre::Animation* a = skel->getAnimation(ai);
+                if (!a) continue;
+                for (const auto& [handle, track] : a->_getNodeTrackList()) {
+                    Q_UNUSED(handle);
+                    if (track) totalKeysBefore += track->getNumKeyFrames();
+                }
+            }
+            std::vector<std::string> names;
+            names.reserve(skel->getNumAnimations());
+            for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai)
+                names.push_back(skel->getAnimation(ai)->getName());
+            for (const auto& n : names)
+                totalRemoved += AnimationMerger::simplifyAnimation(skel.get(), n, tol);
+        }
+        s["applied"] = totalRemoved > 0;
+        if (skels.isEmpty())
+            s["summary"] = "no skeleton / animations to simplify";
+        else if (totalRemoved <= 0)
+            s["summary"] = "no additional simplification within configured tolerances";
+        else
+            s["summary"] = QString("removed %1 / %2 keyframes (%3%) across %4 skeleton(s)")
+                               .arg(totalRemoved).arg(totalKeysBefore)
+                               .arg(totalKeysBefore > 0
+                                    ? QString::number(100.0 * totalRemoved / static_cast<double>(totalKeysBefore), 'f', 1)
+                                    : QString("0.0"))
+                               .arg(skels.size());
+        QJsonObject d;
+        d["removed"] = totalRemoved;
+        d["totalKeyframesBefore"] = static_cast<qint64>(totalKeysBefore);
+        d["skeletons"] = skels.size();
+        s["details"] = d;
+        stagesArr.append(s);
+    }
+
+    // Export the (possibly mutated) scene rooted at the first entity.
+    Ogre::Entity* entity = entities.first();
+    if (entity) entity->refreshAvailableAnimationState();
+    const auto* node = entity ? entity->getParentSceneNode() : nullptr;
+    if (!node) return makeErrorResult("Could not resolve scene node for export");
+
+    static const QMap<QString, QString> formatByExt = {
+        {QStringLiteral("fbx"),  QStringLiteral("FBX Binary (*.fbx)")},
+        {QStringLiteral("fbxa"), QStringLiteral("FBX Binary (*.fbx)")},
+        {QStringLiteral("gltf"), QStringLiteral("glTF 2.0 (*.gltf)")},
+        {QStringLiteral("glb"),  QStringLiteral("glTF 2.0 Binary (*.glb)")},
+        {QStringLiteral("dae"),  QStringLiteral("Collada (*.dae)")},
+        {QStringLiteral("obj"),  QStringLiteral("OBJ (*.obj)")},
+        {QStringLiteral("ply"),  QStringLiteral("PLY (*.ply)")},
+        {QStringLiteral("stl"),  QStringLiteral("STL (*.stl)")},
+        {QStringLiteral("mesh"), QStringLiteral("Ogre Mesh (*.mesh)")},
+    };
+    const QString ext = QFileInfo(outputPath).suffix().toLower();
+    if (!formatByExt.contains(ext))
+        return makeErrorResult(QString("Error: unsupported export format for .%1").arg(ext));
+    if (MeshImporterExporter::exporter(node, outputPath, formatByExt.value(ext)) != 0)
+        return makeErrorResult("Export failed");
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Optimize -> %1").arg(QFileInfo(outputPath).fileName()));
+
+    const qint64 srcBytes = QFileInfo(filePath).size();
+    const qint64 outBytes = QFileInfo(outputPath).size();
+    const qint64 delta = srcBytes - outBytes;
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{
+        {"type", "text"},
+        {"text", QString("Optimized %1 -> %2 (%3 KB -> %4 KB, %5%)")
+            .arg(QFileInfo(filePath).fileName())
+            .arg(QFileInfo(outputPath).fileName())
+            .arg(srcBytes / 1024)
+            .arg(outBytes / 1024)
+            .arg(srcBytes > 0
+                ? QString::number(100.0 * static_cast<double>(delta) / static_cast<double>(srcBytes), 'f', 1)
+                : QString("0.0"))}}};
+    result["file"] = QFileInfo(filePath).fileName();
+    result["output"] = QFileInfo(outputPath).fileName();
+    result["inputBytes"]  = srcBytes;
+    result["outputBytes"] = outBytes;
+    result["bytesDelta"]  = delta;
+    if (srcBytes > 0)
+        result["bytesDeltaPct"] = 100.0 * static_cast<double>(delta) / static_cast<double>(srcBytes);
+    result["stages"] = stagesArr;
+    return result;
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(
+            QString("Ogre error during optimize: %1")
+                .arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const std::exception& e) {
+        return makeErrorResult(
+            QString("Error during optimize: %1").arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        return makeErrorResult("Unknown error during optimize");
+    }
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -4191,7 +4471,7 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
         props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to simplify. If omitted, all animations are processed."}};
-        props["preset"] = QJsonObject{{"type", "string"}, {"description", "Tolerance preset: 'conservative' (~0.1mm/0.05°), 'balanced' (~1mm/0.5°, default), or 'aggressive' (~1cm/1°). Higher tolerance removes more keys."}};
+        props["preset"] = QJsonObject{{"type", "string"}, {"description", "Tolerance preset: 'conservative' (~0.1mm/0.05°, default — destructive, so the safe choice), 'balanced' (~1mm/0.5°), or 'aggressive' (~1cm/1°). Higher tolerance removes more keys."}};
         props["tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override translation tolerance in world units. Falls back to the preset value when omitted."}};
         props["rotation_tolerance_deg"] = QJsonObject{{"type", "number"}, {"description", "Override rotation tolerance in degrees. Falls back to the preset value when omitted."}};
         props["scale_tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override scale tolerance (unitless). Falls back to the preset value when omitted."}};
@@ -4210,7 +4490,7 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
         props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to analyze. If omitted, all animations are reported."}};
-        props["preset"] = QJsonObject{{"type", "string"}, {"description", "Tolerance preset: 'conservative', 'balanced' (default), or 'aggressive'."}};
+        props["preset"] = QJsonObject{{"type", "string"}, {"description", "Tolerance preset: 'conservative' (default — destructive, so the safe choice), 'balanced', or 'aggressive'."}};
         props["tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override translation tolerance."}};
         props["rotation_tolerance_deg"] = QJsonObject{{"type", "number"}, {"description", "Override rotation tolerance in degrees."}};
         props["scale_tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override scale tolerance."}};
@@ -4693,6 +4973,57 @@ QJsonArray MCPServer::buildToolsList()
             "many small per-prop textures into one binding to reduce GPU draw-call count. Tiles are "
             "padded on every side (configurable) to prevent MIP bleed. Returns tile count + atlas "
             "dimensions on success.",
+            props,
+            required
+        );
+    }
+
+    // optimize_mesh (Phase 6 slice G)
+    {
+        QJsonObject props;
+        props["file"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Source mesh file (FBX / glTF / glb / DAE / OBJ / PLY / STL / .mesh)."}};
+        props["output"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Output path. Extension determines format. Must differ from `file`."}};
+        props["vertex_cache"] = QJsonObject{
+            {"type", "boolean"},
+            {"description", "Run Forsyth vertex-cache reorder on every submesh. Default true."}};
+        props["simplify_anim"] = QJsonObject{
+            {"type", "boolean"},
+            {"description", "Strip redundant animation keyframes via AnimationMerger::simplifyAnimation. Default true."}};
+        props["all"] = QJsonObject{
+            {"type", "boolean"},
+            {"description", "Convenience: enable vertex_cache + simplify_anim together. Default false (defaults handle that)."}};
+        props["reduction"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Decimate by fraction (0..0.95). 0.5 = 50% triangle reduction. Mutually exclusive with target_tris / target_verts."}};
+        props["target_tris"] = QJsonObject{
+            {"type", "integer"},
+            {"description", "Decimate to approximately this many triangles. Mutually exclusive with reduction / target_verts."}};
+        props["target_verts"] = QJsonObject{
+            {"type", "integer"},
+            {"description", "Decimate to approximately this many vertices. Mutually exclusive with reduction / target_tris."}};
+        props["simplify_translation_tol"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Animation simplify translation tolerance in world units. Default 0.001 (~1mm on meter-scale rigs)."}};
+        props["simplify_rotation_deg_tol"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Animation simplify rotation tolerance in degrees. Default 0.5."}};
+        props["simplify_scale_tol"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Animation simplify scale tolerance (unitless multiplier delta). Default 0.001."}};
+        QJsonArray required;
+        required.append("file");
+        required.append("output");
+        appendTool(
+            "optimize_mesh",
+            "Batch-optimize a mesh asset end-to-end. Runs the slice C / C4 / D optimizations in "
+            "sequence on the same loaded scene: vertex-cache reorder (Forsyth), single-pass decimation "
+            "(if reduction / target_tris / target_verts is provided), and animation keyframe simplify. "
+            "Writes the result to `output` (extension determines format). Returns a per-stage applied/"
+            "summary report plus the input/output byte counts.",
             props,
             required
         );
