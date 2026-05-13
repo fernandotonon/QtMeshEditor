@@ -1,5 +1,9 @@
 #include "MaterialProcessor.h"
 #include "RTShaderHelper.h"
+#include "EmbeddedTextureCache.h"
+
+#include <cstddef>
+
 #include <OgreRTShaderSystem.h>
 
 namespace {
@@ -358,6 +362,16 @@ Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, co
         //returned pointer is not null, read texture from memory
         if(texture->mHeight == 0) {
             // The texture data is compressed (e.g., JPEG, PNG, etc.)
+            // Stash the raw compressed bytes so the FBX re-exporter can
+            // embed them in Video.Content. Without this they only live
+            // in the GPU texture cache and the exporter has no path
+            // back to them. Issue #508. `aiTexel*` (4-byte BGRA struct
+            // for raw, byte stream for compressed) → `const std::byte*`
+            // is the canonical idiom for "opaque bytes".
+            EmbeddedTextureCache::store(
+                filename,
+                reinterpret_cast<const std::byte*>(texture->pcData),
+                texture->mWidth);
             Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(texture->pcData, texture->mWidth));
             Ogre::Image img;
             img.load(stream, texture->achFormatHint);
@@ -368,7 +382,17 @@ Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, co
                     img
                     );
         } else {
-            // The texture data is raw
+            // The texture data is raw. Stash the raw payload too — note
+            // it's *uncompressed* RGB8, which most FBX readers won't
+            // accept in Video.Content. We still stash it for symmetry
+            // and let the exporter re-encode if needed. Issue #508.
+            const std::size_t rawBytes =
+                static_cast<std::size_t>(texture->mWidth) *
+                static_cast<std::size_t>(texture->mHeight) * 3;
+            EmbeddedTextureCache::store(
+                filename,
+                reinterpret_cast<const std::byte*>(texture->pcData),
+                rawBytes);
             Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(texture->pcData, texture->mWidth * texture->mHeight * 3)); // Assuming RGB 8-bit
             return Ogre::TextureManager::getSingleton().loadRawData(
                 filename,
@@ -379,7 +403,7 @@ Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, co
                 Ogre::PF_R8G8B8  // Assuming RGB 8-bit format
                 );
         }
-    } 
+    }
     //regular file, check if it exists and read it
     return Ogre::TextureManager::getSingleton().load(filename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 }

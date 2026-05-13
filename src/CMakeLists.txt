@@ -80,6 +80,7 @@ MeshLodController.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 ApplyAtlas.cpp
+EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
 MemoryEstimator.cpp
 DrawCallAnalyzer.cpp
@@ -173,6 +174,7 @@ MeshLodController.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 ApplyAtlas.h
+EmbeddedTextureCache.h
 NormalMapGenerator.h
 MemoryEstimator.h
 DrawCallAnalyzer.h
