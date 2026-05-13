@@ -18,7 +18,11 @@ scan:
     - "**/*.rsd"
     - "**/*.ply"
   exclude:
-    # robot.mesh uses Ogre MeshSerializer v1.40 which Assimp cannot read
+    # robot.mesh is MeshSerializer v1.40. The local in-tree build reads it
+    # fine via Ogre 14.5.x; the published 'fernandotonon/qtmesh' Docker image
+    # used by the scan-assets-qtmesh job ships an older Ogre that only
+    # supports up to v1.8. Drop this exclude once the next release rebuilds
+    # the action image against current Ogre.
     - "**/robot.mesh"
     - "**/build/**"
     - "**/.git/**"

@@ -33,6 +33,7 @@
 #include <OgreMaterialManager.h>
 #include <OgreMesh.h>
 #include <OgreMeshManager.h>
+#include <OgreSkeletonManager.h>
 #include <OgreSubMesh.h>
 
 #include "PS1/PS1PLY.h"
@@ -50,9 +51,10 @@ namespace {
 
 bool ensureOgreHeadlessQuiet()
 {
-    // ScanEngine is normally Assimp-only and shouldn't spam Ogre logs when a fix path
-    // needs Ogre. Mirror CLIPipeline's default behavior: suppress debug output unless
-    // the user explicitly asked for verbose logs (ScanEngine has no --verbose flag).
+    // ScanEngine uses Ogre for fix paths and (slice C2) for ACMR, but doesn't
+    // need the Ogre log spam in the CLI output. Mirror CLIPipeline's default
+    // behavior: suppress debug output unless the user explicitly asked for
+    // verbose logs (ScanEngine has no --verbose flag).
     if (!Ogre::LogManager::getSingletonPtr()) {
         auto* logMgr = new Ogre::LogManager();
         logMgr->createLog("ogre.log", true, false, true); // default, debugOut=false, suppressFile=true
@@ -103,9 +105,14 @@ bool ensureOgreHeadlessQuiet()
     }
 }
 
-// MeshImporterExporter::importer appends to the scene without clearing prior imports.
-// Scan --fix runs multiple FBX imports in one process; stale entities/skeleton
-// handles would make entity/skeleton selection wrong and can corrupt Ogre state.
+// MeshImporterExporter::importer appends to the scene without clearing prior
+// imports. The scan loops over many files in one process — both inspect and
+// --fix import each one — so without per-file cleanup stale entities,
+// meshes, and skeletons pile up in Ogre's resource managers across a scan
+// of a large directory. Clear the scene graph and ask each resource manager
+// to drop anything no longer referenced. Wrapped in try/catch because
+// unloadUnreferencedResources can throw if some asset is still pinned by
+// a resource group's load order.
 static void clearOgreSceneForScanImport()
 {
     if (!Manager::getSingletonPtr())
@@ -116,6 +123,29 @@ static void clearOgreSceneForScanImport()
     for (auto* sn : sceneNodesCopy) {
         if (sn)
             manager->destroySceneNode(sn);
+    }
+
+    // Free per-file resources so a 1000-asset scan doesn't accumulate
+    // ~N meshes / materials / skeletons in the manager pools. Exceptions
+    // from the unloads are non-fatal — they typically mean the manager
+    // still has a reference somewhere (a Skeleton pinned by a Mesh, etc.).
+    // Log and move on so the next file can still be scanned.
+    auto* log = Ogre::LogManager::getSingletonPtr()
+                  ? Ogre::LogManager::getSingleton().getDefaultLog()
+                  : nullptr;
+    try {
+        Ogre::MeshManager::getSingleton().unloadUnreferencedResources(true);
+    } catch (const Ogre::Exception& e) {
+        if (log) log->logMessage(
+            std::string("ScanEngine: MeshManager unload skipped — ") + e.what(),
+            Ogre::LML_NORMAL);
+    }
+    try {
+        Ogre::SkeletonManager::getSingleton().unloadUnreferencedResources(true);
+    } catch (const Ogre::Exception& e) {
+        if (log) log->logMessage(
+            std::string("ScanEngine: SkeletonManager unload skipped — ") + e.what(),
+            Ogre::LML_NORMAL);
     }
 }
 
@@ -209,6 +239,38 @@ static void fillAssetInfoFromOgreMesh(AssetInfo& info, const Ogre::MeshPtr& mesh
     }
 }
 
+// Walk an Ogre skeleton populating boneCount + animation list on AssetInfo.
+// Mirrors what the Assimp pass extracts so .mesh + .skeleton assets show the
+// same metadata as Assimp-loaded formats. Keyframe count per animation is the
+// maximum across node tracks, matching the per-anim "maxKeys" the Assimp path
+// computes. Redundant-keyframe analysis is intentionally skipped here — that
+// pass is Assimp-channel-specific and not load-bearing for .mesh files.
+static void fillAssetInfoFromOgreSkeleton(AssetInfo& info, const Ogre::SkeletonPtr& skel)
+{
+    if (!skel)
+        return;
+    info.hasSkeleton = true;
+    info.boneCount = skel->getNumBones();
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+        if (auto* b = skel->getBone(i))
+            info.boneNames.append(QString::fromStdString(b->getName()));
+
+    info.animationCount = skel->getNumAnimations();
+    for (unsigned short a = 0; a < skel->getNumAnimations(); ++a) {
+        const Ogre::Animation* anim = skel->getAnimation(a);
+        if (!anim)
+            continue;
+        info.animationNames.append(QString::fromStdString(anim->getName()));
+        info.animationDurations.append(static_cast<double>(anim->getLength()));
+        unsigned maxKeys = 0;
+        for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+            if (track)
+                maxKeys = std::max(maxKeys, static_cast<unsigned>(track->getNumKeyFrames()));
+        }
+        info.animationKeyframeCounts.append(static_cast<int>(maxKeys));
+    }
+}
+
 #ifdef QTMESH_UNIT_TESTS
 void ScanEngine::testApplyOgreMeshInspectCounts(AssetInfo& info, const Ogre::MeshPtr& mesh)
 {
@@ -220,6 +282,94 @@ void ScanEngine::testApplyOgreMeshInspectCounts(AssetInfo& info, const Ogre::Mes
     fillAssetInfoFromOgreMesh(info, mesh);
 }
 #endif
+
+// Phase 6 slice C2: Ogre-backed ACMR. The Assimp face-array walk that used
+// to populate AssetInfo::weightedAcmr produced numbers that did not match
+// the editor's in-app validator (Assimp re-orders triangles during import,
+// so its flattened indices have different cache locality than what Ogre's
+// MeshSerializer ultimately ships to the GPU). This helper imports the
+// file through MeshImporterExporter — the same path the editor uses — and
+// computes ACMR over the actual Ogre index buffers, so scan-side thresholds
+// (max_acmr) and in-editor metrics agree on every asset.
+
+// Read an Ogre SubMesh's index buffer into a uint32 vector, transparently
+// handling the 16/32-bit variants. Returns empty on non-triangulated or
+// degenerate input.
+static std::vector<uint32_t> readSubmeshIndexBuffer(const Ogre::SubMesh* sub)
+{
+    std::vector<uint32_t> idxFlat;
+    if (!sub || !sub->indexData || !sub->indexData->indexBuffer) return idxFlat;
+    const Ogre::IndexData* id = sub->indexData;
+    if (id->indexCount < 3 || id->indexCount % 3 != 0) return idxFlat;
+
+    const bool use16 = id->indexBuffer->getType() == Ogre::HardwareIndexBuffer::IT_16BIT;
+    idxFlat.resize(id->indexCount);
+    const void* src = id->indexBuffer->lock(Ogre::HardwareBuffer::HBL_READ_ONLY);
+    if (use16) {
+        const auto* in = static_cast<const uint16_t*>(src);
+        for (size_t i = 0; i < idxFlat.size(); ++i)
+            idxFlat[i] = in[id->indexStart + i];
+    } else {
+        const auto* in = static_cast<const uint32_t*>(src);
+        for (size_t i = 0; i < idxFlat.size(); ++i)
+            idxFlat[i] = in[id->indexStart + i];
+    }
+    id->indexBuffer->unlock();
+    return idxFlat;
+}
+
+// Walk one entity's submeshes, accumulating ACMR weighted by triangle count.
+static void accumulateEntityAcmr(const Ogre::Entity* entity,
+                                 double& weightedSum, unsigned int& totalTris)
+{
+    if (!entity) return;
+    const Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return;
+    for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+        const std::vector<uint32_t> idxFlat = readSubmeshIndexBuffer(mesh->getSubMesh(s));
+        if (idxFlat.empty()) continue;
+        const double acmr = VertexCacheOptimizer::computeAcmr(idxFlat);
+        const auto tris = static_cast<unsigned int>(idxFlat.size() / 3);
+        weightedSum += acmr * tris;
+        totalTris += tris;
+    }
+}
+
+// Returns true when an ACMR was produced; false on import failure or no
+// triangulated submeshes. Clears the scene + unloads Ogre resources on the
+// way out so the caller's loop doesn't accumulate state.
+static bool computeWeightedAcmrViaOgre(const QString& filePath, AssetInfo& info)
+{
+    if (!ensureOgreHeadlessQuiet())
+        return false;
+
+    clearOgreSceneForScanImport();
+    // Import via the editor's loader; default flags (0) match what the GUI
+    // uses for File > Open, so the index order we measure is the order the
+    // user actually ships.
+    MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()}, 0);
+
+    auto* mgr = Manager::getSingleton();
+    if (!mgr) return false;
+    const auto& entities = mgr->getEntities();
+    if (entities.isEmpty()) {
+        // Some formats (animation-only FBX) produce no entity; not an error
+        // for the scan, just nothing to measure ACMR on.
+        clearOgreSceneForScanImport();
+        return false;
+    }
+
+    double weightedSum = 0.0;
+    unsigned int totalTris = 0;
+    for (const Ogre::Entity* entity : entities)
+        accumulateEntityAcmr(entity, weightedSum, totalTris);
+
+    if (totalTris > 0)
+        info.weightedAcmr = weightedSum / totalTris;
+
+    clearOgreSceneForScanImport();
+    return totalTris > 0;
+}
 
 template<typename ImportFn>
 static bool loadAndFillOgreInspect(AssetInfo& info, ImportFn&& importFn, QString* detailErr)
@@ -566,8 +716,12 @@ static void analyzeAnimationRedundancy(const aiAnimation* anim,
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Asset inspection: Assimp for most formats; PlayStation TMD / Psy-Q PLY / RSD
-// use the same Ogre importers as the editor (headless Ogre context).
+// Asset inspection: Assimp drives scene-graph metadata extraction (vertex /
+// face counts, materials, animations, redundant-keyframe analysis); Ogre
+// drives ACMR (slice C2) and the PlayStation TMD / Psy-Q PLY / RSD paths.
+// Both run through a single headless Ogre context shared across files; per-
+// file cleanup happens in clearOgreSceneForScanImport (which also flushes
+// MeshManager / SkeletonManager so a 1000-asset scan doesn't pile state).
 // ---------------------------------------------------------------------------
 
 bool ScanEngine::isAssimpResultLoadFailure(const aiScene* scene, const char* assimpErrorString,
@@ -684,6 +838,44 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         return info;
     }
 
+    // Ogre native .mesh: load via Ogre's MeshSerializer (the same path the
+    // editor uses) instead of routing through Assimp. Assimp's .mesh reader
+    // is limited to v1.41+ and fails on older serializer versions (e.g.
+    // robot.mesh / v1.40). ACMR is computed below via the shared Ogre path.
+    if (extLower == QLatin1String("mesh")) {
+        QString detailErr;
+        Ogre::MeshPtr loaded;
+        const bool ok = loadAndFillOgreInspect(
+            info,
+            [filePath, &loaded](const std::string& /*mn*/) -> Ogre::MeshPtr {
+                const QFileInfo fi(filePath);
+                const Ogre::String meshResName = fi.fileName().toStdString();
+                const Ogre::String meshGroup   = fi.absolutePath().toStdString();
+                Ogre::ResourceGroupManager& rgm = Ogre::ResourceGroupManager::getSingleton();
+                if (!rgm.resourceGroupExists(meshGroup)) {
+                    rgm.createResourceGroup(meshGroup);
+                    rgm.addResourceLocation(meshGroup, "FileSystem", meshGroup);
+                    rgm.initialiseResourceGroup(meshGroup);
+                }
+                if (auto existing = Ogre::MeshManager::getSingleton().getByName(meshResName, meshGroup))
+                    Ogre::MeshManager::getSingleton().remove(existing);
+                loaded = Ogre::MeshManager::getSingleton().load(meshResName, meshGroup);
+                return loaded;
+            },
+            &detailErr);
+        if (ok && loaded && loaded->hasSkeleton())
+            fillAssetInfoFromOgreSkeleton(info, loaded->getSkeleton());
+        // Run the standard ACMR path (loads through MeshImporterExporter into
+        // its own scene). Safe to call after the inspect helper above because
+        // computeWeightedAcmrViaOgre uses a separate per-scan clear cycle.
+        computeWeightedAcmrViaOgre(filePath, info);
+        info.filePath = filePath;
+        info.relativePath = QDir(scanRoot).relativeFilePath(filePath);
+        info.format = extLower;
+        info.fileSize = QFileInfo(filePath).size();
+        return info;
+    }
+
     Assimp::Importer importer;
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
@@ -713,10 +905,10 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
     info.materialCount = scene->mNumMaterials;
     info.animationCount = scene->mNumAnimations;
 
-    // Vertex & face counts + skeleton detection + weighted ACMR
+    // Vertex / face / skeleton metadata from Assimp's scene graph. ACMR is
+    // computed via Ogre below (slice C2) so the numbers line up with what
+    // the editor's in-app validator reports.
     std::set<std::string> uniqueBones;
-    double acmrTriWeightedSum = 0.0;
-    unsigned int acmrTotalTris = 0;
     for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
         const aiMesh* mesh = scene->mMeshes[i];
         if (!mesh)
@@ -728,29 +920,7 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
                 continue;
             uniqueBones.insert(mesh->mBones[b]->mName.C_Str());
         }
-
-        // Phase 6 slice C: ACMR for cache friendliness. Flatten Assimp's
-        // per-face indices into a flat uint32 vector and run the same
-        // pure-data primitive the editor / CLI use. Skip non-triangle
-        // primitives (point clouds, lines, strips).
-        std::vector<uint32_t> idxFlat;
-        idxFlat.reserve(static_cast<size_t>(mesh->mNumFaces) * 3);
-        for (unsigned f = 0; f < mesh->mNumFaces; ++f) {
-            const aiFace& face = mesh->mFaces[f];
-            if (face.mNumIndices != 3) continue;
-            idxFlat.push_back(face.mIndices[0]);
-            idxFlat.push_back(face.mIndices[1]);
-            idxFlat.push_back(face.mIndices[2]);
-        }
-        if (!idxFlat.empty()) {
-            const double acmr = VertexCacheOptimizer::computeAcmr(idxFlat);
-            const auto tris = static_cast<unsigned int>(idxFlat.size() / 3);
-            acmrTriWeightedSum += acmr * tris;
-            acmrTotalTris += tris;
-        }
     }
-    if (acmrTotalTris > 0)
-        info.weightedAcmr = acmrTriWeightedSum / acmrTotalTris;
     info.boneCount  = static_cast<unsigned int>(uniqueBones.size());
     info.hasSkeleton = !uniqueBones.empty();
     for (const auto& boneName : uniqueBones)
@@ -822,6 +992,11 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
     // Deduplicate embedded-texture flag from scene
     if (scene->mNumTextures > 0)
         info.hasEmbeddedTextures = true;
+
+    // Slice C2: compute ACMR via Ogre so the scan numbers line up with the
+    // editor's in-app validator. Failures are non-fatal — the rest of the
+    // AssetInfo stays valid and we just leave weightedAcmr at 0.
+    computeWeightedAcmrViaOgre(filePath, info);
 
     return info;
 }
@@ -982,15 +1157,12 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
                          QString("%1 vertices is below minimum of %2")
                              .arg(asset.vertexCount).arg(config.minVertexCount)});
 
-    // ---- max_acmr ---- (Phase 6 slice C)
+    // ---- max_acmr ---- (Phase 6 slice C / C2)
     //
-    // ACMR is measured on Assimp's flattened triangle list, which does not
-    // perfectly match the order Ogre's MeshSerializer produces — Assimp's
-    // numbers tend to run higher than the editor's report. The rule still
-    // catches the meshes that need a reorder; the exact threshold needs
-    // calibration to the Assimp pipeline (1.5 is a reasonable starting
-    // point for "this asset should be reordered"). The Ogre-backed scan
-    // backend (slice C2) will produce matching numbers when available.
+    // ACMR is measured on the same Ogre index buffer the editor's in-app
+    // validator sees, so scan-side numbers match in-editor numbers
+    // one-for-one. A typical reorder-friendly ceiling is around 1.0; assets
+    // above that benefit from `qtmesh vertex-cache -o <out>`.
     if (config.maxAcmr > 0.0 && asset.weightedAcmr > config.maxAcmr) {
         findings.append({asset.relativePath, "max_acmr", Severity::Warning,
                          QString("ACMR %1 exceeds limit of %2 — reorder index buffer for "
