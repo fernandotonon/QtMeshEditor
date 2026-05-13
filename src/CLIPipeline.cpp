@@ -529,7 +529,8 @@ void CLIPipeline::printUsage()
         "                                    Keep every Sth keyframe (plus first and last)\n"
         "  anim <file> --simplify [--preset {conservative|balanced|aggressive}] [--tolerance T] [--rotation-tolerance-deg D] [-o <output>] [--animation <name>]\n"
         "                                    Remove redundant keyframes (tolerance-based, preserves sharp keys)\n"
-        "                                    Default preset: balanced (~1mm / 0.5°)\n"
+        "                                    Default preset: conservative (~0.1mm / 0.05°) — destructive, so the safe default.\n"
+        "                                    Use --preset balanced / aggressive for more aggressive reduction.\n"
         "                                    --tolerance T sets translation+scale tolerance (world units)\n"
         "  anim <file> --bake-fps N [-o <output>] [--animation <name>]\n"
         "                                    Re-grid to exactly N keyframes per second (uniform)\n"
@@ -643,10 +644,13 @@ void CLIPipeline::printUsage()
         "                                    Add --reduction <r> / --target-tris N / --target-verts N\n"
         "                                    to also decimate. --all enables vertex-cache + simplify-anim\n"
         "                                    together (decimation still requires an explicit target).\n"
-        "                                    Anim simplify tolerances:\n"
-        "                                      --simplify-translation-tol T   default 0.001 (world units)\n"
-        "                                      --simplify-rotation-deg-tol D  default 0.5  (degrees)\n"
-        "                                      --simplify-scale-tol S         default 0.001\n"
+        "                                    Anim simplify tolerances (Conservative preset by default —\n"
+        "                                    simplify is destructive, so the safe choice. Use\n"
+        "                                    larger values for Balanced (1e-3 / 0.5° / 1e-3) or\n"
+        "                                    Aggressive (1e-2 / 1° / 1e-2) reduction):\n"
+        "                                      --simplify-translation-tol T   default 0.0001 (world units, ~0.1mm)\n"
+        "                                      --simplify-rotation-deg-tol D  default 0.05   (degrees)\n"
+        "                                      --simplify-scale-tol S         default 0.0001\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -3973,9 +3977,14 @@ struct OptimizeCmdArgs {
     int targetTris = -1;
     int targetVerts = -1;
     // Animation simplify tolerances (defaults match AnimationMerger Balanced)
-    float animTranslationTol = 1e-3f;
-    float animRotationDegTol = 0.5f;
-    float animScaleTol       = 1e-3f;
+    // Defaults match AnimationMerger::SimplifyTolerances{} — Conservative
+    // since simplify is destructive. Override via --simplify-translation-tol /
+    // --simplify-rotation-deg-tol / --simplify-scale-tol when you want
+    // Balanced (1e-3 / 0.5° / 1e-3) or Aggressive (1e-2 / 1° / 1e-2)
+    // reduction at the cost of perceptible drift.
+    float animTranslationTol = 1e-4f;
+    float animRotationDegTol = 0.05f;
+    float animScaleTol       = 1e-4f;
     bool explicitFlags = false;     // any optimization flag was supplied?
 };
 

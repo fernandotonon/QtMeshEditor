@@ -67,9 +67,14 @@ struct ScanConfig {
     // threshold in their `qtmesh.yml`/`.json` config. To restore the
     // previous behavior, set `redundant_keyframes_pct: 40` in the config.
     double redundantKeyframesPctThreshold = 0.0; // 0 = disabled; opt in via qtmesh.yml to warn / auto-simplify
-    double redundantKeyframesTranslationTol = 1e-3;  // Balanced preset (~1mm)
-    double redundantKeyframesRotationDegTol = 0.5;
-    double redundantKeyframesScaleTol = 1e-3;
+    // Defaults are the "Conservative" preset since the --fix path that
+    // consumes these tolerances is destructive (rewrites the asset in
+    // place). Set `redundant_keyframes_*_tol` in qtmesh.yml or pass
+    // explicit overrides to scan with Balanced (~1mm/0.5°) or Aggressive
+    // (~1cm/1°) tolerances.
+    double redundantKeyframesTranslationTol = 1e-4;  // Conservative preset (~0.1mm)
+    double redundantKeyframesRotationDegTol = 0.05;
+    double redundantKeyframesScaleTol = 1e-4;
 
     // Phase 6 slice C4 — quality rules driven by the Ogre scene walk.
     //

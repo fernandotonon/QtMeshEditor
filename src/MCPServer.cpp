@@ -4471,7 +4471,7 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
         props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to simplify. If omitted, all animations are processed."}};
-        props["preset"] = QJsonObject{{"type", "string"}, {"description", "Tolerance preset: 'conservative' (~0.1mm/0.05°), 'balanced' (~1mm/0.5°, default), or 'aggressive' (~1cm/1°). Higher tolerance removes more keys."}};
+        props["preset"] = QJsonObject{{"type", "string"}, {"description", "Tolerance preset: 'conservative' (~0.1mm/0.05°, default — destructive, so the safe choice), 'balanced' (~1mm/0.5°), or 'aggressive' (~1cm/1°). Higher tolerance removes more keys."}};
         props["tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override translation tolerance in world units. Falls back to the preset value when omitted."}};
         props["rotation_tolerance_deg"] = QJsonObject{{"type", "number"}, {"description", "Override rotation tolerance in degrees. Falls back to the preset value when omitted."}};
         props["scale_tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override scale tolerance (unitless). Falls back to the preset value when omitted."}};
@@ -4490,7 +4490,7 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
         props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to analyze. If omitted, all animations are reported."}};
-        props["preset"] = QJsonObject{{"type", "string"}, {"description", "Tolerance preset: 'conservative', 'balanced' (default), or 'aggressive'."}};
+        props["preset"] = QJsonObject{{"type", "string"}, {"description", "Tolerance preset: 'conservative' (default — destructive, so the safe choice), 'balanced', or 'aggressive'."}};
         props["tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override translation tolerance."}};
         props["rotation_tolerance_deg"] = QJsonObject{{"type", "number"}, {"description", "Override rotation tolerance in degrees."}};
         props["scale_tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override scale tolerance."}};

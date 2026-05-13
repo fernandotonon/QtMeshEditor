@@ -827,9 +827,9 @@ qtmesh optimize <file> -o <output> --vertex-cache  # just vertex-cache, skip ani
               ['--reduction <r>', 'Drop this fraction of triangles (0..0.95). 0.5 = 50% reduction'],
               ['--target-tris N', 'Reduce to approximately N triangles total'],
               ['--target-verts N', 'Reduce to approximately N vertices total'],
-              ['--simplify-translation-tol T', 'Anim simplify translation tolerance in world units (default 0.001)'],
-              ['--simplify-rotation-deg-tol D', 'Anim simplify rotation tolerance in degrees (default 0.5)'],
-              ['--simplify-scale-tol S', 'Anim simplify scale tolerance (default 0.001)'],
+              ['--simplify-translation-tol T', 'Anim simplify translation tolerance in world units (default 0.0001 = Conservative — simplify is destructive, so the safe choice)'],
+              ['--simplify-rotation-deg-tol D', 'Anim simplify rotation tolerance in degrees (default 0.05 = Conservative)'],
+              ['--simplify-scale-tol S', 'Anim simplify scale tolerance (default 0.0001 = Conservative)'],
               ['--json', 'Emit the per-stage report as JSON instead of text'],
             ]}
             examples={[

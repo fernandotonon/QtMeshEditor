@@ -854,17 +854,18 @@ TEST(AnimationMergerStandaloneTest, TolerancesForPresetMapping)
     EXPECT_FLOAT_EQ(agg.translation, 1e-2f);
     EXPECT_FLOAT_EQ(agg.rotationDeg, 1.0f);
 
-    // Empty string falls back to balanced and is reported as OK
+    // Empty string falls back to conservative (the safe default — simplify
+    // is destructive) and is reported as OK
     bool ok = false;
     auto def = AnimationMerger::tolerancesForPreset("", &ok);
     EXPECT_TRUE(ok);
-    EXPECT_FLOAT_EQ(def.translation, 1e-3f);
+    EXPECT_FLOAT_EQ(def.translation, 1e-4f);
 
-    // Unknown preset reports !ok but still returns balanced defaults
+    // Unknown preset reports !ok but still returns conservative defaults
     bool ok2 = true;
     auto bad = AnimationMerger::tolerancesForPreset("garbage", &ok2);
     EXPECT_FALSE(ok2);
-    EXPECT_FLOAT_EQ(bad.translation, 1e-3f);
+    EXPECT_FLOAT_EQ(bad.translation, 1e-4f);
 
     // Case-insensitive
     bool ok3 = false;

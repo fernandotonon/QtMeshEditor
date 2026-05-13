@@ -228,7 +228,7 @@ public:
     /// Returns a map with: total, redundant, percent.
     Q_INVOKABLE QVariantMap analyzeAnimationKeyframes(const QString& entityName,
                                                       const QString& animName,
-                                                      const QString& preset = QStringLiteral("balanced"));
+                                                      const QString& preset = QStringLiteral("conservative"));
 
     /// Remove redundant keyframes from an animation in-place. Returns the
     /// number of keyframes removed (0 on no-op or failure).
