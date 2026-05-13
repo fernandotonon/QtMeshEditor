@@ -223,6 +223,36 @@ TEST(PS1MAT, WriteAndRoundTrip_MixedEntries)
     EXPECT_FALSE(out[2].unlit);
 }
 
+TEST(PS1MAT, WriteAndRoundTrip_PreservesSmoothShadingToken)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("smooth.mat"));
+
+    QVector<PS1MAT::MatEntry> in;
+    PS1MAT::MatEntry g;
+    g.typeChar = 'G';
+    g.shadingChar = 'G';
+    g.vertColors = {
+        QColor(255, 0, 0), QColor(0, 255, 0), QColor(0, 0, 255), QColor(255, 255, 255)
+    };
+    g.rgb = g.vertColors.first();
+    in.push_back(g);
+
+    QString err;
+    ASSERT_TRUE(PS1MAT::writeMatFile(path, in, &err)) << err.toStdString();
+
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString text = QString::fromLatin1(f.readAll());
+    EXPECT_TRUE(text.contains(QStringLiteral("0 0 G G "))) << text.toStdString();
+
+    QVector<PS1MAT::MatEntry> out;
+    ASSERT_TRUE(PS1MAT::parseMatFile(path, out, &err)) << err.toStdString();
+    ASSERT_EQ(out.size(), 1);
+    EXPECT_EQ(out[0].shadingChar, 'G');
+}
+
 TEST(PS1MAT, WritesGouraudTriWithFourCornerPadding)
 {
     // Repro for Example Project.rsd round-trip: the Blender RSD exporter pads tri G

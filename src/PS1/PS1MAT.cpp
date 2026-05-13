@@ -342,7 +342,10 @@ bool writeMatFile(const QString& matPath, const QVector<MatEntry>& entries, QStr
         if (typeChar != 'C' && typeChar != 'G' && typeChar != 'T'
             && typeChar != 'D' && typeChar != 'H')
             typeChar = 'C';
-        const char shading = (e.shadingChar == 'S' || e.shadingChar == 'G') ? 'S' : 'F';
+        const char shading =
+            (e.shadingChar == 'F' || e.shadingChar == 'G' || e.shadingChar == 'S')
+                ? e.shadingChar
+                : 'F';
         ts << i << " " << encodeBlenderMaterialFlagBits(e.unlit) << " " << shading << " " << typeChar;
 
         auto writeUvs = [&]() {

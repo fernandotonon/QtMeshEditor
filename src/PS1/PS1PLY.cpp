@@ -542,7 +542,7 @@ static Ogre::MeshPtr buildMeshFromTriSoup(const std::string& meshName, const Tri
             if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
                 Ogre::Pass* p0 = mat->getTechnique(0)->getPass(0);
                 if (p0)
-                    PS1PLY::configurePsyqRsdMaterialPass(p0, haveColors, true);
+                    PS1PLY::configurePsyqRsdMaterialPass(p0, haveColors, false);
             }
         }
     } catch (...) {
