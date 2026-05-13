@@ -79,6 +79,62 @@ Ogre::MeshLodGenerator& sharedLodGenerator()
     return *(new Ogre::MeshLodGenerator());
 }
 
+using LodFaceListSnapshot = std::vector<std::vector<Ogre::IndexData*>>;
+
+// Move each submesh's existing LOD face list aside so the generator can
+// rebuild the chain from scratch. Returned snapshot must be either restored
+// (on failure) or freed (on success) by the caller.
+LodFaceListSnapshot snapshotLodFaceLists(const Ogre::MeshPtr& mesh)
+{
+    LodFaceListSnapshot snapshot;
+    snapshot.reserve(mesh->getNumSubMeshes());
+    for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(s);
+        snapshot.push_back(sub ? sub->mLodFaceList
+                               : std::vector<Ogre::IndexData*>{});
+        if (sub) sub->mLodFaceList.clear();
+    }
+    return snapshot;
+}
+
+// Put the snapshotted LOD chain back — used when generateLodLevels throws so
+// the reported failure is not destructive for in-memory callers.
+void restoreLodFaceLists(const Ogre::MeshPtr& mesh,
+                         const LodFaceListSnapshot& snapshot)
+{
+    for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(s);
+        if (sub && s < snapshot.size())
+            sub->mLodFaceList = snapshot[s];
+    }
+}
+
+// Release the snapshotted IndexData* allocations after a successful generator
+// run — the base mesh swaps to the new LOD's index data, so the old per-LOD
+// buffers are no longer referenced.
+void freeLodSnapshot(LodFaceListSnapshot& snapshot)
+{
+    for (auto& list : snapshot)
+        for (Ogre::IndexData* idx : list) delete idx;
+}
+
+// Swap each submesh's freshly-generated LOD-1 index data into the base slot.
+// MeshLodController::doExportLods uses the same swap pattern transiently for
+// per-LOD export; here we keep the swap permanent — `removeLodLevels()` then
+// frees the now-pushed-aside originals.
+void promoteFirstLodToBase(const Ogre::MeshPtr& mesh)
+{
+    for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(s);
+        if (!sub) continue;
+        if (sub->mLodFaceList.empty() || !sub->mLodFaceList.front()) continue;
+        Ogre::IndexData* original = sub->indexData;
+        sub->indexData = sub->mLodFaceList.front();
+        sub->mLodFaceList.front() = original; // keep ownership balanced
+    }
+    mesh->removeLodLevels();
+}
+
 
 
 int countTrianglesInMesh(const Ogre::Mesh* mesh)
@@ -163,18 +219,10 @@ DecimationReport MeshDecimator::decimateEntity(Ogre::Entity* entity, double redu
         return report;
     }
 
-    // Snapshot the existing LOD face list per submesh so we can roll back
-    // if the generator throws. Then wipe — the base mesh is being reduced,
-    // and the new chain has to start fresh so the LOD-1 index data we
-    // promote into the base is the one we asked for.
-    std::vector<std::vector<Ogre::IndexData*>> savedLodFaceLists;
-    savedLodFaceLists.reserve(mesh->getNumSubMeshes());
-    for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
-        Ogre::SubMesh* sub = mesh->getSubMesh(s);
-        savedLodFaceLists.push_back(sub ? sub->mLodFaceList
-                                        : std::vector<Ogre::IndexData*>{});
-        if (sub) sub->mLodFaceList.clear();
-    }
+    // Snapshot then clear the existing LOD chain so the generator builds
+    // a fresh one from scratch (a stray pre-existing LOD-0 would otherwise
+    // get promoted into the base in promoteFirstLodToBase below).
+    LodFaceListSnapshot saved = snapshotLodFaceLists(mesh);
 
     Ogre::LodConfig lodConfig(mesh);
     lodConfig.createGeneratedLodLevel(0.0f, // distance — meaningless when collapsing in place
@@ -186,37 +234,13 @@ DecimationReport MeshDecimator::decimateEntity(Ogre::Entity* entity, double redu
         // has been instantiated yet (CLI / MCP / test contexts).
         sharedLodGenerator().generateLodLevels(lodConfig);
     } catch (const Ogre::Exception& /*e*/) {
-        // Restore the snapshotted LOD chain so a reported failure is not
-        // destructive for in-memory callers — the mesh comes back exactly
-        // as it was before decimateEntity ran.
-        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
-            Ogre::SubMesh* sub = mesh->getSubMesh(s);
-            if (sub && s < savedLodFaceLists.size())
-                sub->mLodFaceList = savedLodFaceLists[s];
-        }
+        restoreLodFaceLists(mesh, saved);
         report.totalTrianglesAfter = report.totalTrianglesBefore;
         return report;
     }
-    // Generator succeeded — free the old IndexData* we'd snapshotted, since
-    // the base mesh is about to swap to the new LOD's index data and the
-    // old per-LOD buffers are no longer referenced.
-    for (auto& list : savedLodFaceLists)
-        for (Ogre::IndexData* idx : list) delete idx;
 
-    // Promote LOD 1 (the reduced level) into the base mesh by swapping its
-    // index data with the original submesh index data. This is the same
-    // pattern MeshLodController::doExportLods uses for per-LOD export, but
-    // we keep the swap permanent — the original index buffers are released
-    // when the SubMesh destructor runs at scene teardown.
-    for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
-        Ogre::SubMesh* sub = mesh->getSubMesh(s);
-        if (!sub) continue;
-        if (sub->mLodFaceList.empty() || !sub->mLodFaceList.front()) continue;
-        Ogre::IndexData* original = sub->indexData;
-        sub->indexData = sub->mLodFaceList.front();
-        sub->mLodFaceList.front() = original; // keep ownership balanced
-    }
-    mesh->removeLodLevels();
+    freeLodSnapshot(saved);
+    promoteFirstLodToBase(mesh);
 
     // Re-count post-decimation triangles per submesh.
     int subIdx = 0;
