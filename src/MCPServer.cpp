@@ -3737,16 +3737,35 @@ QJsonObject MCPServer::toolOptimizeMesh(const QJsonObject &args)
     if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingletonPtr()->getRenderSystem())
         return makeErrorResult("Ogre render system not initialized");
 
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr) return makeErrorResult("Manager unavailable");
+
+    // The MCP server runs inside the editor process, so the importer
+    // appends into the user's currently-loaded scene rather than into a
+    // fresh one. Snapshot which entities existed before the import so the
+    // optimize stages only touch the newly-loaded asset and never mutate
+    // the user's other meshes.
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Optimize importing %1").arg(QFileInfo(filePath).fileName()));
+    const QList<Ogre::Entity*> beforeEntities = mgr->getEntities();
+    QSet<Ogre::Entity*> beforeSet;
+    for (Ogre::Entity* e : beforeEntities) beforeSet.insert(e);
+
     QList<Ogre::SkeletonPtr> animOnlySkeletons;
     try {
         MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()}, 0,
                                        &animOnlySkeletons);
     } catch (const std::exception& e) {
         return makeErrorResult(QString("Importer threw: %1").arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        return makeErrorResult("Importer threw (unknown exception type)");
     }
-    auto* mgr = Manager::getSingletonPtr();
-    if (!mgr) return makeErrorResult("Manager unavailable");
-    const auto entities = mgr->getEntities();
+
+    QList<Ogre::Entity*> entities;
+    for (Ogre::Entity* e : mgr->getEntities()) {
+        if (!beforeSet.contains(e))
+            entities.append(e);
+    }
     if (entities.isEmpty())
         return makeErrorResult(QString("Failed to load any entities from %1").arg(filePath));
     if (decimate && entities.size() > 1)
@@ -3754,7 +3773,33 @@ QJsonObject MCPServer::toolOptimizeMesh(const QJsonObject &args)
             QString("%1 contains %2 entities; optimize_mesh + decimation supports one entity per file.")
                 .arg(filePath).arg(entities.size()));
 
+    // Cleanup: when we leave this function (success or error), destroy
+    // the entities we just imported so the user's live scene returns to
+    // exactly the state it was in before. The optimize result is already
+    // serialized to the output path; no in-scene state needs to survive.
+    struct ImportCleanup {
+        Manager* mgr;
+        QList<Ogre::Entity*> imported;
+        ~ImportCleanup() {
+            if (!mgr) return;
+            // Walk scene-node parents and destroy via Manager so the
+            // SelectionSet / SceneTreeModel signals fire correctly. Drop
+            // exceptions — best-effort cleanup, the original failure
+            // (if any) is the one the caller cares about.
+            try {
+                std::set<Ogre::SceneNode*> nodes;
+                for (Ogre::Entity* e : imported) {
+                    if (e && e->getParentSceneNode())
+                        nodes.insert(e->getParentSceneNode());
+                }
+                for (Ogre::SceneNode* sn : nodes)
+                    mgr->destroySceneNode(sn);
+            } catch (...) {}
+        }
+    } cleanup{mgr, entities};
+
     QJsonArray stagesArr;
+    try {
 
     if (vertexCache) {
         VertexCacheReport aggregate;
@@ -3790,6 +3835,7 @@ QJsonObject MCPServer::toolOptimizeMesh(const QJsonObject &args)
         if (reduction <= 0.0) {
             s["applied"] = false;
             s["summary"] = "target equals or exceeds current count; nothing to do";
+            stagesArr.append(s);
         } else {
             const DecimationReport report = MeshDecimator::decimateEntity(entity, reduction);
             s["applied"] = report.applied;
@@ -3798,25 +3844,37 @@ QJsonObject MCPServer::toolOptimizeMesh(const QJsonObject &args)
                                .arg(report.totalTrianglesBefore)
                                .arg(report.totalTrianglesAfter);
             s["details"] = MeshDecimator::toJson(report);
+            stagesArr.append(s);
+            // A positive reduction that didn't apply means the generator
+            // failed — surface as an error instead of silent "success".
+            if (!report.applied)
+                return makeErrorResult(
+                    "Decimation failed: MeshLodGenerator could not produce a reduced mesh. "
+                    "The mesh may not be suitable (e.g. zero index data).");
         }
-        stagesArr.append(s);
     }
 
     if (simplifyAnim) {
         QJsonObject s;
         s["name"] = "simplify-anim";
-        Ogre::SkeletonPtr skel;
+        // Walk every skeleton in the imported asset (mesh-level + animation-
+        // only). Multi-entity scenes with multiple skeletons get the same
+        // simplification treatment everywhere — matches the CLI fix.
+        QList<Ogre::SkeletonPtr> skels;
+        std::set<std::string> seenSkelNames;
         for (Ogre::Entity* e : entities) {
-            if (e && e->hasSkeleton() && e->getMesh()) {
-                skel = e->getMesh()->getSkeleton();
-                if (skel) break;
-            }
+            if (!e || !e->hasSkeleton() || !e->getMesh()) continue;
+            const Ogre::SkeletonPtr s2 = e->getMesh()->getSkeleton();
+            if (s2 && seenSkelNames.insert(s2->getName()).second)
+                skels.append(s2);
         }
-        if (!skel && !animOnlySkeletons.isEmpty())
-            skel = animOnlySkeletons.last();
+        for (const auto& s2 : animOnlySkeletons) {
+            if (s2 && seenSkelNames.insert(s2->getName()).second)
+                skels.append(s2);
+        }
         int totalRemoved = 0;
         long long totalKeysBefore = 0;
-        if (skel) {
+        for (const Ogre::SkeletonPtr& skel : skels) {
             for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
                 const Ogre::Animation* a = skel->getAnimation(ai);
                 if (!a) continue;
@@ -3833,19 +3891,21 @@ QJsonObject MCPServer::toolOptimizeMesh(const QJsonObject &args)
                 totalRemoved += AnimationMerger::simplifyAnimation(skel.get(), n, tol);
         }
         s["applied"] = totalRemoved > 0;
-        if (!skel)
+        if (skels.isEmpty())
             s["summary"] = "no skeleton / animations to simplify";
         else if (totalRemoved <= 0)
             s["summary"] = "no additional simplification within configured tolerances";
         else
-            s["summary"] = QString("removed %1 / %2 keyframes (%3%)")
+            s["summary"] = QString("removed %1 / %2 keyframes (%3%) across %4 skeleton(s)")
                                .arg(totalRemoved).arg(totalKeysBefore)
                                .arg(totalKeysBefore > 0
                                     ? QString::number(100.0 * totalRemoved / static_cast<double>(totalKeysBefore), 'f', 1)
-                                    : QString("0.0"));
+                                    : QString("0.0"))
+                               .arg(skels.size());
         QJsonObject d;
         d["removed"] = totalRemoved;
         d["totalKeyframesBefore"] = static_cast<qint64>(totalKeysBefore);
+        d["skeletons"] = skels.size();
         s["details"] = d;
         stagesArr.append(s);
     }
@@ -3898,6 +3958,16 @@ QJsonObject MCPServer::toolOptimizeMesh(const QJsonObject &args)
         result["bytesDeltaPct"] = 100.0 * static_cast<double>(delta) / static_cast<double>(srcBytes);
     result["stages"] = stagesArr;
     return result;
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(
+            QString("Ogre error during optimize: %1")
+                .arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const std::exception& e) {
+        return makeErrorResult(
+            QString("Error during optimize: %1").arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        return makeErrorResult("Unknown error during optimize");
+    }
 }
 
 QJsonArray MCPServer::buildToolsList()

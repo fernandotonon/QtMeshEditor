@@ -643,6 +643,10 @@ void CLIPipeline::printUsage()
         "                                    Add --reduction <r> / --target-tris N / --target-verts N\n"
         "                                    to also decimate. --all enables vertex-cache + simplify-anim\n"
         "                                    together (decimation still requires an explicit target).\n"
+        "                                    Anim simplify tolerances:\n"
+        "                                      --simplify-translation-tol T   default 0.001 (world units)\n"
+        "                                      --simplify-rotation-deg-tol D  default 0.5  (degrees)\n"
+        "                                      --simplify-scale-tol S         default 0.001\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -3991,21 +3995,36 @@ int applyOptimizeArg(const QString& arg, int argc, char* argv[], int& i,
     }
     if (arg == "--reduction" && i < argc) {
         out.decimateRequested = true; out.explicitFlags = true;
-        return parseStrictDouble("--reduction",
-                                 QString::fromLocal8Bit(argv[i++]),
-                                 out.reduction) ? 1 : 0;
+        if (!parseStrictDouble("--reduction",
+                               QString::fromLocal8Bit(argv[i++]),
+                               out.reduction)) return 0;
+        if (out.reduction < 0.0) {
+            err() << "Error: --reduction must be >= 0 (got " << out.reduction << ")" << Qt::endl;
+            return 0;
+        }
+        return 1;
     }
     if (arg == "--target-tris" && i < argc) {
         out.decimateRequested = true; out.explicitFlags = true;
-        return parseStrictInt("--target-tris",
-                              QString::fromLocal8Bit(argv[i++]),
-                              out.targetTris) ? 1 : 0;
+        if (!parseStrictInt("--target-tris",
+                            QString::fromLocal8Bit(argv[i++]),
+                            out.targetTris)) return 0;
+        if (out.targetTris < 0) {
+            err() << "Error: --target-tris must be >= 0 (got " << out.targetTris << ")" << Qt::endl;
+            return 0;
+        }
+        return 1;
     }
     if (arg == "--target-verts" && i < argc) {
         out.decimateRequested = true; out.explicitFlags = true;
-        return parseStrictInt("--target-verts",
-                              QString::fromLocal8Bit(argv[i++]),
-                              out.targetVerts) ? 1 : 0;
+        if (!parseStrictInt("--target-verts",
+                            QString::fromLocal8Bit(argv[i++]),
+                            out.targetVerts)) return 0;
+        if (out.targetVerts < 0) {
+            err() << "Error: --target-verts must be >= 0 (got " << out.targetVerts << ")" << Qt::endl;
+            return 0;
+        }
+        return 1;
     }
     if (arg == "--simplify-translation-tol" && i < argc) {
         double v = 0.0;
@@ -4238,12 +4257,27 @@ int CLIPipeline::cmdOptimize(int argc, char* argv[])
                             .arg(report.totalTrianglesBefore)
                             .arg(report.totalTrianglesAfter);
             s.details = MeshDecimator::toJson(report);
+            // Mirror cmdDecimate: when a positive reduction was asked for
+            // but didn't apply, that's a hard error — the asset isn't
+            // suitable for in-place reduction. Don't silently emit a
+            // success report.
+            if (!report.applied) {
+                stages.append(s);
+                err() << "Error: Decimation failed (MeshLodGenerator). The mesh may not "
+                         "be suitable for in-place reduction (e.g. zero index data)." << Qt::endl;
+                emitOptimizeReport(fi, cmdArgs.outputPath, fi.size(), 0, stages, cmdArgs.jsonOutput);
+                return 1;
+            }
         }
         stages.append(s);
     }
 
     // Stage 3: animation simplify (same analyzer + same tolerances as
     // `qtmesh anim --simplify` and the Inspector "Simplify" button).
+    // Walks *every* skeleton — multi-entity scenes (different mesh files
+    // merged into one optimize call, or co-loaded animation-only skeletons)
+    // had only the first one simplified before; now they all get the same
+    // treatment.
     if (cmdArgs.simplifyAnim) {
         StageReport s;
         s.name = "simplify-anim";
@@ -4254,17 +4288,22 @@ int CLIPipeline::cmdOptimize(int argc, char* argv[])
 
         int totalRemoved = 0;
         long long totalKeysBefore = 0;
-        Ogre::SkeletonPtr skel;
+        QList<Ogre::SkeletonPtr> skels;
+        std::set<std::string> seenSkelNames;
         for (Ogre::Entity* entity : entities) {
             if (!entity || !entity->hasSkeleton()) continue;
+            Ogre::SkeletonPtr s2;
             if (auto* mesh = entity->getMesh().get())
-                skel = mesh->getSkeleton();
-            if (skel) break;
+                s2 = mesh->getSkeleton();
+            if (s2 && seenSkelNames.insert(s2->getName()).second)
+                skels.append(s2);
         }
-        if (!skel && !animOnlySkeletons.isEmpty())
-            skel = animOnlySkeletons.last();
+        for (const auto& s2 : animOnlySkeletons) {
+            if (s2 && seenSkelNames.insert(s2->getName()).second)
+                skels.append(s2);
+        }
 
-        if (skel) {
+        for (const Ogre::SkeletonPtr& skel : skels) {
             for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
                 const Ogre::Animation* a = skel->getAnimation(ai);
                 if (!a) continue;
@@ -4284,19 +4323,21 @@ int CLIPipeline::cmdOptimize(int argc, char* argv[])
         }
 
         s.applied = totalRemoved > 0;
-        if (!skel)
+        if (skels.isEmpty())
             s.summary = "no skeleton / animations to simplify";
         else if (totalRemoved <= 0)
             s.summary = "no additional simplification within configured tolerances";
         else
-            s.summary = QString("removed %1 / %2 keyframes (%3%)")
+            s.summary = QString("removed %1 / %2 keyframes (%3%) across %4 skeleton(s)")
                             .arg(totalRemoved).arg(totalKeysBefore)
                             .arg(totalKeysBefore > 0
                                 ? QString::number(100.0 * totalRemoved / static_cast<double>(totalKeysBefore), 'f', 1)
-                                : QString("0.0"));
+                                : QString("0.0"))
+                            .arg(skels.size());
         QJsonObject d;
         d["removed"] = totalRemoved;
         d["totalKeyframesBefore"] = static_cast<qint64>(totalKeysBefore);
+        d["skeletons"] = skels.size();
         s.details = d;
         stages.append(s);
     }
