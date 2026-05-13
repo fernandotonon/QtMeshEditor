@@ -40,7 +40,9 @@ THE SOFTWARE.
 #include <QDir>
 #include <QRegularExpression>
 #include <set>
+#include <limits>
 #include <cmath>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
@@ -506,9 +508,11 @@ static bool decodeSceneNgonFaceMetadata(const aiString& encoded, std::vector<uns
         const std::string token = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
         if (token.empty())
             return false;
+        errno = 0;
         char* tail = nullptr;
         const unsigned long parsed = std::strtoul(token.c_str(), &tail, 10);
-        if (!tail || *tail != '\0')
+        if (!tail || *tail != '\0' || errno == ERANGE ||
+            parsed > std::numeric_limits<unsigned int>::max())
             return false;
         outFace.push_back(static_cast<unsigned int>(parsed));
         if (end == std::string::npos)
@@ -556,9 +560,11 @@ static bool decodeSceneNgonFacesMetadata(const aiMetadata* metadata,
         const std::string suffix = key.substr(prefix.size());
         if (suffix.empty())
             return false;
+        errno = 0;
         char* tail = nullptr;
         const unsigned long faceIndex = std::strtoul(suffix.c_str(), &tail, 10);
-        if (!tail || *tail != '\0')
+        if (!tail || *tail != '\0' || errno == ERANGE ||
+            faceIndex > std::numeric_limits<unsigned int>::max())
             return false;
 
         aiString encoded;
@@ -3309,8 +3315,10 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
     Assimp::Importer assimpImporter;
     assimpImporter.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
+    // Preserve the vertex/submesh indexing encoded in qtme.faces metadata.
+    // Topology-rewriting post-process steps like JoinIdenticalVertices and
+    // OptimizeMeshes can invalidate those indices before we restore them.
     unsigned int flags = aiProcess_CalcTangentSpace |
-                         aiProcess_JoinIdenticalVertices |
                          aiProcess_Triangulate |
                          aiProcess_RemoveComponent |
                          aiProcess_GenSmoothNormals |
@@ -3320,7 +3328,6 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
                          aiProcess_ImproveCacheLocality |
                          aiProcess_FixInfacingNormals |
                          aiProcess_PopulateArmatureData |
-                         aiProcess_OptimizeMeshes |
                          aiProcess_GlobalScale;
 
     const aiScene* scene = assimpImporter.ReadFile(file.filePath().toStdString(), flags);

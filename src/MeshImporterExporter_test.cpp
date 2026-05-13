@@ -671,9 +671,11 @@ protected:
 };
 
 namespace {
-QString writeQuadObjForScene(const QString& baseName)
+QString writeQuadObjForScene(const QTemporaryDir& dir, const QString& fileName)
 {
-    const QString path = QDir::tempPath() + "/" + baseName + ".obj";
+    if (!dir.isValid())
+        return {};
+    const QString path = dir.filePath(fileName);
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return {};
@@ -815,7 +817,9 @@ TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
 
 TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding_Gltf)
 {
-    const QString objPath = writeQuadObjForScene("scene_ngon_roundtrip");
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString objPath = writeQuadObjForScene(tmpDir, "scene_ngon_roundtrip.obj");
     ASSERT_FALSE(objPath.isEmpty());
 
     MeshImporterExporter::importer(QStringList{objPath});
@@ -831,8 +835,6 @@ TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding_Gltf)
     ASSERT_EQ(facesBefore.size(), 1u);
     EXPECT_EQ(facesBefore[0].size(), 4u);
 
-    QTemporaryDir tmpDir;
-    ASSERT_TRUE(tmpDir.isValid());
     const QString sceneFile = tmpDir.filePath("ngon.scene.gltf");
     ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
 
@@ -843,13 +845,13 @@ TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding_Gltf)
     ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
     entity = manager->getSceneMgr()->getEntity(node->getName());
     expectEntityHasSingleQuadBinding(entity, facesBefore[0]);
-
-    QFile::remove(objPath);
 }
 
 TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding_Glb)
 {
-    const QString objPath = writeQuadObjForScene("scene_ngon_roundtrip_glb");
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString objPath = writeQuadObjForScene(tmpDir, "scene_ngon_roundtrip_glb.obj");
     ASSERT_FALSE(objPath.isEmpty());
 
     MeshImporterExporter::importer(QStringList{objPath});
@@ -864,8 +866,6 @@ TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding_Glb)
     ASSERT_TRUE(readNgonFacesFromMesh(entity->getMesh().get(), 0, facesBefore));
     ASSERT_EQ(facesBefore.size(), 1u);
 
-    QTemporaryDir tmpDir;
-    ASSERT_TRUE(tmpDir.isValid());
     const QString sceneFile = tmpDir.filePath("ngon.scene.glb");
     ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
 
@@ -876,8 +876,6 @@ TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding_Glb)
     ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
     entity = manager->getSceneMgr()->getEntity(node->getName());
     expectEntityHasSingleQuadBinding(entity, facesBefore[0]);
-
-    QFile::remove(objPath);
 }
 
 TEST_F(SceneSaveLoadTest, RoundTrip_QuadMeshWithUnusedSharedVertex_RemapPreservesNgonFaceBinding)
