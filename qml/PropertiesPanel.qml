@@ -2276,6 +2276,38 @@ Rectangle {
                 }
             }
 
+            // Phase 6 slice E2: Apply Atlas to Mesh — consume a previously-
+            // packed atlas manifest, remap UV0 + rebind diffuse on a target
+            // mesh. Counterpart to "Pack Atlas…".
+            Rectangle {
+                width: Math.min(parent.width - 16, applyAtlasLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                color: applyAtlasMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: applyAtlasLabel
+                    anchors.centerIn: parent
+                    text: "Apply Atlas to Mesh…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: applyAtlasMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openApplyAtlasDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: "Consume a packed atlas manifest: rewrite UV0 + rebind the diffuse texture on a target mesh. Counterpart to Pack Atlas."
+                }
+            }
+
             // Slice I: Material Preview Environment — interactive
             // preview of the currently-selected material on Sphere/Cube
             // shapes. Drag horizontally on the thumbnail to rotate the
@@ -2486,6 +2518,23 @@ Rectangle {
             textureAtlasLoader.active = true
         } else if (textureAtlasLoader.item) {
             textureAtlasLoader.item.open()
+        }
+    }
+
+    // Phase 6 slice E2: Apply Atlas dialog — same Loader pattern.
+    Loader {
+        id: applyAtlasLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/ApplyAtlasDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+
+    function openApplyAtlasDialog() {
+        if (!applyAtlasLoader.active) {
+            applyAtlasLoader.active = true
+        } else if (applyAtlasLoader.item) {
+            applyAtlasLoader.item.open()
         }
     }
 

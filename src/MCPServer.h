@@ -193,6 +193,10 @@ private:
     /// Phase 6 slice E: pack N input textures into a single atlas image
     /// + JSON manifest of per-tile UV remaps. Shelf bin-pack, deterministic.
     QJsonObject toolPackAtlas(const QJsonObject &args);
+    /// Phase 6 slice E2: consume a packed-atlas manifest — rewrite each
+    /// submesh's UV0 into the matching tile's sub-rect and rebind the
+    /// diffuse TUS to the atlas texture. Counterpart to pack_atlas.
+    QJsonObject toolApplyAtlas(const QJsonObject &args);
     /// Phase 6 slice G: batch optimize pipeline. Runs the slice A–E
     /// optimizations end-to-end on a single asset and writes the result.
     /// Per-stage applied/summary report on success.
