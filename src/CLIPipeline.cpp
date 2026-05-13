@@ -662,6 +662,8 @@ void CLIPipeline::printUsage()
         "                                      --simplify-translation-tol T   default 0.0001 (world units, ~0.1mm)\n"
         "                                      --simplify-rotation-deg-tol D  default 0.05   (degrees)\n"
         "                                      --simplify-scale-tol S         default 0.0001\n"
+        "                                      --simplify-preset P            shorthand for the three tolerances;\n"
+        "                                                                     P = conservative | balanced | aggressive\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -4193,10 +4195,14 @@ struct OptimizeCmdArgs {
     // since simplify is destructive. Override via --simplify-translation-tol /
     // --simplify-rotation-deg-tol / --simplify-scale-tol when you want
     // Balanced (1e-3 / 0.5° / 1e-3) or Aggressive (1e-2 / 1° / 1e-2)
-    // reduction at the cost of perceptible drift.
+    // reduction at the cost of perceptible drift. The shorthand
+    // --simplify-preset {conservative|balanced|aggressive} sets all three
+    // in one go; reject if combined with an explicit per-axis flag (#509).
     float animTranslationTol = 1e-4f;
     float animRotationDegTol = 0.05f;
     float animScaleTol       = 1e-4f;
+    QString simplifyPreset;         // empty when not set; "" / "conservative" / "balanced" / "aggressive"
+    bool sawExplicitTol = false;    // any --simplify-*-tol flag explicitly given
     bool explicitFlags = false;     // any optimization flag was supplied?
 };
 
@@ -4252,6 +4258,7 @@ int applyOptimizeArg(const QString& arg, int argc, char* argv[], int& i,
         if (!parseStrictDouble("--simplify-translation-tol",
                                QString::fromLocal8Bit(argv[i++]), v)) return 0;
         out.animTranslationTol = static_cast<float>(v);
+        out.sawExplicitTol = true;
         return 1;
     }
     if (arg == "--simplify-rotation-deg-tol" && i < argc) {
@@ -4259,6 +4266,7 @@ int applyOptimizeArg(const QString& arg, int argc, char* argv[], int& i,
         if (!parseStrictDouble("--simplify-rotation-deg-tol",
                                QString::fromLocal8Bit(argv[i++]), v)) return 0;
         out.animRotationDegTol = static_cast<float>(v);
+        out.sawExplicitTol = true;
         return 1;
     }
     if (arg == "--simplify-scale-tol" && i < argc) {
@@ -4266,6 +4274,11 @@ int applyOptimizeArg(const QString& arg, int argc, char* argv[], int& i,
         if (!parseStrictDouble("--simplify-scale-tol",
                                QString::fromLocal8Bit(argv[i++]), v)) return 0;
         out.animScaleTol = static_cast<float>(v);
+        out.sawExplicitTol = true;
+        return 1;
+    }
+    if (arg == "--simplify-preset" && i < argc) {
+        out.simplifyPreset = QString::fromLocal8Bit(argv[i++]).toLower();
         return 1;
     }
     if (!arg.startsWith("-") && out.filePath.isEmpty()) out.filePath = arg;
@@ -4290,6 +4303,32 @@ int parseOptimizeArgs(int argc, char* argv[], OptimizeCmdArgs& out)
         err() << "Error: pass at most one of --reduction / --target-tris / --target-verts."
               << Qt::endl;
         return 0;
+    }
+
+    // --simplify-preset: shorthand for the three --simplify-*-tol flags.
+    // Resolve via AnimationMerger so CLI / Inspector / MCP / scan-engine
+    // all consume the same preset table (#509). Reject combining with
+    // explicit per-axis flags — letting both through silently picks one
+    // over the other and surprises the caller.
+    if (!out.simplifyPreset.isEmpty()) {
+        if (out.sawExplicitTol) {
+            err() << "Error: --simplify-preset cannot be combined with explicit "
+                     "--simplify-translation-tol / --simplify-rotation-deg-tol / "
+                     "--simplify-scale-tol. Use one or the other." << Qt::endl;
+            return 0;
+        }
+        bool ok = false;
+        const auto tol =
+            AnimationMerger::tolerancesForPreset(out.simplifyPreset.toStdString(), &ok);
+        if (!ok) {
+            err() << "Error: --simplify-preset must be one of "
+                     "{conservative, balanced, aggressive} (got '"
+                  << out.simplifyPreset << "')." << Qt::endl;
+            return 0;
+        }
+        out.animTranslationTol = tol.translation;
+        out.animRotationDegTol = tol.rotationDeg;
+        out.animScaleTol       = tol.scale;
     }
 
     // Default selection. The non-destructive optimizations
@@ -4377,6 +4416,7 @@ int CLIPipeline::cmdOptimize(int argc, char* argv[])
             err() << "  Flags: --vertex-cache  --simplify-anim  --all" << Qt::endl;
             err() << "         --reduction <r> | --target-tris N | --target-verts N" << Qt::endl;
             err() << "         --simplify-translation-tol T  --simplify-rotation-deg-tol D  --simplify-scale-tol S" << Qt::endl;
+            err() << "         --simplify-preset {conservative|balanced|aggressive}" << Qt::endl;
         }
         return 2;
     }
