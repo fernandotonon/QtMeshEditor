@@ -306,6 +306,24 @@ void MeshValidator::doValidate()
         issue["count"] = 0;
         issue["fixable"] = false;
         m_issues.append(issue);
+
+        // Phase 6 slice D: triangle-budget hint. Over ~10k tris on a mobile
+        // target, suggest a one-shot decimation. Threshold is intentionally
+        // generous — desktop pipelines routinely ship higher poly counts.
+        // The actual budget belongs in a future scan rule; this is the
+        // "did you remember to think about this?" nudge.
+        if (totalTris > 10000) {
+            QVariantMap suggestion;
+            suggestion["type"] = "info";
+            suggestion["description"] =
+                QString("Tri budget: %1 triangle(s) — consider decimating for mobile/web "
+                        "(qtmesh decimate -o <out> --target-tris 5000, or the MCP "
+                        "decimate_mesh tool)")
+                    .arg(locale.toString(totalTris));
+            suggestion["count"] = totalTris;
+            suggestion["fixable"] = false;
+            m_issues.append(suggestion);
+        }
     }
 
     // 2. UVs — finite / range. Skip the check entirely when the mesh has no UVs.

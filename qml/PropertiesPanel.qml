@@ -361,6 +361,17 @@ Rectangle {
                 Component.onCompleted: content = lodComponent
             }
 
+            // ---- Decimate (single-pass) ----
+            CollapsibleSection {
+                title: "Decimate (single-pass)"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    MeshDecimatorController.hasSelection)
+                expanded: false
+
+                Component.onCompleted: content = decimateComponent
+            }
+
             // ---- Material Editor (Material mode) ----
             CollapsibleSection {
                 title: "Material Editor"
@@ -1637,6 +1648,154 @@ Rectangle {
                         lodFeedback.text = ""
                     }
                 }
+            }
+        }
+    }
+
+    // ---- Decimate (single-pass) — Phase 6 slice D ----
+    // Live slider + preview that swaps a temporary LOD into the viewport,
+    // mirroring the LOD section's previewLod pattern but for one-shot
+    // base-mesh reduction. Apply commits the swap permanently.
+    Component {
+        id: decimateComponent
+
+        Column {
+            id: decimateContent
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            // Slider state — 0..0.95. Default 0 = no change, so opening the
+            // section doesn't already preview a reduction.
+            property real reduction: 0.0
+
+            // Ensure baseTriangleCount is populated when the section is opened
+            // for the first time — the controller's selectionChanged hook
+            // doesn't fire if the user had a selection before the singleton
+            // was instantiated.
+            Component.onCompleted: MeshDecimatorController.primeBaseline()
+
+            // Debounce the preview regenerator so the slider doesn't melt
+            // Ogre with a per-pixel LOD rebuild.
+            Timer {
+                id: previewDebounce
+                interval: 150
+                repeat: false
+                onTriggered: MeshDecimatorController.previewReduction(decimateContent.reduction)
+            }
+
+            // Reset reduction back to the default when selection changes
+            // so the slider doesn't carry a stale value across meshes.
+            Connections {
+                target: MeshDecimatorController
+                function onSelectionChanged() {
+                    decimateContent.reduction = 0.0
+                    decimateFeedback.text = ""
+                }
+                function onApplied(before, after) {
+                    decimateFeedback.color = "#60c060"
+                    decimateFeedback.text = "Decimated: " + before.toLocaleString() +
+                                            " → " + after.toLocaleString() + " triangles"
+                }
+                function onError(msg) {
+                    decimateFeedback.color = "#c06060"
+                    decimateFeedback.text = msg
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                text: "Single-pass reduction of the base mesh. Drag to preview, click Apply to commit."
+                wrapMode: Text.Wrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+
+            // Reduction percent slider
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Reduce:"
+                    width: 50
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    id: decimateSlider
+                    from: 0.0; to: 0.95; stepSize: 0.05
+                    value: decimateContent.reduction
+                    width: parent.width - 130
+                    anchors.verticalCenter: parent.verticalCenter
+                    onValueChanged: {
+                        decimateContent.reduction = value
+                        previewDebounce.restart()
+                    }
+                }
+                Text {
+                    text: Math.round(decimateContent.reduction * 100) + "%"
+                    width: 40
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Live tri-count display: base → preview.
+            Row {
+                spacing: 8; width: parent.width - 16
+                Text {
+                    text: "Tris:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    width: 50
+                }
+                Text {
+                    text: MeshDecimatorController.baseTriangleCount.toLocaleString()
+                    color: Qt.lighter(PropertiesPanelController.textColor, 0.8)
+                    font.pixelSize: 10
+                }
+                Text {
+                    visible: MeshDecimatorController.hasActivePreview
+                    text: "→ " + MeshDecimatorController.previewTriangleCount.toLocaleString()
+                    color: "#5090d0"; font.pixelSize: 10
+                }
+            }
+
+            // Apply / Reset row
+            Row {
+                spacing: 6; width: parent.width - 16
+
+                Rectangle {
+                    width: 110; height: 28; radius: 3
+                    color: applyMouse.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                         : applyMouse.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                         : PropertiesPanelController.highlightColor
+                    Text { anchors.centerIn: parent; text: "Apply"; color: "white"; font.pixelSize: 12 }
+                    MouseArea {
+                        id: applyMouse; anchors.fill: parent; hoverEnabled: true
+                        onClicked: MeshDecimatorController.applyReduction(decimateContent.reduction)
+                    }
+                }
+
+                Rectangle {
+                    width: 110; height: 28; radius: 3
+                    visible: MeshDecimatorController.hasActivePreview
+                    color: resetMouse.pressed ? "#705050"
+                         : resetMouse.containsMouse ? "#806060"
+                         : "#604040"
+                    Text { anchors.centerIn: parent; text: "Reset Preview"; color: "white"; font.pixelSize: 11 }
+                    MouseArea {
+                        id: resetMouse; anchors.fill: parent; hoverEnabled: true
+                        onClicked: MeshDecimatorController.clearPreview()
+                    }
+                }
+            }
+
+            Text {
+                id: decimateFeedback
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: "#60c060"
+                text: ""
             }
         }
     }
