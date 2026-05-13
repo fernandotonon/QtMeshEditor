@@ -35,8 +35,20 @@ Window {
     }
 
     function normaliseDroppedPath(url) {
+        // Strip the file:// scheme and decode percent-encoding so dropped
+        // paths from Finder / Explorer arrive in their native form rather
+        // than as URI-encoded strings (spaces, accents, etc.). On Windows
+        // file URLs look like "file:///C:/path" — the leading slash before
+        // the drive letter has to come off.
         const s = url.toString()
-        return s.startsWith("file://") ? s.substring(7) : s
+        if (!s.startsWith("file:")) return s
+        let path = s.substring(s.startsWith("file:///") ? 8 : 7)
+        try { path = decodeURIComponent(path) } catch (e) { /* keep raw */ }
+        if (Qt.platform.os === "windows" && /^\/[A-Za-z]:[\/\\]/.test("/" + path))
+            path = path.replace(/^\/+/, "")
+        else if (!path.startsWith("/") && Qt.platform.os !== "windows")
+            path = "/" + path
+        return path
     }
 
     // ── Inspector primitives (matching TextureAtlasDialog patterns) ──

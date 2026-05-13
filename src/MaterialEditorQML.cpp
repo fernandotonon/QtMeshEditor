@@ -3250,9 +3250,22 @@ QString MaterialEditorQML::applyAtlas(const QString& meshPath,
         return QStringLiteral("Manifest not found: %1").arg(manifestPath);
     if (!QFileInfo::exists(atlasImagePath))
         return QStringLiteral("Atlas image not found: %1").arg(atlasImagePath);
-    if (QFileInfo(meshPath).canonicalFilePath() == QFileInfo(outputPath).canonicalFilePath()
-        && !QFileInfo(meshPath).canonicalFilePath().isEmpty())
-        return QStringLiteral("Output points to the input file; choose a different path.");
+    // Same-file guard. canonicalFilePath() returns "" for non-existent
+    // paths — and the output doesn't exist yet — so a naive equality
+    // check would never fire. Compare normalized absolute paths instead;
+    // case-fold on the platforms whose filesystems are case-insensitive
+    // by default so "model.fbx" and "MODEL.FBX" still collide.
+    {
+        const QString a = QDir::cleanPath(QFileInfo(meshPath).absoluteFilePath());
+        const QString b = QDir::cleanPath(QFileInfo(outputPath).absoluteFilePath());
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        const auto cs = Qt::CaseInsensitive;
+#else
+        const auto cs = Qt::CaseSensitive;
+#endif
+        if (!a.isEmpty() && a.compare(b, cs) == 0)
+            return QStringLiteral("Output points to the input file; choose a different path.");
+    }
 
     QFile mf(manifestPath);
     if (!mf.open(QIODevice::ReadOnly))
@@ -3305,12 +3318,32 @@ QString MaterialEditorQML::applyAtlas(const QString& meshPath,
         }
     } cleanup{mgr, entities};
 
+    // Register the atlas image's directory as a resource location so the
+    // mutated materials can resolve the texture during the export pass.
+    // We register into the default group (rather than a one-shot group)
+    // because the per-submesh materials live in the default group, and
+    // an Ogre Material can only see textures from groups it's a member
+    // of. The location is removed on every return path via an RAII guard.
     const QFileInfo atlasFi(atlasImagePath);
+    const Ogre::String atlasDir = atlasFi.absolutePath().toStdString();
+    bool addedAtlasLoc = false;
     try {
         Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
-            atlasFi.absolutePath().toStdString(), "FileSystem",
+            atlasDir, "FileSystem",
             Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, true);
+        addedAtlasLoc = true;
     } catch (const Ogre::Exception&) { /* already-registered is fine */ }
+    struct LocationCleanup {
+        Ogre::String dir;
+        bool added;
+        ~LocationCleanup() {
+            if (!added) return;
+            try {
+                Ogre::ResourceGroupManager::getSingleton().removeResourceLocation(
+                    dir, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            } catch (...) {}
+        }
+    } locationCleanup{atlasDir, addedAtlasLoc};
 
     ApplyAtlas::ApplyOptions opts;
     opts.matchMode = (matchMode.toLower() == "fullpath")

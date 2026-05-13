@@ -3714,9 +3714,21 @@ QJsonObject MCPServer::toolApplyAtlas(const QJsonObject &args)
         return makeErrorResult(QString("Error: manifest not found: %1").arg(manifestPath));
     if (!QFileInfo::exists(atlasPath))
         return makeErrorResult(QString("Error: atlas not found: %1").arg(atlasPath));
-    if (QFileInfo(filePath).canonicalFilePath() == QFileInfo(outputPath).canonicalFilePath()
-        && !QFileInfo(filePath).canonicalFilePath().isEmpty())
-        return makeErrorResult("Error: output points to the input file; choose a different path.");
+    // Same-file guard. canonicalFilePath() returns "" for the not-yet-
+    // existing output, so equality on canonical paths would never fire.
+    // Compare normalized absolute paths instead, case-folded on the
+    // platforms whose filesystems are case-insensitive by default.
+    {
+        const QString a = QDir::cleanPath(QFileInfo(filePath).absoluteFilePath());
+        const QString b = QDir::cleanPath(QFileInfo(outputPath).absoluteFilePath());
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        const auto cs = Qt::CaseInsensitive;
+#else
+        const auto cs = Qt::CaseSensitive;
+#endif
+        if (!a.isEmpty() && a.compare(b, cs) == 0)
+            return makeErrorResult("Error: output points to the input file; choose a different path.");
+    }
     if (!matchMode.isEmpty() && matchMode != "basename" && matchMode != "fullpath")
         return makeErrorResult("Error: 'match' must be 'basename' or 'fullpath'");
 
@@ -3773,12 +3785,30 @@ QJsonObject MCPServer::toolApplyAtlas(const QJsonObject &args)
         }
     } cleanup{mgr, entities};
 
+    // Register the atlas image's directory as a resource location into
+    // the default group (the only group the imported materials see).
+    // RAII-cleanup so repeated apply_atlas calls don't accumulate
+    // locations in the live process.
     const QFileInfo atlasFi(atlasPath);
+    const Ogre::String atlasDir = atlasFi.absolutePath().toStdString();
+    bool addedAtlasLoc = false;
     try {
         Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
-            atlasFi.absolutePath().toStdString(), "FileSystem",
+            atlasDir, "FileSystem",
             Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, true);
+        addedAtlasLoc = true;
     } catch (const Ogre::Exception&) { /* already-registered is fine */ }
+    struct LocationCleanup {
+        Ogre::String dir;
+        bool added;
+        ~LocationCleanup() {
+            if (!added) return;
+            try {
+                Ogre::ResourceGroupManager::getSingleton().removeResourceLocation(
+                    dir, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            } catch (...) {}
+        }
+    } locationCleanup{atlasDir, addedAtlasLoc};
 
     ApplyAtlas::ApplyOptions opts;
     opts.matchMode = (matchMode == "fullpath")

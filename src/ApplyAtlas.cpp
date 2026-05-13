@@ -116,6 +116,15 @@ int rewriteUv0(Ogre::SubMesh* sub, const Ogre::Mesh* mesh,
     if (tcElem->getType() != Ogre::VET_FLOAT2) return 0;
 
     auto vbuf = vData->vertexBufferBinding->getBuffer(tcElem->getSource());
+
+    // RAII unlock. The body below indexes raw pointers and dereferences
+    // baseVertexPointerToElement(); if any of that throws (corrupt
+    // vertex layout, etc.) the buffer must still unlock or every
+    // subsequent operation on it deadlocks.
+    struct LockGuard {
+        Ogre::HardwareVertexBufferSharedPtr buf;
+        ~LockGuard() { if (buf) { try { buf->unlock(); } catch (...) {} } }
+    } guard{vbuf};
     auto* base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
 
     const float du = tile.u1 - tile.u0;
@@ -140,7 +149,6 @@ int rewriteUv0(Ogre::SubMesh* sub, const Ogre::Mesh* mesh,
         ++touched;
     }
 
-    vbuf->unlock();
     return touched;
 }
 
