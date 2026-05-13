@@ -4,6 +4,7 @@
 #include "MaterialEditorQML.h"
 #include "MaterialPresetLibrary.h"
 #include "TextureChannelPacker.h"
+#include "TextureAtlasPacker.h"
 #include "NormalMapGenerator.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
@@ -454,7 +455,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("set_pivot_mode"), &MCPServer::toolSetPivotMode},
         {QStringLiteral("get_pivot_mode"), &MCPServer::toolGetPivotMode},
         {QStringLiteral("pack_textures"), &MCPServer::toolPackTextures},
-        {QStringLiteral("generate_normal_map"), &MCPServer::toolGenerateNormalMap}
+        {QStringLiteral("generate_normal_map"), &MCPServer::toolGenerateNormalMap},
+        {QStringLiteral("pack_atlas"), &MCPServer::toolPackAtlas}
     };
     return handlers;
 }
@@ -3611,6 +3613,75 @@ QJsonObject MCPServer::toolGenerateNormalMap(const QJsonObject &args)
     return result;
 }
 
+QJsonObject MCPServer::toolPackAtlas(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "pack_atlas");
+
+    TextureAtlasPacker::AtlasSpec spec;
+    // Accept either a JSON array of strings ("inputs": ["a.png", "b.png"]) or
+    // a comma-separated single string for CLI-style ergonomics.
+    if (args.contains("inputs")) {
+        const QJsonValue v = args.value("inputs");
+        if (v.isArray()) {
+            for (const auto& it : v.toArray())
+                spec.sourcePaths.append(it.toString());
+        } else {
+            const QStringList parts = v.toString().split(',', Qt::SkipEmptyParts);
+            for (const QString& p : parts) {
+                const QString trimmed = p.trimmed();
+                if (!trimmed.isEmpty())
+                    spec.sourcePaths.append(trimmed);
+            }
+        }
+    }
+    if (args.contains("size")) {
+        const int n = args.value("size").toInt();
+        spec.atlasWidth = n;
+        spec.atlasHeight = n;
+    }
+    if (args.contains("width"))   spec.atlasWidth  = args.value("width").toInt();
+    if (args.contains("height"))  spec.atlasHeight = args.value("height").toInt();
+    if (args.contains("padding")) spec.padding     = args.value("padding").toInt();
+
+    const QString outPath = args.value("output").toString();
+    const QString manifestPath = args.value("manifest").toString();
+    if (spec.sourcePaths.isEmpty() || outPath.isEmpty())
+        return makeErrorResult("Error: missing required 'inputs' and 'output' arguments");
+
+    auto r = TextureAtlasPacker::packToFile(spec, outPath);
+    if (!r.ok)
+        return makeErrorResult(QString("Error: %1").arg(r.error));
+
+    if (!manifestPath.isEmpty()) {
+        const QString json = TextureAtlasPacker::manifestToJson(r, spec.padding);
+        QFile mf(manifestPath);
+        if (mf.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+            mf.write(json.toUtf8());
+            mf.close();
+        }
+    }
+
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{
+        {"type", "text"},
+        {"text", QString("Packed %1 tiles into %2x%3 atlas (used %4x%5) -> %6")
+            .arg(r.tiles.size())
+            .arg(spec.atlasWidth)
+            .arg(spec.atlasHeight)
+            .arg(r.usedWidth)
+            .arg(r.usedHeight)
+            .arg(outPath)}}};
+    result["tiles_packed"] = r.tiles.size();
+    result["atlas_width"]  = spec.atlasWidth;
+    result["atlas_height"] = spec.atlasHeight;
+    result["used_width"]   = r.usedWidth;
+    result["used_height"]  = r.usedHeight;
+    result["output"]       = outPath;
+    if (!manifestPath.isEmpty())
+        result["manifest"] = manifestPath;
+    return result;
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -4571,6 +4642,42 @@ QJsonArray MCPServer::buildToolsList()
             "Generate a tangent-space normal map from a grayscale height/bump source via a 3x3 Sobel "
             "filter. Output is RGB8 with the OpenGL +Y-up convention by default; set invert_g (or "
             "directx) for DirectX +Y-down output. Returns the output dimensions on success.",
+            props,
+            required
+        );
+    }
+
+    // pack_atlas (Phase 6 slice E)
+    {
+        QJsonObject props;
+        props["inputs"] = QJsonObject{
+            {"type", "array"},
+            {"items", QJsonObject{{"type", "string"}}},
+            {"description", "Paths to the input texture files (PNG/TGA/JPG/BMP). Comma-separated string also accepted for parity with the CLI."}};
+        props["output"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Output atlas image path. Extension determines format (PNG/TGA/JPG)."}};
+        props["manifest"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Optional path for the JSON manifest (per-tile UV remaps). Schema: { width, height, padding, tiles: [{ source, x, y, w, h, u0, v0, u1, v1 }] }."}};
+        props["size"] = QJsonObject{
+            {"type", "integer"},
+            {"description", "Convenience: sets both width and height to a square atlas. Default 2048."}};
+        props["width"]  = QJsonObject{{"type", "integer"}, {"description", "Atlas width in pixels. Defaults to 2048."}};
+        props["height"] = QJsonObject{{"type", "integer"}, {"description", "Atlas height in pixels. Defaults to 2048."}};
+        props["padding"] = QJsonObject{
+            {"type", "integer"},
+            {"description", "Padding in pixels around every tile so MIPs don't bleed across neighbours. Default 2."}};
+        QJsonArray required;
+        required.append("inputs");
+        required.append("output");
+        appendTool(
+            "pack_atlas",
+            "Pack N input textures into a single atlas image + JSON manifest of per-tile UV remaps. "
+            "Uses shelf bin-packing (height-descending sort, deterministic). Useful for consolidating "
+            "many small per-prop textures into one binding to reduce GPU draw-call count. Tiles are "
+            "padded on every side (configurable) to prevent MIP bleed. Returns tile count + atlas "
+            "dimensions on success.",
             props,
             required
         );
