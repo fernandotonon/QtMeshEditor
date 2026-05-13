@@ -439,6 +439,96 @@ static bool detectEmbeddedTexturesFromEntities(const QList<Ogre::Entity*>& entit
 //
 // Replaces both the Assimp aiScene traversal that previously filled metadata
 // AND the separate computeWeightedAcmrViaOgre import — we load each file once.
+// Enumerate every aiMaterial's texture references via a cheap Assimp
+// ReadFile (no triangulation, no expensive post-processing). Restores the
+// pre-C3 behavior of `info.texturePaths` capturing referenced-but-missing
+// texture files — Ogre's TextureUnitState only sees textures that bound
+// successfully, so without this pass require_textures_exist would have
+// nothing to flag. Native .mesh files don't have an Assimp reader for
+// v1.40, and their texture refs already came from the .material script via
+// Ogre, so they short-circuit here.
+static void enumerateTextureRefsViaAssimp(const QString& filePath, AssetInfo& info,
+                                          std::set<std::string>& seenTextures)
+{
+    if (filePath.endsWith(QLatin1String(".mesh"), Qt::CaseInsensitive))
+        return;
+    Assimp::Importer imp;
+    imp.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+    const aiScene* scene = imp.ReadFile(filePath.toStdString(),
+                                        aiProcess_ValidateDataStructure);
+    if (!scene || ScanEngine::isAssimpResultLoadFailure(scene, imp.GetErrorString(), nullptr))
+        return;
+
+    for (unsigned m = 0; m < scene->mNumMaterials; ++m) {
+        const aiMaterial* mat = scene->mMaterials[m];
+        if (!mat) continue;
+        for (int type = aiTextureType_DIFFUSE; type <= aiTextureType_UNKNOWN; ++type) {
+            const unsigned count = mat->GetTextureCount(static_cast<aiTextureType>(type));
+            for (unsigned j = 0; j < count; ++j) {
+                aiString p;
+                mat->GetTexture(static_cast<aiTextureType>(type), j, &p);
+                const QString tp = QString::fromUtf8(p.C_Str());
+                if (tp.isEmpty()) continue;
+                if (tp.startsWith('*')) {
+                    info.hasEmbeddedTextures = true;
+                    continue;
+                }
+                if (seenTextures.insert(tp.toStdString()).second) {
+                    info.texturePaths.append(tp);
+                    info.textureRefCount++;
+                }
+            }
+        }
+    }
+    // aiScene-level embedded texture blobs (FBX/glTF) — flag even when no
+    // material referenced them via a '*' path.
+    if (scene->mNumTextures > 0)
+        info.hasEmbeddedTextures = true;
+}
+
+// Fallback: when the Ogre import fails (e.g. an OBJ that references a missing
+// texture file — MaterialProcessor throws on TextureManager::load), still
+// produce useful counts by walking the aiScene directly. The scan can then
+// flag the missing texture via require_textures_exist instead of bailing
+// with a load_error on the whole file.
+static bool fillAssetInfoFromAssimpFallback(const QString& filePath, AssetInfo& info)
+{
+    Assimp::Importer imp;
+    imp.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+    const aiScene* scene = imp.ReadFile(filePath.toStdString(),
+                                        aiProcess_Triangulate | aiProcess_ValidateDataStructure);
+    if (!scene || ScanEngine::isAssimpResultLoadFailure(scene, imp.GetErrorString(), nullptr))
+        return false;
+
+    info.meshCount      = scene->mNumMeshes;
+    info.materialCount  = scene->mNumMaterials;
+    info.animationCount = scene->mNumAnimations;
+
+    std::set<std::string> bones;
+    for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
+        const aiMesh* m = scene->mMeshes[i];
+        if (!m) continue;
+        info.vertexCount += m->mNumVertices;
+        info.faceCount   += m->mNumFaces;
+        for (unsigned b = 0; b < m->mNumBones; ++b)
+            if (m->mBones[b])
+                bones.insert(m->mBones[b]->mName.C_Str());
+    }
+    info.boneCount   = static_cast<unsigned int>(bones.size());
+    info.hasSkeleton = !bones.empty();
+    for (const auto& bn : bones)
+        info.boneNames.append(QString::fromStdString(bn));
+
+    for (unsigned i = 0; i < scene->mNumMaterials; ++i) {
+        const aiMaterial* mat = scene->mMaterials[i];
+        if (!mat) continue;
+        aiString n;
+        mat->Get(AI_MATKEY_NAME, n);
+        info.materialNames.append(QString::fromUtf8(n.C_Str()));
+    }
+    return true;
+}
+
 static bool inspectAssetViaOgre(const QString& filePath, AssetInfo& info,
                                 const AnimationMerger::SimplifyTolerances& redundancyTol)
 {
@@ -450,8 +540,18 @@ static bool inspectAssetViaOgre(const QString& filePath, AssetInfo& info,
 
     clearOgreSceneForScanImport();
     // Default flags (0) match File > Open: same index ordering and same
-    // material/texture binding the user actually ships.
-    MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()}, 0);
+    // material/texture binding the user actually ships. MaterialProcessor
+    // can throw if a referenced texture file is missing on disk; swallow
+    // that so the scan still produces metadata + can flag the missing
+    // texture via require_textures_exist (instead of dropping the asset
+    // entirely with a load_error).
+    try {
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()}, 0);
+    } catch (const Ogre::Exception&) {
+        // Continue — try to extract whatever entities did make it in.
+    } catch (const std::exception&) {
+        // Same.
+    }
 
     auto* mgr = Manager::getSingleton();
     if (!mgr) {
@@ -460,12 +560,17 @@ static bool inspectAssetViaOgre(const QString& filePath, AssetInfo& info,
         info.errorMessage = QStringLiteral("Manager unavailable");
         return false;
     }
-    const QList<Ogre::Entity*> entities = mgr->getEntities();
+    QList<Ogre::Entity*> entities = mgr->getEntities();
     if (entities.isEmpty()) {
-        // Some assets (animation-only FBX, malformed files) produce no entity.
-        // Not a hard error — the rule evaluator can still flag the empty mesh.
+        // Partial / failed Ogre import (e.g. OBJ with a missing texture
+        // reference that aborted MaterialProcessor). Fall back to Assimp's
+        // scene graph for at least the count metadata so the rule evaluator
+        // can still flag what's wrong instead of dropping the file.
         clearOgreSceneForScanImport();
-        return false;
+        const bool ok = fillAssetInfoFromAssimpFallback(filePath, info);
+        std::set<std::string> seenTextures;
+        enumerateTextureRefsViaAssimp(filePath, info, seenTextures);
+        return ok;
     }
 
     std::set<std::string> seenMaterials, seenBones, seenAnims, seenTextures;
@@ -493,6 +598,8 @@ static bool inspectAssetViaOgre(const QString& filePath, AssetInfo& info,
         : 0.0;
 
     info.hasEmbeddedTextures = detectEmbeddedTexturesFromEntities(entities);
+
+    enumerateTextureRefsViaAssimp(filePath, info, seenTextures);
 
     clearOgreSceneForScanImport();
     return true;
