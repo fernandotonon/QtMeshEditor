@@ -15,11 +15,18 @@ using namespace TextureAtlasPacker;
 namespace {
 
 // Helper: write a solid-colour PNG of given size to a temp dir.
+// Uses Format_ARGB32 so `img.fill(qRgba(...))` is byte-order safe: the
+// QRgb returned by qRgba() is a native-endian ARGB packed int, which
+// QImage::fill() interprets correctly for ARGB32 on every platform. The
+// RGBA8888 variant treats fill() bytes as RGBA byte-order, which mangles
+// the colour on little-endian Linux (CI catches this; macOS happens to
+// agree because the colour saved still round-trips through the PNG
+// loader's byte conversion).
 QString writeSolidPng(const QTemporaryDir& dir,
                       const QString& name,
                       int w, int h, QRgb colour)
 {
-    QImage img(w, h, QImage::Format_RGBA8888);
+    QImage img(w, h, QImage::Format_ARGB32);
     img.fill(colour);
     const QString path = dir.filePath(name);
     [&]() { ASSERT_TRUE(img.save(path, "PNG")) << path.toStdString(); }();
