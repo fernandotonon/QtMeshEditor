@@ -6,6 +6,7 @@
 #include "CLIPipeline.h"
 #include "MemoryEstimator.h"
 #include "DrawCallAnalyzer.h"
+#include "MeshDecimatorController.h"
 #include "mainwindow.h"
 
 #include <QEvent>
@@ -21,6 +22,11 @@ MeshInfoOverlay::MeshInfoOverlay(QMainWindow* parent)
     connect(Manager::getSingleton(), &Manager::entityCreated,
             this, &MeshInfoOverlay::refresh);
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed,
+            this, &MeshInfoOverlay::refresh);
+    // In-place mesh mutations (decimate, future ones) don't fire any of the
+    // Manager signals above — listen to the controller directly so the
+    // overlay's tri/draw/GPU lines stay accurate after Apply.
+    connect(MeshDecimatorController::instance(), &MeshDecimatorController::applied,
             this, &MeshInfoOverlay::refresh);
 
     // Track main window moves/resizes to reposition the floating overlay
