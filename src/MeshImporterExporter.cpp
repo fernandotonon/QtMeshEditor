@@ -39,10 +39,9 @@ THE SOFTWARE.
 #include <QFile>
 #include <QDir>
 #include <QRegularExpression>
-#include <QJsonArray>
-#include <QJsonDocument>
 #include <set>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 
@@ -476,20 +475,66 @@ static std::string sceneNgonFacesMetaKey(unsigned int subIndex)
     return std::string("qtme.faces.") + std::to_string(subIndex);
 }
 
-static aiString encodeSceneNgonFacesMetadata(const std::vector<std::vector<unsigned int>>& faces)
+static std::string sceneNgonFaceMetaKey(unsigned int subIndex, unsigned int faceIndex)
 {
-    QJsonArray outer;
-    for (const auto& face : faces)
+    return sceneNgonFacesMetaKey(subIndex) + ".face." + std::to_string(faceIndex);
+}
+
+static aiString encodeSceneNgonFaceMetadata(const std::vector<unsigned int>& face)
+{
+    std::string encoded;
+    for (size_t vertexIndex = 0; vertexIndex < face.size(); ++vertexIndex)
     {
-        if (face.size() < 3)
-            continue;
-        QJsonArray poly;
-        for (unsigned int idx : face)
-            poly.append(static_cast<int>(idx));
-        outer.append(poly);
+        if (!encoded.empty())
+            encoded.push_back(',');
+        encoded += std::to_string(face[vertexIndex]);
     }
-    const QByteArray json = QJsonDocument(outer).toJson(QJsonDocument::Compact);
-    return aiString(json.constData());
+    return aiString(encoded);
+}
+
+static bool decodeSceneNgonFaceMetadata(const aiString& encoded, std::vector<unsigned int>& outFace)
+{
+    outFace.clear();
+    const std::string value = encoded.C_Str();
+    if (value.empty())
+        return false;
+
+    size_t start = 0;
+    while (start < value.size())
+    {
+        const size_t end = value.find(',', start);
+        const std::string token = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (token.empty())
+            return false;
+        char* tail = nullptr;
+        const unsigned long parsed = std::strtoul(token.c_str(), &tail, 10);
+        if (!tail || *tail != '\0')
+            return false;
+        outFace.push_back(static_cast<unsigned int>(parsed));
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+
+    return outFace.size() >= 3;
+}
+
+static bool remapNgonFaces(const std::vector<unsigned int>& remap,
+                           std::vector<std::vector<unsigned int>>& faces)
+{
+    if (remap.empty())
+        return true;
+
+    for (auto& face : faces)
+    {
+        for (auto& idx : face)
+        {
+            if (idx >= remap.size() || remap[idx] == UINT_MAX)
+                return false;
+            idx = remap[idx];
+        }
+    }
+    return true;
 }
 
 static bool decodeSceneNgonFacesMetadata(const aiMetadata* metadata,
@@ -500,49 +545,40 @@ static bool decodeSceneNgonFacesMetadata(const aiMetadata* metadata,
     if (!metadata)
         return false;
 
-    aiString encoded;
-    bool found = false;
-    const std::string key = sceneNgonFacesMetaKey(subIndex);
+    const std::string prefix = sceneNgonFacesMetaKey(subIndex) + ".face.";
+    std::map<unsigned int, std::vector<unsigned int>> orderedFaces;
     for (unsigned int i = 0; i < metadata->mNumProperties; ++i)
     {
-        if (std::string(metadata->mKeys[i].C_Str()) != key)
+        const std::string key = metadata->mKeys[i].C_Str();
+        if (key.rfind(prefix, 0) != 0)
             continue;
+
+        const std::string suffix = key.substr(prefix.size());
+        if (suffix.empty())
+            return false;
+        char* tail = nullptr;
+        const unsigned long faceIndex = std::strtoul(suffix.c_str(), &tail, 10);
+        if (!tail || *tail != '\0')
+            return false;
+
+        aiString encoded;
         if (!metadata->Get(i, encoded))
             return false;
-        found = true;
-        break;
-    }
-    if (!found)
-        return false;
 
-    const QJsonDocument doc = QJsonDocument::fromJson(QByteArray(encoded.C_Str()));
-    if (!doc.isArray())
-        return false;
-
-    const QJsonArray outer = doc.array();
-    outFaces.reserve(static_cast<size_t>(outer.size()));
-    for (const QJsonValue& faceValue : outer)
-    {
-        if (!faceValue.isArray())
-            return false;
-        const QJsonArray poly = faceValue.toArray();
-        if (poly.size() < 3)
-            return false;
         std::vector<unsigned int> face;
-        face.reserve(static_cast<size_t>(poly.size()));
-        for (const QJsonValue& idxValue : poly)
-        {
-            if (!idxValue.isDouble())
-                return false;
-            const int idx = idxValue.toInt(-1);
-            if (idx < 0)
-                return false;
-            face.push_back(static_cast<unsigned int>(idx));
-        }
-        outFaces.push_back(std::move(face));
+        if (!decodeSceneNgonFaceMetadata(encoded, face))
+            return false;
+        orderedFaces[static_cast<unsigned int>(faceIndex)] = std::move(face);
     }
 
-    return !outFaces.empty();
+    if (orderedFaces.empty())
+        return false;
+
+    outFaces.reserve(orderedFaces.size());
+    for (auto& [faceIndex, face] : orderedFaces)
+        outFaces.push_back(std::move(face));
+
+    return true;
 }
 
 // Assign bone weights from Ogre bone assignments to an aiMesh
@@ -594,9 +630,10 @@ static void assignBoneWeights(
 // weights. Required when exporting LOD-reduced geometry (full vertex buffer but
 // only a fraction of triangles), which otherwise causes expensive post-processing
 // (aiProcess_JoinIdenticalVertices, aiProcess_OptimizeMeshes) on import.
-static void compactAiMesh(aiMesh* aiM)
+static std::vector<unsigned int> compactAiMesh(aiMesh* aiM)
 {
-    if (!aiM || aiM->mNumVertices == 0 || aiM->mNumFaces == 0) return;
+    if (!aiM || aiM->mNumVertices == 0 || aiM->mNumFaces == 0)
+        return {};
 
     std::vector<bool> used(aiM->mNumVertices, false);
     for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
@@ -609,7 +646,8 @@ static void compactAiMesh(aiMesh* aiM)
     for (unsigned int i = 0; i < aiM->mNumVertices; ++i)
         if (used[i]) remap[i] = newCount++;
 
-    if (newCount == aiM->mNumVertices) return; // nothing to compact
+    if (newCount == aiM->mNumVertices)
+        return remap; // nothing to compact
 
     for (unsigned int i = 0; i < aiM->mNumVertices; ++i) {
         if (!used[i]) continue;
@@ -642,6 +680,8 @@ static void compactAiMesh(aiMesh* aiM)
         }
         bone->mNumWeights = kept;
     }
+
+    return remap;
 }
 
 // Convert an Ogre skeleton animation to an aiAnimation
@@ -3114,7 +3154,6 @@ static aiScene* buildSceneAiScene()
         scene->mRootNode->mChildren[ni] = entityNode;
 
         // --- Build meshes for this entity ---
-        std::vector<std::pair<unsigned int, aiString>> ngonMetadataEntries;
         for (unsigned int si = 0; si < numSub; ++si)
         {
             const Ogre::SubMesh* subMesh = mesh->getSubMesh(si);
@@ -3126,26 +3165,27 @@ static aiScene* buildSceneAiScene()
             scene->mMeshes[globalMeshIdx + si] = aiM;
             readSubmeshGeometry(aiM, vData, subMesh, entity, si, matIndexMap, false);
 
-            std::vector<std::vector<unsigned int>> ngonFaces;
-            if (readNgonFacesFromMesh(mesh.get(), si, ngonFaces) && !ngonFaces.empty())
-                ngonMetadataEntries.emplace_back(si, encodeSceneNgonFacesMetadata(ngonFaces));
-
             if (hasSkeleton)
                 assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
 
-            compactAiMesh(aiM);
-        }
+            const std::vector<unsigned int> remap = compactAiMesh(aiM);
 
-        if (meshOwnerNode && !ngonMetadataEntries.empty())
-        {
-            meshOwnerNode->mMetaData = aiMetadata::Alloc(
-                static_cast<unsigned int>(ngonMetadataEntries.size()));
-            for (unsigned int mi = 0; mi < ngonMetadataEntries.size(); ++mi)
+            std::vector<std::vector<unsigned int>> ngonFaces;
+            if (meshOwnerNode
+                && readNgonFacesFromMesh(mesh.get(), si, ngonFaces)
+                && !ngonFaces.empty()
+                && remapNgonFaces(remap, ngonFaces))
             {
-                meshOwnerNode->mMetaData->Set(
-                    mi,
-                    sceneNgonFacesMetaKey(ngonMetadataEntries[mi].first),
-                    ngonMetadataEntries[mi].second);
+                if (!meshOwnerNode->mMetaData)
+                    meshOwnerNode->mMetaData = new aiMetadata();
+                for (size_t faceIndex = 0; faceIndex < ngonFaces.size(); ++faceIndex)
+                {
+                    if (ngonFaces[faceIndex].size() < 3)
+                        continue;
+                    meshOwnerNode->mMetaData->Add(
+                        sceneNgonFaceMetaKey(si, static_cast<unsigned int>(faceIndex)),
+                        encodeSceneNgonFaceMetadata(ngonFaces[faceIndex]));
+                }
             }
         }
 
