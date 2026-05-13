@@ -797,22 +797,45 @@ MeshInfo CLIPipeline::extractMeshInfo(const Ogre::Entity* entity, const QString&
         }
     }
 
-    // Textures
+    // Textures. The straightforward pass walks every CONTENT_NAMED
+    // TextureUnitState. That covers diffuse/albedo/metallic/roughness/ao/
+    // emissive — every PBR slot MaterialProcessor binds as a plain TUS.
+    // It does NOT cover the normal map: MaterialProcessor wires that one
+    // through RTSS's render-state side channel (see RTShaderHelper::
+    // applyNormalMap), which creates a transient TUS during shader-state
+    // resolution that's not visible on the base pass. To recover that
+    // texture name we read the qtme.normal_map UOB hint the importer
+    // leaves on the pass (the same hint slice #507 added so FBX export
+    // could round-trip the normal map). Issue #510.
     std::set<std::string, std::less<>> seenTex;
-    for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i) {
-        auto mat = entity->getSubEntity(i)->getMaterial();
-        if (!mat) continue;
-        for (auto* tech : mat->getTechniques()) {
-            for (auto* pass : tech->getPasses()) {
-                for (auto* tus : pass->getTextureUnitStates()) {
-                    if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED) {
-                        auto name = tus->getTextureName();
-                        if (seenTex.insert(name).second)
-                            info.textures << QString::fromStdString(name);
-                    }
-                }
-            }
+    const auto collectFromPass = [&](const Ogre::Pass* pass) {
+        if (!pass) return;
+        for (auto* tus : pass->getTextureUnitStates()) {
+            if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                continue;
+            const auto& name = tus->getTextureName();
+            if (!name.empty() && seenTex.insert(name).second)
+                info.textures << QString::fromStdString(name);
         }
+        // Recover RTSS-wired normal map from the UOB hint. Use the
+        // pointer variant of any_cast (returns nullptr on type mismatch
+        // — older assets / payload-type drift / a future writer with a
+        // different shape) so we don't have to catch std::bad_cast just
+        // to swallow it.
+        const Ogre::Any& nh =
+            pass->getUserObjectBindings().getUserAny("qtme.normal_map");
+        if (!nh.has_value()) return;
+        if (const Ogre::String* n = Ogre::any_cast<Ogre::String>(&nh)) {
+            if (!n->empty() && seenTex.insert(*n).second)
+                info.textures << QString::fromStdString(*n);
+        }
+    };
+    for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i) {
+        const auto mat = entity->getSubEntity(i)->getMaterial();
+        if (!mat) continue;
+        for (const Ogre::Technique* tech : mat->getTechniques())
+            for (const Ogre::Pass* pass : tech->getPasses())
+                collectFromPass(pass);
     }
 
     // Skeleton & animations
