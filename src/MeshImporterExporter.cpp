@@ -40,7 +40,10 @@ THE SOFTWARE.
 #include <QDir>
 #include <QRegularExpression>
 #include <set>
+#include <limits>
 #include <cmath>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 
@@ -322,7 +325,8 @@ static void readSubmeshGeometry(
     const Ogre::SubMesh* subMesh,
     const Ogre::Entity* entity,
     unsigned int subIndex,
-    const std::map<std::string, unsigned int, std::less<>>& matIndexMap)
+    const std::map<std::string, unsigned int, std::less<>>& matIndexMap,
+    bool preferNgonFaces = true)
 {
     aiM->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
     aiM->mNumVertices = static_cast<unsigned int>(vData->vertexCount);
@@ -414,7 +418,7 @@ static void readSubmeshGeometry(
     // that have never carried n-gon data — fall back to reading the
     // triangle index buffer directly.
     std::vector<std::vector<unsigned int>> ngonFaces;
-    const bool hasNgon = readNgonFacesFromMesh(
+    const bool hasNgon = preferNgonFaces && readNgonFacesFromMesh(
         entity->getMesh().get(), subIndex, ngonFaces);
     if (hasNgon)
     {
@@ -468,6 +472,121 @@ static void readSubmeshGeometry(
     }
 }
 
+static std::string sceneNgonFacesMetaKey(unsigned int subIndex)
+{
+    return std::string("qtme.faces.") + std::to_string(subIndex);
+}
+
+static std::string sceneNgonFaceMetaKey(unsigned int subIndex, unsigned int faceIndex)
+{
+    return sceneNgonFacesMetaKey(subIndex) + ".face." + std::to_string(faceIndex);
+}
+
+static aiString encodeSceneNgonFaceMetadata(const std::vector<unsigned int>& face)
+{
+    std::string encoded;
+    for (size_t vertexIndex = 0; vertexIndex < face.size(); ++vertexIndex)
+    {
+        if (!encoded.empty())
+            encoded.push_back(',');
+        encoded += std::to_string(face[vertexIndex]);
+    }
+    return aiString(encoded);
+}
+
+static bool decodeSceneNgonFaceMetadata(const aiString& encoded, std::vector<unsigned int>& outFace)
+{
+    outFace.clear();
+    const std::string value = encoded.C_Str();
+    if (value.empty())
+        return false;
+
+    size_t start = 0;
+    while (start < value.size())
+    {
+        const size_t end = value.find(',', start);
+        const std::string token = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (token.empty())
+            return false;
+        errno = 0;
+        char* tail = nullptr;
+        const unsigned long parsed = std::strtoul(token.c_str(), &tail, 10);
+        if (!tail || *tail != '\0' || errno == ERANGE ||
+            parsed > std::numeric_limits<unsigned int>::max())
+            return false;
+        outFace.push_back(static_cast<unsigned int>(parsed));
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+
+    return outFace.size() >= 3;
+}
+
+static bool remapNgonFaces(const std::vector<unsigned int>& remap,
+                           std::vector<std::vector<unsigned int>>& faces)
+{
+    if (remap.empty())
+        return true;
+
+    for (auto& face : faces)
+    {
+        for (auto& idx : face)
+        {
+            if (idx >= remap.size() || remap[idx] == UINT_MAX)
+                return false;
+            idx = remap[idx];
+        }
+    }
+    return true;
+}
+
+static bool decodeSceneNgonFacesMetadata(const aiMetadata* metadata,
+                                         unsigned int subIndex,
+                                         std::vector<std::vector<unsigned int>>& outFaces)
+{
+    outFaces.clear();
+    if (!metadata)
+        return false;
+
+    const std::string prefix = sceneNgonFacesMetaKey(subIndex) + ".face.";
+    std::map<unsigned int, std::vector<unsigned int>> orderedFaces;
+    for (unsigned int i = 0; i < metadata->mNumProperties; ++i)
+    {
+        const std::string key = metadata->mKeys[i].C_Str();
+        if (key.rfind(prefix, 0) != 0)
+            continue;
+
+        const std::string suffix = key.substr(prefix.size());
+        if (suffix.empty())
+            return false;
+        errno = 0;
+        char* tail = nullptr;
+        const unsigned long faceIndex = std::strtoul(suffix.c_str(), &tail, 10);
+        if (!tail || *tail != '\0' || errno == ERANGE ||
+            faceIndex > std::numeric_limits<unsigned int>::max())
+            return false;
+
+        aiString encoded;
+        if (!metadata->Get(i, encoded))
+            return false;
+
+        std::vector<unsigned int> face;
+        if (!decodeSceneNgonFaceMetadata(encoded, face))
+            return false;
+        orderedFaces[static_cast<unsigned int>(faceIndex)] = std::move(face);
+    }
+
+    if (orderedFaces.empty())
+        return false;
+
+    outFaces.reserve(orderedFaces.size());
+    for (auto& [faceIndex, face] : orderedFaces)
+        outFaces.push_back(std::move(face));
+
+    return true;
+}
+
 // Assign bone weights from Ogre bone assignments to an aiMesh
 static void assignBoneWeights(
     aiMesh* aiM,
@@ -517,9 +636,10 @@ static void assignBoneWeights(
 // weights. Required when exporting LOD-reduced geometry (full vertex buffer but
 // only a fraction of triangles), which otherwise causes expensive post-processing
 // (aiProcess_JoinIdenticalVertices, aiProcess_OptimizeMeshes) on import.
-static void compactAiMesh(aiMesh* aiM)
+static std::vector<unsigned int> compactAiMesh(aiMesh* aiM)
 {
-    if (!aiM || aiM->mNumVertices == 0 || aiM->mNumFaces == 0) return;
+    if (!aiM || aiM->mNumVertices == 0 || aiM->mNumFaces == 0)
+        return {};
 
     std::vector<bool> used(aiM->mNumVertices, false);
     for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
@@ -532,7 +652,8 @@ static void compactAiMesh(aiMesh* aiM)
     for (unsigned int i = 0; i < aiM->mNumVertices; ++i)
         if (used[i]) remap[i] = newCount++;
 
-    if (newCount == aiM->mNumVertices) return; // nothing to compact
+    if (newCount == aiM->mNumVertices)
+        return remap; // nothing to compact
 
     for (unsigned int i = 0; i < aiM->mNumVertices; ++i) {
         if (!used[i]) continue;
@@ -565,6 +686,8 @@ static void compactAiMesh(aiMesh* aiM)
         }
         bone->mNumWeights = kept;
     }
+
+    return remap;
 }
 
 // Convert an Ogre skeleton animation to an aiAnimation
@@ -2989,6 +3112,7 @@ static aiScene* buildSceneAiScene()
 
         // Create the scene node's aiNode
         aiNode* entityNode;
+        aiNode* meshOwnerNode = nullptr;
         if (hasSkeleton)
         {
             entityNode = new aiNode(std::string(sn->getName()));
@@ -3010,6 +3134,7 @@ static aiScene* buildSceneAiScene()
             meshNode->mMeshes = new unsigned int[numSub];
             for (unsigned int si = 0; si < numSub; ++si)
                 meshNode->mMeshes[si] = globalMeshIdx + si;
+            meshOwnerNode = meshNode;
 
             entityNode->mNumChildren = static_cast<unsigned int>(rootBoneNodes.size()) + 1;
             entityNode->mChildren = new aiNode*[entityNode->mNumChildren];
@@ -3025,6 +3150,7 @@ static aiScene* buildSceneAiScene()
             entityNode->mMeshes = new unsigned int[numSub];
             for (unsigned int si = 0; si < numSub; ++si)
                 entityNode->mMeshes[si] = globalMeshIdx + si;
+            meshOwnerNode = entityNode;
         }
 
         Ogre::Matrix4 nodeTransform;
@@ -3043,12 +3169,30 @@ static aiScene* buildSceneAiScene()
 
             auto* aiM = new aiMesh();
             scene->mMeshes[globalMeshIdx + si] = aiM;
-            readSubmeshGeometry(aiM, vData, subMesh, entity, si, matIndexMap);
+            readSubmeshGeometry(aiM, vData, subMesh, entity, si, matIndexMap, false);
 
             if (hasSkeleton)
                 assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
 
-            compactAiMesh(aiM);
+            const std::vector<unsigned int> remap = compactAiMesh(aiM);
+
+            std::vector<std::vector<unsigned int>> ngonFaces;
+            if (meshOwnerNode
+                && readNgonFacesFromMesh(mesh.get(), si, ngonFaces)
+                && !ngonFaces.empty()
+                && remapNgonFaces(remap, ngonFaces))
+            {
+                if (!meshOwnerNode->mMetaData)
+                    meshOwnerNode->mMetaData = new aiMetadata();
+                for (size_t faceIndex = 0; faceIndex < ngonFaces.size(); ++faceIndex)
+                {
+                    if (ngonFaces[faceIndex].size() < 3)
+                        continue;
+                    meshOwnerNode->mMetaData->Add(
+                        sceneNgonFaceMetaKey(si, static_cast<unsigned int>(faceIndex)),
+                        encodeSceneNgonFaceMetadata(ngonFaces[faceIndex]));
+                }
+            }
         }
 
         // --- Animations ---
@@ -3171,8 +3315,10 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
     Assimp::Importer assimpImporter;
     assimpImporter.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
+    // Preserve the vertex/submesh indexing encoded in qtme.faces metadata.
+    // Topology-rewriting post-process steps like JoinIdenticalVertices and
+    // OptimizeMeshes can invalidate those indices before we restore them.
     unsigned int flags = aiProcess_CalcTangentSpace |
-                         aiProcess_JoinIdenticalVertices |
                          aiProcess_Triangulate |
                          aiProcess_RemoveComponent |
                          aiProcess_GenSmoothNormals |
@@ -3182,7 +3328,6 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
                          aiProcess_ImproveCacheLocality |
                          aiProcess_FixInfacingNormals |
                          aiProcess_PopulateArmatureData |
-                         aiProcess_OptimizeMeshes |
                          aiProcess_GlobalScale;
 
     const aiScene* scene = assimpImporter.ReadFile(file.filePath().toStdString(), flags);
@@ -3516,6 +3661,28 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
             Ogre::MeshPtr ogreMesh = meshProcessor.createMesh(
                 meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
                 materialProcessor);
+
+            std::vector<EditableSubMesh> importedNgonFaces(ogreMesh->getNumSubMeshes());
+            bool haveImportedNgons = false;
+            const unsigned int importedSubCount =
+                std::min<unsigned int>(node->mNumMeshes, ogreMesh->getNumSubMeshes());
+            for (unsigned int subIdx = 0; subIdx < importedSubCount; ++subIdx)
+            {
+                std::vector<std::vector<unsigned int>> faces;
+                if (!decodeSceneNgonFacesMetadata(node->mMetaData, subIdx, faces))
+                    continue;
+
+                importedNgonFaces[subIdx].faces.reserve(faces.size());
+                for (auto& poly : faces)
+                {
+                    EditableFace face;
+                    face.indices = std::move(poly);
+                    importedNgonFaces[subIdx].faces.push_back(std::move(face));
+                }
+                haveImportedNgons = haveImportedNgons || !importedNgonFaces[subIdx].faces.empty();
+            }
+            if (haveImportedNgons)
+                writeNgonFacesToMesh(ogreMesh.get(), importedNgonFaces);
 
             // Create scene node with decomposed world transform
             Ogre::SceneNode* sn = manager->addSceneNode(nodeName);

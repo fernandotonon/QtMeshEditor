@@ -13,13 +13,17 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QTextStream>
 #include <QVector>
 #include <cstdint>
 #include <set>
+#include <OgreMeshManager.h>
+#include <OgreHardwareBufferManager.h>
 #include <OgreTextureManager.h>
 #include <OgreHardwarePixelBuffer.h>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "EditableMesh.h"
 #include "SelectionSet.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 #include <OgreException.h>
@@ -666,6 +670,89 @@ protected:
     }
 };
 
+namespace {
+QString writeQuadObjForScene(const QTemporaryDir& dir, const QString& fileName)
+{
+    if (!dir.isValid())
+        return {};
+    const QString path = dir.filePath(fileName);
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return {};
+    QTextStream out(&f);
+    out << "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n";
+    f.close();
+    return path;
+}
+
+Ogre::MeshPtr createQuadMeshWithUnusedSharedVertex(const std::string& name)
+{
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* sub = mesh->createSubMesh();
+    mesh->sharedVertexData = new Ogre::VertexData();
+    auto* decl = mesh->sharedVertexData->vertexDeclaration;
+
+    size_t offset = 0;
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+
+    mesh->sharedVertexData->vertexCount = 5;
+    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl->getVertexSize(0), mesh->sharedVertexData->vertexCount,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    const float verts[] = {
+        0,0,0,   0,0,1,  0.0f,0.0f,
+        5,5,5,   0,0,1,  0.5f,0.5f, // intentionally unused to force compaction remap
+        1,0,0,   0,0,1,  1.0f,0.0f,
+        1,1,0,   0,0,1,  1.0f,1.0f,
+        0,1,0,   0,0,1,  0.0f,1.0f,
+    };
+    vbuf->writeData(0, sizeof(verts), verts);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, vbuf);
+
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 6,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    const uint16_t idx[] = {0, 2, 3, 0, 3, 4};
+    ibuf->writeData(0, sizeof(idx), idx);
+    sub->useSharedVertices = true;
+    sub->indexData->indexBuffer = ibuf;
+    sub->indexData->indexCount = 6;
+
+    std::vector<EditableSubMesh> subs(1);
+    subs[0].faces.push_back(EditableFace{{0, 2, 3, 4}});
+    writeNgonFacesToMesh(mesh.get(), subs);
+
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1,-1,-1,6,6,1));
+    mesh->_setBoundingSphereRadius(9.0);
+    mesh->load();
+    return mesh;
+}
+
+void expectEntityHasSingleQuadBinding(Ogre::Entity* entity,
+                                      const std::vector<unsigned int>& expectedFace)
+{
+    ASSERT_NE(entity, nullptr);
+
+    std::vector<std::vector<unsigned int>> faces;
+    ASSERT_TRUE(readNgonFacesFromMesh(entity->getMesh().get(), 0, faces));
+    ASSERT_EQ(faces.size(), 1u);
+    EXPECT_EQ(faces[0], expectedFace);
+
+    EditableMesh mesh;
+    ASSERT_TRUE(mesh.loadFromEntity(entity));
+    ASSERT_EQ(mesh.subMeshes().size(), 1u);
+    ASSERT_EQ(mesh.subMeshes()[0].faces.size(), 1u);
+    EXPECT_EQ(mesh.subMeshes()[0].faces[0].indices, expectedFace);
+    EXPECT_EQ(mesh.subMeshes()[0].triangles.size(), 2u);
+}
+} // namespace
+
 TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
     auto* manager = Manager::getSingleton();
 
@@ -726,6 +813,96 @@ TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
     }
     EXPECT_TRUE(foundNode1) << "First node with position (1,2,3) not found";
     EXPECT_TRUE(foundNode2) << "Second node with position (-1,0,5) not found";
+}
+
+TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding_Gltf)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString objPath = writeQuadObjForScene(tmpDir, "scene_ngon_roundtrip.obj");
+    ASSERT_FALSE(objPath.isEmpty());
+
+    MeshImporterExporter::importer(QStringList{objPath});
+
+    auto* manager = Manager::getSingleton();
+    ASSERT_EQ(manager->getSceneNodes().size(), 1);
+    auto* node = manager->getSceneNodes().front();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+    auto* entity = manager->getSceneMgr()->getEntity(node->getName());
+
+    std::vector<std::vector<unsigned int>> facesBefore;
+    ASSERT_TRUE(readNgonFacesFromMesh(entity->getMesh().get(), 0, facesBefore));
+    ASSERT_EQ(facesBefore.size(), 1u);
+    EXPECT_EQ(facesBefore[0].size(), 4u);
+
+    const QString sceneFile = tmpDir.filePath("ngon.scene.gltf");
+    ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+    ASSERT_EQ(manager->getSceneNodes().size(), 1);
+
+    node = manager->getSceneNodes().front();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+    entity = manager->getSceneMgr()->getEntity(node->getName());
+    expectEntityHasSingleQuadBinding(entity, facesBefore[0]);
+}
+
+TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding_Glb)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString objPath = writeQuadObjForScene(tmpDir, "scene_ngon_roundtrip_glb.obj");
+    ASSERT_FALSE(objPath.isEmpty());
+
+    MeshImporterExporter::importer(QStringList{objPath});
+
+    auto* manager = Manager::getSingleton();
+    ASSERT_EQ(manager->getSceneNodes().size(), 1);
+    auto* node = manager->getSceneNodes().front();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+    auto* entity = manager->getSceneMgr()->getEntity(node->getName());
+
+    std::vector<std::vector<unsigned int>> facesBefore;
+    ASSERT_TRUE(readNgonFacesFromMesh(entity->getMesh().get(), 0, facesBefore));
+    ASSERT_EQ(facesBefore.size(), 1u);
+
+    const QString sceneFile = tmpDir.filePath("ngon.scene.glb");
+    ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+    ASSERT_EQ(manager->getSceneNodes().size(), 1);
+
+    node = manager->getSceneNodes().front();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+    entity = manager->getSceneMgr()->getEntity(node->getName());
+    expectEntityHasSingleQuadBinding(entity, facesBefore[0]);
+}
+
+TEST_F(SceneSaveLoadTest, RoundTrip_QuadMeshWithUnusedSharedVertex_RemapPreservesNgonFaceBinding)
+{
+    auto* manager = Manager::getSingleton();
+    Ogre::MeshPtr mesh = createQuadMeshWithUnusedSharedVertex("SceneQuadUnusedSharedVertex");
+    ASSERT_TRUE(mesh);
+
+    Ogre::SceneNode* node = manager->addSceneNode("SceneQuadUnusedSharedVertex");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = manager->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    expectEntityHasSingleQuadBinding(entity, {0, 2, 3, 4});
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString sceneFile = tmpDir.filePath("ngon_compacted.scene.gltf");
+    ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+    ASSERT_EQ(manager->getSceneNodes().size(), 1);
+
+    node = manager->getSceneNodes().front();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+    entity = manager->getSceneMgr()->getEntity(node->getName());
+    expectEntityHasSingleQuadBinding(entity, {0, 1, 2, 3});
 }
 
 // Slice F3 export-side PBR slot dispatch:
