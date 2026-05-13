@@ -429,6 +429,26 @@ Window {
                     Layout.preferredWidth: 80
                     onClicked: dialog.close()
                 }
+                // Phase 6 slice E2: open the Apply Atlas dialog. Niche
+                // follow-up tool — surfaced here instead of the panel
+                // so it doesn't clutter the general UI. Auto-fills the
+                // atlas image + manifest paths from this dialog's state
+                // when they're set, so the typical "pack → apply" flow
+                // is one extra click after Pack.
+                InspectorButton {
+                    label: "Apply to Mesh…"
+                    Layout.preferredWidth: 120
+                    onClicked: dialog.openApplyAtlasDialog()
+                    ToolTip.visible: applyBtnMa.containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: "Consume the manifest above and apply it to a mesh: remap UV0 + rebind the diffuse texture."
+                    MouseArea {
+                        id: applyBtnMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton // tooltip-only; the InspectorButton's own MouseArea handles clicks
+                    }
+                }
                 InspectorButton {
                     label: "Pack Atlas"
                     Layout.preferredWidth: 100
@@ -504,6 +524,31 @@ Window {
                 opacity: 0.7
             }
             Item { Layout.fillHeight: true }
+        }
+    }
+
+    // Phase 6 slice E2: child Apply Atlas dialog. Loaded on demand to
+    // keep startup cost down; the parent pack dialog auto-fills the
+    // freshly-saved atlas + manifest paths so a "pack → apply" flow
+    // is one click after Pack.
+    Loader {
+        id: applyAtlasLoader
+        active: false
+        source: "qrc:/MaterialEditorQML/ApplyAtlasDialog.qml"
+        onLoaded: {
+            if (!item) return
+            if (dialog.outputPath.length > 0)   item.atlasPath    = dialog.outputPath
+            if (dialog.manifestPath.length > 0) item.manifestPath = dialog.manifestPath
+            if (item.open) item.open()
+        }
+    }
+    function openApplyAtlasDialog() {
+        if (!applyAtlasLoader.active) {
+            applyAtlasLoader.active = true
+        } else if (applyAtlasLoader.item) {
+            if (dialog.outputPath.length > 0)   applyAtlasLoader.item.atlasPath    = dialog.outputPath
+            if (dialog.manifestPath.length > 0) applyAtlasLoader.item.manifestPath = dialog.manifestPath
+            applyAtlasLoader.item.open()
         }
     }
 }
