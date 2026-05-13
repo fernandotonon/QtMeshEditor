@@ -7,6 +7,7 @@
     <file alias="AISettingsDialog.qml">../qml/AISettingsDialog.qml</file>
     <file alias="TextureChannelPackerDialog.qml">../qml/TextureChannelPackerDialog.qml</file>
     <file alias="NormalMapGeneratorDialog.qml">../qml/NormalMapGeneratorDialog.qml</file>
+    <file alias="TextureAtlasDialog.qml">../qml/TextureAtlasDialog.qml</file>
     <file alias="qmldir">../qml/qmldir</file>
     <file alias="ThemedButton.qml">../qml/ThemedButton.qml</file>
     <file alias="ThemedCheckBox.qml">../qml/ThemedCheckBox.qml</file>

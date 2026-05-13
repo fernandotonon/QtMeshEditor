@@ -87,6 +87,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BatchExporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureChannelPacker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureAtlasPacker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MemoryEstimator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DrawCallAnalyzer.cpp

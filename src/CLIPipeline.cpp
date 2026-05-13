@@ -11,6 +11,7 @@
 #include "FBX/FBXExporter.h"
 #include "MaterialPresetLibrary.h"
 #include "TextureChannelPacker.h"
+#include "TextureAtlasPacker.h"
 #include "NormalMapGenerator.h"
 #include "MemoryEstimator.h"
 #include "DrawCallAnalyzer.h"
@@ -630,6 +631,12 @@ void CLIPipeline::printUsage()
         "                                    Single-pass mesh decimation. Choose one target:\n"
         "                                    --reduction 0.5 (drop half the triangles),\n"
         "                                    --target-tris 5000, or --target-verts 2500.\n"
+        "  atlas --inputs <csv> -o <atlas.png> [--size N] [--width N --height N] [--padding N]\n"
+        "                                    [--manifest <atlas.json>]\n"
+        "                                    Pack N textures into a single atlas + JSON manifest of\n"
+        "                                    per-tile UV remaps. Shelf bin-pack; deterministic. Useful\n"
+        "                                    for consolidating per-prop textures into one binding to\n"
+        "                                    reduce GPU draw-call count.\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -992,6 +999,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "material") rc = cmdMaterial(argc, argv);
     else if (cmd == "pack-textures") rc = cmdPackTextures(argc, argv);
     else if (cmd == "normal-from-height") rc = cmdNormalFromHeight(argc, argv);
+    else if (cmd == "atlas") rc = cmdAtlas(argc, argv);
     else if (cmd == "memory") rc = cmdMemory(argc, argv);
     else if (cmd == "analyze") rc = cmdAnalyze(argc, argv);
     else if (cmd == "vertex-cache") rc = cmdVertexCache(argc, argv);
@@ -2750,6 +2758,106 @@ int CLIPipeline::cmdNormalFromHeight(int argc, char* argv[])
                  .arg(r.usedWidth)
                  .arg(r.usedHeight)
                  .arg(QFileInfo(outputPath).fileName()));
+    return 0;
+}
+
+int CLIPipeline::cmdAtlas(int argc, char* argv[])
+{
+    // Parse:
+    //   atlas --inputs a.png,b.png,c.png -o atlas.png
+    //         [--size 2048] [--width N] [--height N] [--padding N]
+    //         [--manifest atlas.json]
+    TextureAtlasPacker::AtlasSpec spec;
+    QString outputPath;
+    QString manifestPath;
+    QString inputsArg;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "atlas" || arg == "--cli") continue;
+        if (arg == "--inputs" && i + 1 < argc) { inputsArg = QString(argv[++i]); continue; }
+        if (arg == "--size" && i + 1 < argc) {
+            const int n = QString(argv[++i]).toInt();
+            spec.atlasWidth = n;
+            spec.atlasHeight = n;
+            continue;
+        }
+        if (arg == "--width"   && i + 1 < argc) { spec.atlasWidth   = QString(argv[++i]).toInt(); continue; }
+        if (arg == "--height"  && i + 1 < argc) { spec.atlasHeight  = QString(argv[++i]).toInt(); continue; }
+        if (arg == "--padding" && i + 1 < argc) { spec.padding      = QString(argv[++i]).toInt(); continue; }
+        if (arg == "--manifest" && i + 1 < argc) { manifestPath = QString(argv[++i]); continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString(argv[++i]);
+            continue;
+        }
+        // Accept bare positional inputs too (a.png b.png c.png).
+        if (!arg.startsWith("-")) {
+            if (inputsArg.isEmpty()) inputsArg = arg;
+            else inputsArg += "," + arg;
+        }
+    }
+
+    if (inputsArg.isEmpty() || outputPath.isEmpty()) {
+        err() << "Error: missing --inputs or -o." << Qt::endl;
+        err() << "Usage: qtmesh atlas --inputs a.png,b.png,c.png -o atlas.png" << Qt::endl;
+        err() << "                    [--size 2048] [--width N --height N]" << Qt::endl;
+        err() << "                    [--padding 2] [--manifest atlas.json]" << Qt::endl;
+        return 2;
+    }
+
+    // Split comma-separated inputs, trim whitespace, drop empties.
+    const QStringList parts = inputsArg.split(',', Qt::SkipEmptyParts);
+    for (const QString& p : parts) {
+        const QString trimmed = p.trimmed();
+        if (!trimmed.isEmpty())
+            spec.sourcePaths.append(trimmed);
+    }
+    if (spec.sourcePaths.isEmpty()) {
+        err() << "Error: --inputs must list at least one image." << Qt::endl;
+        return 2;
+    }
+
+    SentryReporter::addBreadcrumb("cli.atlas",
+        QString("Atlas %1 inputs -> %2")
+            .arg(spec.sourcePaths.size())
+            .arg(QFileInfo(outputPath).fileName()));
+
+    auto r = TextureAtlasPacker::packToFile(spec, outputPath);
+    if (!r.ok) {
+        err() << "Error: " << r.error << Qt::endl;
+        return 1;
+    }
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Atlas %1 tiles -> %2").arg(r.tiles.size()).arg(QFileInfo(outputPath).fileName()));
+
+    cliWrite(QString("Packed %1 tiles into %2x%3 atlas (used %4x%5) -> %6\n")
+                 .arg(r.tiles.size())
+                 .arg(spec.atlasWidth)
+                 .arg(spec.atlasHeight)
+                 .arg(r.usedWidth)
+                 .arg(r.usedHeight)
+                 .arg(QFileInfo(outputPath).fileName()));
+
+    if (!manifestPath.isEmpty()) {
+        const QString json = TextureAtlasPacker::manifestToJson(r, spec.padding);
+        const QByteArray bytes = json.toUtf8();
+        QFile mf(manifestPath);
+        if (!mf.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+            err() << "Error: could not open manifest path: " << manifestPath << Qt::endl;
+            return 1;
+        }
+        const qint64 written = mf.write(bytes);
+        mf.close();
+        if (written != bytes.size()) {
+            err() << "Error: short write to manifest path: " << manifestPath
+                  << " (" << written << "/" << bytes.size() << " bytes)" << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb("file.export",
+            QString("Atlas manifest -> %1").arg(QFileInfo(manifestPath).fileName()));
+        cliWrite(QString("Manifest -> %1\n").arg(QFileInfo(manifestPath).fileName()));
+    }
+
     return 0;
 }
 

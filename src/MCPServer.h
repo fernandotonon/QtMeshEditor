@@ -190,6 +190,9 @@ private:
     /// Slice H: generate a tangent-space normal map from a height/bump
     /// source via Sobel filter.
     QJsonObject toolGenerateNormalMap(const QJsonObject &args);
+    /// Phase 6 slice E: pack N input textures into a single atlas image
+    /// + JSON manifest of per-tile UV remaps. Shelf bin-pack, deterministic.
+    QJsonObject toolPackAtlas(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {

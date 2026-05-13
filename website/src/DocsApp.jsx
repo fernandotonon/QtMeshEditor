@@ -24,6 +24,7 @@ const NAV = [
     { id: 'cmd-analyze', label: 'analyze' },
     { id: 'cmd-vertex-cache', label: 'vertex-cache' },
     { id: 'cmd-decimate', label: 'decimate' },
+    { id: 'cmd-atlas', label: 'atlas' },
   ]},
   { section: 'Scan Reference', items: [
     { id: 'scan-config', label: 'Configuration (qtmesh.yml)' },
@@ -755,6 +756,59 @@ Total: 1,008 → 492 (51.2% effective reduction)`}</CodeBlock>
               optional <Code>dry_run</Code> bool (default <Code>false</Code>; when true, returns a
               projected report without mutating the scene). Response carries the structured
               payload under the <Code>decimation</Code> key.
+            </p>
+          </CmdSection>
+
+          <CmdSection id="cmd-atlas" name="atlas" description={<>Pack N input textures into a single atlas image plus a JSON manifest of per-tile UV remaps. Shelf bin-pack with height-descending sort — deterministic; no rotation; tiles padded on every side to prevent MIP bleed. Pairs with the slice B <a href="#cmd-analyze" className={s.link}>draw-call analyzer</a>'s merge suggestions: collapse many small per-prop textures into a single binding and you cut the draw-call count proportionally.</>}
+            synopsis={`qtmesh atlas --inputs a.png,b.png,c.png -o atlas.png
+qtmesh atlas --inputs a.png,b.png --size 1024 --padding 4 -o atlas.png
+qtmesh atlas --inputs a.png,b.png -o atlas.png --manifest atlas.json`}
+            options={[
+              ['--inputs <csv>', 'Comma-separated paths to input texture files (PNG/TGA/JPG/BMP). Bare positional args also work.'],
+              ['-o <output>', 'Output atlas image path. Extension determines format (PNG/TGA/JPG).'],
+              ['--size N', 'Convenience: sets both atlas width and height to a square. Default 2048.'],
+              ['--width N --height N', 'Explicit per-axis atlas dimensions when not square.'],
+              ['--padding N', 'Pixels of empty space on every side of a tile so MIPs don\'t bleed. Default 2.'],
+              ['--manifest <json>', 'Optional path for the JSON manifest of per-tile UV remaps.'],
+            ]}
+            examples={[
+              'qtmesh atlas --inputs props/wood.png,props/metal.png,props/stone.png -o props_atlas.png --manifest props_atlas.json',
+              'qtmesh atlas --inputs character_diffuse.png,character_normal.png --size 4096 --padding 8 -o character_atlas.png',
+            ]}
+          >
+            <h3 className={s.subsection}>Manifest Schema</h3>
+            <CodeBlock lang="json">{`{
+  "width": 2048,
+  "height": 2048,
+  "padding": 2,
+  "tiles": [
+    {
+      "source": "props/wood.png",
+      "x": 2, "y": 2, "w": 512, "h": 512,
+      "u0": 0.000976, "v0": 0.000976,
+      "u1": 0.250976, "v1": 0.250976
+    }
+  ]
+}`}</CodeBlock>
+            <p className={s.para}>
+              Each tile carries both pixel coordinates and pre-computed UV ranges. Downstream
+              tooling (asset-pipeline scripts, custom build steps, future "Apply Atlas" Inspector
+              action) can ingest the manifest directly to rewrite mesh UV0 onto the atlas.
+            </p>
+            <h3 className={s.subsection}>Algorithm</h3>
+            <p className={s.para}>
+              Inputs are sorted by padded-height descending and placed left-to-right on the
+              current shelf. When the next tile doesn't fit width-wise, a new shelf is opened
+              below at the existing shelf's bottom edge. Returns an error if any single tile
+              exceeds the atlas after padding, or if the requested atlas can't fit the full
+              input set.
+            </p>
+            <p className={s.para}>
+              <strong>MCP:</strong> the <Code>pack_atlas</Code> tool accepts the same shape —
+              <Code>inputs</Code> can be either a JSON array of strings or a comma-separated
+              single string. Response carries <Code>tiles_packed</Code>, <Code>atlas_width</Code>,
+              <Code>atlas_height</Code>, <Code>used_width</Code>, <Code>used_height</Code>, and
+              the <Code>output</Code>/<Code>manifest</Code> paths.
             </p>
           </CmdSection>
 

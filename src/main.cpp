@@ -90,7 +90,7 @@ int main(int argc, char *argv[])
                         || arg == "scan" || arg == "material" || arg == "pack-textures"
                         || arg == "normal-from-height" || arg == "memory"
                         || arg == "analyze" || arg == "vertex-cache"
-                        || arg == "decimate")
+                        || arg == "decimate" || arg == "atlas")
                     cliMode = true;
                 break;  // first non-flag arg determines mode
             }

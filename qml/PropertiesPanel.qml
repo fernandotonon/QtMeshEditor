@@ -2243,6 +2243,39 @@ Rectangle {
                 }
             }
 
+            // Phase 6 slice E: Texture Atlas Packer — pack N textures into
+            // a single atlas + JSON UV manifest. Same Mode-Tools placement
+            // as Pack Texture Channels and Generate Normal Map (operates
+            // on disk files, not the selection's TUS).
+            Rectangle {
+                width: Math.min(parent.width - 16, atlasLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                color: atlasMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: atlasLabel
+                    anchors.centerIn: parent
+                    text: "Pack Atlas…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: atlasMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openTextureAtlasDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: "Pack N textures into a single atlas image + JSON UV manifest. Reduces GPU draw-call count by consolidating bindings."
+                }
+            }
+
             // Slice I: Material Preview Environment — interactive
             // preview of the currently-selected material on Sphere/Cube
             // shapes. Drag horizontally on the thumbnail to rotate the
@@ -2436,6 +2469,23 @@ Rectangle {
             normalMapGeneratorLoader.active = true
         } else if (normalMapGeneratorLoader.item) {
             normalMapGeneratorLoader.item.open()
+        }
+    }
+
+    // Phase 6 slice E: Texture Atlas dialog — same Loader pattern.
+    Loader {
+        id: textureAtlasLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/TextureAtlasDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+
+    function openTextureAtlasDialog() {
+        if (!textureAtlasLoader.active) {
+            textureAtlasLoader.active = true
+        } else if (textureAtlasLoader.item) {
+            textureAtlasLoader.item.open()
         }
     }
 

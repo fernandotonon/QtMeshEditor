@@ -465,6 +465,36 @@ public slots:
                                           bool invertR,
                                           bool invertG,
                                           const QString& outputPath);
+
+    /// Phase 6 slice E: open a native save-as dialog for the atlas
+    /// output path (PNG/TGA/JPG). Mirrors savePackedTextureDialog().
+    Q_INVOKABLE QString saveAtlasDialog();
+
+    /// Phase 6 slice E: open a native save-as dialog for the optional
+    /// manifest JSON path. Empty return = cancelled.
+    Q_INVOKABLE QString saveAtlasManifestDialog();
+
+    /// Phase 6 slice E: render a small preview of the atlas layout
+    /// without writing to disk. `previewSize` is the largest edge in
+    /// pixels of the live thumbnail; the packer's natural aspect ratio
+    /// is preserved. Returns a `data:image/png;base64,…` URL the QML
+    /// Image element can show directly, or empty on failure.
+    Q_INVOKABLE QString previewAtlas(const QStringList& sourcePaths,
+                                     int atlasWidth,
+                                     int atlasHeight,
+                                     int padding,
+                                     int previewSize);
+
+    /// Phase 6 slice E: pack the supplied textures into an atlas at
+    /// `outputPath` and optionally write a JSON manifest at
+    /// `manifestPath` (empty = skip). Returns empty string on success or
+    /// an error message.
+    Q_INVOKABLE QString packAtlas(const QStringList& sourcePaths,
+                                  int atlasWidth,
+                                  int atlasHeight,
+                                  int padding,
+                                  const QString& outputPath,
+                                  const QString& manifestPath);
     
     // Color picker
     void openColorPicker(const QString &colorType);

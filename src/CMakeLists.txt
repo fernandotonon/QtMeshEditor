@@ -78,6 +78,7 @@ BatchExporter.cpp
 MaterialPresetLibrary.cpp
 MeshLodController.cpp
 TextureChannelPacker.cpp
+TextureAtlasPacker.cpp
 NormalMapGenerator.cpp
 MemoryEstimator.cpp
 DrawCallAnalyzer.cpp
@@ -169,6 +170,7 @@ BatchExporter.h
 MaterialPresetLibrary.h
 MeshLodController.h
 TextureChannelPacker.h
+TextureAtlasPacker.h
 NormalMapGenerator.h
 MemoryEstimator.h
 DrawCallAnalyzer.h
