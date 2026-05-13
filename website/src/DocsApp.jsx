@@ -538,10 +538,9 @@ Summary:
             </p>
             <p className={s.para}>
               The scan command's <Code>max_acmr</Code> rule flags assets above a configured ceiling.
-              Heads-up: scan computes ACMR from Assimp's flattened triangle list, which doesn't match
-              Ogre's index order — scan numbers run higher than the in-app validator's on the same asset.
-              <Code>1.5</Code> is a reasonable scan-side ceiling. A future Ogre-backed scan backend will
-              reconcile the numbers.
+              Scan loads each mesh through the editor's <Code>MeshImporterExporter</Code> and measures
+              ACMR on Ogre's actual index buffer, so scan-side numbers match the in-editor validator
+              one-for-one — set the same ceiling you'd accept in the editor.
             </p>
           </section>
 
@@ -720,7 +719,7 @@ rules:
   min_vertex_count: 3           # Catch degenerate geometry
 
   # Vertex-cache friendliness (ACMR — see Performance Concepts)
-  max_acmr: 1.5                 # Warn when ACMR exceeds this; 0 = disabled
+  max_acmr: 1.0                 # Warn when ACMR exceeds this; 0 = disabled
 
   # Skeleton & animation existence
   require_skeleton: false
@@ -802,11 +801,12 @@ report:
             <RuleCard name="max_acmr" type="number" severity="warning"
               description={<>Maximum acceptable <strong>Average Cache Miss Ratio</strong>. Flags meshes whose
                             index buffer reorders poorly for the GPU vertex cache. See the <a href="#perf-overview" className={s.link}>Performance Concepts</a> page
-                            for the formula. <strong>Note:</strong> scan computes ACMR from Assimp's flattened triangle list, not
-                            Ogre's index order, so the numbers run higher than the in-app validator on the same asset —
-                            <Code>1.5</Code> is a reasonable starting ceiling on the scan side. Fix with
+                            for the formula. Scan loads each mesh through the editor's
+                            <Code>MeshImporterExporter</Code> and measures ACMR on Ogre's actual index buffer,
+                            so scan numbers match the in-editor validator's one-for-one — set the same ceiling
+                            you'd accept in the editor (around <Code>1.0</Code> is typical). Fix with
                             <Code>qtmesh vertex-cache &lt;in&gt; -o &lt;out&gt;</Code>.</>}
-              example={`max_acmr: 1.5    # 0 = disabled`} />
+              example={`max_acmr: 1.0    # 0 = disabled`} />
 
             <h3 className={s.subsection}>Skeleton & Animation Existence</h3>
             <RuleCard name="require_skeleton" type="boolean" severity="error"
