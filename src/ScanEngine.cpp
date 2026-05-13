@@ -126,13 +126,20 @@ static void clearOgreSceneForScanImport()
     }
 
     // Free per-file resources so a 1000-asset scan doesn't accumulate
-    // ~N meshes / materials / skeletons in the manager pools.
+    // ~N meshes / materials / skeletons in the manager pools. Ignore any
+    // Ogre::Exception thrown by the unload — it just means the manager
+    // still has a reference somewhere (a Skeleton pinned by a Mesh, etc.)
+    // and we'll get to it on the next pass.
     try {
         Ogre::MeshManager::getSingleton().unloadUnreferencedResources(true);
-    } catch (...) {}
+    } catch (const Ogre::Exception&) {
+        // Intentionally swallowed — best-effort cleanup, not load-bearing.
+    }
     try {
         Ogre::SkeletonManager::getSingleton().unloadUnreferencedResources(true);
-    } catch (...) {}
+    } catch (const Ogre::Exception&) {
+        // Intentionally swallowed — see comment above.
+    }
 }
 
 } // namespace
@@ -245,7 +252,50 @@ void ScanEngine::testApplyOgreMeshInspectCounts(AssetInfo& info, const Ogre::Mes
 // file through MeshImporterExporter — the same path the editor uses — and
 // computes ACMR over the actual Ogre index buffers, so scan-side thresholds
 // (max_acmr) and in-editor metrics agree on every asset.
-//
+
+// Read an Ogre SubMesh's index buffer into a uint32 vector, transparently
+// handling the 16/32-bit variants. Returns empty on non-triangulated or
+// degenerate input.
+static std::vector<uint32_t> readSubmeshIndexBuffer(const Ogre::SubMesh* sub)
+{
+    std::vector<uint32_t> idxFlat;
+    if (!sub || !sub->indexData || !sub->indexData->indexBuffer) return idxFlat;
+    const Ogre::IndexData* id = sub->indexData;
+    if (id->indexCount < 3 || id->indexCount % 3 != 0) return idxFlat;
+
+    const bool use16 = id->indexBuffer->getType() == Ogre::HardwareIndexBuffer::IT_16BIT;
+    idxFlat.resize(id->indexCount);
+    const void* src = id->indexBuffer->lock(Ogre::HardwareBuffer::HBL_READ_ONLY);
+    if (use16) {
+        const auto* in = static_cast<const uint16_t*>(src);
+        for (size_t i = 0; i < idxFlat.size(); ++i)
+            idxFlat[i] = in[id->indexStart + i];
+    } else {
+        const auto* in = static_cast<const uint32_t*>(src);
+        for (size_t i = 0; i < idxFlat.size(); ++i)
+            idxFlat[i] = in[id->indexStart + i];
+    }
+    id->indexBuffer->unlock();
+    return idxFlat;
+}
+
+// Walk one entity's submeshes, accumulating ACMR weighted by triangle count.
+static void accumulateEntityAcmr(const Ogre::Entity* entity,
+                                 double& weightedSum, unsigned int& totalTris)
+{
+    if (!entity) return;
+    const Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return;
+    for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+        const std::vector<uint32_t> idxFlat = readSubmeshIndexBuffer(mesh->getSubMesh(s));
+        if (idxFlat.empty()) continue;
+        const double acmr = VertexCacheOptimizer::computeAcmr(idxFlat);
+        const auto tris = static_cast<unsigned int>(idxFlat.size() / 3);
+        weightedSum += acmr * tris;
+        totalTris += tris;
+    }
+}
+
 // Returns true when an ACMR was produced; false on import failure or no
 // triangulated submeshes. Clears the scene + unloads Ogre resources on the
 // way out so the caller's loop doesn't accumulate state.
@@ -272,40 +322,8 @@ static bool computeWeightedAcmrViaOgre(const QString& filePath, AssetInfo& info)
 
     double weightedSum = 0.0;
     unsigned int totalTris = 0;
-
-    for (Ogre::Entity* entity : entities) {
-        if (!entity) continue;
-        const Ogre::MeshPtr mesh = entity->getMesh();
-        if (!mesh) continue;
-        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
-            const Ogre::SubMesh* sub = mesh->getSubMesh(s);
-            if (!sub || !sub->indexData || !sub->indexData->indexBuffer) continue;
-            if (sub->indexData->indexCount < 3) continue;
-            if (sub->indexData->indexCount % 3 != 0) continue;
-
-            const bool use16 = sub->indexData->indexBuffer->getType()
-                               == Ogre::HardwareIndexBuffer::IT_16BIT;
-            std::vector<uint32_t> idxFlat;
-            idxFlat.resize(sub->indexData->indexCount);
-            const void* src = sub->indexData->indexBuffer->lock(
-                Ogre::HardwareBuffer::HBL_READ_ONLY);
-            if (use16) {
-                const auto* in = static_cast<const uint16_t*>(src);
-                for (size_t i = 0; i < idxFlat.size(); ++i)
-                    idxFlat[i] = in[sub->indexData->indexStart + i];
-            } else {
-                const auto* in = static_cast<const uint32_t*>(src);
-                for (size_t i = 0; i < idxFlat.size(); ++i)
-                    idxFlat[i] = in[sub->indexData->indexStart + i];
-            }
-            sub->indexData->indexBuffer->unlock();
-
-            const double acmr = VertexCacheOptimizer::computeAcmr(idxFlat);
-            const auto tris = static_cast<unsigned int>(idxFlat.size() / 3);
-            weightedSum += acmr * tris;
-            totalTris += tris;
-        }
-    }
+    for (const Ogre::Entity* entity : entities)
+        accumulateEntityAcmr(entity, weightedSum, totalTris);
 
     if (totalTris > 0)
         info.weightedAcmr = weightedSum / totalTris;
