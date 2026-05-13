@@ -23,6 +23,11 @@ The MIT License
  *   <polyIndex>  <flag> <normalMode> <typeChar> <payload...>
  *
  * Where:
+ *   - Integer after poly index: packed flags from the Blender RSD exporter's
+ *     `materialFlag("000",0,0,unlit)` — the **least significant bit is unlit** (no
+ *     hardware lighting / "full bright") when other bits are zero. Omitted legacy
+ *     lines (`0 F G ...`) default to **lit** (unlit=false).
+ *   - Next letter: Blender mesh smooth (`G`) vs flat (`F`) shading — stored as `shadingChar`.
  *   - typeChar 'C' = flat solid color           (payload: R G B)
  *   - typeChar 'G' = smooth (Gouraud) color     (payload: 3*RGB for tri or 4*RGB for quad)
  *   - typeChar 'T' = textured, no color         (payload: texIndex u0 v0 u1 v1 u2 v2 u3 v3)
@@ -46,8 +51,9 @@ struct UV {
 
 struct MatEntry {
     QColor rgb;                ///< representative RGB (back-compat); first vert colour for smooth shaded entries.
-    char shadingChar = 'F';    ///< 'F' (flat) or 'S' / 'G' (smooth) - Psy-Q ASCII field, kept verbatim.
+    char shadingChar = 'F';    ///< Blender exporter: poly flat (`F`) vs smooth (`G`) normals — kept verbatim.
     char typeChar = 'C';       ///< 'C', 'G', 'T', 'H', or 'D' - see header doc.
+    bool unlit = false;        ///< MAT flag LSB: no scene lighting (Blender "Unlit" / PS1 no-light style).
     bool textured = false;     ///< true for T/H/D.
     int  textureIndex = -1;    ///< RSD TEX[i] index for textured polygons; -1 otherwise.
     QVector<UV> uvs;           ///< 0, 3 or 4 entries (textured polygons only).
@@ -58,8 +64,9 @@ bool parseMatFile(const QString& matPath, QVector<MatEntry>& outEntries, QString
 
 /// Write a minimal Psy-Q MAT file with one RGB entry per face.
 ///
-/// Entries are serialised as `<idx> 1 <shading> <type> <payload>` matching the
-/// canonical Psy-Q / Blender-RSD ASCII layout. Textured entries (`textureIndex >= 0`
+/// Entries are serialised as `<idx> <flag> <shading> <type> <payload>` where `<flag>`
+/// matches the Blender exporter's `materialFlag(..., unlit)` (LSB = unlit).
+/// Textured entries (`textureIndex >= 0`
 /// and `uvs.size() >= 3`) write the texture index + 8 UV ints, padding with the
 /// final UV (or `0 0`) for triangles to keep the on-disk shape stable.
 bool writeMatFile(const QString& matPath, const QVector<MatEntry>& entries, QString* outError = nullptr);

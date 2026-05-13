@@ -159,13 +159,27 @@ bool tryParseEntryLine(const QString& line, MatEntry& outEntry)
     if (!okIdx)
         return false;
 
-    // Find the type char: scan from the start past the leading numerics and pick the
-    // SECOND single-letter token (first is shadingChar, second is typeChar).
+    // Optional packed flag integer (Blender exporter) before the two letter tokens.
+    int scanStart = 1;
+    int matFlags = 0;
+    bool haveMatFlags = false;
+    if (parts.size() > 2) {
+        bool okF = false;
+        const int maybe = parts[1].toInt(&okF, 10);
+        if (okF && maybe >= 0 && maybe <= 0xFFFFFF) {
+            matFlags = maybe;
+            haveMatFlags = true;
+            scanStart = 2;
+        }
+    }
+
+    // Find the type char: scan from `scanStart` and pick the SECOND single-letter token
+    // (first is shadingChar, second is typeChar).
     int letterCount = 0;
     int typeCharIdx = -1;
     char shadingChar = 'F';
     char typeChar = 'C';
-    for (int i = 1; i < parts.size(); ++i) {
+    for (int i = scanStart; i < parts.size(); ++i) {
         const QString& p = parts[i];
         if (isSingleLetter(p)) {
             const char c = p.at(0).toUpper().toLatin1();
@@ -195,7 +209,11 @@ bool tryParseEntryLine(const QString& line, MatEntry& outEntry)
     outEntry = MatEntry{};
     outEntry.shadingChar = shadingChar;
     outEntry.typeChar = typeChar;
-    return decodePayload(outEntry, trailing);
+    if (haveMatFlags)
+        outEntry.unlit = (matFlags & 1) != 0;
+    if (!decodePayload(outEntry, trailing))
+        return false;
+    return true;
 }
 
 bool readExpectedCount(const QStringList& lines, int& outCount, bool& outSawHeader)
@@ -229,6 +247,16 @@ bool readExpectedCount(const QStringList& lines, int& outCount, bool& outSawHead
 }
 
 } // namespace
+
+/** Blender `Playstation RSD Exporter.py` materialFlag("000",0,0,unlit) → decimal int. */
+static int encodeBlenderMaterialFlagBits(bool unlit)
+{
+    const QString bits = QStringLiteral("00") + QStringLiteral("000") + QLatin1Char('0')
+                        + QLatin1Char('0') + QLatin1Char(unlit ? '1' : '0');
+    bool ok = false;
+    const int v = bits.toInt(&ok, 2);
+    return ok ? v : (unlit ? 1 : 0);
+}
 
 bool parseMatFile(const QString& matPath, QVector<MatEntry>& outEntries, QString* outError)
 {
@@ -310,15 +338,15 @@ bool writeMatFile(const QString& matPath, const QVector<MatEntry>& entries, QStr
 
     for (int i = 0; i < entries.size(); ++i) {
         const MatEntry& e = entries[i];
-        const char shading = (e.shadingChar == 'S' || e.shadingChar == 'G') ? 'S' : 'F';
-        ts << i << " 1 " << shading << " ";
-
-        // Effective type char: keep what the caller provided unless it's nonsensical.
         char typeChar = e.typeChar;
         if (typeChar != 'C' && typeChar != 'G' && typeChar != 'T'
             && typeChar != 'D' && typeChar != 'H')
             typeChar = 'C';
-        ts << typeChar;
+        const char shading =
+            (e.shadingChar == 'F' || e.shadingChar == 'G' || e.shadingChar == 'S')
+                ? e.shadingChar
+                : 'F';
+        ts << i << " " << encodeBlenderMaterialFlagBits(e.unlit) << " " << shading << " " << typeChar;
 
         auto writeUvs = [&]() {
             if (e.uvs.size() >= 4) {
@@ -413,4 +441,3 @@ bool writeMatFile(const QString& matPath, const QVector<MatEntry>& entries, QStr
 }
 
 } // namespace PS1MAT
-
