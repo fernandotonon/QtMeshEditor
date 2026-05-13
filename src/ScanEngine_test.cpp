@@ -703,7 +703,7 @@ TEST(ScanEngineTest, EvaluateRules_DetectOverlappingUvs_FiresOverThreshold)
     auto findings = ScanEngine::evaluateRules(asset, config);
     bool found = false;
     for (const auto& f : findings)
-        if (f.rule == "detect_overlapping_uvs") { found = true; break; }
+        if (f.rule == "detect_overlapping_uvs_pct") { found = true; break; }
     EXPECT_TRUE(found);
 }
 
@@ -715,7 +715,7 @@ TEST(ScanEngineTest, EvaluateRules_DetectOverlappingUvs_SkipsWhenUv0Missing)
     config.detectOverlappingUvsPct = 1.0;
     auto findings = ScanEngine::evaluateRules(asset, config);
     for (const auto& f : findings)
-        EXPECT_NE(f.rule, "detect_overlapping_uvs");
+        EXPECT_NE(f.rule, "detect_overlapping_uvs_pct");
 }
 
 TEST(ScanEngineTest, EvaluateRules_DetectNonManifoldEdges_FiresOverThreshold)
@@ -731,7 +731,7 @@ TEST(ScanEngineTest, EvaluateRules_DetectNonManifoldEdges_FiresOverThreshold)
     auto findings = ScanEngine::evaluateRules(asset, config);
     bool found = false;
     for (const auto& f : findings)
-        if (f.rule == "detect_non_manifold_edges") { found = true; break; }
+        if (f.rule == "detect_non_manifold_edges_pct") { found = true; break; }
     EXPECT_TRUE(found);
 }
 
@@ -753,8 +753,8 @@ TEST(ScanEngineTest, EvaluateRules_C4Rules_AllDisabledByDefault)
         EXPECT_NE(f.rule, "max_texture_resolution");
         EXPECT_NE(f.rule, "require_uv_channels");
         EXPECT_NE(f.rule, "detect_zero_weight_bones");
-        EXPECT_NE(f.rule, "detect_overlapping_uvs");
-        EXPECT_NE(f.rule, "detect_non_manifold_edges");
+        EXPECT_NE(f.rule, "detect_overlapping_uvs_pct");
+        EXPECT_NE(f.rule, "detect_non_manifold_edges_pct");
     }
 }
 

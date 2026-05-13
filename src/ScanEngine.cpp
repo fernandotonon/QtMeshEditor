@@ -492,11 +492,16 @@ static QStringList zeroWeightBonesForEntities(const QList<Ogre::Entity*>& entiti
         if (!skel) continue;
 
         std::set<unsigned short> usedHandles;
+        // Mesh-level (shared-geometry skinned meshes — common Ogre layout
+        // for skinned characters where one VertexData feeds every submesh).
+        for (const auto& [vertexIdx, vba] : mesh->getBoneAssignments())
+            usedHandles.insert(vba.boneIndex);
+        // SubMesh-level (per-submesh skin — used when submeshes carry their
+        // own VertexData rather than sharing the mesh-level pool).
         for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
             const Ogre::SubMesh* sub = mesh->getSubMesh(s);
             if (!sub) continue;
-            const auto& assignments = sub->getBoneAssignments();
-            for (const auto& [vertexIdx, vba] : assignments)
+            for (const auto& [vertexIdx, vba] : sub->getBoneAssignments())
                 usedHandles.insert(vba.boneIndex);
         }
 
@@ -602,16 +607,32 @@ static double overlappingUvsRatioForEntities(const QList<Ogre::Entity*>& entitie
 // non-manifold. Boundary edges (1 face) count as non-manifold here — a
 // proper manifold closed-surface check needs that. Returns -1 when there
 // are no triangulated submeshes.
+//
+// The edge key carries the *vertex-pool pointer* (mesh->sharedVertexData when
+// useSharedVertices, sub->vertexData otherwise) alongside the (min,max) index
+// pair. Without this, raw indices like (0,1) collide across unrelated
+// submeshes and entities — every fresh index buffer starts at 0 — and the
+// non-manifold count would be wildly wrong on multi-submesh assets.
 static double nonManifoldEdgesRatioForEntities(const QList<Ogre::Entity*>& entities)
 {
-    // Hash unordered vertex-pair edges. Use (min, max) tuple.
-    struct PairHash {
-        std::size_t operator()(const std::pair<uint32_t, uint32_t>& p) const noexcept {
-            return std::hash<uint64_t>{}(
-                (static_cast<uint64_t>(p.first) << 32) | p.second);
+    struct EdgeKey {
+        const void* pool;
+        uint32_t a;
+        uint32_t b;
+        bool operator==(const EdgeKey& o) const noexcept {
+            return pool == o.pool && a == o.a && b == o.b;
         }
     };
-    std::unordered_map<std::pair<uint32_t, uint32_t>, unsigned int, PairHash> edges;
+    struct EdgeHash {
+        std::size_t operator()(const EdgeKey& k) const noexcept {
+            const auto p = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(k.pool));
+            const uint64_t ab = (static_cast<uint64_t>(k.a) << 32) | k.b;
+            // Mix the pool pointer in so edges from different vertex pools
+            // never collide in the same hash bucket.
+            return std::hash<uint64_t>{}(p ^ (ab * 0x9E3779B97F4A7C15ULL));
+        }
+    };
+    std::unordered_map<EdgeKey, unsigned int, EdgeHash> edges;
     bool sawTris = false;
 
     for (const Ogre::Entity* entity : entities) {
@@ -620,15 +641,19 @@ static double nonManifoldEdgesRatioForEntities(const QList<Ogre::Entity*>& entit
         if (!mesh) continue;
         for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
             const Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            if (!sub) continue;
             const std::vector<uint32_t> idx = readSubmeshIndexBuffer(sub);
             if (idx.empty()) continue;
+            const void* pool = sub->useSharedVertices
+                ? static_cast<const void*>(mesh->sharedVertexData)
+                : static_cast<const void*>(sub->vertexData);
             sawTris = true;
             for (size_t t = 0; t + 2 < idx.size(); t += 3) {
                 for (int k = 0; k < 3; ++k) {
                     uint32_t a = idx[t + k];
                     uint32_t b = idx[t + ((k + 1) % 3)];
                     if (a > b) std::swap(a, b);
-                    edges[{a, b}]++;
+                    edges[EdgeKey{pool, a, b}]++;
                 }
             }
         }
@@ -1089,6 +1114,14 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         info.animationRedundantKeyframeRatio = inner.animationRedundantKeyframeRatio;
         info.totalKeyframes = inner.totalKeyframes;
         info.redundantKeyframes = inner.redundantKeyframes;
+        // Slice C4 metric forwarding — without these copies, .rsd assets
+        // silently skip every C4 rule because their AssetInfo loses the
+        // collector output from the inner inspect call.
+        info.maxTextureDimension = inner.maxTextureDimension;
+        info.minUvChannelCount = inner.minUvChannelCount;
+        info.zeroWeightBoneNames = inner.zeroWeightBoneNames;
+        info.overlappingUvsRatio = inner.overlappingUvsRatio;
+        info.nonManifoldEdgesRatio = inner.nonManifoldEdgesRatio;
         info.filePath = filePath;
         info.relativePath = QDir(scanRoot).relativeFilePath(filePath);
         info.format = extLower;
@@ -1368,12 +1401,12 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
                 .arg(n).arg(sample.join(", ")).arg(suffix)});
     }
 
-    // ---- detect_overlapping_uvs ---- (UV0 AABB sweep — upper bound)
+    // ---- detect_overlapping_uvs_pct ---- (UV0 AABB sweep — upper bound)
     if (config.detectOverlappingUvsPct > 0.0
         && asset.overlappingUvsRatio >= 0.0) {
         const double pct = 100.0 * asset.overlappingUvsRatio;
         if (pct >= config.detectOverlappingUvsPct) {
-            findings.append({asset.relativePath, "detect_overlapping_uvs", Severity::Warning,
+            findings.append({asset.relativePath, "detect_overlapping_uvs_pct", Severity::Warning,
                 QString("%1% of triangles have UV0 AABBs overlapping another — likely "
                         "shared/overlapping UV islands. Bake lightmaps will smear; "
                         "consider a non-overlapping unwrap for UV1.")
@@ -1381,12 +1414,12 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
         }
     }
 
-    // ---- detect_non_manifold_edges ----
+    // ---- detect_non_manifold_edges_pct ----
     if (config.detectNonManifoldEdgesPct > 0.0
         && asset.nonManifoldEdgesRatio >= 0.0) {
         const double pct = 100.0 * asset.nonManifoldEdgesRatio;
         if (pct >= config.detectNonManifoldEdgesPct) {
-            findings.append({asset.relativePath, "detect_non_manifold_edges", Severity::Warning,
+            findings.append({asset.relativePath, "detect_non_manifold_edges_pct", Severity::Warning,
                 QString("%1% of edges are non-manifold (shared by != 2 faces). "
                         "Boolean ops, fluid sims and 3D printing expect manifold input — "
                         "weld duplicate verts and cap open boundaries in your DCC.")
@@ -1631,7 +1664,24 @@ void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, A
 
             clearOgreSceneForScanImport();
             QList<Ogre::SkeletonPtr> animOnlySkeletons;
-            MeshImporterExporter::importer({asset.filePath}, 0, &animOnlySkeletons);
+            // Importer can throw on malformed assets (e.g. a referenced texture
+            // missing on disk crashes MaterialProcessor). Swallow it here so a
+            // single bad file doesn't kill the whole --fix pass; if the import
+            // produces nothing usable we fall through to the no-skeleton branch
+            // below and emit a per-file fix-failed message instead.
+            try {
+                MeshImporterExporter::importer({asset.filePath}, 0, &animOnlySkeletons);
+            } catch (const Ogre::Exception& e) {
+                f.message = QStringLiteral("Fix failed: importer threw — %1")
+                                .arg(QString::fromUtf8(e.what()));
+                clearOgreSceneForScanImport();
+                continue;
+            } catch (const std::exception& e) {
+                f.message = QStringLiteral("Fix failed: importer threw — %1")
+                                .arg(QString::fromUtf8(e.what()));
+                clearOgreSceneForScanImport();
+                continue;
+            }
 
             auto& ents = Manager::getSingleton()->getEntities();
             Ogre::Entity* entity = ents.isEmpty() ? nullptr : ents.last();
@@ -2157,8 +2207,8 @@ QString ScanEngine::formatSarif(const ScanResult& result)
     ruleDescriptions["max_texture_resolution"]    = "Asset has textures larger than the configured pixel ceiling";
     ruleDescriptions["require_uv_channels"]       = "Submesh has fewer UV sets than the rule requires";
     ruleDescriptions["detect_zero_weight_bones"]  = "Skeleton has bones with no vertex weights (Mixamo bloat)";
-    ruleDescriptions["detect_overlapping_uvs"]    = "Triangles share overlapping UV0 regions (lightmap-unsafe)";
-    ruleDescriptions["detect_non_manifold_edges"] = "Mesh has non-manifold edges (booleans / printing will fail)";
+    ruleDescriptions["detect_overlapping_uvs_pct"]    = "Triangles share overlapping UV0 regions (lightmap-unsafe)";
+    ruleDescriptions["detect_non_manifold_edges_pct"] = "Mesh has non-manifold edges (booleans / printing will fail)";
 
     // Collect unique rules used in findings
     QSet<QString> usedRules;

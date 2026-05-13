@@ -1109,6 +1109,15 @@ scopes:
               <thead><tr><th>Rule</th><th>Fix Action</th></tr></thead>
               <tbody>
                 <tr><td><Code>file_name_case</Code></td><td>Renames the file to match the convention</td></tr>
+                <tr>
+                  <td><Code>redundant_keyframes_pct</Code></td>
+                  <td>
+                    Re-exports the asset (FBX / glTF / glb / DAE / OBJ / PLY / STL / .mesh) with redundant animation
+                    keyframes removed via <Code>AnimationMerger::simplifyAnimation</Code> — the same routine as
+                    <Code> qtmesh anim --simplify</Code> and the in-app "Simplify" button. The fix is skipped when the
+                    rewrite would be materially larger than the original.
+                  </td>
+                </tr>
               </tbody>
             </table>
             <p className={s.para}>
