@@ -2,6 +2,7 @@
 #define WELCOMEDIALOG_H
 
 #include <QDialog>
+#include <QFileDialog>
 #include <QStringList>
 
 class WelcomeDialog : public QDialog
@@ -17,6 +18,7 @@ public:
 
     /// Returns true if dialog should be shown (checks QSettings "WelcomeScreen/dontShowAgain")
     static bool shouldShow();
+    static QFileDialog::Options openFileDialogOptions();
 
 private:
     Result m_action = Dismissed;
