@@ -2827,6 +2827,8 @@ int CLIPipeline::cmdAtlas(int argc, char* argv[])
         err() << "Error: " << r.error << Qt::endl;
         return 1;
     }
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Atlas %1 tiles -> %2").arg(r.tiles.size()).arg(QFileInfo(outputPath).fileName()));
 
     cliWrite(QString("Packed %1 tiles into %2x%3 atlas (used %4x%5) -> %6\n")
                  .arg(r.tiles.size())
@@ -2838,13 +2840,21 @@ int CLIPipeline::cmdAtlas(int argc, char* argv[])
 
     if (!manifestPath.isEmpty()) {
         const QString json = TextureAtlasPacker::manifestToJson(r, spec.padding);
+        const QByteArray bytes = json.toUtf8();
         QFile mf(manifestPath);
         if (!mf.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
             err() << "Error: could not open manifest path: " << manifestPath << Qt::endl;
             return 1;
         }
-        mf.write(json.toUtf8());
+        const qint64 written = mf.write(bytes);
         mf.close();
+        if (written != bytes.size()) {
+            err() << "Error: short write to manifest path: " << manifestPath
+                  << " (" << written << "/" << bytes.size() << " bytes)" << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb("file.export",
+            QString("Atlas manifest -> %1").arg(QFileInfo(manifestPath).fileName()));
         cliWrite(QString("Manifest -> %1\n").arg(QFileInfo(manifestPath).fileName()));
     }
 

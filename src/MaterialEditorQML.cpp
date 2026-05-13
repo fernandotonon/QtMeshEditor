@@ -10,6 +10,7 @@
 #include "ModelDownloader.h"
 #include "RTShaderHelper.h"
 #include "TextureChannelPacker.h"
+#include "TextureAtlasPacker.h"
 #include "NormalMapGenerator.h"
 #include "PS1/PS1TIM.h"
 #include <OgreRTShaderSystem.h>
@@ -3047,6 +3048,130 @@ QString MaterialEditorQML::generateNormalMap(const QString& sourcePath,
 
     auto r = NormalMapGenerator::generateToFile(spec, outputPath);
     return r.ok ? QString() : r.error;
+}
+
+// ─── Phase 6 slice E: texture atlas hooks ────────────────────────────
+
+QString MaterialEditorQML::saveAtlasDialog()
+{
+    QString texturesPath = "./media/materials/textures";
+    QDir texturesDir(texturesPath);
+    QString startDir = texturesDir.exists() ? texturesDir.absolutePath() : QDir::currentPath();
+
+    QApplication::processEvents();
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+
+    return QFileDialog::getSaveFileName(
+        QApplication::activeWindow(),
+        "Save Atlas",
+        startDir + "/atlas.png",
+        "PNG (*.png);;TGA (*.tga);;JPEG (*.jpg *.jpeg);;BMP (*.bmp)",
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons
+    );
+}
+
+QString MaterialEditorQML::saveAtlasManifestDialog()
+{
+    QString texturesPath = "./media/materials/textures";
+    QDir texturesDir(texturesPath);
+    QString startDir = texturesDir.exists() ? texturesDir.absolutePath() : QDir::currentPath();
+
+    QApplication::processEvents();
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+
+    return QFileDialog::getSaveFileName(
+        QApplication::activeWindow(),
+        "Save Atlas Manifest",
+        startDir + "/atlas.json",
+        "JSON (*.json)",
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons
+    );
+}
+
+QString MaterialEditorQML::previewAtlas(const QStringList& sourcePaths,
+                                         int atlasWidth,
+                                         int atlasHeight,
+                                         int padding,
+                                         int previewSize)
+{
+    // Need at least one input to produce anything; otherwise just return
+    // empty so the QML Image renders the placeholder text.
+    if (sourcePaths.isEmpty() || atlasWidth <= 0 || atlasHeight <= 0)
+        return QString();
+
+    TextureAtlasPacker::AtlasSpec spec;
+    spec.sourcePaths = sourcePaths;
+    spec.atlasWidth  = atlasWidth;
+    spec.atlasHeight = atlasHeight;
+    spec.padding     = std::max(0, padding);
+
+    auto r = TextureAtlasPacker::pack(spec);
+    if (!r.ok) return QString();
+
+    // Downscale the full-resolution atlas to the requested preview size
+    // (longest edge) while preserving aspect.
+    const int cappedSize = std::clamp(previewSize, 32, 512);
+    QImage thumb = (r.image.width() > r.image.height())
+        ? r.image.scaledToWidth(cappedSize, Qt::SmoothTransformation)
+        : r.image.scaledToHeight(cappedSize, Qt::SmoothTransformation);
+
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    if (!thumb.save(&buf, "PNG")) return QString();
+    return QStringLiteral("data:image/png;base64,") + bytes.toBase64();
+}
+
+QString MaterialEditorQML::packAtlas(const QStringList& sourcePaths,
+                                     int atlasWidth,
+                                     int atlasHeight,
+                                     int padding,
+                                     const QString& outputPath,
+                                     const QString& manifestPath)
+{
+    SentryReporter::addBreadcrumb("ui.action", "Pack texture atlas");
+
+    if (sourcePaths.isEmpty())
+        return QStringLiteral("No input textures supplied");
+    if (outputPath.isEmpty())
+        return QStringLiteral("Output path is empty");
+
+    TextureAtlasPacker::AtlasSpec spec;
+    spec.sourcePaths = sourcePaths;
+    spec.atlasWidth  = atlasWidth;
+    spec.atlasHeight = atlasHeight;
+    spec.padding     = std::max(0, padding);
+
+    auto r = TextureAtlasPacker::packToFile(spec, outputPath);
+    if (!r.ok) return r.error;
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Atlas %1 tiles -> %2").arg(r.tiles.size()).arg(QFileInfo(outputPath).fileName()));
+
+    if (!manifestPath.isEmpty()) {
+        const QString json = TextureAtlasPacker::manifestToJson(r, spec.padding);
+        const QByteArray bytes = json.toUtf8();
+        QFile mf(manifestPath);
+        if (!mf.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+            return QStringLiteral("Could not open manifest path: %1").arg(manifestPath);
+        const qint64 written = mf.write(bytes);
+        mf.close();
+        if (written != bytes.size())
+            return QStringLiteral("Short write to manifest path: %1 (%2/%3 bytes)")
+                       .arg(manifestPath).arg(written).arg(bytes.size());
+        SentryReporter::addBreadcrumb("file.export",
+            QString("Atlas manifest -> %1").arg(QFileInfo(manifestPath).fileName()));
+    }
+    return QString();
 }
 
 // Add a helper method to check if Ogre is available

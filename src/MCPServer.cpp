@@ -3651,14 +3651,22 @@ QJsonObject MCPServer::toolPackAtlas(const QJsonObject &args)
     auto r = TextureAtlasPacker::packToFile(spec, outPath);
     if (!r.ok)
         return makeErrorResult(QString("Error: %1").arg(r.error));
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Atlas %1 tiles -> %2").arg(r.tiles.size()).arg(QFileInfo(outPath).fileName()));
 
     if (!manifestPath.isEmpty()) {
         const QString json = TextureAtlasPacker::manifestToJson(r, spec.padding);
+        const QByteArray bytes = json.toUtf8();
         QFile mf(manifestPath);
-        if (mf.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-            mf.write(json.toUtf8());
-            mf.close();
-        }
+        if (!mf.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+            return makeErrorResult(QString("Error: could not open manifest path: %1").arg(manifestPath));
+        const qint64 written = mf.write(bytes);
+        mf.close();
+        if (written != bytes.size())
+            return makeErrorResult(QString("Error: short write to manifest path: %1 (%2/%3 bytes)")
+                                       .arg(manifestPath).arg(written).arg(bytes.size()));
+        SentryReporter::addBreadcrumb("file.export",
+            QString("Atlas manifest -> %1").arg(QFileInfo(manifestPath).fileName()));
     }
 
     QJsonObject result;
@@ -4651,9 +4659,16 @@ QJsonArray MCPServer::buildToolsList()
     {
         QJsonObject props;
         props["inputs"] = QJsonObject{
-            {"type", "array"},
-            {"items", QJsonObject{{"type", "string"}}},
-            {"description", "Paths to the input texture files (PNG/TGA/JPG/BMP). Comma-separated string also accepted for parity with the CLI."}};
+            // Accept either a JSON array of strings or a single comma-separated
+            // string. The handler at toolPackAtlas branches on the type.
+            {"anyOf", QJsonArray{
+                QJsonObject{
+                    {"type", "array"},
+                    {"items", QJsonObject{{"type", "string"}}}
+                },
+                QJsonObject{{"type", "string"}}
+            }},
+            {"description", "Paths to the input texture files (PNG/TGA/JPG/BMP). Pass either a JSON array of strings or a single comma-separated string."}};
         props["output"] = QJsonObject{
             {"type", "string"},
             {"description", "Output atlas image path. Extension determines format (PNG/TGA/JPG)."}};

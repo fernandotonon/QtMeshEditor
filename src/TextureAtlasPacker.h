@@ -22,8 +22,8 @@ namespace TextureAtlasPacker {
 
 struct AtlasSpec {
     QStringList sourcePaths;   // input image paths (PNG/TGA/JPG/BMP)
-    int atlasWidth   = 2048;   // pixels; 0 = auto-pick a power of two
-    int atlasHeight  = 2048;
+    int atlasWidth   = 2048;   // pixels; must be > 0 (no auto-sizing)
+    int atlasHeight  = 2048;   // pixels; must be > 0
     int padding      = 2;      // pixels of empty space on every side of a tile
 };
 

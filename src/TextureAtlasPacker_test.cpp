@@ -6,6 +6,8 @@
 #include <QJsonObject>
 #include <QTemporaryDir>
 
+#include <set>
+
 #include "TextureAtlasPacker.h"
 
 using namespace TextureAtlasPacker;
