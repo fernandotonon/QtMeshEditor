@@ -71,6 +71,33 @@ struct ScanConfig {
     double redundantKeyframesRotationDegTol = 0.5;
     double redundantKeyframesScaleTol = 1e-3;
 
+    // Phase 6 slice C4 — quality rules driven by the Ogre scene walk.
+    //
+    // max_texture_resolution: maximum width OR height of any bound texture in
+    // pixels. 0 = disabled. 2048 is a sensible mobile / web cap; 4096 keeps
+    // desktop builds out of the VRAM red zone.
+    int maxTextureResolution = 0;
+    // require_uv_channels: minimum number of UV sets required per submesh.
+    // 0 = disabled. 1 = require base UV0 (any texturing). 2 = require UV0 +
+    // UV1 (lightmap workflows). Counts UV sets actually present in the
+    // vertex declaration, not just declared in the material.
+    int requireUvChannels = 0;
+    // detect_zero_weight_bones: when true, report skeletons where bones
+    // exist in the hierarchy but no vertex weight references them. Common
+    // Mixamo waste — armatures carry hand / finger / eye bones that never
+    // get rigged. Emits an Info finding with count + sample names.
+    bool detectZeroWeightBones = false;
+    // detect_overlapping_uvs: percent of triangles whose UV0 AABB overlaps
+    // with another triangle's AABB at which to flag. 0 = disabled. 5.0 is
+    // the conservative lightmap-quality default. AABB overlap is an upper
+    // bound — true UV overlap requires SAT and is a follow-up.
+    double detectOverlappingUvsPct = 0.0;
+    // detect_non_manifold_edges: percent of edges that fail the
+    // exactly-two-incident-faces test at which to flag. 0 = disabled.
+    // Boolean operations, fluid sims, 3D printing all expect manifold
+    // input; 1% is the conservative starting point.
+    double detectNonManifoldEdgesPct = 0.0;
+
     // scoped rules — path-specific overrides
     QList<ScanScope> scopes;
 

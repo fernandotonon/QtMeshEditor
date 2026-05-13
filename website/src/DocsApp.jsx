@@ -822,6 +822,20 @@ rules:
   # File naming convention
   file_name_case: snake_case    # snake_case|kebab-case|camelCase|PascalCase|lowercase
 
+  # Animation simplification (fixable via --fix; same analyzer as
+  # qtmesh anim --simplify and the in-app Simplify button)
+  redundant_keyframes_pct: 40
+  redundant_keyframes_translation_tol: 0.001
+  redundant_keyframes_rotation_deg_tol: 0.5
+  redundant_keyframes_scale_tol: 0.001
+
+  # Quality rules (slice C4) — all opt-in
+  max_texture_resolution: 2048           # px on longest edge
+  require_uv_channels: 1                 # 0 = off, 1 = any UV, 2 = lightmap
+  detect_zero_weight_bones: true         # info: Mixamo-style unused bones
+  detect_overlapping_uvs_pct: 5.0        # warn at >= 5% overlapping UV0 AABBs
+  detect_non_manifold_edges_pct: 1.0     # warn at >= 1% non-manifold edges
+
 # Path-specific rule overrides
 scopes:
   "characters/**":
@@ -923,6 +937,74 @@ report:
             <RuleCard name="allow_missing_materials" type="boolean" severity="warning"
               description="Set to false to warn about placeholder materials (DefaultMaterial, AI_DEFAULT, etc.)."
               example="allow_missing_materials: false" />
+
+            <h3 className={s.subsection}>Animation Simplification</h3>
+            <RuleCard name="redundant_keyframes_pct" type="number" severity="warning"
+              description={<>Warn when a tolerance-based simplifier could remove at least
+                this percentage of animation keyframes. Uses the same analyzer as
+                <Code>qtmesh anim --simplify</Code> and the in-app "Simplify" button — so
+                the percentage the scan flags is exactly the percentage the auto-fix would
+                remove. The rule is <strong>fixable</strong>: <Code>qtmesh scan ... --fix</Code> re-exports
+                the asset (FBX / glTF / DAE / OBJ / PLY / STL / .mesh) with the simplified
+                animation, only replacing the original if the rewrite isn't materially larger.
+                Set the three tolerance keys to tune what counts as redundant.</>}
+              example={`redundant_keyframes_pct: 40
+redundant_keyframes_translation_tol: 0.001    # ~1mm on meter-scale rigs
+redundant_keyframes_rotation_deg_tol: 0.5
+redundant_keyframes_scale_tol: 0.001`} />
+
+            <h3 className={s.subsection}>Quality Rules (Slice C4)</h3>
+            <p className={s.para}>
+              All quality rules are driven by the same Ogre scene walk that powers
+              the in-app <Code>MeshInfoOverlay</Code>, so a value reported by the scan
+              matches what the editor would show for the same asset. All are <strong>opt-in</strong>
+              (default off) — none of these fire on a fresh <Code>qtmesh.yml</Code> until you
+              explicitly enable them.
+            </p>
+
+            <RuleCard name="max_texture_resolution" type="number" severity="warning"
+              description={<>Cap on the largest single-axis pixel dimension across every bound
+                texture. Walks each <Code>TextureUnitState</Code>'s resolved <Code>Ogre::Texture</Code>
+                and checks <Code>max(width, height)</Code> against the threshold. <Code>0</Code> = disabled.
+                Typical: <Code>2048</Code> for mobile / web, <Code>4096</Code> for desktop. Pack with
+                <Code>qtmesh pack-textures</Code> to consolidate ORM-style maps and reduce VRAM cost.</>}
+              example={`max_texture_resolution: 2048    # px on longest edge`} />
+
+            <RuleCard name="require_uv_channels" type="number" severity="warning"
+              description={<>Minimum number of UV sets every submesh must carry. Counts
+                <Code>VES_TEXTURE_COORDINATES</Code> elements in the vertex declaration of the
+                <em> least</em>-equipped submesh, so a single submesh missing UV1 trips the rule.
+                <Code>0</Code> = disabled. <Code>1</Code> requires base UV0 (anything texture-mapped).
+                <Code>2</Code> is the lightmap-workflow setting — every submesh needs a non-overlapping
+                second UV channel for baked lighting.</>}
+              example={`require_uv_channels: 2    # 0 = off, 1 = any UV, 2 = lightmap`} />
+
+            <RuleCard name="detect_zero_weight_bones" type="boolean" severity="info"
+              description={<>Reports skeleton bones that exist in the hierarchy but have no
+                <Code>VertexBoneAssignment</Code> on any submesh. Common Mixamo bloat — armatures
+                ship with 70 bones but only ~30 actually influence vertices. Info-level by design,
+                because stripping unused bones requires a DCC round-trip rather than an auto-fix.</>}
+              example={`detect_zero_weight_bones: true`} />
+
+            <RuleCard name="detect_overlapping_uvs_pct" type="number" severity="warning"
+              description={<>Warn when at least this percentage of triangles have a UV0
+                axis-aligned bounding box overlapping another triangle's. <Code>0</Code> = disabled.
+                This is an <em>upper bound</em> on true UV overlap — if two AABBs don't intersect, the
+                triangles can't overlap, but intersecting AABBs may still be disjoint when their UVs
+                form a tight diagonal. Cheap O(n log n) sweep that catches the common cases:
+                Mixamo body / clothing islands stacked at the same UV range, mirrored geometry on
+                a shared lightmap unwrap, etc. Bake lightmaps will smear on these areas.</>}
+              example={`detect_overlapping_uvs_pct: 5.0    # warn at 5% or higher`} />
+
+            <RuleCard name="detect_non_manifold_edges_pct" type="number" severity="warning"
+              description={<>Warn when at least this percentage of edges are <em>non-manifold</em> —
+                shared by something other than exactly two triangulated faces. <Code>0</Code> = disabled.
+                Boolean operations, fluid sims, 3D printing slicers and many shading pipelines expect
+                manifold input; non-manifold edges break booleans, leak water sims and confuse slicer
+                infill. Boundary edges (one face) count here too, which catches open-bottom clothing
+                meshes from Mixamo and similar exports. Fix by welding duplicate verts and capping
+                open boundaries in your DCC.</>}
+              example={`detect_non_manifold_edges_pct: 1.0    # 1% manifold-violation tolerance`} />
 
             <h3 className={s.subsection}>Naming Rules</h3>
             <RuleCard name="file_name_case" type="string" severity="warning"

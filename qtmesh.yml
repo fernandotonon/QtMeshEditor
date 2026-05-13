@@ -51,5 +51,20 @@ rules:
   # Skip file naming enforcement — demo assets have spaces in names
   # file_name_case: snake_case
 
+  # Phase 6 slice C4 — quality rules driven by the Ogre scene walk.
+  # All opt-in (0/false = disabled) so adding them here doesn't change
+  # CI behaviour for the demo asset set. Uncomment to enable.
+  # max_texture_resolution: 2048           # px, longest texture edge
+  # require_uv_channels: 1                 # min UV sets per submesh (1=any UV, 2=lightmap workflow)
+  # detect_zero_weight_bones: true         # info-level Mixamo bloat detector
+  # detect_overlapping_uvs_pct: 5.0        # warn at >= 5% triangles with overlapping UV0 AABBs
+  # detect_non_manifold_edges_pct: 1.0     # warn at >= 1% non-manifold edges
+
+  # Animation simplification — opt-in because the --fix is destructive.
+  # When set, redundant_keyframes_pct also drives the auto-fix that
+  # re-exports the asset via MeshImporterExporter for every supported
+  # format (FBX/glTF/glb/DAE/OBJ/PLY/STL/.mesh) — no Assimp::Exporter.
+  # redundant_keyframes_pct: 40
+
 report:
   fail_on: error

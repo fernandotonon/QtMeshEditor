@@ -16,7 +16,6 @@
 #include <QTextStream>
 #include <QWidget>
 
-#include <assimp/Exporter.hpp>
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
@@ -44,8 +43,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <climits>
 #include <cmath>
+#include <numeric>
 #include <set>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -395,6 +397,250 @@ static void fillRedundancyFromOgreSkeleton(const Ogre::Entity* entity,
     }
 }
 
+// --- Phase 6 slice C4 collectors --------------------------------------------
+//
+// These all consume the same Ogre scene the C3 walk uses. They live next to
+// the existing helpers so each new rule's data source is right next to the
+// rule itself in the file. Each collector either:
+//   - accumulates into AssetInfo directly (texture resolution, UV channels)
+//   - returns data the rule evaluator consumes via AssetInfo (zero-weight
+//     bones, overlapping-UV ratio, non-manifold edges ratio).
+
+// Largest single-axis pixel dimension across every Texture bound through
+// every SubEntity's material. Walks TextureUnitState::getTextureName() and
+// resolves the Texture; gracefully handles unbound names.
+static int maxTextureDimensionForEntities(const QList<Ogre::Entity*>& entities)
+{
+    auto& tmgr = Ogre::TextureManager::getSingleton();
+    int worst = 0;
+    for (const Ogre::Entity* entity : entities) {
+        if (!entity) continue;
+        for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i) {
+            const auto* sub = entity->getSubEntity(i);
+            const auto mat = sub ? sub->getMaterial() : Ogre::MaterialPtr();
+            if (!mat) continue;
+            for (auto* tech : mat->getTechniques()) {
+                for (auto* pass : tech->getPasses()) {
+                    for (auto* tus : pass->getTextureUnitStates()) {
+                        if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                            continue;
+                        const Ogre::String n = tus->getTextureName();
+                        if (n.empty()) continue;
+                        const Ogre::TexturePtr t = tmgr.getByName(
+                            n, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                        if (!t) continue;
+                        const int dim = static_cast<int>(std::max(t->getWidth(), t->getHeight()));
+                        worst = std::max(worst, dim);
+                    }
+                }
+            }
+        }
+    }
+    return worst;
+}
+
+// Count distinct UV sets (VES_TEXTURE_COORDINATES) in a single VertexData's
+// declaration. Returns 0 when vd is null.
+static int countUvSets(const Ogre::VertexData* vd)
+{
+    if (!vd || !vd->vertexDeclaration) return 0;
+    int seen = 0;
+    const auto& elems = vd->vertexDeclaration->getElements();
+    for (const auto& e : elems) {
+        if (e.getSemantic() == Ogre::VES_TEXTURE_COORDINATES)
+            seen++;
+    }
+    return seen;
+}
+
+// Minimum UV-set count across every submesh of every entity. The conservative
+// "what's guaranteed to be there" value. 0 when no submesh has any UVs.
+static int minUvChannelCountForEntities(const QList<Ogre::Entity*>& entities)
+{
+    int worst = INT_MAX;
+    bool seenAny = false;
+    for (const Ogre::Entity* entity : entities) {
+        if (!entity) continue;
+        const Ogre::MeshPtr mesh = entity->getMesh();
+        if (!mesh) continue;
+        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+            const Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            if (!sub) continue;
+            const Ogre::VertexData* vd = sub->useSharedVertices
+                ? mesh->sharedVertexData
+                : sub->vertexData;
+            const int uvCount = countUvSets(vd);
+            worst = std::min(worst, uvCount);
+            seenAny = true;
+        }
+    }
+    return seenAny ? worst : 0;
+}
+
+// Bones that exist in the skeleton but have no VertexBoneAssignment on any
+// submesh — typical Mixamo bloat where the armature carries 70 bones but
+// only ~30 actually influence vertices. Empty when there's no skeleton or
+// every bone is used.
+static QStringList zeroWeightBonesForEntities(const QList<Ogre::Entity*>& entities)
+{
+    QStringList dead;
+    for (const Ogre::Entity* entity : entities) {
+        if (!entity || !entity->hasSkeleton()) continue;
+        const Ogre::MeshPtr mesh = entity->getMesh();
+        if (!mesh) continue;
+        const Ogre::SkeletonPtr skel = mesh->getSkeleton();
+        if (!skel) continue;
+
+        std::set<unsigned short> usedHandles;
+        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+            const Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            if (!sub) continue;
+            const auto& assignments = sub->getBoneAssignments();
+            for (const auto& [vertexIdx, vba] : assignments)
+                usedHandles.insert(vba.boneIndex);
+        }
+
+        for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+            const Ogre::Bone* b = skel->getBone(i);
+            if (!b) continue;
+            if (usedHandles.count(b->getHandle()) == 0)
+                dead.append(QString::fromStdString(b->getName()));
+        }
+    }
+    return dead;
+}
+
+// UV0 AABB overlap detection (O(n log n) sweep on triangle-AABB x-ranges).
+// Returns -1 when UV0 isn't available or no triangulated submesh exists.
+//
+// This is an *upper bound* on true UV overlap: if two triangle AABBs don't
+// intersect, the triangles can't overlap; if they do, true SAT is needed
+// to confirm. Cheap proxy that catches the common cases (Mixamo body /
+// clothing UV islands sharing the same 0-1 range, etc.).
+static double overlappingUvsRatioForEntities(const QList<Ogre::Entity*>& entities)
+{
+    struct TriBox { float xmin, xmax, ymin, ymax; };
+    std::vector<TriBox> boxes;
+    bool sawUv0 = false;
+
+    for (const Ogre::Entity* entity : entities) {
+        if (!entity) continue;
+        const Ogre::MeshPtr mesh = entity->getMesh();
+        if (!mesh) continue;
+
+        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+            const Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            if (!sub || !sub->indexData || !sub->indexData->indexBuffer) continue;
+            const Ogre::VertexData* vd = sub->useSharedVertices
+                ? mesh->sharedVertexData
+                : sub->vertexData;
+            if (!vd || !vd->vertexDeclaration) continue;
+
+            const Ogre::VertexElement* uvElem = vd->vertexDeclaration
+                ->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES, 0);
+            if (!uvElem) continue;
+            sawUv0 = true;
+
+            const Ogre::HardwareVertexBufferSharedPtr vbuf =
+                vd->vertexBufferBinding->getBuffer(uvElem->getSource());
+            if (!vbuf) continue;
+
+            const auto* vbase = static_cast<const unsigned char*>(
+                vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+            const size_t vstride = vbuf->getVertexSize();
+
+            const std::vector<uint32_t> idx = readSubmeshIndexBuffer(sub);
+            for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+                float u[3], v[3];
+                for (int k = 0; k < 3; ++k) {
+                    const unsigned char* vp = vbase + idx[t + k] * vstride;
+                    float* uv;
+                    uvElem->baseVertexPointerToElement(const_cast<unsigned char*>(vp),
+                                                      &uv);
+                    u[k] = uv[0];
+                    v[k] = uv[1];
+                }
+                TriBox box;
+                box.xmin = std::min({u[0], u[1], u[2]});
+                box.xmax = std::max({u[0], u[1], u[2]});
+                box.ymin = std::min({v[0], v[1], v[2]});
+                box.ymax = std::max({v[0], v[1], v[2]});
+                boxes.push_back(box);
+            }
+            vbuf->unlock();
+        }
+    }
+
+    if (!sawUv0 || boxes.empty()) return -1.0;
+
+    // Sweep on xmin; for each box, scan neighbours whose xmin <= our xmax
+    // and check 2D AABB overlap. With ascending sort on xmin this is
+    // O(n log n + overlaps).
+    std::vector<size_t> order(boxes.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return boxes[a].xmin < boxes[b].xmin;
+    });
+
+    std::vector<bool> overlapping(boxes.size(), false);
+    for (size_t i = 0; i < order.size(); ++i) {
+        const TriBox& A = boxes[order[i]];
+        for (size_t j = i + 1; j < order.size(); ++j) {
+            const TriBox& B = boxes[order[j]];
+            if (B.xmin > A.xmax) break; // sweep terminator
+            if (B.xmax < A.xmin) continue;
+            if (A.ymax < B.ymin || B.ymax < A.ymin) continue;
+            overlapping[order[i]] = true;
+            overlapping[order[j]] = true;
+        }
+    }
+    const auto over = std::count(overlapping.begin(), overlapping.end(), true);
+    return static_cast<double>(over) / static_cast<double>(boxes.size());
+}
+
+// Non-manifold edge fraction. An edge shared by != 2 triangles is
+// non-manifold. Boundary edges (1 face) count as non-manifold here — a
+// proper manifold closed-surface check needs that. Returns -1 when there
+// are no triangulated submeshes.
+static double nonManifoldEdgesRatioForEntities(const QList<Ogre::Entity*>& entities)
+{
+    // Hash unordered vertex-pair edges. Use (min, max) tuple.
+    struct PairHash {
+        std::size_t operator()(const std::pair<uint32_t, uint32_t>& p) const noexcept {
+            return std::hash<uint64_t>{}(
+                (static_cast<uint64_t>(p.first) << 32) | p.second);
+        }
+    };
+    std::unordered_map<std::pair<uint32_t, uint32_t>, unsigned int, PairHash> edges;
+    bool sawTris = false;
+
+    for (const Ogre::Entity* entity : entities) {
+        if (!entity) continue;
+        const Ogre::MeshPtr mesh = entity->getMesh();
+        if (!mesh) continue;
+        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+            const Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            const std::vector<uint32_t> idx = readSubmeshIndexBuffer(sub);
+            if (idx.empty()) continue;
+            sawTris = true;
+            for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+                for (int k = 0; k < 3; ++k) {
+                    uint32_t a = idx[t + k];
+                    uint32_t b = idx[t + ((k + 1) % 3)];
+                    if (a > b) std::swap(a, b);
+                    edges[{a, b}]++;
+                }
+            }
+        }
+    }
+
+    if (!sawTris || edges.empty()) return -1.0;
+    unsigned int nonManifold = 0;
+    for (const auto& [_, count] : edges)
+        if (count != 2) nonManifold++;
+    return static_cast<double>(nonManifold) / static_cast<double>(edges.size());
+}
+
 // Detect embedded textures: walk each TextureUnitState used by every
 // SubEntity's Material and ask Ogre if the texture was manually loaded
 // (i.e. fed bytes from an in-memory stream rather than resolved through
@@ -600,6 +846,16 @@ static bool inspectAssetViaOgre(const QString& filePath, AssetInfo& info,
     info.hasEmbeddedTextures = detectEmbeddedTexturesFromEntities(entities);
 
     enumerateTextureRefsViaAssimp(filePath, info, seenTextures);
+
+    // C4 quality data — collected unconditionally so the JSON report carries
+    // it for downstream tooling. The rule evaluator only emits findings when
+    // the corresponding rule is enabled, so leaving these populated for free
+    // doesn't trigger noise.
+    info.maxTextureDimension  = maxTextureDimensionForEntities(entities);
+    info.minUvChannelCount    = minUvChannelCountForEntities(entities);
+    info.zeroWeightBoneNames  = zeroWeightBonesForEntities(entities);
+    info.overlappingUvsRatio  = overlappingUvsRatioForEntities(entities);
+    info.nonManifoldEdgesRatio = nonManifoldEdgesRatioForEntities(entities);
 
     clearOgreSceneForScanImport();
     return true;
@@ -1076,6 +1332,68 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
         }
     }
 
+    // ---- max_texture_resolution ---- (Phase 6 slice C4)
+    if (config.maxTextureResolution > 0
+        && asset.maxTextureDimension > config.maxTextureResolution) {
+        findings.append({asset.relativePath, "max_texture_resolution", Severity::Warning,
+            QString("Largest texture is %1px on its longest edge — exceeds limit of %2px. "
+                    "Downscale or pack with `qtmesh pack-textures` to reduce VRAM cost.")
+                .arg(asset.maxTextureDimension)
+                .arg(config.maxTextureResolution)});
+    }
+
+    // ---- require_uv_channels ----
+    // Skip when the asset has no triangulated geometry at all (e.g.
+    // animation-only FBX); the geometry-side rules will already flag it.
+    if (config.requireUvChannels > 0
+        && asset.faceCount > 0
+        && asset.minUvChannelCount < config.requireUvChannels) {
+        findings.append({asset.relativePath, "require_uv_channels", Severity::Warning,
+            QString("Submesh has only %1 UV set(s); rule requires %2. "
+                    "Add a second UV set in your DCC for lightmap or detail-map workflows.")
+                .arg(asset.minUvChannelCount)
+                .arg(config.requireUvChannels)});
+    }
+
+    // ---- detect_zero_weight_bones ----
+    if (config.detectZeroWeightBones && !asset.zeroWeightBoneNames.isEmpty()) {
+        const int n = asset.zeroWeightBoneNames.size();
+        QStringList sample = asset.zeroWeightBoneNames.mid(0, 5);
+        QString suffix = (n > sample.size())
+            ? QString(", …+%1 more").arg(n - sample.size())
+            : QString();
+        findings.append({asset.relativePath, "detect_zero_weight_bones", Severity::Info,
+            QString("%1 bone(s) have no vertex weights: %2%3. "
+                    "Strip unused bones to shrink the skeleton and reduce per-vertex skin math.")
+                .arg(n).arg(sample.join(", ")).arg(suffix)});
+    }
+
+    // ---- detect_overlapping_uvs ---- (UV0 AABB sweep — upper bound)
+    if (config.detectOverlappingUvsPct > 0.0
+        && asset.overlappingUvsRatio >= 0.0) {
+        const double pct = 100.0 * asset.overlappingUvsRatio;
+        if (pct >= config.detectOverlappingUvsPct) {
+            findings.append({asset.relativePath, "detect_overlapping_uvs", Severity::Warning,
+                QString("%1% of triangles have UV0 AABBs overlapping another — likely "
+                        "shared/overlapping UV islands. Bake lightmaps will smear; "
+                        "consider a non-overlapping unwrap for UV1.")
+                    .arg(pct, 0, 'f', 1)});
+        }
+    }
+
+    // ---- detect_non_manifold_edges ----
+    if (config.detectNonManifoldEdgesPct > 0.0
+        && asset.nonManifoldEdgesRatio >= 0.0) {
+        const double pct = 100.0 * asset.nonManifoldEdgesRatio;
+        if (pct >= config.detectNonManifoldEdgesPct) {
+            findings.append({asset.relativePath, "detect_non_manifold_edges", Severity::Warning,
+                QString("%1% of edges are non-manifold (shared by != 2 faces). "
+                        "Boolean ops, fluid sims and 3D printing expect manifold input — "
+                        "weld duplicate verts and cap open boundaries in your DCC.")
+                    .arg(pct, 0, 'f', 1)});
+        }
+    }
+
     // ---- allow_missing_materials ----
     if (!config.allowMissingMaterials) {
         for (const auto& name : asset.materialNames) {
@@ -1236,139 +1554,11 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
 }
 
 // ---------------------------------------------------------------------------
-// Auto-fixes
+// Auto-fixes — the redundant_keyframes_pct fix is now driven entirely by
+// AnimationMerger::simplifyAnimation + MeshImporterExporter::exporter, the
+// same path the FBX branch used since slice C2. No Assimp::Importer or
+// Assimp::Exporter for the rewrite step.
 // ---------------------------------------------------------------------------
-
-namespace {
-
-bool vecApproxEqualAssimp(const aiVector3D& a, const aiVector3D& b, float eps = 1e-6f)
-{
-    return (std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps);
-}
-
-bool quatApproxEqualAssimp(const aiQuaternion& a, const aiQuaternion& b, float eps = 1e-3f)
-{
-    const float d = std::fabs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z);
-    return d > 1.f - eps;
-}
-
-void compactVectorTrackInPlace(aiVectorKey*& keys, unsigned& n)
-{
-    if (n <= 2 || !keys)
-        return;
-    std::vector<aiVectorKey> out;
-    out.reserve(n);
-    out.push_back(keys[0]);
-    for (unsigned i = 1; i + 1 < n; ++i) {
-        if (!vecApproxEqualAssimp(keys[i].mValue, out.back().mValue))
-            out.push_back(keys[i]);
-    }
-    if (!vecApproxEqualAssimp(keys[n - 1].mValue, out.back().mValue))
-        out.push_back(keys[n - 1]);
-    if (out.size() == 1 && n >= 2) {
-        out.clear();
-        out.push_back(keys[0]);
-        out.push_back(keys[n - 1]);
-    }
-    const unsigned newN = static_cast<unsigned>(out.size());
-    if (newN == n)
-        return;
-    auto* nk = new aiVectorKey[newN];
-    for (unsigned i = 0; i < newN; ++i)
-        nk[i] = out[i];
-    delete[] keys;
-    keys = nk;
-    n = newN;
-}
-
-void compactQuatTrackInPlace(aiQuatKey*& keys, unsigned& n)
-{
-    if (n <= 2 || !keys)
-        return;
-    std::vector<aiQuatKey> out;
-    out.reserve(n);
-    out.push_back(keys[0]);
-    for (unsigned i = 1; i + 1 < n; ++i) {
-        if (!quatApproxEqualAssimp(keys[i].mValue, out.back().mValue))
-            out.push_back(keys[i]);
-    }
-    if (!quatApproxEqualAssimp(keys[n - 1].mValue, out.back().mValue))
-        out.push_back(keys[n - 1]);
-    if (out.size() == 1 && n >= 2) {
-        out.clear();
-        out.push_back(keys[0]);
-        out.push_back(keys[n - 1]);
-    }
-    const unsigned newN = static_cast<unsigned>(out.size());
-    if (newN == n)
-        return;
-    auto* nk = new aiQuatKey[newN];
-    for (unsigned i = 0; i < newN; ++i)
-        nk[i] = out[i];
-    delete[] keys;
-    keys = nk;
-    n = newN;
-}
-
-void stripRedundantAnimKeys(aiScene* scene)
-{
-    if (!scene)
-        return;
-    for (unsigned ai = 0; ai < scene->mNumAnimations; ++ai) {
-        aiAnimation* anim = scene->mAnimations[ai];
-        if (!anim || !anim->mChannels)
-            continue;
-        for (unsigned c = 0; c < anim->mNumChannels; ++c) {
-            aiNodeAnim* ch = anim->mChannels[c];
-            if (!ch)
-                continue;
-            compactVectorTrackInPlace(ch->mPositionKeys, ch->mNumPositionKeys);
-            compactQuatTrackInPlace(ch->mRotationKeys, ch->mNumRotationKeys);
-            compactVectorTrackInPlace(ch->mScalingKeys, ch->mNumScalingKeys);
-        }
-    }
-}
-
-long long totalAnimKeysForScene(const aiScene* scene)
-{
-    if (!scene)
-        return 0;
-    long long total = 0;
-    for (unsigned ai = 0; ai < scene->mNumAnimations; ++ai) {
-        const aiAnimation* anim = scene->mAnimations[ai];
-        if (!anim || !anim->mChannels)
-            continue;
-        for (unsigned c = 0; c < anim->mNumChannels; ++c) {
-            const aiNodeAnim* ch = anim->mChannels[c];
-            if (!ch)
-                continue;
-            total += static_cast<long long>(ch->mNumPositionKeys);
-            total += static_cast<long long>(ch->mNumRotationKeys);
-            total += static_cast<long long>(ch->mNumScalingKeys);
-        }
-    }
-    return total;
-}
-
-QString assimpExportFormatIdForAssetPath(const QString& outputPath)
-{
-    const QString suf = QFileInfo(outputPath).suffix().toLower();
-    static const QMap<QString, QString> fromExt{
-        {QStringLiteral("fbx"), QStringLiteral("fbx")},
-        {QStringLiteral("dae"), QStringLiteral("collada")},
-        {QStringLiteral("obj"), QStringLiteral("obj")},
-        {QStringLiteral("stl"), QStringLiteral("stl")},
-        {QStringLiteral("ply"), QStringLiteral("ply")},
-        {QStringLiteral("3ds"), QStringLiteral("3ds")},
-        {QStringLiteral("gltf"), QStringLiteral("gltf2")},
-        {QStringLiteral("glb"), QStringLiteral("glb2")},
-        {QStringLiteral("assbin"), QStringLiteral("assbin")},
-        {QStringLiteral("x"), QStringLiteral("x")},
-    };
-    return fromExt.value(suf, QStringLiteral("fbx"));
-}
-
-} // namespace
 
 void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, AssetInfo& asset,
                             QList<Finding>& findings)
@@ -1406,187 +1596,122 @@ void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, A
                 f.message += QStringLiteral(" [dry-run: would simplify animation keys (same as qtmesh anim --simplify)]");
                 continue;
             }
+
+            // Slice C4: unified Ogre fix path for every format the editor
+            // can export. Load via MeshImporterExporter (same as the in-app
+            // import), run AnimationMerger::simplifyAnimation under the
+            // configured tolerances (same as `qtmesh anim --simplify` and
+            // the Inspector Simplify button), then re-export via the
+            // editor's exporter for the matching format. No Assimp.
+            if (!ensureOgreHeadlessQuiet()) {
+                f.message = QStringLiteral("Fix failed: could not initialize Ogre");
+                continue;
+            }
+
+            // Map asset extension to the MeshImporterExporter format
+            // descriptor string. Unknown extensions are dropped here — the
+            // fix only runs on formats Ogre can both import and export.
             const QString suf = QFileInfo(asset.filePath).suffix().toLower();
-            if (suf == QStringLiteral("fbx") || suf == QStringLiteral("fbxa")) {
-                // Ogre + tolerance-based simplify (same core as `qtmesh anim --simplify`) + custom FBX exporter.
-                if (!ensureOgreHeadlessQuiet()) {
-                    f.message = QStringLiteral("Fix failed: could not initialize Ogre");
-                    continue;
-                }
+            static const QMap<QString, QString> formatByExt = {
+                {QStringLiteral("fbx"),   QStringLiteral("FBX Binary (*.fbx)")},
+                {QStringLiteral("fbxa"),  QStringLiteral("FBX Binary (*.fbx)")},
+                {QStringLiteral("gltf"),  QStringLiteral("glTF 2.0 (*.gltf)")},
+                {QStringLiteral("glb"),   QStringLiteral("glTF 2.0 Binary (*.glb)")},
+                {QStringLiteral("dae"),   QStringLiteral("Collada (*.dae)")},
+                {QStringLiteral("obj"),   QStringLiteral("OBJ (*.obj)")},
+                {QStringLiteral("ply"),   QStringLiteral("PLY (*.ply)")},
+                {QStringLiteral("stl"),   QStringLiteral("STL (*.stl)")},
+                {QStringLiteral("mesh"),  QStringLiteral("Ogre Mesh (*.mesh)")},
+            };
+            if (!formatByExt.contains(suf)) {
+                f.message = QStringLiteral("Fix failed: unsupported export format for .%1").arg(suf);
+                continue;
+            }
+            const QString exportFormat = formatByExt.value(suf);
 
-                clearOgreSceneForScanImport();
+            clearOgreSceneForScanImport();
+            QList<Ogre::SkeletonPtr> animOnlySkeletons;
+            MeshImporterExporter::importer({asset.filePath}, 0, &animOnlySkeletons);
 
-                QList<Ogre::SkeletonPtr> animOnlySkeletons;
-                MeshImporterExporter::importer({asset.filePath}, 0, &animOnlySkeletons);
+            auto& ents = Manager::getSingleton()->getEntities();
+            Ogre::Entity* entity = ents.isEmpty() ? nullptr : ents.last();
+            Ogre::SkeletonPtr skel;
+            if (entity && entity->hasSkeleton())
+                skel = entity->getMesh()->getSkeleton();
+            if (!skel && !animOnlySkeletons.isEmpty())
+                skel = animOnlySkeletons.last();
 
-                auto& ents = Manager::getSingleton()->getEntities();
-                Ogre::Entity* entity = ents.isEmpty() ? nullptr : ents.last();
-                Ogre::SkeletonPtr skel;
-                if (entity && entity->hasSkeleton())
-                    skel = entity->getMesh()->getSkeleton();
-                if (!skel && !animOnlySkeletons.isEmpty())
-                    skel = animOnlySkeletons.last();
+            if (!skel) {
+                f.message = QStringLiteral("Fix failed: could not load skeleton via Ogre importer");
+                continue;
+            }
 
-                if (!skel) {
-                    f.message = QStringLiteral("Fix failed: could not load skeleton via Ogre importer");
-                    continue;
-                }
+            AnimationMerger::SimplifyTolerances tol;
+            tol.translation = static_cast<float>(config.redundantKeyframesTranslationTol);
+            tol.rotationDeg = static_cast<float>(config.redundantKeyframesRotationDegTol);
+            tol.scale       = static_cast<float>(config.redundantKeyframesScaleTol);
 
-                AnimationMerger::SimplifyTolerances tol;
-                tol.translation = static_cast<float>(config.redundantKeyframesTranslationTol);
-                tol.rotationDeg = static_cast<float>(config.redundantKeyframesRotationDegTol);
-                tol.scale = static_cast<float>(config.redundantKeyframesScaleTol);
-
-                // Compute total keyframes before simplifying (for reporting).
-                long long totalKeysBefore = 0;
-                for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
-                    const Ogre::Animation* a = skel->getAnimation(ai);
-                    if (!a) continue;
-                    for (const auto& [handle, track] : a->_getNodeTrackList()) {
-                        Q_UNUSED(handle);
-                        if (!track) continue;
+            // Total keyframes before simplifying (for reporting).
+            long long totalKeysBefore = 0;
+            for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+                const Ogre::Animation* a = skel->getAnimation(ai);
+                if (!a) continue;
+                for (const auto& [handle, track] : a->_getNodeTrackList()) {
+                    Q_UNUSED(handle);
+                    if (track)
                         totalKeysBefore += track->getNumKeyFrames();
-                    }
                 }
-
-                int totalRemoved = 0;
-                const unsigned short numAnims = skel->getNumAnimations();
-                std::vector<std::string> animNames;
-                animNames.reserve(numAnims);
-                for (unsigned short ai = 0; ai < numAnims; ++ai)
-                    animNames.push_back(skel->getAnimation(ai)->getName());
-
-                for (const auto& name : animNames)
-                    totalRemoved += AnimationMerger::simplifyAnimation(skel.get(), name, tol);
-
-                if (totalRemoved <= 0) {
-                    f.message = QStringLiteral("Fix not needed: no additional simplification within configured tolerances");
-                    f.severity = Severity::Info;
-                    f.skipped = true;
-                    continue;
-                }
-
-                // Export to a temp path first and only apply if it improves size.
-                const qint64 originalBytes = QFileInfo(asset.filePath).size();
-                const QString tmpPath = asset.filePath + QStringLiteral(".qtmesh-simplify.tmp");
-                if (QFile::exists(tmpPath))
-                    QFile::remove(tmpPath);
-
-                bool ok = false;
-                if (!entity) {
-                    ok = FBXExporter::exportSkeletonOnlyFBX(skel.get(), tmpPath);
-                } else {
-                    entity->refreshAvailableAnimationState();
-                    auto* node = entity->getParentSceneNode();
-                    ok = (MeshImporterExporter::exporter(node, tmpPath, QStringLiteral("FBX Binary (*.fbx)")) == 0);
-                }
-
-                if (!ok) {
-                    QFile::remove(tmpPath);
-                    f.message = QStringLiteral("Fix failed: FBX export failed");
-                    continue;
-                }
-
-                const qint64 rewrittenBytes = QFileInfo(tmpPath).size();
-                // The goal of this fix is to reduce animation payload. If the rewritten file
-                // isn't smaller, keep the original to avoid regressions from exporter variance.
-                if (originalBytes > 0 && rewrittenBytes >= originalBytes) {
-                    QFile::remove(tmpPath);
-                    f.message = QStringLiteral("output would be larger (%1 KB -> %2 KB), keeping original")
-                                    .arg(originalBytes / 1024)
-                                    .arg(rewrittenBytes / 1024);
-                    f.severity = Severity::Info;
-                    f.skipped = true;
-                    continue;
-                }
-
-                QFile orig(asset.filePath);
-                if (!orig.remove()) {
-                    QFile::remove(tmpPath);
-                    f.message = QStringLiteral("Fix failed: could not replace original file");
-                    continue;
-                }
-                if (!QFile::rename(tmpPath, asset.filePath)) {
-                    f.message = QStringLiteral("Fix failed: could not install rewritten file");
-                    continue;
-                }
-
-                SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-                    QStringLiteral("Scan fix: simplified anim keys (custom FBX): %1").arg(asset.relativePath));
-                const qint64 savedBytes = (originalBytes > 0 && rewrittenBytes > 0) ? (originalBytes - rewrittenBytes) : 0;
-                const double keysPct = (totalKeysBefore > 0)
-                    ? (static_cast<double>(totalRemoved) * 100.0 / static_cast<double>(totalKeysBefore))
-                    : 0.0;
-                const double sizePct = (originalBytes > 0)
-                    ? (static_cast<double>(savedBytes) * 100.0 / static_cast<double>(originalBytes))
-                    : 0.0;
-                f.severity = Severity::Info;
-                f.bytesSaved = savedBytes;
-                f.keysRemoved = totalRemoved;
-                f.message = QStringLiteral("removed %1/%2 keys (%3%), saved %4 KB (%5%)")
-                                .arg(totalRemoved)
-                                .arg(totalKeysBefore)
-                                .arg(QString::number(keysPct, 'f', 1))
-                                .arg(savedBytes / 1024)
-                                .arg(QString::number(sizePct, 'f', 1));
-                f.fixed = true;
-                asset = inspectAsset(asset.filePath, scanRoot);
-                continue;
             }
 
-            const qint64 originalBytes = QFileInfo(asset.filePath).size();
-            Assimp::Importer imp;
-            imp.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
-            unsigned int impFlags = aiProcess_Triangulate | aiProcess_ValidateDataStructure;
-            const aiScene* loaded = imp.ReadFile(asset.filePath.toStdString(), impFlags);
-            if (isAssimpResultLoadFailure(loaded, imp.GetErrorString(), nullptr) &&
-                (pathEndsWithInsensitive(asset.filePath, QLatin1String(".fbx")) ||
-                 pathEndsWithInsensitive(asset.filePath, QLatin1String(".fbxa")))) {
-                impFlags = aiProcess_Triangulate | aiProcess_ValidateDataStructure |
-                           aiProcess_LimitBoneWeights | aiProcess_PopulateArmatureData |
-                           aiProcess_GlobalScale;
-                loaded = imp.ReadFile(asset.filePath.toStdString(), impFlags);
-            }
-            if (isAssimpResultLoadFailure(loaded, imp.GetErrorString(), nullptr)) {
-                f.message += QStringLiteral(" [fix failed: could not re-read asset]");
-                continue;
-            }
-            if (loaded->mNumAnimations == 0) {
-                f.message += QStringLiteral(" [fix failed: no animations in file]");
-                continue;
-            }
-            aiScene* mutScene = const_cast<aiScene*>(loaded);
-            const long long keysBefore = totalAnimKeysForScene(mutScene);
-            stripRedundantAnimKeys(mutScene);
-            const long long keysAfter = totalAnimKeysForScene(mutScene);
-            if (keysAfter >= keysBefore) {
-                f.message = QStringLiteral("Fix not needed: no reducible consecutive duplicate keys (per-channel)");
+            int totalRemoved = 0;
+            const unsigned short numAnims = skel->getNumAnimations();
+            std::vector<std::string> animNames;
+            animNames.reserve(numAnims);
+            for (unsigned short ai = 0; ai < numAnims; ++ai)
+                animNames.push_back(skel->getAnimation(ai)->getName());
+
+            for (const auto& name : animNames)
+                totalRemoved += AnimationMerger::simplifyAnimation(skel.get(), name, tol);
+
+            if (totalRemoved <= 0) {
+                f.message = QStringLiteral("Fix not needed: no additional simplification within configured tolerances");
                 f.severity = Severity::Info;
                 f.skipped = true;
                 continue;
             }
 
-            const QString tmpPath = asset.filePath + QStringLiteral(".qtmesh-strip.tmp");
+            // Export to a temp path first and only apply if it improves size.
+            const qint64 originalBytes = QFileInfo(asset.filePath).size();
+            const QString tmpPath = asset.filePath + QStringLiteral(".qtmesh-simplify.tmp");
             if (QFile::exists(tmpPath))
                 QFile::remove(tmpPath);
 
-            const QString formatId = assimpExportFormatIdForAssetPath(asset.filePath);
-            const unsigned int exportFlags =
-                (formatId == QLatin1String("x")) ? 0u : aiProcess_ConvertToLeftHanded;
-
-            Assimp::Exporter exporter;
-            const aiReturn expRet = exporter.Export(mutScene, formatId.toStdString().c_str(),
-                                                    tmpPath.toStdString().c_str(), exportFlags);
-            if (expRet != AI_SUCCESS) {
-                QFile::remove(tmpPath);
-                f.message += QStringLiteral(" [fix failed: export: %1]")
-                                 .arg(QString::fromUtf8(exporter.GetErrorString()));
+            bool ok = false;
+            // FBX skeleton-only path: animation-only files (no mesh) take the
+            // custom skeleton-only exporter which preserves the bind pose. All
+            // other paths go through MeshImporterExporter::exporter.
+            if (!entity && (suf == QStringLiteral("fbx") || suf == QStringLiteral("fbxa"))) {
+                ok = FBXExporter::exportSkeletonOnlyFBX(skel.get(), tmpPath);
+            } else if (entity) {
+                entity->refreshAvailableAnimationState();
+                auto* node = entity->getParentSceneNode();
+                ok = (MeshImporterExporter::exporter(node, tmpPath, exportFormat) == 0);
+            } else {
+                f.message = QStringLiteral("Fix failed: animation-only export not supported for .%1").arg(suf);
                 continue;
             }
+
+            if (!ok) {
+                QFile::remove(tmpPath);
+                f.message = QStringLiteral("Fix failed: %1 export failed").arg(suf.toUpper());
+                continue;
+            }
+
             const qint64 rewrittenBytes = QFileInfo(tmpPath).size();
-            // Assimp FBX export is not size-stable; allow a small overhead so fixes still apply
-            // when they meaningfully improve animation data. Hard-skip large blowups.
-            const qint64 maxAllowedGrowthBytes = std::max<qint64>(64 * 1024, originalBytes / 20); // max(64KB, 5%)
+            // Ogre exporters are not always size-stable; allow a small overhead
+            // so fixes still apply when they meaningfully improve animation
+            // data, but hard-skip large blowups (>5% or >64KB growth).
+            const qint64 maxAllowedGrowthBytes = std::max<qint64>(64 * 1024, originalBytes / 20);
             const qint64 maxAllowedBytes = (originalBytes > 0) ? (originalBytes + maxAllowedGrowthBytes) : 0;
             if (originalBytes > 0 && rewrittenBytes > maxAllowedBytes) {
                 QFile::remove(tmpPath);
@@ -1597,6 +1722,7 @@ void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, A
                 f.skipped = true;
                 continue;
             }
+
             QFile orig(asset.filePath);
             if (!orig.remove()) {
                 QFile::remove(tmpPath);
@@ -1607,9 +1733,27 @@ void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, A
                 f.message = QStringLiteral("Fix failed: could not install rewritten file");
                 continue;
             }
+
             SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-                QStringLiteral("Scan fix: stripped consecutive duplicate anim keys (Assimp): %1").arg(asset.relativePath));
-            f.message = QStringLiteral("Fixed: stripped consecutive duplicate animation keys (non-FBX path)");
+                QStringLiteral("Scan fix: simplified anim keys (%1): %2").arg(suf, asset.relativePath));
+            const qint64 savedBytes = (originalBytes > 0 && rewrittenBytes > 0)
+                ? (originalBytes - rewrittenBytes)
+                : 0;
+            const double keysPct = (totalKeysBefore > 0)
+                ? (static_cast<double>(totalRemoved) * 100.0 / static_cast<double>(totalKeysBefore))
+                : 0.0;
+            const double sizePct = (originalBytes > 0)
+                ? (static_cast<double>(savedBytes) * 100.0 / static_cast<double>(originalBytes))
+                : 0.0;
+            f.severity = Severity::Info;
+            f.bytesSaved = savedBytes;
+            f.keysRemoved = totalRemoved;
+            f.message = QStringLiteral("removed %1/%2 keys (%3%), saved %4 KB (%5%)")
+                            .arg(totalRemoved)
+                            .arg(totalKeysBefore)
+                            .arg(QString::number(keysPct, 'f', 1))
+                            .arg(savedBytes / 1024)
+                            .arg(QString::number(sizePct, 'f', 1));
             f.fixed = true;
             asset = inspectAsset(asset.filePath, scanRoot);
         }
@@ -1892,6 +2036,22 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
             ao["redundantKeyframes"] = asset.redundantKeyframes;
         }
 
+        // C4 quality fields — written only when populated (non-default)
+        // so the JSON stays compact for assets the rule doesn't fire on.
+        if (asset.maxTextureDimension > 0)
+            ao["maxTextureDimension"] = asset.maxTextureDimension;
+        if (asset.minUvChannelCount > 0)
+            ao["minUvChannelCount"]   = asset.minUvChannelCount;
+        if (!asset.zeroWeightBoneNames.isEmpty()) {
+            QJsonArray zwb;
+            for (const auto& n : asset.zeroWeightBoneNames) zwb.append(n);
+            ao["zeroWeightBones"] = zwb;
+        }
+        if (asset.overlappingUvsRatio >= 0.0)
+            ao["overlappingUvsRatio"]  = asset.overlappingUvsRatio;
+        if (asset.nonManifoldEdgesRatio >= 0.0)
+            ao["nonManifoldEdgesRatio"] = asset.nonManifoldEdgesRatio;
+
         if (asset.loadError)
             ao["loadError"] = true;
 
@@ -1993,6 +2153,12 @@ QString ScanEngine::formatSarif(const ScanResult& result)
     ruleDescriptions["require_animation_names"] = "Required animation not found in asset";
     ruleDescriptions["require_bone_names"]      = "Required bone not found in skeleton";
     ruleDescriptions["redundant_keyframes_pct"] = "Animation contains redundant keyframes that could be safely simplified";
+    // C4 quality rules
+    ruleDescriptions["max_texture_resolution"]    = "Asset has textures larger than the configured pixel ceiling";
+    ruleDescriptions["require_uv_channels"]       = "Submesh has fewer UV sets than the rule requires";
+    ruleDescriptions["detect_zero_weight_bones"]  = "Skeleton has bones with no vertex weights (Mixamo bloat)";
+    ruleDescriptions["detect_overlapping_uvs"]    = "Triangles share overlapping UV0 regions (lightmap-unsafe)";
+    ruleDescriptions["detect_non_manifold_edges"] = "Mesh has non-manifold edges (booleans / printing will fail)";
 
     // Collect unique rules used in findings
     QSet<QString> usedRules;
