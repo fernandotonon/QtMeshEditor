@@ -26,6 +26,7 @@
 #include "SelectionSet.h"
 #include "MeshImporterExporter.h"
 #include "AnimationMerger.h"
+#include "CLIPipeline.h"
 #include "FBX/FBXExporter.h"
 #include "VertexCacheOptimizer.h"
 
@@ -239,38 +240,6 @@ static void fillAssetInfoFromOgreMesh(AssetInfo& info, const Ogre::MeshPtr& mesh
     }
 }
 
-// Walk an Ogre skeleton populating boneCount + animation list on AssetInfo.
-// Mirrors what the Assimp pass extracts so .mesh + .skeleton assets show the
-// same metadata as Assimp-loaded formats. Keyframe count per animation is the
-// maximum across node tracks, matching the per-anim "maxKeys" the Assimp path
-// computes. Redundant-keyframe analysis is intentionally skipped here — that
-// pass is Assimp-channel-specific and not load-bearing for .mesh files.
-static void fillAssetInfoFromOgreSkeleton(AssetInfo& info, const Ogre::SkeletonPtr& skel)
-{
-    if (!skel)
-        return;
-    info.hasSkeleton = true;
-    info.boneCount = skel->getNumBones();
-    for (unsigned short i = 0; i < skel->getNumBones(); ++i)
-        if (auto* b = skel->getBone(i))
-            info.boneNames.append(QString::fromStdString(b->getName()));
-
-    info.animationCount = skel->getNumAnimations();
-    for (unsigned short a = 0; a < skel->getNumAnimations(); ++a) {
-        const Ogre::Animation* anim = skel->getAnimation(a);
-        if (!anim)
-            continue;
-        info.animationNames.append(QString::fromStdString(anim->getName()));
-        info.animationDurations.append(static_cast<double>(anim->getLength()));
-        unsigned maxKeys = 0;
-        for (const auto& [handle, track] : anim->_getNodeTrackList()) {
-            if (track)
-                maxKeys = std::max(maxKeys, static_cast<unsigned>(track->getNumKeyFrames()));
-        }
-        info.animationKeyframeCounts.append(static_cast<int>(maxKeys));
-    }
-}
-
 #ifdef QTMESH_UNIT_TESTS
 void ScanEngine::testApplyOgreMeshInspectCounts(AssetInfo& info, const Ogre::MeshPtr& mesh)
 {
@@ -335,40 +304,305 @@ static void accumulateEntityAcmr(const Ogre::Entity* entity,
     }
 }
 
-// Returns true when an ACMR was produced; false on import failure or no
-// triangulated submeshes. Clears the scene + unloads Ogre resources on the
-// way out so the caller's loop doesn't accumulate state.
-static bool computeWeightedAcmrViaOgre(const QString& filePath, AssetInfo& info)
+// Walk a single Ogre entity, accumulating CLIPipeline::extractMeshInfo into the
+// AssetInfo aggregate fields. Shared helper so both the per-entity loop and
+// future per-entity tests can use the same merge logic.
+static void mergeOgreEntityIntoAssetInfo(const Ogre::Entity* entity,
+                                         AssetInfo& info,
+                                         std::set<std::string>& seenMaterials,
+                                         std::set<std::string>& seenBones,
+                                         std::set<std::string>& seenAnims,
+                                         std::set<std::string>& seenTextures)
 {
-    if (!ensureOgreHeadlessQuiet())
+    if (!entity) return;
+    // extractMeshInfo lives in CLIPipeline and is the same routine the in-app
+    // MeshInfoOverlay uses — so scan, info CLI, and overlay all show the same
+    // numbers for the same asset.
+    const MeshInfo mi = CLIPipeline::extractMeshInfo(entity, QString());
+
+    info.vertexCount += mi.vertices;
+    info.faceCount   += mi.triangles;
+    info.meshCount   += 1;   // one mesh per entity (multi-entity scenes count both)
+
+    for (const QString& m : mi.materials) {
+        if (m.isEmpty()) continue;
+        if (seenMaterials.insert(m.toStdString()).second) {
+            info.materialNames.append(m);
+            info.materialCount++;
+        }
+    }
+
+    for (const QString& t : mi.textures) {
+        if (t.isEmpty()) continue;
+        if (seenTextures.insert(t.toStdString()).second) {
+            info.texturePaths.append(t);
+            info.textureRefCount++;
+        }
+    }
+
+    for (const QString& b : mi.bones) {
+        if (b.isEmpty()) continue;
+        if (seenBones.insert(b.toStdString()).second)
+            info.boneNames.append(b);
+    }
+    info.boneCount = static_cast<unsigned int>(info.boneNames.size());
+    info.hasSkeleton = info.boneCount > 0;
+
+    // De-duplicate animations by name across entities.
+    for (const auto& a : mi.animations) {
+        if (a.name.isEmpty()) continue;
+        if (!seenAnims.insert(a.name.toStdString()).second)
+            continue;
+        info.animationNames.append(a.name);
+        info.animationDurations.append(static_cast<double>(a.duration));
+        info.animationCount++;
+    }
+}
+
+// Run AnimationMerger::analyzeRedundantKeyframes — the same analyzer used by
+// `qtmesh anim --simplify` and the Inspector's Simplify action — on every
+// animation on the entity's skeleton, accumulating per-anim maxKeyframes and
+// total/redundant counts into AssetInfo.
+static void fillRedundancyFromOgreSkeleton(const Ogre::Entity* entity,
+                                           AssetInfo& info,
+                                           const AnimationMerger::SimplifyTolerances& tol,
+                                           std::set<std::string>& seenAnims)
+{
+    if (!entity || !entity->hasSkeleton()) return;
+    const Ogre::SkeletonPtr skel = entity->getMesh() ? entity->getMesh()->getSkeleton()
+                                                     : Ogre::SkeletonPtr();
+    if (!skel) return;
+
+    for (unsigned short a = 0; a < skel->getNumAnimations(); ++a) {
+        const Ogre::Animation* anim = skel->getAnimation(a);
+        if (!anim) continue;
+        // Only count once per animation name across multi-entity scenes — the
+        // metadata pass already de-dup'd, mirror that here.
+        const std::string animKey = anim->getName() + "::analyzed";
+        if (!seenAnims.insert(animKey).second) continue;
+
+        unsigned maxKeys = 0;
+        for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+            if (track)
+                maxKeys = std::max(maxKeys, static_cast<unsigned>(track->getNumKeyFrames()));
+        }
+        info.animationKeyframeCounts.append(static_cast<int>(maxKeys));
+
+        int t = 0, r = 0;
+        AnimationMerger::analyzeRedundantKeyframes(anim, tol, &t, &r);
+        info.totalKeyframes     += t;
+        info.redundantKeyframes += r;
+    }
+}
+
+// Detect embedded textures: walk each TextureUnitState used by every
+// SubEntity's Material and ask Ogre if the texture was manually loaded
+// (i.e. fed bytes from an in-memory stream rather than resolved through
+// resource locations). MaterialProcessor::loadTexture calls loadImage()
+// for embedded textures, which sets isManuallyLoaded()==true.
+static bool detectEmbeddedTexturesFromEntities(const QList<Ogre::Entity*>& entities)
+{
+    auto& tmgr = Ogre::TextureManager::getSingleton();
+    for (const Ogre::Entity* entity : entities) {
+        if (!entity) continue;
+        for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i) {
+            const auto* sub = entity->getSubEntity(i);
+            const auto mat = sub ? sub->getMaterial() : Ogre::MaterialPtr();
+            if (!mat) continue;
+            for (auto* tech : mat->getTechniques()) {
+                for (auto* pass : tech->getPasses()) {
+                    for (auto* tus : pass->getTextureUnitStates()) {
+                        if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                            continue;
+                        const Ogre::String texName = tus->getTextureName();
+                        if (texName.empty()) continue;
+                        const Ogre::TexturePtr tex = tmgr.getByName(texName,
+                            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                        if (tex && tex->isManuallyLoaded())
+                            return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Slice C3 single-pass scan inspector. Loads the asset through the editor's
+// MeshImporterExporter, walks the resulting Ogre scene, and fills every
+// AssetInfo field the scan rules consume — counts, materials, textures,
+// skeleton, animations, redundant-keyframe analysis, embedded-texture flag,
+// and ACMR — using CLIPipeline::extractMeshInfo (the same extractor the
+// in-app MeshInfoOverlay uses) plus AnimationMerger::analyzeRedundantKeyframes
+// (the same analyzer powering `qtmesh anim --simplify` and the Inspector's
+// "Simplify" action). Returns true on successful import.
+//
+// Replaces both the Assimp aiScene traversal that previously filled metadata
+// AND the separate computeWeightedAcmrViaOgre import — we load each file once.
+// Enumerate every aiMaterial's texture references via a cheap Assimp
+// ReadFile (no triangulation, no expensive post-processing). Restores the
+// pre-C3 behavior of `info.texturePaths` capturing referenced-but-missing
+// texture files — Ogre's TextureUnitState only sees textures that bound
+// successfully, so without this pass require_textures_exist would have
+// nothing to flag. Native .mesh files don't have an Assimp reader for
+// v1.40, and their texture refs already came from the .material script via
+// Ogre, so they short-circuit here.
+static void enumerateTextureRefsViaAssimp(const QString& filePath, AssetInfo& info,
+                                          std::set<std::string>& seenTextures)
+{
+    if (filePath.endsWith(QLatin1String(".mesh"), Qt::CaseInsensitive))
+        return;
+    Assimp::Importer imp;
+    imp.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+    const aiScene* scene = imp.ReadFile(filePath.toStdString(),
+                                        aiProcess_ValidateDataStructure);
+    if (!scene || ScanEngine::isAssimpResultLoadFailure(scene, imp.GetErrorString(), nullptr))
+        return;
+
+    for (unsigned m = 0; m < scene->mNumMaterials; ++m) {
+        const aiMaterial* mat = scene->mMaterials[m];
+        if (!mat) continue;
+        for (int type = aiTextureType_DIFFUSE; type <= aiTextureType_UNKNOWN; ++type) {
+            const unsigned count = mat->GetTextureCount(static_cast<aiTextureType>(type));
+            for (unsigned j = 0; j < count; ++j) {
+                aiString p;
+                mat->GetTexture(static_cast<aiTextureType>(type), j, &p);
+                const QString tp = QString::fromUtf8(p.C_Str());
+                if (tp.isEmpty()) continue;
+                if (tp.startsWith('*')) {
+                    info.hasEmbeddedTextures = true;
+                    continue;
+                }
+                if (seenTextures.insert(tp.toStdString()).second) {
+                    info.texturePaths.append(tp);
+                    info.textureRefCount++;
+                }
+            }
+        }
+    }
+    // aiScene-level embedded texture blobs (FBX/glTF) — flag even when no
+    // material referenced them via a '*' path.
+    if (scene->mNumTextures > 0)
+        info.hasEmbeddedTextures = true;
+}
+
+// Fallback: when the Ogre import fails (e.g. an OBJ that references a missing
+// texture file — MaterialProcessor throws on TextureManager::load), still
+// produce useful counts by walking the aiScene directly. The scan can then
+// flag the missing texture via require_textures_exist instead of bailing
+// with a load_error on the whole file.
+static bool fillAssetInfoFromAssimpFallback(const QString& filePath, AssetInfo& info)
+{
+    Assimp::Importer imp;
+    imp.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+    const aiScene* scene = imp.ReadFile(filePath.toStdString(),
+                                        aiProcess_Triangulate | aiProcess_ValidateDataStructure);
+    if (!scene || ScanEngine::isAssimpResultLoadFailure(scene, imp.GetErrorString(), nullptr))
         return false;
 
-    clearOgreSceneForScanImport();
-    // Import via the editor's loader; default flags (0) match what the GUI
-    // uses for File > Open, so the index order we measure is the order the
-    // user actually ships.
-    MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()}, 0);
+    info.meshCount      = scene->mNumMeshes;
+    info.materialCount  = scene->mNumMaterials;
+    info.animationCount = scene->mNumAnimations;
 
-    auto* mgr = Manager::getSingleton();
-    if (!mgr) return false;
-    const auto& entities = mgr->getEntities();
-    if (entities.isEmpty()) {
-        // Some formats (animation-only FBX) produce no entity; not an error
-        // for the scan, just nothing to measure ACMR on.
-        clearOgreSceneForScanImport();
+    std::set<std::string> bones;
+    for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
+        const aiMesh* m = scene->mMeshes[i];
+        if (!m) continue;
+        info.vertexCount += m->mNumVertices;
+        info.faceCount   += m->mNumFaces;
+        for (unsigned b = 0; b < m->mNumBones; ++b)
+            if (m->mBones[b])
+                bones.insert(m->mBones[b]->mName.C_Str());
+    }
+    info.boneCount   = static_cast<unsigned int>(bones.size());
+    info.hasSkeleton = !bones.empty();
+    for (const auto& bn : bones)
+        info.boneNames.append(QString::fromStdString(bn));
+
+    for (unsigned i = 0; i < scene->mNumMaterials; ++i) {
+        const aiMaterial* mat = scene->mMaterials[i];
+        if (!mat) continue;
+        aiString n;
+        mat->Get(AI_MATKEY_NAME, n);
+        info.materialNames.append(QString::fromUtf8(n.C_Str()));
+    }
+    return true;
+}
+
+static bool inspectAssetViaOgre(const QString& filePath, AssetInfo& info,
+                                const AnimationMerger::SimplifyTolerances& redundancyTol)
+{
+    if (!ensureOgreHeadlessQuiet()) {
+        info.loadError = true;
+        info.errorMessage = QStringLiteral("Ogre headless context unavailable");
         return false;
     }
 
-    double weightedSum = 0.0;
+    clearOgreSceneForScanImport();
+    // Default flags (0) match File > Open: same index ordering and same
+    // material/texture binding the user actually ships. MaterialProcessor
+    // can throw if a referenced texture file is missing on disk; swallow
+    // that so the scan still produces metadata + can flag the missing
+    // texture via require_textures_exist (instead of dropping the asset
+    // entirely with a load_error).
+    try {
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()}, 0);
+    } catch (const Ogre::Exception&) {
+        // Continue — try to extract whatever entities did make it in.
+    } catch (const std::exception&) {
+        // Same.
+    }
+
+    auto* mgr = Manager::getSingleton();
+    if (!mgr) {
+        clearOgreSceneForScanImport();
+        info.loadError = true;
+        info.errorMessage = QStringLiteral("Manager unavailable");
+        return false;
+    }
+    QList<Ogre::Entity*> entities = mgr->getEntities();
+    if (entities.isEmpty()) {
+        // Partial / failed Ogre import (e.g. OBJ with a missing texture
+        // reference that aborted MaterialProcessor). Fall back to Assimp's
+        // scene graph for at least the count metadata so the rule evaluator
+        // can still flag what's wrong instead of dropping the file.
+        clearOgreSceneForScanImport();
+        const bool ok = fillAssetInfoFromAssimpFallback(filePath, info);
+        std::set<std::string> seenTextures;
+        enumerateTextureRefsViaAssimp(filePath, info, seenTextures);
+        return ok;
+    }
+
+    std::set<std::string> seenMaterials, seenBones, seenAnims, seenTextures;
+    double weightedAcmrSum = 0.0;
     unsigned int totalTris = 0;
-    for (const Ogre::Entity* entity : entities)
-        accumulateEntityAcmr(entity, weightedSum, totalTris);
+
+    for (const Ogre::Entity* entity : entities) {
+        mergeOgreEntityIntoAssetInfo(entity, info,
+                                     seenMaterials, seenBones, seenAnims, seenTextures);
+        accumulateEntityAcmr(entity, weightedAcmrSum, totalTris);
+    }
 
     if (totalTris > 0)
-        info.weightedAcmr = weightedSum / totalTris;
+        info.weightedAcmr = weightedAcmrSum / totalTris;
+
+    // Redundant-keyframe analysis — use the editor's analyzer so scan numbers
+    // match what `qtmesh anim --simplify` and the Inspector's Simplify button
+    // would actually remove at the configured tolerances.
+    std::set<std::string> seenAnimsForAnalysis;
+    for (const Ogre::Entity* entity : entities)
+        fillRedundancyFromOgreSkeleton(entity, info, redundancyTol, seenAnimsForAnalysis);
+
+    info.animationRedundantKeyframeRatio = (info.totalKeyframes > 0)
+        ? static_cast<double>(info.redundantKeyframes) / static_cast<double>(info.totalKeyframes)
+        : 0.0;
+
+    info.hasEmbeddedTextures = detectEmbeddedTexturesFromEntities(entities);
+
+    enumerateTextureRefsViaAssimp(filePath, info, seenTextures);
 
     clearOgreSceneForScanImport();
-    return totalTris > 0;
+    return true;
 }
 
 template<typename ImportFn>
@@ -494,234 +728,16 @@ QStringList ScanEngine::enumerateFiles(const ScanConfig& config, const QString& 
 }
 
 // ---------------------------------------------------------------------------
-// Redundant-keyframe analysis (Assimp-side, no Ogre).
-//
-// Mirrors AnimationMerger::simplifyAnimation, which treats an Ogre node
-// keyframe atomically (a single record holding T+R+S at one time). We build
-// the same per-node view from Assimp by unioning the position/rotation/scale
-// time arrays per aiNodeAnim and sampling all three streams at each unique
-// time. Then a key is redundant when removing it leaves the lerp/slerp of
-// the *atomic* neighbors within tolerance for every channel — same definition
-// the simplifier applies. First and last keys per node track are preserved.
-// ---------------------------------------------------------------------------
-
-namespace {
-
-struct RedundancyTolerances {
-    double translation = 1e-3;
-    double rotationDeg = 0.5;
-    double scale       = 1e-3;
-};
-
-struct NodeKey {
-    double time = 0.0;
-    double tx = 0.0, ty = 0.0, tz = 0.0;     // position
-    double sx = 1.0, sy = 1.0, sz = 1.0;     // scale
-    double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0; // rotation
-};
-
-// Sample a sorted aiVectorKey array at time `t` using piecewise-linear
-// interpolation (Assimp's storage convention). Empty arrays return the
-// supplied default.
-static aiVector3D sampleVecKeys(const aiVectorKey* keys, unsigned n, double t,
-                                const aiVector3D& fallback)
-{
-    if (n == 0 || !keys) return fallback;
-    if (n == 1 || t <= keys[0].mTime) return keys[0].mValue;
-    if (t >= keys[n-1].mTime) return keys[n-1].mValue;
-    // Linear scan — channel arrays are short (~hundreds), no need for binary search.
-    for (unsigned i = 1; i < n; ++i) {
-        if (t <= keys[i].mTime) {
-            const double span = keys[i].mTime - keys[i-1].mTime;
-            if (span <= 1e-9) return keys[i].mValue;
-            const float u = static_cast<float>((t - keys[i-1].mTime) / span);
-            return keys[i-1].mValue + (keys[i].mValue - keys[i-1].mValue) * u;
-        }
-    }
-    return keys[n-1].mValue;
-}
-
-static aiQuaternion sampleQuatKeys(const aiQuatKey* keys, unsigned n, double t,
-                                   const aiQuaternion& fallback)
-{
-    if (n == 0 || !keys) return fallback;
-    if (n == 1 || t <= keys[0].mTime) return keys[0].mValue;
-    if (t >= keys[n-1].mTime) return keys[n-1].mValue;
-    for (unsigned i = 1; i < n; ++i) {
-        if (t <= keys[i].mTime) {
-            const double span = keys[i].mTime - keys[i-1].mTime;
-            if (span <= 1e-9) return keys[i].mValue;
-            const float u = static_cast<float>((t - keys[i-1].mTime) / span);
-            aiQuaternion out;
-            aiQuaternion::Interpolate(out, keys[i-1].mValue, keys[i].mValue, u);
-            return out;
-        }
-    }
-    return keys[n-1].mValue;
-}
-
-// Union of distinct times across T/R/S streams for one aiNodeAnim, in order.
-static std::vector<double> unionTimes(const aiNodeAnim* ch)
-{
-    if (!ch)
-        return {};
-    std::vector<double> times;
-    times.reserve(ch->mNumPositionKeys + ch->mNumRotationKeys + ch->mNumScalingKeys);
-    if (ch->mPositionKeys) {
-        for (unsigned i = 0; i < ch->mNumPositionKeys; ++i)
-            times.push_back(ch->mPositionKeys[i].mTime);
-    }
-    if (ch->mRotationKeys) {
-        for (unsigned i = 0; i < ch->mNumRotationKeys; ++i)
-            times.push_back(ch->mRotationKeys[i].mTime);
-    }
-    if (ch->mScalingKeys) {
-        for (unsigned i = 0; i < ch->mNumScalingKeys; ++i)
-            times.push_back(ch->mScalingKeys[i].mTime);
-    }
-    std::sort(times.begin(), times.end());
-    times.erase(std::unique(times.begin(), times.end(),
-        [](double a, double b) { return std::fabs(a - b) < 1e-7; }), times.end());
-    return times;
-}
-
-// Quaternion dot product (avoids depending on Assimp's operator).
-static double quatDot(const aiQuaternion& a, const aiQuaternion& b)
-{
-    return a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w;
-}
-static aiQuaternion alignedTo(const aiQuaternion& q, const aiQuaternion& ref)
-{
-    if (quatDot(q, ref) < 0.0)
-        return aiQuaternion(-q.w, -q.x, -q.y, -q.z);
-    return q;
-}
-
-// Decide whether key B (between A and C) can be safely dropped given that
-// the atomic node value contains T, R, and S — i.e. all three channels must
-// be within their respective tolerances at B's time.
-static bool nodeKeyIsRedundant(const NodeKey& a, const NodeKey& b, const NodeKey& c,
-                               const RedundancyTolerances& tol)
-{
-    const double span = c.time - a.time;
-    if (span <= 1e-7) return true;
-    const double u = (b.time - a.time) / span;
-    if (u <= 0.0 || u >= 1.0) return false;
-
-    // Translation
-    const double dtx = (a.tx + (c.tx - a.tx) * u) - b.tx;
-    const double dty = (a.ty + (c.ty - a.ty) * u) - b.ty;
-    const double dtz = (a.tz + (c.tz - a.tz) * u) - b.tz;
-    if (std::sqrt(dtx*dtx + dty*dty + dtz*dtz) > tol.translation) return false;
-
-    // Scale
-    const double dsx = (a.sx + (c.sx - a.sx) * u) - b.sx;
-    const double dsy = (a.sy + (c.sy - a.sy) * u) - b.sy;
-    const double dsz = (a.sz + (c.sz - a.sz) * u) - b.sz;
-    if (std::sqrt(dsx*dsx + dsy*dsy + dsz*dsz) > tol.scale) return false;
-
-    // Rotation: slerp on hemisphere-aligned quats, compare angular distance.
-    const aiQuaternion qA(static_cast<float>(a.qw), static_cast<float>(a.qx),
-                          static_cast<float>(a.qy), static_cast<float>(a.qz));
-    aiQuaternion qC(static_cast<float>(c.qw), static_cast<float>(c.qx),
-                    static_cast<float>(c.qy), static_cast<float>(c.qz));
-    aiQuaternion qB(static_cast<float>(b.qw), static_cast<float>(b.qx),
-                    static_cast<float>(b.qy), static_cast<float>(b.qz));
-    qC = alignedTo(qC, qA);
-    qB = alignedTo(qB, qA);
-    aiQuaternion slerp;
-    aiQuaternion::Interpolate(slerp, qA, qC, static_cast<float>(u));
-    double d = std::fabs(quatDot(slerp, qB));
-    if (d > 1.0) d = 1.0;
-    const double angleDeg = std::acos(d) * 2.0 * 180.0 / M_PI;
-    return angleDeg <= tol.rotationDeg;
-}
-
-// Walk one node's atomic keys and count how many would be folded out by
-// simplifyAnimation under the same tolerances. First/last preserved.
-static int countRedundantNodeKeys(const std::vector<NodeKey>& keys,
-                                  const RedundancyTolerances& tol)
-{
-    if (keys.size() < 3) return 0;
-    std::vector<size_t> kept;
-    kept.reserve(keys.size());
-    kept.push_back(0);
-    for (size_t i = 1; i + 1 < keys.size(); ++i) {
-        kept.push_back(i);
-        while (kept.size() >= 3) {
-            const size_t a = kept[kept.size() - 3];
-            const size_t b = kept[kept.size() - 2];
-            const size_t c = kept[kept.size() - 1];
-            if (nodeKeyIsRedundant(keys[a], keys[b], keys[c], tol))
-                kept.erase(kept.begin() + (kept.size() - 2));
-            else
-                break;
-        }
-    }
-    kept.push_back(keys.size() - 1);
-    while (kept.size() >= 3) {
-        const size_t a = kept[kept.size() - 3];
-        const size_t b = kept[kept.size() - 2];
-        const size_t c = kept[kept.size() - 1];
-        if (nodeKeyIsRedundant(keys[a], keys[b], keys[c], tol))
-            kept.erase(kept.begin() + (kept.size() - 2));
-        else
-            break;
-    }
-    return static_cast<int>(keys.size()) - static_cast<int>(kept.size());
-}
-
-static void analyzeAnimationRedundancy(const aiAnimation* anim,
-                                       const RedundancyTolerances& tol,
-                                       int* outTotal, int* outRedundant)
-{
-    int total = 0;
-    int redundant = 0;
-    if (!anim || !anim->mChannels) {
-        if (outTotal) *outTotal = 0;
-        if (outRedundant) *outRedundant = 0;
-        return;
-    }
-    for (unsigned c = 0; c < anim->mNumChannels; ++c) {
-        const aiNodeAnim* ch = anim->mChannels[c];
-        if (!ch)
-            continue;
-        const std::vector<double> times = unionTimes(ch);
-        if (times.empty()) continue;
-
-        // Build atomic node keys by sampling every stream at each unique time.
-        std::vector<NodeKey> keys;
-        keys.reserve(times.size());
-        for (double t : times) {
-            NodeKey k;
-            k.time = t;
-            const aiVector3D pos = sampleVecKeys(ch->mPositionKeys, ch->mNumPositionKeys, t,
-                                                 aiVector3D(0,0,0));
-            const aiVector3D scl = sampleVecKeys(ch->mScalingKeys, ch->mNumScalingKeys, t,
-                                                 aiVector3D(1,1,1));
-            const aiQuaternion rot = sampleQuatKeys(ch->mRotationKeys, ch->mNumRotationKeys, t,
-                                                    aiQuaternion(1,0,0,0));
-            k.tx = pos.x; k.ty = pos.y; k.tz = pos.z;
-            k.sx = scl.x; k.sy = scl.y; k.sz = scl.z;
-            k.qw = rot.w; k.qx = rot.x; k.qy = rot.y; k.qz = rot.z;
-            keys.push_back(k);
-        }
-        total += static_cast<int>(keys.size());
-        redundant += countRedundantNodeKeys(keys, tol);
-    }
-    if (outTotal)     *outTotal     = total;
-    if (outRedundant) *outRedundant = redundant;
-}
-
-} // namespace
-
-// ---------------------------------------------------------------------------
-// Asset inspection: Assimp drives scene-graph metadata extraction (vertex /
-// face counts, materials, animations, redundant-keyframe analysis); Ogre
-// drives ACMR (slice C2) and the PlayStation TMD / Psy-Q PLY / RSD paths.
-// Both run through a single headless Ogre context shared across files; per-
-// file cleanup happens in clearOgreSceneForScanImport (which also flushes
+// Asset inspection (slice C3): every supported format flows through
+// MeshImporterExporter (Ogre) and the resulting Ogre scene is walked with
+// CLIPipeline::extractMeshInfo and AnimationMerger::analyzeRedundantKeyframes
+// — the same extractors the in-app MeshInfoOverlay and the "Simplify" action
+// use. A single headless Ogre context is shared across files; per-file
+// cleanup happens in clearOgreSceneForScanImport (which also flushes
 // MeshManager / SkeletonManager so a 1000-asset scan doesn't pile state).
+// Assimp remains only as a recognized "did this file actually load?" check
+// for formats whose detailed metadata is still useful before deciding to
+// load through Ogre at all.
 // ---------------------------------------------------------------------------
 
 bool ScanEngine::isAssimpResultLoadFailure(const aiScene* scene, const char* assimpErrorString,
@@ -838,165 +854,24 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         return info;
     }
 
-    // Ogre native .mesh: load via Ogre's MeshSerializer (the same path the
-    // editor uses) instead of routing through Assimp. Assimp's .mesh reader
-    // is limited to v1.41+ and fails on older serializer versions (e.g.
-    // robot.mesh / v1.40). ACMR is computed below via the shared Ogre path.
-    if (extLower == QLatin1String("mesh")) {
-        QString detailErr;
-        Ogre::MeshPtr loaded;
-        const bool ok = loadAndFillOgreInspect(
-            info,
-            [filePath, &loaded](const std::string& /*mn*/) -> Ogre::MeshPtr {
-                const QFileInfo fi(filePath);
-                const Ogre::String meshResName = fi.fileName().toStdString();
-                const Ogre::String meshGroup   = fi.absolutePath().toStdString();
-                Ogre::ResourceGroupManager& rgm = Ogre::ResourceGroupManager::getSingleton();
-                if (!rgm.resourceGroupExists(meshGroup)) {
-                    rgm.createResourceGroup(meshGroup);
-                    rgm.addResourceLocation(meshGroup, "FileSystem", meshGroup);
-                    rgm.initialiseResourceGroup(meshGroup);
-                }
-                if (auto existing = Ogre::MeshManager::getSingleton().getByName(meshResName, meshGroup))
-                    Ogre::MeshManager::getSingleton().remove(existing);
-                loaded = Ogre::MeshManager::getSingleton().load(meshResName, meshGroup);
-                return loaded;
-            },
-            &detailErr);
-        if (ok && loaded && loaded->hasSkeleton())
-            fillAssetInfoFromOgreSkeleton(info, loaded->getSkeleton());
-        // Run the standard ACMR path (loads through MeshImporterExporter into
-        // its own scene). Safe to call after the inspect helper above because
-        // computeWeightedAcmrViaOgre uses a separate per-scan clear cycle.
-        computeWeightedAcmrViaOgre(filePath, info);
-        info.filePath = filePath;
-        info.relativePath = QDir(scanRoot).relativeFilePath(filePath);
-        info.format = extLower;
-        info.fileSize = QFileInfo(filePath).size();
+    // Slice C3: single Ogre-backed pass. inspectAssetViaOgre loads the asset
+    // through MeshImporterExporter (the editor's own loader) and walks the
+    // resulting Ogre scene to fill EVERY AssetInfo field — counts, materials,
+    // textures, skeleton, animations, redundant-keyframe analysis, embedded
+    // flag, and ACMR — using the same extractors the in-app MeshInfoOverlay
+    // (CLIPipeline::extractMeshInfo) and "Simplify" action
+    // (AnimationMerger::analyzeRedundantKeyframes) use.
+    //
+    // Default tolerances are sufficient for the JSON report; the
+    // redundant_keyframes_pct rule re-imports with config-specific tolerances
+    // when the rule is enabled.
+    if (!inspectAssetViaOgre(filePath, info, AnimationMerger::SimplifyTolerances{})) {
+        if (!info.loadError) {
+            info.loadError = true;
+            info.errorMessage = QStringLiteral("Failed to load asset via Ogre");
+        }
         return info;
     }
-
-    Assimp::Importer importer;
-    importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
-
-    // Triangulate for consistent vertex/face counts; otherwise minimal processing.
-    unsigned int readFlags = aiProcess_Triangulate | aiProcess_ValidateDataStructure;
-    const aiScene* scene = importer.ReadFile(filePath.toStdString(), readFlags);
-
-    if (isAssimpResultLoadFailure(scene, importer.GetErrorString(), nullptr) &&
-        (pathEndsWithInsensitive(filePath, QLatin1String(".fbx")) ||
-         pathEndsWithInsensitive(filePath, QLatin1String(".fbxa")))) {
-        readFlags = aiProcess_Triangulate | aiProcess_ValidateDataStructure |
-                    aiProcess_LimitBoneWeights | aiProcess_PopulateArmatureData |
-                    aiProcess_GlobalScale;
-        scene = importer.ReadFile(filePath.toStdString(), readFlags);
-    }
-
-    // A null scene is a true load failure.  Do NOT treat AI_SCENE_FLAGS_INCOMPLETE
-    // as fatal: Assimp sets it on many valid FBX files (e.g. Unreal/ Mixamo
-    // animation takes with no mesh geometry).  Match AssimpToOgreImporter: use
-    // mesh/animation presence as the authoritative check.
-    if (isAssimpResultLoadFailure(scene, importer.GetErrorString(), &info.errorMessage)) {
-        info.loadError = true;
-        return info;
-    }
-
-    info.meshCount     = scene->mNumMeshes;
-    info.materialCount = scene->mNumMaterials;
-    info.animationCount = scene->mNumAnimations;
-
-    // Vertex / face / skeleton metadata from Assimp's scene graph. ACMR is
-    // computed via Ogre below (slice C2) so the numbers line up with what
-    // the editor's in-app validator reports.
-    std::set<std::string> uniqueBones;
-    for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
-        const aiMesh* mesh = scene->mMeshes[i];
-        if (!mesh)
-            continue;
-        info.vertexCount += mesh->mNumVertices;
-        info.faceCount   += mesh->mNumFaces;
-        for (unsigned b = 0; b < mesh->mNumBones; ++b) {
-            if (!mesh->mBones[b])
-                continue;
-            uniqueBones.insert(mesh->mBones[b]->mName.C_Str());
-        }
-    }
-    info.boneCount  = static_cast<unsigned int>(uniqueBones.size());
-    info.hasSkeleton = !uniqueBones.empty();
-    for (const auto& boneName : uniqueBones)
-        info.boneNames.append(QString::fromStdString(boneName));
-
-    // Animation details
-    for (unsigned i = 0; i < scene->mNumAnimations; ++i) {
-        const aiAnimation* anim = scene->mAnimations[i];
-        if (!anim)
-            continue;
-        info.animationNames.append(QString::fromUtf8(anim->mName.C_Str()));
-
-        double ticksPerSec = anim->mTicksPerSecond > 0 ? anim->mTicksPerSecond : 25.0;
-        info.animationDurations.append(anim->mDuration / ticksPerSec);
-
-        unsigned maxKeys = 0;
-        if (anim->mChannels) {
-            for (unsigned c = 0; c < anim->mNumChannels; ++c) {
-                const aiNodeAnim* ch = anim->mChannels[c];
-                if (!ch)
-                    continue;
-                maxKeys = std::max(maxKeys, ch->mNumPositionKeys);
-                maxKeys = std::max(maxKeys, ch->mNumRotationKeys);
-                maxKeys = std::max(maxKeys, ch->mNumScalingKeys);
-            }
-        }
-        info.animationKeyframeCounts.append(static_cast<int>(maxKeys));
-
-        // Always compute redundant-keyframe counts under the default
-        // (Balanced) tolerances. The scan rule re-evaluates with its own
-        // configured tolerances if it's enabled — these defaults just keep
-        // the JSON report informative for tooling that consumes it.
-        int animTotal = 0, animRedundant = 0;
-        analyzeAnimationRedundancy(anim, RedundancyTolerances{}, &animTotal, &animRedundant);
-        info.totalKeyframes     += animTotal;
-        info.redundantKeyframes += animRedundant;
-    }
-
-    info.animationRedundantKeyframeRatio = (info.totalKeyframes > 0)
-        ? static_cast<double>(info.redundantKeyframes) / static_cast<double>(info.totalKeyframes)
-        : 0.0;
-
-    // Material names + texture references
-    for (unsigned i = 0; i < scene->mNumMaterials; ++i) {
-        const aiMaterial* mat = scene->mMaterials[i];
-
-        aiString name;
-        mat->Get(AI_MATKEY_NAME, name);
-        info.materialNames.append(QString::fromUtf8(name.C_Str()));
-
-        // Iterate all texture types
-        for (int type = aiTextureType_DIFFUSE; type <= aiTextureType_UNKNOWN; ++type) {
-            unsigned count = mat->GetTextureCount(static_cast<aiTextureType>(type));
-            for (unsigned j = 0; j < count; ++j) {
-                aiString texPath;
-                mat->GetTexture(static_cast<aiTextureType>(type), j, &texPath);
-                QString tp = QString::fromUtf8(texPath.C_Str());
-                info.textureRefCount++;
-                if (tp.startsWith('*')) {
-                    // Embedded texture (Assimp convention: "*0", "*1", ...)
-                    info.hasEmbeddedTextures = true;
-                } else if (!tp.isEmpty()) {
-                    info.texturePaths.append(tp);
-                }
-            }
-        }
-    }
-
-    // Deduplicate embedded-texture flag from scene
-    if (scene->mNumTextures > 0)
-        info.hasEmbeddedTextures = true;
-
-    // Slice C2: compute ACMR via Ogre so the scan numbers line up with the
-    // editor's in-app validator. Failures are non-fatal — the rest of the
-    // AssetInfo stays valid and we just leave weightedAcmr at 0.
-    computeWeightedAcmrViaOgre(filePath, info);
 
     return info;
 }
@@ -1268,66 +1143,77 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
     }
 
     // ---- redundant_keyframes_pct ----
-    // Walks the animation channels under the configured tolerances and warns if
-    // a meaningful share could be folded out by `qtmesh anim --simplify`.
-    if (config.redundantKeyframesPctThreshold > 0.0 && asset.animationCount > 0) {
-        Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(
-            asset.filePath.toStdString(),
-            aiProcess_ValidateDataStructure);
-        // Use the same accept-policy as inspectAsset so animation-only FBX
-        // (which carries AI_SCENE_FLAGS_INCOMPLETE) still goes through the rule.
-        QString reimportErr;
-        const bool readFailed = ScanEngine::isAssimpResultLoadFailure(
-            scene, importer.GetErrorString(), &reimportErr);
-        if (!readFailed) {
-            RedundancyTolerances tol;
-            tol.translation = config.redundantKeyframesTranslationTol;
-            tol.rotationDeg = config.redundantKeyframesRotationDegTol;
-            tol.scale       = config.redundantKeyframesScaleTol;
+    // Walks the animation tracks under the configured tolerances and warns if
+    // a meaningful share could be folded out by `qtmesh anim --simplify`. Uses
+    // AnimationMerger::analyzeRedundantKeyframes — the same analyzer the
+    // --simplify CLI action and the Inspector "Simplify" button run, so the
+    // scan's count matches what the fix would actually remove.
+    if (config.redundantKeyframesPctThreshold > 0.0 && asset.animationCount > 0
+        && ensureOgreHeadlessQuiet()) {
 
-            int total = 0;
-            int redundant = 0;
-            for (unsigned i = 0; i < scene->mNumAnimations; ++i) {
-                if (!scene->mAnimations[i])
-                    continue;
+        AnimationMerger::SimplifyTolerances tol;
+        tol.translation = static_cast<float>(config.redundantKeyframesTranslationTol);
+        tol.rotationDeg = static_cast<float>(config.redundantKeyframesRotationDegTol);
+        tol.scale       = static_cast<float>(config.redundantKeyframesScaleTol);
+
+        clearOgreSceneForScanImport();
+        MeshImporterExporter::importer({QFileInfo(asset.filePath).absoluteFilePath()}, 0);
+        const QList<Ogre::Entity*> entities = Manager::getSingleton()
+            ? Manager::getSingleton()->getEntities() : QList<Ogre::Entity*>();
+
+        int total = 0;
+        int redundant = 0;
+        std::set<std::string> seenAnims;
+        for (const Ogre::Entity* entity : entities) {
+            if (!entity || !entity->hasSkeleton()) continue;
+            const Ogre::SkeletonPtr skel = entity->getMesh()
+                                              ? entity->getMesh()->getSkeleton()
+                                              : Ogre::SkeletonPtr();
+            if (!skel) continue;
+            for (unsigned short a = 0; a < skel->getNumAnimations(); ++a) {
+                const Ogre::Animation* anim = skel->getAnimation(a);
+                if (!anim) continue;
+                // Multi-entity scenes can carry the same animation under more
+                // than one skin (Mixamo Twist Dance, etc.). Count it once.
+                if (!seenAnims.insert(anim->getName()).second) continue;
                 int t = 0, r = 0;
-                analyzeAnimationRedundancy(scene->mAnimations[i], tol, &t, &r);
+                AnimationMerger::analyzeRedundantKeyframes(anim, tol, &t, &r);
                 total += t;
                 redundant += r;
             }
+        }
+        clearOgreSceneForScanImport();
 
-            // The default-tolerance numbers were already filled at inspectAsset
-            // time, so we don't write back here — the rule's percentage may use
-            // different tolerances than the JSON report's totals, and we don't
-            // want them to diverge mid-scan.
+        // The default-tolerance numbers were already filled at inspectAsset
+        // time, so we don't write back here — the rule's percentage may use
+        // different tolerances than the JSON report's totals, and we don't
+        // want them to diverge mid-scan.
 
-            if (total > 0) {
-                const double pct = 100.0 * redundant / total;
-                if (pct >= config.redundantKeyframesPctThreshold) {
-                    const qint64 originalSize  = asset.fileSize;
-                    const qint64 projectedSize = static_cast<qint64>(
-                        originalSize * (1.0 - (pct / 100.0)));
-                    const qint64 savedBytes    = originalSize - projectedSize;
+        if (total > 0) {
+            const double pct = 100.0 * redundant / total;
+            if (pct >= config.redundantKeyframesPctThreshold) {
+                const qint64 originalSize  = asset.fileSize;
+                const qint64 projectedSize = static_cast<qint64>(
+                    originalSize * (1.0 - (pct / 100.0)));
+                const qint64 savedBytes    = originalSize - projectedSize;
 
-                    auto formatBytes = [](qint64 bytes) -> QString {
-                        if (bytes >= 1024 * 1024)
-                            return QString("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 2);
-                        if (bytes >= 1024)
-                            return QString("%1 KB").arg(bytes / 1024.0, 0, 'f', 1);
-                        return QString("%1 B").arg(bytes);
-                    };
+                auto formatBytes = [](qint64 bytes) -> QString {
+                    if (bytes >= 1024 * 1024)
+                        return QString("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 2);
+                    if (bytes >= 1024)
+                        return QString("%1 KB").arg(bytes / 1024.0, 0, 'f', 1);
+                    return QString("%1 B").arg(bytes);
+                };
 
-                    findings.append({asset.relativePath, "redundant_keyframes_pct", Severity::Warning,
-                        QString("%1% redundant keyframes (%2/%3). Simplify it to save ~%4. "
-                                "Original size: %5, projected size: %6. "
-                                "Run `qtmesh scan ... --fix` to apply (FBX uses the same simplify as `qtmesh anim --simplify`; use `--dry-run` to preview).")
-                            .arg(pct, 0, 'f', 1).arg(redundant).arg(total)
-                            .arg(formatBytes(savedBytes))
-                            .arg(formatBytes(originalSize))
-                            .arg(formatBytes(projectedSize)),
-                        /*fixable=*/true});
-                }
+                findings.append({asset.relativePath, "redundant_keyframes_pct", Severity::Warning,
+                    QString("%1% redundant keyframes (%2/%3). Simplify it to save ~%4. "
+                            "Original size: %5, projected size: %6. "
+                            "Run `qtmesh scan ... --fix` to apply (FBX uses the same simplify as `qtmesh anim --simplify`; use `--dry-run` to preview).")
+                        .arg(pct, 0, 'f', 1).arg(redundant).arg(total)
+                        .arg(formatBytes(savedBytes))
+                        .arg(formatBytes(originalSize))
+                        .arg(formatBytes(projectedSize)),
+                    /*fixable=*/true});
             }
         }
     }
