@@ -239,6 +239,38 @@ static void fillAssetInfoFromOgreMesh(AssetInfo& info, const Ogre::MeshPtr& mesh
     }
 }
 
+// Walk an Ogre skeleton populating boneCount + animation list on AssetInfo.
+// Mirrors what the Assimp pass extracts so .mesh + .skeleton assets show the
+// same metadata as Assimp-loaded formats. Keyframe count per animation is the
+// maximum across node tracks, matching the per-anim "maxKeys" the Assimp path
+// computes. Redundant-keyframe analysis is intentionally skipped here — that
+// pass is Assimp-channel-specific and not load-bearing for .mesh files.
+static void fillAssetInfoFromOgreSkeleton(AssetInfo& info, const Ogre::SkeletonPtr& skel)
+{
+    if (!skel)
+        return;
+    info.hasSkeleton = true;
+    info.boneCount = skel->getNumBones();
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+        if (auto* b = skel->getBone(i))
+            info.boneNames.append(QString::fromStdString(b->getName()));
+
+    info.animationCount = skel->getNumAnimations();
+    for (unsigned short a = 0; a < skel->getNumAnimations(); ++a) {
+        const Ogre::Animation* anim = skel->getAnimation(a);
+        if (!anim)
+            continue;
+        info.animationNames.append(QString::fromStdString(anim->getName()));
+        info.animationDurations.append(static_cast<double>(anim->getLength()));
+        unsigned maxKeys = 0;
+        for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+            if (track)
+                maxKeys = std::max(maxKeys, static_cast<unsigned>(track->getNumKeyFrames()));
+        }
+        info.animationKeyframeCounts.append(static_cast<int>(maxKeys));
+    }
+}
+
 #ifdef QTMESH_UNIT_TESTS
 void ScanEngine::testApplyOgreMeshInspectCounts(AssetInfo& info, const Ogre::MeshPtr& mesh)
 {
@@ -803,6 +835,44 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         QString detailErr;
         loadAndFillOgreInspect(
             info, [filePath](const std::string& mn) { return PS1PLY::importPsyqPly(filePath, mn); }, &detailErr);
+        return info;
+    }
+
+    // Ogre native .mesh: load via Ogre's MeshSerializer (the same path the
+    // editor uses) instead of routing through Assimp. Assimp's .mesh reader
+    // is limited to v1.41+ and fails on older serializer versions (e.g.
+    // robot.mesh / v1.40). ACMR is computed below via the shared Ogre path.
+    if (extLower == QLatin1String("mesh")) {
+        QString detailErr;
+        Ogre::MeshPtr loaded;
+        const bool ok = loadAndFillOgreInspect(
+            info,
+            [filePath, &loaded](const std::string& /*mn*/) -> Ogre::MeshPtr {
+                const QFileInfo fi(filePath);
+                const Ogre::String meshResName = fi.fileName().toStdString();
+                const Ogre::String meshGroup   = fi.absolutePath().toStdString();
+                Ogre::ResourceGroupManager& rgm = Ogre::ResourceGroupManager::getSingleton();
+                if (!rgm.resourceGroupExists(meshGroup)) {
+                    rgm.createResourceGroup(meshGroup);
+                    rgm.addResourceLocation(meshGroup, "FileSystem", meshGroup);
+                    rgm.initialiseResourceGroup(meshGroup);
+                }
+                if (auto existing = Ogre::MeshManager::getSingleton().getByName(meshResName, meshGroup))
+                    Ogre::MeshManager::getSingleton().remove(existing);
+                loaded = Ogre::MeshManager::getSingleton().load(meshResName, meshGroup);
+                return loaded;
+            },
+            &detailErr);
+        if (ok && loaded && loaded->hasSkeleton())
+            fillAssetInfoFromOgreSkeleton(info, loaded->getSkeleton());
+        // Run the standard ACMR path (loads through MeshImporterExporter into
+        // its own scene). Safe to call after the inspect helper above because
+        // computeWeightedAcmrViaOgre uses a separate per-scan clear cycle.
+        computeWeightedAcmrViaOgre(filePath, info);
+        info.filePath = filePath;
+        info.relativePath = QDir(scanRoot).relativeFilePath(filePath);
+        info.format = extLower;
+        info.fileSize = QFileInfo(filePath).size();
         return info;
     }
 

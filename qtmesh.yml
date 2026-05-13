@@ -18,8 +18,6 @@ scan:
     - "**/*.rsd"
     - "**/*.ply"
   exclude:
-    # robot.mesh uses Ogre MeshSerializer v1.40 which Assimp cannot read
-    - "**/robot.mesh"
     - "**/build/**"
     - "**/.git/**"
 
