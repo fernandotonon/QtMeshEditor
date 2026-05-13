@@ -39,6 +39,8 @@ THE SOFTWARE.
 #include <QFile>
 #include <QDir>
 #include <QRegularExpression>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <set>
 #include <cmath>
 #include <cstring>
@@ -322,7 +324,8 @@ static void readSubmeshGeometry(
     const Ogre::SubMesh* subMesh,
     const Ogre::Entity* entity,
     unsigned int subIndex,
-    const std::map<std::string, unsigned int, std::less<>>& matIndexMap)
+    const std::map<std::string, unsigned int, std::less<>>& matIndexMap,
+    bool preferNgonFaces = true)
 {
     aiM->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
     aiM->mNumVertices = static_cast<unsigned int>(vData->vertexCount);
@@ -414,7 +417,7 @@ static void readSubmeshGeometry(
     // that have never carried n-gon data — fall back to reading the
     // triangle index buffer directly.
     std::vector<std::vector<unsigned int>> ngonFaces;
-    const bool hasNgon = readNgonFacesFromMesh(
+    const bool hasNgon = preferNgonFaces && readNgonFacesFromMesh(
         entity->getMesh().get(), subIndex, ngonFaces);
     if (hasNgon)
     {
@@ -466,6 +469,80 @@ static void readSubmeshGeometry(
             ibuf->unlock();
         }
     }
+}
+
+static std::string sceneNgonFacesMetaKey(unsigned int subIndex)
+{
+    return std::string("qtme.faces.") + std::to_string(subIndex);
+}
+
+static aiString encodeSceneNgonFacesMetadata(const std::vector<std::vector<unsigned int>>& faces)
+{
+    QJsonArray outer;
+    for (const auto& face : faces)
+    {
+        if (face.size() < 3)
+            continue;
+        QJsonArray poly;
+        for (unsigned int idx : face)
+            poly.append(static_cast<int>(idx));
+        outer.append(poly);
+    }
+    const QByteArray json = QJsonDocument(outer).toJson(QJsonDocument::Compact);
+    return aiString(json.constData());
+}
+
+static bool decodeSceneNgonFacesMetadata(const aiMetadata* metadata,
+                                         unsigned int subIndex,
+                                         std::vector<std::vector<unsigned int>>& outFaces)
+{
+    outFaces.clear();
+    if (!metadata)
+        return false;
+
+    aiString encoded;
+    bool found = false;
+    const std::string key = sceneNgonFacesMetaKey(subIndex);
+    for (unsigned int i = 0; i < metadata->mNumProperties; ++i)
+    {
+        if (std::string(metadata->mKeys[i].C_Str()) != key)
+            continue;
+        if (!metadata->Get(i, encoded))
+            return false;
+        found = true;
+        break;
+    }
+    if (!found)
+        return false;
+
+    const QJsonDocument doc = QJsonDocument::fromJson(QByteArray(encoded.C_Str()));
+    if (!doc.isArray())
+        return false;
+
+    const QJsonArray outer = doc.array();
+    outFaces.reserve(static_cast<size_t>(outer.size()));
+    for (const QJsonValue& faceValue : outer)
+    {
+        if (!faceValue.isArray())
+            return false;
+        const QJsonArray poly = faceValue.toArray();
+        if (poly.size() < 3)
+            return false;
+        std::vector<unsigned int> face;
+        face.reserve(static_cast<size_t>(poly.size()));
+        for (const QJsonValue& idxValue : poly)
+        {
+            if (!idxValue.isDouble())
+                return false;
+            const int idx = idxValue.toInt(-1);
+            if (idx < 0)
+                return false;
+            face.push_back(static_cast<unsigned int>(idx));
+        }
+        outFaces.push_back(std::move(face));
+    }
+
+    return !outFaces.empty();
 }
 
 // Assign bone weights from Ogre bone assignments to an aiMesh
@@ -2989,6 +3066,7 @@ static aiScene* buildSceneAiScene()
 
         // Create the scene node's aiNode
         aiNode* entityNode;
+        aiNode* meshOwnerNode = nullptr;
         if (hasSkeleton)
         {
             entityNode = new aiNode(std::string(sn->getName()));
@@ -3010,6 +3088,7 @@ static aiScene* buildSceneAiScene()
             meshNode->mMeshes = new unsigned int[numSub];
             for (unsigned int si = 0; si < numSub; ++si)
                 meshNode->mMeshes[si] = globalMeshIdx + si;
+            meshOwnerNode = meshNode;
 
             entityNode->mNumChildren = static_cast<unsigned int>(rootBoneNodes.size()) + 1;
             entityNode->mChildren = new aiNode*[entityNode->mNumChildren];
@@ -3025,6 +3104,7 @@ static aiScene* buildSceneAiScene()
             entityNode->mMeshes = new unsigned int[numSub];
             for (unsigned int si = 0; si < numSub; ++si)
                 entityNode->mMeshes[si] = globalMeshIdx + si;
+            meshOwnerNode = entityNode;
         }
 
         Ogre::Matrix4 nodeTransform;
@@ -3034,6 +3114,7 @@ static aiScene* buildSceneAiScene()
         scene->mRootNode->mChildren[ni] = entityNode;
 
         // --- Build meshes for this entity ---
+        std::vector<std::pair<unsigned int, aiString>> ngonMetadataEntries;
         for (unsigned int si = 0; si < numSub; ++si)
         {
             const Ogre::SubMesh* subMesh = mesh->getSubMesh(si);
@@ -3043,12 +3124,29 @@ static aiScene* buildSceneAiScene()
 
             auto* aiM = new aiMesh();
             scene->mMeshes[globalMeshIdx + si] = aiM;
-            readSubmeshGeometry(aiM, vData, subMesh, entity, si, matIndexMap);
+            readSubmeshGeometry(aiM, vData, subMesh, entity, si, matIndexMap, false);
+
+            std::vector<std::vector<unsigned int>> ngonFaces;
+            if (readNgonFacesFromMesh(mesh.get(), si, ngonFaces) && !ngonFaces.empty())
+                ngonMetadataEntries.emplace_back(si, encodeSceneNgonFacesMetadata(ngonFaces));
 
             if (hasSkeleton)
                 assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
 
             compactAiMesh(aiM);
+        }
+
+        if (meshOwnerNode && !ngonMetadataEntries.empty())
+        {
+            meshOwnerNode->mMetaData = aiMetadata::Alloc(
+                static_cast<unsigned int>(ngonMetadataEntries.size()));
+            for (unsigned int mi = 0; mi < ngonMetadataEntries.size(); ++mi)
+            {
+                meshOwnerNode->mMetaData->Set(
+                    mi,
+                    sceneNgonFacesMetaKey(ngonMetadataEntries[mi].first),
+                    ngonMetadataEntries[mi].second);
+            }
         }
 
         // --- Animations ---
@@ -3516,6 +3614,28 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
             Ogre::MeshPtr ogreMesh = meshProcessor.createMesh(
                 meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
                 materialProcessor);
+
+            std::vector<EditableSubMesh> importedNgonFaces(ogreMesh->getNumSubMeshes());
+            bool haveImportedNgons = false;
+            const unsigned int importedSubCount =
+                std::min<unsigned int>(node->mNumMeshes, ogreMesh->getNumSubMeshes());
+            for (unsigned int subIdx = 0; subIdx < importedSubCount; ++subIdx)
+            {
+                std::vector<std::vector<unsigned int>> faces;
+                if (!decodeSceneNgonFacesMetadata(node->mMetaData, subIdx, faces))
+                    continue;
+
+                importedNgonFaces[subIdx].faces.reserve(faces.size());
+                for (auto& poly : faces)
+                {
+                    EditableFace face;
+                    face.indices = std::move(poly);
+                    importedNgonFaces[subIdx].faces.push_back(std::move(face));
+                }
+                haveImportedNgons = haveImportedNgons || !importedNgonFaces[subIdx].faces.empty();
+            }
+            if (haveImportedNgons)
+                writeNgonFacesToMesh(ogreMesh.get(), importedNgonFaces);
 
             // Create scene node with decomposed world transform
             Ogre::SceneNode* sn = manager->addSceneNode(nodeName);

@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QTextStream>
 #include <QVector>
 #include <cstdint>
 #include <set>
@@ -20,6 +21,7 @@
 #include <OgreHardwarePixelBuffer.h>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "EditableMesh.h"
 #include "SelectionSet.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 #include <OgreException.h>
@@ -666,6 +668,20 @@ protected:
     }
 };
 
+namespace {
+QString writeQuadObjForScene(const QString& baseName)
+{
+    const QString path = QDir::tempPath() + "/" + baseName + ".obj";
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return {};
+    QTextStream out(&f);
+    out << "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n";
+    f.close();
+    return path;
+}
+} // namespace
+
 TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
     auto* manager = Manager::getSingleton();
 
@@ -726,6 +742,54 @@ TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
     }
     EXPECT_TRUE(foundNode1) << "First node with position (1,2,3) not found";
     EXPECT_TRUE(foundNode2) << "Second node with position (-1,0,5) not found";
+}
+
+TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding)
+{
+    const QString objPath = writeQuadObjForScene("scene_ngon_roundtrip");
+    ASSERT_FALSE(objPath.isEmpty());
+
+    MeshImporterExporter::importer(QStringList{objPath});
+
+    auto* manager = Manager::getSingleton();
+    ASSERT_EQ(manager->getSceneNodes().size(), 1);
+    auto* node = manager->getSceneNodes().front();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+    auto* entity = manager->getSceneMgr()->getEntity(node->getName());
+    ASSERT_NE(entity, nullptr);
+
+    std::vector<std::vector<unsigned int>> facesBefore;
+    ASSERT_TRUE(readNgonFacesFromMesh(entity->getMesh().get(), 0, facesBefore));
+    ASSERT_EQ(facesBefore.size(), 1u);
+    EXPECT_EQ(facesBefore[0].size(), 4u);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString sceneFile = tmpDir.filePath("ngon.scene.gltf");
+    ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+    ASSERT_EQ(manager->getSceneNodes().size(), 1);
+
+    node = manager->getSceneNodes().front();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+    entity = manager->getSceneMgr()->getEntity(node->getName());
+    ASSERT_NE(entity, nullptr);
+
+    std::vector<std::vector<unsigned int>> facesAfter;
+    ASSERT_TRUE(readNgonFacesFromMesh(entity->getMesh().get(), 0, facesAfter));
+    ASSERT_EQ(facesAfter.size(), 1u);
+    EXPECT_EQ(facesAfter[0].size(), 4u);
+    EXPECT_EQ(facesAfter[0], facesBefore[0]);
+
+    EditableMesh mesh;
+    ASSERT_TRUE(mesh.loadFromEntity(entity));
+    ASSERT_EQ(mesh.subMeshes().size(), 1u);
+    ASSERT_EQ(mesh.subMeshes()[0].faces.size(), 1u);
+    EXPECT_EQ(mesh.subMeshes()[0].faces[0].indices.size(), 4u);
+    EXPECT_EQ(mesh.subMeshes()[0].triangles.size(), 2u);
+
+    QFile::remove(objPath);
 }
 
 // Slice F3 export-side PBR slot dispatch:
