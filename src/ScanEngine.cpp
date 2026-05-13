@@ -126,19 +126,26 @@ static void clearOgreSceneForScanImport()
     }
 
     // Free per-file resources so a 1000-asset scan doesn't accumulate
-    // ~N meshes / materials / skeletons in the manager pools. Ignore any
-    // Ogre::Exception thrown by the unload — it just means the manager
-    // still has a reference somewhere (a Skeleton pinned by a Mesh, etc.)
-    // and we'll get to it on the next pass.
+    // ~N meshes / materials / skeletons in the manager pools. Exceptions
+    // from the unloads are non-fatal — they typically mean the manager
+    // still has a reference somewhere (a Skeleton pinned by a Mesh, etc.).
+    // Log and move on so the next file can still be scanned.
+    auto* log = Ogre::LogManager::getSingletonPtr()
+                  ? Ogre::LogManager::getSingleton().getDefaultLog()
+                  : nullptr;
     try {
         Ogre::MeshManager::getSingleton().unloadUnreferencedResources(true);
-    } catch (const Ogre::Exception&) {
-        // Intentionally swallowed — best-effort cleanup, not load-bearing.
+    } catch (const Ogre::Exception& e) {
+        if (log) log->logMessage(
+            std::string("ScanEngine: MeshManager unload skipped — ") + e.what(),
+            Ogre::LML_NORMAL);
     }
     try {
         Ogre::SkeletonManager::getSingleton().unloadUnreferencedResources(true);
-    } catch (const Ogre::Exception&) {
-        // Intentionally swallowed — see comment above.
+    } catch (const Ogre::Exception& e) {
+        if (log) log->logMessage(
+            std::string("ScanEngine: SkeletonManager unload skipped — ") + e.what(),
+            Ogre::LML_NORMAL);
     }
 }
 
