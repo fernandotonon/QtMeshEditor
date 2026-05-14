@@ -252,6 +252,15 @@ public:
     /// @brief End the session — release the paint buffer.
     Q_INVOKABLE void closeSession();
 
+    /// Walk every UV-mapped triangle and return the local-space
+    /// position + normal at `uv` (the first triangle that covers it
+    /// in UV space). Used by the 2D-panel → 3D-mesh hover lookup;
+    /// also exposed publicly so unit tests can verify reverse-UV
+    /// math against an in-memory mesh.
+    bool findMeshPointForUV(const Ogre::Vector2& uv,
+                            Ogre::Vector3& outLocal,
+                            Ogre::Vector3& outNormal) const;
+
     /// Read-only access for tests.
     const TexturePaintBuffer& buffer() const { return m_buffer; }
     TexturePaintBuffer& mutableBuffer() { return m_buffer; }
@@ -341,14 +350,6 @@ private:
     /// Apply the brush stamp at a UV coord using the current tool.
     /// Returns true if any pixel changed.
     bool applyBrushAtUV(const Ogre::Vector2& uv);
-
-    /// Walk every UV-mapped triangle and return the local-space
-    /// position+normal at `uv`. Used by the 2D-panel → 3D-mesh hover
-    /// indicator so the user sees a brush ring on the model when they
-    /// hover the texture preview.
-    bool findMeshPointForUV(const Ogre::Vector2& uv,
-                            Ogre::Vector3& outLocal,
-                            Ogre::Vector3& outNormal) const;
 
     /// Draw the hover ring on the mesh at a given local position +
     /// normal. Shared between viewport-driven and panel-driven hover.
