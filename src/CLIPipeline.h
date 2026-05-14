@@ -114,6 +114,11 @@ public:
     /// per-stage before/after report (text or --json).
     static int cmdOptimize(int argc, char* argv[]);
 
+    /// Phase 7 paint: bake EditableMesh vertex colors into a UV-space
+    /// PNG texture with configurable resolution and seam dilation.
+    /// Surfaces VertexColorBaker via the CLI for headless asset pipelines.
+    static int cmdBakeVertexColors(int argc, char* argv[]);
+
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);
 };

@@ -25,6 +25,7 @@
 #include "commands/BoneTransformCommand.h"
 #include "BoneDragRelease.h"
 #include "EditModeController.h"
+#include "TexturePaintController.h"
 #include "AnimationControlController.h"
 #include "PropertiesPanelController.h"
 #include "SkeletonDebug.h"
@@ -1014,6 +1015,16 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 // Paint mode on: do not start box / component selection on miss.
                 return;
             }
+            auto* texPaint = TexturePaintController::instance();
+            if (texPaint->texturePaintEnabled()) {
+                if (texPaint->beginStroke(m_pActiveWidget, e->pos())) {
+                    mTexturePaintDragActive = true;
+                    SentryReporter::addBreadcrumb("ui.action", "Texture paint: stroke begin");
+                    return;
+                }
+                // Texture paint mode on: don't start box selection on miss.
+                return;
+            }
             mScreenStart = e->pos();
             m_pSelectionBox->clear();
             m_pSelectionBox->setVisible(true);
@@ -1264,6 +1275,13 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                && m_pActiveWidget)
     {
         editCtrl->updateVertexPaintPreview(m_pActiveWidget, e->pos());
+    }
+
+    // Texture paint drag: update on every move while LMB is held.
+    if (mTexturePaintDragActive && editCtrl->isEditModeActive()
+        && (e->buttons() & Qt::LeftButton) && m_pActiveWidget)
+    {
+        TexturePaintController::instance()->updateStroke(m_pActiveWidget, e->pos());
     }
 
     // Knife hover preview: cheap to update on every move while the session
@@ -1788,6 +1806,13 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         EditModeController::instance()->endVertexPaintStroke(/*commitUndo=*/true);
         mVertexPaintDragActive = false;
         SentryReporter::addBreadcrumb("ui.action", "Vertex paint: stroke end");
+        return;
+    }
+
+    if (mTexturePaintDragActive && e->button() == Qt::LeftButton) {
+        TexturePaintController::instance()->endStroke();
+        mTexturePaintDragActive = false;
+        SentryReporter::addBreadcrumb("ui.action", "Texture paint: stroke end");
         return;
     }
 

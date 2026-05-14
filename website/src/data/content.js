@@ -187,6 +187,10 @@ export const highlightFeatures = [
   {
     title: 'MCP / AI agent integration',
     body: 'Expose pipeline tools through MCP for scripted and agent-driven workflows.'
+  },
+  {
+    title: 'Paint tools',
+    body: 'Vertex-color polypaint and BaseColor texture painting on the mesh surface, plus a bake step that writes vertex colors into a UV-space PNG with seam dilation.'
   }
 ];
 

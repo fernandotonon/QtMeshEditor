@@ -166,7 +166,51 @@ qtmesh pose model.fbx --animation "Dance" --count 4 -o pose_%02d.stl
 
 # LOD generation
 qtmesh lod model.fbx --auto
+
+# Bake vertex colors → texture (with UV-seam dilation)
+qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilation 4
 ```
+
+---
+
+### 🎨 Paint Tools
+
+ZBrush-style polypaint and BaseColor texture painting, with a one-click bake
+that turns vertex colors into a UV-space texture.
+
+**Quick start (GUI):**
+
+1. Select a mesh entity. Press **Tab** to enter Edit Mode.
+2. In the Inspector → **Edit Mode Tools** section, tick *Vertex Color Preview*
+   to see vertex colors live on the mesh.
+3. Click the **Vertex Paint** brush button in the toolbar. Pick a color,
+   radius, strength, and falloff. Left-click-drag on the mesh to paint.
+   Strokes go through Undo/Redo (Ctrl+Z / Ctrl+Shift+Z).
+4. To paint into a texture instead, open the Inspector → **Texture Paint**
+   section. Click *Create / Attach Texture*, tick *Enable texture paint
+   mode*, then left-click-drag on the mesh. The painted texture is
+   uploaded to the GPU with per-stroke dirty-rect updates — no full
+   re-upload — so live painting stays responsive on large textures.
+5. **Bake Vertex Colors → Texture** rasterizes the active mesh's vertex
+   colors into a UV-space PNG via barycentric interpolation, then dilates
+   the result outward by N pixels to mask UV-seam bleed at MIP-map time.
+
+**Headless (CLI):**
+
+```bash
+qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilation 4
+```
+
+**Export.** Vertex colors are preserved on export to formats that support
+them (glTF preferred — verified round-trip).
+
+**Limitations (MVP).**
+
+- Texture paint operates on the **first submesh's diffuse texture only**.
+  Multi-material per-submesh paint will land in a follow-up.
+- Texture paint requires Edit Mode (vertex paint conventions).
+- Bake uses fan triangulation of n-gon faces; concave faces should be
+  pre-triangulated.
 
 ---
 
@@ -198,6 +242,7 @@ Split View|Skeleton Animation Controls
 - **Animation resampling** — reduce keyframe density for game engines
 - **Pose export** — bake animation frames as static meshes (3D printing)
 - **LOD generation** — automatic level-of-detail mesh reduction
+- **Paint tools** — vertex paint, texture paint (BaseColor), bake vertex colors to texture with seam dilation
 - **Material editor** — visual editing with AI-assisted generation
 - **Skeleton inspection** — bone weights, debug overlays, animation preview
 - **Scene management** — duplicate (Ctrl+D), group (Ctrl+G), snap, pivot modes

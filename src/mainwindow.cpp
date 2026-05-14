@@ -71,6 +71,7 @@
 #include "WelcomeScreenController.h"
 #include "AssetBrowserController.h"
 #include "EditModeController.h"
+#include "TexturePaintController.h"
 #include "EditorModeController.h"
 #include <QDockWidget>
 #include <QQuickWidget>
@@ -530,6 +531,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<EditModeController>("PropertiesPanel", 1, 0, "EditModeController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return EditModeController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<TexturePaintController>("PropertiesPanel", 1, 0, "TexturePaintController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return TexturePaintController::qmlInstance(engine, nullptr);
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));

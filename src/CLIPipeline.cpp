@@ -18,6 +18,9 @@
 #include "DrawCallAnalyzer.h"
 #include "VertexCacheOptimizer.h"
 #include "MeshDecimator.h"
+#include "EditableMesh.h"
+#include "TexturePaintBuffer.h"
+#include "VertexColorBaker.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -664,6 +667,11 @@ void CLIPipeline::printUsage()
         "                                      --simplify-scale-tol S         default 0.0001\n"
         "                                      --simplify-preset P            shorthand for the three tolerances;\n"
         "                                                                     P = conservative | balanced | aggressive\n"
+        "  bake-vertex-colors <file> -o <out.png> [--resolution N] [--dilation N] [--json]\n"
+        "                                    Bake vertex colors to a UV-space PNG. Walks every UV-mapped\n"
+        "                                    triangle, rasterizes barycentric-interpolated vertex colors,\n"
+        "                                    then dilates outward by N pixels to mask seam bleed at MIP time.\n"
+        "                                    Default resolution=1024, dilation=4. Output PNG is RGBA.\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -1056,6 +1064,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "vertex-cache") rc = cmdVertexCache(argc, argv);
     else if (cmd == "decimate") rc = cmdDecimate(argc, argv);
     else if (cmd == "optimize") rc = cmdOptimize(argc, argv);
+    else if (cmd == "bake-vertex-colors") rc = cmdBakeVertexColors(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -4621,5 +4630,125 @@ int CLIPipeline::cmdOptimize(int argc, char* argv[])
     const qint64 srcBytes = fi.size();
     const qint64 outBytes = QFileInfo(cmdArgs.outputPath).size();
     emitOptimizeReport(fi, cmdArgs.outputPath, srcBytes, outBytes, stages, cmdArgs.jsonOutput);
+    return 0;
+}
+
+int CLIPipeline::cmdBakeVertexColors(int argc, char* argv[])
+{
+    // Parse:
+    //   bake-vertex-colors <file> -o <out.png>
+    //                      [--resolution N] [--dilation N] [--json]
+    QString inputPath, outputPath;
+    int resolution = 1024;
+    int dilation = 4;
+    bool jsonOutput = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "bake-vertex-colors" || arg == "--cli") continue;
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString(argv[++i]); continue;
+        }
+        if (arg == "--resolution" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString(argv[++i]).toInt(&ok);
+            if (!ok || v < 16 || v > 8192) {
+                err() << "Error: --resolution must be an integer in [16..8192]" << Qt::endl;
+                return 2;
+            }
+            resolution = v; continue;
+        }
+        if (arg == "--dilation" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString(argv[++i]).toInt(&ok);
+            if (!ok || v < 0 || v > 64) {
+                err() << "Error: --dilation must be an integer in [0..64]" << Qt::endl;
+                return 2;
+            }
+            dilation = v; continue;
+        }
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) {
+            inputPath = arg; continue;
+        }
+    }
+
+    if (inputPath.isEmpty() || outputPath.isEmpty()) {
+        err() << "Error: missing required arguments." << Qt::endl;
+        err() << "Usage: qtmesh bake-vertex-colors <file> -o <out.png>" << Qt::endl;
+        err() << "         [--resolution N] [--dilation N] [--json]" << Qt::endl;
+        return 2;
+    }
+
+    const QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.bake-vertex-colors",
+        QString("Bake vertex colors → %1×%1 PNG (dilation=%2)").arg(resolution).arg(dilation));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0);
+    const auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        err() << "Error: Failed to load file: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    // Bake the first entity found. Multi-entity scenes get a warning; the
+    // caller can pre-split the scene if they need per-entity bakes.
+    Ogre::Entity* entity = nullptr;
+    int entityCount = 0;
+    for (auto* obj : entities) {
+        if (!obj || obj->getMovableType() != "Entity") continue;
+        if (!entity) entity = static_cast<Ogre::Entity*>(obj);
+        ++entityCount;
+    }
+    if (!entity) {
+        err() << "Error: No mesh entity in: " << inputPath << Qt::endl;
+        return 1;
+    }
+    if (entityCount > 1) {
+        err() << "Note: " << entityCount
+              << " entities in scene; baking the first only." << Qt::endl;
+    }
+
+    EditableMesh mesh;
+    if (!mesh.loadFromEntity(entity)) {
+        err() << "Error: Failed to decompose mesh for: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    TexturePaintBuffer buffer;
+    VertexColorBaker::Options opts;
+    opts.resolution = resolution;
+    opts.dilationPixels = dilation;
+    const int painted = VertexColorBaker::bake(mesh, buffer, opts);
+
+    if (!buffer.save(outputPath.toStdString())) {
+        err() << "Error: Failed to write: " << outputPath << Qt::endl;
+        return 1;
+    }
+
+    if (jsonOutput) {
+        QJsonObject root;
+        root["input"] = inputPath;
+        root["output"] = outputPath;
+        root["resolution"] = resolution;
+        root["dilation"] = dilation;
+        root["pixels_rasterized"] = painted;
+        root["entity"] = QString::fromStdString(entity->getName());
+        QJsonDocument doc(root);
+        cliWrite(QString::fromUtf8(doc.toJson(QJsonDocument::Compact)) + "\n");
+    } else {
+        cliWrite(QStringLiteral("Baked %1 pixels into %2×%2 texture: %3\n")
+                     .arg(painted).arg(resolution).arg(outputPath));
+        cliWrite(QStringLiteral("  dilation: %1 px\n").arg(dilation));
+    }
     return 0;
 }

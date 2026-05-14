@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import PropertiesPanel 1.0
 import AnimationControl 1.0
 import EditorMode 1.0
@@ -280,6 +281,17 @@ Rectangle {
                 expanded: true
 
                 Component.onCompleted: content = editModeToolsComponent
+            }
+
+            // ---- Texture Paint ----
+            CollapsibleSection {
+                title: "Texture Paint"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.EditMode,
+                    EditModeController.editModeActive)
+                expanded: false
+
+                Component.onCompleted: content = texturePaintComponent
             }
 
             CollapsibleSection {
@@ -930,6 +942,245 @@ Rectangle {
                 visible: EditModeController.editModeActive && !EditModeController.hasValidationWarnings
                 text: "\u2714 No degenerate triangles"
                 color: "#60c060"; font.pixelSize: 10
+            }
+        }
+    }
+
+    // ---- Texture Paint Content ----
+    Component {
+        id: texturePaintComponent
+
+        Column {
+            id: texPaintCol
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            property bool paintOn: TexturePaintController.texturePaintEnabled
+            property color brushColor: TexturePaintController.texturePaintColor
+            property real brushRadius: TexturePaintController.texturePaintRadius
+            property real brushStrength: TexturePaintController.texturePaintStrength
+            property real brushFalloff: TexturePaintController.texturePaintFalloff
+            property bool hasSession: TexturePaintController.hasActiveSession
+            property int sessionRes: TexturePaintController.textureResolution
+
+            Connections {
+                target: TexturePaintController
+                function onTexturePaintChanged() {
+                    texPaintCol.paintOn = TexturePaintController.texturePaintEnabled
+                    texPaintCol.brushColor = TexturePaintController.texturePaintColor
+                    texPaintCol.brushRadius = TexturePaintController.texturePaintRadius
+                    texPaintCol.brushStrength = TexturePaintController.texturePaintStrength
+                    texPaintCol.brushFalloff = TexturePaintController.texturePaintFalloff
+                }
+                function onSessionChanged() {
+                    texPaintCol.hasSession = TexturePaintController.hasActiveSession
+                    texPaintCol.sessionRes = TexturePaintController.textureResolution
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                text: "Paint directly into a BaseColor texture using mesh UVs."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10; opacity: 0.7
+                wrapMode: Text.Wrap
+            }
+
+            // Enable toggle
+            Row {
+                spacing: 6
+                Rectangle {
+                    width: 18; height: 18; radius: 3
+                    color: texPaintCol.paintOn ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: texPaintCol.paintOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: { TexturePaintController.texturePaintEnabled = !texPaintCol.paintOn }
+                    }
+                }
+                Text {
+                    text: "Enable texture paint mode"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Session info
+            Text {
+                width: parent.width - 16
+                text: texPaintCol.hasSession
+                    ? ("Active texture: " + texPaintCol.sessionRes + "\u00d7" + texPaintCol.sessionRes)
+                    : "No texture session \u2014 click \"Create / Attach Texture\" to start."
+                color: texPaintCol.hasSession ? "#60c060" : PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: texPaintCol.hasSession ? 1.0 : 0.7
+                wrapMode: Text.Wrap
+            }
+
+            // Action row 1: create, save, load
+            Flow {
+                width: parent.width - 16
+                spacing: 4
+
+                Rectangle {
+                    width: 140; height: 24; radius: 3
+                    color: createMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Create / Attach Texture"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea {
+                        id: createMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.ensurePaintableTexture(1024)
+                    }
+                }
+
+                Rectangle {
+                    width: 70; height: 24; radius: 3
+                    color: saveMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    opacity: texPaintCol.hasSession ? 1.0 : 0.4
+                    Text { anchors.centerIn: parent; text: "Save\u2026"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea {
+                        id: saveMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        enabled: texPaintCol.hasSession
+                        onClicked: texPaintSaveDialog.open()
+                    }
+                }
+
+                Rectangle {
+                    width: 70; height: 24; radius: 3
+                    color: loadMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Load\u2026"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea {
+                        id: loadMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: texPaintLoadDialog.open()
+                    }
+                }
+            }
+
+            // Action row 2: bake vertex colors
+            Flow {
+                width: parent.width - 16
+                spacing: 4
+
+                Rectangle {
+                    width: 200; height: 24; radius: 3
+                    color: bakeMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Bake Vertex Colors \u2192 Texture"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea {
+                        id: bakeMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.bakeVertexColorsToTexture(1024, 4, "")
+                    }
+                }
+            }
+
+            // Brush color picker
+            Row {
+                spacing: 6
+                Text {
+                    text: "Color"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 70
+                }
+                Rectangle {
+                    width: 28; height: 22; radius: 3
+                    color: texPaintCol.brushColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: texPaintColorDialog.open()
+                    }
+                }
+            }
+
+            // Radius slider
+            Row {
+                spacing: 6
+                Text {
+                    text: "Radius"; width: 70
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    width: 140
+                    from: 0.005; to: 0.5; stepSize: 0.005
+                    value: texPaintCol.brushRadius
+                    onMoved: TexturePaintController.texturePaintRadius = value
+                }
+                Text {
+                    text: texPaintCol.brushRadius.toFixed(3)
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Strength slider
+            Row {
+                spacing: 6
+                Text {
+                    text: "Strength"; width: 70
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    width: 140
+                    from: 0.0; to: 1.0; stepSize: 0.01
+                    value: texPaintCol.brushStrength
+                    onMoved: TexturePaintController.texturePaintStrength = value
+                }
+                Text {
+                    text: texPaintCol.brushStrength.toFixed(2)
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Falloff slider
+            Row {
+                spacing: 6
+                Text {
+                    text: "Falloff"; width: 70
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    width: 140
+                    from: 0.0; to: 1.0; stepSize: 0.01
+                    value: texPaintCol.brushFalloff
+                    onMoved: TexturePaintController.texturePaintFalloff = value
+                }
+                Text {
+                    text: texPaintCol.brushFalloff.toFixed(2)
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            ColorDialog {
+                id: texPaintColorDialog
+                title: "Texture paint color"
+                onAccepted: TexturePaintController.texturePaintColor = selectedColor
+            }
+
+            FileDialog {
+                id: texPaintSaveDialog
+                title: "Save painted texture"
+                fileMode: FileDialog.SaveFile
+                nameFilters: ["PNG image (*.png)", "JPEG image (*.jpg *.jpeg)", "TGA image (*.tga)"]
+                onAccepted: TexturePaintController.savePaintBuffer(selectedFile.toString().replace(/^file:\/\//, ''))
+            }
+
+            FileDialog {
+                id: texPaintLoadDialog
+                title: "Load texture into paint buffer"
+                fileMode: FileDialog.OpenFile
+                nameFilters: ["Image files (*.png *.jpg *.jpeg *.tga *.bmp)"]
+                onAccepted: TexturePaintController.loadPaintBuffer(selectedFile.toString().replace(/^file:\/\//, ''))
             }
         }
     }
