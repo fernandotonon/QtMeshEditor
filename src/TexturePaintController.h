@@ -325,6 +325,18 @@ private:
     std::vector<uint8_t> m_strokePreSnapshot; // for undo
     BrushTool m_tool = ToolPaint;
 
+    /// Track every TUS we rebound to the paint texture so closeSession()
+    /// can restore the originals. We keep the *material name* (not a
+    /// raw pointer) so a destroyed/reloaded material doesn't dangle.
+    struct BoundSlot {
+        std::string materialName;
+        unsigned short techIdx = 0;
+        unsigned short passIdx = 0;
+        unsigned short tusIdx = 0;
+        std::string originalTexture;
+    };
+    std::vector<BoundSlot> m_boundSlots;
+
     // Private EditableMesh — built from the active entity so painting
     // doesn't depend on the user-facing Edit Mode workspace.
     std::unique_ptr<EditableMesh> m_paintMesh;

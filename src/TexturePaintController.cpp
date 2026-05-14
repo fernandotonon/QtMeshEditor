@@ -336,28 +336,35 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
 
     QString existingTex = QString::fromStdString(tu->getTextureName());
     bool loadedExisting = false;
+    QString loadError;
     if (!existingTex.isEmpty()) {
         auto existing = Ogre::TextureManager::getSingleton().getByName(
             existingTex.toStdString(),
             Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
         if (existing) {
             try {
+                // Make sure the texture is loaded (Ogre defers loading).
+                if (!existing->isLoaded()) existing->load();
                 Ogre::Image img;
                 existing->convertToImage(img);
                 const int w = static_cast<int>(img.getWidth());
                 const int h = static_cast<int>(img.getHeight());
                 if (w > 0 && h > 0) {
                     m_buffer.resize(w, h);
-                    // PF_BYTE_RGBA == 4 bytes/pixel
                     Ogre::PixelBox srcBox = img.getPixelBox();
-                    Ogre::PixelBox dstBox(w, h, 1, Ogre::PF_BYTE_RGBA, m_buffer.data().data());
+                    Ogre::PixelBox dstBox(w, h, 1, Ogre::PF_BYTE_RGBA,
+                                          m_buffer.data().data());
                     Ogre::PixelUtil::bulkPixelConversion(srcBox, dstBox);
                     m_buffer.clearDirty();
                     loadedExisting = true;
                 }
-            } catch (const Ogre::Exception&) {
-                // Fall through to blank buffer.
+            } catch (const Ogre::Exception& e) {
+                loadError = QString::fromStdString(e.getDescription());
+            } catch (...) {
+                loadError = QStringLiteral("unknown exception");
             }
+        } else {
+            loadError = QStringLiteral("texture not found in TextureManager");
         }
     }
 
@@ -366,6 +373,13 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
         m_buffer.resize(res, res);
         m_buffer.clear(Ogre::ColourValue::White);
         m_buffer.clearDirty();
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Texture paint: starting from blank %1×%1 (tex='%2', err='%3')")
+                .arg(res).arg(existingTex).arg(loadError));
+    } else {
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Texture paint: loaded existing %1×%2 from '%3'")
+                .arg(m_buffer.width()).arg(m_buffer.height()).arg(existingTex));
     }
 
     static unsigned int s_unique = 0;
@@ -413,7 +427,8 @@ bool TexturePaintController::createOgreTextureFromBuffer(Ogre::Entity* entity, c
         m_ogreTexture = tm.createManual(
             texName, group, Ogre::TEX_TYPE_2D,
             m_buffer.width(), m_buffer.height(), 0,
-            Ogre::PF_BYTE_RGBA, Ogre::TU_DYNAMIC_WRITE_ONLY);
+            Ogre::PF_BYTE_RGBA,
+            Ogre::TU_DYNAMIC_WRITE_ONLY_DISCARDABLE);
         if (!m_ogreTexture) return false;
         // Initial upload
         auto pixbuf = m_ogreTexture->getBuffer();
@@ -423,43 +438,68 @@ bool TexturePaintController::createOgreTextureFromBuffer(Ogre::Entity* entity, c
         pixbuf->blitFromMemory(pb);
         m_textureName = QString::fromStdString(texName);
 
-        // Rebind every TUS on every submesh material that points at the
-        // original texture. Imported PBR materials alias the diffuse
-        // texture under both `diffuse_map` (TUS 0) and `albedo` (last
-        // TUS) — rebinding only TUS 0 leaves `albedo` pointing at the
-        // old texture, and whichever slot the renderer samples wins, so
-        // the user sees no change. Walk every submesh and rebind.
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Texture paint: rebind base = '%1' → '%2'")
+                .arg(QString::fromStdString(originalTexName))
+                .arg(QString::fromStdString(texName)));
+        // Rebind every TUS pointing at the user's original slot
+        // texture. Track each rebind so closeSession() restores them.
+        //
+        // Imported PBR materials alias the diffuse texture under both
+        // `diffuse_map` (TUS 0) and `albedo` (last TUS) — we rebind
+        // both copies that share originalTexName.
+        //
+        // If originalTexName is empty (the slot had no texture bound
+        // yet — e.g. a freshly-created session on a flat-color
+        // material), we bind the *chosen slot only* so the user has
+        // SOMETHING to paint against and see the result.
+        m_boundSlots.clear();
         std::set<Ogre::Material*> touched;
+        const int chosenSubmesh =
+            (m_activeSlot >= 0 && m_activeSlot < m_slots.size())
+                ? m_slots.at(m_activeSlot).toMap().value("submesh", -1).toInt()
+                : 0;
         for (unsigned int se = 0; se < entity->getNumSubEntities(); ++se) {
             auto* sub = entity->getSubEntity(se);
             if (!sub) continue;
             Ogre::MaterialPtr mat = sub->getMaterial();
             if (!mat) continue;
             bool changed = false;
-            for (auto* tech : mat->getTechniques()) {
+            const auto& techs = mat->getTechniques();
+            for (size_t tIdx = 0; tIdx < techs.size(); ++tIdx) {
+                auto* tech = techs[tIdx];
                 for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
                     auto* p = tech->getPass(pi);
                     for (unsigned short ti = 0; ti < p->getNumTextureUnitStates(); ++ti) {
                         auto* tusN = p->getTextureUnitState(ti);
-                        const std::string n = tusN->getName();
-                        // Match either the original texture name or a
-                        // canonical diffuse slot name. The slot-name
-                        // path catches submeshes whose `albedo`/
-                        // `diffuse_map` was bound to a different
-                        // texture than the one we sampled — every
-                        // diffuse slot still gets the paint texture.
-                        const bool nameMatch = !originalTexName.empty()
-                            && tusN->getTextureName() == originalTexName;
-                        const bool slotMatch = (n == "albedo" || n == "diffuse_map");
-                        if (nameMatch || slotMatch) {
-                            tusN->setTextureName(texName);
-                            changed = true;
+                        const std::string currentTex = tusN->getTextureName();
+                        bool shouldBind = false;
+                        if (!originalTexName.empty()) {
+                            shouldBind = (currentTex == originalTexName);
+                        } else if (static_cast<int>(se) == chosenSubmesh) {
+                            // Empty-source fallback: bind the exact TUS
+                            // the user picked. We approximate "the
+                            // user's TUS" as the matching slot/index on
+                            // the chosen submesh.
+                            shouldBind = (tusN == tu);
                         }
+                        if (!shouldBind) continue;
+                        BoundSlot s;
+                        s.materialName = mat->getName();
+                        s.techIdx = static_cast<unsigned short>(tIdx);
+                        s.passIdx = pi;
+                        s.tusIdx = ti;
+                        s.originalTexture = currentTex;
+                        m_boundSlots.push_back(s);
+                        tusN->setTextureName(texName);
+                        changed = true;
                     }
                 }
             }
             if (changed) touched.insert(mat.get());
         }
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Texture paint: bound %1 TUSes").arg(m_boundSlots.size()));
 
         // Force RTSS / FFP lighting passes to drop their cached binding
         // and re-sample our texture. Without compile()+reload() the
@@ -507,8 +547,10 @@ void TexturePaintController::flushDirtyToOgre()
         Ogre::PixelBox pb(rectW, rectH, 1, Ogre::PF_BYTE_RGBA, slice.data());
         Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
         buf->blitFromMemory(pb, dst);
-    } catch (const Ogre::Exception&) {
-        // Best-effort — skip this flush.
+    } catch (const Ogre::Exception& e) {
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Texture paint: blit failed — %1")
+                .arg(QString::fromStdString(e.getDescription())));
     }
     m_buffer.clearDirty();
     // Debounce the 2D preview refresh — encoding a 1024×1024 PNG +
@@ -936,6 +978,37 @@ void TexturePaintController::applyPixelSnapshot(const std::vector<uint8_t>& pixe
 void TexturePaintController::closeSession()
 {
     if (m_strokeActive) endStroke();
+
+    // Restore every TUS we rebound. Must do this BEFORE removing the
+    // paint texture from TextureManager, otherwise the next render
+    // tries to sample a freed handle. Look the material up by name
+    // each time so a destroyed/reloaded material doesn't dangle.
+    std::set<std::string> toReload;
+    for (const auto& s : m_boundSlots) {
+        try {
+            if (s.materialName.empty()) continue;
+            auto matPtr = Ogre::MaterialManager::getSingleton().getByName(
+                s.materialName);
+            if (!matPtr) continue;
+            const auto& techs = matPtr->getTechniques();
+            if (s.techIdx >= techs.size()) continue;
+            auto* tech = techs[s.techIdx];
+            if (s.passIdx >= tech->getNumPasses()) continue;
+            auto* p = tech->getPass(s.passIdx);
+            if (s.tusIdx >= p->getNumTextureUnitStates()) continue;
+            auto* tusN = p->getTextureUnitState(s.tusIdx);
+            tusN->setTextureName(s.originalTexture);
+            toReload.insert(s.materialName);
+        } catch (...) {}
+    }
+    m_boundSlots.clear();
+    for (const auto& mname : toReload) {
+        try {
+            auto matPtr = Ogre::MaterialManager::getSingleton().getByName(mname);
+            if (matPtr) { matPtr->compile(); matPtr->reload(); }
+        } catch (...) {}
+    }
+
     if (m_ogreTexture) {
         try {
             Ogre::TextureManager::getSingleton().remove(m_ogreTexture);
