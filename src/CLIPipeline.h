@@ -90,6 +90,12 @@ public:
     /// Reduces draw-call count by consolidating many small textures into
     /// one binding.
     static int cmdAtlas(int argc, char* argv[]);
+    /// Phase 6 slice E2: apply a previously-packed atlas to a mesh.
+    /// Reads the manifest JSON, scales+biases UV0 of every submesh whose
+    /// diffuse texture matches a tile into the tile's sub-rect, and
+    /// rebinds the diffuse TUS to the atlas texture. The output is a
+    /// single-binding-friendly mesh.
+    static int cmdAtlasApply(int argc, char* argv[]);
     /// Phase 6 slice A: estimate GPU memory & VRAM for a mesh file
     /// (per-submesh + per-texture, optional --json, optional --budget).
     static int cmdMemory(int argc, char* argv[]);
