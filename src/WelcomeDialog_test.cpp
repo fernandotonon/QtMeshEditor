@@ -68,6 +68,14 @@ TEST_F(WelcomeDialogTests, DefaultSelectedFileIsEmpty) {
     EXPECT_TRUE(dialog.selectedFile().isEmpty());
 }
 
+TEST_F(WelcomeDialogTests, OpenFileDialogOptionsHonorsPlatformBehavior)
+{
+    const QFileDialog::Options options = WelcomeDialog::openFileDialogOptions();
+
+    EXPECT_TRUE(options.testFlag(QFileDialog::HideNameFilterDetails));
+    EXPECT_TRUE(options.testFlag(QFileDialog::DontUseNativeDialog));
+}
+
 TEST_F(WelcomeDialogTests, ShouldShowRespectsDontShowAgainSetting) {
     // Explicitly set the setting and verify shouldShow reads it
     QSettings settings;

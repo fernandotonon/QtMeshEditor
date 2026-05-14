@@ -22,6 +22,13 @@ bool WelcomeDialog::shouldShow()
     return !settings.value("WelcomeScreen/dontShowAgain", false).toBool();
 }
 
+QFileDialog::Options WelcomeDialog::openFileDialogOptions()
+{
+    // Keep the welcome dialog on the Qt file picker so it inherits the
+    // application's selected palette instead of the desktop theme.
+    return QFileDialog::DontUseNativeDialog | QFileDialog::HideNameFilterDetails;
+}
+
 WelcomeDialog::WelcomeDialog(QWidget* parent)
     : QDialog(parent)
 {
@@ -72,7 +79,7 @@ WelcomeDialog::WelcomeDialog(QWidget* parent)
             Manager::defaultImportExtensions());
         QString file = QFileDialog::getOpenFileName(
             this, tr("Open 3D File"), QString(), filter, nullptr,
-            QFileDialog::DontUseNativeDialog | QFileDialog::HideNameFilterDetails);
+            openFileDialogOptions());
         if (!file.isEmpty()) {
             m_action = OpenFile;
             m_selectedFile = file;

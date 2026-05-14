@@ -1,6 +1,8 @@
 #include "ThemeManager.h"
+#include "AppSettingsKeys.h"
 #include <QApplication>
 #include <QPalette>
+#include <QSettings>
 
 ThemeManager* ThemeManager::m_pSingleton = nullptr;
 
@@ -24,6 +26,52 @@ void ThemeManager::kill()
 {
     delete m_pSingleton;
     m_pSingleton = nullptr;
+}
+
+void ThemeManager::applyThemePreference(const QString& themeValue)
+{
+    const QString themeLower = themeValue.trimmed().toLower();
+    if (themeLower == QStringLiteral("dark")) {
+        QPalette dark;
+        dark.setColor(QPalette::Window, QColor(53, 53, 53));
+        dark.setColor(QPalette::WindowText, Qt::white);
+        dark.setColor(QPalette::Base, QColor(35, 35, 35));
+        dark.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
+        dark.setColor(QPalette::ToolTipBase, QColor(25, 25, 25));
+        dark.setColor(QPalette::ToolTipText, Qt::white);
+        dark.setColor(QPalette::Text, Qt::white);
+        dark.setColor(QPalette::Button, QColor(53, 53, 53));
+        dark.setColor(QPalette::ButtonText, Qt::white);
+        dark.setColor(QPalette::Link, QColor(42, 130, 218));
+        dark.setColor(QPalette::Highlight, QColor(42, 130, 218));
+        dark.setColor(QPalette::HighlightedText, Qt::black);
+        QApplication::setPalette(dark);
+        return;
+    }
+    if (themeLower == QStringLiteral("light")) {
+        QApplication::setPalette(QColor(QStringLiteral("ghostwhite")));
+        return;
+    }
+    if (themeLower == QStringLiteral("custom")) {
+        QSettings settings;
+        const QColor custom = settings.value(QStringLiteral("customPalette")).value<QColor>();
+        if (custom.isValid()) {
+            QApplication::setPalette(custom);
+        }
+    }
+}
+
+void ThemeManager::applySavedThemeFromSettings()
+{
+    QSettings settings;
+    const QString appearanceTheme = settings.value(AppSettingsKeys::appearanceTheme()).toString().trimmed();
+    const QString paletteTheme = settings.value(AppSettingsKeys::palette(), QStringLiteral("dark")).toString().trimmed();
+    const QString paletteThemeLower = paletteTheme.toLower();
+    const QString themeValue =
+        paletteThemeLower == QStringLiteral("custom")
+            ? paletteTheme
+            : (appearanceTheme.isEmpty() ? paletteTheme : appearanceTheme);
+    applyThemePreference(themeValue);
 }
 
 ThemeManager::ThemeManager() : QObject(nullptr) {}
