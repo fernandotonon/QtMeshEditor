@@ -329,6 +329,10 @@ MainWindow::~MainWindow()
     EditorModeController::kill();
     Manager* manager = Manager::getSingletonPtr();
     if (manager) {
+        // Paint controller holds an EditableMesh + ring overlay objects
+        // owned by the SceneManager. Kill it before Manager teardown
+        // so its destructor runs against a live Ogre.
+        TexturePaintController::kill();
         EditModeController::kill();
         SubEntityHighlight::kill();
         AnimationBlender::kill();
