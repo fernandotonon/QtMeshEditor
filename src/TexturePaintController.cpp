@@ -535,7 +535,13 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     // crashing mid-stroke. Doing it at session-create time happens
     // BEFORE the first stroke fires, so there's no re-entrant render
     // hazard.
-    if (!createOgreTextureFromBuffer(entity, hint, /*rebindToModel=*/true)) {
+    // Create the GPU texture but DEFER the material rebind. Doing
+    // mat->compile()/mat->reload() on the same call stack as the
+    // mouse-press event raced with Ogre's render thread and
+    // segfaulted mid-stroke. The rebind happens on the next
+    // event-loop tick via the deferred-rebind path in
+    // doFlushDirtyToOgre.
+    if (!createOgreTextureFromBuffer(entity, hint, /*rebindToModel=*/false)) {
         m_buffer = TexturePaintBuffer();
         m_textureName.clear();
         m_sessionEntity = nullptr;
@@ -830,8 +836,14 @@ void TexturePaintController::doFlushDirtyToOgre()
         // they don't end up visible. Full-frame upload is heavier
         // but always lands. (At 1024² that's ~4 MB per stroke; the
         // debounce on previewDataUri amortises CPU cost separately.)
-        Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA,
-                          const_cast<uint8_t*>(m_buffer.data().data()));
+        //
+        // Copy m_buffer.data() into a transient std::vector first.
+        // Ogre's Metal backend can queue the blit asynchronously;
+        // pointing the PixelBox at our live buffer caused
+        // use-after-free crashes when the next stroke modified
+        // pixels before the GPU finished reading.
+        std::vector<uint8_t> uploadCopy(m_buffer.data().begin(), m_buffer.data().end());
+        Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA, uploadCopy.data());
         buf->blitFromMemory(pb);
     } catch (const Ogre::Exception& e) {
         SentryReporter::addBreadcrumb("ui.action",
