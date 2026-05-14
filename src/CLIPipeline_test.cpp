@@ -50,6 +50,18 @@ QString writeMinimalObj(const QString& dirPath, const QString& fileName)
     return path;
 }
 
+void clearManagerScene()
+{
+    if (!Manager::getSingletonPtr())
+        return;
+
+    auto nodes = Manager::getSingleton()->getSceneNodes();
+    for (auto* node : nodes) {
+        Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+        Manager::getSingleton()->destroySceneNode(node);
+    }
+}
+
 Ogre::MeshPtr createTwoSubmeshSharedMesh(const std::string& name)
 {
     Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().createManual(
@@ -3150,4 +3162,327 @@ TEST(CLIPipelineCmdNormalFromHeight, InvertGFlipsGreenChannel)
     QImage img(outPath);
     ASSERT_FALSE(img.isNull());
     EXPECT_GT(qGreen(img.pixel(8, 8)), 135);
+}
+
+// -- cmdAtlas (texture atlas packing) --
+
+TEST(CLIPipelineCmdAtlas, MissingInputsOrOutputFails)
+{
+    TestArgv noInputs({"qtmesh", "atlas", "-o", "atlas.png"});
+    EXPECT_EQ(CLIPipeline::cmdAtlas(noInputs.argc(), noInputs.argv()), 2);
+
+    TestArgv noOutput({"qtmesh", "atlas", "--inputs", "a.png"});
+    EXPECT_EQ(CLIPipeline::cmdAtlas(noOutput.argc(), noOutput.argv()), 2);
+
+    TestArgv emptyInputs({"qtmesh", "atlas", "--inputs", ", ,", "-o", "atlas.png"});
+    EXPECT_EQ(CLIPipeline::cmdAtlas(emptyInputs.argc(), emptyInputs.argv()), 2);
+}
+
+TEST(CLIPipelineCmdAtlas, MissingSourceImageReturnsRuntimeError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray outPath = tmp.filePath("atlas.png").toUtf8();
+
+    TestArgv args({"qtmesh", "atlas",
+                   "--inputs", "/nonexistent/missing_atlas_source.png",
+                   "-o", outPath.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAtlas(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdAtlas, WritesAtlasAndManifestFromCommaSeparatedInputs)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString red = writeGreyPng(tmp, "red.png", 8, 8, [](int, int){ return 32; });
+    const QString green = writeGreyPng(tmp, "green.png", 8, 8, [](int, int){ return 192; });
+    const QByteArray inputs = QString("%1, %2").arg(red, green).toUtf8();
+    const QByteArray outPath = tmp.filePath("atlas.png").toUtf8();
+    const QByteArray manifestPath = tmp.filePath("atlas.json").toUtf8();
+
+    TestArgv args({"qtmesh", "atlas",
+                   "--inputs", inputs.constData(),
+                   "--width", "32",
+                   "--height", "16",
+                   "--padding", "1",
+                   "--manifest", manifestPath.constData(),
+                   "-o", outPath.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAtlas(args.argc(), args.argv()), 0);
+
+    EXPECT_TRUE(QFileInfo::exists(outPath));
+    EXPECT_TRUE(QFileInfo::exists(manifestPath));
+    const QJsonDocument manifest = QJsonDocument::fromJson([&] {
+        QFile f(manifestPath);
+        EXPECT_TRUE(f.open(QIODevice::ReadOnly));
+        return f.readAll();
+    }());
+    ASSERT_TRUE(manifest.isObject());
+    EXPECT_TRUE(manifest.object().contains(QStringLiteral("tiles")));
+}
+
+TEST(CLIPipelineCmdAtlas, ManifestWriteFailureReturnsRuntimeError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString source = writeGreyPng(tmp, "source.png", 8, 8, [](int, int){ return 128; });
+    const QByteArray sourceArg = source.toUtf8();
+    const QByteArray outPath = tmp.filePath("atlas.png").toUtf8();
+    const QByteArray manifestDir = tmp.path().toUtf8();
+
+    TestArgv args({"qtmesh", "atlas",
+                   "--inputs", sourceArg.constData(),
+                   "--manifest", manifestDir.constData(),
+                   "-o", outPath.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAtlas(args.argc(), args.argv()), 1);
+}
+
+// -- cmdAtlasApply argument validation --
+
+TEST(CLIPipelineCmdAtlasApply, MissingRequiredArgumentsFails)
+{
+    TestArgv args({"qtmesh", "atlas-apply", "mesh.obj"});
+    EXPECT_EQ(CLIPipeline::cmdAtlasApply(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdAtlasApply, InvalidMatchModeFails)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString mesh = writeMinimalObj(tmp.path(), "mesh.obj");
+    const QString manifest = tmp.filePath("atlas.json");
+    const QString atlas = writeGreyPng(tmp, "atlas.png", 8, 8, [](int, int){ return 128; });
+    QFile manifestFile(manifest);
+    ASSERT_TRUE(manifestFile.open(QIODevice::WriteOnly));
+    manifestFile.close();
+
+    const QByteArray meshArg = mesh.toUtf8();
+    const QByteArray outArg = tmp.filePath("out.obj").toUtf8();
+    const QByteArray manifestArg = manifest.toUtf8();
+    const QByteArray atlasArg = atlas.toUtf8();
+    TestArgv args({"qtmesh", "atlas-apply", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--manifest", manifestArg.constData(),
+                   "--atlas", atlasArg.constData(),
+                   "--match", "filename"});
+    EXPECT_EQ(CLIPipeline::cmdAtlasApply(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdAtlasApply, MissingFilesReturnRuntimeErrors)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray outArg = tmp.filePath("out.obj").toUtf8();
+    const QByteArray manifestArg = tmp.filePath("atlas.json").toUtf8();
+    const QByteArray atlasArg = tmp.filePath("atlas.png").toUtf8();
+
+    TestArgv missingMesh({"qtmesh", "atlas-apply", "/nonexistent/source.obj",
+                          "-o", outArg.constData(),
+                          "--manifest", manifestArg.constData(),
+                          "--atlas", atlasArg.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAtlasApply(missingMesh.argc(), missingMesh.argv()), 1);
+
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "mesh.obj").toUtf8();
+    TestArgv missingManifest({"qtmesh", "atlas-apply", meshArg.constData(),
+                              "-o", outArg.constData(),
+                              "--manifest", manifestArg.constData(),
+                              "--atlas", atlasArg.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAtlasApply(missingManifest.argc(), missingManifest.argv()), 1);
+}
+
+TEST(CLIPipelineCmdAtlasApply, MissingAtlasAndInvalidManifestReturnRuntimeErrors)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "mesh.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("out.obj").toUtf8();
+    const QString manifestPath = tmp.filePath("atlas.json");
+    QFile manifestFile(manifestPath);
+    ASSERT_TRUE(manifestFile.open(QIODevice::WriteOnly | QIODevice::Text));
+    manifestFile.write("{ not-json");
+    manifestFile.close();
+    const QByteArray manifestArg = manifestPath.toUtf8();
+    const QByteArray missingAtlasArg = tmp.filePath("missing_atlas.png").toUtf8();
+
+    TestArgv missingAtlas({"qtmesh", "atlas-apply", meshArg.constData(),
+                           "-o", outArg.constData(),
+                           "--manifest", manifestArg.constData(),
+                           "--atlas", missingAtlasArg.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAtlasApply(missingAtlas.argc(), missingAtlas.argv()), 1);
+
+    const QString atlas = writeGreyPng(tmp, "atlas.png", 8, 8, [](int, int){ return 128; });
+    const QByteArray atlasArg = atlas.toUtf8();
+    TestArgv invalidManifest({"qtmesh", "atlas-apply", meshArg.constData(),
+                              "-o", outArg.constData(),
+                              "--manifest", manifestArg.constData(),
+                              "--atlas", atlasArg.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAtlasApply(invalidManifest.argc(), invalidManifest.argv()), 1);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnalyzeLoadsObjInTextAndJsonModes)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "mesh.obj").toUtf8();
+
+    TestArgv textArgs({"qtmesh", "analyze", meshArg.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAnalyze(textArgs.argc(), textArgs.argv()), 0);
+    clearManagerScene();
+
+    TestArgv jsonArgs({"qtmesh", "analyze", meshArg.constData(), "--json"});
+    EXPECT_EQ(CLIPipeline::cmdAnalyze(jsonArgs.argc(), jsonArgs.argv()), 0);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdMemoryLoadsObjAndHonorsExplicitBudget)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "mesh.obj").toUtf8();
+
+    TestArgv args({"qtmesh", "memory", meshArg.constData(),
+                   "--budget", "1GB",
+                   "--json",
+                   "--no-cloud"});
+    EXPECT_EQ(CLIPipeline::cmdMemory(args.argc(), args.argv()), 0);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdVertexCacheAnalyzesAndRewritesObj)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "mesh.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("rewritten.obj").toUtf8();
+
+    TestArgv analyzeArgs({"qtmesh", "vertex-cache", meshArg.constData(), "--json"});
+    EXPECT_EQ(CLIPipeline::cmdVertexCache(analyzeArgs.argc(), analyzeArgs.argv()), 0);
+    clearManagerScene();
+
+    TestArgv rewriteArgs({"qtmesh", "vertex-cache", meshArg.constData(),
+                          "-o", outArg.constData()});
+    EXPECT_EQ(CLIPipeline::cmdVertexCache(rewriteArgs.argc(), rewriteArgs.argv()), 0);
+    EXPECT_TRUE(QFileInfo::exists(outArg));
+}
+
+TEST_F(CLIPipelineCmdTest, CmdDecimateNoOpTargetStillWritesOutput)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "mesh.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("decimated.obj").toUtf8();
+
+    TestArgv args({"qtmesh", "decimate", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--target-tris", "99",
+                   "--json"});
+    EXPECT_EQ(CLIPipeline::cmdDecimate(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFileInfo::exists(outArg));
+}
+
+TEST_F(CLIPipelineCmdTest, CmdOptimizeRunsVertexCacheOnly)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "mesh.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("optimized.obj").toUtf8();
+
+    TestArgv args({"qtmesh", "optimize", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--vertex-cache",
+                   "--json"});
+    EXPECT_EQ(CLIPipeline::cmdOptimize(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFileInfo::exists(outArg));
+}
+
+// -- Phase 6 CLI command argument validation --
+
+TEST(CLIPipelineCmdMemory, MissingInputAndInvalidBudgetFailAsUsage)
+{
+    TestArgv missing({"qtmesh", "memory"});
+    EXPECT_EQ(CLIPipeline::cmdMemory(missing.argc(), missing.argv()), 2);
+
+    TestArgv invalidBudget({"qtmesh", "memory", "mesh.obj", "--budget", "nope"});
+    EXPECT_EQ(CLIPipeline::cmdMemory(invalidBudget.argc(), invalidBudget.argv()), 2);
+}
+
+TEST(CLIPipelineCmdMemory, MissingFileReturnsRuntimeError)
+{
+    TestArgv args({"qtmesh", "memory", "/nonexistent/missing.obj", "--no-cloud"});
+    EXPECT_EQ(CLIPipeline::cmdMemory(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdAnalyze, MissingInputAndMissingFileFail)
+{
+    TestArgv missing({"qtmesh", "analyze"});
+    EXPECT_EQ(CLIPipeline::cmdAnalyze(missing.argc(), missing.argv()), 2);
+
+    TestArgv missingFile({"qtmesh", "analyze", "/nonexistent/missing.obj", "--json"});
+    EXPECT_EQ(CLIPipeline::cmdAnalyze(missingFile.argc(), missingFile.argv()), 1);
+}
+
+TEST(CLIPipelineCmdVertexCache, MissingInputAndMissingFileFail)
+{
+    TestArgv missing({"qtmesh", "vertex-cache"});
+    EXPECT_EQ(CLIPipeline::cmdVertexCache(missing.argc(), missing.argv()), 2);
+
+    TestArgv missingFile({"qtmesh", "vertex-cache", "/nonexistent/missing.obj", "--json"});
+    EXPECT_EQ(CLIPipeline::cmdVertexCache(missingFile.argc(), missingFile.argv()), 1);
+}
+
+TEST(CLIPipelineCmdDecimate, RejectsMissingAndAmbiguousTargets)
+{
+    TestArgv missing({"qtmesh", "decimate"});
+    EXPECT_EQ(CLIPipeline::cmdDecimate(missing.argc(), missing.argv()), 2);
+
+    TestArgv noOutput({"qtmesh", "decimate", "mesh.obj", "--reduction", "0.5"});
+    EXPECT_EQ(CLIPipeline::cmdDecimate(noOutput.argc(), noOutput.argv()), 2);
+
+    TestArgv ambiguous({"qtmesh", "decimate", "mesh.obj", "-o", "out.obj",
+                        "--reduction", "0.5", "--target-tris", "10"});
+    EXPECT_EQ(CLIPipeline::cmdDecimate(ambiguous.argc(), ambiguous.argv()), 2);
+}
+
+TEST(CLIPipelineCmdDecimate, RejectsInvalidNumbersAndMissingFile)
+{
+    TestArgv badReduction({"qtmesh", "decimate", "mesh.obj", "-o", "out.obj",
+                           "--reduction", "half"});
+    EXPECT_EQ(CLIPipeline::cmdDecimate(badReduction.argc(), badReduction.argv()), 2);
+
+    TestArgv badTarget({"qtmesh", "decimate", "mesh.obj", "-o", "out.obj",
+                        "--target-verts", "lots"});
+    EXPECT_EQ(CLIPipeline::cmdDecimate(badTarget.argc(), badTarget.argv()), 2);
+
+    TestArgv missingFile({"qtmesh", "decimate", "/nonexistent/missing.obj", "-o", "out.obj",
+                          "--target-tris", "10"});
+    EXPECT_EQ(CLIPipeline::cmdDecimate(missingFile.argc(), missingFile.argv()), 1);
+}
+
+TEST(CLIPipelineCmdOptimize, RejectsMissingOutputAndMissingFile)
+{
+    TestArgv missing({"qtmesh", "optimize"});
+    EXPECT_EQ(CLIPipeline::cmdOptimize(missing.argc(), missing.argv()), 2);
+
+    TestArgv noOutput({"qtmesh", "optimize", "mesh.obj", "--vertex-cache"});
+    EXPECT_EQ(CLIPipeline::cmdOptimize(noOutput.argc(), noOutput.argv()), 2);
+
+    TestArgv missingFile({"qtmesh", "optimize", "/nonexistent/missing.obj", "-o", "out.obj"});
+    EXPECT_EQ(CLIPipeline::cmdOptimize(missingFile.argc(), missingFile.argv()), 1);
+}
+
+TEST(CLIPipelineCmdOptimize, RejectsInvalidTargetsAndSimplifyPresets)
+{
+    TestArgv ambiguous({"qtmesh", "optimize", "mesh.obj", "-o", "out.obj",
+                        "--reduction", "0.5", "--target-tris", "10"});
+    EXPECT_EQ(CLIPipeline::cmdOptimize(ambiguous.argc(), ambiguous.argv()), 2);
+
+    TestArgv negativeTarget({"qtmesh", "optimize", "mesh.obj", "-o", "out.obj",
+                             "--target-verts", "-1"});
+    EXPECT_EQ(CLIPipeline::cmdOptimize(negativeTarget.argc(), negativeTarget.argv()), 2);
+
+    TestArgv unknownPreset({"qtmesh", "optimize", "mesh.obj", "-o", "out.obj",
+                            "--simplify-preset", "maximum"});
+    EXPECT_EQ(CLIPipeline::cmdOptimize(unknownPreset.argc(), unknownPreset.argv()), 2);
+
+    TestArgv presetWithExplicitTol({"qtmesh", "optimize", "mesh.obj", "-o", "out.obj",
+                                    "--simplify-preset", "balanced",
+                                    "--simplify-scale-tol", "0.1"});
+    EXPECT_EQ(CLIPipeline::cmdOptimize(presetWithExplicitTol.argc(), presetWithExplicitTol.argv()), 2);
 }
