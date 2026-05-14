@@ -273,9 +273,24 @@ private:
     /// false on miss.
     bool hitTestUV(const QPoint& screenPos, OgreWidget* widget, Ogre::Vector2& outUV) const;
 
-    /// Allocate a new manual Ogre::Texture with current buffer dimensions
-    /// and bind it onto the entity's active slot.
-    bool createOgreTextureFromBuffer(Ogre::Entity* entity, const QString& nameHint);
+    /// Allocate a new manual Ogre::Texture with current buffer
+    /// dimensions. When `rebindToModel` is true, also walk the
+    /// entity's materials and rebind diffuse TUSes pointing at the
+    /// original texture to the paint texture. When false (the default
+    /// for session create), the GPU texture is allocated but the
+    /// model's render is left alone until the first stroke
+    /// committedly modifies pixels.
+    bool createOgreTextureFromBuffer(Ogre::Entity* entity,
+                                     const QString& nameHint,
+                                     bool rebindToModel = false);
+
+    /// Rebind diffuse TUSes pointing at the original-slot texture to
+    /// the paint texture. Records the original bindings in
+    /// `m_boundSlots` so closeSession() can restore them. Called
+    /// either eagerly (rebindToModel=true on session create) or
+    /// lazily (on the first stroke flush, so toggling the brush is
+    /// non-destructive).
+    void rebindEntityDiffuseToPaintTexture(Ogre::Entity* entity);
 
     /// Upload buffer.dirtyRect() into the live Ogre texture and clear it.
     void flushDirtyToOgre();

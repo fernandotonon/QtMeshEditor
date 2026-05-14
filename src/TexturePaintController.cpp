@@ -470,7 +470,9 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     return true;
 }
 
-bool TexturePaintController::createOgreTextureFromBuffer(Ogre::Entity* entity, const QString& nameHint)
+bool TexturePaintController::createOgreTextureFromBuffer(Ogre::Entity* entity,
+                                                          const QString& nameHint,
+                                                          bool rebindToModel)
 {
     if (!entity || m_buffer.width() <= 0 || m_buffer.height() <= 0) return false;
     auto* tu = findOrCreateActiveTextureUnit(entity);
@@ -502,83 +504,11 @@ bool TexturePaintController::createOgreTextureFromBuffer(Ogre::Entity* entity, c
         pixbuf->blitFromMemory(pb);
         m_textureName = QString::fromStdString(texName);
 
-        SentryReporter::addBreadcrumb("ui.action",
-            QStringLiteral("Texture paint: rebind base = '%1' → '%2'")
-                .arg(QString::fromStdString(originalTexName))
-                .arg(QString::fromStdString(texName)));
-        // Rebind every TUS pointing at the user's original slot
-        // texture. Track each rebind so closeSession() restores them.
-        //
-        // Imported PBR materials alias the diffuse texture under both
-        // `diffuse_map` (TUS 0) and `albedo` (last TUS) — we rebind
-        // both copies that share originalTexName.
-        //
-        // If originalTexName is empty (the slot had no texture bound
-        // yet — e.g. a freshly-created session on a flat-color
-        // material), we bind the *chosen slot only* so the user has
-        // SOMETHING to paint against and see the result.
-        m_boundSlots.clear();
-        std::set<Ogre::Material*> touched;
-        const int chosenSubmesh =
-            (m_activeSlot >= 0 && m_activeSlot < m_slots.size())
-                ? m_slots.at(m_activeSlot).toMap().value("submesh", -1).toInt()
-                : 0;
-        for (unsigned int se = 0; se < entity->getNumSubEntities(); ++se) {
-            auto* sub = entity->getSubEntity(se);
-            if (!sub) continue;
-            Ogre::MaterialPtr mat = sub->getMaterial();
-            if (!mat) continue;
-            bool changed = false;
-            const auto& techs = mat->getTechniques();
-            for (size_t tIdx = 0; tIdx < techs.size(); ++tIdx) {
-                auto* tech = techs[tIdx];
-                for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
-                    auto* p = tech->getPass(pi);
-                    for (unsigned short ti = 0; ti < p->getNumTextureUnitStates(); ++ti) {
-                        auto* tusN = p->getTextureUnitState(ti);
-                        const std::string currentTex = tusN->getTextureName();
-                        bool shouldBind = false;
-                        if (!originalTexName.empty()) {
-                            shouldBind = (currentTex == originalTexName);
-                        } else if (static_cast<int>(se) == chosenSubmesh) {
-                            // Empty-source fallback: bind the exact TUS
-                            // the user picked. We approximate "the
-                            // user's TUS" as the matching slot/index on
-                            // the chosen submesh.
-                            shouldBind = (tusN == tu);
-                        }
-                        if (!shouldBind) continue;
-                        BoundSlot s;
-                        s.materialName = mat->getName();
-                        s.techIdx = static_cast<unsigned short>(tIdx);
-                        s.passIdx = pi;
-                        s.tusIdx = ti;
-                        s.originalTexture = currentTex;
-                        m_boundSlots.push_back(s);
-                        tusN->setTextureName(texName);
-                        changed = true;
-                    }
-                }
-            }
-            if (changed) touched.insert(mat.get());
-        }
-        SentryReporter::addBreadcrumb("ui.action",
-            QStringLiteral("Texture paint: bound %1 TUSes").arg(m_boundSlots.size()));
-
-        // Force RTSS / FFP lighting passes to drop their cached binding
-        // and re-sample our texture. Without compile()+reload() the
-        // renderer keeps using whatever sampler the shader was
-        // generated with, so the new texture stays invisible.
-        for (auto* mat : touched) {
-            try {
-                mat->compile();
-                mat->reload();
-            } catch (const Ogre::Exception&) {
-                // Best-effort: a reload failure shouldn't kill the
-                // paint session — the worst case is stale rendering
-                // until the next material edit.
-            }
-        }
+        if (rebindToModel)
+            rebindEntityDiffuseToPaintTexture(entity);
+        else
+            SentryReporter::addBreadcrumb("ui.action",
+                QStringLiteral("Texture paint: GPU texture created, deferred rebind"));
         return true;
     } catch (const Ogre::Exception&) {
         return false;
@@ -587,11 +517,83 @@ bool TexturePaintController::createOgreTextureFromBuffer(Ogre::Entity* entity, c
     }
 }
 
+void TexturePaintController::rebindEntityDiffuseToPaintTexture(Ogre::Entity* entity)
+{
+    if (!entity || m_textureName.isEmpty()) return;
+    // Capture the original texture name from the user's active slot
+    // (or the first diffuse-like TUS as fallback).
+    auto* tu = findOrCreateActiveTextureUnit(entity);
+    const std::string originalTexName = tu ? tu->getTextureName() : "";
+    const std::string texName = m_textureName.toStdString();
+
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Texture paint: rebind base = '%1' → '%2'")
+            .arg(QString::fromStdString(originalTexName))
+            .arg(QString::fromStdString(texName)));
+
+    m_boundSlots.clear();
+    std::set<Ogre::Material*> touched;
+    const int chosenSubmesh =
+        (m_activeSlot >= 0 && m_activeSlot < m_slots.size())
+            ? m_slots.at(m_activeSlot).toMap().value("submesh", -1).toInt()
+            : 0;
+    for (unsigned int se = 0; se < entity->getNumSubEntities(); ++se) {
+        auto* sub = entity->getSubEntity(se);
+        if (!sub) continue;
+        Ogre::MaterialPtr mat = sub->getMaterial();
+        if (!mat) continue;
+        bool changed = false;
+        const auto& techs = mat->getTechniques();
+        for (size_t tIdx = 0; tIdx < techs.size(); ++tIdx) {
+            auto* tech = techs[tIdx];
+            for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
+                auto* p = tech->getPass(pi);
+                for (unsigned short ti = 0; ti < p->getNumTextureUnitStates(); ++ti) {
+                    auto* tusN = p->getTextureUnitState(ti);
+                    const std::string currentTex = tusN->getTextureName();
+                    bool shouldBind = false;
+                    if (!originalTexName.empty()) {
+                        shouldBind = (currentTex == originalTexName);
+                    } else if (static_cast<int>(se) == chosenSubmesh) {
+                        shouldBind = (tusN == tu);
+                    }
+                    if (!shouldBind) continue;
+                    BoundSlot s;
+                    s.materialName = mat->getName();
+                    s.techIdx = static_cast<unsigned short>(tIdx);
+                    s.passIdx = pi;
+                    s.tusIdx = ti;
+                    s.originalTexture = currentTex;
+                    m_boundSlots.push_back(s);
+                    tusN->setTextureName(texName);
+                    changed = true;
+                }
+            }
+        }
+        if (changed) touched.insert(mat.get());
+    }
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Texture paint: bound %1 TUSes").arg(m_boundSlots.size()));
+
+    for (auto* mat : touched) {
+        try { mat->compile(); mat->reload(); }
+        catch (const Ogre::Exception&) {}
+    }
+}
+
 void TexturePaintController::flushDirtyToOgre()
 {
     if (!m_ogreTexture) return;
     const auto& dirty = m_buffer.dirtyRect();
     if (dirty.empty()) return;
+
+    // First-flush deferred rebind: the model's diffuse TUSes are not
+    // rebound to the paint texture until the user actually paints
+    // something. This keeps "enable paint" non-destructive — the
+    // model only changes when there's a stroke to commit.
+    if (m_boundSlots.empty() && m_paintMeshEntity) {
+        rebindEntityDiffuseToPaintTexture(m_paintMeshEntity);
+    }
     try {
         auto buf = m_ogreTexture->getBuffer();
         if (!buf) return;
@@ -915,9 +917,11 @@ bool TexturePaintController::loadPaintBuffer(const QString& path)
         QFileInfo fi(path);
         QString hint = QStringLiteral("QMEPaintLoad_%1").arg(fi.completeBaseName());
         m_sessionEntity = entity;
-        // Re-create the Ogre texture at the new resolution.
+        // Re-create the Ogre texture at the new resolution. The user
+        // explicitly loaded a new image — rebind immediately so they
+        // see it on the model.
         m_ogreTexture.reset();
-        if (!createOgreTextureFromBuffer(entity, hint)) return false;
+        if (!createOgreTextureFromBuffer(entity, hint, /*rebindToModel=*/true)) return false;
     }
     emit sessionChanged();
     return true;
@@ -1024,7 +1028,9 @@ int TexturePaintController::bakeVertexColorsToTexture(int resolution,
     const QString hint = QStringLiteral("QMEBake_%1_%2")
                        .arg(QString::fromStdString(entity->getName()))
                        .arg(++s_bakeUnique);
-    createOgreTextureFromBuffer(entity, hint);
+    // Bake is an explicit user action — rebind immediately so the
+    // baked result appears on the model.
+    createOgreTextureFromBuffer(entity, hint, /*rebindToModel=*/true);
 
     if (!savePath.isEmpty())
         m_buffer.save(savePath.toStdString());
@@ -1177,16 +1183,11 @@ void TexturePaintController::clearHoveredUV()
 
 void TexturePaintController::refreshSlots()
 {
-    // If paint is enabled and the user just changed selection, try to
-    // re-establish the session against the new entity so they don't
-    // have to click "Create / Attach Texture" again. Skip if the
-    // session is already valid for the current entity.
-    if (m_paintEnabled) {
-        auto* e = activeEntity();
-        if (e && e != m_sessionEntity && !hasActiveSession())
-            ensurePaintableTexture(1024);
-    }
-
+    // Refresh is pure metadata — it must not create a paint session
+    // as a side effect. Otherwise toggling the brush button (which
+    // calls refreshSlots) silently rebinds the model's diffuse TUS
+    // and the user sees the model "go textureless". Sessions are
+    // created lazily inside beginStroke() instead.
     QVariantList newSlots;
     auto* entity = activeEntity();
     if (entity) {

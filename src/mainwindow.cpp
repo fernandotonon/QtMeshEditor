@@ -1365,14 +1365,19 @@ void MainWindow::initToolBar()
     });
 
     connect(vertexPaintButton, &QToolButton::toggled, this, [this](bool on) {
+        const auto mode = EditorModeController::instance()->currentMode();
+        const bool material = mode == EditorModeController::MaterialMode;
+        const bool edit     = mode == EditorModeController::EditMode;
         SentryReporter::addBreadcrumb("ui.action",
-            QStringLiteral("Toolbar: Paint brush %1").arg(on ? QStringLiteral("on") : QStringLiteral("off")));
-        // One button toggles both vertex and texture paint. They share a
-        // brush; enabling them together gives the user "the brush is on"
-        // semantics regardless of whether they're painting vertex colors
-        // or into a texture.
-        EditModeController::instance()->setVertexPaintEnabled(on);
-        TexturePaintController::instance()->setTexturePaintEnabled(on);
+            QStringLiteral("Toolbar: Paint brush %1 (mode=%2)")
+                .arg(on ? QStringLiteral("on") : QStringLiteral("off"))
+                .arg(material ? "material" : edit ? "edit" : "other"));
+        // Pick the right brush for the current mode. Vertex paint
+        // needs Edit Mode; texture paint works in Material Mode.
+        if (edit)
+            EditModeController::instance()->setVertexPaintEnabled(on);
+        if (material)
+            TexturePaintController::instance()->setTexturePaintEnabled(on);
         if (on)
             setTransformState(TransformOperator::TS_SELECT);
     });
@@ -1390,20 +1395,23 @@ void MainWindow::initToolBar()
     QAction* vertexPaintAction = ui->objectsToolbar->addWidget(vertexPaintButton);
     vertexPaintAction->setObjectName("modeMaterialPaintBrushAction");
 
-    // Material Mode owns the paint brush (vertex + texture). Hide the
-    // toolbar button outside Material Mode so it doesn't crowd the
-    // Edit-mode topology row.
-    auto refreshPaintBrushVisibility = [vertexPaintAction, vertexPaintButton]() {
-        const bool material = EditorModeController::instance()->currentMode()
-                              == EditorModeController::MaterialMode;
-        vertexPaintAction->setVisible(material);
-        vertexPaintButton->setEnabled(material);
-        if (!material) {
-            // Switching out of Material Mode turns the brush off so the
-            // user doesn't end up painting blindly in another mode.
-            EditModeController::instance()->setVertexPaintEnabled(false);
-            TexturePaintController::instance()->setTexturePaintEnabled(false);
-        }
+    // The paint brush is contextual:
+    //  - Material Mode → texture paint (paint into the BaseColor)
+    //  - Edit Mode    → vertex paint (paint vertex colors)
+    //  - Other modes  → hidden
+    // Switching modes turns the previous mode's brush off so we don't
+    // leave a stale checked state.
+    auto refreshPaintBrushVisibility = [vertexPaintButton, vertexPaintAction]() {
+        const auto mode = EditorModeController::instance()->currentMode();
+        const bool material = mode == EditorModeController::MaterialMode;
+        const bool edit     = mode == EditorModeController::EditMode;
+        const bool show = material || edit;
+        vertexPaintAction->setVisible(show);
+        vertexPaintButton->setEnabled(show);
+        // Always disable both brushes on mode change so the user gets
+        // a fresh "off" state and the toolbar checkbox matches.
+        EditModeController::instance()->setVertexPaintEnabled(false);
+        TexturePaintController::instance()->setTexturePaintEnabled(false);
     };
     refreshPaintBrushVisibility();
     connect(EditorModeController::instance(), &EditorModeController::modeChanged,
