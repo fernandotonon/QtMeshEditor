@@ -344,6 +344,21 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     QString existingTex = QString::fromStdString(tu->getTextureName());
     bool loadedExisting = false;
     QString loadError;
+    // Track the original texture handle (not just its name) so we
+    // can paint directly into it via blitFromMemory and skip the
+    // TUS rebind entirely. This is the most reliable path on macOS
+    // Metal where "missing texture" fallback gives yellow and
+    // TU_DYNAMIC manual textures sometimes don't get uploaded.
+    Ogre::TexturePtr originalTex;
+    if (!existingTex.isEmpty()) {
+        try {
+            originalTex = Ogre::TextureManager::getSingleton().getByName(
+                existingTex.toStdString(),
+                Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        } catch (...) {}
+    }
+    m_originalTexture = originalTex;
+    m_originalTextureName = existingTex;
     if (!existingTex.isEmpty()) {
         // Try multiple strategies because imported PBR textures can
         // come from inline FBX embeds (no disk file), legacy on-disk
@@ -533,7 +548,11 @@ bool TexturePaintController::createOgreTextureFromBuffer(Ogre::Entity* entity,
             texName, group, Ogre::TEX_TYPE_2D,
             m_buffer.width(), m_buffer.height(), 0,
             Ogre::PF_BYTE_RGBA,
-            Ogre::TU_DYNAMIC_WRITE_ONLY_DISCARDABLE);
+            // Plain TU_DYNAMIC: write-only with no discard hint. The
+            // _DISCARDABLE variant can drop initial content on some
+            // drivers — bad for us since the initial blit IS the
+            // user's "current pixels" baseline.
+            Ogre::TU_DYNAMIC_WRITE_ONLY);
         if (!m_ogreTexture) return false;
         // Initial upload
         auto pixbuf = m_ogreTexture->getBuffer();
@@ -622,14 +641,59 @@ void TexturePaintController::rebindEntityDiffuseToPaintTexture(Ogre::Entity* ent
 
 void TexturePaintController::flushDirtyToOgre()
 {
-    if (!m_ogreTexture) return;
     const auto& dirty = m_buffer.dirtyRect();
     if (dirty.empty()) return;
 
-    // First-flush deferred rebind: the model's diffuse TUSes are not
-    // rebound to the paint texture until the user actually paints
-    // something. This keeps "enable paint" non-destructive — the
-    // model only changes when there's a stroke to commit.
+    // Preferred path: paint directly INTO the model's original
+    // texture. No rebind needed — the existing material binding
+    // continues to work, and the paint just modifies pixels in place.
+    // Falls back to our manual texture + rebind if blit-to-original
+    // fails (e.g. immutable texture, format mismatch).
+    if (m_originalTexture && !m_useOriginalTexture) {
+        try {
+            auto pixbuf = m_originalTexture->getBuffer();
+            if (pixbuf) {
+                const int W = m_buffer.width();
+                const int rectW = dirty.width();
+                const int rectH = dirty.height();
+                std::vector<uint8_t> slice(static_cast<size_t>(rectW) * static_cast<size_t>(rectH) * 4u);
+                const auto& src = m_buffer.data();
+                for (int row = 0; row < rectH; ++row) {
+                    const size_t srcOff = (static_cast<size_t>(dirty.y0 + row) * static_cast<size_t>(W)
+                                           + static_cast<size_t>(dirty.x0)) * 4u;
+                    const size_t dstOff = static_cast<size_t>(row) * static_cast<size_t>(rectW) * 4u;
+                    std::memcpy(slice.data() + dstOff, src.data() + srcOff,
+                                static_cast<size_t>(rectW) * 4u);
+                }
+                Ogre::PixelBox pb(rectW, rectH, 1, Ogre::PF_BYTE_RGBA, slice.data());
+                Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
+                pixbuf->blitFromMemory(pb, dst);
+                m_useOriginalTexture = true;
+                SentryReporter::addBreadcrumb("ui.action",
+                    "Texture paint: in-place blit to original succeeded");
+                m_buffer.clearDirty();
+                if (!m_previewRefreshScheduled) {
+                    m_previewRefreshScheduled = true;
+                    QTimer::singleShot(60, this, [this]() {
+                        m_previewRefreshScheduled = false;
+                        refreshPreviewUri();
+                    });
+                }
+                return;
+            }
+        } catch (const Ogre::Exception& e) {
+            SentryReporter::addBreadcrumb("ui.action",
+                QStringLiteral("Texture paint: in-place blit FAILED → fallback to manual texture (%1)")
+                    .arg(QString::fromStdString(e.getDescription())));
+            // Fall through to manual-texture path.
+        } catch (...) {}
+    }
+
+    if (!m_ogreTexture) return;
+
+    // Fallback path: the model's diffuse TUSes are rebound to our
+    // manual paint texture on first flush. This is the original
+    // behaviour and works when blit-to-original isn't supported.
     if (m_boundSlots.empty() && m_paintMeshEntity) {
         rebindEntityDiffuseToPaintTexture(m_paintMeshEntity);
     }
@@ -1151,6 +1215,9 @@ void TexturePaintController::closeSession()
     m_paintMeshEntity = nullptr;
     m_buffer = TexturePaintBuffer();
     m_textureName.clear();
+    m_originalTexture.reset();
+    m_originalTextureName.clear();
+    m_useOriginalTexture = false;
     m_sessionEntity = nullptr;
     m_strokePreSnapshot.clear();
     if (!m_uvOverlayUri.isEmpty()) {

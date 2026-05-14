@@ -333,6 +333,14 @@ private:
     TexturePaintBuffer m_buffer;
     QString m_textureName;
     Ogre::TexturePtr m_ogreTexture;
+    /// The original texture we're painting into. We blit our dirty
+    /// rects directly to its GPU buffer when possible, so the
+    /// existing material binding is untouched. Falls back to
+    /// `m_ogreTexture` (our manual paint texture) when the original
+    /// isn't writable.
+    Ogre::TexturePtr m_originalTexture;
+    QString m_originalTextureName;
+    bool m_useOriginalTexture = false;
     Ogre::Entity* m_sessionEntity = nullptr;
 
     bool m_strokeActive = false;
