@@ -1343,32 +1343,25 @@ Rectangle {
                     }
                     onPositionChanged: function(m) {
                         const uv = toUV(m.x, m.y)
-                        // Use the live `pressed` state instead of
-                        // our own `dragging` flag — flags can get
-                        // stuck if onReleased misses (release
-                        // outside the area).
-                        if (pressed && (m.buttons & Qt.LeftButton)) {
-                            if (!dragging) {
-                                if (TexturePaintController.beginStrokeUV(uv.x, uv.y))
-                                    dragging = true
-                            } else {
-                                TexturePaintController.updateStrokeUV(uv.x, uv.y)
-                            }
+                        // While dragging: keep painting regardless of
+                        // pressed/buttons state. onPressed sets the
+                        // flag; onReleased / onExited / onCanceled
+                        // clear it. Some Qt6/macOS edge cases zero
+                        // m.buttons mid-drag which used to break the
+                        // stroke after the first move.
+                        if (dragging) {
+                            TexturePaintController.updateStrokeUV(uv.x, uv.y)
                         } else {
-                            if (dragging) {
-                                // Stale state — finalize.
-                                TexturePaintController.endStrokeUV()
-                                dragging = false
-                            }
                             TexturePaintController.setHoveredUV(uv.x, uv.y)
                         }
                     }
                     onExited: {
-                        if (dragging) {
-                            TexturePaintController.endStrokeUV()
-                            dragging = false
-                        }
-                        TexturePaintController.clearHoveredUV()
+                        // Don't end the stroke if we're still mid-drag —
+                        // the user may drag off and back onto the panel
+                        // in one motion. onReleased fires globally
+                        // (mouse is grabbed by the press) so we don't
+                        // need a defensive end-stroke here.
+                        if (!dragging) TexturePaintController.clearHoveredUV()
                     }
                     onPressed: function(m) {
                         if (m.button !== Qt.LeftButton) return
