@@ -364,6 +364,7 @@ private:
     QString m_originalTextureName;
     bool m_useOriginalTexture = false;
     bool m_loggedInPlaceBlit = false;
+    bool m_rebindScheduled = false;
     Ogre::Entity* m_sessionEntity = nullptr;
 
     bool m_strokeActive = false;

@@ -702,47 +702,66 @@ void TexturePaintController::flushDirtyToOgre()
                 // convert our RGBA8 source to the texture's format
                 // up front and submit it raw.
                 const Ogre::PixelFormat dstFmt = m_originalTexture->getFormat();
-                const size_t dstBytes = Ogre::PixelUtil::getMemorySize(rectW, rectH, 1, dstFmt);
-                std::vector<uint8_t> slice(dstBytes);
-                Ogre::PixelBox srcRgba(rectW, rectH, 1, Ogre::PF_BYTE_RGBA, nullptr);
-                std::vector<uint8_t> srcRow(static_cast<size_t>(rectW) * static_cast<size_t>(rectH) * 4u);
-                const auto& src = m_buffer.data();
-                for (int row = 0; row < rectH; ++row) {
-                    const size_t srcOff = (static_cast<size_t>(dirty.y0 + row) * static_cast<size_t>(W)
-                                           + static_cast<size_t>(dirty.x0)) * 4u;
-                    const size_t dstOff = static_cast<size_t>(row) * static_cast<size_t>(rectW) * 4u;
-                    std::memcpy(srcRow.data() + dstOff, src.data() + srcOff,
-                                static_cast<size_t>(rectW) * 4u);
-                }
-                srcRgba.data = srcRow.data();
-                if (dstFmt == Ogre::PF_BYTE_RGBA) {
-                    // No conversion needed.
-                    Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
-                    pixbuf->blitFromMemory(srcRgba, dst);
-                } else {
-                    Ogre::PixelBox dstPb(rectW, rectH, 1, dstFmt, slice.data());
-                    Ogre::PixelUtil::bulkPixelConversion(srcRgba, dstPb);
-                    Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
-                    pixbuf->blitFromMemory(dstPb, dst);
-                }
-                m_useOriginalTexture = true;
-                if (!m_loggedInPlaceBlit) {
-                    m_loggedInPlaceBlit = true;
+                // Only handle plain uncompressed formats in-place.
+                // Compressed formats (DXT/BC) need real CPU encoders
+                // which can crash bulkPixelConversion on Metal.
+                const bool plainFmt =
+                    dstFmt == Ogre::PF_BYTE_RGBA
+                 || dstFmt == Ogre::PF_BYTE_RGB
+                 || dstFmt == Ogre::PF_BYTE_BGRA
+                 || dstFmt == Ogre::PF_BYTE_BGR
+                 || dstFmt == Ogre::PF_A8R8G8B8
+                 || dstFmt == Ogre::PF_R8G8B8A8
+                 || dstFmt == Ogre::PF_A8B8G8R8
+                 || dstFmt == Ogre::PF_X8R8G8B8
+                 || dstFmt == Ogre::PF_R8G8B8;
+                if (!plainFmt) {
                     SentryReporter::addBreadcrumb("ui.action",
-                        QStringLiteral("Texture paint: in-place blit fmt=%1 size=%2x%3")
-                            .arg(static_cast<int>(dstFmt))
-                            .arg(m_originalTexture->getWidth())
-                            .arg(m_originalTexture->getHeight()));
+                        QStringLiteral("Texture paint: in-place skipped — compressed format %1")
+                            .arg(static_cast<int>(dstFmt)));
+                    m_originalTexture.reset();
+                    // Fall through to manual-texture path.
+                } else {
+                    std::vector<uint8_t> srcRow(static_cast<size_t>(rectW) * static_cast<size_t>(rectH) * 4u);
+                    const auto& src = m_buffer.data();
+                    for (int row = 0; row < rectH; ++row) {
+                        const size_t srcOff = (static_cast<size_t>(dirty.y0 + row) * static_cast<size_t>(W)
+                                               + static_cast<size_t>(dirty.x0)) * 4u;
+                        const size_t dstOff = static_cast<size_t>(row) * static_cast<size_t>(rectW) * 4u;
+                        std::memcpy(srcRow.data() + dstOff, src.data() + srcOff,
+                                    static_cast<size_t>(rectW) * 4u);
+                    }
+                    Ogre::PixelBox srcRgba(rectW, rectH, 1, Ogre::PF_BYTE_RGBA, srcRow.data());
+                    if (dstFmt == Ogre::PF_BYTE_RGBA) {
+                        Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
+                        pixbuf->blitFromMemory(srcRgba, dst);
+                    } else {
+                        const size_t dstBytes = Ogre::PixelUtil::getMemorySize(rectW, rectH, 1, dstFmt);
+                        std::vector<uint8_t> slice(dstBytes);
+                        Ogre::PixelBox dstPb(rectW, rectH, 1, dstFmt, slice.data());
+                        Ogre::PixelUtil::bulkPixelConversion(srcRgba, dstPb);
+                        Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
+                        pixbuf->blitFromMemory(dstPb, dst);
+                    }
+                    m_useOriginalTexture = true;
+                    if (!m_loggedInPlaceBlit) {
+                        m_loggedInPlaceBlit = true;
+                        SentryReporter::addBreadcrumb("ui.action",
+                            QStringLiteral("Texture paint: in-place blit fmt=%1 size=%2x%3")
+                                .arg(static_cast<int>(dstFmt))
+                                .arg(m_originalTexture->getWidth())
+                                .arg(m_originalTexture->getHeight()));
+                    }
+                    m_buffer.clearDirty();
+                    if (!m_previewRefreshScheduled) {
+                        m_previewRefreshScheduled = true;
+                        QTimer::singleShot(60, this, [this]() {
+                            m_previewRefreshScheduled = false;
+                            refreshPreviewUri();
+                        });
+                    }
+                    return;
                 }
-                m_buffer.clearDirty();
-                if (!m_previewRefreshScheduled) {
-                    m_previewRefreshScheduled = true;
-                    QTimer::singleShot(60, this, [this]() {
-                        m_previewRefreshScheduled = false;
-                        refreshPreviewUri();
-                    });
-                }
-                return;
             }
         } catch (const Ogre::Exception& e) {
             SentryReporter::addBreadcrumb("ui.action",
@@ -759,10 +778,18 @@ void TexturePaintController::flushDirtyToOgre()
     if (!m_ogreTexture) return;
 
     // Fallback path: the model's diffuse TUSes are rebound to our
-    // manual paint texture on first flush. This is the original
-    // behaviour and works when blit-to-original isn't supported.
-    if (m_boundSlots.empty() && m_paintMeshEntity) {
-        rebindEntityDiffuseToPaintTexture(m_paintMeshEntity);
+    // manual paint texture on first flush. Defer the rebind via a
+    // singleShot timer so material compile/reload doesn't run on
+    // the same call stack as the mouse-move event — that was
+    // racing against the active stroke and crashing.
+    if (m_boundSlots.empty() && m_paintMeshEntity && !m_rebindScheduled) {
+        m_rebindScheduled = true;
+        Ogre::Entity* ent = m_paintMeshEntity;
+        QTimer::singleShot(0, this, [this, ent]() {
+            m_rebindScheduled = false;
+            if (m_paintMeshEntity == ent && m_boundSlots.empty())
+                rebindEntityDiffuseToPaintTexture(ent);
+        });
     }
     try {
         auto buf = m_ogreTexture->getBuffer();
@@ -1321,6 +1348,7 @@ void TexturePaintController::closeSession()
     m_originalTextureName.clear();
     m_useOriginalTexture = false;
     m_loggedInPlaceBlit = false;
+    m_rebindScheduled = false;
     m_sessionEntity = nullptr;
     m_strokePreSnapshot.clear();
     if (!m_uvOverlayUri.isEmpty()) {
