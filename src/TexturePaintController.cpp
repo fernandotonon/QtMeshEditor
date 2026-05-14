@@ -530,7 +530,12 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     QString hint = QStringLiteral("QMEPaint_%1_%2")
                        .arg(QString::fromStdString(entity->getName()))
                        .arg(++s_unique);
-    if (!createOgreTextureFromBuffer(entity, hint)) {
+    // Rebind eagerly on session create. The deferred / lazy rebind
+    // approach was racing with the mouse-move event stack and
+    // crashing mid-stroke. Doing it at session-create time happens
+    // BEFORE the first stroke fires, so there's no re-entrant render
+    // hazard.
+    if (!createOgreTextureFromBuffer(entity, hint, /*rebindToModel=*/true)) {
         m_buffer = TexturePaintBuffer();
         m_textureName.clear();
         m_sessionEntity = nullptr;
@@ -670,25 +675,12 @@ void TexturePaintController::flushDirtyToOgre()
     const auto& dirty = m_buffer.dirtyRect();
     if (dirty.empty()) return;
 
-    // Preferred path: paint directly INTO the model's original
-    // texture. No rebind needed — the existing material binding
-    // continues to work, and the paint just modifies pixels in place.
-    // Falls back to our manual texture + rebind if blit-to-original
-    // fails (e.g. immutable texture, format mismatch, Metal storage
-    // mode rejects CPU writes).
-    //
-    // Re-resolve the handle by name every flush in case the texture
-    // was reloaded/destroyed between strokes (RTSS material reload
-    // can invalidate the TexturePtr).
-    if (!m_originalTextureName.isEmpty()) {
-        try {
-            auto fresh = Ogre::TextureManager::getSingleton().getByName(
-                m_originalTextureName.toStdString(),
-                Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
-            if (fresh) m_originalTexture = fresh;
-        } catch (...) {}
-    }
-    if (m_originalTexture) {
+    // Previously we tried to blit directly into the original texture
+    // here. That path crashed mid-stroke on macOS Metal — likely
+    // because the original texture's getBuffer() readback is unsafe
+    // while a stroke is in flight. Always use the manual-texture
+    // path (rebind happened at session create).
+    if (false && m_originalTexture) {
         try {
             auto pixbuf = m_originalTexture->getBuffer();
             if (pixbuf) {
