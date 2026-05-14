@@ -161,15 +161,21 @@ void TexturePaintController::setTexturePaintEnabled(bool enabled)
         // EditModeController::enterEditMode() — that would flip the
         // workspace mode to EditMode, kick the user out of Material
         // Mode, and (via the visibility hooks) silently disable us.
+        //
+        // We do NOT auto-create a session here. Creating a session
+        // rebinds the model's diffuse TUS to a paint texture, which
+        // visibly changes the model (white if the existing texture
+        // couldn't be read back). Instead, the session is lazily
+        // created on the first stroke (beginStroke / beginStrokeUV)
+        // so toggling the brush button is non-destructive.
         refreshSlots();
-        // Make sure a session exists so the first click actually
-        // paints — without this the user clicks, nothing happens,
-        // they have to find the "Create / Attach Texture" button.
-        if (!hasActiveSession())
-            ensurePaintableTexture(1024);
     }
-    if (!enabled && m_strokeActive)
-        endStroke();
+    if (!enabled) {
+        if (m_strokeActive) endStroke();
+        // Disabling paint also tears down any active session so the
+        // model's original textures snap back into the render.
+        if (hasActiveSession()) closeSession();
+    }
     SentryReporter::addBreadcrumb("ui.action",
         enabled ? "Texture paint: enabled" : "Texture paint: disabled");
     emit texturePaintChanged();
@@ -338,12 +344,21 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     bool loadedExisting = false;
     QString loadError;
     if (!existingTex.isEmpty()) {
-        auto existing = Ogre::TextureManager::getSingleton().getByName(
-            existingTex.toStdString(),
-            Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        // Try multiple strategies because imported PBR textures can
+        // come from inline FBX embeds (no disk file), legacy on-disk
+        // files, or auto-generated render targets. Each strategy
+        // succeeds for a different source.
+        //
+        // 1. TextureManager → convertToImage (works when Ogre keeps
+        //    pixels in an Image buffer beside the GPU upload).
+        Ogre::TexturePtr existing;
+        try {
+            existing = Ogre::TextureManager::getSingleton().getByName(
+                existingTex.toStdString(),
+                Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        } catch (...) {}
         if (existing) {
             try {
-                // Make sure the texture is loaded (Ogre defers loading).
                 if (!existing->isLoaded()) existing->load();
                 Ogre::Image img;
                 existing->convertToImage(img);
@@ -361,10 +376,59 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
             } catch (const Ogre::Exception& e) {
                 loadError = QString::fromStdString(e.getDescription());
             } catch (...) {
-                loadError = QStringLiteral("unknown exception");
+                loadError = QStringLiteral("convertToImage exception");
             }
         } else {
             loadError = QStringLiteral("texture not found in TextureManager");
+        }
+
+        // 2. Read from GPU directly via blitToMemory. Works when the
+        //    texture is on the GPU but its source Image buffer was
+        //    discarded post-upload (common for static textures).
+        if (!loadedExisting && existing) {
+            try {
+                if (!existing->isLoaded()) existing->load();
+                const int w = static_cast<int>(existing->getWidth());
+                const int h = static_cast<int>(existing->getHeight());
+                if (w > 0 && h > 0) {
+                    m_buffer.resize(w, h);
+                    Ogre::PixelBox pb(w, h, 1, Ogre::PF_BYTE_RGBA,
+                                      m_buffer.data().data());
+                    auto pixbuf = existing->getBuffer();
+                    if (pixbuf) {
+                        pixbuf->blitToMemory(pb);
+                        m_buffer.clearDirty();
+                        loadedExisting = true;
+                        loadError.clear();
+                    }
+                }
+            } catch (...) {
+                // Try strategy 3.
+            }
+        }
+
+        // 3. QImage reading via Ogre::Image::load — works when the
+        //    texture name is also a filename in a registered location.
+        if (!loadedExisting) {
+            try {
+                Ogre::Image img;
+                img.load(existingTex.toStdString(),
+                         Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+                const int w = static_cast<int>(img.getWidth());
+                const int h = static_cast<int>(img.getHeight());
+                if (w > 0 && h > 0) {
+                    m_buffer.resize(w, h);
+                    Ogre::PixelBox srcBox = img.getPixelBox();
+                    Ogre::PixelBox dstBox(w, h, 1, Ogre::PF_BYTE_RGBA,
+                                          m_buffer.data().data());
+                    Ogre::PixelUtil::bulkPixelConversion(srcBox, dstBox);
+                    m_buffer.clearDirty();
+                    loadedExisting = true;
+                    loadError.clear();
+                }
+            } catch (...) {
+                // All three failed.
+            }
         }
     }
 
@@ -374,7 +438,7 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
         m_buffer.clear(Ogre::ColourValue::White);
         m_buffer.clearDirty();
         SentryReporter::addBreadcrumb("ui.action",
-            QStringLiteral("Texture paint: starting from blank %1×%1 (tex='%2', err='%3')")
+            QStringLiteral("Texture paint: starting from blank %1×%1 (existing tex='%2', err='%3')")
                 .arg(res).arg(existingTex).arg(loadError));
     } else {
         SentryReporter::addBreadcrumb("ui.action",
@@ -631,10 +695,18 @@ bool TexturePaintController::hitTestUV(const QPoint& screenPos, OgreWidget* widg
 
 bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& screenPos)
 {
-    if (!m_paintEnabled || m_strokeActive) return false;
+    if (!m_paintEnabled || m_strokeActive) {
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Texture paint: beginStroke skipped (enabled=%1 active=%2)")
+                .arg(m_paintEnabled).arg(m_strokeActive));
+        return false;
+    }
     if (!hasActiveSession()) {
-        if (!ensurePaintableTexture(m_buffer.width() > 0 ? m_buffer.width() : 1024))
+        if (!ensurePaintableTexture(m_buffer.width() > 0 ? m_buffer.width() : 1024)) {
+            SentryReporter::addBreadcrumb("ui.action",
+                "Texture paint: beginStroke aborted — no session could be created");
             return false;
+        }
     }
     m_strokeActive = true;
     m_strokeJustBegan = true;
