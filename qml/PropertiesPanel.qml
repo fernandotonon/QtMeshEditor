@@ -1333,6 +1333,12 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.CrossCursor
+                    // Stop parent layouts from stealing the drag — QML
+                    // scrollers / containers may grab the press as a
+                    // flick gesture after a few pixels of motion,
+                    // killing the brush stroke. preventStealing keeps
+                    // the grab locked here.
+                    preventStealing: true
                     property bool dragging: false
 
                     function toUV(mx, my) {
