@@ -1365,30 +1365,20 @@ void MainWindow::initToolBar()
     });
 
     connect(vertexPaintButton, &QToolButton::toggled, this, [this](bool on) {
-        const auto mode = EditorModeController::instance()->currentMode();
-        const bool material = mode == EditorModeController::MaterialMode;
-        const bool edit     = mode == EditorModeController::EditMode;
         SentryReporter::addBreadcrumb("ui.action",
-            QStringLiteral("Toolbar: Paint brush %1 (mode=%2)")
-                .arg(on ? QStringLiteral("on") : QStringLiteral("off"))
-                .arg(material ? "material" : edit ? "edit" : "other"));
-        // Pick the right brush for the current mode. Vertex paint
-        // needs Edit Mode; texture paint works in Material Mode.
-        if (edit)
-            EditModeController::instance()->setVertexPaintEnabled(on);
-        if (material)
-            TexturePaintController::instance()->setTexturePaintEnabled(on);
+            QStringLiteral("Toolbar: Paint brush %1").arg(on ? "on" : "off"));
+        // All painting goes through TexturePaintController. The
+        // controller's "paint target" enum picks between texture
+        // paint and vertex paint per stroke.
+        TexturePaintController::instance()->setTexturePaintEnabled(on);
         if (on)
             setTransformState(TransformOperator::TS_SELECT);
     });
     auto syncPaintBtnChecked = [vertexPaintButton]() {
-        const bool on = EditModeController::instance()->vertexPaintEnabled()
-                     || TexturePaintController::instance()->texturePaintEnabled();
+        const bool on = TexturePaintController::instance()->texturePaintEnabled();
         QSignalBlocker b(vertexPaintButton);
         vertexPaintButton->setChecked(on);
     };
-    connect(EditModeController::instance(), &EditModeController::vertexPaintChanged,
-            this, syncPaintBtnChecked);
     connect(TexturePaintController::instance(), &TexturePaintController::texturePaintChanged,
             this, syncPaintBtnChecked);
 
@@ -1404,15 +1394,15 @@ void MainWindow::initToolBar()
     auto refreshPaintBrushVisibility = [vertexPaintButton, vertexPaintAction]() {
         const auto mode = EditorModeController::instance()->currentMode();
         const bool material = mode == EditorModeController::MaterialMode;
-        const bool edit     = mode == EditorModeController::EditMode;
-        const bool show = material || edit;
-        vertexPaintAction->setVisible(show);
-        vertexPaintButton->setEnabled(show);
+        // Paint brush lives in Material Mode only. The user chooses
+        // between Vertex and Texture painting via the panel's target
+        // picker; both run through TexturePaintController.
+        vertexPaintAction->setVisible(material);
+        vertexPaintButton->setEnabled(material);
         // Disable both brushes AND reset the button's checked state on
         // mode change. Without resetting the checked flag, the user's
         // next click toggles "on→off" (since we silently set the
-        // controllers off but left the button visually checked), which
-        // looks like "the brush button stopped working".
+        // controllers off but left the button visually checked).
         EditModeController::instance()->setVertexPaintEnabled(false);
         TexturePaintController::instance()->setTexturePaintEnabled(false);
         QSignalBlocker b(vertexPaintButton);

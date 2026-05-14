@@ -68,6 +68,9 @@ class TexturePaintController : public QObject
     // Brush tool — paint / erase / fill / picker.
     Q_PROPERTY(int brushTool READ brushTool WRITE setBrushTool NOTIFY brushToolChanged)
 
+    // Paint target — texture or vertex.
+    Q_PROPERTY(int paintTarget READ paintTarget WRITE setPaintTarget NOTIFY paintTargetChanged)
+
     // Live preview of the current paint buffer as a data URI, so the QML
     // preview panel can render it via Image { source: ... }. Emitted on
     // every dirty-rect flush so the preview stays in sync with strokes.
@@ -88,6 +91,13 @@ public:
         ToolSmudge      = 4,  ///< Drag pixels in the brush direction.
     };
     Q_ENUM(BrushTool)
+
+    /// What the brush paints into.
+    enum PaintTarget {
+        TargetTexture = 0,  ///< Paint into the BaseColor texture (default).
+        TargetVertex  = 1,  ///< Paint vertex colors (formerly Edit Mode's vertex paint).
+    };
+    Q_ENUM(PaintTarget)
 
     static TexturePaintController* instance();
     static TexturePaintController* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
@@ -118,6 +128,12 @@ public:
     /// @{
     int brushTool() const { return static_cast<int>(m_tool); }
     void setBrushTool(int tool);
+    /// @}
+
+    /// @name Paint target (texture or vertex colors)
+    /// @{
+    int paintTarget() const { return static_cast<int>(m_target); }
+    void setPaintTarget(int target);
     /// @}
 
     /// @name Texture slot enumeration (selection-driven)
@@ -243,6 +259,7 @@ signals:
     void texturePaintChanged();
     void sessionChanged();
     void brushToolChanged();
+    void paintTargetChanged();
     void slotsChanged();
     void previewChanged();
     void uvOverlayChanged();
@@ -272,6 +289,11 @@ private:
     /// recover the barycentric-interpolated UV at the hit point. Returns
     /// false on miss.
     bool hitTestUV(const QPoint& screenPos, OgreWidget* widget, Ogre::Vector2& outUV) const;
+
+    /// Same hit-test but returns the local-space position and normal
+    /// at the hit (for vertex paint, which works in 3D space).
+    bool hitTestLocalPoint(OgreWidget* widget, const QPoint& screenPos,
+                           Ogre::Vector3& outLocal, Ogre::Vector3& outNormal) const;
 
     /// Allocate a new manual Ogre::Texture with current buffer
     /// dimensions. When `rebindToModel` is true, also walk the
@@ -341,12 +363,14 @@ private:
     Ogre::TexturePtr m_originalTexture;
     QString m_originalTextureName;
     bool m_useOriginalTexture = false;
+    bool m_loggedInPlaceBlit = false;
     Ogre::Entity* m_sessionEntity = nullptr;
 
     bool m_strokeActive = false;
     bool m_strokeJustBegan = false; ///< Fill/picker tools fire only once per stroke.
     std::vector<uint8_t> m_strokePreSnapshot; // for undo
     BrushTool m_tool = ToolPaint;
+    PaintTarget m_target = TargetTexture;
 
     /// Track every TUS we rebound to the paint texture so closeSession()
     /// can restore the originals. We keep the *material name* (not a

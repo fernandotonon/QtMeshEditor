@@ -193,6 +193,16 @@ void TexturePaintController::setBrushTool(int tool)
     emit brushToolChanged();
 }
 
+void TexturePaintController::setPaintTarget(int target)
+{
+    PaintTarget t = static_cast<PaintTarget>(target);
+    if (t == m_target) return;
+    m_target = t;
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Paint target = %1").arg(target == TargetVertex ? "vertex" : "texture"));
+    emit paintTargetChanged();
+}
+
 void TexturePaintController::setActiveSlotIndex(int index)
 {
     if (index < 0 || index >= m_slots.size()) return;
@@ -637,6 +647,18 @@ void TexturePaintController::rebindEntityDiffuseToPaintTexture(Ogre::Entity* ent
         try { mat->compile(); mat->reload(); }
         catch (const Ogre::Exception&) {}
     }
+    // Also force re-binding at the SubEntity level. Some imports
+    // store per-subentity material overrides that cache the current
+    // pass state; setMaterialName(name) forces Ogre to refresh the
+    // subentity's render pass pointer to the modified material.
+    for (unsigned int se = 0; se < entity->getNumSubEntities(); ++se) {
+        auto* sub = entity->getSubEntity(se);
+        if (!sub) continue;
+        const std::string mname = sub->getMaterialName();
+        if (!mname.empty()) {
+            try { sub->setMaterialName(mname); } catch (...) {}
+        }
+    }
 }
 
 void TexturePaintController::flushDirtyToOgre()
@@ -648,29 +670,54 @@ void TexturePaintController::flushDirtyToOgre()
     // texture. No rebind needed — the existing material binding
     // continues to work, and the paint just modifies pixels in place.
     // Falls back to our manual texture + rebind if blit-to-original
-    // fails (e.g. immutable texture, format mismatch).
-    if (m_originalTexture && !m_useOriginalTexture) {
+    // fails (e.g. immutable texture, format mismatch, Metal storage
+    // mode rejects CPU writes).
+    if (m_originalTexture) {
         try {
             auto pixbuf = m_originalTexture->getBuffer();
             if (pixbuf) {
                 const int W = m_buffer.width();
                 const int rectW = dirty.width();
                 const int rectH = dirty.height();
-                std::vector<uint8_t> slice(static_cast<size_t>(rectW) * static_cast<size_t>(rectH) * 4u);
+                // Blit in the texture's NATIVE format. blitFromMemory
+                // does internal conversion if the source PixelBox
+                // format differs, but on some Metal backends the
+                // conversion silently produces no upload — so we
+                // convert our RGBA8 source to the texture's format
+                // up front and submit it raw.
+                const Ogre::PixelFormat dstFmt = m_originalTexture->getFormat();
+                const size_t dstBytes = Ogre::PixelUtil::getMemorySize(rectW, rectH, 1, dstFmt);
+                std::vector<uint8_t> slice(dstBytes);
+                Ogre::PixelBox srcRgba(rectW, rectH, 1, Ogre::PF_BYTE_RGBA, nullptr);
+                std::vector<uint8_t> srcRow(static_cast<size_t>(rectW) * static_cast<size_t>(rectH) * 4u);
                 const auto& src = m_buffer.data();
                 for (int row = 0; row < rectH; ++row) {
                     const size_t srcOff = (static_cast<size_t>(dirty.y0 + row) * static_cast<size_t>(W)
                                            + static_cast<size_t>(dirty.x0)) * 4u;
                     const size_t dstOff = static_cast<size_t>(row) * static_cast<size_t>(rectW) * 4u;
-                    std::memcpy(slice.data() + dstOff, src.data() + srcOff,
+                    std::memcpy(srcRow.data() + dstOff, src.data() + srcOff,
                                 static_cast<size_t>(rectW) * 4u);
                 }
-                Ogre::PixelBox pb(rectW, rectH, 1, Ogre::PF_BYTE_RGBA, slice.data());
-                Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
-                pixbuf->blitFromMemory(pb, dst);
+                srcRgba.data = srcRow.data();
+                if (dstFmt == Ogre::PF_BYTE_RGBA) {
+                    // No conversion needed.
+                    Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
+                    pixbuf->blitFromMemory(srcRgba, dst);
+                } else {
+                    Ogre::PixelBox dstPb(rectW, rectH, 1, dstFmt, slice.data());
+                    Ogre::PixelUtil::bulkPixelConversion(srcRgba, dstPb);
+                    Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
+                    pixbuf->blitFromMemory(dstPb, dst);
+                }
                 m_useOriginalTexture = true;
-                SentryReporter::addBreadcrumb("ui.action",
-                    "Texture paint: in-place blit to original succeeded");
+                if (!m_loggedInPlaceBlit) {
+                    m_loggedInPlaceBlit = true;
+                    SentryReporter::addBreadcrumb("ui.action",
+                        QStringLiteral("Texture paint: in-place blit fmt=%1 size=%2x%3")
+                            .arg(static_cast<int>(dstFmt))
+                            .arg(m_originalTexture->getWidth())
+                            .arg(m_originalTexture->getHeight()));
+                }
                 m_buffer.clearDirty();
                 if (!m_previewRefreshScheduled) {
                     m_previewRefreshScheduled = true;
@@ -685,8 +732,12 @@ void TexturePaintController::flushDirtyToOgre()
             SentryReporter::addBreadcrumb("ui.action",
                 QStringLiteral("Texture paint: in-place blit FAILED → fallback to manual texture (%1)")
                     .arg(QString::fromStdString(e.getDescription())));
-            // Fall through to manual-texture path.
-        } catch (...) {}
+            // Fall through to manual-texture path. Clear the
+            // original-texture handle so we don't keep trying.
+            m_originalTexture.reset();
+        } catch (...) {
+            m_originalTexture.reset();
+        }
     }
 
     if (!m_ogreTexture) return;
@@ -806,11 +857,24 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
                 .arg(m_paintEnabled).arg(m_strokeActive));
         return false;
     }
-    if (!hasActiveSession()) {
-        if (!ensurePaintableTexture(m_buffer.width() > 0 ? m_buffer.width() : 1024)) {
+    if (m_target == TargetVertex) {
+        // Vertex paint just needs the EditableMesh built — no GPU
+        // texture, no rebind. Build it now if it isn't ready.
+        if (auto* e = activeEntity())
+            ensureEditableMesh(e);
+        if (!m_paintMesh || !m_paintMeshEntity) {
             SentryReporter::addBreadcrumb("ui.action",
-                "Texture paint: beginStroke aborted — no session could be created");
+                "Vertex paint: beginStroke aborted — no mesh");
             return false;
+        }
+        m_paintMesh->ensureVertexColorBuffers(m_paintMeshEntity);
+    } else {
+        if (!hasActiveSession()) {
+            if (!ensurePaintableTexture(m_buffer.width() > 0 ? m_buffer.width() : 1024)) {
+                SentryReporter::addBreadcrumb("ui.action",
+                    "Texture paint: beginStroke aborted — no session could be created");
+                return false;
+            }
         }
     }
     m_strokeActive = true;
@@ -818,7 +882,8 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
     m_smudgeHavePrev = false;
     m_strokePreSnapshot = snapshotPixels();
     SentryReporter::addBreadcrumb("ui.action",
-        QStringLiteral("Texture paint stroke begin (tool=%1 radius=%2 strength=%3 color=%4)")
+        QStringLiteral("Paint stroke begin (target=%1 tool=%2 radius=%3 strength=%4 color=%5)")
+            .arg(m_target == TargetVertex ? "vertex" : "texture")
             .arg(static_cast<int>(m_tool))
             .arg(texturePaintRadius(), 0, 'f', 3)
             .arg(texturePaintStrength(), 0, 'f', 3)
@@ -830,6 +895,27 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
 void TexturePaintController::updateStroke(OgreWidget* widget, const QPoint& screenPos)
 {
     if (!m_strokeActive || !m_paintEnabled) return;
+
+    if (m_target == TargetVertex) {
+        // Vertex paint: get local-space hit point and apply the
+        // vertex-color brush directly on m_paintMesh.
+        if (!m_paintMesh || !m_paintMeshEntity) return;
+        Ogre::Vector3 localPos, localNormal;
+        if (!hitTestLocalPoint(widget, screenPos, localPos, localNormal)) return;
+        drawHoverRingAt(localPos, localNormal);
+        const QColor c = texturePaintColor();
+        const Ogre::ColourValue paint(c.redF(), c.greenF(), c.blueF(), c.alphaF());
+        const bool changed = EditModeController::applyVertexColorBrush(
+            *m_paintMesh, localPos,
+            static_cast<float>(texturePaintRadius()),
+            paint,
+            static_cast<float>(texturePaintStrength()),
+            static_cast<float>(texturePaintFalloff()));
+        if (changed)
+            m_paintMesh->commitVertexColorsToEntity(m_paintMeshEntity);
+        return;
+    }
+
     Ogre::Vector2 uv;
     if (!hitTestUV(screenPos, widget, uv)) {
         clearHoveredUV();
@@ -1218,6 +1304,7 @@ void TexturePaintController::closeSession()
     m_originalTexture.reset();
     m_originalTextureName.clear();
     m_useOriginalTexture = false;
+    m_loggedInPlaceBlit = false;
     m_sessionEntity = nullptr;
     m_strokePreSnapshot.clear();
     if (!m_uvOverlayUri.isEmpty()) {
@@ -1511,6 +1598,57 @@ void TexturePaintController::clearMeshHover()
 {
     if (m_ringObj) m_ringObj->clear();
     emit hoveredUVChanged(-1.0, -1.0);
+}
+
+bool TexturePaintController::hitTestLocalPoint(OgreWidget* widget, const QPoint& screenPos,
+                                                Ogre::Vector3& outLocal, Ogre::Vector3& outNormal) const
+{
+    if (!m_paintMesh || !m_paintMeshEntity || !widget) return false;
+    auto* spaceCam = widget->getSpaceCamera();
+    auto* camera = spaceCam ? spaceCam->getCamera() : nullptr;
+    if (!camera) return false;
+    int vw = 0, vh = 0;
+    widget->pixelSizeForCameraPicking(vw, vh);
+    if (vw <= 0 || vh <= 0) return false;
+    const Ogre::Real nx = static_cast<Ogre::Real>(screenPos.x()) / vw;
+    const Ogre::Real ny = static_cast<Ogre::Real>(screenPos.y()) / vh;
+    const Ogre::Ray ray = camera->getCameraToViewportRay(nx, ny);
+    Ogre::SceneNode* node = m_paintMeshEntity->getParentSceneNode();
+    Ogre::Affine3 worldToLocal = node ? node->_getFullTransform().inverse() : Ogre::Affine3::IDENTITY;
+    Ogre::Vector3 localOrigin = worldToLocal * ray.getOrigin();
+    Ogre::Vector3 localDir = worldToLocal.linear() * ray.getDirection();
+    localDir.normalise();
+    Ogre::Real bestT = std::numeric_limits<Ogre::Real>::infinity();
+    bool found = false;
+    for (const auto& sub : m_paintMesh->subMeshes()) {
+        for (const auto& tri : sub.triangles) {
+            const auto& v0 = sub.vertices[tri.indices[0]];
+            const auto& v1 = sub.vertices[tri.indices[1]];
+            const auto& v2 = sub.vertices[tri.indices[2]];
+            const Ogre::Vector3 e1 = v1.position - v0.position;
+            const Ogre::Vector3 e2 = v2.position - v0.position;
+            const Ogre::Vector3 pvec = localDir.crossProduct(e2);
+            const Ogre::Real det = e1.dotProduct(pvec);
+            if (std::abs(det) < 1e-8f) continue;
+            const Ogre::Real invDet = 1.0f / det;
+            const Ogre::Vector3 tvec = localOrigin - v0.position;
+            const Ogre::Real u = tvec.dotProduct(pvec) * invDet;
+            if (u < 0.0f || u > 1.0f) continue;
+            const Ogre::Vector3 qvec = tvec.crossProduct(e1);
+            const Ogre::Real v = localDir.dotProduct(qvec) * invDet;
+            if (v < 0.0f || u + v > 1.0f) continue;
+            const Ogre::Real tHit = e2.dotProduct(qvec) * invDet;
+            if (tHit <= 0.0f || tHit >= bestT) continue;
+            bestT = tHit;
+            outLocal = localOrigin + localDir * tHit;
+            Ogre::Vector3 n = e1.crossProduct(e2);
+            if (!n.isZeroLength()) n.normalise();
+            else n = Ogre::Vector3::UNIT_Y;
+            outNormal = n;
+            found = true;
+        }
+    }
+    return found;
 }
 
 bool TexturePaintController::findMeshPointForUV(const Ogre::Vector2& uv,

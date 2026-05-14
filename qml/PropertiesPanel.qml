@@ -1145,10 +1145,41 @@ Rectangle {
                     }
                 }
                 Text {
-                    text: "Enable texture paint mode"
+                    text: "Enable paint mode"
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Paint target selector \u2014 Texture vs Vertex
+            Row {
+                spacing: 4
+                Text {
+                    text: "Target:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 50
+                }
+                Repeater {
+                    model: [
+                        { target: 0, label: "Texture" },
+                        { target: 1, label: "Vertex" }
+                    ]
+                    Rectangle {
+                        width: 70; height: 24; radius: 3
+                        color: TexturePaintController.paintTarget === modelData.target
+                            ? PropertiesPanelController.highlightColor
+                            : (tgtMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                                                   : PropertiesPanelController.headerColor)
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: modelData.label
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea {
+                            id: tgtMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.paintTarget = modelData.target
+                        }
+                    }
                 }
             }
 
