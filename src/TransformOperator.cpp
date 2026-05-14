@@ -1002,6 +1002,21 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             return;
         }
 
+        // Texture paint takes priority over selection/box pick: it works
+        // in Material Mode without entering Edit Mode, so we handle it
+        // before the Edit-Mode-gated branch below.
+        {
+            auto* texPaint = TexturePaintController::instance();
+            if (texPaint->texturePaintEnabled() && mTransformState == TS_SELECT) {
+                if (texPaint->beginStroke(m_pActiveWidget, e->pos())) {
+                    mTexturePaintDragActive = true;
+                    SentryReporter::addBreadcrumb("ui.action", "Texture paint: stroke begin");
+                    return;
+                }
+                // Cursor missed the mesh — fall through to normal selection.
+            }
+        }
+
         // In edit mode, delegate selection to EditModeController
         if (EditModeController::instance()->isEditModeActive() && mTransformState == TS_SELECT)
         {
@@ -1013,16 +1028,6 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                     return;
                 }
                 // Paint mode on: do not start box / component selection on miss.
-                return;
-            }
-            auto* texPaint = TexturePaintController::instance();
-            if (texPaint->texturePaintEnabled()) {
-                if (texPaint->beginStroke(m_pActiveWidget, e->pos())) {
-                    mTexturePaintDragActive = true;
-                    SentryReporter::addBreadcrumb("ui.action", "Texture paint: stroke begin");
-                    return;
-                }
-                // Texture paint mode on: don't start box selection on miss.
                 return;
             }
             mScreenStart = e->pos();
@@ -1277,11 +1282,16 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
         editCtrl->updateVertexPaintPreview(m_pActiveWidget, e->pos());
     }
 
-    // Texture paint drag: update on every move while LMB is held.
-    if (mTexturePaintDragActive && editCtrl->isEditModeActive()
-        && (e->buttons() & Qt::LeftButton) && m_pActiveWidget)
+    // Texture paint: while LMB held, update stroke; otherwise update
+    // the hover preview so the user sees the brush ring even before
+    // clicking. Decoupled from Edit Mode — texture paint owns its own
+    // EditableMesh now.
+    auto* texPaint = TexturePaintController::instance();
+    if (mTexturePaintDragActive && (e->buttons() & Qt::LeftButton) && m_pActiveWidget)
     {
-        TexturePaintController::instance()->updateStroke(m_pActiveWidget, e->pos());
+        texPaint->updateStroke(m_pActiveWidget, e->pos());
+    } else if (texPaint->texturePaintEnabled() && m_pActiveWidget) {
+        texPaint->updateMeshHover(m_pActiveWidget, e->pos());
     }
 
     // Knife hover preview: cheap to update on every move while the session

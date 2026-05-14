@@ -169,6 +169,7 @@ TEST(TexturePaintBufferTest, PaintBrushClampsToBufferBounds)
 
 TEST(TexturePaintBufferTest, UvToPixelRoundTrip)
 {
+    // UV origin = top-left (Ogre + Qt convention).
     TexturePaintBuffer buf(64, 32);
     int x = 0, y = 0;
     buf.uvToPixel(Ogre::Vector2(0.5f, 0.5f), x, y);
@@ -176,13 +177,13 @@ TEST(TexturePaintBufferTest, UvToPixelRoundTrip)
     EXPECT_EQ(y, 16);
     buf.uvToPixel(Ogre::Vector2(0.0f, 0.0f), x, y);
     EXPECT_EQ(x, 0);
-    EXPECT_EQ(y, 32); // V flipped
+    EXPECT_EQ(y, 0);
     buf.uvToPixel(Ogre::Vector2(1.0f, 1.0f), x, y);
     // 1.0 * 64 = 64 (out of bounds upper) — the helper doesn't clamp; that's
     // the consumer's job. Verify the computed value rather than asserting
     // in-bounds.
     EXPECT_EQ(x, 64);
-    EXPECT_EQ(y, 0);
+    EXPECT_EQ(y, 32);
 }
 
 TEST(TexturePaintBufferTest, SaveAndLoadRoundTripPreservesPixels)
@@ -210,6 +211,72 @@ TEST(TexturePaintBufferTest, LoadOnNonExistentFileFails)
 {
     TexturePaintBuffer buf;
     EXPECT_FALSE(buf.load("/definitely/does/not/exist/asdf.png"));
+}
+
+// ---- Erase behavior ----
+// Erase = paintBrush(color={0,0,0,0}) — lerps current pixel toward
+// transparent. Verify by stamping red, then erasing the same spot.
+TEST(TexturePaintBufferTest, EraseStampReducesAlpha)
+{
+    TexturePaintBuffer buf(32, 32);
+    buf.paintBrush(Ogre::Vector2(0.5f, 0.5f), 0.1f,
+                   Ogre::ColourValue::Red, 1.0f, 0.0f);
+    int cx = 0, cy = 0;
+    buf.uvToPixel(Ogre::Vector2(0.5f, 0.5f), cx, cy);
+    EXPECT_NEAR(buf.pixel(cx, cy).a, 1.0f, 0.02f);
+    // Erase: full strength, hard falloff, transparent black target.
+    buf.paintBrush(Ogre::Vector2(0.5f, 0.5f), 0.1f,
+                   Ogre::ColourValue(0, 0, 0, 0), 1.0f, 0.0f);
+    EXPECT_NEAR(buf.pixel(cx, cy).a, 0.0f, 0.02f);
+}
+
+// ---- Flood fill ----
+TEST(TexturePaintBufferTest, FloodFillReplacesContiguousRegion)
+{
+    TexturePaintBuffer buf(8, 8);
+    // Default is all opaque white. Drop a vertical green stripe down the middle.
+    for (int y = 0; y < 8; ++y)
+        buf.setPixel(4, y, Ogre::ColourValue::Green);
+    buf.clearDirty();
+
+    // Fill the left half (white) with red starting from (0,0).
+    const int n = buf.floodFill(0, 0, Ogre::ColourValue::Red);
+    EXPECT_GT(n, 30); // 8 columns × 4 rows-ish = 32
+    EXPECT_NEAR(buf.pixel(0, 0).r, 1.0f, 0.02f);
+    EXPECT_NEAR(buf.pixel(3, 3).r, 1.0f, 0.02f);
+    // Green stripe still green (the fill stopped at color boundary).
+    EXPECT_NEAR(buf.pixel(4, 3).g, 1.0f, 0.02f);
+    // Right half still white (separated from left by the green stripe).
+    EXPECT_NEAR(buf.pixel(7, 3).r, 1.0f, 0.02f);
+    EXPECT_NEAR(buf.pixel(7, 3).g, 1.0f, 0.02f);
+}
+
+TEST(TexturePaintBufferTest, FloodFillSameColorIsNoop)
+{
+    TexturePaintBuffer buf(4, 4);
+    buf.clearDirty();
+    const int n = buf.floodFill(1, 1, Ogre::ColourValue::White);
+    EXPECT_EQ(n, 0);
+}
+
+TEST(TexturePaintBufferTest, FloodFillSeedOutOfBoundsReturnsZero)
+{
+    TexturePaintBuffer buf(4, 4);
+    EXPECT_EQ(buf.floodFill(-1, 0, Ogre::ColourValue::Red), 0);
+    EXPECT_EQ(buf.floodFill(0, 99, Ogre::ColourValue::Red), 0);
+}
+
+// ---- Hard-edge fill region replacement (single brush) ----
+TEST(TexturePaintBufferTest, HardBrushReplacesPixelExactly)
+{
+    TexturePaintBuffer buf(8, 8);
+    buf.paintBrush(Ogre::Vector2(0.5f, 0.5f), 0.5f,
+                   Ogre::ColourValue::Blue, 1.0f, 0.0f);
+    int cx = 0, cy = 0;
+    buf.uvToPixel(Ogre::Vector2(0.5f, 0.5f), cx, cy);
+    const auto c = buf.pixel(cx, cy);
+    EXPECT_NEAR(c.r, 0.0f, 0.02f);
+    EXPECT_NEAR(c.b, 1.0f, 0.02f);
 }
 
 TEST(TexturePaintBufferTest, MarkDirtyExpandsRectExternally)

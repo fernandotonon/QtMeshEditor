@@ -24,8 +24,9 @@ int VertexColorBaker::rasterizeTriangle(TexturePaintBuffer& buffer,
     const int H = buffer.height();
     if (W <= 0 || H <= 0) return 0;
 
+    // UV origin = top-left (matches TexturePaintBuffer::uvToPixel).
     auto toPix = [&](const Ogre::Vector2& uv) {
-        return Ogre::Vector2(uv.x * W, (1.0f - uv.y) * H);
+        return Ogre::Vector2(uv.x * W, uv.y * H);
     };
 
     const Ogre::Vector2 p0 = toPix(uv0);

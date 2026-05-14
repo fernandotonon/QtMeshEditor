@@ -59,6 +59,15 @@ public:
     /// raw `data()` array (e.g. VertexColorBaker dilation).
     void markDirty(int x0, int y0, int x1, int y1) { expandDirty(x0, y0, x1, y1); }
 
+    /**
+     * @brief Flood-fill connected pixels at (sx, sy) with `fill`.
+     *
+     * 4-connected scan, tolerance ε=4/255 per channel. Stops at any
+     * pixel whose color differs from the seed. Returns the pixel count
+     * filled, 0 if the seed already matches `fill`.
+     */
+    int floodFill(int sx, int sy, const Ogre::ColourValue& fill);
+
     /// Read pixel. Out-of-bounds returns black-transparent.
     Ogre::ColourValue pixel(int x, int y) const;
 

@@ -8,6 +8,8 @@
 #include <QPoint>
 #include <QQmlEngine>
 #include <QString>
+#include <QStringList>
+#include <QVariantList>
 #include <QtQml/qqmlregistration.h>
 
 #include <OgreTexture.h>
@@ -16,6 +18,7 @@
 #include <memory>
 #include <vector>
 
+class EditableMesh;
 class OgreWidget;
 
 namespace Ogre {
@@ -51,15 +54,41 @@ class TexturePaintController : public QObject
     QML_SINGLETON
 
     Q_PROPERTY(bool texturePaintEnabled READ texturePaintEnabled WRITE setTexturePaintEnabled NOTIFY texturePaintChanged)
-    Q_PROPERTY(QColor texturePaintColor READ texturePaintColor WRITE setTexturePaintColor NOTIFY texturePaintChanged)
-    Q_PROPERTY(double texturePaintRadius READ texturePaintRadius WRITE setTexturePaintRadius NOTIFY texturePaintChanged)
-    Q_PROPERTY(double texturePaintStrength READ texturePaintStrength WRITE setTexturePaintStrength NOTIFY texturePaintChanged)
-    Q_PROPERTY(double texturePaintFalloff READ texturePaintFalloff WRITE setTexturePaintFalloff NOTIFY texturePaintChanged)
+    // Brush params are mirrored from EditModeController so the toolbar brush
+    // popup is the single source of truth — read-only here, used by QML for
+    // live preview text in the Texture Paint section.
+    Q_PROPERTY(QColor texturePaintColor READ texturePaintColor NOTIFY texturePaintChanged)
+    Q_PROPERTY(double texturePaintRadius READ texturePaintRadius NOTIFY texturePaintChanged)
+    Q_PROPERTY(double texturePaintStrength READ texturePaintStrength NOTIFY texturePaintChanged)
+    Q_PROPERTY(double texturePaintFalloff READ texturePaintFalloff NOTIFY texturePaintChanged)
     Q_PROPERTY(int textureResolution READ textureResolution NOTIFY sessionChanged)
     Q_PROPERTY(QString currentTextureName READ currentTextureName NOTIFY sessionChanged)
     Q_PROPERTY(bool hasActiveSession READ hasActiveSession NOTIFY sessionChanged)
 
+    // Brush tool — paint / erase / fill / picker.
+    Q_PROPERTY(int brushTool READ brushTool WRITE setBrushTool NOTIFY brushToolChanged)
+
+    // Live preview of the current paint buffer as a data URI, so the QML
+    // preview panel can render it via Image { source: ... }. Emitted on
+    // every dirty-rect flush so the preview stays in sync with strokes.
+    Q_PROPERTY(QString previewDataUri READ previewDataUri NOTIFY previewChanged)
+
+    // Texture slots on the currently-selected entity. Each entry is a
+    // map: { label, submesh, slot, textureName }. QML reads this to
+    // populate the slot picker.
+    Q_PROPERTY(QVariantList textureSlots READ textureSlots NOTIFY slotsChanged)
+    Q_PROPERTY(int activeSlotIndex READ activeSlotIndex WRITE setActiveSlotIndex NOTIFY slotsChanged)
+
 public:
+    enum BrushTool {
+        ToolPaint       = 0,  ///< Lerp pixels toward brush color.
+        ToolErase       = 1,  ///< Paint transparent (alpha 0). Reveals layer below if any.
+        ToolFill        = 2,  ///< Flood-fill connected pixels under cursor.
+        ToolColorPicker = 3,  ///< Sample color at hit UV into the brush color.
+        ToolSmudge      = 4,  ///< Drag pixels in the brush direction.
+    };
+    Q_ENUM(BrushTool)
+
     static TexturePaintController* instance();
     static TexturePaintController* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
     static void kill();
@@ -70,20 +99,12 @@ public:
     void setTexturePaintEnabled(bool enabled);
     /// @}
 
-    /// @name Brush parameters
+    /// @name Brush parameters (read-only mirror of EditModeController)
     /// @{
-    QColor texturePaintColor() const { return m_color; }
-    void setTexturePaintColor(const QColor& c);
-    Q_INVOKABLE void setTexturePaintColorHex(const QString& cssColor);
-
-    double texturePaintRadius() const { return m_radiusUV; }
-    void setTexturePaintRadius(double r);
-
-    double texturePaintStrength() const { return m_strength; }
-    void setTexturePaintStrength(double s);
-
-    double texturePaintFalloff() const { return m_falloff; }
-    void setTexturePaintFalloff(double f);
+    QColor texturePaintColor() const;
+    double texturePaintRadius() const;
+    double texturePaintStrength() const;
+    double texturePaintFalloff() const;
     /// @}
 
     /// @name Session state
@@ -92,6 +113,41 @@ public:
     QString currentTextureName() const { return m_textureName; }
     bool hasActiveSession() const { return m_buffer.width() > 0 && !m_textureName.isEmpty(); }
     /// @}
+
+    /// @name Brush tool
+    /// @{
+    int brushTool() const { return static_cast<int>(m_tool); }
+    void setBrushTool(int tool);
+    /// @}
+
+    /// @name Texture slot enumeration (selection-driven)
+    /// @{
+    QVariantList textureSlots() const { return m_slots; }
+    int activeSlotIndex() const { return m_activeSlot; }
+    void setActiveSlotIndex(int index);
+    /// Recompute the texture slot list from the current selection.
+    Q_INVOKABLE void refreshSlots();
+    /// @}
+
+    /// Preview data URI (PNG, base64) regenerated on every dirty flush.
+    QString previewDataUri() const { return m_previewUri; }
+
+    /// Paint via a UV coordinate directly (driven by the texture preview
+    /// panel's mouse area). The preview ↔ 3D mesh hover indicator is
+    /// driven by emitting hoveredUVChanged at the same time.
+    Q_INVOKABLE bool beginStrokeUV(double u, double v);
+    Q_INVOKABLE void updateStrokeUV(double u, double v);
+    Q_INVOKABLE void endStrokeUV();
+    /// Update the "hovered UV" without painting. Drives the brush ring
+    /// overlay on the 3D mesh from the 2D preview panel.
+    Q_INVOKABLE void setHoveredUV(double u, double v);
+    Q_INVOKABLE void clearHoveredUV();
+
+    /// Hover update from the 3D viewport — does a hit-test, emits the
+    /// hovered UV signal, and draws the brush-ring overlay at the hit
+    /// point in mesh-local space.
+    void updateMeshHover(OgreWidget* widget, const QPoint& screenPos);
+    void clearMeshHover();
 
     /// @name Stroke API (called from TransformOperator mouse pipeline)
     /// @{
@@ -120,11 +176,31 @@ public:
      */
     Q_INVOKABLE bool savePaintBuffer(const QString& path) const;
 
+    /// Show a native save dialog and write the paint buffer to the chosen path.
+    /// Returns the path on success or empty on cancel/failure.
+    Q_INVOKABLE QString savePaintBufferInteractive();
+
     /**
      * @brief Load an image into the paint buffer (replaces contents) and
      * binds it as the active texture on the entity's first submesh.
      */
     Q_INVOKABLE bool loadPaintBuffer(const QString& path);
+
+    /// Show a native open dialog and load the chosen image. Returns the
+    /// path on success or empty on cancel/failure.
+    Q_INVOKABLE QString loadPaintBufferInteractive();
+
+    /// Show a native color picker for the (shared) brush color. Writes
+    /// back to EditModeController on accept.
+    Q_INVOKABLE void pickBrushColorInteractive();
+
+    /// Setters that mirror through to EditModeController so the toolbar
+    /// brush popup and the Material-mode Paint Brush panel both stay
+    /// in sync.
+    Q_INVOKABLE void setBrushRadius(double r);
+    Q_INVOKABLE void setBrushStrength(double s);
+    Q_INVOKABLE void setBrushFalloff(double f);
+    Q_INVOKABLE void setBrushColor(const QColor& c);
 
     /**
      * @brief Bake the active EditableMesh's vertex colors into the texture buffer.
@@ -155,45 +231,109 @@ public:
 signals:
     void texturePaintChanged();
     void sessionChanged();
+    void brushToolChanged();
+    void slotsChanged();
+    void previewChanged();
+    /// Emitted when the mouse hovers over a UV-mapped triangle (from
+    /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
+    /// (-1, -1) means "no hover".
+    void hoveredUVChanged(double u, double v);
 
 private:
     explicit TexturePaintController(QObject* parent = nullptr);
     ~TexturePaintController() override;
 
-    /// Try to look up the active edit-mode entity from EditModeController.
-    /// Returns nullptr if no edit session is active.
+    /// Currently-selected entity (or Edit Mode's active entity if Edit
+    /// Mode happens to be on). Painting no longer requires Edit Mode —
+    /// we keep our own private EditableMesh built from this entity.
     Ogre::Entity* activeEntity() const;
 
-    /// Find/create the diffuse texture unit on the entity's first submesh.
-    Ogre::TextureUnitState* findOrCreateDiffuseTextureUnit(Ogre::Entity* entity);
+    /// Ensure the private EditableMesh is built for the active entity.
+    /// Called on session creation and whenever the selection changes.
+    bool ensureEditableMesh(Ogre::Entity* entity);
 
-    /// Hit-test screen position against the active editable mesh and recover
-    /// the barycentric-interpolated UV at the hit point. Returns false on miss.
+    /// Find the texture unit corresponding to the currently-active slot,
+    /// creating one if no diffuse-like TUS exists on the selected submesh.
+    Ogre::TextureUnitState* findOrCreateActiveTextureUnit(Ogre::Entity* entity);
+
+    /// Hit-test screen position against the private editable mesh and
+    /// recover the barycentric-interpolated UV at the hit point. Returns
+    /// false on miss.
     bool hitTestUV(const QPoint& screenPos, OgreWidget* widget, Ogre::Vector2& outUV) const;
 
     /// Allocate a new manual Ogre::Texture with current buffer dimensions
-    /// and bind it onto the entity's first submesh material.
+    /// and bind it onto the entity's active slot.
     bool createOgreTextureFromBuffer(Ogre::Entity* entity, const QString& nameHint);
 
     /// Upload buffer.dirtyRect() into the live Ogre texture and clear it.
     void flushDirtyToOgre();
 
+    /// Regenerate `m_previewUri` from the buffer (PNG, base64). Emits
+    /// previewChanged when the URI actually changed.
+    void refreshPreviewUri();
+
     /// One-time deep-copy snapshot of pixel buffer for undo.
     std::vector<uint8_t> snapshotPixels() const;
 
-    bool m_paintEnabled = false;
-    QColor m_color = QColor(255, 0, 0, 255);
-    double m_radiusUV = 0.05;     // 5% of UV space
-    double m_strength = 0.75;
-    double m_falloff = 0.5;
+    /// Apply the brush stamp at a UV coord using the current tool.
+    /// Returns true if any pixel changed.
+    bool applyBrushAtUV(const Ogre::Vector2& uv);
 
+    /// Walk every UV-mapped triangle and return the local-space
+    /// position+normal at `uv`. Used by the 2D-panel → 3D-mesh hover
+    /// indicator so the user sees a brush ring on the model when they
+    /// hover the texture preview.
+    bool findMeshPointForUV(const Ogre::Vector2& uv,
+                            Ogre::Vector3& outLocal,
+                            Ogre::Vector3& outNormal) const;
+
+    /// Draw the hover ring on the mesh at a given local position +
+    /// normal. Shared between viewport-driven and panel-driven hover.
+    void drawHoverRingAt(const Ogre::Vector3& localPos,
+                         const Ogre::Vector3& localNormal);
+
+    /// Flood-fill connected pixels at UV with the brush color.
+    bool floodFillAtUV(const Ogre::Vector2& uv);
+
+    /// Sample the buffer color at a UV and set it as the brush color.
+    void pickColorAtUV(const Ogre::Vector2& uv);
+
+    bool m_paintEnabled = false;
     TexturePaintBuffer m_buffer;
     QString m_textureName;
     Ogre::TexturePtr m_ogreTexture;
     Ogre::Entity* m_sessionEntity = nullptr;
 
     bool m_strokeActive = false;
+    bool m_strokeJustBegan = false; ///< Fill/picker tools fire only once per stroke.
     std::vector<uint8_t> m_strokePreSnapshot; // for undo
+    BrushTool m_tool = ToolPaint;
+
+    // Private EditableMesh — built from the active entity so painting
+    // doesn't depend on the user-facing Edit Mode workspace.
+    std::unique_ptr<EditableMesh> m_paintMesh;
+    Ogre::Entity* m_paintMeshEntity = nullptr;
+
+    // Texture slot model. Populated from the selected entity's
+    // materials. The active slot drives which TUS the painter writes
+    // back to and which texture name the QML preview shows.
+    QVariantList m_slots;
+    int m_activeSlot = 0;
+
+    // Smudge state: hold the previous stamp's pre-paint sample so the
+    // next stamp can copy it forward.
+    Ogre::Vector2 m_smudgePrev = Ogre::Vector2::ZERO;
+    bool m_smudgeHavePrev = false;
+
+    // Brush-ring overlay on the 3D mesh surface — drawn at the
+    // current hover hit point so the user sees brush size in world
+    // units while painting.
+    Ogre::SceneNode* m_ringNode = nullptr;
+    Ogre::ManualObject* m_ringObj = nullptr;
+
+    // Preview PNG cache.
+    QString m_previewUri;
+
     static TexturePaintController* s_instance;
 };
 

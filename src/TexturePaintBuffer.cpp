@@ -79,8 +79,9 @@ void TexturePaintBuffer::setPixel(int x, int y, const Ogre::ColourValue& color)
 
 void TexturePaintBuffer::uvToPixel(const Ogre::Vector2& uv, int& outX, int& outY) const
 {
+    // UV origin = top-left (Ogre + Qt convention). U → X, V → Y, both direct.
     outX = static_cast<int>(std::floor(uv.x * static_cast<float>(m_width)));
-    outY = static_cast<int>(std::floor((1.0f - uv.y) * static_cast<float>(m_height)));
+    outY = static_cast<int>(std::floor(uv.y * static_cast<float>(m_height)));
 }
 
 Ogre::Vector2 TexturePaintBuffer::pixelToUV(int x, int y) const
@@ -88,7 +89,7 @@ Ogre::Vector2 TexturePaintBuffer::pixelToUV(int x, int y) const
     if (m_width <= 0 || m_height <= 0)
         return Ogre::Vector2::ZERO;
     const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(m_width);
-    const float v = 1.0f - (static_cast<float>(y) + 0.5f) / static_cast<float>(m_height);
+    const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(m_height);
     return Ogre::Vector2(u, v);
 }
 
@@ -107,7 +108,7 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
     const float radiusXf = radiusUV * static_cast<float>(m_width);
     const float radiusYf = radiusUV * static_cast<float>(m_height);
     const float centerXf = uv.x * static_cast<float>(m_width);
-    const float centerYf = (1.0f - uv.y) * static_cast<float>(m_height);
+    const float centerYf = uv.y * static_cast<float>(m_height);
 
     int x0 = static_cast<int>(std::floor(centerXf - radiusXf));
     int x1 = static_cast<int>(std::ceil(centerXf + radiusXf));
@@ -156,6 +157,45 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
 
     if (affected > 0)
         expandDirty(touchedX0, touchedY0, touchedX1, touchedY1);
+    return affected;
+}
+
+int TexturePaintBuffer::floodFill(int sx, int sy, const Ogre::ColourValue& fill)
+{
+    if (m_width <= 0 || m_height <= 0) return 0;
+    if (sx < 0 || sy < 0 || sx >= m_width || sy >= m_height) return 0;
+    const Ogre::ColourValue seed = pixel(sx, sy);
+    const float eps = 4.0f / 255.0f;
+    auto sameColor = [&seed, eps](const Ogre::ColourValue& other) {
+        return std::abs(other.r - seed.r) <= eps
+            && std::abs(other.g - seed.g) <= eps
+            && std::abs(other.b - seed.b) <= eps
+            && std::abs(other.a - seed.a) <= eps;
+    };
+    if (sameColor(fill)) return 0;
+
+    std::vector<std::pair<int,int>> stack;
+    stack.push_back({sx, sy});
+    std::vector<uint8_t> visited(static_cast<size_t>(m_width) * m_height, 0);
+    int affected = 0;
+    int tx0 = m_width, tx1 = 0, ty0 = m_height, ty1 = 0;
+    while (!stack.empty()) {
+        auto [x, y] = stack.back();
+        stack.pop_back();
+        if (x < 0 || y < 0 || x >= m_width || y >= m_height) continue;
+        const size_t idx = static_cast<size_t>(y) * m_width + x;
+        if (visited[idx]) continue;
+        if (!sameColor(pixel(x, y))) continue;
+        visited[idx] = 1;
+        setPixel(x, y, fill);
+        ++affected;
+        tx0 = std::min(tx0, x); ty0 = std::min(ty0, y);
+        tx1 = std::max(tx1, x + 1); ty1 = std::max(ty1, y + 1);
+        stack.push_back({x + 1, y});
+        stack.push_back({x - 1, y});
+        stack.push_back({x, y + 1});
+        stack.push_back({x, y - 1});
+    }
     return affected;
 }
 

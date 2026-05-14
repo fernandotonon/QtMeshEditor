@@ -38,12 +38,12 @@ TEST(VertexColorBakerTest, RasterizeFlatTriangleSolidColor)
         Ogre::Vector2(0.0f, 1.0f),
         Ogre::ColourValue::Red, Ogre::ColourValue::Red, Ogre::ColourValue::Red);
     EXPECT_GT(painted, 1000); // ~half of 64*64 ~= 2048
-    // Pixel near vertex 0 (uv 0,0 → x=0, y=63) should be red.
-    const auto p0 = buf.pixel(2, 61);
+    // Pixel near vertex 0 (uv 0,0 → top-left pixel (0,0)) should be red.
+    const auto p0 = buf.pixel(2, 2);
     EXPECT_NEAR(p0.r, 1.0f, 0.05f);
     EXPECT_NEAR(p0.g, 0.0f, 0.05f);
     // Pixel inside the triangle, near center.
-    const auto pc = buf.pixel(10, 50);
+    const auto pc = buf.pixel(10, 10);
     EXPECT_NEAR(pc.r, 1.0f, 0.05f);
 }
 
@@ -60,7 +60,7 @@ TEST(VertexColorBakerTest, RasterizeBarycentricInterpolatesColors)
         Ogre::ColourValue(0.0f, 1.0f, 0.0f, 1.0f),  // green at (1,0)
         Ogre::ColourValue(0.0f, 0.0f, 1.0f, 1.0f)); // blue at (0,1)
 
-    // Pixel near v0 (uv 0,0 → x=0, y=127 in V-flipped pixel coords).
+    // Pixel near v0 (uv 0,0 → pixel (0,0) since UV origin is top-left).
     // Use small offsets to stay inside the triangle.
     int x0=0, y0=0; buf.uvToPixel(Ogre::Vector2(0.02f, 0.02f), x0, y0);
     const auto cNearV0 = buf.pixel(x0, y0);
