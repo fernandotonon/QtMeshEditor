@@ -217,6 +217,12 @@ public:
     /// path on success or empty on cancel/failure.
     Q_INVOKABLE QString loadPaintBufferInteractive();
 
+    /// Write the current paint buffer **into the original texture's
+    /// on-disk file** so exports pick up the painted pixels. Returns
+    /// the disk path that was written, or empty if no source file was
+    /// found (e.g. embedded texture).
+    Q_INVOKABLE QString bakeToOriginalFile();
+
     /// Show a native color picker for the (shared) brush color. Writes
     /// back to EditModeController on accept.
     Q_INVOKABLE void pickBrushColorInteractive();

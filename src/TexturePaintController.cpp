@@ -177,14 +177,15 @@ void TexturePaintController::setTexturePaintEnabled(bool enabled)
         // EditModeController::enterEditMode() — that would flip the
         // workspace mode to EditMode, kick the user out of Material
         // Mode, and (via the visibility hooks) silently disable us.
-        //
-        // We do NOT auto-create a paint session (no GPU texture
-        // rebind) here. The session is created lazily on the first
-        // stroke so toggling the brush is non-destructive. But we
-        // DO build the EditableMesh for the selected entity so
-        // hover queries (brush ring, UV preview) work immediately.
-        if (auto* e = activeEntity())
+        if (auto* e = activeEntity()) {
             ensureEditableMesh(e);
+            // Pre-create the paint session for texture target so the
+            // preview thumbnail populates immediately and the first
+            // stroke doesn't have to do the heavy setup work.
+            // (Skip for vertex target — no texture session needed.)
+            if (m_target == TargetTexture && !hasActiveSession())
+                ensurePaintableTexture(1024);
+        }
         refreshSlots();
     }
     if (!enabled) {
@@ -1163,6 +1164,12 @@ void TexturePaintController::endStroke()
         m_textureName);
     UndoManager::getSingleton()->push(cmd);
     SentryReporter::addBreadcrumb("ui.action", "Texture paint stroke end (committed)");
+    // Persist the painted pixels back to the original texture file
+    // on disk so exports include the paint. Only does anything for
+    // texture target with a known-disk source (skipped silently for
+    // embedded textures and vertex paint).
+    if (m_target == TargetTexture)
+        bakeToOriginalFile();
 }
 
 std::vector<uint8_t> TexturePaintController::snapshotPixels() const
@@ -1194,6 +1201,9 @@ bool TexturePaintController::loadPaintBuffer(const QString& path)
         m_ogreTexture.reset();
         if (!createOgreTextureFromBuffer(entity, hint, /*rebindToModel=*/true)) return false;
     }
+    // Refresh the 2D preview panel — the buffer just got rewritten
+    // with the loaded image's pixels.
+    refreshPreviewUri();
     emit sessionChanged();
     return true;
 }
@@ -1255,6 +1265,49 @@ void TexturePaintController::setBrushFalloff(double f)
 void TexturePaintController::setBrushColor(const QColor& c)
 {
     if (auto* em = EditModeController::instance()) em->setVertexPaintColor(c);
+}
+
+QString TexturePaintController::bakeToOriginalFile()
+{
+    if (m_originalTextureName.isEmpty()) return QString();
+    if (m_buffer.width() <= 0 || m_buffer.height() <= 0) return QString();
+
+    // Resolve the on-disk path. The texture name might already be a
+    // full filename; Ogre's resource manager has it indexed under
+    // each registered FileSystem location.
+    QString diskPath;
+    auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+    const Ogre::String texName = m_originalTextureName.toStdString();
+    // Try every group's listResourceLocations.
+    try {
+        for (const auto& grp : rgm.getResourceGroups()) {
+            auto locs = rgm.listResourceLocations(grp);
+            for (const auto& loc : *locs) {
+                QDir d(QString::fromStdString(loc));
+                const QString candidate = d.filePath(m_originalTextureName);
+                if (QFileInfo(candidate).exists()) {
+                    diskPath = candidate;
+                    break;
+                }
+            }
+            if (!diskPath.isEmpty()) break;
+        }
+    } catch (...) {}
+
+    if (diskPath.isEmpty()) {
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Bake to original: no disk file for texture '%1' (embedded?)")
+                .arg(m_originalTextureName));
+        return QString();
+    }
+    if (!m_buffer.save(diskPath.toStdString())) {
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Bake to original: save FAILED at %1").arg(diskPath));
+        return QString();
+    }
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Bake to original: wrote %1").arg(diskPath));
+    return diskPath;
 }
 
 QString TexturePaintController::loadPaintBufferInteractive()
