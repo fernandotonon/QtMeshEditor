@@ -27,6 +27,7 @@ THE SOFTWARE.
 */
 
 #include "FBXExporter.h"
+#include "EmbeddedTextureCache.h"
 
 #include <OgreMesh.h>
 #include <OgreSubMesh.h>
@@ -442,6 +443,137 @@ private:
     std::ofstream& m_out;
     std::vector<NodeInfo> m_nodeStack;
 };
+
+// ═══════════════════════════════════════════════════════════════════
+//  Texture-byte lookup (issue #508)
+//
+//  Pulled out of FBXDocumentBuilder so the class stays under Sonar's
+//  "too many methods" threshold (it's hovering around 35). These helpers
+//  don't need any member access — they're stateless lookups against the
+//  process-wide EmbeddedTextureCache + Ogre's resource manager.
+// ═══════════════════════════════════════════════════════════════════
+namespace fbxResourceBytes {
+
+// Drain an Ogre data stream into a uint8_t vector.
+inline std::vector<uint8_t> readStreamAll(const Ogre::DataStreamPtr& stream)
+{
+    if (!stream)
+        return {};
+    std::vector<uint8_t> data;
+    if (const size_t sz = stream->size(); sz > 0 && sz != static_cast<size_t>(-1)) {
+        data.resize(sz);
+        const size_t n = stream->read(data.data(), sz);
+        data.resize(n);
+        return data;
+    }
+    // Fallback if size is unknown: read in chunks.
+    constexpr size_t kChunk = 64 * 1024;
+    std::vector<uint8_t> chunk(kChunk);
+    while (!stream->eof()) {
+        const size_t n = stream->read(chunk.data(), kChunk);
+        if (n == 0) break;
+        data.insert(data.end(), chunk.begin(), chunk.begin() + static_cast<std::ptrdiff_t>(n));
+    }
+    return data;
+}
+
+// The group Ogre claims contains a resource, or empty when no group
+// does. Swallows the ItemIdentityException Ogre throws on miss — that's
+// not a runtime failure, just "lookup didn't find anything," and the
+// caller has other fallbacks to try.
+inline Ogre::String findGroupForResource(const std::string& resourceName)
+{
+    try {
+        return Ogre::ResourceGroupManager::getSingleton()
+            .findGroupContainingResource(resourceName);
+    } catch (const Ogre::Exception&) {
+        // Ogre's "no group contains this resource" signal.
+        return {};
+    }
+}
+
+// Brute-force final fallback: walk every resource group's locations and
+// probe disk directly. resourceExists / openResource both consult the
+// per-group file index built at initialiseResourceGroup() time; if the
+// texture file landed in a location after the index was built (or whose
+// basename matches a sibling of an indexed file), the file is on disk
+// but the index doesn't know about it. Returns empty if no probe succeeds.
+inline std::vector<uint8_t> probeFilesystemForResource(const std::string& resourceName)
+{
+    const auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+    for (const auto& g : rgm.getResourceGroups()) {
+        Ogre::StringVectorPtr locsPtr;
+        try {
+            locsPtr = rgm.listResourceLocations(g);
+        } catch (const Ogre::Exception&) {
+            // Group was destroyed mid-iteration, etc. — keep scanning.
+            continue;
+        }
+        if (!locsPtr) continue;
+        for (const auto& loc : *locsPtr) {
+            const std::string candidate = loc + "/" + resourceName;
+            std::ifstream f(candidate, std::ios::binary);
+            if (!f) continue;
+            f.seekg(0, std::ios::end);
+            const auto sz = static_cast<std::streamsize>(f.tellg());
+            if (sz <= 0) continue;
+            std::vector<uint8_t> out(static_cast<size_t>(sz));
+            f.seekg(0);
+            f.read(reinterpret_cast<char*>(out.data()), sz);
+            if (f.gcount() == sz)
+                return out;
+        }
+    }
+    return {};
+}
+
+inline std::vector<uint8_t> read(const std::string& resourceName)
+{
+    // (1) Import-time embedded-texture cache. Textures loaded via
+    // Assimp's GetEmbeddedTexture (Boss_normal.png inside Rumba
+    // Dancing.fbx is the canonical case) live only in the GPU texture
+    // cache; no resource-group entry, no on-disk path, no way for the
+    // lookups below to recover them. Issue #508.
+    if (auto cached = EmbeddedTextureCache::retrieve(resourceName);
+        !cached.empty())
+        return cached;
+
+    try {
+        const auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+        const auto openInGroup = [&](const Ogre::String& group) -> Ogre::DataStreamPtr {
+            if (group.empty() || !rgm.resourceExists(group, resourceName))
+                return {};
+            return rgm.openResource(resourceName, group);
+        };
+
+        // (2) Prefer the group Ogre says contains it.
+        if (const Ogre::String preferred = findGroupForResource(resourceName);
+            !preferred.empty()) {
+            if (auto stream = openInGroup(preferred))
+                return readStreamAll(stream);
+        }
+
+        // (3) Default group.
+        if (auto stream = openInGroup(
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+            return readStreamAll(stream);
+
+        // (4) Every other group (path-based / dynamically registered).
+        for (const auto& g : rgm.getResourceGroups()) {
+            if (auto stream = openInGroup(g))
+                return readStreamAll(stream);
+        }
+
+        // (5) Direct filesystem probe.
+        return probeFilesystemForResource(resourceName);
+    } catch (const Ogre::Exception&) {
+        return {};
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+} // namespace fbxResourceBytes
 
 // ═══════════════════════════════════════════════════════════════════
 //  FBX Document Builder
@@ -1755,64 +1887,6 @@ private:
     }
 
     // ── Texture objects ─────────────────────────────────────────
-    static std::vector<uint8_t> readOgreResourceBytes(const std::string& resourceName)
-    {
-        const auto readAll = [](const Ogre::DataStreamPtr& stream) -> std::vector<uint8_t> {
-            if (!stream)
-                return {};
-
-            std::vector<uint8_t> data;
-            if (const size_t sz = stream->size(); sz > 0 && sz != static_cast<size_t>(-1)) {
-                data.resize(sz);
-                const size_t n = stream->read(data.data(), sz);
-                data.resize(n);
-                return data;
-            }
-
-            // Fallback if size is unknown: read in chunks
-            constexpr size_t kChunk = 64 * 1024;
-            std::vector<uint8_t> chunk(kChunk);
-            while (!stream->eof()) {
-                const size_t n = stream->read(chunk.data(), kChunk);
-                if (n == 0)
-                    break;
-                data.insert(data.end(), chunk.begin(), chunk.begin() + static_cast<std::ptrdiff_t>(n));
-            }
-            return data;
-        };
-
-        try {
-            const auto& rgm = Ogre::ResourceGroupManager::getSingleton();
-            const auto openInGroup = [&](const Ogre::String& group) -> Ogre::DataStreamPtr {
-                if (group.empty() || !rgm.resourceExists(group, resourceName))
-                    return {};
-                return rgm.openResource(resourceName, group);
-            };
-
-            // Prefer the group Ogre says contains it.
-            if (const Ogre::String preferred = rgm.findGroupContainingResource(resourceName); !preferred.empty()) {
-                if (auto stream = openInGroup(preferred))
-                    return readAll(stream);
-            }
-
-            // Then try default group.
-            if (auto stream = openInGroup(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
-                return readAll(stream);
-
-            // Finally scan all groups (dynamic groups may exist, e.g. path-based groups).
-            for (const auto& g : rgm.getResourceGroups()) {
-                if (auto stream = openInGroup(g))
-                    return readAll(stream);
-            }
-
-            return {};
-        } catch (const Ogre::Exception&) {
-            return {};
-        } catch (const std::exception&) {
-            return {};
-        }
-    }
-
     void writeTextureObjects()
     {
         std::set<std::string> seen;
@@ -1888,9 +1962,14 @@ private:
                 m_w.beginNode("FileName"); m_w.writePropertyS(texName); m_w.endProperties(); m_w.endNodeLeaf();
                 m_w.beginNode("RelativeFilename"); m_w.writePropertyS(texName); m_w.endProperties(); m_w.endNodeLeaf();
 
-                // Embed texture bytes when the resource is available. Many tools (e.g. Mixamo exports)
-                // expect texture payloads to be embedded via Video.Content.
-                if (const auto bytes = readOgreResourceBytes(texName); !bytes.empty()) {
+                // Embed texture bytes when available. Many tools (e.g. Mixamo
+                // FBX consumers) expect texture payloads inline via
+                // Video.Content. fbxResourceBytes::read tries (1) the
+                // import-time EmbeddedTextureCache — for textures Assimp
+                // extracted from inline FBX Video.Content — then (2)
+                // resource-group lookups, then (3) direct disk probes of
+                // every registered location.
+                if (const auto bytes = fbxResourceBytes::read(texName); !bytes.empty()) {
                     m_w.beginNode("Content");
                     m_w.writePropertyR(bytes);
                     m_w.endProperties();
