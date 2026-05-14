@@ -175,25 +175,38 @@ qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilatio
 
 ### 🎨 Paint Tools
 
-ZBrush-style polypaint and BaseColor texture painting, with a one-click bake
-that turns vertex colors into a UV-space texture.
+ZBrush-style polypaint and BaseColor texture painting, with a 2D preview
+panel, multiple brush tools (paint, erase, fill, color picker, smudge),
+texture-slot picker per submesh, and a one-click bake that turns vertex
+colors into a UV-space texture.
 
-**Quick start (GUI):**
+**Quick start (texture paint, GUI):**
 
-1. Select a mesh entity. Press **Tab** to enter Edit Mode.
-2. In the Inspector → **Edit Mode Tools** section, tick *Vertex Color Preview*
-   to see vertex colors live on the mesh.
-3. Click the **Vertex Paint** brush button in the toolbar. Pick a color,
-   radius, strength, and falloff. Left-click-drag on the mesh to paint.
-   Strokes go through Undo/Redo (Ctrl+Z / Ctrl+Shift+Z).
-4. To paint into a texture instead, open the Inspector → **Texture Paint**
-   section. Click *Create / Attach Texture*, tick *Enable texture paint
-   mode*, then left-click-drag on the mesh. The painted texture is
-   uploaded to the GPU with per-stroke dirty-rect updates — no full
-   re-upload — so live painting stays responsive on large textures.
-5. **Bake Vertex Colors → Texture** rasterizes the active mesh's vertex
-   colors into a UV-space PNG via barycentric interpolation, then dilates
-   the result outward by N pixels to mask UV-seam bleed at MIP-map time.
+1. Switch to **Material Mode** (mode bar at the top).
+2. Select a mesh entity. The Inspector's **Texture Paint** section
+   shows a slot picker (every paintable TUS across submeshes) and a 256×256
+   live preview of the active texture.
+3. Click the **paint brush** button in the toolbar to enable painting. The
+   first click on the mesh auto-creates a paint session against the active
+   slot (or you can pre-create with *Create / Attach Texture*).
+4. Pick a tool from the row at the top of the panel: ✏ Paint, ⌫ Erase, ⧉ Fill,
+   ⊰ Pick (eyedropper), ∿ Smudge. Brush color/radius/strength/falloff comes
+   from the shared Paint Brush section above the toolbar's brush popup.
+5. Left-click-drag on **either** the 3D mesh or the 2D preview panel. Both
+   drive the same paint buffer; the 2D preview updates in real time and a
+   brush ring shows where the cursor maps on the 3D surface (and vice versa).
+6. *Save…* / *Load…* round-trips the buffer to disk as PNG (or any format
+   QImage can write).
+
+**Vertex paint (GUI):**
+
+Same flow, but vertex paint operates in **Edit Mode** instead. Press **Tab**
+on a selected mesh to enter Edit Mode, then tick *Vertex Color Preview* in
+the Edit Mode Tools section to see vertex colors live.
+
+**Bake Vertex Colors → Texture** rasterizes the active mesh's vertex colors
+into a UV-space PNG via barycentric interpolation, then dilates the result
+outward by N pixels to mask UV-seam bleed at MIP-map time.
 
 **Headless (CLI):**
 
@@ -204,11 +217,16 @@ qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilatio
 **Export.** Vertex colors are preserved on export to formats that support
 them (glTF preferred — verified round-trip).
 
-**Limitations (MVP).**
+**Notes / limitations.**
 
-- Texture paint operates on the **first submesh's diffuse texture only**.
-  Multi-material per-submesh paint will land in a follow-up.
-- Texture paint requires Edit Mode (vertex paint conventions).
+- Brush size is in local mesh units (shared with vertex paint). For texture
+  paint we divide by mesh bounding-box extent and clamp to a UV-friendly
+  range, so 0.25 produces a sensible stamp on both a unit cube and a
+  100-unit character.
+- Painting auto-rebinds every TUS named `albedo` or `diffuse_map` on the
+  active material — imported PBR materials alias the diffuse texture under
+  both, and rebinding only one would leave the other pointing at the
+  original.
 - Bake uses fan triangulation of n-gon faces; concave faces should be
   pre-triangulated.
 
