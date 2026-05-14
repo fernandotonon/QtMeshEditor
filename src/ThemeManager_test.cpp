@@ -229,3 +229,16 @@ TEST_F(ThemeManagerTests, ApplySavedThemeFromSettingsUsesCustomLegacyPalette)
 
     EXPECT_EQ(app->palette().color(QPalette::Window), custom);
 }
+
+TEST_F(ThemeManagerTests, ApplySavedThemeFromSettingsPrefersCustomPaletteOverStaleAppearanceTheme)
+{
+    QSettings settings;
+    const QColor custom(98, 76, 54);
+    settings.setValue(QStringLiteral("palette"), QStringLiteral("custom"));
+    settings.setValue(QStringLiteral("customPalette"), custom);
+    settings.setValue(QStringLiteral("Appearance/theme"), QStringLiteral("Light"));
+
+    ThemeManager::applySavedThemeFromSettings();
+
+    EXPECT_EQ(app->palette().color(QPalette::Window), custom);
+}

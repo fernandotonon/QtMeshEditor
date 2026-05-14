@@ -66,7 +66,11 @@ void ThemeManager::applySavedThemeFromSettings()
     QSettings settings;
     const QString appearanceTheme = settings.value(AppSettingsKeys::appearanceTheme()).toString().trimmed();
     const QString paletteTheme = settings.value(AppSettingsKeys::palette(), QStringLiteral("dark")).toString().trimmed();
-    const QString themeValue = appearanceTheme.isEmpty() ? paletteTheme : appearanceTheme;
+    const QString paletteThemeLower = paletteTheme.toLower();
+    const QString themeValue =
+        paletteThemeLower == QStringLiteral("custom")
+            ? paletteTheme
+            : (appearanceTheme.isEmpty() ? paletteTheme : appearanceTheme);
     applyThemePreference(themeValue);
 }
 
