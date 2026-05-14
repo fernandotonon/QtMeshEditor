@@ -8,6 +8,7 @@
 #include "SpaceCamera.h"
 #include "UndoManager.h"
 #include "VertexColorBaker.h"
+#include "EmbeddedTextureCache.h"
 
 #include <QApplication>
 #include <QBuffer>
@@ -1164,12 +1165,35 @@ void TexturePaintController::endStroke()
         m_textureName);
     UndoManager::getSingleton()->push(cmd);
     SentryReporter::addBreadcrumb("ui.action", "Texture paint stroke end (committed)");
-    // Persist the painted pixels back to the original texture file
-    // on disk so exports include the paint. Only does anything for
-    // texture target with a known-disk source (skipped silently for
-    // embedded textures and vertex paint).
-    if (m_target == TargetTexture)
+    // Persist the painted pixels for export. We do TWO things for
+    // texture target:
+    //  (a) Write the buffer back to the original texture's on-disk
+    //      file if it lives in a registered resource location. The
+    //      Ogre and Assimp export paths re-read textures from disk.
+    //  (b) Push the encoded PNG bytes into EmbeddedTextureCache
+    //      under the original texture name. The FBX exporter pulls
+    //      from this cache for textures that were originally
+    //      embedded in the source FBX (no disk source) — without
+    //      this they'd export with the un-painted bytes.
+    if (m_target == TargetTexture && !m_originalTextureName.isEmpty()) {
         bakeToOriginalFile();
+        try {
+            QImage img(const_cast<uchar*>(m_buffer.data().data()),
+                       m_buffer.width(), m_buffer.height(),
+                       m_buffer.width() * 4, QImage::Format_RGBA8888);
+            QByteArray bytes;
+            QBuffer qbuf(&bytes);
+            qbuf.open(QIODevice::WriteOnly);
+            if (img.save(&qbuf, "PNG")) {
+                std::vector<uint8_t> v(bytes.begin(), bytes.end());
+                EmbeddedTextureCache::store(
+                    m_originalTextureName.toStdString(), v);
+                SentryReporter::addBreadcrumb("ui.action",
+                    QStringLiteral("Paint: cached %1 bytes in EmbeddedTextureCache for '%2'")
+                        .arg(bytes.size()).arg(m_originalTextureName));
+            }
+        } catch (...) {}
+    }
 }
 
 std::vector<uint8_t> TexturePaintController::snapshotPixels() const
