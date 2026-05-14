@@ -105,6 +105,10 @@ TransformOperator::TransformOperator() : QObject(nullptr)
             this, &TransformOperator::onSelectionChanged);
     connect(EditModeController::instance(), &EditModeController::vertexPaintChanged,
             this, &TransformOperator::onSelectionChanged);
+    // Texture paint toggle also affects mouse-tracking (we need
+    // hover events without a button press) and gizmo visibility.
+    connect(TexturePaintController::instance(), &TexturePaintController::texturePaintChanged,
+            this, &TransformOperator::onSelectionChanged);
 
     QtInputManager::getInstance().AddMouseListener(this);
 
@@ -580,8 +584,14 @@ void TransformOperator::updateGizmo()
                 m_pRotationGizmo->setVisible(false);
                 m_pTranslationGizmo->setVisible(false);
                 m_pScaleGizmo->setVisible(false);
-                mTrackingEnable = EditModeController::instance()->isEditModeActive()
-                               && EditModeController::instance()->vertexPaintEnabled();
+                // Enable mouse tracking when ANY paint mode is on so
+                // the hover preview / brush ring updates without a
+                // pressed button. Vertex paint requires Edit Mode;
+                // texture paint works in any mode.
+                mTrackingEnable =
+                    (EditModeController::instance()->isEditModeActive()
+                     && EditModeController::instance()->vertexPaintEnabled())
+                    || TexturePaintController::instance()->texturePaintEnabled();
           break;
         case TransformOperator::TS_TRANSLATE:
                 m_pTransformNode->setOrientation(gizmoOrientation);
@@ -617,8 +627,16 @@ void TransformOperator::updateGizmo()
         m_pTranslationGizmo->setVisible(false);
         m_pScaleGizmo->setVisible(false);
     }
-    if(m_pActiveWidget)
+    if(m_pActiveWidget) {
         m_pActiveWidget->setMouseTracking(mTrackingEnable);
+        // Crosshair cursor while any paint mode is on so the user
+        // gets clear feedback that clicks will paint, not select.
+        const bool paintOn =
+            (EditModeController::instance()->isEditModeActive()
+             && EditModeController::instance()->vertexPaintEnabled())
+            || TexturePaintController::instance()->texturePaintEnabled();
+        m_pActiveWidget->setCursor(paintOn ? Qt::CrossCursor : Qt::ArrowCursor);
+    }
 }
 
 void TransformOperator::tickTransformGizmoScale(const Ogre::Camera* camera)
