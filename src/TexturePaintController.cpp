@@ -386,30 +386,41 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
         // 2. Read from GPU directly via blitToMemory. Works when the
         //    texture is on the GPU but its source Image buffer was
         //    discarded post-upload (common for static textures).
+        //    Reading in the texture's native format and letting Ogre
+        //    convert is more reliable than asking for RGBA up front —
+        //    some Metal/GL drivers refuse the format mismatch.
         if (!loadedExisting && existing) {
             try {
                 if (!existing->isLoaded()) existing->load();
                 const int w = static_cast<int>(existing->getWidth());
                 const int h = static_cast<int>(existing->getHeight());
-                if (w > 0 && h > 0) {
+                auto pixbuf = existing->getBuffer();
+                if (w > 0 && h > 0 && pixbuf) {
+                    const Ogre::PixelFormat srcFmt = existing->getFormat();
+                    SentryReporter::addBreadcrumb("ui.action",
+                        QStringLiteral("Texture paint: blit native fmt=%1 size=%2x%3")
+                            .arg(static_cast<int>(srcFmt)).arg(w).arg(h));
+                    const size_t srcBytes = Ogre::PixelUtil::getMemorySize(w, h, 1, srcFmt);
+                    std::vector<uint8_t> srcBuf(srcBytes);
+                    Ogre::PixelBox srcPb(w, h, 1, srcFmt, srcBuf.data());
+                    pixbuf->blitToMemory(srcPb);
                     m_buffer.resize(w, h);
-                    Ogre::PixelBox pb(w, h, 1, Ogre::PF_BYTE_RGBA,
-                                      m_buffer.data().data());
-                    auto pixbuf = existing->getBuffer();
-                    if (pixbuf) {
-                        pixbuf->blitToMemory(pb);
-                        m_buffer.clearDirty();
-                        loadedExisting = true;
-                        loadError.clear();
-                    }
+                    Ogre::PixelBox dstPb(w, h, 1, Ogre::PF_BYTE_RGBA,
+                                         m_buffer.data().data());
+                    Ogre::PixelUtil::bulkPixelConversion(srcPb, dstPb);
+                    m_buffer.clearDirty();
+                    loadedExisting = true;
+                    loadError.clear();
                 }
+            } catch (const Ogre::Exception& e) {
+                loadError = QStringLiteral("blit-native: ") + QString::fromStdString(e.getDescription());
             } catch (...) {
-                // Try strategy 3.
+                loadError = QStringLiteral("blit-native: unknown exception");
             }
         }
 
-        // 3. QImage reading via Ogre::Image::load — works when the
-        //    texture name is also a filename in a registered location.
+        // 3. Ogre::Image::load — works when the texture name is also
+        //    a filename in a registered resource location.
         if (!loadedExisting) {
             try {
                 Ogre::Image img;
@@ -427,8 +438,35 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
                     loadedExisting = true;
                     loadError.clear();
                 }
+            } catch (const Ogre::Exception& e) {
+                loadError = QStringLiteral("image-load: ") + QString::fromStdString(e.getDescription());
             } catch (...) {
-                // All three failed.
+                loadError = QStringLiteral("image-load: unknown");
+            }
+        }
+
+        // 4. QImage as a raw file path. Handles textures whose name
+        //    is a relative or absolute filesystem path (some assets
+        //    keep their texture name == on-disk path).
+        if (!loadedExisting) {
+            try {
+                QImage qimg(existingTex);
+                if (!qimg.isNull()) {
+                    qimg = qimg.convertToFormat(QImage::Format_RGBA8888);
+                    const int w = qimg.width();
+                    const int h = qimg.height();
+                    m_buffer.resize(w, h);
+                    for (int y = 0; y < h; ++y) {
+                        std::memcpy(m_buffer.data().data() + static_cast<size_t>(y) * w * 4u,
+                                    qimg.constScanLine(y),
+                                    static_cast<size_t>(w) * 4u);
+                    }
+                    m_buffer.clearDirty();
+                    loadedExisting = true;
+                    loadError.clear();
+                }
+            } catch (...) {
+                // All four failed.
             }
         }
     }
@@ -1330,6 +1368,14 @@ void TexturePaintController::refreshPreviewUri()
 void TexturePaintController::updateMeshHover(OgreWidget* widget, const QPoint& screenPos)
 {
     if (!m_paintEnabled) { clearMeshHover(); return; }
+    // Build the EditableMesh on first hover if it isn't already
+    // ready. This handles the "user selected the mesh AFTER enabling
+    // paint" case so the brush ring appears as soon as the cursor
+    // touches the mesh.
+    if (!m_paintMesh || !m_paintMeshEntity) {
+        if (auto* e = activeEntity())
+            ensureEditableMesh(e);
+    }
     Ogre::Vector2 uv;
     if (!hitTestUV(screenPos, widget, uv)) {
         clearMeshHover();

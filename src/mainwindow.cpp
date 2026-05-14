@@ -1408,10 +1408,15 @@ void MainWindow::initToolBar()
         const bool show = material || edit;
         vertexPaintAction->setVisible(show);
         vertexPaintButton->setEnabled(show);
-        // Always disable both brushes on mode change so the user gets
-        // a fresh "off" state and the toolbar checkbox matches.
+        // Disable both brushes AND reset the button's checked state on
+        // mode change. Without resetting the checked flag, the user's
+        // next click toggles "on→off" (since we silently set the
+        // controllers off but left the button visually checked), which
+        // looks like "the brush button stopped working".
         EditModeController::instance()->setVertexPaintEnabled(false);
         TexturePaintController::instance()->setTexturePaintEnabled(false);
+        QSignalBlocker b(vertexPaintButton);
+        vertexPaintButton->setChecked(false);
     };
     refreshPaintBrushVisibility();
     connect(EditorModeController::instance(), &EditorModeController::modeChanged,
