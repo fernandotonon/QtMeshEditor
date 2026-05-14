@@ -162,12 +162,13 @@ void TexturePaintController::setTexturePaintEnabled(bool enabled)
         // workspace mode to EditMode, kick the user out of Material
         // Mode, and (via the visibility hooks) silently disable us.
         //
-        // We do NOT auto-create a session here. Creating a session
-        // rebinds the model's diffuse TUS to a paint texture, which
-        // visibly changes the model (white if the existing texture
-        // couldn't be read back). Instead, the session is lazily
-        // created on the first stroke (beginStroke / beginStrokeUV)
-        // so toggling the brush button is non-destructive.
+        // We do NOT auto-create a paint session (no GPU texture
+        // rebind) here. The session is created lazily on the first
+        // stroke so toggling the brush is non-destructive. But we
+        // DO build the EditableMesh for the selected entity so
+        // hover queries (brush ring, UV preview) work immediately.
+        if (auto* e = activeEntity())
+            ensureEditableMesh(e);
         refreshSlots();
     }
     if (!enabled) {
@@ -1188,6 +1189,16 @@ void TexturePaintController::refreshSlots()
     // calls refreshSlots) silently rebinds the model's diffuse TUS
     // and the user sees the model "go textureless". Sessions are
     // created lazily inside beginStroke() instead.
+    //
+    // But we DO eagerly build the EditableMesh for the selected
+    // entity so hover/brush-ring queries work without an active
+    // session. The EditableMesh is just a CPU mirror of mesh data;
+    // it doesn't alter the model's render.
+    if (m_paintEnabled) {
+        if (auto* e = activeEntity())
+            ensureEditableMesh(e);
+    }
+
     QVariantList newSlots;
     auto* entity = activeEntity();
     if (entity) {
