@@ -319,6 +319,37 @@ TEST_F(CLIPipelineOgreTest, ExtractMeshInfo_DeduplicatesMaterialAndTextureNames)
     EXPECT_TRUE(info.textures.contains("normal.png"));
 }
 
+TEST_F(CLIPipelineOgreTest, ExtractMeshInfo_SurfacesRTSSNormalMapHint)
+{
+    // RTSS-wired normal maps don't appear as CONTENT_NAMED TUSes — the
+    // shader-system routes them through a render-state side channel. The
+    // importer leaves the texture name on a "qtme.normal_map" UOB so
+    // FBX export can round-trip it (#508). extractMeshInfo should also
+    // surface that hint so qtmesh info reports the normal map (#510).
+    auto mesh = createInMemoryTriangleMesh("cli_test_uob_normal");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("cli_test_uob_normal_node");
+    auto* entity = sceneMgr->createEntity("cli_test_uob_normal_entity", mesh);
+    node->attachObject(entity);
+
+    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create(
+        "cli_test_uob_normal_mat",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* pass = material->getTechnique(0)->getPass(0);
+    pass->createTextureUnitState("Boss_diffuse.png");
+    // Mirror MaterialProcessor::applyRTSSNormalMap — stash on UOB without
+    // adding a TUS, so the test verifies the UOB recovery path specifically.
+    pass->getUserObjectBindings().setUserAny(
+        "qtme.normal_map", Ogre::Any(Ogre::String("Boss_normal.png")));
+    entity->getSubEntity(0)->setMaterial(material);
+
+    MeshInfo info = CLIPipeline::extractMeshInfo(entity, "with_normal.fbx");
+
+    EXPECT_TRUE(info.textures.contains("Boss_diffuse.png"));
+    EXPECT_TRUE(info.textures.contains("Boss_normal.png"))
+        << "RTSS-wired normal map should surface via the qtme.normal_map UOB hint";
+}
+
 TEST_F(CLIPipelineOgreTest, ExtractMeshInfo_NullEntity)
 {
     MeshInfo info = CLIPipeline::extractMeshInfo(nullptr, "null.mesh");
