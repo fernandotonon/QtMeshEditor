@@ -370,7 +370,7 @@ private:
     bool m_strokeJustBegan = false; ///< Fill/picker tools fire only once per stroke.
     std::vector<uint8_t> m_strokePreSnapshot; // for undo
     BrushTool m_tool = ToolPaint;
-    PaintTarget m_target = TargetTexture;
+    PaintTarget m_target = TargetVertex;
 
     /// Track every TUS we rebound to the paint texture so closeSession()
     /// can restore the originals. We keep the *material name* (not a

@@ -1090,6 +1090,7 @@ Rectangle {
             property var slots: TexturePaintController.textureSlots
             property int activeSlot: TexturePaintController.activeSlotIndex
             property int brushTool: TexturePaintController.brushTool
+            property int paintTarget: TexturePaintController.paintTarget
             property string previewUri: TexturePaintController.previewDataUri
             // Live hover position in UV space, fed by hoveredUVChanged.
             property real hoverU: -1
@@ -1114,6 +1115,9 @@ Rectangle {
                 function onBrushToolChanged() {
                     texPaintCol.brushTool = TexturePaintController.brushTool
                 }
+                function onPaintTargetChanged() {
+                    texPaintCol.paintTarget = TexturePaintController.paintTarget
+                }
                 function onHoveredUVChanged(u, v) {
                     texPaintCol.hoverU = u
                     texPaintCol.hoverV = v
@@ -1122,62 +1126,57 @@ Rectangle {
 
             Text {
                 width: parent.width - 16
-                text: "Paint directly into a BaseColor texture. " +
-                      "The brush color/radius/strength/falloff comes from the " +
-                      "Paint Brush section above (same brush used by the toolbar " +
-                      "Vertex Paint popup)."
+                text: "Paint into the model — either as vertex colors " +
+                      "(polypaint, exported with the mesh) or into the " +
+                      "BaseColor texture. Pick the target below."
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10; opacity: 0.7
                 wrapMode: Text.Wrap
             }
 
-            // Enable toggle
-            Row {
-                spacing: 6
-                Rectangle {
-                    width: 18; height: 18; radius: 3
-                    color: texPaintCol.paintOn ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
-                    border.color: PropertiesPanelController.borderColor; border.width: 1
-                    Text { anchors.centerIn: parent; text: texPaintCol.paintOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-                    MouseArea {
-                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                        onClicked: { TexturePaintController.texturePaintEnabled = !texPaintCol.paintOn }
-                    }
-                }
-                Text {
-                    text: "Enable paint mode"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-
-            // Paint target selector \u2014 Texture vs Vertex
+            // Paint target switch \u2014 picking a target also enables paint.
+            // Three states: Off / Vertex / Texture. Defaults to Vertex.
             Row {
                 spacing: 4
                 Text {
-                    text: "Target:"
+                    text: "Paint:"
                     color: PropertiesPanelController.textColor; font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
                     width: 50
                 }
                 Repeater {
                     model: [
-                        { target: 0, label: "Texture" },
-                        { target: 1, label: "Vertex" }
+                        { target: -1, label: "Off" },
+                        { target: 1,  label: "Vertex" },
+                        { target: 0,  label: "Texture" }
                     ]
                     Rectangle {
-                        width: 70; height: 24; radius: 3
-                        color: TexturePaintController.paintTarget === modelData.target
+                        width: 70; height: 26; radius: 3
+                        property bool isActive: modelData.target === -1
+                            ? !texPaintCol.paintOn
+                            : (texPaintCol.paintOn && texPaintCol.paintTarget === modelData.target)
+                        color: isActive
                             ? PropertiesPanelController.highlightColor
                             : (tgtMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
                                                    : PropertiesPanelController.headerColor)
                         border.color: PropertiesPanelController.borderColor; border.width: 1
-                        Text { anchors.centerIn: parent; text: modelData.label
-                            color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
                         MouseArea {
                             id: tgtMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: TexturePaintController.paintTarget = modelData.target
+                            onClicked: {
+                                if (modelData.target === -1) {
+                                    TexturePaintController.texturePaintEnabled = false
+                                } else {
+                                    TexturePaintController.paintTarget = modelData.target
+                                    if (!texPaintCol.paintOn)
+                                        TexturePaintController.texturePaintEnabled = true
+                                }
+                            }
                         }
                     }
                 }
