@@ -142,7 +142,12 @@ TexturePaintController::TexturePaintController(QObject* parent)
     }
 }
 
-TexturePaintController::~TexturePaintController() = default;
+TexturePaintController::~TexturePaintController()
+{
+    // Drop the manual objects on the scene before Ogre destructors
+    // race us on shutdown. closeSession is safe to call repeatedly.
+    closeSession();
+}
 
 void TexturePaintController::setTexturePaintEnabled(bool enabled)
 {
