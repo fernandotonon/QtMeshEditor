@@ -1016,6 +1016,16 @@ void TexturePaintController::clearHoveredUV()
 
 void TexturePaintController::refreshSlots()
 {
+    // If paint is enabled and the user just changed selection, try to
+    // re-establish the session against the new entity so they don't
+    // have to click "Create / Attach Texture" again. Skip if the
+    // session is already valid for the current entity.
+    if (m_paintEnabled) {
+        auto* e = activeEntity();
+        if (e && e != m_sessionEntity && !hasActiveSession())
+            ensurePaintableTexture(1024);
+    }
+
     QVariantList newSlots;
     auto* entity = activeEntity();
     if (entity) {
