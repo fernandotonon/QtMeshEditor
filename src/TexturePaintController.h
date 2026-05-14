@@ -132,6 +132,17 @@ public:
     /// Preview data URI (PNG, base64) regenerated on every dirty flush.
     QString previewDataUri() const { return m_previewUri; }
 
+    /// PNG data URI of the UV wireframe (white triangles on transparent
+    /// background) at the current texture resolution. Lets the QML
+    /// preview panel overlay UV islands on the texture so the user can
+    /// see where their strokes are going relative to the unwrap.
+    Q_PROPERTY(QString uvOverlayDataUri READ uvOverlayDataUri NOTIFY uvOverlayChanged)
+    QString uvOverlayDataUri() const { return m_uvOverlayUri; }
+
+    Q_PROPERTY(bool uvOverlayVisible READ uvOverlayVisible WRITE setUvOverlayVisible NOTIFY uvOverlayChanged)
+    bool uvOverlayVisible() const { return m_uvOverlayVisible; }
+    void setUvOverlayVisible(bool on);
+
     /// Paint via a UV coordinate directly (driven by the texture preview
     /// panel's mouse area). The preview ↔ 3D mesh hover indicator is
     /// driven by emitting hoveredUVChanged at the same time.
@@ -234,6 +245,7 @@ signals:
     void brushToolChanged();
     void slotsChanged();
     void previewChanged();
+    void uvOverlayChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -271,6 +283,10 @@ private:
     /// Regenerate `m_previewUri` from the buffer (PNG, base64). Emits
     /// previewChanged when the URI actually changed.
     void refreshPreviewUri();
+
+    /// Regenerate `m_uvOverlayUri` by drawing every UV-mapped triangle
+    /// outline at the current texture resolution into a transparent PNG.
+    void refreshUvOverlay();
 
     /// One-time deep-copy snapshot of pixel buffer for undo.
     std::vector<uint8_t> snapshotPixels() const;
@@ -336,6 +352,11 @@ private:
     /// Debounce flag: prevents stroke moves from regenerating the
     /// base64 PNG on every dirty flush (expensive at 1024×1024).
     bool m_previewRefreshScheduled = false;
+
+    // UV wireframe overlay (data: URI of a transparent PNG with the
+    // triangle outlines drawn at the texture resolution).
+    QString m_uvOverlayUri;
+    bool m_uvOverlayVisible = false;
 
     static TexturePaintController* s_instance;
 };

@@ -1197,7 +1197,7 @@ Rectangle {
                 }
                 ThemedComboBox {
                     id: slotCombo
-                    width: 220
+                    width: 180
                     enabled: texPaintCol.slots.length > 0
                     model: {
                         const labels = []
@@ -1210,6 +1210,30 @@ Rectangle {
                         if (texPaintCol.slots.length > 0)
                             TexturePaintController.activeSlotIndex = index
                     }
+                }
+                // UV island overlay toggle
+                Rectangle {
+                    width: 18; height: 18; radius: 3
+                    color: TexturePaintController.uvOverlayVisible
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text {
+                        anchors.centerIn: parent
+                        text: TexturePaintController.uvOverlayVisible ? "\u2713" : ""
+                        color: "white"; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.uvOverlayVisible = !TexturePaintController.uvOverlayVisible
+                    }
+                }
+                Text {
+                    text: "UV"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
                 }
             }
 
@@ -1246,6 +1270,18 @@ Rectangle {
                     cache: false
                     // Bust the cache when source string changes
                     onSourceChanged: previewImg.update()
+                }
+                // UV-island wireframe overlay (toggleable).
+                Image {
+                    id: uvOverlayImg
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    visible: TexturePaintController.uvOverlayVisible
+                    opacity: 0.7
+                    source: TexturePaintController.uvOverlayDataUri
+                    fillMode: Image.PreserveAspectFit
+                    smooth: false
+                    cache: false
                 }
 
                 // Crosshair indicator at hover UV

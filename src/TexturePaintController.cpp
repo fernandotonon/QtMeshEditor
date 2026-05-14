@@ -11,6 +11,8 @@
 
 #include <QApplication>
 #include <QBuffer>
+#include <QPainter>
+#include <QPen>
 #include <QTimer>
 #include <QByteArray>
 #include <QColorDialog>
@@ -381,6 +383,7 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
             .arg(loadedExisting ? "yes" : "no"));
 
     refreshPreviewUri();
+    if (m_uvOverlayVisible) refreshUvOverlay();
     emit sessionChanged();
     return true;
 }
@@ -1070,6 +1073,66 @@ void TexturePaintController::refreshSlots()
 // ---------------------------------------------------------------------------
 // Preview URI
 // ---------------------------------------------------------------------------
+
+void TexturePaintController::setUvOverlayVisible(bool on)
+{
+    if (m_uvOverlayVisible == on) return;
+    m_uvOverlayVisible = on;
+    if (on && m_uvOverlayUri.isEmpty()) refreshUvOverlay();
+    emit uvOverlayChanged();
+}
+
+void TexturePaintController::refreshUvOverlay()
+{
+    if (!m_paintMesh || m_buffer.width() <= 0 || m_buffer.height() <= 0) {
+        if (!m_uvOverlayUri.isEmpty()) {
+            m_uvOverlayUri.clear();
+            emit uvOverlayChanged();
+        }
+        return;
+    }
+    const int W = m_buffer.width();
+    const int H = m_buffer.height();
+    QImage img(W, H, QImage::Format_RGBA8888);
+    img.fill(Qt::transparent);
+    QPainter p(&img);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    QPen pen(QColor(255, 255, 255, 200));
+    // Keep the wireframe a single pixel wide at any resolution.
+    pen.setWidth(1);
+    pen.setCosmetic(true);
+    p.setPen(pen);
+
+    auto toPx = [&](const Ogre::Vector2& uv) {
+        return QPointF(uv.x * W, uv.y * H);
+    };
+    for (const auto& sub : m_paintMesh->subMeshes()) {
+        for (const auto& tri : sub.triangles) {
+            const auto& v0 = sub.vertices[tri.indices[0]];
+            const auto& v1 = sub.vertices[tri.indices[1]];
+            const auto& v2 = sub.vertices[tri.indices[2]];
+            if (!v0.hasUV || !v1.hasUV || !v2.hasUV) continue;
+            const QPointF p0 = toPx(v0.uv);
+            const QPointF p1 = toPx(v1.uv);
+            const QPointF p2 = toPx(v2.uv);
+            p.drawLine(p0, p1);
+            p.drawLine(p1, p2);
+            p.drawLine(p2, p0);
+        }
+    }
+    p.end();
+
+    QByteArray bytes;
+    QBuffer qbuf(&bytes);
+    qbuf.open(QIODevice::WriteOnly);
+    img.save(&qbuf, "PNG");
+    const QString next = QStringLiteral("data:image/png;base64,")
+                       + QString::fromLatin1(bytes.toBase64());
+    if (next != m_uvOverlayUri) {
+        m_uvOverlayUri = next;
+        emit uvOverlayChanged();
+    }
+}
 
 void TexturePaintController::refreshPreviewUri()
 {
