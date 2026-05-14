@@ -82,6 +82,7 @@ qtmesh atlas-apply mesh.fbx -o atlased.fbx --manifest atlas.json --atlas atlas.p
 qtmesh optimize character.fbx -o character_opt.fbx  # vertex-cache reorder + animation keyframe simplify
 qtmesh optimize character.fbx --reduction 0.5 -o character_lo.fbx  # also decimate 50%
 qtmesh optimize character.fbx --target-tris 5000 --simplify-rotation-deg-tol 1.0 -o lo.fbx  # tighter anim tolerances
+qtmesh optimize character.fbx --simplify-preset aggressive -o lo.fbx  # 1e-2/1°/1e-2 — ~20× key reduction, visible drift
 ```
 
 CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`, `material`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
