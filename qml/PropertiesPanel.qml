@@ -1306,14 +1306,25 @@ Rectangle {
                 width: parent.width - 16
                 spacing: 4
 
+                // Resolution picker for fresh textures.
+                ThemedComboBox {
+                    id: resCombo
+                    width: 80
+                    model: ["256", "512", "1024", "2048", "4096"]
+                    currentIndex: 2  // 1024
+                }
+
                 Rectangle {
-                    width: 140; height: 24; radius: 3
+                    width: 130; height: 24; radius: 3
                     color: createMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : PropertiesPanelController.headerColor
                     border.color: PropertiesPanelController.borderColor; border.width: 1
                     Text { anchors.centerIn: parent; text: "Create / Attach Texture"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
                     MouseArea {
                         id: createMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                        onClicked: TexturePaintController.ensurePaintableTexture(1024)
+                        onClicked: {
+                            const res = parseInt(resCombo.model[resCombo.currentIndex])
+                            TexturePaintController.ensurePaintableTexture(res)
+                        }
                     }
                 }
 
@@ -1354,7 +1365,10 @@ Rectangle {
                     Text { anchors.centerIn: parent; text: "Bake Vertex Colors \u2192 Texture"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
                     MouseArea {
                         id: bakeMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                        onClicked: TexturePaintController.bakeVertexColorsToTexture(1024, 4, "")
+                        onClicked: {
+                            const res = parseInt(resCombo.model[resCombo.currentIndex])
+                            TexturePaintController.bakeVertexColorsToTexture(res, 4, "")
+                        }
                     }
                 }
             }
