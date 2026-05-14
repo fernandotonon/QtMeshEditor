@@ -11,6 +11,7 @@
 
 #include <QApplication>
 #include <QBuffer>
+#include <QTimer>
 #include <QByteArray>
 #include <QColorDialog>
 #include <QDir>
@@ -498,9 +499,17 @@ void TexturePaintController::flushDirtyToOgre()
         // Best-effort — skip this flush.
     }
     m_buffer.clearDirty();
-    // Regenerate the 2D preview after every flush so the texture
-    // preview panel stays in sync with strokes in real time.
-    refreshPreviewUri();
+    // Debounce the 2D preview refresh — encoding a 1024×1024 PNG +
+    // base64 on every stroke move is ~150ms of CPU work, which makes
+    // dragging hitchy. Schedule one refresh per ~60ms; the buffer ↔
+    // preview drift during that window is invisible to the user.
+    if (!m_previewRefreshScheduled) {
+        m_previewRefreshScheduled = true;
+        QTimer::singleShot(60, this, [this]() {
+            m_previewRefreshScheduled = false;
+            refreshPreviewUri();
+        });
+    }
 }
 
 bool TexturePaintController::hitTestUV(const QPoint& screenPos, OgreWidget* widget, Ogre::Vector2& outUV) const
@@ -1022,15 +1031,16 @@ void TexturePaintController::refreshSlots()
             for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti) {
                 auto* tus = pass->getTextureUnitState(ti);
                 const std::string& n = tus->getName();
-                // Show diffuse-like slots only (paintable BaseColor).
-                if (!(n.empty() || n == "albedo" || n == "diffuse_map"))
-                    continue;
+                const std::string tex = tus->getTextureName();
+                // Skip entirely-empty TUSes (no name AND no texture) —
+                // they're usually placeholders.
+                if (n.empty() && tex.empty()) continue;
                 QVariantMap m;
-                const QString labelN = QString::fromStdString(n.empty() ? "diffuse" : n);
+                const QString labelN = QString::fromStdString(n.empty() ? "TUS " + std::to_string(ti) : n);
                 m["label"] = QStringLiteral("sub %1 — %2").arg(si).arg(labelN);
                 m["submesh"] = static_cast<int>(si);
                 m["slot"] = QString::fromStdString(n);
-                m["textureName"] = QString::fromStdString(tus->getTextureName());
+                m["textureName"] = QString::fromStdString(tex);
                 newSlots.append(m);
             }
         }

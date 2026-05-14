@@ -333,6 +333,9 @@ private:
 
     // Preview PNG cache.
     QString m_previewUri;
+    /// Debounce flag: prevents stroke moves from regenerating the
+    /// base64 PNG on every dirty flush (expensive at 1024×1024).
+    bool m_previewRefreshScheduled = false;
 
     static TexturePaintController* s_instance;
 };
