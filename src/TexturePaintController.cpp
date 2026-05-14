@@ -190,10 +190,14 @@ void TexturePaintController::setActiveSlotIndex(int index)
 {
     if (index < 0 || index >= m_slots.size()) return;
     if (m_activeSlot == index) return;
+    // Preserve the user's current buffer resolution across slot
+    // switches — without this, jumping slots always falls back to 1024
+    // even after the user picked 2048.
+    const int preservedRes = m_buffer.width() > 0 ? m_buffer.width() : 1024;
     m_activeSlot = index;
-    // Switching slots resets the buffer to that slot's texture.
+    // Switching slots resets the buffer to the new slot's texture.
     closeSession();
-    ensurePaintableTexture(1024);
+    ensurePaintableTexture(preservedRes);
     emit slotsChanged();
 }
 
