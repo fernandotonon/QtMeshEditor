@@ -963,6 +963,10 @@ void TexturePaintController::closeSession()
     m_textureName.clear();
     m_sessionEntity = nullptr;
     m_strokePreSnapshot.clear();
+    if (!m_uvOverlayUri.isEmpty()) {
+        m_uvOverlayUri.clear();
+        emit uvOverlayChanged();
+    }
     m_previewUri.clear();
     emit previewChanged();
     emit sessionChanged();
