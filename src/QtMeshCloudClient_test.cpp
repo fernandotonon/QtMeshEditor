@@ -73,35 +73,52 @@ TEST(QtMeshCloudClientValidate, AcceptsNumericVersionFloat)
     EXPECT_TRUE(QtMeshCloudClient::validateCloudConfigJson(o));
 }
 
-TEST(QtMeshCloudClientApiBaseUrl, DefaultUrlWhenEnvUnset)
+// Snapshots QTMESH_API_BASE in SetUp and restores it in TearDown so individual
+// tests can freely mutate the env var without leaking state into the rest of
+// the UnitTests run (other suites may rely on the original value).
+class QtMeshCloudClientApiBaseUrlTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        m_hadOriginal = qEnvironmentVariableIsSet("QTMESH_API_BASE");
+        if (m_hadOriginal)
+            m_original = qgetenv("QTMESH_API_BASE");
+    }
+    void TearDown() override {
+        if (m_hadOriginal)
+            qputenv("QTMESH_API_BASE", m_original);
+        else
+            qunsetenv("QTMESH_API_BASE");
+    }
+    QByteArray m_original;
+    bool m_hadOriginal = false;
+};
+
+TEST_F(QtMeshCloudClientApiBaseUrlTest, DefaultUrlWhenEnvUnset)
 {
     qunsetenv("QTMESH_API_BASE");
     EXPECT_EQ(QtMeshCloudClient::apiBaseUrl(),
               QStringLiteral("https://api.qtmesh.dev"));
 }
 
-TEST(QtMeshCloudClientApiBaseUrl, EnvOverride)
+TEST_F(QtMeshCloudClientApiBaseUrlTest, EnvOverride)
 {
     qputenv("QTMESH_API_BASE", "https://my-host.example.com");
     EXPECT_EQ(QtMeshCloudClient::apiBaseUrl(),
               QStringLiteral("https://my-host.example.com"));
-    qunsetenv("QTMESH_API_BASE");
 }
 
-TEST(QtMeshCloudClientApiBaseUrl, TrailingSlashesStripped)
+TEST_F(QtMeshCloudClientApiBaseUrlTest, TrailingSlashesStripped)
 {
     qputenv("QTMESH_API_BASE", "https://my-host.example.com///");
     EXPECT_EQ(QtMeshCloudClient::apiBaseUrl(),
               QStringLiteral("https://my-host.example.com"));
-    qunsetenv("QTMESH_API_BASE");
 }
 
-TEST(QtMeshCloudClientApiBaseUrl, WhitespaceTrimmed)
+TEST_F(QtMeshCloudClientApiBaseUrlTest, WhitespaceTrimmed)
 {
     qputenv("QTMESH_API_BASE", "  https://api.test.com/  ");
     EXPECT_EQ(QtMeshCloudClient::apiBaseUrl(),
               QStringLiteral("https://api.test.com"));
-    qunsetenv("QTMESH_API_BASE");
 }
 
 TEST(QtMeshCloudClientFetchRules, MissingTokenReturnsErrorImmediately)

@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QDockWidget>
 #include <QLabel>
+#include <QMainWindow>
 #include <QSignalSpy>
 #include <QToolButton>
 
@@ -99,6 +100,7 @@ TEST_F(ViewportTitleBarTest, CloseButtonClosesDock)
     QDockWidget dock(QStringLiteral("Vis"));
     dock.show();
     ViewportTitleBar bar(&dock, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_NE(bar.closeButton(), nullptr);
     bar.closeButton()->click();
     QCoreApplication::processEvents();
     EXPECT_FALSE(dock.isVisible());
@@ -106,14 +108,22 @@ TEST_F(ViewportTitleBarTest, CloseButtonClosesDock)
 
 TEST_F(ViewportTitleBarTest, FloatButtonTogglesFloating)
 {
-    QDockWidget dock;
-    // Without a parent QMainWindow the dock is already floating; verify the
-    // toggle flips state regardless of starting value.
-    const bool before = dock.isFloating();
-    ViewportTitleBar bar(&dock, nullptr, nullptr, nullptr, nullptr);
+    // Dock needs a real QMainWindow parent: a parentless dock is permanently
+    // floating, and toggling it has no observable effect (nowhere to dock to).
+    QMainWindow window;
+    auto* dock = new QDockWidget(QStringLiteral("Vis"), &window);
+    window.addDockWidget(Qt::RightDockWidgetArea, dock);
+    ViewportTitleBar bar(dock, nullptr, nullptr, nullptr, nullptr);
+    ASSERT_NE(bar.floatButton(), nullptr);
+
+    const bool before = dock->isFloating();   // false — docked into window
     bar.floatButton()->click();
     QCoreApplication::processEvents();
-    EXPECT_NE(dock.isFloating(), before);
+    EXPECT_NE(dock->isFloating(), before);    // toggled to true
+
+    bar.floatButton()->click();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(dock->isFloating(), before);    // toggled back
 }
 
 TEST_F(ViewportTitleBarTest, ActionToolTipPropagatesToButton)

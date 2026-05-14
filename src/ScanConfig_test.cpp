@@ -276,7 +276,14 @@ TEST(ScanConfigFromVariantMapTest, PopulatesAllRuleFields)
 
     EXPECT_EQ(cfg.version, 2);
     EXPECT_EQ(cfg.roots, (QStringList{QStringLiteral("./assets")}));
-    EXPECT_EQ(cfg.includePatterns, (QStringList{QStringLiteral("**/*.fbx")}));
+    // fromVariantMap injects editor-only mesh globs (tmd/rsd/ply) when the
+    // explicit include list omits them — assert the user's pattern survives
+    // and the auto-injected extras are present, without coupling to the
+    // injection list's exact contents/order.
+    EXPECT_TRUE(cfg.includePatterns.contains(QStringLiteral("**/*.fbx")));
+    EXPECT_TRUE(cfg.includePatterns.contains(QStringLiteral("**/*.tmd")));
+    EXPECT_TRUE(cfg.includePatterns.contains(QStringLiteral("**/*.rsd")));
+    EXPECT_TRUE(cfg.includePatterns.contains(QStringLiteral("**/*.ply")));
     EXPECT_EQ(cfg.excludePatterns, (QStringList{QStringLiteral("**/legacy/**")}));
 
     EXPECT_EQ(cfg.allowedFormats, (QStringList{QStringLiteral("fbx"), QStringLiteral("glb")}));
