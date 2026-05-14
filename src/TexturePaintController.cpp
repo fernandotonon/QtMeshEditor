@@ -695,7 +695,10 @@ void TexturePaintController::flushDirtyToOgre()
             if (fresh) m_originalTexture = fresh;
         } catch (...) {}
     }
-    if (m_originalTexture) {
+    // Skip the in-place path once we've rebound the model to the
+    // manual paint texture — the original is no longer what the
+    // renderer samples, so blitting to it would be invisible.
+    if (m_boundSlots.empty() && m_originalTexture) {
         try {
             auto pixbuf = m_originalTexture->getBuffer();
             if (pixbuf) {
@@ -802,21 +805,15 @@ void TexturePaintController::flushDirtyToOgre()
         auto buf = m_ogreTexture->getBuffer();
         if (!buf) return;
         const int W = m_buffer.width();
-        const int rectW = dirty.width();
-        const int rectH = dirty.height();
-        // Build a contiguous slice from the dirty rect.
-        std::vector<uint8_t> slice(static_cast<size_t>(rectW) * static_cast<size_t>(rectH) * 4u);
-        const auto& src = m_buffer.data();
-        for (int row = 0; row < rectH; ++row) {
-            const size_t srcOff = (static_cast<size_t>(dirty.y0 + row) * static_cast<size_t>(W)
-                                   + static_cast<size_t>(dirty.x0)) * 4u;
-            const size_t dstOff = static_cast<size_t>(row) * static_cast<size_t>(rectW) * 4u;
-            std::memcpy(slice.data() + dstOff, src.data() + srcOff,
-                        static_cast<size_t>(rectW) * 4u);
-        }
-        Ogre::PixelBox pb(rectW, rectH, 1, Ogre::PF_BYTE_RGBA, slice.data());
-        Ogre::Box dst(dirty.x0, dirty.y0, dirty.x1, dirty.y1);
-        buf->blitFromMemory(pb, dst);
+        const int H = m_buffer.height();
+        // Upload the FULL buffer each flush. Sub-rect blits via
+        // blitFromMemory are unreliable on macOS Metal — sometimes
+        // they don't end up visible. Full-frame upload is heavier
+        // but always lands. (At 1024² that's ~4 MB per stroke; the
+        // debounce on previewDataUri amortises CPU cost separately.)
+        Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA,
+                          const_cast<uint8_t*>(m_buffer.data().data()));
+        buf->blitFromMemory(pb);
     } catch (const Ogre::Exception& e) {
         SentryReporter::addBreadcrumb("ui.action",
             QStringLiteral("Texture paint: blit failed — %1")
