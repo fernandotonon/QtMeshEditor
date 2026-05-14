@@ -654,7 +654,14 @@ void TexturePaintController::rebindEntityDiffuseToPaintTexture(Ogre::Entity* ent
                     s.tusIdx = ti;
                     s.originalTexture = currentTex;
                     m_boundSlots.push_back(s);
-                    tusN->setTextureName(texName);
+                    // Bind the TexturePtr directly. setTextureName
+                    // does name resolution that can pick the wrong
+                    // group on macOS/Metal. Direct binding never
+                    // mis-resolves.
+                    if (m_ogreTexture)
+                        tusN->setTexture(m_ogreTexture);
+                    else
+                        tusN->setTextureName(texName);
                     changed = true;
                 }
             }
@@ -675,12 +682,20 @@ void TexturePaintController::flushDirtyToOgre()
     const auto& dirty = m_buffer.dirtyRect();
     if (dirty.empty()) return;
 
-    // Previously we tried to blit directly into the original texture
-    // here. That path crashed mid-stroke on macOS Metal — likely
-    // because the original texture's getBuffer() readback is unsafe
-    // while a stroke is in flight. Always use the manual-texture
-    // path (rebind happened at session create).
-    if (false && m_originalTexture) {
+    // Preferred path: paint directly INTO the model's original
+    // texture. No rebind needed — the existing material binding
+    // continues to work, and the paint just modifies pixels in place.
+    // Re-resolve the handle each flush so a reloaded material
+    // doesn't dangle.
+    if (!m_originalTextureName.isEmpty()) {
+        try {
+            auto fresh = Ogre::TextureManager::getSingleton().getByName(
+                m_originalTextureName.toStdString(),
+                Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+            if (fresh) m_originalTexture = fresh;
+        } catch (...) {}
+    }
+    if (m_originalTexture) {
         try {
             auto pixbuf = m_originalTexture->getBuffer();
             if (pixbuf) {
