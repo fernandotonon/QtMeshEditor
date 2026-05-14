@@ -147,8 +147,24 @@ TexturePaintController::TexturePaintController(QObject* parent)
 TexturePaintController::~TexturePaintController()
 {
     // Drop the manual objects on the scene before Ogre destructors
-    // race us on shutdown. closeSession is safe to call repeatedly.
-    closeSession();
+    // race us on shutdown. Skip the cleanup entirely if Ogre's
+    // singletons are already gone — touching them post-teardown
+    // segfaults at process exit.
+    if (Ogre::Root::getSingletonPtr() == nullptr) {
+        m_paintMesh.reset();
+        m_ogreTexture.reset();
+        m_originalTexture.reset();
+        m_ringNode = nullptr;
+        m_ringObj = nullptr;
+        m_paintMeshEntity = nullptr;
+        m_sessionEntity = nullptr;
+        return;
+    }
+    try {
+        closeSession();
+    } catch (...) {
+        // Best-effort shutdown.
+    }
 }
 
 void TexturePaintController::setTexturePaintEnabled(bool enabled)
@@ -647,18 +663,6 @@ void TexturePaintController::rebindEntityDiffuseToPaintTexture(Ogre::Entity* ent
         try { mat->compile(); mat->reload(); }
         catch (const Ogre::Exception&) {}
     }
-    // Also force re-binding at the SubEntity level. Some imports
-    // store per-subentity material overrides that cache the current
-    // pass state; setMaterialName(name) forces Ogre to refresh the
-    // subentity's render pass pointer to the modified material.
-    for (unsigned int se = 0; se < entity->getNumSubEntities(); ++se) {
-        auto* sub = entity->getSubEntity(se);
-        if (!sub) continue;
-        const std::string mname = sub->getMaterialName();
-        if (!mname.empty()) {
-            try { sub->setMaterialName(mname); } catch (...) {}
-        }
-    }
 }
 
 void TexturePaintController::flushDirtyToOgre()
@@ -672,6 +676,18 @@ void TexturePaintController::flushDirtyToOgre()
     // Falls back to our manual texture + rebind if blit-to-original
     // fails (e.g. immutable texture, format mismatch, Metal storage
     // mode rejects CPU writes).
+    //
+    // Re-resolve the handle by name every flush in case the texture
+    // was reloaded/destroyed between strokes (RTSS material reload
+    // can invalidate the TexturePtr).
+    if (!m_originalTextureName.isEmpty()) {
+        try {
+            auto fresh = Ogre::TextureManager::getSingleton().getByName(
+                m_originalTextureName.toStdString(),
+                Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+            if (fresh) m_originalTexture = fresh;
+        } catch (...) {}
+    }
     if (m_originalTexture) {
         try {
             auto pixbuf = m_originalTexture->getBuffer();
