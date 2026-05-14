@@ -1329,10 +1329,10 @@ void TexturePaintController::drawHoverRingAt(const Ogre::Vector3& localPos,
     const QColor c = texturePaintColor();
     const Ogre::ColourValue ringCol(c.redF(), c.greenF(), c.blueF(), 0.95f);
     constexpr int kSegments = 64;
-    const Ogre::AxisAlignedBox bbox = m_paintMesh ? m_paintMesh->calculateBounds()
-                                                  : Ogre::AxisAlignedBox::BOX_NULL;
-    const Ogre::Real meshScale = bbox.isFinite() ? bbox.getSize().length() * 0.5f : 1.0f;
-    const float radius = static_cast<float>(texturePaintRadius()) * meshScale * 0.8f;
+    // The brush radius is in local mesh units (shared with vertex paint).
+    // 0.8 narrows the ring slightly so it visually matches the painted
+    // footprint (a softly-falloff brush doesn't quite touch the ring edge).
+    const float radius = static_cast<float>(texturePaintRadius()) * 0.8f;
     const Ogre::Vector3 center = localPos + normal * 0.001f;
     m_ringObj->begin(kMatName, Ogre::RenderOperation::OT_LINE_STRIP);
     for (int i = 0; i <= kSegments; ++i) {
