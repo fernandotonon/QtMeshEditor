@@ -1572,13 +1572,22 @@ void TexturePaintController::refreshPreviewUri()
         }
         return;
     }
-    QImage img(const_cast<uchar*>(m_buffer.data().data()),
+    // Scale down to a thumbnail before PNG-encoding. The preview
+    // panel is 256×256; encoding a 1024² or 2048² PNG every refresh
+    // burns most of a frame on the main thread. Qt::FastTransformation
+    // is the cheapest scaler.
+    QImage src(const_cast<uchar*>(m_buffer.data().data()),
                m_buffer.width(), m_buffer.height(),
                m_buffer.width() * 4, QImage::Format_RGBA8888);
+    constexpr int kPreviewMax = 256;
+    QImage thumb = (m_buffer.width() > kPreviewMax || m_buffer.height() > kPreviewMax)
+        ? src.scaled(kPreviewMax, kPreviewMax,
+                     Qt::KeepAspectRatio, Qt::FastTransformation)
+        : src.copy();   // own the pixels — src points at m_buffer
     QByteArray bytes;
     QBuffer qbuf(&bytes);
     qbuf.open(QIODevice::WriteOnly);
-    img.save(&qbuf, "PNG");
+    thumb.save(&qbuf, "PNG");
     const QString next = QStringLiteral("data:image/png;base64,")
                        + QString::fromLatin1(bytes.toBase64());
     if (next != m_previewUri) {
