@@ -2489,6 +2489,10 @@ Rectangle {
         }
     }
 
+    // Phase 6 slice E2: Apply Atlas dialog is launched from inside the
+    // Pack Atlas dialog (Atlas → "Apply to Mesh…") to avoid taking up
+    // toolbar space for a niche follow-up tool.
+
     // ---- Material Presets Content ----
     Component {
         id: materialPresetsComponent

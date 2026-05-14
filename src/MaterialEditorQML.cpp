@@ -11,6 +11,8 @@
 #include "RTShaderHelper.h"
 #include "TextureChannelPacker.h"
 #include "TextureAtlasPacker.h"
+#include "ApplyAtlas.h"
+#include "MeshImporterExporter.h"
 #include "NormalMapGenerator.h"
 #include "PS1/PS1TIM.h"
 #include <OgreRTShaderSystem.h>
@@ -3171,6 +3173,228 @@ QString MaterialEditorQML::packAtlas(const QStringList& sourcePaths,
         SentryReporter::addBreadcrumb("file.export",
             QString("Atlas manifest -> %1").arg(QFileInfo(manifestPath).fileName()));
     }
+    return QString();
+}
+
+// ─── Phase 6 slice E2: apply-atlas dialog hooks ──────────────────────
+
+QString MaterialEditorQML::openManifestDialog()
+{
+    QString startDir = QDir::currentPath();
+    QApplication::processEvents();
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+    return QFileDialog::getOpenFileName(
+        QApplication::activeWindow(),
+        "Open Atlas Manifest",
+        startDir, "JSON (*.json);;All Files (*)",
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+}
+
+QString MaterialEditorQML::openMeshDialog()
+{
+    QString startDir = QDir::currentPath();
+    QApplication::processEvents();
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+    return QFileDialog::getOpenFileName(
+        QApplication::activeWindow(),
+        "Open Mesh File",
+        startDir,
+        "Mesh files (*.fbx *.gltf *.glb *.dae *.obj *.ply *.stl *.mesh);;All Files (*)",
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+}
+
+QString MaterialEditorQML::saveAtlasedMeshDialog()
+{
+    QString startDir = QDir::currentPath();
+    QApplication::processEvents();
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+    return QFileDialog::getSaveFileName(
+        QApplication::activeWindow(),
+        "Save Atlased Mesh",
+        startDir + "/atlased.fbx",
+        "FBX (*.fbx);;glTF (*.gltf);;glTF Binary (*.glb);;Collada (*.dae);;OBJ (*.obj);;PLY (*.ply);;STL (*.stl);;Ogre Mesh (*.mesh)",
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+}
+
+QString MaterialEditorQML::applyAtlas(const QString& meshPath,
+                                      const QString& manifestPath,
+                                      const QString& atlasImagePath,
+                                      const QString& outputPath,
+                                      const QString& matchMode,
+                                      bool clampOutOfRangeUVs,
+                                      bool stripNonDiffuseTextures)
+{
+    SentryReporter::addBreadcrumb("ui.action", "Apply atlas to mesh");
+
+    if (meshPath.isEmpty() || manifestPath.isEmpty()
+        || atlasImagePath.isEmpty() || outputPath.isEmpty())
+        return QStringLiteral("All four paths (mesh, manifest, atlas, output) are required.");
+    if (!QFileInfo::exists(meshPath))
+        return QStringLiteral("Mesh file not found: %1").arg(meshPath);
+    if (!QFileInfo::exists(manifestPath))
+        return QStringLiteral("Manifest not found: %1").arg(manifestPath);
+    if (!QFileInfo::exists(atlasImagePath))
+        return QStringLiteral("Atlas image not found: %1").arg(atlasImagePath);
+    // Same-file guard. canonicalFilePath() returns "" for non-existent
+    // paths — and the output doesn't exist yet — so a naive equality
+    // check would never fire. Compare normalized absolute paths instead;
+    // case-fold on the platforms whose filesystems are case-insensitive
+    // by default so "model.fbx" and "MODEL.FBX" still collide.
+    {
+        const QString a = QDir::cleanPath(QFileInfo(meshPath).absoluteFilePath());
+        const QString b = QDir::cleanPath(QFileInfo(outputPath).absoluteFilePath());
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        const auto cs = Qt::CaseInsensitive;
+#else
+        const auto cs = Qt::CaseSensitive;
+#endif
+        if (!a.isEmpty() && a.compare(b, cs) == 0)
+            return QStringLiteral("Output points to the input file; choose a different path.");
+    }
+
+    QFile mf(manifestPath);
+    if (!mf.open(QIODevice::ReadOnly))
+        return QStringLiteral("Could not read manifest: %1").arg(manifestPath);
+    const QByteArray manifestJson = mf.readAll();
+    mf.close();
+
+    auto parsed = ApplyAtlas::parseManifestJson(manifestJson);
+    if (!parsed.ok) return parsed.error;
+
+    // The Inspector runs inside the editor process where Ogre is up. We
+    // import the source file, scope the imported entities, mutate, export,
+    // then tear down so the user's live scene returns to its prior state.
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr) return QStringLiteral("Manager unavailable");
+    if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingletonPtr()->getRenderSystem())
+        return QStringLiteral("Ogre render system not initialized");
+
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Apply-atlas importing %1").arg(QFileInfo(meshPath).fileName()));
+    QSet<Ogre::Entity*> beforeSet;
+    for (Ogre::Entity* e : mgr->getEntities()) beforeSet.insert(e);
+
+    try {
+        MeshImporterExporter::importer({QFileInfo(meshPath).absoluteFilePath()});
+    } catch (const std::exception& e) {
+        return QStringLiteral("Importer threw: %1").arg(QString::fromUtf8(e.what()));
+    } catch (...) {
+        return QStringLiteral("Importer threw (unknown)");
+    }
+
+    QList<Ogre::Entity*> entities;
+    for (Ogre::Entity* e : mgr->getEntities())
+        if (!beforeSet.contains(e)) entities.append(e);
+    if (entities.isEmpty())
+        return QStringLiteral("Failed to load entities from %1").arg(meshPath);
+
+    struct ImportCleanup {
+        Manager* mgr;
+        QList<Ogre::Entity*> imported;
+        ~ImportCleanup() {
+            if (!mgr) return;
+            try {
+                std::set<Ogre::SceneNode*> nodes;
+                for (Ogre::Entity* e : imported)
+                    if (e && e->getParentSceneNode())
+                        nodes.insert(e->getParentSceneNode());
+                for (Ogre::SceneNode* sn : nodes) mgr->destroySceneNode(sn);
+            } catch (...) {}
+        }
+    } cleanup{mgr, entities};
+
+    // Register the atlas image's directory as a resource location so the
+    // mutated materials can resolve the texture during the export pass.
+    // We register into the default group (rather than a one-shot group)
+    // because the per-submesh materials live in the default group, and
+    // an Ogre Material can only see textures from groups it's a member
+    // of. The location is removed on every return path via an RAII guard.
+    const QFileInfo atlasFi(atlasImagePath);
+    const Ogre::String atlasDir = atlasFi.absolutePath().toStdString();
+    bool addedAtlasLoc = false;
+    try {
+        Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+            atlasDir, "FileSystem",
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, true);
+        addedAtlasLoc = true;
+    } catch (const Ogre::Exception&) { /* already-registered is fine */ }
+    struct LocationCleanup {
+        Ogre::String dir;
+        bool added;
+        ~LocationCleanup() {
+            if (!added) return;
+            try {
+                Ogre::ResourceGroupManager::getSingleton().removeResourceLocation(
+                    dir, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            } catch (...) {}
+        }
+    } locationCleanup{atlasDir, addedAtlasLoc};
+
+    ApplyAtlas::ApplyOptions opts;
+    opts.matchMode = (matchMode.toLower() == "fullpath")
+        ? ApplyAtlas::MatchMode::FullPath
+        : ApplyAtlas::MatchMode::Basename;
+    opts.atlasTextureName = atlasFi.fileName();
+    opts.clampOutOfRangeUVs = clampOutOfRangeUVs;
+    opts.stripNonDiffuseTextures = stripNonDiffuseTextures;
+
+    int totalRewritten = 0, totalSubmeshes = 0;
+    try {
+        for (Ogre::Entity* ent : entities) {
+            auto r = ApplyAtlas::applyToEntity(ent, parsed.manifest, opts);
+            if (!r.ok) return r.error;
+            totalRewritten += r.rewrittenCount();
+            totalSubmeshes += r.submeshCount();
+        }
+        Ogre::Entity* first = entities.first();
+        const auto* node = first ? first->getParentSceneNode() : nullptr;
+        if (!node) return QStringLiteral("Could not resolve scene node for export");
+
+        static const QMap<QString, QString> formatByExt = {
+            {QStringLiteral("fbx"),  QStringLiteral("FBX Binary (*.fbx)")},
+            {QStringLiteral("gltf"), QStringLiteral("glTF 2.0 (*.gltf)")},
+            {QStringLiteral("glb"),  QStringLiteral("glTF 2.0 Binary (*.glb)")},
+            {QStringLiteral("dae"),  QStringLiteral("Collada (*.dae)")},
+            {QStringLiteral("obj"),  QStringLiteral("OBJ (*.obj)")},
+            {QStringLiteral("ply"),  QStringLiteral("PLY (*.ply)")},
+            {QStringLiteral("stl"),  QStringLiteral("STL (*.stl)")},
+            {QStringLiteral("mesh"), QStringLiteral("Ogre Mesh (*.mesh)")},
+        };
+        const QString ext = QFileInfo(outputPath).suffix().toLower();
+        if (!formatByExt.contains(ext))
+            return QStringLiteral("Unsupported export format for .%1").arg(ext);
+        if (MeshImporterExporter::exporter(node, outputPath, formatByExt.value(ext)) != 0)
+            return QStringLiteral("Export failed");
+        SentryReporter::addBreadcrumb("file.export",
+            QString("apply_atlas -> %1").arg(QFileInfo(outputPath).fileName()));
+    } catch (const Ogre::Exception& e) {
+        return QStringLiteral("Ogre error: %1")
+                   .arg(QString::fromStdString(e.getFullDescription()));
+    } catch (const std::exception& e) {
+        return QStringLiteral("Error: %1").arg(QString::fromUtf8(e.what()));
+    } catch (...) {
+        return QStringLiteral("Unknown error during apply_atlas");
+    }
+
+    // Append a structured result to the Sentry breadcrumb so subsequent
+    // diagnostics see how many submeshes the user actually atlased.
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Atlas applied: %1/%2 submeshes").arg(totalRewritten).arg(totalSubmeshes));
     return QString();
 }
 

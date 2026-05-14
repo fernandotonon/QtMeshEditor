@@ -12,6 +12,7 @@
 #include "MaterialPresetLibrary.h"
 #include "TextureChannelPacker.h"
 #include "TextureAtlasPacker.h"
+#include "ApplyAtlas.h"
 #include "NormalMapGenerator.h"
 #include "MemoryEstimator.h"
 #include "DrawCallAnalyzer.h"
@@ -638,6 +639,16 @@ void CLIPipeline::printUsage()
         "                                    per-tile UV remaps. Shelf bin-pack; deterministic. Useful\n"
         "                                    for consolidating per-prop textures into one binding to\n"
         "                                    reduce GPU draw-call count.\n"
+        "  atlas-apply <file> -o <output> --manifest <atlas.json> --atlas <atlas.png>\n"
+        "                                    [--match {basename|fullpath}] [--no-clamp]\n"
+        "                                    [--keep-extras] [--json]\n"
+        "                                    Apply a previously-packed atlas to a mesh: rewrite UV0\n"
+        "                                    into each tile's sub-rect and rebind the diffuse TUS to the\n"
+        "                                    atlas texture. By default normal/AO/emissive TUSes are\n"
+        "                                    stripped from affected materials because they sample UV0,\n"
+        "                                    which is now diffuse-atlas-relative — pass --keep-extras\n"
+        "                                    when you have pre-atlased auxiliary maps to match.\n"
+        "                                    Counterpart to `atlas`.\n"
         "  optimize <file> -o <output> [flags] [--json]\n"
         "                                    Batch-optimize a single asset. Defaults to\n"
         "                                    --vertex-cache --simplify-anim when no flags are given.\n"
@@ -651,6 +662,8 @@ void CLIPipeline::printUsage()
         "                                      --simplify-translation-tol T   default 0.0001 (world units, ~0.1mm)\n"
         "                                      --simplify-rotation-deg-tol D  default 0.05   (degrees)\n"
         "                                      --simplify-scale-tol S         default 0.0001\n"
+        "                                      --simplify-preset P            shorthand for the three tolerances;\n"
+        "                                                                     P = conservative | balanced | aggressive\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -786,22 +799,45 @@ MeshInfo CLIPipeline::extractMeshInfo(const Ogre::Entity* entity, const QString&
         }
     }
 
-    // Textures
+    // Textures. The straightforward pass walks every CONTENT_NAMED
+    // TextureUnitState. That covers diffuse/albedo/metallic/roughness/ao/
+    // emissive — every PBR slot MaterialProcessor binds as a plain TUS.
+    // It does NOT cover the normal map: MaterialProcessor wires that one
+    // through RTSS's render-state side channel (see RTShaderHelper::
+    // applyNormalMap), which creates a transient TUS during shader-state
+    // resolution that's not visible on the base pass. To recover that
+    // texture name we read the qtme.normal_map UOB hint the importer
+    // leaves on the pass (the same hint slice #507 added so FBX export
+    // could round-trip the normal map). Issue #510.
     std::set<std::string, std::less<>> seenTex;
-    for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i) {
-        auto mat = entity->getSubEntity(i)->getMaterial();
-        if (!mat) continue;
-        for (auto* tech : mat->getTechniques()) {
-            for (auto* pass : tech->getPasses()) {
-                for (auto* tus : pass->getTextureUnitStates()) {
-                    if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED) {
-                        auto name = tus->getTextureName();
-                        if (seenTex.insert(name).second)
-                            info.textures << QString::fromStdString(name);
-                    }
-                }
-            }
+    const auto collectFromPass = [&](const Ogre::Pass* pass) {
+        if (!pass) return;
+        for (auto* tus : pass->getTextureUnitStates()) {
+            if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                continue;
+            const auto& name = tus->getTextureName();
+            if (!name.empty() && seenTex.insert(name).second)
+                info.textures << QString::fromStdString(name);
         }
+        // Recover RTSS-wired normal map from the UOB hint. Use the
+        // pointer variant of any_cast (returns nullptr on type mismatch
+        // — older assets / payload-type drift / a future writer with a
+        // different shape) so we don't have to catch std::bad_cast just
+        // to swallow it.
+        const Ogre::Any& nh =
+            pass->getUserObjectBindings().getUserAny("qtme.normal_map");
+        if (!nh.has_value()) return;
+        if (const Ogre::String* n = Ogre::any_cast<Ogre::String>(&nh)) {
+            if (!n->empty() && seenTex.insert(*n).second)
+                info.textures << QString::fromStdString(*n);
+        }
+    };
+    for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i) {
+        const auto mat = entity->getSubEntity(i)->getMaterial();
+        if (!mat) continue;
+        for (const Ogre::Technique* tech : mat->getTechniques())
+            for (const Ogre::Pass* pass : tech->getPasses())
+                collectFromPass(pass);
     }
 
     // Skeleton & animations
@@ -1014,6 +1050,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "pack-textures") rc = cmdPackTextures(argc, argv);
     else if (cmd == "normal-from-height") rc = cmdNormalFromHeight(argc, argv);
     else if (cmd == "atlas") rc = cmdAtlas(argc, argv);
+    else if (cmd == "atlas-apply") rc = cmdAtlasApply(argc, argv);
     else if (cmd == "memory") rc = cmdMemory(argc, argv);
     else if (cmd == "analyze") rc = cmdAnalyze(argc, argv);
     else if (cmd == "vertex-cache") rc = cmdVertexCache(argc, argv);
@@ -2876,6 +2913,183 @@ int CLIPipeline::cmdAtlas(int argc, char* argv[])
     return 0;
 }
 
+int CLIPipeline::cmdAtlasApply(int argc, char* argv[])
+{
+    // Parse:
+    //   atlas-apply <file> -o <output> --manifest <atlas.json> --atlas <atlas.png>
+    //               [--match {basename|fullpath}] [--no-clamp] [--json]
+    QString inputPath, outputPath, manifestPath, atlasImagePath;
+    QString matchMode = "basename";
+    bool noClamp = false;
+    bool keepExtras = false;
+    bool jsonOutput = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "atlas-apply" || arg == "--cli") continue;
+        if (arg == "--manifest" && i + 1 < argc) { manifestPath = QString(argv[++i]); continue; }
+        if (arg == "--atlas"    && i + 1 < argc) { atlasImagePath = QString(argv[++i]); continue; }
+        if (arg == "--match"    && i + 1 < argc) { matchMode = QString(argv[++i]).toLower(); continue; }
+        if (arg == "--no-clamp") { noClamp = true; continue; }
+        if (arg == "--keep-extras") { keepExtras = true; continue; }
+        if (arg == "--json")     { jsonOutput = true; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString(argv[++i]); continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) {
+            inputPath = arg; continue;
+        }
+    }
+
+    if (inputPath.isEmpty() || outputPath.isEmpty()
+        || manifestPath.isEmpty() || atlasImagePath.isEmpty()) {
+        err() << "Error: missing required arguments." << Qt::endl;
+        err() << "Usage: qtmesh atlas-apply <file> -o <output>" << Qt::endl;
+        err() << "         --manifest <atlas.json> --atlas <atlas.png>" << Qt::endl;
+        err() << "         [--match {basename|fullpath}] [--no-clamp]" << Qt::endl;
+        err() << "         [--keep-extras] [--json]" << Qt::endl;
+        return 2;
+    }
+    if (matchMode != "basename" && matchMode != "fullpath") {
+        err() << "Error: --match must be 'basename' or 'fullpath' (got '"
+              << matchMode << "')" << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << inputPath << Qt::endl;
+        return 1;
+    }
+    QFile manifestFile(manifestPath);
+    if (!manifestFile.exists()) {
+        err() << "Error: Manifest not found: " << manifestPath << Qt::endl;
+        return 1;
+    }
+    if (!QFileInfo::exists(atlasImagePath)) {
+        err() << "Error: Atlas image not found: " << atlasImagePath << Qt::endl;
+        return 1;
+    }
+    if (!manifestFile.open(QIODevice::ReadOnly)) {
+        err() << "Error: Could not read manifest: " << manifestPath << Qt::endl;
+        return 1;
+    }
+    const QByteArray manifestJson = manifestFile.readAll();
+    manifestFile.close();
+
+    auto parsed = ApplyAtlas::parseManifestJson(manifestJson);
+    if (!parsed.ok) {
+        err() << "Error: " << parsed.error << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.atlas-apply",
+        QString("Apply atlas (%1 tiles) to .%2").arg(parsed.manifest.tiles.size())
+            .arg(fi.suffix()));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        err() << "Error: Failed to load file: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    // Register the atlas image directory as a resource location so the
+    // material can resolve the texture by leaf name on re-export.
+    const QFileInfo atlasFi(atlasImagePath);
+    const QString atlasDir = atlasFi.absolutePath();
+    const Ogre::String atlasTexName = atlasFi.fileName().toStdString();
+    try {
+        Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+            atlasDir.toStdString(), "FileSystem",
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, true);
+    } catch (const Ogre::Exception&) {
+        // Already registered — fine, the texture lookup below will still
+        // resolve. We swallow the duplicate-location exception only.
+    }
+
+    ApplyAtlas::ApplyOptions opts;
+    opts.matchMode = (matchMode == "fullpath")
+        ? ApplyAtlas::MatchMode::FullPath
+        : ApplyAtlas::MatchMode::Basename;
+    opts.atlasTextureName = atlasFi.fileName();
+    opts.clampOutOfRangeUVs = !noClamp;
+    opts.stripNonDiffuseTextures = !keepExtras;
+
+    // Apply to every loaded Entity in turn. Multi-entity scenes (e.g. a
+    // scene-export glTF) get every applicable submesh rewritten in one go.
+    int totalSubmeshes = 0;
+    int totalRewritten = 0;
+    int totalOutOfRange = 0;
+    QJsonArray perEntity;
+    for (auto* obj : entities) {
+        if (!obj || obj->getMovableType() != "Entity") continue;
+        auto* ent = static_cast<Ogre::Entity*>(obj);
+        ApplyAtlas::ApplyReport r = ApplyAtlas::applyToEntity(ent, parsed.manifest, opts);
+        if (!r.ok) {
+            err() << "Error: " << r.error << Qt::endl;
+            return 1;
+        }
+        totalSubmeshes  += r.submeshCount();
+        totalRewritten  += r.rewrittenCount();
+        for (const auto& s : r.submeshes) totalOutOfRange += s.outOfRangeUVs;
+        QJsonObject e = r.toJson();
+        e["entity"] = QString::fromStdString(ent->getName());
+        perEntity.append(e);
+    }
+
+    // Export the mutated scene.
+    Ogre::Entity* firstEntity = nullptr;
+    for (auto* obj : entities) {
+        if (obj && obj->getMovableType() == "Entity") {
+            firstEntity = static_cast<Ogre::Entity*>(obj);
+            break;
+        }
+    }
+    if (!firstEntity) {
+        err() << "Error: no Entity to export." << Qt::endl;
+        return 1;
+    }
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Exporting %1").arg(QFileInfo(outputPath).absoluteFilePath()));
+    if (MeshImporterExporter::exporter(firstEntity->getParentSceneNode(),
+                                       outputPath,
+                                       formatForExtension(outputPath)) != 0) {
+        err() << "Error: Export failed." << Qt::endl;
+        return 1;
+    }
+
+    if (jsonOutput) {
+        QJsonObject root;
+        root["file"]   = fi.fileName();
+        root["output"] = QFileInfo(outputPath).fileName();
+        root["atlas"]  = atlasFi.fileName();
+        root["manifest"] = QFileInfo(manifestPath).fileName();
+        root["submeshes"]      = totalSubmeshes;
+        root["rewritten"]      = totalRewritten;
+        root["outOfRangeUVs"]  = totalOutOfRange;
+        root["entities"]       = perEntity;
+        cliWrite(QString::fromUtf8(
+            QJsonDocument(root).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        cliWrite(QString("Applied atlas '%1' to %2: %3/%4 submeshes rewritten"
+                         "%5 -> %6\n")
+                     .arg(atlasFi.fileName())
+                     .arg(fi.fileName())
+                     .arg(totalRewritten).arg(totalSubmeshes)
+                     .arg(totalOutOfRange > 0
+                          ? QString(" (%1 UV(s) %2)").arg(totalOutOfRange)
+                                .arg(noClamp ? "skipped" : "clamped")
+                          : QString())
+                     .arg(QFileInfo(outputPath).fileName()));
+    }
+    return 0;
+}
+
 int CLIPipeline::cmdScan(int argc, char* argv[])
 {
     // Parse: scan [path] [options]
@@ -3981,10 +4195,14 @@ struct OptimizeCmdArgs {
     // since simplify is destructive. Override via --simplify-translation-tol /
     // --simplify-rotation-deg-tol / --simplify-scale-tol when you want
     // Balanced (1e-3 / 0.5° / 1e-3) or Aggressive (1e-2 / 1° / 1e-2)
-    // reduction at the cost of perceptible drift.
+    // reduction at the cost of perceptible drift. The shorthand
+    // --simplify-preset {conservative|balanced|aggressive} sets all three
+    // in one go; reject if combined with an explicit per-axis flag (#509).
     float animTranslationTol = 1e-4f;
     float animRotationDegTol = 0.05f;
     float animScaleTol       = 1e-4f;
+    QString simplifyPreset;         // empty when not set; "" / "conservative" / "balanced" / "aggressive"
+    bool sawExplicitTol = false;    // any --simplify-*-tol flag explicitly given
     bool explicitFlags = false;     // any optimization flag was supplied?
 };
 
@@ -4040,6 +4258,7 @@ int applyOptimizeArg(const QString& arg, int argc, char* argv[], int& i,
         if (!parseStrictDouble("--simplify-translation-tol",
                                QString::fromLocal8Bit(argv[i++]), v)) return 0;
         out.animTranslationTol = static_cast<float>(v);
+        out.sawExplicitTol = true;
         return 1;
     }
     if (arg == "--simplify-rotation-deg-tol" && i < argc) {
@@ -4047,6 +4266,7 @@ int applyOptimizeArg(const QString& arg, int argc, char* argv[], int& i,
         if (!parseStrictDouble("--simplify-rotation-deg-tol",
                                QString::fromLocal8Bit(argv[i++]), v)) return 0;
         out.animRotationDegTol = static_cast<float>(v);
+        out.sawExplicitTol = true;
         return 1;
     }
     if (arg == "--simplify-scale-tol" && i < argc) {
@@ -4054,6 +4274,11 @@ int applyOptimizeArg(const QString& arg, int argc, char* argv[], int& i,
         if (!parseStrictDouble("--simplify-scale-tol",
                                QString::fromLocal8Bit(argv[i++]), v)) return 0;
         out.animScaleTol = static_cast<float>(v);
+        out.sawExplicitTol = true;
+        return 1;
+    }
+    if (arg == "--simplify-preset" && i < argc) {
+        out.simplifyPreset = QString::fromLocal8Bit(argv[i++]).toLower();
         return 1;
     }
     if (!arg.startsWith("-") && out.filePath.isEmpty()) out.filePath = arg;
@@ -4078,6 +4303,32 @@ int parseOptimizeArgs(int argc, char* argv[], OptimizeCmdArgs& out)
         err() << "Error: pass at most one of --reduction / --target-tris / --target-verts."
               << Qt::endl;
         return 0;
+    }
+
+    // --simplify-preset: shorthand for the three --simplify-*-tol flags.
+    // Resolve via AnimationMerger so CLI / Inspector / MCP / scan-engine
+    // all consume the same preset table (#509). Reject combining with
+    // explicit per-axis flags — letting both through silently picks one
+    // over the other and surprises the caller.
+    if (!out.simplifyPreset.isEmpty()) {
+        if (out.sawExplicitTol) {
+            err() << "Error: --simplify-preset cannot be combined with explicit "
+                     "--simplify-translation-tol / --simplify-rotation-deg-tol / "
+                     "--simplify-scale-tol. Use one or the other." << Qt::endl;
+            return 0;
+        }
+        bool ok = false;
+        const auto tol =
+            AnimationMerger::tolerancesForPreset(out.simplifyPreset.toStdString(), &ok);
+        if (!ok) {
+            err() << "Error: --simplify-preset must be one of "
+                     "{conservative, balanced, aggressive} (got '"
+                  << out.simplifyPreset << "')." << Qt::endl;
+            return 0;
+        }
+        out.animTranslationTol = tol.translation;
+        out.animRotationDegTol = tol.rotationDeg;
+        out.animScaleTol       = tol.scale;
     }
 
     // Default selection. The non-destructive optimizations
@@ -4165,6 +4416,7 @@ int CLIPipeline::cmdOptimize(int argc, char* argv[])
             err() << "  Flags: --vertex-cache  --simplify-anim  --all" << Qt::endl;
             err() << "         --reduction <r> | --target-tris N | --target-verts N" << Qt::endl;
             err() << "         --simplify-translation-tol T  --simplify-rotation-deg-tol D  --simplify-scale-tol S" << Qt::endl;
+            err() << "         --simplify-preset {conservative|balanced|aggressive}" << Qt::endl;
         }
         return 2;
     }

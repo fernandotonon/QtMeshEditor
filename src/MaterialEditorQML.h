@@ -495,7 +495,25 @@ public slots:
                                   int padding,
                                   const QString& outputPath,
                                   const QString& manifestPath);
-    
+    /// Phase 6 slice E2: apply a previously-packed atlas manifest to a
+    /// mesh file. UV0 of every matched submesh is rewritten into the
+    /// tile's sub-rect, the diffuse TUS is rebound to the atlas image,
+    /// and the result is exported to `outputPath`. Returns empty string
+    /// on success or an error message.
+    Q_INVOKABLE QString applyAtlas(const QString& meshPath,
+                                   const QString& manifestPath,
+                                   const QString& atlasImagePath,
+                                   const QString& outputPath,
+                                   const QString& matchMode,
+                                   bool clampOutOfRangeUVs,
+                                   bool stripNonDiffuseTextures);
+    /// Phase 6 slice E2: pick a manifest JSON file (read).
+    Q_INVOKABLE QString openManifestDialog();
+    /// Phase 6 slice E2: pick a source mesh file (read).
+    Q_INVOKABLE QString openMeshDialog();
+    /// Phase 6 slice E2: pick an output mesh file (write).
+    Q_INVOKABLE QString saveAtlasedMeshDialog();
+
     // Color picker
     void openColorPicker(const QString &colorType);
     

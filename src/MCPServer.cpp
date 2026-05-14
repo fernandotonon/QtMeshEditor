@@ -5,6 +5,7 @@
 #include "MaterialPresetLibrary.h"
 #include "TextureChannelPacker.h"
 #include "TextureAtlasPacker.h"
+#include "ApplyAtlas.h"
 #include "NormalMapGenerator.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
@@ -457,6 +458,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("pack_textures"), &MCPServer::toolPackTextures},
         {QStringLiteral("generate_normal_map"), &MCPServer::toolGenerateNormalMap},
         {QStringLiteral("pack_atlas"), &MCPServer::toolPackAtlas},
+        {QStringLiteral("apply_atlas"), &MCPServer::toolApplyAtlas},
         {QStringLiteral("optimize_mesh"), &MCPServer::toolOptimizeMesh}
     };
     return handlers;
@@ -3691,6 +3693,194 @@ QJsonObject MCPServer::toolPackAtlas(const QJsonObject &args)
     return result;
 }
 
+QJsonObject MCPServer::toolApplyAtlas(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "apply_atlas");
+
+    const QString filePath     = args.value("file").toString();
+    const QString outputPath   = args.value("output").toString();
+    const QString manifestPath = args.value("manifest").toString();
+    const QString atlasPath    = args.value("atlas").toString();
+    const QString matchMode    = args.value("match").toString().toLower();
+    const bool clamp           = args.contains("no_clamp") ? !args.value("no_clamp").toBool() : true;
+    const bool keepExtras      = args.contains("keep_extras") && args.value("keep_extras").toBool();
+
+    if (filePath.isEmpty() || outputPath.isEmpty()
+        || manifestPath.isEmpty() || atlasPath.isEmpty())
+        return makeErrorResult("Error: missing required 'file', 'output', 'manifest', 'atlas' arguments");
+    if (!QFileInfo::exists(filePath))
+        return makeErrorResult(QString("Error: file not found: %1").arg(filePath));
+    if (!QFileInfo::exists(manifestPath))
+        return makeErrorResult(QString("Error: manifest not found: %1").arg(manifestPath));
+    if (!QFileInfo::exists(atlasPath))
+        return makeErrorResult(QString("Error: atlas not found: %1").arg(atlasPath));
+    // Same-file guard. canonicalFilePath() returns "" for the not-yet-
+    // existing output, so equality on canonical paths would never fire.
+    // Compare normalized absolute paths instead, case-folded on the
+    // platforms whose filesystems are case-insensitive by default.
+    {
+        const QString a = QDir::cleanPath(QFileInfo(filePath).absoluteFilePath());
+        const QString b = QDir::cleanPath(QFileInfo(outputPath).absoluteFilePath());
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        const auto cs = Qt::CaseInsensitive;
+#else
+        const auto cs = Qt::CaseSensitive;
+#endif
+        if (!a.isEmpty() && a.compare(b, cs) == 0)
+            return makeErrorResult("Error: output points to the input file; choose a different path.");
+    }
+    if (!matchMode.isEmpty() && matchMode != "basename" && matchMode != "fullpath")
+        return makeErrorResult("Error: 'match' must be 'basename' or 'fullpath'");
+
+    QFile mf(manifestPath);
+    if (!mf.open(QIODevice::ReadOnly))
+        return makeErrorResult(QString("Error: could not read manifest: %1").arg(manifestPath));
+    const QByteArray manifestJson = mf.readAll();
+    mf.close();
+
+    auto parsed = ApplyAtlas::parseManifestJson(manifestJson);
+    if (!parsed.ok)
+        return makeErrorResult(QString("Error: %1").arg(parsed.error));
+
+    if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingletonPtr()->getRenderSystem())
+        return makeErrorResult("Ogre render system not initialized");
+
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr) return makeErrorResult("Manager unavailable");
+
+    // Same scene-isolation pattern as toolOptimizeMesh: snapshot the
+    // pre-import entity set so we only mutate the new asset and we can
+    // clean up on every return path.
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Apply-atlas importing %1").arg(QFileInfo(filePath).fileName()));
+    QSet<Ogre::Entity*> beforeSet;
+    for (Ogre::Entity* e : mgr->getEntities()) beforeSet.insert(e);
+
+    try {
+        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
+    } catch (const std::exception& e) {
+        return makeErrorResult(QString("Importer threw: %1").arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        return makeErrorResult("Importer threw (unknown exception type)");
+    }
+
+    QList<Ogre::Entity*> entities;
+    for (Ogre::Entity* e : mgr->getEntities())
+        if (!beforeSet.contains(e)) entities.append(e);
+    if (entities.isEmpty())
+        return makeErrorResult(QString("Failed to load entities from %1").arg(filePath));
+
+    struct ImportCleanup {
+        Manager* mgr;
+        QList<Ogre::Entity*> imported;
+        ~ImportCleanup() {
+            if (!mgr) return;
+            try {
+                std::set<Ogre::SceneNode*> nodes;
+                for (Ogre::Entity* e : imported)
+                    if (e && e->getParentSceneNode())
+                        nodes.insert(e->getParentSceneNode());
+                for (Ogre::SceneNode* sn : nodes) mgr->destroySceneNode(sn);
+            } catch (...) {}
+        }
+    } cleanup{mgr, entities};
+
+    // Register the atlas image's directory as a resource location into
+    // the default group (the only group the imported materials see).
+    // RAII-cleanup so repeated apply_atlas calls don't accumulate
+    // locations in the live process.
+    const QFileInfo atlasFi(atlasPath);
+    const Ogre::String atlasDir = atlasFi.absolutePath().toStdString();
+    bool addedAtlasLoc = false;
+    try {
+        Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+            atlasDir, "FileSystem",
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false, true);
+        addedAtlasLoc = true;
+    } catch (const Ogre::Exception&) { /* already-registered is fine */ }
+    struct LocationCleanup {
+        Ogre::String dir;
+        bool added;
+        ~LocationCleanup() {
+            if (!added) return;
+            try {
+                Ogre::ResourceGroupManager::getSingleton().removeResourceLocation(
+                    dir, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            } catch (...) {}
+        }
+    } locationCleanup{atlasDir, addedAtlasLoc};
+
+    ApplyAtlas::ApplyOptions opts;
+    opts.matchMode = (matchMode == "fullpath")
+        ? ApplyAtlas::MatchMode::FullPath
+        : ApplyAtlas::MatchMode::Basename;
+    opts.atlasTextureName = atlasFi.fileName();
+    opts.clampOutOfRangeUVs = clamp;
+    opts.stripNonDiffuseTextures = !keepExtras;
+
+    int totalSubmeshes = 0, totalRewritten = 0, totalOutOfRange = 0;
+    QJsonArray perEntity;
+    try {
+        for (Ogre::Entity* ent : entities) {
+            ApplyAtlas::ApplyReport r = ApplyAtlas::applyToEntity(ent, parsed.manifest, opts);
+            if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
+            totalSubmeshes  += r.submeshCount();
+            totalRewritten  += r.rewrittenCount();
+            for (const auto& s : r.submeshes) totalOutOfRange += s.outOfRangeUVs;
+            QJsonObject e = r.toJson();
+            e["entity"] = QString::fromStdString(ent->getName());
+            perEntity.append(e);
+        }
+
+        Ogre::Entity* first = entities.first();
+        const auto* node = first ? first->getParentSceneNode() : nullptr;
+        if (!node) return makeErrorResult("Could not resolve scene node for export");
+
+        static const QMap<QString, QString> formatByExt = {
+            {QStringLiteral("fbx"),  QStringLiteral("FBX Binary (*.fbx)")},
+            {QStringLiteral("gltf"), QStringLiteral("glTF 2.0 (*.gltf)")},
+            {QStringLiteral("glb"),  QStringLiteral("glTF 2.0 Binary (*.glb)")},
+            {QStringLiteral("dae"),  QStringLiteral("Collada (*.dae)")},
+            {QStringLiteral("obj"),  QStringLiteral("OBJ (*.obj)")},
+            {QStringLiteral("ply"),  QStringLiteral("PLY (*.ply)")},
+            {QStringLiteral("stl"),  QStringLiteral("STL (*.stl)")},
+            {QStringLiteral("mesh"), QStringLiteral("Ogre Mesh (*.mesh)")},
+        };
+        const QString ext = QFileInfo(outputPath).suffix().toLower();
+        if (!formatByExt.contains(ext))
+            return makeErrorResult(QString("Error: unsupported export format for .%1").arg(ext));
+        if (MeshImporterExporter::exporter(node, outputPath, formatByExt.value(ext)) != 0)
+            return makeErrorResult("Export failed");
+        SentryReporter::addBreadcrumb("file.export",
+            QString("apply_atlas -> %1").arg(QFileInfo(outputPath).fileName()));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1")
+                                   .arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        return makeErrorResult("Unknown error during apply_atlas");
+    }
+
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{
+        {"type", "text"},
+        {"text", QString("Applied atlas '%1' to %2: %3/%4 submeshes rewritten -> %5")
+            .arg(atlasFi.fileName())
+            .arg(QFileInfo(filePath).fileName())
+            .arg(totalRewritten).arg(totalSubmeshes)
+            .arg(QFileInfo(outputPath).fileName())}}};
+    result["file"]          = QFileInfo(filePath).fileName();
+    result["output"]        = QFileInfo(outputPath).fileName();
+    result["atlas"]         = atlasFi.fileName();
+    result["manifest"]      = QFileInfo(manifestPath).fileName();
+    result["submeshes"]     = totalSubmeshes;
+    result["rewritten"]     = totalRewritten;
+    result["outOfRangeUVs"] = totalOutOfRange;
+    result["entities"]      = perEntity;
+    return result;
+}
+
 QJsonObject MCPServer::toolOptimizeMesh(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "optimize_mesh");
@@ -4973,6 +5163,48 @@ QJsonArray MCPServer::buildToolsList()
             "many small per-prop textures into one binding to reduce GPU draw-call count. Tiles are "
             "padded on every side (configurable) to prevent MIP bleed. Returns tile count + atlas "
             "dimensions on success.",
+            props,
+            required
+        );
+    }
+
+    // apply_atlas (Phase 6 slice E2)
+    {
+        QJsonObject props;
+        props["file"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Source mesh file to apply the atlas to (FBX / glTF / glb / DAE / OBJ / PLY / STL / .mesh)."}};
+        props["output"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Output path. Extension determines format. Must differ from `file`."}};
+        props["manifest"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Path to the JSON manifest produced by pack_atlas."}};
+        props["atlas"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Path to the atlas image. Its filename is rebound onto every matched submesh's diffuse TUS."}};
+        props["match"] = QJsonObject{
+            {"type", "string"},
+            {"enum", QJsonArray{"basename", "fullpath"}},
+            {"description", "How to match the submesh's diffuse texture name against the manifest's 'source' fields. 'basename' (default) is robust to path differences; 'fullpath' is exact-match."}};
+        props["no_clamp"] = QJsonObject{
+            {"type", "boolean"},
+            {"description", "When true, UVs outside [0..1] are left unchanged instead of being clamped before remapping. Default false (clamp on)."}};
+        props["keep_extras"] = QJsonObject{
+            {"type", "boolean"},
+            {"description", "By default, normal/AO/emissive TUSes on affected materials are stripped because they sample UV0 — now diffuse-atlas-relative. Set true to keep them (only sensible when you've also atlased those channels to match)."}};
+        QJsonArray required;
+        required.append("file");
+        required.append("output");
+        required.append("manifest");
+        required.append("atlas");
+        appendTool(
+            "apply_atlas",
+            "Apply a previously-packed atlas to a mesh. Reads the manifest, scales+biases UV0 of "
+            "every submesh whose diffuse texture matches a tile into the tile's sub-rect, and "
+            "rebinds the diffuse TUS to the atlas image. Counterpart to pack_atlas — together they "
+            "consolidate N per-prop bindings down to one. Returns a per-submesh rewritten/skipped "
+            "report.",
             props,
             required
         );
