@@ -988,10 +988,10 @@ void TexturePaintController::updateStroke(OgreWidget* widget, const QPoint& scre
         return;
     }
     emit hoveredUVChanged(uv.x, uv.y);
-    // Keep the brush-ring overlay tracking the cursor during a stroke.
-    Ogre::Vector3 localPos, localNormal;
-    if (findMeshPointForUV(uv, localPos, localNormal))
-        drawHoverRingAt(localPos, localNormal);
+    // Skip the brush-ring redraw during an active stroke. The ring
+    // is hover-feedback; once the user is painting, the strokes
+    // themselves are the feedback. findMeshPointForUV walks every
+    // triangle and was the main lag source at 100+ Hz mouse-move.
     if (applyBrushAtUV(uv))
         flushDirtyToOgre();
 }
@@ -1411,11 +1411,11 @@ void TexturePaintController::updateStrokeUV(double u, double v)
     if (!m_strokeActive || !m_paintEnabled) return;
     const Ogre::Vector2 uv(static_cast<float>(u), static_cast<float>(v));
     emit hoveredUVChanged(u, v);
-    // Update brush-ring overlay on the mesh so the user sees their
-    // painting location even when driving the brush from the 2D panel.
-    Ogre::Vector3 localPos, localNormal;
-    if (findMeshPointForUV(uv, localPos, localNormal))
-        drawHoverRingAt(localPos, localNormal);
+    // Don't update the 3D mesh-ring during a panel-driven stroke —
+    // findMeshPointForUV walks every triangle and adds noticeable
+    // lag at 100+ Hz mouse-move. The crosshair on the 2D preview is
+    // already showing the brush position; the mesh-side ring is for
+    // hover preview only.
     if (applyBrushAtUV(uv))
         flushDirtyToOgre();
 }

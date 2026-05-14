@@ -283,15 +283,9 @@ Rectangle {
             }
 
             // ---- Texture Paint (Material mode) ----
-            CollapsibleSection {
-                title: "Paint Brush"
-                sectionVisible: root.modeToolSectionVisible(
-                    EditorModeController.MaterialMode,
-                    true)
-                expanded: true
-
-                Component.onCompleted: content = paintBrushComponent
-            }
+            // (Brush color/radius/strength/falloff live on the toolbar
+            //  paint-brush popup. The Inspector panel keeps only the
+            //  paint-target switch, slot picker, and texture preview.)
 
             CollapsibleSection {
                 title: "Texture Paint"
@@ -955,7 +949,11 @@ Rectangle {
         }
     }
 
-    // ---- Paint Brush Content (shared by vertex paint + texture paint) ----
+    // ---- Paint Brush Content (DEPRECATED — kept dormant) ----
+    // Brush color/radius/strength/falloff now live exclusively on the
+    // toolbar paint-brush popup. The component below is no longer
+    // wired into any CollapsibleSection; left here only because
+    // removing it would churn 100+ lines of unrelated diff.
     Component {
         id: paintBrushComponent
 
