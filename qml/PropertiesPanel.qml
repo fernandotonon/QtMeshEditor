@@ -1345,13 +1345,33 @@ Rectangle {
                     }
                     onPositionChanged: function(m) {
                         const uv = toUV(m.x, m.y)
-                        if (dragging) {
-                            TexturePaintController.updateStrokeUV(uv.x, uv.y)
+                        // Use the live `pressed` state instead of
+                        // our own `dragging` flag — flags can get
+                        // stuck if onReleased misses (release
+                        // outside the area).
+                        if (pressed && (m.buttons & Qt.LeftButton)) {
+                            if (!dragging) {
+                                if (TexturePaintController.beginStrokeUV(uv.x, uv.y))
+                                    dragging = true
+                            } else {
+                                TexturePaintController.updateStrokeUV(uv.x, uv.y)
+                            }
                         } else {
+                            if (dragging) {
+                                // Stale state — finalize.
+                                TexturePaintController.endStrokeUV()
+                                dragging = false
+                            }
                             TexturePaintController.setHoveredUV(uv.x, uv.y)
                         }
                     }
-                    onExited: TexturePaintController.clearHoveredUV()
+                    onExited: {
+                        if (dragging) {
+                            TexturePaintController.endStrokeUV()
+                            dragging = false
+                        }
+                        TexturePaintController.clearHoveredUV()
+                    }
                     onPressed: function(m) {
                         if (m.button !== Qt.LeftButton) return
                         const uv = toUV(m.x, m.y)
@@ -1359,6 +1379,12 @@ Rectangle {
                             dragging = true
                     }
                     onReleased: function(m) {
+                        if (dragging) {
+                            TexturePaintController.endStrokeUV()
+                            dragging = false
+                        }
+                    }
+                    onCanceled: {
                         if (dragging) {
                             TexturePaintController.endStrokeUV()
                             dragging = false

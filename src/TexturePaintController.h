@@ -315,7 +315,11 @@ private:
     void rebindEntityDiffuseToPaintTexture(Ogre::Entity* entity);
 
     /// Upload buffer.dirtyRect() into the live Ogre texture and clear it.
+    /// This is the public entry point and **debounces** to ~16 ms — the
+    /// actual GPU work happens in doFlushDirtyToOgre on a timer.
     void flushDirtyToOgre();
+    /// The synchronous GPU upload. Called from the debounce timer.
+    void doFlushDirtyToOgre();
 
     /// Regenerate `m_previewUri` from the buffer (PNG, base64). Emits
     /// previewChanged when the URI actually changed.
@@ -365,6 +369,11 @@ private:
     bool m_useOriginalTexture = false;
     bool m_loggedInPlaceBlit = false;
     bool m_rebindScheduled = false;
+    /// Debounce flag for the GPU upload. We accumulate dirty pixels
+    /// in m_buffer and schedule a single blit per ~16ms instead of
+    /// blitting on every mouse-move (which hits 100+ Hz and uploads
+    /// 4 MB each time on macOS Metal).
+    bool m_gpuFlushScheduled = false;
     Ogre::Entity* m_sessionEntity = nullptr;
 
     bool m_strokeActive = false;

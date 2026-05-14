@@ -682,6 +682,25 @@ void TexturePaintController::flushDirtyToOgre()
     const auto& dirty = m_buffer.dirtyRect();
     if (dirty.empty()) return;
 
+    // Debounce the GPU upload. Mouse-move fires at 100+ Hz; the
+    // full-buffer blit is ~4 MB at 1024² and CHUGS at that rate.
+    // Schedule a single coalesced flush per ~16 ms (one render
+    // tick). The dirty rect keeps accumulating in the meantime, so
+    // no pixels are lost — just batched.
+    if (m_gpuFlushScheduled) return;
+    m_gpuFlushScheduled = true;
+    QTimer::singleShot(16, this, [this]() {
+        m_gpuFlushScheduled = false;
+        if (m_buffer.dirtyRect().empty()) return;
+        doFlushDirtyToOgre();
+    });
+}
+
+void TexturePaintController::doFlushDirtyToOgre()
+{
+    const auto& dirty = m_buffer.dirtyRect();
+    if (dirty.empty()) return;
+
     // Preferred path: paint directly INTO the model's original
     // texture. No rebind needed — the existing material binding
     // continues to work, and the paint just modifies pixels in place.
@@ -1113,6 +1132,10 @@ void TexturePaintController::endStroke()
 {
     if (!m_strokeActive) return;
     m_strokeActive = false;
+    // Ensure any pending debounced GPU upload runs immediately so
+    // the final stroke pixels are visible before the user releases.
+    if (!m_buffer.dirtyRect().empty())
+        doFlushDirtyToOgre();
     // If nothing changed, drop the snapshot.
     auto after = snapshotPixels();
     if (after == m_strokePreSnapshot) {
@@ -1353,6 +1376,7 @@ void TexturePaintController::closeSession()
     m_useOriginalTexture = false;
     m_loggedInPlaceBlit = false;
     m_rebindScheduled = false;
+    m_gpuFlushScheduled = false;
     m_sessionEntity = nullptr;
     m_strokePreSnapshot.clear();
     if (!m_uvOverlayUri.isEmpty()) {
