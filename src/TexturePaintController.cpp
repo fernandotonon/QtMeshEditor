@@ -596,6 +596,10 @@ void TexturePaintController::updateStroke(OgreWidget* widget, const QPoint& scre
         return;
     }
     emit hoveredUVChanged(uv.x, uv.y);
+    // Keep the brush-ring overlay tracking the cursor during a stroke.
+    Ogre::Vector3 localPos, localNormal;
+    if (findMeshPointForUV(uv, localPos, localNormal))
+        drawHoverRingAt(localPos, localNormal);
     if (applyBrushAtUV(uv))
         flushDirtyToOgre();
 }
@@ -966,6 +970,11 @@ void TexturePaintController::updateStrokeUV(double u, double v)
     if (!m_strokeActive || !m_paintEnabled) return;
     const Ogre::Vector2 uv(static_cast<float>(u), static_cast<float>(v));
     emit hoveredUVChanged(u, v);
+    // Update brush-ring overlay on the mesh so the user sees their
+    // painting location even when driving the brush from the 2D panel.
+    Ogre::Vector3 localPos, localNormal;
+    if (findMeshPointForUV(uv, localPos, localNormal))
+        drawHoverRingAt(localPos, localNormal);
     if (applyBrushAtUV(uv))
         flushDirtyToOgre();
 }
@@ -1182,6 +1191,23 @@ void TexturePaintController::drawHoverRingAt(const Ogre::Vector3& localPos,
     if (!entity) return;
     auto* sceneMgr = entity->_getManager();
     if (!sceneMgr) return;
+
+    // Ensure the hover-line material exists. It's normally created
+    // when entering Edit Mode (EditModeController::createOverlayMaterials);
+    // we may need to draw the ring before the user has ever entered
+    // Edit Mode, so set it up here too.
+    static const char* kMatName = "TexturePaint/HoverRing";
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    if (!matMgr.getByName(kMatName)) {
+        auto mat = matMgr.create(kMatName,
+            Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        auto* pass = mat->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(false);
+        pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+        pass->setDepthCheckEnabled(false);
+        pass->setDepthWriteEnabled(false);
+        pass->setLineWidth(2.0f);
+    }
     if (!m_ringNode) m_ringNode = sceneMgr->getRootSceneNode()->createChildSceneNode();
     if (!m_ringObj) {
         m_ringObj = sceneMgr->createManualObject("TexturePaint_HoverRing");
@@ -1212,7 +1238,7 @@ void TexturePaintController::drawHoverRingAt(const Ogre::Vector3& localPos,
     const Ogre::Real meshScale = bbox.isFinite() ? bbox.getSize().length() * 0.5f : 1.0f;
     const float radius = static_cast<float>(texturePaintRadius()) * meshScale * 0.8f;
     const Ogre::Vector3 center = localPos + normal * 0.001f;
-    m_ringObj->begin("EditMode/EdgeSelection", Ogre::RenderOperation::OT_LINE_STRIP);
+    m_ringObj->begin(kMatName, Ogre::RenderOperation::OT_LINE_STRIP);
     for (int i = 0; i <= kSegments; ++i) {
         const float t = static_cast<float>(i) / kSegments;
         const float a = Ogre::Math::TWO_PI * t;

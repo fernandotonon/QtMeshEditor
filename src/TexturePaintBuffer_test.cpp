@@ -279,6 +279,20 @@ TEST(TexturePaintBufferTest, HardBrushReplacesPixelExactly)
     EXPECT_NEAR(c.b, 1.0f, 0.02f);
 }
 
+// ---- floodFill stops at color boundaries with the 4-pixel tolerance ----
+TEST(TexturePaintBufferTest, FloodFillRespectsTolerance)
+{
+    TexturePaintBuffer buf(4, 4);
+    // Plant a near-white pixel (slight off-white). With the 4/255
+    // tolerance per channel, the fill from a white seed should treat
+    // it as same-color and fill it too.
+    buf.setPixel(2, 2, Ogre::ColourValue(254.0f/255.0f, 254.0f/255.0f,
+                                         254.0f/255.0f, 1.0f));
+    buf.clearDirty();
+    const int n = buf.floodFill(0, 0, Ogre::ColourValue::Red);
+    EXPECT_EQ(n, 16); // entire 4x4 swept
+}
+
 TEST(TexturePaintBufferTest, MarkDirtyExpandsRectExternally)
 {
     TexturePaintBuffer buf(16, 16);
