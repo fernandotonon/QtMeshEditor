@@ -956,6 +956,17 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
         }
         m_paintMesh->ensureVertexColorBuffers(m_paintMeshEntity);
     } else {
+        // Tear down a stale session if the selection moved to a
+        // different entity since the session was created. Without
+        // this, strokes hit-test against the new mesh's geometry but
+        // write into the old mesh's texture/session state. Codex P1.
+        auto* curEntity = activeEntity();
+        if (hasActiveSession() && m_sessionEntity && curEntity
+            && m_sessionEntity != curEntity) {
+            SentryReporter::addBreadcrumb("ui.action",
+                "Texture paint: selection changed — rebuilding session for new entity");
+            closeSession();
+        }
         if (!hasActiveSession()) {
             if (!ensurePaintableTexture(m_buffer.width() > 0 ? m_buffer.width() : 1024)) {
                 SentryReporter::addBreadcrumb("ui.action",

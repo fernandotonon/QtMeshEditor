@@ -80,8 +80,14 @@ void TexturePaintBuffer::setPixel(int x, int y, const Ogre::ColourValue& color)
 void TexturePaintBuffer::uvToPixel(const Ogre::Vector2& uv, int& outX, int& outY) const
 {
     // UV origin = top-left (Ogre + Qt convention). U → X, V → Y, both direct.
-    outX = static_cast<int>(std::floor(uv.x * static_cast<float>(m_width)));
-    outY = static_cast<int>(std::floor(uv.y * static_cast<float>(m_height)));
+    // Clamp to [0, size-1] so uv = (1.0, 1.0) maps to the last in-bounds
+    // texel rather than (width, height), which is out of range. Without
+    // this, tools that round-trip via uvToPixel (fill seed, picker,
+    // smudge) silently miss the right/bottom edge.
+    outX = std::clamp(static_cast<int>(std::floor(uv.x * static_cast<float>(m_width))),
+                      0, m_width - 1);
+    outY = std::clamp(static_cast<int>(std::floor(uv.y * static_cast<float>(m_height))),
+                      0, m_height - 1);
 }
 
 Ogre::Vector2 TexturePaintBuffer::pixelToUV(int x, int y) const

@@ -184,11 +184,11 @@ TEST(TexturePaintBufferTest, UvToPixelRoundTrip)
     EXPECT_EQ(x, 0);
     EXPECT_EQ(y, 0);
     buf.uvToPixel(Ogre::Vector2(1.0f, 1.0f), x, y);
-    // 1.0 * 64 = 64 (out of bounds upper) — the helper doesn't clamp; that's
-    // the consumer's job. Verify the computed value rather than asserting
-    // in-bounds.
-    EXPECT_EQ(x, 64);
-    EXPECT_EQ(y, 32);
+    // Clamped to (width-1, height-1) so right/bottom-edge UVs map to
+    // the last in-bounds texel rather than width/height (which would
+    // be out of range).
+    EXPECT_EQ(x, 63);
+    EXPECT_EQ(y, 31);
 }
 
 TEST(TexturePaintBufferTest, SaveAndLoadRoundTripPreservesPixels)
