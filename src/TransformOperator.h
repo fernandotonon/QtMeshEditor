@@ -221,6 +221,7 @@ private:
 
     // Vertex paint drag state (edit mode only).
     bool                                    mVertexPaintDragActive = false;
+    bool                                    mTexturePaintDragActive = false;
 
     // Bone-gizmo drag state. Active when a bone is the current selection
     // (per AnimationControlController::selectedBonePtr) and the user

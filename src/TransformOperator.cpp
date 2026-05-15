@@ -25,6 +25,7 @@
 #include "commands/BoneTransformCommand.h"
 #include "BoneDragRelease.h"
 #include "EditModeController.h"
+#include "TexturePaintController.h"
 #include "AnimationControlController.h"
 #include "PropertiesPanelController.h"
 #include "SkeletonDebug.h"
@@ -103,6 +104,10 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     connect(EditModeController::instance(), &EditModeController::editModeChanged,
             this, &TransformOperator::onSelectionChanged);
     connect(EditModeController::instance(), &EditModeController::vertexPaintChanged,
+            this, &TransformOperator::onSelectionChanged);
+    // Texture paint toggle also affects mouse-tracking (we need
+    // hover events without a button press) and gizmo visibility.
+    connect(TexturePaintController::instance(), &TexturePaintController::texturePaintChanged,
             this, &TransformOperator::onSelectionChanged);
 
     QtInputManager::getInstance().AddMouseListener(this);
@@ -579,8 +584,14 @@ void TransformOperator::updateGizmo()
                 m_pRotationGizmo->setVisible(false);
                 m_pTranslationGizmo->setVisible(false);
                 m_pScaleGizmo->setVisible(false);
-                mTrackingEnable = EditModeController::instance()->isEditModeActive()
-                               && EditModeController::instance()->vertexPaintEnabled();
+                // Enable mouse tracking when ANY paint mode is on so
+                // the hover preview / brush ring updates without a
+                // pressed button. Vertex paint requires Edit Mode;
+                // texture paint works in any mode.
+                mTrackingEnable =
+                    (EditModeController::instance()->isEditModeActive()
+                     && EditModeController::instance()->vertexPaintEnabled())
+                    || TexturePaintController::instance()->texturePaintEnabled();
           break;
         case TransformOperator::TS_TRANSLATE:
                 m_pTransformNode->setOrientation(gizmoOrientation);
@@ -616,8 +627,23 @@ void TransformOperator::updateGizmo()
         m_pTranslationGizmo->setVisible(false);
         m_pScaleGizmo->setVisible(false);
     }
-    if(m_pActiveWidget)
+    if(m_pActiveWidget) {
         m_pActiveWidget->setMouseTracking(mTrackingEnable);
+        // Crosshair cursor while any paint mode is on so the user
+        // gets clear feedback that clicks will paint, not select.
+        // Only override the cursor in TS_SELECT — in Translate/Rotate/
+        // Scale the gizmo is the active interaction and the user
+        // should see the default cursor over its handles.
+        if (mTransformState == TS_SELECT) {
+            const bool paintOn =
+                (EditModeController::instance()->isEditModeActive()
+                 && EditModeController::instance()->vertexPaintEnabled())
+                || TexturePaintController::instance()->texturePaintEnabled();
+            m_pActiveWidget->setCursor(paintOn ? Qt::CrossCursor : Qt::ArrowCursor);
+        } else {
+            m_pActiveWidget->setCursor(Qt::ArrowCursor);
+        }
+    }
 }
 
 void TransformOperator::tickTransformGizmoScale(const Ogre::Camera* camera)
@@ -1001,6 +1027,21 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             return;
         }
 
+        // Texture paint takes priority over selection/box pick: it works
+        // in Material Mode without entering Edit Mode, so we handle it
+        // before the Edit-Mode-gated branch below.
+        {
+            auto* texPaint = TexturePaintController::instance();
+            if (texPaint->texturePaintEnabled() && mTransformState == TS_SELECT) {
+                if (texPaint->beginStroke(m_pActiveWidget, e->pos())) {
+                    mTexturePaintDragActive = true;
+                    SentryReporter::addBreadcrumb("ui.action", "Texture paint: stroke begin");
+                    return;
+                }
+                // Cursor missed the mesh — fall through to normal selection.
+            }
+        }
+
         // In edit mode, delegate selection to EditModeController
         if (EditModeController::instance()->isEditModeActive() && mTransformState == TS_SELECT)
         {
@@ -1264,6 +1305,18 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                && m_pActiveWidget)
     {
         editCtrl->updateVertexPaintPreview(m_pActiveWidget, e->pos());
+    }
+
+    // Texture paint: while LMB held, update stroke; otherwise update
+    // the hover preview so the user sees the brush ring even before
+    // clicking. Decoupled from Edit Mode — texture paint owns its own
+    // EditableMesh now.
+    auto* texPaint = TexturePaintController::instance();
+    if (mTexturePaintDragActive && (e->buttons() & Qt::LeftButton) && m_pActiveWidget)
+    {
+        texPaint->updateStroke(m_pActiveWidget, e->pos());
+    } else if (texPaint->texturePaintEnabled() && m_pActiveWidget) {
+        texPaint->updateMeshHover(m_pActiveWidget, e->pos());
     }
 
     // Knife hover preview: cheap to update on every move while the session
@@ -1788,6 +1841,13 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         EditModeController::instance()->endVertexPaintStroke(/*commitUndo=*/true);
         mVertexPaintDragActive = false;
         SentryReporter::addBreadcrumb("ui.action", "Vertex paint: stroke end");
+        return;
+    }
+
+    if (mTexturePaintDragActive && e->button() == Qt::LeftButton) {
+        TexturePaintController::instance()->endStroke();
+        mTexturePaintDragActive = false;
+        SentryReporter::addBreadcrumb("ui.action", "Texture paint: stroke end");
         return;
     }
 

@@ -91,7 +91,7 @@ int main(int argc, char *argv[])
                         || arg == "normal-from-height" || arg == "memory"
                         || arg == "analyze" || arg == "vertex-cache"
                         || arg == "decimate" || arg == "atlas" || arg == "atlas-apply"
-                        || arg == "optimize")
+                        || arg == "optimize" || arg == "bake-vertex-colors")
                     cliMode = true;
                 break;  // first non-flag arg determines mode
             }

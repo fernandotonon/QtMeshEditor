@@ -79,6 +79,9 @@ MaterialPresetLibrary.cpp
 MeshLodController.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
+TexturePaintBuffer.cpp
+TexturePaintController.cpp
+VertexColorBaker.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
@@ -173,6 +176,9 @@ MaterialPresetLibrary.h
 MeshLodController.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
+TexturePaintBuffer.h
+TexturePaintController.h
+VertexColorBaker.h
 ApplyAtlas.h
 EmbeddedTextureCache.h
 NormalMapGenerator.h

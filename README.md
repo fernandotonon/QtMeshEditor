@@ -166,7 +166,69 @@ qtmesh pose model.fbx --animation "Dance" --count 4 -o pose_%02d.stl
 
 # LOD generation
 qtmesh lod model.fbx --auto
+
+# Bake vertex colors → texture (with UV-seam dilation)
+qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilation 4
 ```
+
+---
+
+### 🎨 Paint Tools
+
+ZBrush-style polypaint and BaseColor texture painting, with a 2D preview
+panel, multiple brush tools (paint, erase, fill, color picker, smudge),
+texture-slot picker per submesh, and a one-click bake that turns vertex
+colors into a UV-space texture.
+
+**Quick start (texture paint, GUI):**
+
+1. Switch to **Material Mode** (mode bar at the top).
+2. Select a mesh entity. The Inspector's **Texture Paint** section
+   shows a slot picker (every paintable TUS across submeshes) and a 256×256
+   live preview of the active texture.
+3. Click the **paint brush** button in the toolbar to enable painting. The
+   first click on the mesh auto-creates a paint session against the active
+   slot (or you can pre-create with *Create / Attach Texture*).
+4. Pick a tool from the row at the top of the panel: ✏ Paint, ⌫ Erase, ⧉ Fill,
+   ⊰ Pick (eyedropper), ∿ Smudge. Brush color/radius/strength/falloff comes
+   from the shared Paint Brush section above the toolbar's brush popup.
+5. Left-click-drag on **either** the 3D mesh or the 2D preview panel. Both
+   drive the same paint buffer; the 2D preview updates in real time and a
+   brush ring shows where the cursor maps on the 3D surface (and vice versa).
+6. *Save…* / *Load…* round-trips the buffer to disk as PNG (or any format
+   QImage can write).
+
+**Vertex paint (GUI):**
+
+Same flow, but vertex paint operates in **Edit Mode** instead. Press **Tab**
+on a selected mesh to enter Edit Mode, then tick *Vertex Color Preview* in
+the Edit Mode Tools section to see vertex colors live.
+
+**Bake Vertex Colors → Texture** rasterizes the active mesh's vertex colors
+into a UV-space PNG via barycentric interpolation, then dilates the result
+outward by N pixels to mask UV-seam bleed at MIP-map time.
+
+**Headless (CLI):**
+
+```bash
+qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilation 4
+```
+
+**Export.** Vertex colors are preserved on export to formats that support
+them (glTF preferred — verified round-trip).
+
+**Notes / limitations.**
+
+- Brush size is in local mesh units (shared with vertex paint). For texture
+  paint we divide by mesh bounding-box extent and clamp to a UV-friendly
+  range, so 0.25 produces a sensible stamp on both a unit cube and a
+  100-unit character.
+- Painting auto-rebinds every TUS named `albedo` or `diffuse_map` on the
+  active material — imported PBR materials alias the diffuse texture under
+  both, and rebinding only one would leave the other pointing at the
+  original.
+- Bake uses fan triangulation of n-gon faces; concave faces should be
+  pre-triangulated.
 
 ---
 
@@ -198,6 +260,7 @@ Split View|Skeleton Animation Controls
 - **Animation resampling** — reduce keyframe density for game engines
 - **Pose export** — bake animation frames as static meshes (3D printing)
 - **LOD generation** — automatic level-of-detail mesh reduction
+- **Paint tools** — vertex paint, texture paint (BaseColor), bake vertex colors to texture with seam dilation
 - **Material editor** — visual editing with AI-assisted generation
 - **Skeleton inspection** — bone weights, debug overlays, animation preview
 - **Scene management** — duplicate (Ctrl+D), group (Ctrl+G), snap, pivot modes

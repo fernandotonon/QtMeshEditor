@@ -71,6 +71,7 @@
 #include "WelcomeScreenController.h"
 #include "AssetBrowserController.h"
 #include "EditModeController.h"
+#include "TexturePaintController.h"
 #include "EditorModeController.h"
 #include <QDockWidget>
 #include <QQuickWidget>
@@ -328,6 +329,10 @@ MainWindow::~MainWindow()
     EditorModeController::kill();
     Manager* manager = Manager::getSingletonPtr();
     if (manager) {
+        // Paint controller holds an EditableMesh + ring overlay objects
+        // owned by the SceneManager. Kill it before Manager teardown
+        // so its destructor runs against a live Ogre.
+        TexturePaintController::kill();
         EditModeController::kill();
         SubEntityHighlight::kill();
         AnimationBlender::kill();
@@ -530,6 +535,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<EditModeController>("PropertiesPanel", 1, 0, "EditModeController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return EditModeController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<TexturePaintController>("PropertiesPanel", 1, 0, "TexturePaintController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return TexturePaintController::qmlInstance(engine, nullptr);
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
@@ -1229,7 +1238,8 @@ void MainWindow::initToolBar()
     vertexPaintButton->setCheckable(true);
     vertexPaintButton->setIcon(makeVertexPaintBrushIcon());
     vertexPaintButton->setIconSize(QSize(18, 18));
-    vertexPaintButton->setToolTip(tr("Vertex paint — paint on mesh (Select tool). Arrow: brush settings."));
+    vertexPaintButton->setToolTip(tr("Paint brush — toggles vertex + texture paint together "
+                                     "(Material Mode). Arrow: brush settings."));
     vertexPaintButton->setFont(topoFont);
     vertexPaintButton->setStyleSheet(topoBtnStyle);
     vertexPaintButton->setPopupMode(QToolButton::MenuButtonPopup);
@@ -1356,18 +1366,54 @@ void MainWindow::initToolBar()
 
     connect(vertexPaintButton, &QToolButton::toggled, this, [this](bool on) {
         SentryReporter::addBreadcrumb("ui.action",
-            QStringLiteral("Toolbar: Vertex paint %1").arg(on ? QStringLiteral("on") : QStringLiteral("off")));
-        EditModeController::instance()->setVertexPaintEnabled(on);
+            QStringLiteral("Toolbar: Paint brush %1").arg(on ? "on" : "off"));
+        // All painting goes through TexturePaintController. The
+        // controller's "paint target" enum picks between texture
+        // paint and vertex paint per stroke.
+        TexturePaintController::instance()->setTexturePaintEnabled(on);
         if (on)
             setTransformState(TransformOperator::TS_SELECT);
     });
-    connect(EditModeController::instance(), &EditModeController::vertexPaintChanged, this, [vertexPaintButton]() {
+    auto syncPaintBtnChecked = [vertexPaintButton]() {
+        const bool on = TexturePaintController::instance()->texturePaintEnabled();
         QSignalBlocker b(vertexPaintButton);
-        vertexPaintButton->setChecked(EditModeController::instance()->vertexPaintEnabled());
-    });
+        vertexPaintButton->setChecked(on);
+    };
+    connect(TexturePaintController::instance(), &TexturePaintController::texturePaintChanged,
+            this, syncPaintBtnChecked);
 
     QAction* vertexPaintAction = ui->objectsToolbar->addWidget(vertexPaintButton);
-    vertexPaintAction->setObjectName("modeEditVertexPaintAction");
+    vertexPaintAction->setObjectName("modeMaterialPaintBrushAction");
+
+    // The paint brush is contextual:
+    //  - Material Mode → texture paint (paint into the BaseColor)
+    //  - Edit Mode    → vertex paint (paint vertex colors)
+    //  - Other modes  → hidden
+    // Switching modes turns the previous mode's brush off so we don't
+    // leave a stale checked state.
+    auto refreshPaintBrushVisibility = [vertexPaintButton, vertexPaintAction]() {
+        const auto mode = EditorModeController::instance()->currentMode();
+        const bool material = mode == EditorModeController::MaterialMode;
+        // Paint brush lives in Material Mode only. The user chooses
+        // between Vertex and Texture painting via the panel's target
+        // picker; both run through TexturePaintController.
+        vertexPaintAction->setVisible(material);
+        vertexPaintButton->setEnabled(material);
+        // Disable both brushes AND reset the button's checked state on
+        // mode change. Without resetting the checked flag, the user's
+        // next click toggles "on→off" (since we silently set the
+        // controllers off but left the button visually checked).
+        EditModeController::instance()->setVertexPaintEnabled(false);
+        TexturePaintController::instance()->setTexturePaintEnabled(false);
+        SentryReporter::addBreadcrumb(
+            "ui.action",
+            QStringLiteral("Mode switch: paint state reset"));
+        QSignalBlocker b(vertexPaintButton);
+        vertexPaintButton->setChecked(false);
+    };
+    refreshPaintBrushVisibility();
+    connect(EditorModeController::instance(), &EditorModeController::modeChanged,
+            this, refreshPaintBrushVisibility);
 
     // Context-aware visibility + enabled:
     //  - Hidden entirely when NOT in edit mode.
@@ -1376,10 +1422,8 @@ void MainWindow::initToolBar()
     //    non-empty selection.
     auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton, mergeButton, deleteButton,
                                subdivideButton, fillButton, loopCutButton, convertToQuadsButton,
-                               vertexPaintButton,
                                extrudeAction, bevelAction, knifeAction, mergeAction, deleteAction,
-                               subdivideAction, fillAction, loopCutAction, convertToQuadsAction,
-                               vertexPaintAction]() {
+                               subdivideAction, fillAction, loopCutAction, convertToQuadsAction]() {
         auto* c = EditModeController::instance();
         const bool active = c->isEditModeActive();
         extrudeAction->setVisible(active);
@@ -1391,7 +1435,6 @@ void MainWindow::initToolBar()
         fillAction->setVisible(active);
         loopCutAction->setVisible(active);
         convertToQuadsAction->setVisible(active);
-        vertexPaintAction->setVisible(active);
         if (!active) return;
         const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
         const bool hasFaces = c->selectedFaceCount() > 0;
@@ -1429,7 +1472,6 @@ void MainWindow::initToolBar()
         // some quad) still qualify — the tri-only submeshes can still
         // be merged. (CodeRabbit follow-up on PR #347.)
         convertToQuadsButton->setEnabled(c->canConvertToQuads());
-        vertexPaintButton->setEnabled(true);
     };
     refreshTopoButtons();
     connect(editCtrlForTopo, &EditModeController::editModeChanged,

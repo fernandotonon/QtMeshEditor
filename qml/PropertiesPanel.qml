@@ -282,6 +282,21 @@ Rectangle {
                 Component.onCompleted: content = editModeToolsComponent
             }
 
+            // ---- Texture Paint (Material mode) ----
+            // (Brush color/radius/strength/falloff live on the toolbar
+            //  paint-brush popup. The Inspector panel keeps only the
+            //  paint-target switch, slot picker, and texture preview.)
+
+            CollapsibleSection {
+                title: "Texture Paint"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.MaterialMode,
+                    true)
+                expanded: true
+
+                Component.onCompleted: content = texturePaintComponent
+            }
+
             CollapsibleSection {
                 title: "Workspace Panels"
                 sectionVisible: root.currentTab === root.modeToolsTab
@@ -930,6 +945,521 @@ Rectangle {
                 visible: EditModeController.editModeActive && !EditModeController.hasValidationWarnings
                 text: "\u2714 No degenerate triangles"
                 color: "#60c060"; font.pixelSize: 10
+            }
+        }
+    }
+
+    // ---- Paint Brush Content (DEPRECATED — kept dormant) ----
+    // Brush color/radius/strength/falloff now live exclusively on the
+    // toolbar paint-brush popup. The component below is no longer
+    // wired into any CollapsibleSection; left here only because
+    // removing it would churn 100+ lines of unrelated diff.
+    Component {
+        id: paintBrushComponent
+
+        Column {
+            id: brushCol
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            property color brushColor: TexturePaintController.texturePaintColor
+            property real brushRadius: TexturePaintController.texturePaintRadius
+            property real brushStrength: TexturePaintController.texturePaintStrength
+            property real brushFalloff: TexturePaintController.texturePaintFalloff
+
+            Connections {
+                target: TexturePaintController
+                function onTexturePaintChanged() {
+                    brushCol.brushColor = TexturePaintController.texturePaintColor
+                    brushCol.brushRadius = TexturePaintController.texturePaintRadius
+                    brushCol.brushStrength = TexturePaintController.texturePaintStrength
+                    brushCol.brushFalloff = TexturePaintController.texturePaintFalloff
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                text: "Shared brush settings for Vertex Paint and Texture Paint. " +
+                      "The toolbar Vertex Paint popup uses these same values."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10; opacity: 0.7
+                wrapMode: Text.Wrap
+            }
+
+            // Color picker (native dialog)
+            Row {
+                spacing: 6
+                Text {
+                    text: "Color"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 70
+                }
+                Rectangle {
+                    width: 28; height: 22; radius: 3
+                    color: brushCol.brushColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.pickBrushColorInteractive()
+                    }
+                }
+            }
+
+            // Radius slider
+            Row {
+                spacing: 6
+                Text {
+                    text: "Radius"; width: 70
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    width: 140
+                    from: 0.02; to: 2.0; stepSize: 0.01
+                    value: brushCol.brushRadius
+                    onMoved: TexturePaintController.setBrushRadius(value)
+                }
+                Text {
+                    text: brushCol.brushRadius.toFixed(2)
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Strength slider
+            Row {
+                spacing: 6
+                Text {
+                    text: "Strength"; width: 70
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    width: 140
+                    from: 0.0; to: 1.0; stepSize: 0.01
+                    value: brushCol.brushStrength
+                    onMoved: TexturePaintController.setBrushStrength(value)
+                }
+                Text {
+                    text: brushCol.brushStrength.toFixed(2)
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Falloff slider
+            Row {
+                spacing: 6
+                Text {
+                    text: "Falloff"; width: 70
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    width: 140
+                    from: 0.0; to: 1.0; stepSize: 0.01
+                    value: brushCol.brushFalloff
+                    onMoved: TexturePaintController.setBrushFalloff(value)
+                }
+                Text {
+                    text: brushCol.brushFalloff.toFixed(2)
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+        }
+    }
+
+    // ---- Texture Paint Content ----
+    Component {
+        id: texturePaintComponent
+
+        Column {
+            id: texPaintCol
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            property bool paintOn: TexturePaintController.texturePaintEnabled
+            property bool hasSession: TexturePaintController.hasActiveSession
+            property int sessionRes: TexturePaintController.textureResolution
+            property var slots: TexturePaintController.textureSlots
+            property int activeSlot: TexturePaintController.activeSlotIndex
+            property int brushTool: TexturePaintController.brushTool
+            property int paintTarget: TexturePaintController.paintTarget
+            property string previewUri: TexturePaintController.previewDataUri
+            // Live hover position in UV space, fed by hoveredUVChanged.
+            property real hoverU: -1
+            property real hoverV: -1
+
+            Connections {
+                target: TexturePaintController
+                function onTexturePaintChanged() {
+                    texPaintCol.paintOn = TexturePaintController.texturePaintEnabled
+                }
+                function onSessionChanged() {
+                    texPaintCol.hasSession = TexturePaintController.hasActiveSession
+                    texPaintCol.sessionRes = TexturePaintController.textureResolution
+                }
+                function onSlotsChanged() {
+                    texPaintCol.slots = TexturePaintController.textureSlots
+                    texPaintCol.activeSlot = TexturePaintController.activeSlotIndex
+                }
+                function onPreviewChanged() {
+                    texPaintCol.previewUri = TexturePaintController.previewDataUri
+                }
+                function onBrushToolChanged() {
+                    texPaintCol.brushTool = TexturePaintController.brushTool
+                }
+                function onPaintTargetChanged() {
+                    texPaintCol.paintTarget = TexturePaintController.paintTarget
+                }
+                function onHoveredUVChanged(u, v) {
+                    texPaintCol.hoverU = u
+                    texPaintCol.hoverV = v
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                text: "Paint into the model — either as vertex colors " +
+                      "(polypaint, exported with the mesh) or into the " +
+                      "BaseColor texture. Pick the target below."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10; opacity: 0.7
+                wrapMode: Text.Wrap
+            }
+
+            // Paint target switch \u2014 picking a target also enables paint.
+            // Three states: Off / Vertex / Texture. Defaults to Vertex.
+            Row {
+                spacing: 4
+                Text {
+                    text: "Paint:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 50
+                }
+                Repeater {
+                    model: [
+                        { target: -1, label: "Off" },
+                        { target: 1,  label: "Vertex" },
+                        { target: 0,  label: "Texture" }
+                    ]
+                    Rectangle {
+                        width: 70; height: 26; radius: 3
+                        property bool isActive: modelData.target === -1
+                            ? !texPaintCol.paintOn
+                            : (texPaintCol.paintOn && texPaintCol.paintTarget === modelData.target)
+                        color: isActive
+                            ? PropertiesPanelController.highlightColor
+                            : (tgtMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                                                   : PropertiesPanelController.headerColor)
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: tgtMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (modelData.target === -1) {
+                                    TexturePaintController.texturePaintEnabled = false
+                                } else {
+                                    TexturePaintController.paintTarget = modelData.target
+                                    if (!texPaintCol.paintOn)
+                                        TexturePaintController.texturePaintEnabled = true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Tool selector \u2014 Paint, Erase, Fill, Picker, Smudge
+            Row {
+                spacing: 4
+                Repeater {
+                    model: [
+                        { tool: 0, label: "Paint", glyph: "\u270f" },
+                        { tool: 1, label: "Erase", glyph: "\u232b" },
+                        { tool: 2, label: "Fill",  glyph: "\u29c9" },
+                        { tool: 3, label: "Pick",  glyph: "\u22b0" },
+                        { tool: 4, label: "Smudge", glyph: "\u223f" }
+                    ]
+                    Rectangle {
+                        width: 52; height: 26; radius: 3
+                        color: texPaintCol.brushTool === modelData.tool
+                            ? PropertiesPanelController.highlightColor
+                            : (toolMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                                                    : PropertiesPanelController.headerColor)
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.glyph + " " + modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: toolMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.brushTool = modelData.tool
+                        }
+                    }
+                }
+            }
+
+            // Texture slot picker \u2014 populated by selection
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: "Slot:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 36
+                }
+                ThemedComboBox {
+                    id: slotCombo
+                    width: 180
+                    enabled: texPaintCol.slots.length > 0
+                    model: {
+                        const labels = []
+                        for (let i = 0; i < texPaintCol.slots.length; ++i)
+                            labels.push(texPaintCol.slots[i].label || ("slot " + i))
+                        return labels.length === 0 ? ["(no texture slots \u2014 select a mesh)"] : labels
+                    }
+                    currentIndex: Math.max(0, texPaintCol.activeSlot)
+                    onActivated: function(index) {
+                        if (texPaintCol.slots.length > 0)
+                            TexturePaintController.activeSlotIndex = index
+                    }
+                }
+                // UV island overlay toggle
+                Rectangle {
+                    width: 18; height: 18; radius: 3
+                    color: TexturePaintController.uvOverlayVisible
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text {
+                        anchors.centerIn: parent
+                        text: TexturePaintController.uvOverlayVisible ? "\u2713" : ""
+                        color: "white"; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.uvOverlayVisible = !TexturePaintController.uvOverlayVisible
+                    }
+                }
+                Text {
+                    text: "UV"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Session info
+            Text {
+                width: parent.width - 16
+                text: texPaintCol.hasSession
+                    ? ("Active texture: " + texPaintCol.sessionRes + "\u00d7" + texPaintCol.sessionRes)
+                    : "No texture session \u2014 enable paint or click \"Create / Attach Texture\"."
+                color: texPaintCol.hasSession ? "#60c060" : PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: texPaintCol.hasSession ? 1.0 : 0.7
+                wrapMode: Text.Wrap
+            }
+
+            // ---- 2D preview / paint surface ----
+            // Live image of the paint buffer; clicking and dragging
+            // paints into the texture in UV space. Crosshair indicator
+            // mirrors the 3D-mesh hover position.
+            Rectangle {
+                width: 256; height: 256
+                color: "#222"
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                visible: texPaintCol.hasSession
+
+                Image {
+                    id: previewImg
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    source: texPaintCol.previewUri
+                    fillMode: Image.PreserveAspectFit
+                    smooth: false
+                    cache: false
+                    // Bust the cache when source string changes
+                    onSourceChanged: previewImg.update()
+                }
+                // UV-island wireframe overlay (toggleable).
+                Image {
+                    id: uvOverlayImg
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    visible: TexturePaintController.uvOverlayVisible
+                    opacity: 0.7
+                    source: TexturePaintController.uvOverlayDataUri
+                    fillMode: Image.PreserveAspectFit
+                    smooth: false
+                    cache: false
+                }
+
+                // Crosshair indicator at hover UV
+                Rectangle {
+                    visible: texPaintCol.hoverU >= 0 && texPaintCol.hoverV >= 0
+                    width: 1; height: parent.height - 2
+                    color: "#ff3030"
+                    x: 1 + Math.round(texPaintCol.hoverU * (parent.width - 2))
+                    y: 1
+                }
+                Rectangle {
+                    visible: texPaintCol.hoverU >= 0 && texPaintCol.hoverV >= 0
+                    width: parent.width - 2; height: 1
+                    color: "#ff3030"
+                    x: 1
+                    y: 1 + Math.round(texPaintCol.hoverV * (parent.height - 2))
+                }
+
+                MouseArea {
+                    id: paintArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.CrossCursor
+                    // Stop parent layouts from stealing the drag — QML
+                    // scrollers / containers may grab the press as a
+                    // flick gesture after a few pixels of motion,
+                    // killing the brush stroke. preventStealing keeps
+                    // the grab locked here.
+                    preventStealing: true
+                    property bool dragging: false
+
+                    function toUV(mx, my) {
+                        const W = paintArea.width
+                        const H = paintArea.height
+                        return Qt.point(Math.max(0, Math.min(1, mx / W)),
+                                        Math.max(0, Math.min(1, my / H)))
+                    }
+                    onPositionChanged: function(m) {
+                        const uv = toUV(m.x, m.y)
+                        // While dragging: keep painting regardless of
+                        // pressed/buttons state. onPressed sets the
+                        // flag; onReleased / onExited / onCanceled
+                        // clear it. Some Qt6/macOS edge cases zero
+                        // m.buttons mid-drag which used to break the
+                        // stroke after the first move.
+                        if (dragging) {
+                            TexturePaintController.updateStrokeUV(uv.x, uv.y)
+                        } else {
+                            TexturePaintController.setHoveredUV(uv.x, uv.y)
+                        }
+                    }
+                    onExited: {
+                        // Don't end the stroke if we're still mid-drag —
+                        // the user may drag off and back onto the panel
+                        // in one motion. onReleased fires globally
+                        // (mouse is grabbed by the press) so we don't
+                        // need a defensive end-stroke here.
+                        if (!dragging) TexturePaintController.clearHoveredUV()
+                    }
+                    onPressed: function(m) {
+                        if (m.button !== Qt.LeftButton) return
+                        const uv = toUV(m.x, m.y)
+                        if (TexturePaintController.beginStrokeUV(uv.x, uv.y))
+                            dragging = true
+                    }
+                    onReleased: function(m) {
+                        if (dragging) {
+                            TexturePaintController.endStrokeUV()
+                            dragging = false
+                        }
+                    }
+                    onCanceled: {
+                        if (dragging) {
+                            TexturePaintController.endStrokeUV()
+                            dragging = false
+                        }
+                    }
+                }
+            }
+
+            // Action row 1: create, save, load
+            Flow {
+                width: parent.width - 16
+                spacing: 4
+
+                // Resolution picker for fresh textures.
+                ThemedComboBox {
+                    id: resCombo
+                    width: 80
+                    model: ["256", "512", "1024", "2048", "4096"]
+                    currentIndex: 2  // 1024
+                }
+
+                Rectangle {
+                    width: 130; height: 24; radius: 3
+                    color: createMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Create / Attach Texture"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea {
+                        id: createMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            const res = parseInt(resCombo.model[resCombo.currentIndex])
+                            TexturePaintController.ensurePaintableTexture(res)
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 70; height: 24; radius: 3
+                    color: saveMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    opacity: texPaintCol.hasSession ? 1.0 : 0.4
+                    Text { anchors.centerIn: parent; text: "Save\u2026"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea {
+                        id: saveMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        enabled: texPaintCol.hasSession
+                        onClicked: TexturePaintController.savePaintBufferInteractive()
+                    }
+                }
+
+                Rectangle {
+                    width: 70; height: 24; radius: 3
+                    color: loadMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Load\u2026"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea {
+                        id: loadMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: TexturePaintController.loadPaintBufferInteractive()
+                    }
+                }
+            }
+
+            // Action row 2: bake vertex colors
+            Flow {
+                width: parent.width - 16
+                spacing: 4
+
+                Rectangle {
+                    width: 200; height: 24; radius: 3
+                    color: bakeMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Bake Vertex Colors \u2192 Texture"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea {
+                        id: bakeMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            const res = parseInt(resCombo.model[resCombo.currentIndex])
+                            TexturePaintController.bakeVertexColorsToTexture(res, 4, "")
+                        }
+                    }
+                }
             }
         }
     }
