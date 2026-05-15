@@ -1033,6 +1033,21 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
         {
             auto* texPaint = TexturePaintController::instance();
             if (texPaint->texturePaintEnabled() && mTransformState == TS_SELECT) {
+                // For the Wand tool only: probe the mesh first. If the
+                // click missed (empty space behind the model), Photoshop
+                // / GIMP convention is to clear the current selection.
+                // beginStroke would otherwise still return true on a miss
+                // for texture paint (it creates the session before
+                // hit-testing), masking the click-outside case.
+                if (texPaint->brushTool() == TexturePaintController::ToolSmartSelect
+                    && !texPaint->wouldStrokeHit(m_pActiveWidget, e->pos())) {
+                    if (texPaint->hasSelectionMask()) {
+                        texPaint->clearSelectionMask();
+                        SentryReporter::addBreadcrumb("ui.action",
+                            "Wand: cleared selection (click outside mesh)");
+                    }
+                    return;
+                }
                 if (texPaint->beginStroke(m_pActiveWidget, e->pos())) {
                     mTexturePaintDragActive = true;
                     SentryReporter::addBreadcrumb("ui.action", "Texture paint: stroke begin");

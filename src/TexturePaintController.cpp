@@ -2,6 +2,7 @@
 
 #include "EditModeController.h"
 #include "EditableMesh.h"
+#include "Manager.h"
 #include "OgreWidget.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -14,6 +15,11 @@
 #include <QBuffer>
 #include <QPainter>
 #include <QPen>
+#include <QLibraryInfo>
+#include <QQmlApplicationEngine>
+#include <QQmlComponent>
+#include <QQmlEngine>
+#include <QQuickWindow>
 #include <QTimer>
 #include <QByteArray>
 #include <QColorDialog>
@@ -22,6 +28,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QUndoCommand>
+#include <QUrl>
 #include <QVariantMap>
 #include <QWidget>
 #include <QtMath>
@@ -101,6 +108,56 @@ private:
     bool m_skipFirstRedo = true; // command is pushed *after* the stroke applied
 };
 
+/// Undo command for a one-shot selection-mask action (fill FG / fill BG
+/// / delete). Same pre/post-snapshot model as TexturePaintStrokeCommand
+/// — actions like "Delete selected" can affect thousands of pixels but
+/// happen atomically, so storing a full pixel snapshot is the simplest
+/// correct approach (matches Photoshop's "History snapshot").
+class TexturePaintMaskActionCommand : public QUndoCommand
+{
+public:
+    TexturePaintMaskActionCommand(TexturePaintController* controller,
+                                  std::vector<uint8_t> before,
+                                  std::vector<uint8_t> after,
+                                  int width,
+                                  int height,
+                                  QString textureName,
+                                  QString label)
+        : QUndoCommand(label)
+        , m_controller(controller)
+        , m_before(std::move(before))
+        , m_after(std::move(after))
+        , m_width(width)
+        , m_height(height)
+        , m_textureName(std::move(textureName))
+    {}
+
+    void undo() override { apply(m_before); }
+    void redo() override
+    {
+        if (m_skipFirstRedo) { m_skipFirstRedo = false; return; }
+        apply(m_after);
+    }
+
+private:
+    void apply(const std::vector<uint8_t>& pixels)
+    {
+        if (!m_controller) return;
+        if (m_controller->currentTextureName() != m_textureName) return;
+        const auto& buf = m_controller->buffer();
+        if (buf.width() != m_width || buf.height() != m_height) return;
+        m_controller->applyPixelSnapshot(pixels);
+    }
+
+    TexturePaintController* m_controller = nullptr;
+    std::vector<uint8_t> m_before;
+    std::vector<uint8_t> m_after;
+    int m_width = 0;
+    int m_height = 0;
+    QString m_textureName;
+    bool m_skipFirstRedo = true;
+};
+
 } // namespace
 
 TexturePaintController* TexturePaintController::instance()
@@ -142,6 +199,47 @@ TexturePaintController::TexturePaintController(QObject* parent)
     if (auto* sel = SelectionSet::getSingleton()) {
         connect(sel, &SelectionSet::selectionChanged,
                 this, &TexturePaintController::refreshSlots);
+    }
+
+    // Listen for scene-node destruction so we can drop dangling paint
+    // session references before the source Entity goes away. Without
+    // this, deleting a mesh while it had an active paint session or
+    // a wand selection mask would crash on the next frame — the
+    // mask-overlay clone holds a MeshPtr keyed off the dying entity,
+    // and m_paintMeshEntity / m_sessionEntity remain pointed at
+    // freed memory. Manager emits the signal BEFORE actually
+    // destroying the node so the entities are still valid here.
+    if (auto* mgr = Manager::getSingletonPtr()) {
+        connect(mgr, &Manager::sceneNodeDestroyed, this,
+            [this](Ogre::SceneNode* node) {
+                if (!node) return;
+                // If any attached object on the doomed node is the
+                // session entity (or the overlay clone), tear down
+                // the session now while the entity is still alive.
+                bool touches = false;
+                try {
+                    const auto& objs = node->getAttachedObjects();
+                    for (auto* o : objs) {
+                        if (!o) continue;
+                        if (o == static_cast<Ogre::MovableObject*>(m_paintMeshEntity)
+                         || o == static_cast<Ogre::MovableObject*>(m_sessionEntity)
+                         || o == static_cast<Ogre::MovableObject*>(m_maskOverlayEntity)) {
+                            touches = true;
+                            break;
+                        }
+                    }
+                } catch (...) { touches = true; }
+                if (touches) {
+                    SentryReporter::addBreadcrumb("ui.action",
+                        "Paint: scene node holding session entity destroyed — closing session");
+                    try { closeSession(); } catch (...) {}
+                }
+            });
+        connect(mgr, &Manager::sceneClearing, this, [this]() {
+            // Hard scene reset — every entity is about to go away, so
+            // unconditionally tear down the paint session.
+            try { closeSession(); } catch (...) {}
+        });
     }
 }
 
@@ -215,10 +313,27 @@ void TexturePaintController::setPaintTarget(int target)
 {
     PaintTarget t = static_cast<PaintTarget>(target);
     if (t == m_target) return;
+
+    // Abort any active stroke first — switching target mid-stroke
+    // crashes because beginStroke captured one set of buffers and
+    // updateStroke would write into the other.
+    if (m_strokeActive) {
+        try { endStroke(); } catch (...) {}
+    }
+    // Tear down the texture-paint session when leaving texture target.
+    // The session owns a GPU texture, rebind state, and an EditableMesh
+    // built for the texture-paint flow; leaving any of that in place
+    // when target=Vertex was the source of the "switch crashes app"
+    // bug — the next vertex stroke called into half-initialized state.
+    if (m_target == TargetTexture && t == TargetVertex && hasActiveSession()) {
+        try { closeSession(); } catch (...) {}
+    }
     m_target = t;
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Paint target = %1").arg(target == TargetVertex ? "vertex" : "texture"));
     emit paintTargetChanged();
+    emit sessionChanged();
+    emit smartSelectChanged();  // the mask UI is texture-only
 }
 
 void TexturePaintController::setActiveSlotIndex(int index)
@@ -246,6 +361,12 @@ double TexturePaintController::texturePaintRadius() const
 {
     auto* em = EditModeController::instance();
     return em ? em->vertexPaintRadius() : 0.05;
+}
+
+QColor TexturePaintController::bgPaintColor() const
+{
+    auto* em = EditModeController::instance();
+    return em ? em->vertexPaintBackgroundColor() : QColor(255, 255, 255);
 }
 
 double TexturePaintController::texturePaintStrength() const
@@ -569,9 +690,15 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
             .arg(QString::fromStdString(entity->getName()))
             .arg(loadedExisting ? "yes" : "no"));
 
+    // The selection mask is paired 1:1 with the paint buffer. Re-size
+    // on every session so smartSelect's per-pixel indexing matches.
+    m_mask.resize(m_buffer.width(), m_buffer.height());
+    m_maskOverlayUri.clear();
+
     refreshPreviewUri();
     if (m_uvOverlayVisible) refreshUvOverlay();
     emit sessionChanged();
+    emit smartSelectChanged();
     return true;
 }
 
@@ -991,6 +1118,8 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
     m_strokeJustBegan = true;
     m_smudgeHavePrev = false;
     m_strokePreSnapshot = snapshotPixels();
+    m_wandStrokeActive = false;
+    m_wandStartScreenPos = screenPos;
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Paint stroke begin (target=%1 tool=%2 radius=%3 strength=%4 color=%5)")
             .arg(m_target == TargetVertex ? "vertex" : "texture")
@@ -1005,6 +1134,34 @@ bool TexturePaintController::beginStroke(OgreWidget* widget, const QPoint& scree
 void TexturePaintController::updateStroke(OgreWidget* widget, const QPoint& screenPos)
 {
     if (!m_strokeActive || !m_paintEnabled) return;
+
+    // Wand drag-to-scrub: once the smart-select tool has seeded the
+    // mask at press time, every subsequent move re-runs the select
+    // at the same UV seed with the tolerance derived from horizontal
+    // mouse displacement. This lets the user adjust the selection
+    // size live without lifting the mouse or touching a separate UI
+    // control.
+    if (m_tool == ToolSmartSelect && m_wandStrokeActive) {
+        if (widget) {
+            int vw = 0, vh = 0;
+            widget->pixelSizeForCameraPicking(vw, vh);
+            const int viewportW = vw > 0 ? vw : 800;
+            // Scale: full tolerance range across one viewport width.
+            // That's intuitive — drag from middle to the right edge of
+            // the viewport ≈ 50% tolerance jump.
+            const double dx = static_cast<double>(screenPos.x() - m_wandStartScreenPos.x());
+            const double t = std::clamp(m_wandStartTolerance + dx / static_cast<double>(viewportW),
+                                        0.0, 1.0);
+            if (std::abs(t - m_smartSelectTolerance) > 1e-4) {
+                m_smartSelectTolerance = t;
+                emit smartSelectChanged();
+                smartSelectAtUV(static_cast<double>(m_wandSeedUV.x),
+                                static_cast<double>(m_wandSeedUV.y),
+                                /*mode=*/0);
+            }
+        }
+        return;
+    }
 
     if (m_target == TargetVertex) {
         // Vertex paint: get local-space hit point and apply the
@@ -1069,10 +1226,19 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
         return m_buffer.paintBrush(uv, radius, paint, strength, falloff) > 0;
     }
     case ToolErase: {
-        // Erase = paint transparent. Strength controls how much alpha
-        // the stamp removes.
-        const Ogre::ColourValue clear(0.0f, 0.0f, 0.0f, 0.0f);
-        return m_buffer.paintBrush(uv, radius, clear, strength, falloff) > 0;
+        // Erase = paint with the user-chosen background color. The BG
+        // color is part of the FG/BG color pair (Photoshop / GIMP /
+        // Krita model). When BG is fully transparent (alpha 0) this
+        // matches the old "erase to transparent" behaviour; otherwise
+        // it lays down a solid replacement color — much more useful
+        // for actually masking out parts of a texture.
+        const QColor bg = bgPaintColor();
+        const Ogre::ColourValue eraseTo(
+            static_cast<float>(bg.redF()),
+            static_cast<float>(bg.greenF()),
+            static_cast<float>(bg.blueF()),
+            static_cast<float>(bg.alphaF()));
+        return m_buffer.paintBrush(uv, radius, eraseTo, strength, falloff) > 0;
     }
     case ToolFill: {
         // Fill is a single-stamp operation — apply once per stroke
@@ -1148,6 +1314,31 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
         m_smudgePrev = uv;
         return changed;
     }
+    case ToolSmartSelect: {
+        // Press = seed the selection at uv. Subsequent moves don't
+        // re-seed — instead they nudge the tolerance and re-run the
+        // select at the press seed. The on-move tolerance update
+        // happens in updateStroke / updateStrokeUV because we need
+        // the screen / UV delta to compute the scrub; this case
+        // handles the press-time seed only.
+        //
+        // Reset to the canonical 15% tolerance each press so the
+        // user starts from a known baseline. Otherwise the drag from
+        // the previous stroke would carry over and a fresh click on
+        // a new region would silently use last-stroke's wide value.
+        if (!m_strokeJustBegan) return false;
+        m_strokeJustBegan = false;
+        m_wandStrokeActive = true;
+        m_wandSeedUV = uv;
+        constexpr double kDefaultWandTolerance = 0.15;
+        m_wandStartTolerance = kDefaultWandTolerance;
+        if (std::abs(m_smartSelectTolerance - kDefaultWandTolerance) > 1e-4) {
+            m_smartSelectTolerance = kDefaultWandTolerance;
+            emit smartSelectChanged();
+        }
+        smartSelectAtUV(static_cast<double>(uv.x), static_cast<double>(uv.y), /*mode=*/0);
+        return false;  // smart-select doesn't dirty pixels
+    }
     }
     return false;
 }
@@ -1176,6 +1367,16 @@ void TexturePaintController::endStroke()
 {
     if (!m_strokeActive) return;
     m_strokeActive = false;
+    // Wand-drag stroke never dirties pixels, so the post-snapshot
+    // diff below would be a no-op; just clear the wand flags and bail.
+    if (m_wandStrokeActive) {
+        m_wandStrokeActive = false;
+        m_strokePreSnapshot.clear();
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Wand stroke end (final tolerance=%1)")
+                .arg(m_smartSelectTolerance, 0, 'f', 3));
+        return;
+    }
     // Ensure any pending debounced GPU upload runs immediately so
     // the final stroke pixels are visible before the user releases.
     if (!m_buffer.dirtyRect().empty())
@@ -1195,42 +1396,31 @@ void TexturePaintController::endStroke()
         m_textureName);
     UndoManager::getSingleton()->push(cmd);
     SentryReporter::addBreadcrumb("ui.action", "Texture paint stroke end (committed)");
-    // Persist the painted pixels for export. We do TWO things for
-    // texture target:
-    //  (a) Write the buffer back to the original texture's on-disk
-    //      file if it lives in a registered resource location. The
-    //      Ogre and Assimp export paths re-read textures from disk.
-    //  (b) Push the encoded PNG bytes into EmbeddedTextureCache
-    //      under the original texture name. The FBX exporter pulls
-    //      from this cache for textures that were originally
-    //      embedded in the source FBX (no disk source) — without
-    //      this they'd export with the un-painted bytes.
+    // Cache the painted pixels in-memory only. The user's original
+    // texture file on disk is NEVER touched during a stroke — they
+    // would lose paint on Cmd-Z, but they would also lose their
+    // unmodified asset if they were just experimenting. The
+    // EmbeddedTextureCache feeds the FBX exporter (and the in-engine
+    // re-bind), so an explicit Save / Export still picks up the
+    // painted texture. To persist to disk the user must invoke "Save
+    // to Original" or "Save…" / export. See bakeToOriginalFile().
     if (m_target == TargetTexture && !m_originalTextureName.isEmpty()) {
-        // bakeToOriginalFile returns the on-disk path when it found and
-        // overwrote a registered file. When it returns empty, the
-        // source was embedded (no disk file) and the FBX exporter will
-        // pull from EmbeddedTextureCache instead — only do the PNG
-        // encode + cache write in that fallback case to avoid burning
-        // CPU on the common disk-backed path.
-        const QString writtenDisk = bakeToOriginalFile();
-        if (writtenDisk.isEmpty()) {
-            try {
-                QImage img(const_cast<uchar*>(m_buffer.data().data()),
-                           m_buffer.width(), m_buffer.height(),
-                           m_buffer.width() * 4, QImage::Format_RGBA8888);
-                QByteArray bytes;
-                QBuffer qbuf(&bytes);
-                qbuf.open(QIODevice::WriteOnly);
-                if (img.save(&qbuf, "PNG")) {
-                    std::vector<uint8_t> v(bytes.begin(), bytes.end());
-                    EmbeddedTextureCache::store(
-                        m_originalTextureName.toStdString(), v);
-                    SentryReporter::addBreadcrumb("ui.action",
-                        QStringLiteral("Paint: cached %1 bytes in EmbeddedTextureCache for '%2'")
-                            .arg(bytes.size()).arg(m_originalTextureName));
-                }
-            } catch (...) {}
-        }
+        try {
+            QImage img(const_cast<uchar*>(m_buffer.data().data()),
+                       m_buffer.width(), m_buffer.height(),
+                       m_buffer.width() * 4, QImage::Format_RGBA8888);
+            QByteArray bytes;
+            QBuffer qbuf(&bytes);
+            qbuf.open(QIODevice::WriteOnly);
+            if (img.save(&qbuf, "PNG")) {
+                std::vector<uint8_t> v(bytes.begin(), bytes.end());
+                EmbeddedTextureCache::store(
+                    m_originalTextureName.toStdString(), v);
+                SentryReporter::addBreadcrumb("ui.action",
+                    QStringLiteral("Paint: cached %1 bytes in EmbeddedTextureCache for '%2' (no disk write)")
+                        .arg(bytes.size()).arg(m_originalTextureName));
+            }
+        } catch (...) {}
     }
 }
 
@@ -1479,20 +1669,25 @@ void TexturePaintController::closeSession()
         } catch (...) {}
         m_ogreTexture.reset();
     }
-    if (m_ringObj && m_paintMeshEntity) {
-        try {
-            auto* mgr = m_paintMeshEntity->_getManager();
-            if (mgr) {
+    // Source scene manager from the global singleton — going through
+    // m_paintMeshEntity->_getManager() is unsafe if the entity was
+    // cascade-destroyed (mesh removed while paint was active).
+    {
+        auto* mgr = Manager::getSingletonPtr();
+        auto* sceneMgr = mgr ? mgr->getSceneMgr() : nullptr;
+        if (sceneMgr) {
+            try {
                 if (m_ringNode) {
                     m_ringNode->detachAllObjects();
-                    mgr->getRootSceneNode()->removeChild(m_ringNode);
-                    mgr->destroySceneNode(m_ringNode);
-                    m_ringNode = nullptr;
+                    sceneMgr->getRootSceneNode()->removeChild(m_ringNode);
+                    sceneMgr->destroySceneNode(m_ringNode);
                 }
-                mgr->destroyManualObject(m_ringObj);
-                m_ringObj = nullptr;
-            }
-        } catch (...) {}
+                if (m_ringObj)
+                    sceneMgr->destroyManualObject(m_ringObj);
+            } catch (...) {}
+        }
+        m_ringNode = nullptr;
+        m_ringObj = nullptr;
     }
     m_paintMesh.reset();
     m_paintMeshEntity = nullptr;
@@ -1509,6 +1704,15 @@ void TexturePaintController::closeSession()
     if (!m_uvOverlayUri.isEmpty()) {
         m_uvOverlayUri.clear();
         emit uvOverlayChanged();
+    }
+    // Tear down smart-select state too — a stale mask sized for the
+    // previous buffer would crash smartSelectAtUV. Also drop the on-
+    // mesh wand overlay (it pointed at the old entity).
+    m_mask = PaintSelectionMask();
+    destroyMeshMaskOverlay();
+    if (!m_maskOverlayUri.isEmpty()) {
+        m_maskOverlayUri.clear();
+        emit smartSelectChanged();
     }
     m_previewUri.clear();
     emit previewChanged();
@@ -1528,6 +1732,10 @@ bool TexturePaintController::beginStrokeUV(double u, double v)
     m_strokeJustBegan = true;
     m_smudgeHavePrev = false;
     m_strokePreSnapshot = snapshotPixels();
+    m_wandStrokeActive = false;
+    // Re-use the screen-pos field to stash press UV (u in pixel-ish
+    // units). updateStrokeUV reads the delta from the current u.
+    m_wandStartScreenPos = QPoint(static_cast<int>(u * 10000.0), 0);
     emit hoveredUVChanged(u, v);
     updateStrokeUV(u, v);
     return true;
@@ -1538,6 +1746,24 @@ void TexturePaintController::updateStrokeUV(double u, double v)
     if (!m_strokeActive || !m_paintEnabled) return;
     const Ogre::Vector2 uv(static_cast<float>(u), static_cast<float>(v));
     emit hoveredUVChanged(u, v);
+
+    // Wand drag-to-scrub from the 2D thumbnail. Horizontal UV delta
+    // maps directly to a tolerance delta: 0..1 UV span = full
+    // tolerance range, so the user can dial in coverage by sliding
+    // toward / away from the seed pixel.
+    if (m_tool == ToolSmartSelect && m_wandStrokeActive) {
+        const double pressU = static_cast<double>(m_wandStartScreenPos.x()) / 10000.0;
+        const double du = u - pressU;
+        const double t = std::clamp(m_wandStartTolerance + du, 0.0, 1.0);
+        if (std::abs(t - m_smartSelectTolerance) > 1e-4) {
+            m_smartSelectTolerance = t;
+            emit smartSelectChanged();
+            smartSelectAtUV(static_cast<double>(m_wandSeedUV.x),
+                            static_cast<double>(m_wandSeedUV.y),
+                            /*mode=*/0);
+        }
+        return;
+    }
     // Update brush-ring overlay on the mesh so the user sees their
     // painting location even when driving the brush from the 2D panel.
     Ogre::Vector3 localPos, localNormal;
@@ -1859,6 +2085,14 @@ bool TexturePaintController::hitTestLocalPoint(OgreWidget* widget, const QPoint&
     return found;
 }
 
+bool TexturePaintController::wouldStrokeHit(OgreWidget* widget,
+                                            const QPoint& screenPos) const
+{
+    if (!m_paintMesh || !m_paintMeshEntity || !widget) return false;
+    Ogre::Vector2 uv;
+    return hitTestUV(screenPos, widget, uv);
+}
+
 bool TexturePaintController::findMeshPointForUV(const Ogre::Vector2& uv,
                                                 Ogre::Vector3& outLocal,
                                                 Ogre::Vector3& outNormal) const
@@ -1960,4 +2194,507 @@ void TexturePaintController::drawHoverRingAt(const Ogre::Vector3& localPos,
         m_ringObj->colour(ringCol);
     }
     m_ringObj->end();
+}
+
+// ---------------------------------------------------------------------------
+// Smart-select / selection-mask API
+// ---------------------------------------------------------------------------
+
+void TexturePaintController::setSmartSelectTolerance(double t)
+{
+    const double clamped = std::clamp(t, 0.0, 1.0);
+    if (m_smartSelectTolerance == clamped) return;
+    m_smartSelectTolerance = clamped;
+    emit smartSelectChanged();
+}
+
+bool TexturePaintController::hasSelectionMask() const
+{
+    return !m_mask.isEmpty();
+}
+
+int TexturePaintController::selectedPixelCount() const
+{
+    return m_mask.selectedCount();
+}
+
+void TexturePaintController::clearSelectionMask()
+{
+    if (m_mask.isEmpty()) return;
+    m_mask.clear();
+    m_maskOverlayUri.clear();
+    destroyMeshMaskOverlay();
+    SentryReporter::addBreadcrumb("ui.action", "Smart select: cleared");
+    emit smartSelectChanged();
+}
+
+void TexturePaintController::selectAllMask()
+{
+    if (!hasActiveSession()) return;
+    if (m_mask.width() != m_buffer.width() || m_mask.height() != m_buffer.height())
+        m_mask.resize(m_buffer.width(), m_buffer.height());
+    m_mask.selectAll();
+    SentryReporter::addBreadcrumb("ui.action", "Smart select: select all");
+    scheduleMaskOverlayRefresh();
+    emit smartSelectChanged();
+}
+
+void TexturePaintController::invertSelectionMask()
+{
+    if (!hasActiveSession()) return;
+    if (m_mask.width() != m_buffer.width() || m_mask.height() != m_buffer.height())
+        m_mask.resize(m_buffer.width(), m_buffer.height());
+    m_mask.invert();
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Smart select: invert (%1 px now)").arg(m_mask.selectedCount()));
+    scheduleMaskOverlayRefresh();
+    emit smartSelectChanged();
+}
+
+int TexturePaintController::smartSelectAtUV(double u, double v, int mode)
+{
+    if (!hasActiveSession()) return 0;
+    if (m_mask.width() != m_buffer.width() || m_mask.height() != m_buffer.height())
+        m_mask.resize(m_buffer.width(), m_buffer.height());
+
+    int sx = 0, sy = 0;
+    m_buffer.uvToPixel(Ogre::Vector2(static_cast<float>(u), static_cast<float>(v)),
+                       sx, sy);
+    const auto cmode = (mode == 1) ? PaintSelectionMask::CombineMode::Add
+                     : (mode == 2) ? PaintSelectionMask::CombineMode::Sub
+                                   : PaintSelectionMask::CombineMode::Replace;
+    const int affected = m_mask.smartSelect(m_buffer, sx, sy,
+                                            static_cast<float>(m_smartSelectTolerance),
+                                            cmode);
+    if (affected > 0) {
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Smart select: %1 px (mode=%2, tol=%3)")
+                .arg(affected).arg(mode).arg(m_smartSelectTolerance, 0, 'f', 2));
+        scheduleMaskOverlayRefresh();
+        emit smartSelectChanged();
+    }
+    return affected;
+}
+
+namespace {
+
+// Apply `apply` to every pixel in `mask`. Returns count of affected
+// pixels. Caller owns the before/after snapshots for undo.
+template <typename F>
+int applyToMaskedPixels(TexturePaintBuffer& buf, const PaintSelectionMask& mask, F&& apply)
+{
+    if (mask.isEmpty()) return 0;
+    const int W = buf.width();
+    const int H = buf.height();
+    if (mask.width() != W || mask.height() != H) return 0;
+    const auto& maskData = mask.data();
+    auto& px = buf.data();
+    const auto& bb = mask.bbox();
+    int affected = 0;
+    for (int y = bb.y0; y < bb.y1; ++y) {
+        for (int x = bb.x0; x < bb.x1; ++x) {
+            const size_t i = static_cast<size_t>(y) * static_cast<size_t>(W) + static_cast<size_t>(x);
+            if (!maskData[i]) continue;
+            const size_t off = i * 4u;
+            apply(px[off + 0], px[off + 1], px[off + 2], px[off + 3]);
+            ++affected;
+        }
+    }
+    if (affected > 0)
+        buf.markDirty(bb.x0, bb.y0, bb.x1, bb.y1);
+    return affected;
+}
+
+} // namespace
+
+int TexturePaintController::fillMaskWithFG()
+{
+    if (!hasActiveSession() || !hasSelectionMask()) return 0;
+    auto before = m_buffer.data();
+    const QColor c = texturePaintColor();
+    const uint8_t fr = static_cast<uint8_t>(std::lround(c.redF()   * 255.0));
+    const uint8_t fg = static_cast<uint8_t>(std::lround(c.greenF() * 255.0));
+    const uint8_t fb = static_cast<uint8_t>(std::lround(c.blueF()  * 255.0));
+    const uint8_t fa = static_cast<uint8_t>(std::lround(c.alphaF() * 255.0));
+    const int affected = applyToMaskedPixels(m_buffer, m_mask,
+        [&](uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) {
+            r = fr; g = fg; b = fb; a = fa;
+        });
+    if (affected <= 0) return 0;
+    UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
+        this, std::move(before), m_buffer.data(),
+        m_buffer.width(), m_buffer.height(), m_textureName,
+        QStringLiteral("Fill selection (FG)")));
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Smart select: filled %1 px with FG %2")
+            .arg(affected).arg(c.name(QColor::HexRgb)));
+    flushDirtyToOgre();
+    return affected;
+}
+
+int TexturePaintController::fillMaskWithBG()
+{
+    if (!hasActiveSession() || !hasSelectionMask()) return 0;
+    auto before = m_buffer.data();
+    const QColor c = bgPaintColor();
+    const uint8_t fr = static_cast<uint8_t>(std::lround(c.redF()   * 255.0));
+    const uint8_t fg = static_cast<uint8_t>(std::lround(c.greenF() * 255.0));
+    const uint8_t fb = static_cast<uint8_t>(std::lround(c.blueF()  * 255.0));
+    const uint8_t fa = static_cast<uint8_t>(std::lround(c.alphaF() * 255.0));
+    const int affected = applyToMaskedPixels(m_buffer, m_mask,
+        [&](uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) {
+            r = fr; g = fg; b = fb; a = fa;
+        });
+    if (affected <= 0) return 0;
+    UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
+        this, std::move(before), m_buffer.data(),
+        m_buffer.width(), m_buffer.height(), m_textureName,
+        QStringLiteral("Fill selection (BG)")));
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Smart select: filled %1 px with BG %2")
+            .arg(affected).arg(c.name(QColor::HexArgb)));
+    flushDirtyToOgre();
+    return affected;
+}
+
+int TexturePaintController::deleteMaskPixels()
+{
+    if (!hasActiveSession() || !hasSelectionMask()) return 0;
+    auto before = m_buffer.data();
+    const int affected = applyToMaskedPixels(m_buffer, m_mask,
+        [](uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) {
+            r = 0; g = 0; b = 0; a = 0;
+        });
+    if (affected <= 0) return 0;
+    UndoManager::getSingleton()->push(new TexturePaintMaskActionCommand(
+        this, std::move(before), m_buffer.data(),
+        m_buffer.width(), m_buffer.height(), m_textureName,
+        QStringLiteral("Delete selection")));
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Smart select: deleted %1 px").arg(affected));
+    flushDirtyToOgre();
+    return affected;
+}
+
+void TexturePaintController::scheduleMaskOverlayRefresh()
+{
+    if (m_maskOverlayRefreshScheduled) return;
+    m_maskOverlayRefreshScheduled = true;
+    QTimer::singleShot(60, this, [this]() {
+        m_maskOverlayRefreshScheduled = false;
+        refreshMaskOverlay();
+    });
+}
+
+void TexturePaintController::refreshMaskOverlay()
+{
+    // Keep the on-mesh 3D overlay in sync with the mask. Doing it here
+    // (the debounced path) covers smartSelect, selectAll, and invert
+    // without each caller having to remember to refresh both layers.
+    refreshMeshMaskOverlay();
+
+    const int W = m_mask.width();
+    const int H = m_mask.height();
+    if (W <= 0 || H <= 0 || m_mask.isEmpty()) {
+        if (!m_maskOverlayUri.isEmpty()) {
+            m_maskOverlayUri.clear();
+            emit smartSelectChanged();
+        }
+        return;
+    }
+    // Render the mask as a high-contrast translucent overlay: yellow tint
+    // inside, black 1px outline at the boundary (any selected pixel with
+    // an unselected 4-neighbor). This is the "marching ants" mock —
+    // animation comes from the QML side if we add it later.
+    const int previewW = std::min(W, 512);
+    const int previewH = std::min(H, 512);
+    const float sx = static_cast<float>(W) / previewW;
+    const float sy = static_cast<float>(H) / previewH;
+    // ARGB32 (not RGBA8888) so qRgba's 0xAARRGGBB packing maps to the
+    // image's bytes correctly. With RGBA8888 the channels are
+    // re-ordered to R,G,B,A in memory and the values written via qRgba
+    // come out swizzled (yellow → light blue).
+    QImage img(previewW, previewH, QImage::Format_ARGB32);
+    img.fill(Qt::transparent);
+    const auto& d = m_mask.data();
+    auto sel = [&](int x, int y) {
+        if (x < 0 || y < 0 || x >= W || y >= H) return false;
+        return d[static_cast<size_t>(y) * static_cast<size_t>(W) + static_cast<size_t>(x)] != 0;
+    };
+    for (int py = 0; py < previewH; ++py) {
+        const int y = std::min(H - 1, static_cast<int>(py * sy));
+        auto* line = reinterpret_cast<QRgb*>(img.scanLine(py));
+        for (int px = 0; px < previewW; ++px) {
+            const int x = std::min(W - 1, static_cast<int>(px * sx));
+            const bool inside = sel(x, y);
+            if (!inside) continue;
+            const bool boundary = !sel(x - 1, y) || !sel(x + 1, y)
+                               || !sel(x, y - 1) || !sel(x, y + 1);
+            line[px] = boundary ? qRgba(0, 0, 0, 220) : qRgba(255, 240, 0, 80);
+        }
+    }
+    QByteArray bytes;
+    QBuffer qbuf(&bytes);
+    qbuf.open(QIODevice::WriteOnly);
+    if (!img.save(&qbuf, "PNG")) return;
+    m_maskOverlayUri = QStringLiteral("data:image/png;base64,") + QString::fromLatin1(bytes.toBase64());
+    emit smartSelectChanged();
+}
+
+// ---------------------------------------------------------------------------
+// Detached texture editor window
+// ---------------------------------------------------------------------------
+
+void TexturePaintController::openEditorWindow()
+{
+    if (m_editorWindow) {
+        // Already open — raise / show.
+        if (auto* w = qobject_cast<QQuickWindow*>(m_editorWindow)) {
+            w->show();
+            w->raise();
+            w->requestActivate();
+        }
+        return;
+    }
+    // Use a QQmlApplicationEngine so the loaded Window registers as a
+    // top-level (matches MaterialEditor's pattern). We also need to
+    // re-register the PropertiesPanel singleton in this new engine so
+    // the imported singleton resolves at QML load time — main.cpp's
+    // registrations are per-engine in Qt 6.
+    auto* engine = new QQmlApplicationEngine(this);
+    const QString appDir = QCoreApplication::applicationDirPath();
+    engine->addImportPath(appDir + "/qml");
+    engine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
+
+    qmlRegisterSingletonType<TexturePaintController>(
+        "PropertiesPanel", 1, 0, "TexturePaintController",
+        [](QQmlEngine* e, QJSEngine*) -> QObject* {
+            return TexturePaintController::qmlInstance(e, nullptr);
+        });
+
+    bool handled = false;
+    connect(engine, &QQmlApplicationEngine::objectCreated, this,
+        [this, engine, &handled](QObject* obj, const QUrl&) {
+            handled = true;
+            if (!obj) {
+                SentryReporter::addBreadcrumb("ui.action",
+                    QStringLiteral("Texture editor window: QML load failed"));
+                engine->deleteLater();
+                return;
+            }
+            m_editorWindow = obj;
+            if (auto* w = qobject_cast<QQuickWindow*>(obj)) {
+                connect(w, &QQuickWindow::visibleChanged, this,
+                    [this, w, engine](bool vis) {
+                        if (vis || m_editorWindow != w) return;
+                        m_editorWindow = nullptr;
+                        emit editorWindowChanged();
+                        engine->deleteLater();
+                    });
+                w->show();
+                w->raise();
+                w->requestActivate();
+            }
+            emit editorWindowChanged();
+        }, Qt::DirectConnection);
+
+    engine->load(QUrl(QStringLiteral("qrc:/PropertiesPanel/TextureEditorWindow.qml")));
+    if (!handled) {
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Texture editor window: load() returned without objectCreated firing"));
+    }
+    SentryReporter::addBreadcrumb("ui.action", "Texture editor window opened");
+}
+
+void TexturePaintController::closeEditorWindow()
+{
+    if (!m_editorWindow) return;
+    if (auto* w = qobject_cast<QQuickWindow*>(m_editorWindow)) {
+        w->close();
+        // visibleChanged handler will null m_editorWindow + emit.
+    } else {
+        m_editorWindow->deleteLater();
+        m_editorWindow = nullptr;
+        emit editorWindowChanged();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// On-mesh wand-selection overlay
+// ---------------------------------------------------------------------------
+
+void TexturePaintController::refreshMeshMaskOverlay()
+{
+    if (!m_paintMeshEntity || m_mask.isEmpty()) {
+        destroyMeshMaskOverlay();
+        return;
+    }
+    auto* entity = m_paintMeshEntity;
+    auto* sceneMgr = entity->_getManager();
+    auto* parentNode = entity->getParentSceneNode();
+    if (!sceneMgr || !parentNode) return;
+
+    // (1) Build / refresh the overlay GPU texture from the mask data.
+    //     Match the 2D preview's marching-ants palette so the 3D and
+    //     2D views read as the same selection: yellow tint inside
+    //     (255,240,0 α≈80), black outline (0,0,0 α≈220) on any
+    //     selected pixel adjacent to an unselected one. Boundary
+    //     test is the same 4-neighbor as refreshMaskOverlay.
+    const int W = m_mask.width();
+    const int H = m_mask.height();
+    if (W <= 0 || H <= 0) {
+        destroyMeshMaskOverlay();
+        return;
+    }
+    std::vector<uint8_t> rgba(static_cast<size_t>(W) * static_cast<size_t>(H) * 4u, 0);
+    const auto& d = m_mask.data();
+    auto sel = [&](int x, int y) {
+        if (x < 0 || y < 0 || x >= W || y >= H) return false;
+        return d[static_cast<size_t>(y) * static_cast<size_t>(W) + static_cast<size_t>(x)] != 0;
+    };
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const size_t i = static_cast<size_t>(y) * static_cast<size_t>(W) + static_cast<size_t>(x);
+            if (!d[i]) continue;
+            const bool boundary = !sel(x - 1, y) || !sel(x + 1, y)
+                               || !sel(x, y - 1) || !sel(x, y + 1);
+            const size_t off = i * 4u;
+            if (boundary) {
+                rgba[off + 0] = 0;
+                rgba[off + 1] = 0;
+                rgba[off + 2] = 0;
+                rgba[off + 3] = 220;
+            } else {
+                rgba[off + 0] = 255;
+                rgba[off + 1] = 240;
+                rgba[off + 2] = 0;
+                rgba[off + 3] = 80;
+            }
+        }
+    }
+    const std::string texName = "QMEPaintMaskOverlay_"
+        + std::to_string(reinterpret_cast<uintptr_t>(this));
+    auto& texMgr = Ogre::TextureManager::getSingleton();
+    if (m_maskOverlayTex && (static_cast<int>(m_maskOverlayTex->getWidth()) != W
+                          || static_cast<int>(m_maskOverlayTex->getHeight()) != H)) {
+        // Size changed — drop and recreate.
+        try { texMgr.remove(m_maskOverlayTex); } catch (...) {}
+        m_maskOverlayTex.reset();
+    }
+    if (!m_maskOverlayTex) {
+        m_maskOverlayTex = texMgr.createManual(
+            texName,
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+            Ogre::TEX_TYPE_2D, W, H, 0,
+            Ogre::PF_BYTE_RGBA,
+            Ogre::TU_DYNAMIC_WRITE_ONLY);
+    }
+    try {
+        auto buf = m_maskOverlayTex->getBuffer();
+        if (buf) {
+            Ogre::PixelBox pb(W, H, 1, Ogre::PF_BYTE_RGBA, rgba.data());
+            buf->blitFromMemory(pb);
+        }
+    } catch (...) {}
+
+    // (2) Build / fetch the unlit transparent material that samples
+    //     the overlay texture. One material per controller — reused
+    //     across refreshes.
+    if (m_maskOverlayMatName.empty()) {
+        m_maskOverlayMatName = "QMEPaintMaskOverlay_Mat_"
+            + std::to_string(reinterpret_cast<uintptr_t>(this));
+    }
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    Ogre::MaterialPtr mat = matMgr.getByName(m_maskOverlayMatName);
+    if (!mat) {
+        mat = matMgr.create(m_maskOverlayMatName,
+            Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        auto* tech = mat->getTechnique(0);
+        auto* pass = tech->getPass(0);
+        pass->setLightingEnabled(false);
+        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        pass->setDepthWriteEnabled(false);
+        pass->setDepthCheckEnabled(true);
+        pass->setDepthBias(1.0f, 1.0f);   // tiny z-pull-in so we sit on top
+        pass->setCullingMode(Ogre::CULL_NONE);
+        auto* tus = pass->createTextureUnitState(m_maskOverlayTex->getName());
+        tus->setTextureFiltering(Ogre::TFO_NONE);
+    } else {
+        // Re-point the existing TUS at the (possibly resized) texture.
+        try {
+            auto* pass = mat->getTechnique(0)->getPass(0);
+            if (pass->getNumTextureUnitStates() > 0) {
+                pass->getTextureUnitState(0)->setTextureName(m_maskOverlayTex->getName());
+            }
+        } catch (...) {}
+    }
+
+    // (3) Create / refresh the duplicate Entity that draws the mesh
+    //     with the overlay material. Sharing the source MeshPtr means
+    //     the verts / UVs / animation match the base mesh for free.
+    if (!m_maskOverlayEntity) {
+        try {
+            const std::string entName = "QMEPaintMaskOverlay_Ent_"
+                + std::to_string(reinterpret_cast<uintptr_t>(this));
+            m_maskOverlayEntity = sceneMgr->createEntity(entName, entity->getMesh()->getName());
+            m_maskOverlayEntity->setMaterialName(m_maskOverlayMatName);
+            m_maskOverlayEntity->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY - 1);
+            m_maskOverlayEntity->setCastShadows(false);
+            m_maskOverlayEntity->setQueryFlags(0);
+        } catch (const Ogre::Exception& e) {
+            SentryReporter::addBreadcrumb("ui.action",
+                QStringLiteral("Mask overlay: createEntity failed: %1")
+                    .arg(QString::fromStdString(e.getDescription())));
+            return;
+        }
+    } else {
+        // Ensure every submesh also samples the overlay material — Ogre
+        // creates one sub-entity per submesh on createEntity and they
+        // each get the source material unless we override.
+        for (unsigned i = 0; i < m_maskOverlayEntity->getNumSubEntities(); ++i)
+            m_maskOverlayEntity->getSubEntity(i)->setMaterialName(m_maskOverlayMatName);
+    }
+    if (!m_maskOverlayNode) {
+        m_maskOverlayNode = parentNode->createChildSceneNode();
+        m_maskOverlayNode->attachObject(m_maskOverlayEntity);
+    }
+}
+
+void TexturePaintController::destroyMeshMaskOverlay()
+{
+    // Source scene manager via the global Manager — touching
+    // m_maskOverlayEntity->_getManager() is unsafe when the entity
+    // was already cascade-destroyed (e.g. user removed the mesh
+    // while a wand selection was up). Manager's sceneNodeDestroyed
+    // signal handler nulls our pointers preemptively, so by the time
+    // we reach here the cleanup may be a partial no-op — guard each
+    // step independently.
+    auto* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr ? mgr->getSceneMgr() : nullptr;
+
+    if (m_maskOverlayNode && sceneMgr) {
+        try {
+            m_maskOverlayNode->detachAllObjects();
+            auto* parent = m_maskOverlayNode->getParentSceneNode();
+            if (parent) parent->removeChild(m_maskOverlayNode);
+            sceneMgr->destroySceneNode(m_maskOverlayNode);
+        } catch (...) {}
+    }
+    m_maskOverlayNode = nullptr;
+
+    if (m_maskOverlayEntity && sceneMgr) {
+        try {
+            // Only destroy if Ogre still thinks it owns this entity
+            // by name — otherwise it was already cascade-destroyed.
+            const std::string& n = m_maskOverlayEntity->getName();
+            if (sceneMgr->hasEntity(n))
+                sceneMgr->destroyEntity(m_maskOverlayEntity);
+        } catch (...) {}
+    }
+    m_maskOverlayEntity = nullptr;
+
+    if (m_maskOverlayTex) {
+        try { Ogre::TextureManager::getSingleton().remove(m_maskOverlayTex); } catch (...) {}
+        m_maskOverlayTex.reset();
+    }
 }

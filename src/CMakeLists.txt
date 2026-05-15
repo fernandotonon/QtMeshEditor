@@ -79,6 +79,7 @@ MaterialPresetLibrary.cpp
 MeshLodController.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
+PaintSelectionMask.cpp
 TexturePaintBuffer.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
@@ -176,6 +177,7 @@ MaterialPresetLibrary.h
 MeshLodController.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
+PaintSelectionMask.h
 TexturePaintBuffer.h
 TexturePaintController.h
 VertexColorBaker.h

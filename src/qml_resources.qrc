@@ -28,6 +28,7 @@
     <file alias="SceneTreeNode.qml">../qml/SceneTreeNode.qml</file>
     <file alias="ProfileGraph.qml">../qml/ProfileGraph.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
+    <file alias="TextureEditorWindow.qml">../qml/TextureEditorWindow.qml</file>
   </qresource>
   <qresource prefix="/ModeBar">
     <file alias="ModeBar.qml">../qml/ModeBar.qml</file>

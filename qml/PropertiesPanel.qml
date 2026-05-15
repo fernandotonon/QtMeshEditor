@@ -1017,12 +1017,12 @@ Rectangle {
                 }
                 Slider {
                     width: 140
-                    from: 0.02; to: 2.0; stepSize: 0.01
+                    from: 0.001; to: 2.0; stepSize: 0.001
                     value: brushCol.brushRadius
                     onMoved: TexturePaintController.setBrushRadius(value)
                 }
                 Text {
-                    text: brushCol.brushRadius.toFixed(2)
+                    text: brushCol.brushRadius.toFixed(3)
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -1090,6 +1090,10 @@ Rectangle {
             property int brushTool: TexturePaintController.brushTool
             property int paintTarget: TexturePaintController.paintTarget
             property string previewUri: TexturePaintController.previewDataUri
+            property string maskOverlayUri: TexturePaintController.maskOverlayDataUri
+            property bool hasMask: TexturePaintController.hasSelectionMask
+            property int maskCount: TexturePaintController.selectedPixelCount
+            property real smartTolerance: TexturePaintController.smartSelectTolerance
             // Live hover position in UV space, fed by hoveredUVChanged.
             property real hoverU: -1
             property real hoverV: -1
@@ -1119,6 +1123,12 @@ Rectangle {
                 function onHoveredUVChanged(u, v) {
                     texPaintCol.hoverU = u
                     texPaintCol.hoverV = v
+                }
+                function onSmartSelectChanged() {
+                    texPaintCol.maskOverlayUri = TexturePaintController.maskOverlayDataUri
+                    texPaintCol.hasMask = TexturePaintController.hasSelectionMask
+                    texPaintCol.maskCount = TexturePaintController.selectedPixelCount
+                    texPaintCol.smartTolerance = TexturePaintController.smartSelectTolerance
                 }
             }
 
@@ -1180,15 +1190,19 @@ Rectangle {
                 }
             }
 
-            // Tool selector \u2014 Paint, Erase, Fill, Picker, Smudge
+            // Tool selector \u2014 Paint, Erase, Fill, Picker, Smudge.
+            // Wand is intentionally NOT here; it lives in the left
+            // toolbar (under the paint brush) so it can have its own
+            // green icon + enabled/disabled treatment without
+            // duplicating UI in the right panel.
             Row {
                 spacing: 4
                 Repeater {
                     model: [
-                        { tool: 0, label: "Paint", glyph: "\u270f" },
-                        { tool: 1, label: "Erase", glyph: "\u232b" },
-                        { tool: 2, label: "Fill",  glyph: "\u29c9" },
-                        { tool: 3, label: "Pick",  glyph: "\u22b0" },
+                        { tool: 0, label: "Paint",  glyph: "\u270f" },
+                        { tool: 1, label: "Erase",  glyph: "\u232b" },
+                        { tool: 2, label: "Fill",   glyph: "\u29c9" },
+                        { tool: 3, label: "Pick",   glyph: "\u22b0" },
                         { tool: 4, label: "Smudge", glyph: "\u223f" }
                     ]
                     Rectangle {
@@ -1207,6 +1221,120 @@ Rectangle {
                         MouseArea {
                             id: toolMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                             onClicked: TexturePaintController.brushTool = modelData.tool
+                        }
+                    }
+                }
+            }
+
+            // Smart-select panel. Visible whenever there's an active
+            // session \u2014 tolerance is always meaningful, and once the
+            // mask is non-empty the action buttons go live.
+            Column {
+                spacing: 6
+                visible: texPaintCol.hasSession
+                width: parent.width - 16
+
+                // Status row only — wand tolerance is no longer a
+                // separate control. The user clicks the mesh / 2D
+                // thumbnail with the Wand tool and drags horizontally
+                // mid-stroke; the controller scrubs the tolerance live
+                // and re-selects at the press seed. The current value
+                // is shown here so the user can see what they're at.
+                Row {
+                    spacing: 10
+                    Text {
+                        text: texPaintCol.hasMask
+                            ? (texPaintCol.maskCount + " px selected")
+                            : "Wand: drag horizontally while painting to adjust tolerance"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        opacity: 0.75
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: "tol " + Math.round(texPaintCol.smartTolerance * 100) + "%"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        opacity: 0.55
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                // Detached editor window launcher. Same paint buffer,
+                // bigger canvas, real-time sync with the 3D viewport.
+                Row {
+                    spacing: 6
+                    Rectangle {
+                        width: 140; height: 24; radius: 3
+                        color: editorMa.containsMouse
+                            ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                            : PropertiesPanelController.headerColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: "⤢  Open Editor Window"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: editorMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: TexturePaintController.openEditorWindow()
+                        }
+                    }
+                }
+
+                // Action buttons: act on the current mask.
+                Row {
+                    spacing: 4
+                    Repeater {
+                        model: [
+                            { label: "Fill FG",   action: "fillFG",   needsMask: true,  hint: "Replace selection with foreground color" },
+                            { label: "Fill BG",   action: "fillBG",   needsMask: true,  hint: "Replace selection with background color" },
+                            { label: "Delete",    action: "delete",   needsMask: true,  hint: "Clear selection to transparent" },
+                            { label: "Invert",    action: "invert",   needsMask: false, hint: "Invert the selection" },
+                            { label: "All",       action: "all",      needsMask: false, hint: "Select every pixel" },
+                            { label: "None",      action: "none",     needsMask: true,  hint: "Clear the selection" }
+                        ]
+                        Rectangle {
+                            width: 56; height: 24; radius: 3
+                            color: actionMa.containsMouse
+                                ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                                : PropertiesPanelController.headerColor
+                            opacity: (modelData.needsMask && !texPaintCol.hasMask) ? 0.45 : 1.0
+                            border.color: PropertiesPanelController.borderColor; border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                            }
+                            MouseArea {
+                                id: actionMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                enabled: !modelData.needsMask || texPaintCol.hasMask
+                                ToolTip.text: modelData.hint
+                                ToolTip.visible: containsMouse
+                                ToolTip.delay: 400
+                                onClicked: {
+                                    if (modelData.action === "fillFG")
+                                        TexturePaintController.fillMaskWithFG()
+                                    else if (modelData.action === "fillBG")
+                                        TexturePaintController.fillMaskWithBG()
+                                    else if (modelData.action === "delete")
+                                        TexturePaintController.deleteMaskPixels()
+                                    else if (modelData.action === "invert")
+                                        TexturePaintController.invertSelectionMask()
+                                    else if (modelData.action === "all")
+                                        TexturePaintController.selectAllMask()
+                                    else if (modelData.action === "none")
+                                        TexturePaintController.clearSelectionMask()
+                                }
+                            }
                         }
                     }
                 }
@@ -1307,6 +1435,21 @@ Rectangle {
                     visible: TexturePaintController.uvOverlayVisible
                     opacity: 0.7
                     source: TexturePaintController.uvOverlayDataUri
+                    fillMode: Image.PreserveAspectFit
+                    smooth: false
+                    cache: false
+                }
+
+                // Smart-select / magic-wand mask overlay. Yellow tint on
+                // the selected area + black outline at the boundary —
+                // matches the marching-ants idea without the animation.
+                Image {
+                    id: maskOverlayImg
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    visible: texPaintCol.hasMask
+                    opacity: 0.85
+                    source: texPaintCol.maskOverlayUri
                     fillMode: Image.PreserveAspectFit
                     smooth: false
                     cache: false
@@ -1438,6 +1581,39 @@ Rectangle {
                     MouseArea {
                         id: loadMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                         onClicked: TexturePaintController.loadPaintBufferInteractive()
+                    }
+                }
+
+                // Explicit "write back to the source texture file on
+                // disk" button. Painting is otherwise non-destructive
+                // (the strokes live only in the in-memory paint buffer
+                // and the EmbeddedTextureCache used by exports), so
+                // the user has to click this to overwrite the original
+                // asset. Strong-warning hover text so it isn't mistaken
+                // for the safe "Save\u2026" (which writes a new file).
+                Rectangle {
+                    width: 130; height: 24; radius: 3
+                    color: saveOrigMa.containsMouse
+                        ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    opacity: texPaintCol.hasSession ? 1.0 : 0.4
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Save to Original"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: saveOrigMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        enabled: texPaintCol.hasSession
+                        ToolTip.text: "Overwrite the texture's source file on disk.\nCannot be undone outside the editor."
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 400
+                        onClicked: TexturePaintController.bakeToOriginalFile()
                     }
                 }
             }

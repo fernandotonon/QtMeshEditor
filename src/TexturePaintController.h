@@ -1,6 +1,7 @@
 #ifndef TEXTUREPAINTCONTROLLER_H
 #define TEXTUREPAINTCONTROLLER_H
 
+#include "PaintSelectionMask.h"
 #include "TexturePaintBuffer.h"
 
 #include <QColor>
@@ -85,10 +86,11 @@ class TexturePaintController : public QObject
 public:
     enum BrushTool {
         ToolPaint       = 0,  ///< Lerp pixels toward brush color.
-        ToolErase       = 1,  ///< Paint transparent (alpha 0). Reveals layer below if any.
+        ToolErase       = 1,  ///< Paint with BG color (was: paint transparent).
         ToolFill        = 2,  ///< Flood-fill connected pixels under cursor.
         ToolColorPicker = 3,  ///< Sample color at hit UV into the brush color.
         ToolSmudge      = 4,  ///< Drag pixels in the brush direction.
+        ToolSmartSelect = 5,  ///< Fuzzy / magic-wand region select by color.
     };
     Q_ENUM(BrushTool)
 
@@ -112,6 +114,10 @@ public:
     /// @name Brush parameters (read-only mirror of EditModeController)
     /// @{
     QColor texturePaintColor() const;
+    /// Secondary "background" color. Used by:
+    ///   - ToolErase (replaces pixels with BG instead of transparent)
+    ///   - mask "fill with BG" action
+    QColor bgPaintColor() const;
     double texturePaintRadius() const;
     double texturePaintStrength() const;
     double texturePaintFalloff() const;
@@ -252,6 +258,56 @@ public:
     /// @brief End the session — release the paint buffer.
     Q_INVOKABLE void closeSession();
 
+    /// @name Selection mask (smart-select / magic-wand)
+    /// @{
+    /// Smart-select tolerance, [0..1]. Mirrors GIMP's "Threshold" slider.
+    /// 0 = exact color only; 1 = the whole texture.
+    Q_PROPERTY(double smartSelectTolerance READ smartSelectTolerance
+                       WRITE setSmartSelectTolerance NOTIFY smartSelectChanged)
+    double smartSelectTolerance() const { return m_smartSelectTolerance; }
+    void setSmartSelectTolerance(double t);
+
+    /// True iff the user has selected at least one pixel.
+    Q_PROPERTY(bool hasSelectionMask READ hasSelectionMask NOTIFY smartSelectChanged)
+    bool hasSelectionMask() const;
+
+    /// Number of pixels currently in the selection.
+    Q_PROPERTY(int selectedPixelCount READ selectedPixelCount NOTIFY smartSelectChanged)
+    int selectedPixelCount() const;
+
+    /// PNG data URI of the selection mask (marching-ants–style outline
+    /// rendered as a transparent overlay). Empty when no selection.
+    Q_PROPERTY(QString maskOverlayDataUri READ maskOverlayDataUri NOTIFY smartSelectChanged)
+    QString maskOverlayDataUri() const { return m_maskOverlayUri; }
+
+    /// Clear the entire selection.
+    Q_INVOKABLE void clearSelectionMask();
+    /// Select every pixel.
+    Q_INVOKABLE void selectAllMask();
+    /// Invert the current selection.
+    Q_INVOKABLE void invertSelectionMask();
+
+    /// Smart-select via a UV coordinate. `mode` is 0=replace, 1=add, 2=subtract.
+    /// Returns number of pixels added/removed.
+    Q_INVOKABLE int smartSelectAtUV(double u, double v, int mode = 0);
+
+    /// Open the detached texture editor window (or raise it if it's
+    /// already open). The window shares the same paint pipeline as the
+    /// inline 2D preview, so strokes done in it update the 3D viewport
+    /// in real time and vice versa.
+    Q_INVOKABLE void openEditorWindow();
+    Q_INVOKABLE void closeEditorWindow();
+    Q_PROPERTY(bool editorWindowOpen READ editorWindowOpen NOTIFY editorWindowChanged)
+    bool editorWindowOpen() const { return m_editorWindow != nullptr; }
+
+    /// Apply an action to the current selection. No-op when the mask is empty.
+    /// Each action pushes a single undo command (TexturePaintMaskActionCommand).
+    Q_INVOKABLE int fillMaskWithFG();
+    Q_INVOKABLE int fillMaskWithBG();
+    /// Delete = set selected pixels to fully transparent black (0,0,0,0).
+    Q_INVOKABLE int deleteMaskPixels();
+    /// @}
+
     /// Walk every UV-mapped triangle and return the local-space
     /// position + normal at `uv` (the first triangle that covers it
     /// in UV space). Used by the 2D-panel → 3D-mesh hover lookup;
@@ -260,6 +316,13 @@ public:
     bool findMeshPointForUV(const Ogre::Vector2& uv,
                             Ogre::Vector3& outLocal,
                             Ogre::Vector3& outNormal) const;
+
+    /// Quick "would beginStroke hit the mesh at screenPos?" probe.
+    /// Public wrapper around hitTestUV used by TransformOperator to
+    /// decide whether a click landed on the mesh or empty space (for
+    /// "click outside clears wand selection" behaviour). Returns false
+    /// on a miss or when there's no paint session.
+    bool wouldStrokeHit(OgreWidget* widget, const QPoint& screenPos) const;
 
     /// Read-only access for tests.
     const TexturePaintBuffer& buffer() const { return m_buffer; }
@@ -278,6 +341,8 @@ signals:
     void slotsChanged();
     void previewChanged();
     void uvOverlayChanged();
+    void smartSelectChanged();
+    void editorWindowChanged();
     /// Emitted when the mouse hovers over a UV-mapped triangle (from
     /// the 3D mesh or from the 2D texture preview panel). u,v in [0..1];
     /// (-1, -1) means "no hover".
@@ -433,6 +498,52 @@ private:
     // triangle outlines drawn at the texture resolution).
     QString m_uvOverlayUri;
     bool m_uvOverlayVisible = false;
+
+    // Smart-select state. Mask is per-pixel boolean, paired with
+    // m_buffer; the overlay PNG mirrors it for QML.
+    PaintSelectionMask m_mask;
+    double m_smartSelectTolerance = 0.15;
+    QString m_maskOverlayUri;
+    bool m_maskOverlayRefreshScheduled = false;
+
+    // Wand "drag during stroke" state. While the user holds the mouse
+    // down with the smart-select tool active we remember the seed UV
+    // and the tolerance at press time; subsequent moves don't reseed
+    // (would jitter the selection) — they nudge the tolerance via
+    // horizontal mouse displacement and re-run smartSelect at the
+    // original seed.
+    bool m_wandStrokeActive = false;
+    Ogre::Vector2 m_wandSeedUV = Ogre::Vector2::ZERO;
+    double m_wandStartTolerance = 0.15;
+    QPoint m_wandStartScreenPos;
+
+    /// Regenerate `m_maskOverlayUri` (PNG, base64) from `m_mask`.
+    /// Debounced through QTimer::singleShot.
+    void scheduleMaskOverlayRefresh();
+    void refreshMaskOverlay();
+
+    // Detached texture editor window. Owned heap-allocated; instantiated
+    // lazily when the user clicks "Open Editor Window" and torn down on
+    // window close. Held as a generic QObject* so the header doesn't
+    // need to pull in the QML engine headers.
+    QObject* m_editorWindow = nullptr;
+
+    // On-mesh wand-selection overlay: a yellow tinted copy of the mesh
+    // rendered just above the original geometry in mesh-local space,
+    // textured with the mask PNG so users can see which pixels in UV
+    // space line up with which spots on the 3D model. Built on demand
+    // when the mask becomes non-empty; torn down when it clears.
+    Ogre::Entity*       m_maskOverlayEntity = nullptr;
+    Ogre::SceneNode*    m_maskOverlayNode = nullptr;
+    Ogre::TexturePtr    m_maskOverlayTex;
+    std::string         m_maskOverlayMatName;
+
+    /// (Re)build the per-mesh mask overlay so the selected pixels
+    /// appear highlighted on the 3D model. Called whenever the mask
+    /// changes shape. Tears down the overlay when the mask is empty.
+    void refreshMeshMaskOverlay();
+    /// Free overlay scene state. Safe to call when nothing is bound.
+    void destroyMeshMaskOverlay();
 
     static TexturePaintController* s_instance;
 };

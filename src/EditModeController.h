@@ -104,6 +104,7 @@ class EditModeController : public QObject
     // Vertex color paint (MVP)
     Q_PROPERTY(bool vertexPaintEnabled READ vertexPaintEnabled WRITE setVertexPaintEnabled NOTIFY vertexPaintChanged)
     Q_PROPERTY(QColor vertexPaintColor READ vertexPaintColor WRITE setVertexPaintColor NOTIFY vertexPaintChanged)
+    Q_PROPERTY(QColor vertexPaintBackgroundColor READ vertexPaintBackgroundColor WRITE setVertexPaintBackgroundColor NOTIFY vertexPaintChanged)
     Q_PROPERTY(double vertexPaintRadius READ vertexPaintRadius WRITE setVertexPaintRadius NOTIFY vertexPaintChanged)
     Q_PROPERTY(double vertexPaintStrength READ vertexPaintStrength WRITE setVertexPaintStrength NOTIFY vertexPaintChanged)
     Q_PROPERTY(double vertexPaintFalloff READ vertexPaintFalloff WRITE setVertexPaintFalloff NOTIFY vertexPaintChanged)
@@ -219,6 +220,20 @@ public:
     void setVertexPaintColor(const QColor& c);
     /// Preferred from QML: parses "#RRGGBB" / CSS names reliably (avoids QVariant QColor edge cases).
     Q_INVOKABLE void setVertexPaintBrushColor(const QString& cssColor);
+
+    /// Secondary "background" color. Used by:
+    /// - texture paint erase (replaces pixels with this color instead of
+    ///   transparent, so the user gets a solid fill)
+    /// - smart-select "fill with BG" action
+    /// The two-color FG/BG model mirrors Photoshop / GIMP / Krita.
+    QColor vertexPaintBackgroundColor() const { return m_vertexPaintBackgroundColor; }
+    void setVertexPaintBackgroundColor(const QColor& c);
+    Q_INVOKABLE void setVertexPaintBackgroundBrushColor(const QString& cssColor);
+    /// Swap foreground and background colors. Standard "X" shortcut in
+    /// image editors.
+    Q_INVOKABLE void swapPaintColors();
+    /// Reset to canonical defaults: FG=black, BG=white.
+    Q_INVOKABLE void resetPaintColors();
     double vertexPaintRadius() const { return m_vertexPaintRadius; }
     void setVertexPaintRadius(double r);
     double vertexPaintStrength() const { return m_vertexPaintStrength; }
@@ -932,10 +947,18 @@ private:
     };
     KnifeSession m_knifeSession;
 
-    // Vertex paint state
+    // Vertex paint state. Default FG = Fern (Qt "Fern" CSS color =
+    // #71BC78 = 113,188,120) so paint strokes are immediately visible
+    // on either dark or light textures, and BG = black so the Erase
+    // tool produces a recognisable hole.
     bool m_vertexPaintEnabled = false;
-    QColor m_vertexPaintColor = QColor(255, 0, 0);
-    double m_vertexPaintRadius = 0.25;   // local units
+    QColor m_vertexPaintColor = QColor(113, 188, 120);
+    QColor m_vertexPaintBackgroundColor = QColor(0, 0, 0);
+    // Brush radius in local mesh units. Default 0.02 produces a small
+    // crisp dot on most meshes; users can scale up to 2.0 for broad
+    // washes or down to 0.001 for pixel-level precision via the
+    // toolbar slider / brush popup.
+    double m_vertexPaintRadius = 0.02;
     double m_vertexPaintStrength = 0.5;  // 0..1
     double m_vertexPaintFalloff = 0.5;   // 0..1
     bool m_vertexPaintStrokeActive = false;
