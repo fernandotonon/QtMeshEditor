@@ -350,18 +350,30 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
         return false;
     }
 
+    if (m_sessionEntity == entity && m_buffer.width() > 0 && !m_textureName.isEmpty()) {
+        // Active session for this entity — make sure m_paintMesh is
+        // valid (it could have been torn down by a previous
+        // closeSession that fired after the user's last stroke).
+        if (!ensureEditableMesh(entity)) {
+            emit sessionChanged();
+            return false;
+        }
+        return true;
+    }
+
+    // Reset any prior session first — closeSession() clears m_paintMesh,
+    // so we have to rebuild the EditableMesh AFTER this call. Doing it
+    // before would leave m_paintMesh null on return, breaking every
+    // hit-test (findMeshPointForUV walks m_paintMesh's submeshes).
+    closeSession();
+    m_sessionEntity = entity;
+
     if (!ensureEditableMesh(entity)) {
         // No mesh data → can't UV-hit-test → can't paint.
+        m_sessionEntity = nullptr;
         emit sessionChanged();
         return false;
     }
-
-    if (m_sessionEntity == entity && m_buffer.width() > 0 && !m_textureName.isEmpty())
-        return true;
-
-    // Reset any prior session.
-    closeSession();
-    m_sessionEntity = entity;
 
     auto* tu = findOrCreateActiveTextureUnit(entity);
     if (!tu) {
