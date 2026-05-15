@@ -1322,20 +1322,15 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
         // the screen / UV delta to compute the scrub; this case
         // handles the press-time seed only.
         //
-        // Reset to the canonical 15% tolerance each press so the
-        // user starts from a known baseline. Otherwise the drag from
-        // the previous stroke would carry over and a fresh click on
-        // a new region would silently use last-stroke's wide value.
+        // Don't clobber the user-configured tolerance — the default
+        // lives in the member initializer in the header. Just
+        // remember it as the wand-stroke baseline so drag deltas
+        // are added relative to where the user started.
         if (!m_strokeJustBegan) return false;
         m_strokeJustBegan = false;
         m_wandStrokeActive = true;
         m_wandSeedUV = uv;
-        constexpr double kDefaultWandTolerance = 0.15;
-        m_wandStartTolerance = kDefaultWandTolerance;
-        if (std::abs(m_smartSelectTolerance - kDefaultWandTolerance) > 1e-4) {
-            m_smartSelectTolerance = kDefaultWandTolerance;
-            emit smartSelectChanged();
-        }
+        m_wandStartTolerance = m_smartSelectTolerance;
         smartSelectAtUV(static_cast<double>(uv.x), static_cast<double>(uv.y), /*mode=*/0);
         return false;  // smart-select doesn't dirty pixels
     }
@@ -1404,24 +1399,27 @@ void TexturePaintController::endStroke()
     // re-bind), so an explicit Save / Export still picks up the
     // painted texture. To persist to disk the user must invoke "Save
     // to Original" or "Save…" / export. See bakeToOriginalFile().
-    if (m_target == TargetTexture && !m_originalTextureName.isEmpty()) {
-        try {
-            QImage img(const_cast<uchar*>(m_buffer.data().data()),
-                       m_buffer.width(), m_buffer.height(),
-                       m_buffer.width() * 4, QImage::Format_RGBA8888);
-            QByteArray bytes;
-            QBuffer qbuf(&bytes);
-            qbuf.open(QIODevice::WriteOnly);
-            if (img.save(&qbuf, "PNG")) {
-                std::vector<uint8_t> v(bytes.begin(), bytes.end());
-                EmbeddedTextureCache::store(
-                    m_originalTextureName.toStdString(), v);
-                SentryReporter::addBreadcrumb("ui.action",
-                    QStringLiteral("Paint: cached %1 bytes in EmbeddedTextureCache for '%2' (no disk write)")
-                        .arg(bytes.size()).arg(m_originalTextureName));
-            }
-        } catch (...) {}
-    }
+    updateEmbeddedTextureCache();
+}
+
+void TexturePaintController::updateEmbeddedTextureCache()
+{
+    if (m_target != TargetTexture) return;
+    if (m_originalTextureName.isEmpty()) return;
+    if (m_buffer.width() <= 0 || m_buffer.height() <= 0) return;
+    try {
+        QImage img(const_cast<uchar*>(m_buffer.data().data()),
+                   m_buffer.width(), m_buffer.height(),
+                   m_buffer.width() * 4, QImage::Format_RGBA8888);
+        QByteArray bytes;
+        QBuffer qbuf(&bytes);
+        qbuf.open(QIODevice::WriteOnly);
+        if (img.save(&qbuf, "PNG")) {
+            std::vector<uint8_t> v(bytes.begin(), bytes.end());
+            EmbeddedTextureCache::store(
+                m_originalTextureName.toStdString(), v);
+        }
+    } catch (...) {}
 }
 
 std::vector<uint8_t> TexturePaintController::snapshotPixels() const
@@ -1627,6 +1625,10 @@ void TexturePaintController::applyPixelSnapshot(const std::vector<uint8_t>& pixe
     std::memcpy(m_buffer.data().data(), pixels.data(), pixels.size());
     m_buffer.markDirty(0, 0, m_buffer.width(), m_buffer.height());
     flushDirtyToOgre();
+    // Undo / redo replaces the buffer entirely — the cache that
+    // backs exports needs to follow, otherwise FBX export sees the
+    // pixels from BEFORE the last mutation.
+    updateEmbeddedTextureCache();
 }
 
 void TexturePaintController::closeSession()
@@ -2086,9 +2088,19 @@ bool TexturePaintController::hitTestLocalPoint(OgreWidget* widget, const QPoint&
 }
 
 bool TexturePaintController::wouldStrokeHit(OgreWidget* widget,
-                                            const QPoint& screenPos) const
+                                            const QPoint& screenPos)
 {
-    if (!m_paintMesh || !m_paintMeshEntity || !widget) return false;
+    if (!widget) return false;
+    // Lazily build the paint mesh — beginStroke would do it anyway,
+    // and without this the very first click on the model is treated
+    // as a miss (m_paintMesh is null until the first stroke). That
+    // bug masked the click-outside-clears flow because the seed
+    // press never reached beginStroke.
+    if (!m_paintMesh || !m_paintMeshEntity) {
+        if (auto* e = activeEntity())
+            ensureEditableMesh(e);
+        if (!m_paintMesh || !m_paintMeshEntity) return false;
+    }
     Ogre::Vector2 uv;
     return hitTestUV(screenPos, widget, uv);
 }
@@ -2329,6 +2341,7 @@ int TexturePaintController::fillMaskWithFG()
         QStringLiteral("Smart select: filled %1 px with FG %2")
             .arg(affected).arg(c.name(QColor::HexRgb)));
     flushDirtyToOgre();
+    updateEmbeddedTextureCache();
     return affected;
 }
 
@@ -2354,6 +2367,7 @@ int TexturePaintController::fillMaskWithBG()
         QStringLiteral("Smart select: filled %1 px with BG %2")
             .arg(affected).arg(c.name(QColor::HexArgb)));
     flushDirtyToOgre();
+    updateEmbeddedTextureCache();
     return affected;
 }
 
@@ -2373,6 +2387,7 @@ int TexturePaintController::deleteMaskPixels()
     SentryReporter::addBreadcrumb("ui.action",
         QStringLiteral("Smart select: deleted %1 px").arg(affected));
     flushDirtyToOgre();
+    updateEmbeddedTextureCache();
     return affected;
 }
 

@@ -1287,7 +1287,8 @@ Rectangle {
                 }
 
                 // Action buttons: act on the current mask.
-                Row {
+                Flow {
+                    width: parent.width
                     spacing: 4
                     Repeater {
                         model: [

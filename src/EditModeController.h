@@ -232,7 +232,10 @@ public:
     /// Swap foreground and background colors. Standard "X" shortcut in
     /// image editors.
     Q_INVOKABLE void swapPaintColors();
-    /// Reset to canonical defaults: FG=black, BG=white.
+    /// Reset to canonical defaults: FG = Fern green (#71BC78),
+    /// BG = black. Mirrors the member-initialiser defaults near
+    /// the bottom of the class so the documentation cannot drift
+    /// from the actual reset behaviour.
     Q_INVOKABLE void resetPaintColors();
     double vertexPaintRadius() const { return m_vertexPaintRadius; }
     void setVertexPaintRadius(double r);

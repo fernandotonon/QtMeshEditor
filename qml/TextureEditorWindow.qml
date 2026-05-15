@@ -48,6 +48,15 @@ Window {
         }
         function onSessionChanged() {
             editorWindow.hasSession = TexturePaintController.hasActiveSession
+            // When the session is torn down (mesh removed, mode change,
+            // target switch), wipe the stale preview/mask so the
+            // detached window doesn't show last-session's contents.
+            if (!editorWindow.hasSession) {
+                editorWindow.previewUri = ""
+                editorWindow.maskOverlayUri = ""
+                editorWindow.hoverU = -1
+                editorWindow.hoverV = -1
+            }
         }
         function onHoveredUVChanged(u, v) {
             editorWindow.hoverU = u
@@ -182,35 +191,48 @@ Window {
             smooth: false
             cache: false
         }
+        // Painted-image rectangle. PreserveAspectFit letterboxes
+        // non-square textures inside the square canvas, so we map
+        // mouse coords against this inner rect instead of the
+        // Image's container size — otherwise clicks/drags map to
+        // wrong UVs on non-square textures.
+        Item {
+            id: paintedRect
+            x: canvasImg.x + (canvasImg.width  - canvasImg.paintedWidth)  / 2
+            y: canvasImg.y + (canvasImg.height - canvasImg.paintedHeight) / 2
+            width:  canvasImg.paintedWidth
+            height: canvasImg.paintedHeight
+        }
+
         // Hover crosshair.
         Rectangle {
             visible: editorWindow.hoverU >= 0 && editorWindow.hoverV >= 0
             color: "#ff3030"
-            width: 1; height: canvasImg.height
-            x: canvasImg.x + Math.round(editorWindow.hoverU * canvasImg.width)
-            y: canvasImg.y
+            width: 1; height: paintedRect.height
+            x: paintedRect.x + Math.round(editorWindow.hoverU * paintedRect.width)
+            y: paintedRect.y
         }
         Rectangle {
             visible: editorWindow.hoverU >= 0 && editorWindow.hoverV >= 0
             color: "#ff3030"
-            width: canvasImg.width; height: 1
-            x: canvasImg.x
-            y: canvasImg.y + Math.round(editorWindow.hoverV * canvasImg.height)
+            width: paintedRect.width; height: 1
+            x: paintedRect.x
+            y: paintedRect.y + Math.round(editorWindow.hoverV * paintedRect.height)
         }
 
         MouseArea {
             id: canvasMa
-            anchors.fill: canvasImg
+            anchors.fill: paintedRect
             hoverEnabled: true
             cursorShape: Qt.CrossCursor
             preventStealing: true
             property bool dragging: false
 
             function uvAt(mx, my) {
-                if (canvasImg.width <= 0 || canvasImg.height <= 0)
+                if (paintedRect.width <= 0 || paintedRect.height <= 0)
                     return null
-                const u = mx / canvasImg.width
-                const v = my / canvasImg.height
+                const u = mx / paintedRect.width
+                const v = my / paintedRect.height
                 if (u < 0 || u > 1 || v < 0 || v > 1) return null
                 return { u: u, v: v }
             }
@@ -249,8 +271,10 @@ Window {
 
     // Bottom action bar: save / load / bake / mask actions / "open in
     // external viewer". Keeps the most-used non-stroke actions one click
-    // away without polluting the main inspector.
-    Row {
+    // away without polluting the main inspector. Flow so buttons wrap
+    // to a second line on narrow window widths instead of getting
+    // clipped (minimumWidth is 480, the row had 9 buttons).
+    Flow {
         id: bottomBar
         spacing: 6
         anchors {
@@ -259,7 +283,6 @@ Window {
             bottom: parent.bottom
             margins: 8
         }
-        height: 30
 
         Button {
             text: "Save…"

@@ -1537,10 +1537,12 @@ void MainWindow::initToolBar()
             syncSwatches();
         });
         connect(swap, &QPushButton::clicked, this, [syncSwatches]() {
+            SentryReporter::addBreadcrumb("ui.action", "Toolbar: swap FG/BG colors");
             EditModeController::instance()->swapPaintColors();
             syncSwatches();
         });
         connect(reset, &QPushButton::clicked, this, [syncSwatches]() {
+            SentryReporter::addBreadcrumb("ui.action", "Toolbar: reset FG/BG colors");
             EditModeController::instance()->resetPaintColors();
             syncSwatches();
         });
@@ -1563,7 +1565,12 @@ void MainWindow::initToolBar()
         // picker; both run through TexturePaintController.
         vertexPaintAction->setVisible(material);
         vertexPaintButton->setEnabled(material);
-        paintColorsAction->setVisible(material);
+        // FG/BG swatch stays available in Edit Mode too — vertex paint
+        // runs from Edit Mode and the brush popup no longer holds a
+        // color picker, so without this the user has no toolbar
+        // access to the foreground color while painting vertex colors.
+        const bool edit = mode == EditorModeController::EditMode;
+        paintColorsAction->setVisible(material || edit);
         wandAction->setVisible(material);
         // wandButton enabled state is driven by syncWandEnabled —
         // paint-on + target=Texture. Hide here when out of Material

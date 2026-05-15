@@ -320,9 +320,13 @@ public:
     /// Quick "would beginStroke hit the mesh at screenPos?" probe.
     /// Public wrapper around hitTestUV used by TransformOperator to
     /// decide whether a click landed on the mesh or empty space (for
-    /// "click outside clears wand selection" behaviour). Returns false
-    /// on a miss or when there's no paint session.
-    bool wouldStrokeHit(OgreWidget* widget, const QPoint& screenPos) const;
+    /// "click outside clears wand selection" behaviour). Lazily
+    /// builds the EditableMesh / paint session if the user is making
+    /// the first click on the model (otherwise the first hit would
+    /// silently miss because m_paintMesh is still null at the time
+    /// the TransformOperator press handler queries us). Not const
+    /// for that reason.
+    bool wouldStrokeHit(OgreWidget* widget, const QPoint& screenPos);
 
     /// Read-only access for tests.
     const TexturePaintBuffer& buffer() const { return m_buffer; }
@@ -521,6 +525,15 @@ private:
     /// Debounced through QTimer::singleShot.
     void scheduleMaskOverlayRefresh();
     void refreshMaskOverlay();
+
+    /// Re-encode the current buffer as PNG and push it into
+    /// EmbeddedTextureCache so the next FBX export (or RTSS rebind)
+    /// sees the painted pixels. Must be called from every code path
+    /// that mutates `m_buffer` — stroke end, mask actions, undo /
+    /// redo — otherwise downstream consumers observe stale bytes
+    /// from before the mutation. Cheap PNG encode (~1024² is a few
+    /// ms) so callers don't need to debounce.
+    void updateEmbeddedTextureCache();
 
     // Detached texture editor window. Owned heap-allocated; instantiated
     // lazily when the user clicks "Open Editor Window" and torn down on

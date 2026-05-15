@@ -54,9 +54,12 @@ public:
     /// Tight bbox of currently-set pixels. Empty when isEmpty().
     const BBox& bbox() const { return m_bbox; }
     /// Raw mask byte buffer (row-major, top-left origin, 0 = unselected,
-    /// 1 = selected).
+    /// 1 = selected). Read-only by design — selectedCount() and bbox()
+    /// are cached and would become inconsistent with the underlying
+    /// bits if external code mutated this array directly. Use
+    /// setSelected / clear / selectAll / invert / smartSelect to
+    /// mutate.
     const std::vector<uint8_t>& data() const { return m_data; }
-    std::vector<uint8_t>& data() { return m_data; }
 
     /// True if the pixel at (x, y) is in the selection. Out-of-bounds
     /// returns false.
