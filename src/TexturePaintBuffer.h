@@ -75,29 +75,37 @@ public:
     /// Write pixel (clamped to bounds). Expands dirty rect.
     void setPixel(int x, int y, const Ogre::ColourValue& color);
 
+    /// Brush footprint. Round = circular falloff (default), Square =
+    /// axis-aligned constant-strength rectangle (no falloff, like a
+    /// pixel-art tool).
+    enum class BrushShape { Round = 0, Square = 1 };
+
     /**
-     * @brief Paint a circular brush stamp at UV coordinate.
+     * @brief Paint a brush stamp at UV coordinate.
      *
      * @param uv         Center UV in [0..1]^2 (top-left origin: uv.y=0 → top).
-     * @param radiusUV   Brush radius in UV-space units.
+     * @param radiusUV   Brush radius in UV-space units. For Square,
+     *                   this is half the side length.
      * @param color      Brush color (alpha is interpreted as flow).
      * @param strength   0..1 — how much the brush moves the pixel toward `color`.
      * @param falloff    0 = hard, 1 = full quadratic falloff at the edge.
+     *                   Ignored when `shape == Square`.
+     * @param shape      Round (default) or Square.
      * @return Number of pixels modified.
      *
-     * Each pixel inside the brush footprint is lerped:
-     *
+     * Round mode lerps each pixel in the circular footprint:
      *     out = lerp(prev, color, strength * weight)
+     * where weight = (1 - r^2)^p, p = 1 + falloff * 3.
      *
-     * where `weight = 1` at center and falls off to `0` at the edge. The
-     * falloff curve is `(1 - r^2)^p` with `p = 1 + falloff * 3`, matching
-     * the vertex-paint brush in EditModeController.
+     * Square mode lerps every pixel inside the axis-aligned bounding
+     * box with weight = 1 (constant strength).
      */
     int paintBrush(const Ogre::Vector2& uv,
                    float radiusUV,
                    const Ogre::ColourValue& color,
                    float strength = 1.0f,
-                   float falloff = 0.5f);
+                   float falloff = 0.5f,
+                   BrushShape shape = BrushShape::Round);
 
     /**
      * @brief Save the buffer to disk as a PNG/JPEG/TGA/BMP/etc.

@@ -146,6 +146,32 @@ Window {
 
         Item { width: 16; height: 1 } // spacer
 
+        // UV wireframe overlay toggle. Mirrors the same toggle in
+        // PropertiesPanel.qml so the user can flip the island wires
+        // on from either window. State is shared via the singleton.
+        Rectangle {
+            width: 56; height: 28; radius: 3
+            color: TexturePaintController.uvOverlayVisible
+                ? "#5b8def"
+                : (uvToggleMa.containsMouse ? "#3a3a3a" : "#2a2a2a")
+            border.color: "#555"; border.width: 1
+            anchors.verticalCenter: parent.verticalCenter
+            Text {
+                anchors.centerIn: parent
+                text: (TexturePaintController.uvOverlayVisible ? "✓ " : "") + "UV"
+                color: "white"; font.pixelSize: 11
+            }
+            MouseArea {
+                id: uvToggleMa
+                anchors.fill: parent; hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: TexturePaintController.uvOverlayVisible
+                    = !TexturePaintController.uvOverlayVisible
+            }
+        }
+
+        Item { width: 8; height: 1 } // spacer
+
         Text {
             text: editorWindow.hasMask ? (editorWindow.maskCount + " px") : ""
             color: "#ddd"
@@ -181,6 +207,19 @@ Window {
             cache: false
             onSourceChanged: canvasImg.update()
         }
+        // UV-island wireframe overlay (toggleable). Same source as
+        // the inspector thumbnail so toggling it from either window
+        // is reflected everywhere.
+        Image {
+            anchors.fill: canvasImg
+            visible: TexturePaintController.uvOverlayVisible
+            opacity: 0.7
+            source: TexturePaintController.uvOverlayDataUri
+            fillMode: Image.PreserveAspectFit
+            smooth: false
+            cache: false
+        }
+
         // Mask overlay (selection bounds rendered as a yellow tint).
         Image {
             anchors.fill: canvasImg
@@ -218,6 +257,26 @@ Window {
             width: paintedRect.width; height: 1
             x: paintedRect.x
             y: paintedRect.y + Math.round(editorWindow.hoverV * paintedRect.height)
+        }
+
+        // Brush footprint outline (circle for Round, square for Square).
+        // Mirrors the same overlay rendered in PropertiesPanel.qml — the
+        // detached editor should show identical UI for the same paint
+        // pipeline.
+        Rectangle {
+            id: brushOutline
+            visible: editorWindow.hoverU >= 0 && editorWindow.hoverV >= 0
+                     && TexturePaintController.texturePaintRadiusUV > 0
+            color: "transparent"
+            border.color: "#ff3030"
+            border.width: 1
+            property real diameterPx: Math.max(2,
+                Math.round(TexturePaintController.texturePaintRadiusUV * 2 * paintedRect.width))
+            width: diameterPx
+            height: diameterPx
+            radius: TexturePaintController.brushShape === 1 ? 0 : diameterPx / 2
+            x: paintedRect.x + Math.round(editorWindow.hoverU * paintedRect.width) - diameterPx / 2
+            y: paintedRect.y + Math.round(editorWindow.hoverV * paintedRect.height) - diameterPx / 2
         }
 
         MouseArea {

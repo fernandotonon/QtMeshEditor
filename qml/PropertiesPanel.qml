@@ -1190,41 +1190,11 @@ Rectangle {
                 }
             }
 
-            // Tool selector \u2014 Paint, Erase, Fill, Picker, Smudge.
-            // Wand is intentionally NOT here; it lives in the left
-            // toolbar (under the paint brush) so it can have its own
-            // green icon + enabled/disabled treatment without
-            // duplicating UI in the right panel.
-            Row {
-                spacing: 4
-                Repeater {
-                    model: [
-                        { tool: 0, label: "Paint",  glyph: "\u270f" },
-                        { tool: 1, label: "Erase",  glyph: "\u232b" },
-                        { tool: 2, label: "Fill",   glyph: "\u29c9" },
-                        { tool: 3, label: "Pick",   glyph: "\u22b0" },
-                        { tool: 4, label: "Smudge", glyph: "\u223f" }
-                    ]
-                    Rectangle {
-                        width: 52; height: 26; radius: 3
-                        color: texPaintCol.brushTool === modelData.tool
-                            ? PropertiesPanelController.highlightColor
-                            : (toolMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
-                                                    : PropertiesPanelController.headerColor)
-                        border.color: PropertiesPanelController.borderColor; border.width: 1
-                        Text {
-                            anchors.centerIn: parent
-                            text: modelData.glyph + " " + modelData.label
-                            color: PropertiesPanelController.textColor
-                            font.pixelSize: 10
-                        }
-                        MouseArea {
-                            id: toolMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: TexturePaintController.brushTool = modelData.tool
-                        }
-                    }
-                }
-            }
+            // Tool selector deliberately not in the right panel anymore.
+            // All paint tools (Paint / Bucket / Eraser / Pick / Smudge
+            // / Wand) live in the left toolbar \u2014 see mainwindow.cpp
+            // \u2014 so the user picks the tool with the same buttons
+            // regardless of which target they're painting.
 
             // Smart-select panel. Visible whenever there's an active
             // session \u2014 tolerance is always meaningful, and once the
@@ -1470,6 +1440,30 @@ Rectangle {
                     color: "#ff3030"
                     x: 1
                     y: 1 + Math.round(texPaintCol.hoverV * (parent.height - 2))
+                }
+
+                // Brush footprint outline — circle for Round, square
+                // for Square. Diameter / side comes from the controller's
+                // UV-space radius (same scaling the painter uses) so the
+                // outline matches the actual stamp.
+                Rectangle {
+                    id: brushOutline
+                    visible: texPaintCol.hoverU >= 0 && texPaintCol.hoverV >= 0
+                             && TexturePaintController.texturePaintRadiusUV > 0
+                    color: "transparent"
+                    border.color: "#ff3030"
+                    border.width: 1
+                    // Diameter in pixels of the 254x254 inner image area
+                    // (parent is 256x256 with 1px margins on each side).
+                    property real diameterPx: Math.max(2,
+                        Math.round(TexturePaintController.texturePaintRadiusUV * 2 * (parent.width - 2)))
+                    width: diameterPx
+                    height: diameterPx
+                    radius: TexturePaintController.brushShape === 1 ? 0 : diameterPx / 2
+                    // Centred on the hover point. width/2 is the offset
+                    // so the outline is symmetric around the crosshair.
+                    x: 1 + Math.round(texPaintCol.hoverU * (parent.width - 2)) - diameterPx / 2
+                    y: 1 + Math.round(texPaintCol.hoverV * (parent.height - 2)) - diameterPx / 2
                 }
 
                 MouseArea {

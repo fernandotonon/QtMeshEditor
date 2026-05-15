@@ -363,6 +363,31 @@ double TexturePaintController::texturePaintRadius() const
     return em ? em->vertexPaintRadius() : 0.05;
 }
 
+double TexturePaintController::texturePaintRadiusUV() const
+{
+    // Same mapping the texture-paint dispatch uses (see applyBrushAt)
+    // — divide the mesh-local radius by the mesh bounding-box half-
+    // size. When no paint mesh is available yet (no session) the raw
+    // mesh-local value is returned; the QML overlay treats anything
+    // > 0.5 as "clamp visually".
+    const double raw = texturePaintRadius();
+    if (!m_paintMesh) return raw;
+    const auto bbox = m_paintMesh->calculateBounds();
+    if (!bbox.isFinite()) return raw;
+    const float meshExtent = bbox.getSize().length() * 0.5f;
+    if (meshExtent <= 0.0f) return raw;
+    double uv = raw / static_cast<double>(meshExtent);
+    if (uv < 0.005) uv = 0.005;
+    if (uv > 1.0)  uv = 1.0;
+    return uv;
+}
+
+int TexturePaintController::brushShape() const
+{
+    auto* em = EditModeController::instance();
+    return em ? em->vertexPaintShape() : 0;
+}
+
 QColor TexturePaintController::bgPaintColor() const
 {
     auto* em = EditModeController::instance();
@@ -1172,12 +1197,15 @@ void TexturePaintController::updateStroke(OgreWidget* widget, const QPoint& scre
         drawHoverRingAt(localPos, localNormal);
         const QColor c = texturePaintColor();
         const Ogre::ColourValue paint(c.redF(), c.greenF(), c.blueF(), c.alphaF());
+        const auto* em = EditModeController::instance();
+        const bool square = em && em->vertexPaintShape() == EditModeController::ShapeSquare;
         const bool changed = EditModeController::applyVertexColorBrush(
             *m_paintMesh, localPos,
             static_cast<float>(texturePaintRadius()),
             paint,
             static_cast<float>(texturePaintStrength()),
-            static_cast<float>(texturePaintFalloff()));
+            static_cast<float>(texturePaintFalloff()),
+            square);
         if (changed)
             m_paintMesh->commitVertexColorsToEntity(m_paintMeshEntity);
         return;
@@ -1218,12 +1246,21 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
     radius = std::clamp(radius, 0.005f, 1.0f);
     const float strength = static_cast<float>(texturePaintStrength());
     const float falloff = static_cast<float>(texturePaintFalloff());
+    // Shape is sourced from EditModeController (the canonical brush
+    // settings owner). Default Round = circular falloff; Square is
+    // an axis-aligned constant-strength rectangle for pixel-art
+    // style hard edges.
+    const auto* em = EditModeController::instance();
+    const TexturePaintBuffer::BrushShape shape =
+        (em && em->vertexPaintShape() == EditModeController::ShapeSquare)
+            ? TexturePaintBuffer::BrushShape::Square
+            : TexturePaintBuffer::BrushShape::Round;
 
     switch (m_tool) {
     case ToolPaint: {
         const QColor c = texturePaintColor();
         const Ogre::ColourValue paint(c.redF(), c.greenF(), c.blueF(), c.alphaF());
-        return m_buffer.paintBrush(uv, radius, paint, strength, falloff) > 0;
+        return m_buffer.paintBrush(uv, radius, paint, strength, falloff, shape) > 0;
     }
     case ToolErase: {
         // Erase = paint with the user-chosen background color. The BG
@@ -1238,7 +1275,7 @@ bool TexturePaintController::applyBrushAtUV(const Ogre::Vector2& uv)
             static_cast<float>(bg.greenF()),
             static_cast<float>(bg.blueF()),
             static_cast<float>(bg.alphaF()));
-        return m_buffer.paintBrush(uv, radius, eraseTo, strength, falloff) > 0;
+        return m_buffer.paintBrush(uv, radius, eraseTo, strength, falloff, shape) > 0;
     }
     case ToolFill: {
         // Fill is a single-stamp operation — apply once per stroke
@@ -2190,22 +2227,50 @@ void TexturePaintController::drawHoverRingAt(const Ogre::Vector3& localPos,
 
     const QColor c = texturePaintColor();
     const Ogre::ColourValue ringCol(c.redF(), c.greenF(), c.blueF(), 0.95f);
-    constexpr int kSegments = 64;
     // The brush radius is in local mesh units (shared with vertex paint).
-    // 0.8 narrows the ring slightly so it visually matches the painted
-    // footprint (a softly-falloff brush doesn't quite touch the ring edge).
-    const float radius = static_cast<float>(texturePaintRadius()) * 0.8f;
+    // For the circular overlay we narrow it slightly (0.8x) so the ring
+    // visually matches the painted footprint — a softly-falloff brush
+    // doesn't quite touch the ring edge. The square overlay represents
+    // the AABB cube footprint exactly, so it uses the full radius.
     const Ogre::Vector3 center = localPos + normal * 0.001f;
-    m_ringObj->begin(kMatName, Ogre::RenderOperation::OT_LINE_STRIP);
-    for (int i = 0; i <= kSegments; ++i) {
-        const float t = static_cast<float>(i) / kSegments;
-        const float a = Ogre::Math::TWO_PI * t;
-        const Ogre::Vector3 p = center
-            + (tangent * Ogre::Math::Cos(a) + bitangent * Ogre::Math::Sin(a)) * radius;
-        m_ringObj->position(p);
-        m_ringObj->colour(ringCol);
+
+    const auto* em = EditModeController::instance();
+    const bool square = em && em->vertexPaintShape() == EditModeController::ShapeSquare;
+    if (square) {
+        const float radius = static_cast<float>(texturePaintRadius());
+        // Four corners of the local tangent-plane square, drawn as a
+        // closed line strip. Tangent + bitangent are perpendicular by
+        // construction so the corners are axis-aligned in the surface
+        // frame. NB: applyVertexColorBrush uses an AABB in mesh-local
+        // X/Y/Z space, not the surface frame — this overlay is a
+        // close visual approximation that stays simple, not an exact
+        // projection of that cube. Users want a hint of "square
+        // brush", which this delivers.
+        const Ogre::Vector3 p0 = center + ( tangent + bitangent) * radius;
+        const Ogre::Vector3 p1 = center + (-tangent + bitangent) * radius;
+        const Ogre::Vector3 p2 = center + (-tangent - bitangent) * radius;
+        const Ogre::Vector3 p3 = center + ( tangent - bitangent) * radius;
+        m_ringObj->begin(kMatName, Ogre::RenderOperation::OT_LINE_STRIP);
+        m_ringObj->position(p0); m_ringObj->colour(ringCol);
+        m_ringObj->position(p1); m_ringObj->colour(ringCol);
+        m_ringObj->position(p2); m_ringObj->colour(ringCol);
+        m_ringObj->position(p3); m_ringObj->colour(ringCol);
+        m_ringObj->position(p0); m_ringObj->colour(ringCol);
+        m_ringObj->end();
+    } else {
+        const float radius = static_cast<float>(texturePaintRadius()) * 0.8f;
+        constexpr int kSegments = 64;
+        m_ringObj->begin(kMatName, Ogre::RenderOperation::OT_LINE_STRIP);
+        for (int i = 0; i <= kSegments; ++i) {
+            const float t = static_cast<float>(i) / kSegments;
+            const float a = Ogre::Math::TWO_PI * t;
+            const Ogre::Vector3 p = center
+                + (tangent * Ogre::Math::Cos(a) + bitangent * Ogre::Math::Sin(a)) * radius;
+            m_ringObj->position(p);
+            m_ringObj->colour(ringCol);
+        }
+        m_ringObj->end();
     }
-    m_ringObj->end();
 }
 
 // ---------------------------------------------------------------------------
