@@ -390,6 +390,18 @@ void EditModeController::setVertexPaintFalloff(double f)
     emit vertexPaintChanged();
 }
 
+void EditModeController::setVertexPaintShape(int shape)
+{
+    const BrushShape s = static_cast<BrushShape>(shape);
+    if (s != ShapeRound && s != ShapeSquare) return;
+    if (m_vertexPaintShape == s) return;
+    m_vertexPaintShape = s;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex paint shape: %1").arg(s == ShapeSquare ? "square" : "round"));
+    emit vertexPaintChanged();
+}
+
 bool EditModeController::canEnterEditMode() const
 {
     // Edit mode requires exactly one entity selected (either directly or via node)
@@ -1167,7 +1179,8 @@ bool EditModeController::applyVertexColorBrush(EditableMesh& mesh,
                                                float radius,
                                                const Ogre::ColourValue& color,
                                                float strength,
-                                               float falloff)
+                                               float falloff,
+                                               bool square)
 {
     if (radius <= 0.0f)
         return false;
@@ -1187,14 +1200,22 @@ bool EditModeController::applyVertexColorBrush(EditableMesh& mesh,
         auto& sub = mesh.subMeshes()[si];
         for (size_t vi = 0; vi < sub.vertices.size(); ++vi) {
             auto& v = sub.vertices[vi];
-            const float d = v.position.distance(localCenter);
-            if (d > radius)
-                continue;
-
-            // Distance falloff: w = (1 - d/r)^exp
-            const float t = 1.0f - (d * invR);
-            const float w = std::pow(std::max(0.0f, t), exp);
-            const float a = strength * w;
+            float a = 0.0f;
+            if (square) {
+                // AABB cube: constant strength inside, no falloff.
+                const Ogre::Vector3 d = v.position - localCenter;
+                if (std::fabs(d.x) > radius || std::fabs(d.y) > radius || std::fabs(d.z) > radius)
+                    continue;
+                a = strength;
+            } else {
+                const float d = v.position.distance(localCenter);
+                if (d > radius)
+                    continue;
+                // Distance falloff: w = (1 - d/r)^exp
+                const float t = 1.0f - (d * invR);
+                const float w = std::pow(std::max(0.0f, t), exp);
+                a = strength * w;
+            }
             if (a <= 0.0f)
                 continue;
 
@@ -1714,7 +1735,8 @@ void EditModeController::updateVertexPaintStroke(OgreWidget* widget, const QPoin
         static_cast<float>(m_vertexPaintRadius),
         paint,
         static_cast<float>(m_vertexPaintStrength),
-        static_cast<float>(m_vertexPaintFalloff));
+        static_cast<float>(m_vertexPaintFalloff),
+        m_vertexPaintShape == ShapeSquare);
 
     if (changed) {
         m_vertexPaintStrokeDirty = true;

@@ -103,7 +103,8 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
                                    float radiusUV,
                                    const Ogre::ColourValue& color,
                                    float strength,
-                                   float falloff)
+                                   float falloff,
+                                   BrushShape shape)
 {
     if (m_width <= 0 || m_height <= 0) return 0;
     if (radiusUV <= 0.0f) return 0;
@@ -135,14 +136,23 @@ int TexturePaintBuffer::paintBrush(const Ogre::Vector2& uv,
     int touchedY0 = y1;
     int touchedY1 = y0;
 
+    const bool square = (shape == BrushShape::Square);
     for (int y = y0; y < y1; ++y) {
         const float dy = (static_cast<float>(y) + 0.5f - centerYf) * invRy;
         for (int x = x0; x < x1; ++x) {
             const float dx = (static_cast<float>(x) + 0.5f - centerXf) * invRx;
-            const float r2 = dx * dx + dy * dy;
-            if (r2 >= 1.0f) continue;
-            const float w = std::pow(1.0f - r2, p);
-            const float blend = strength * w;
+            float blend;
+            if (square) {
+                // Constant strength inside the AABB — no falloff, no
+                // circular cull. Half-side equals radius.
+                if (std::fabs(dx) > 1.0f || std::fabs(dy) > 1.0f) continue;
+                blend = strength;
+            } else {
+                const float r2 = dx * dx + dy * dy;
+                if (r2 >= 1.0f) continue;
+                const float w = std::pow(1.0f - r2, p);
+                blend = strength * w;
+            }
             if (blend <= 0.0f) continue;
             const size_t off = (static_cast<size_t>(y) * static_cast<size_t>(m_width) + static_cast<size_t>(x)) * 4u;
             const float prevR = byteToFloat(m_pixels[off + 0]);

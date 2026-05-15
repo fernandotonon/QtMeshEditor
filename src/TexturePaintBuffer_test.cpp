@@ -172,6 +172,70 @@ TEST(TexturePaintBufferTest, PaintBrushClampsToBufferBounds)
     EXPECT_LE(d.y1, 8);
 }
 
+// ---- Square brush shape ----
+
+TEST(TexturePaintBufferTest, SquareBrushPaintsFullAabbWithConstantStrength)
+{
+    // Square should fill every pixel in the radius-side AABB at full
+    // strength regardless of distance-from-center — falloff is
+    // ignored. With a 16x16 buffer and radius 0.125 (= 2px), the
+    // brush at center should fill a 4x4 AABB.
+    TexturePaintBuffer buf(16, 16);
+    const int painted = buf.paintBrush(Ogre::Vector2(0.5f, 0.5f),
+                                       0.125f,
+                                       Ogre::ColourValue::Red,
+                                       1.0f, 0.5f,
+                                       TexturePaintBuffer::BrushShape::Square);
+    EXPECT_EQ(painted, 16); // 4×4
+    // Every pixel inside the AABB should be ~exact red — no falloff.
+    int cx = 0, cy = 0;
+    buf.uvToPixel(Ogre::Vector2(0.5f, 0.5f), cx, cy);
+    EXPECT_NEAR(buf.pixel(cx, cy).r, 1.0f, 1e-3f);
+    // Corner of the AABB stays exact red too (constant strength).
+    EXPECT_NEAR(buf.pixel(cx - 1, cy - 1).r, 1.0f, 1e-3f);
+    EXPECT_NEAR(buf.pixel(cx + 1, cy + 1).r, 1.0f, 1e-3f);
+    // One pixel outside the AABB is untouched.
+    EXPECT_NEAR(buf.pixel(cx + 3, cy).r, 1.0f, 1e-3f);  // still white
+    EXPECT_NEAR(buf.pixel(cx + 3, cy).g, 1.0f, 1e-3f);
+}
+
+TEST(TexturePaintBufferTest, SquareBrushIgnoresFalloffParameter)
+{
+    // With Round, falloff softens the edge — center is full strength
+    // but a pixel near the edge gets a fractional weight. Square
+    // mode should produce identical results for any falloff value
+    // because the parameter is unused.
+    TexturePaintBuffer bufA(16, 16);
+    TexturePaintBuffer bufB(16, 16);
+    bufA.paintBrush(Ogre::Vector2(0.5f, 0.5f), 0.125f,
+                    Ogre::ColourValue::Red, 1.0f, 0.0f,
+                    TexturePaintBuffer::BrushShape::Square);
+    bufB.paintBrush(Ogre::Vector2(0.5f, 0.5f), 0.125f,
+                    Ogre::ColourValue::Red, 1.0f, 1.0f,
+                    TexturePaintBuffer::BrushShape::Square);
+    EXPECT_EQ(bufA.data(), bufB.data());
+}
+
+TEST(TexturePaintBufferTest, RoundBrushIsCircularNotRectangular)
+{
+    // Sanity check the Round path: a pixel at the AABB corner is
+    // outside the unit circle and should be untouched, where Square
+    // would have filled it.
+    TexturePaintBuffer buf(16, 16);
+    buf.paintBrush(Ogre::Vector2(0.5f, 0.5f), 0.125f,
+                   Ogre::ColourValue::Red, 1.0f, 0.0f,
+                   TexturePaintBuffer::BrushShape::Round);
+    int cx = 0, cy = 0;
+    buf.uvToPixel(Ogre::Vector2(0.5f, 0.5f), cx, cy);
+    // (cx-1, cy-1) is at radius sqrt(0.5^2 + 0.5^2) / 2 ≈ 0.35 of
+    // brush radius — inside the unit circle, so painted.
+    EXPECT_NEAR(buf.pixel(cx, cy).r, 1.0f, 0.1f);
+    // Diagonal corner pixel ~ (cx-2, cy-2) lies just outside the
+    // unit circle in pixel-center units → unpainted (still white).
+    EXPECT_NEAR(buf.pixel(cx - 2, cy - 2).r, 1.0f, 1e-3f);
+    EXPECT_NEAR(buf.pixel(cx - 2, cy - 2).g, 1.0f, 1e-3f);
+}
+
 TEST(TexturePaintBufferTest, UvToPixelRoundTrip)
 {
     // UV origin = top-left (Ogre + Qt convention).

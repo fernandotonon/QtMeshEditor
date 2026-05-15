@@ -102,6 +102,80 @@ TEST(EditableMeshStandalone, VertexColorBrushFalloffHigherExponentWeakerAtEdge)
     EXPECT_GT(gHi, gLo);
 }
 
+// ---- Square (AABB cube) brush shape ----
+
+TEST(EditableMeshStandalone, VertexColorBrushSquareCoversAABBCorners)
+{
+    // The sphere brush excludes corners of a unit-radius cube
+    // (their distance to centre is sqrt(3) ≈ 1.73). The square
+    // brush includes them because the test is per-axis |d| <= radius.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    // Cube corner at (1,1,1) — outside the sphere of radius 1.
+    sub.vertices.push_back(makeV(1.0f, 1.0f, 1.0f));
+    mesh.subMeshes().push_back(std::move(sub));
+
+    const Ogre::ColourValue red(1, 0, 0, 1);
+    const Ogre::Vector3 center(0, 0, 0);
+    // Round brush should not reach this corner.
+    EXPECT_FALSE(EditModeController::applyVertexColorBrush(
+        mesh, center, 1.0f, red, 1.0f, 0.0f, /*square=*/false));
+
+    // Square brush with same radius DOES reach the corner.
+    EXPECT_TRUE(EditModeController::applyVertexColorBrush(
+        mesh, center, 1.0f, red, 1.0f, 0.0f, /*square=*/true));
+    EXPECT_NEAR(mesh.subMeshes()[0].vertices[0].color.r, 1.0f, 1e-3f);
+}
+
+TEST(EditableMeshStandalone, VertexColorBrushSquareConstantStrengthNoFalloff)
+{
+    // Falloff has no effect on the square brush — every vertex
+    // inside the AABB gets the same blend weight, regardless of
+    // distance to centre.
+    EditableMesh meshLo;
+    EditableMesh meshHi;
+    EditableSubMesh subLo;
+    EditableSubMesh subHi;
+    // One vertex near centre, one at the cube edge.
+    subLo.vertices.push_back(makeV(0.1f, 0.0f, 0.0f));
+    subLo.vertices.push_back(makeV(0.9f, 0.0f, 0.0f));
+    subHi.vertices = subLo.vertices;
+    meshLo.subMeshes().push_back(std::move(subLo));
+    meshHi.subMeshes().push_back(std::move(subHi));
+
+    const Ogre::ColourValue red(1, 0, 0, 1);
+    const Ogre::Vector3 center(0, 0, 0);
+    ASSERT_TRUE(EditModeController::applyVertexColorBrush(
+        meshLo, center, 1.0f, red, 1.0f, 0.0f, /*square=*/true));
+    ASSERT_TRUE(EditModeController::applyVertexColorBrush(
+        meshHi, center, 1.0f, red, 1.0f, 1.0f, /*square=*/true));
+
+    // Both vertices in both runs should converge on red (same blend).
+    EXPECT_NEAR(meshLo.subMeshes()[0].vertices[0].color.r, 1.0f, 1e-3f);
+    EXPECT_NEAR(meshLo.subMeshes()[0].vertices[1].color.r, 1.0f, 1e-3f);
+    EXPECT_NEAR(meshHi.subMeshes()[0].vertices[0].color.r, 1.0f, 1e-3f);
+    EXPECT_NEAR(meshHi.subMeshes()[0].vertices[1].color.r, 1.0f, 1e-3f);
+}
+
+TEST(EditableMeshStandalone, VertexColorBrushSquareSkipsOutsideAABB)
+{
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    // Inside the cube of radius 1, and outside.
+    sub.vertices.push_back(makeV(0.0f, 0.0f, 0.0f));   // dead-center
+    sub.vertices.push_back(makeV(2.0f, 0.0f, 0.0f));   // outside on +X
+    mesh.subMeshes().push_back(std::move(sub));
+
+    const Ogre::ColourValue red(1, 0, 0, 1);
+    const Ogre::Vector3 center(0, 0, 0);
+    EXPECT_TRUE(EditModeController::applyVertexColorBrush(
+        mesh, center, 1.0f, red, 1.0f, 0.5f, /*square=*/true));
+
+    EXPECT_NEAR(mesh.subMeshes()[0].vertices[0].color.r, 1.0f, 1e-3f);
+    // The outside vertex still has no color set.
+    EXPECT_FALSE(mesh.subMeshes()[0].vertices[1].hasColor);
+}
+
 TEST(EditableMeshStandalone, WeldByPositionMergesCoincidentVerts) {
     EditableMesh em;
     EditableSubMesh sub;

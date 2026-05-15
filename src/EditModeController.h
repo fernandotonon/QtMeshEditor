@@ -108,6 +108,7 @@ class EditModeController : public QObject
     Q_PROPERTY(double vertexPaintRadius READ vertexPaintRadius WRITE setVertexPaintRadius NOTIFY vertexPaintChanged)
     Q_PROPERTY(double vertexPaintStrength READ vertexPaintStrength WRITE setVertexPaintStrength NOTIFY vertexPaintChanged)
     Q_PROPERTY(double vertexPaintFalloff READ vertexPaintFalloff WRITE setVertexPaintFalloff NOTIFY vertexPaintChanged)
+    Q_PROPERTY(int vertexPaintShape READ vertexPaintShape WRITE setVertexPaintShape NOTIFY vertexPaintChanged)
     Q_PROPERTY(bool vertexColorPreviewEnabled READ vertexColorPreviewEnabled WRITE setVertexColorPreviewEnabled NOTIFY vertexColorPreviewChanged)
 
 public:
@@ -237,6 +238,15 @@ public:
     /// the bottom of the class so the documentation cannot drift
     /// from the actual reset behaviour.
     Q_INVOKABLE void resetPaintColors();
+
+    /// Brush footprint shape. Round = circular falloff (the default);
+    /// Square = constant-strength axis-aligned rectangle, no falloff.
+    /// Falloff slider has no effect in Square mode — the brush stays
+    /// crisp like a pixel-art tool. Exposed as an int property to QML.
+    enum BrushShape { ShapeRound = 0, ShapeSquare = 1 };
+    Q_ENUM(BrushShape)
+    int vertexPaintShape() const { return static_cast<int>(m_vertexPaintShape); }
+    void setVertexPaintShape(int shape);
     double vertexPaintRadius() const { return m_vertexPaintRadius; }
     void setVertexPaintRadius(double r);
     double vertexPaintStrength() const { return m_vertexPaintStrength; }
@@ -774,12 +784,17 @@ public:
     static Ogre::ColourValue weightToColor(float weight);
 
     /// Apply a vertex color brush in local space. Returns true if any vertex changed.
+    /// `square` switches the footprint from a sphere (default) to an
+    /// axis-aligned cube of side 2*radius with constant strength (no
+    /// falloff). Matches the 2D TexturePaintBuffer::BrushShape::Square
+    /// model in 3D.
     static bool applyVertexColorBrush(EditableMesh& mesh,
                                       const Ogre::Vector3& localCenter,
                                       float radius,
                                       const Ogre::ColourValue& color,
                                       float strength,
-                                      float falloff);
+                                      float falloff,
+                                      bool square = false);
 
     /// Convert a global vertex index to (subMeshIndex, localVertexIndex) pair.
     std::pair<size_t, size_t> globalToLocal(int globalIndex) const;
@@ -962,6 +977,9 @@ private:
     // washes or down to 0.001 for pixel-level precision via the
     // toolbar slider / brush popup.
     double m_vertexPaintRadius = 0.02;
+    // Brush footprint shape. Default Round = circular falloff,
+    // Square = axis-aligned constant-strength rectangle (pixel-art).
+    BrushShape m_vertexPaintShape = ShapeRound;
     double m_vertexPaintStrength = 0.5;  // 0..1
     double m_vertexPaintFalloff = 0.5;   // 0..1
     bool m_vertexPaintStrokeActive = false;

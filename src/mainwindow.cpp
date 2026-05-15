@@ -1314,6 +1314,40 @@ void MainWindow::initToolBar()
     paintLay->addWidget(falloffLabel);
     paintLay->addWidget(falloffSlider);
 
+    // Brush shape selector: Round (circular falloff) vs Square
+    // (axis-aligned constant strength, no falloff). Falloff slider
+    // is ignored when Square is selected — kept enabled for
+    // discoverability of "switch back to Round".
+    auto* shapeRow = new QHBoxLayout();
+    shapeRow->addWidget(new QLabel(tr("Shape:"), paintSettings));
+    auto* shapeRound = new QPushButton(tr("Round"), paintSettings);
+    auto* shapeSquare = new QPushButton(tr("Square"), paintSettings);
+    shapeRound->setCheckable(true);
+    shapeSquare->setCheckable(true);
+    shapeRound->setAutoExclusive(true);
+    shapeSquare->setAutoExclusive(true);
+    shapeRound->setFixedHeight(22);
+    shapeSquare->setFixedHeight(22);
+    auto syncShape = [shapeRound, shapeSquare, emPaint]() {
+        const bool square = emPaint->vertexPaintShape() == EditModeController::ShapeSquare;
+        QSignalBlocker br(shapeRound);
+        QSignalBlocker bs(shapeSquare);
+        shapeRound->setChecked(!square);
+        shapeSquare->setChecked(square);
+    };
+    syncShape();
+    connect(shapeRound, &QPushButton::clicked, this, [emPaint]() {
+        emPaint->setVertexPaintShape(static_cast<int>(EditModeController::ShapeRound));
+    });
+    connect(shapeSquare, &QPushButton::clicked, this, [emPaint]() {
+        emPaint->setVertexPaintShape(static_cast<int>(EditModeController::ShapeSquare));
+    });
+    connect(emPaint, &EditModeController::vertexPaintChanged, this, syncShape);
+    shapeRow->addWidget(shapeRound);
+    shapeRow->addWidget(shapeSquare);
+    shapeRow->addStretch();
+    paintLay->addLayout(shapeRow);
+
     auto* paintWa = new QWidgetAction(vertexPaintMenu);
     paintWa->setDefaultWidget(paintSettings);
     vertexPaintMenu->addAction(paintWa);
@@ -1325,23 +1359,30 @@ void MainWindow::initToolBar()
         syncFalloff();
     });
 
-    connect(vertexPaintButton, &QToolButton::toggled, this, [this](bool on) {
-        SentryReporter::addBreadcrumb("ui.action",
-            QStringLiteral("Toolbar: Paint brush %1").arg(on ? "on" : "off"));
-        // All painting goes through TexturePaintController. The
-        // controller's "paint target" enum picks between texture
-        // paint and vertex paint per stroke.
-        TexturePaintController::instance()->setTexturePaintEnabled(on);
-        if (on)
-            setTransformState(TransformOperator::TS_SELECT);
+    // The brush button is now a TOOL SELECTOR, not the paint-mode
+    // master toggle. The Off/Vertex/Texture switch in the right
+    // panel is the gate for enabling paint mode; the toolbar buttons
+    // only pick which tool the user is using. Clicking the brush
+    // button selects ToolPaint (or no-ops if it was already
+    // selected — autoExclusive in spirit, the QToolButton group
+    // logic is in syncBrushChecked below).
+    connect(vertexPaintButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: tool = Paint");
+        TexturePaintController::instance()->setBrushTool(
+            static_cast<int>(TexturePaintController::ToolPaint));
     });
+    // Tool button reflects "this tool is selected" rather than "paint
+    // mode is on" — matches the wand button's pattern.
     auto syncPaintBtnChecked = [vertexPaintButton]() {
-        const bool on = TexturePaintController::instance()->texturePaintEnabled();
+        const bool selected =
+            TexturePaintController::instance()->brushTool()
+                == static_cast<int>(TexturePaintController::ToolPaint);
         QSignalBlocker b(vertexPaintButton);
-        vertexPaintButton->setChecked(on);
+        vertexPaintButton->setChecked(selected);
     };
-    connect(TexturePaintController::instance(), &TexturePaintController::texturePaintChanged,
-            this, syncPaintBtnChecked);
+    syncPaintBtnChecked();
+    connect(TexturePaintController::instance(),
+            &TexturePaintController::brushToolChanged, this, syncPaintBtnChecked);
 
     QAction* vertexPaintAction = ui->objectsToolbar->addWidget(vertexPaintButton);
     vertexPaintAction->setObjectName("modeMaterialPaintBrushAction");
@@ -1444,6 +1485,187 @@ void MainWindow::initToolBar()
 
     QAction* wandAction = ui->objectsToolbar->addWidget(wandButton);
     wandAction->setObjectName("modeMaterialWandAction");
+
+    // Per-tool toolbar buttons (Bucket / Eraser / Eyedropper / Smudge)
+    // below the wand. Same green-active / grey-disabled treatment as
+    // the wand. Each is a TexturePaintController tool selector — it
+    // doesn't enable paint mode; the Off/Vertex/Texture switch in
+    // the right panel is the master gate.
+    struct ToolButtonEntry {
+        int tool;
+        const char* label;
+        const char* objectName;
+        std::function<void(QPainter&, const QColor&)> paint;
+    };
+
+    // Drawing helpers. Same green/grey palette as the wand, drawn at
+    // 18x18 — keep the icons high-contrast and silhouette-distinct so
+    // users can pick them out in a vertical column without reading
+    // tooltips.
+    const std::vector<ToolButtonEntry> tools = {
+        {
+            static_cast<int>(TexturePaintController::ToolFill),
+            "Bucket", "modeMaterialBucketAction",
+            [](QPainter& p, const QColor& c) {
+                // Bucket: trapezoid body + handle, with a paint drip.
+                p.setPen(QPen(c, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                p.setBrush(Qt::NoBrush);
+                QPainterPath bucket;
+                bucket.moveTo(3.5, 6.5);
+                bucket.lineTo(14.5, 6.5);
+                bucket.lineTo(13.5, 14.5);
+                bucket.lineTo(4.5, 14.5);
+                bucket.closeSubpath();
+                p.drawPath(bucket);
+                // Rim
+                p.drawLine(QPointF(2.8, 6.5), QPointF(15.2, 6.5));
+                // Handle arc
+                p.drawArc(QRectF(5.5, 2.5, 7, 5), 30 * 16, 120 * 16);
+                // Drip
+                p.setBrush(c);
+                p.setPen(Qt::NoPen);
+                p.drawEllipse(QPointF(11.5, 10.5), 1.5, 2.0);
+            }
+        },
+        {
+            static_cast<int>(TexturePaintController::ToolErase),
+            "Eraser", "modeMaterialEraserAction",
+            [](QPainter& p, const QColor& c) {
+                // Eraser block: rounded rect with a diagonal split
+                // between the rubber and the metal ferrule.
+                p.setPen(QPen(c, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                p.setBrush(Qt::NoBrush);
+                p.save();
+                p.translate(9, 9);
+                p.rotate(-30);
+                p.drawRoundedRect(QRectF(-6, -3, 12, 6), 1.5, 1.5);
+                // Inner ferrule line
+                p.drawLine(QPointF(0, -3), QPointF(0, 3));
+                p.restore();
+            }
+        },
+        {
+            static_cast<int>(TexturePaintController::ToolColorPicker),
+            "Pick", "modeMaterialPickAction",
+            [](QPainter& p, const QColor& c) {
+                // Eyedropper: long diagonal pipette + bulb.
+                p.setPen(QPen(c, 1.8, Qt::SolidLine, Qt::RoundCap));
+                p.drawLine(QPointF(3.0, 15.0), QPointF(10.0, 8.0));
+                p.setBrush(c);
+                p.setPen(Qt::NoPen);
+                // Bulb (top end)
+                p.save();
+                p.translate(13, 5);
+                p.rotate(45);
+                p.drawRoundedRect(QRectF(-3, -2, 6, 4), 1, 1);
+                p.restore();
+                // Drip tip
+                p.drawEllipse(QPointF(3.0, 15.0), 1.1, 1.1);
+            }
+        },
+        {
+            static_cast<int>(TexturePaintController::ToolSmudge),
+            "Smudge", "modeMaterialSmudgeAction",
+            [](QPainter& p, const QColor& c) {
+                // Smudge: finger-tip outline + wavy smear trail.
+                p.setPen(QPen(c, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                p.setBrush(Qt::NoBrush);
+                // Finger pad as a rotated tear-drop
+                QPainterPath finger;
+                finger.moveTo(12, 4);
+                finger.cubicTo(14, 6, 14, 10, 11, 12);
+                finger.cubicTo(8, 13, 6, 10, 8, 8);
+                finger.cubicTo(9, 6, 11, 4, 12, 4);
+                p.drawPath(finger);
+                // Smear trail
+                QPainterPath smear;
+                smear.moveTo(3, 14);
+                smear.cubicTo(5, 12, 7, 16, 9, 14);
+                p.drawPath(smear);
+            }
+        }
+    };
+
+    std::vector<QToolButton*> toolButtons;
+    std::vector<QAction*> toolActions;
+    toolButtons.reserve(tools.size());
+    toolActions.reserve(tools.size());
+
+    for (const auto& tdef : tools) {
+        auto makeIcon = [paint = tdef.paint](const QColor& color) -> QPixmap {
+            QPixmap pm(18, 18);
+            pm.fill(Qt::transparent);
+            QPainter p(&pm);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            paint(p, color);
+            return pm;
+        };
+        const QColor green(0x7B, 0xBD, 0x2A);
+        const QColor disabled(0xB8, 0xB8, 0xB8);
+        QIcon icon;
+        const QPixmap onPm = makeIcon(green);
+        const QPixmap offPm = makeIcon(disabled);
+        icon.addPixmap(onPm,  QIcon::Normal,   QIcon::Off);
+        icon.addPixmap(onPm,  QIcon::Active,   QIcon::Off);
+        icon.addPixmap(onPm,  QIcon::Selected, QIcon::Off);
+        icon.addPixmap(onPm,  QIcon::Normal,   QIcon::On);
+        icon.addPixmap(offPm, QIcon::Disabled, QIcon::Off);
+        icon.addPixmap(offPm, QIcon::Disabled, QIcon::On);
+
+        auto* btn = new QToolButton(ui->objectsToolbar);
+        btn->setCheckable(true);
+        btn->setIcon(icon);
+        btn->setIconSize(QSize(18, 18));
+        btn->setToolTip(tr("%1 — paint tool").arg(tr(tdef.label)));
+        btn->setFont(topoFont);
+        btn->setStyleSheet(topoBtnStyle);
+
+        const int targetTool = tdef.tool;
+        connect(btn, &QToolButton::clicked, this, [targetTool, label = tdef.label]() {
+            SentryReporter::addBreadcrumb("ui.action",
+                QStringLiteral("Toolbar: tool = %1").arg(label));
+            TexturePaintController::instance()->setBrushTool(targetTool);
+        });
+
+        QAction* act = ui->objectsToolbar->addWidget(btn);
+        act->setObjectName(tdef.objectName);
+        toolButtons.push_back(btn);
+        toolActions.push_back(act);
+    }
+
+    // Sync the per-tool button check / enabled state. Tools other than
+    // Paint and Wand only make sense when paint mode is on AND target
+    // is Texture (vertex paint doesn't use flood-fill, picker, etc).
+    //
+    // Capture toolButtons AND the tool int IDs *by value* — the `tools`
+    // descriptor vector is a local that disappears at the end of the
+    // ctor, so binding it by reference would crash the next time the
+    // user changed paint target / enable (the lambda would deref a
+    // freed std::vector). Bug found mid-iteration: the Texture-button
+    // click hit exactly this path.
+    std::vector<int> toolIds;
+    toolIds.reserve(tools.size());
+    for (const auto& t : tools) toolIds.push_back(t.tool);
+
+    auto syncToolButtons = [toolButtons, toolIds]() {
+        auto* tpc = TexturePaintController::instance();
+        const int cur = tpc->brushTool();
+        const bool canTextureTool =
+            tpc->texturePaintEnabled()
+            && tpc->paintTarget() == static_cast<int>(TexturePaintController::TargetTexture);
+        for (size_t i = 0; i < toolButtons.size() && i < toolIds.size(); ++i) {
+            QSignalBlocker b(toolButtons[i]);
+            toolButtons[i]->setChecked(cur == toolIds[i]);
+            toolButtons[i]->setEnabled(canTextureTool);
+        }
+    };
+    syncToolButtons();
+    connect(TexturePaintController::instance(),
+            &TexturePaintController::brushToolChanged, this, syncToolButtons);
+    connect(TexturePaintController::instance(),
+            &TexturePaintController::texturePaintChanged, this, syncToolButtons);
+    connect(TexturePaintController::instance(),
+            &TexturePaintController::paintTargetChanged, this, syncToolButtons);
 
     // FG/BG color swatch widget — Photoshop / GIMP style. Two overlapping
     // rectangles showing the foreground and background colors. The user
@@ -1557,7 +1779,8 @@ void MainWindow::initToolBar()
     // Switching modes turns the previous mode's brush off so we don't
     // leave a stale checked state.
     auto refreshPaintBrushVisibility = [vertexPaintButton, vertexPaintAction,
-                                        paintColorsAction, wandButton, wandAction]() {
+                                        paintColorsAction, wandButton, wandAction,
+                                        toolActions]() {
         const auto mode = EditorModeController::instance()->currentMode();
         const bool material = mode == EditorModeController::MaterialMode;
         // Paint brush lives in Material Mode only. The user chooses
@@ -1572,6 +1795,8 @@ void MainWindow::initToolBar()
         const bool edit = mode == EditorModeController::EditMode;
         paintColorsAction->setVisible(material || edit);
         wandAction->setVisible(material);
+        for (auto* a : toolActions)
+            if (a) a->setVisible(material);
         // wandButton enabled state is driven by syncWandEnabled —
         // paint-on + target=Texture. Hide here when out of Material
         // Mode but don't overrule enabled.
@@ -1584,8 +1809,6 @@ void MainWindow::initToolBar()
         SentryReporter::addBreadcrumb(
             "ui.action",
             QStringLiteral("Mode switch: paint state reset"));
-        QSignalBlocker b(vertexPaintButton);
-        vertexPaintButton->setChecked(false);
         // Reset the tool to Paint on every mode entry so the wand
         // toolbar button starts unchecked too.
         TexturePaintController::instance()->setBrushTool(

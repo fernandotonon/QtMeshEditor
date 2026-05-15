@@ -60,6 +60,15 @@ class TexturePaintController : public QObject
     // live preview text in the Texture Paint section.
     Q_PROPERTY(QColor texturePaintColor READ texturePaintColor NOTIFY texturePaintChanged)
     Q_PROPERTY(double texturePaintRadius READ texturePaintRadius NOTIFY texturePaintChanged)
+    /// Brush radius mapped into UV space (0..1). Same calculation
+    /// the texture-paint dispatch uses to convert the mesh-local
+    /// radius via `bbox half-size`. Drives the 2D thumbnail brush
+    /// outline. Emits texturePaintChanged on radius / session change.
+    Q_PROPERTY(double texturePaintRadiusUV READ texturePaintRadiusUV NOTIFY texturePaintChanged)
+    /// Brush shape: 0 = Round, 1 = Square. Mirror of
+    /// EditModeController::vertexPaintShape so QML doesn't need both
+    /// singletons to draw a brush outline.
+    Q_PROPERTY(int brushShape READ brushShape NOTIFY texturePaintChanged)
     Q_PROPERTY(double texturePaintStrength READ texturePaintStrength NOTIFY texturePaintChanged)
     Q_PROPERTY(double texturePaintFalloff READ texturePaintFalloff NOTIFY texturePaintChanged)
     Q_PROPERTY(int textureResolution READ textureResolution NOTIFY sessionChanged)
@@ -119,6 +128,13 @@ public:
     ///   - mask "fill with BG" action
     QColor bgPaintColor() const;
     double texturePaintRadius() const;
+    /// Same brush radius mapped into UV space. Mirrors the conversion
+    /// done by the texture-paint dispatch (mesh-local / bbox half-
+    /// size). Returns the raw radius when no mesh is available.
+    double texturePaintRadiusUV() const;
+    /// Current brush shape (int form of EditModeController::BrushShape).
+    /// 0 = Round, 1 = Square.
+    int brushShape() const;
     double texturePaintStrength() const;
     double texturePaintFalloff() const;
     /// @}
