@@ -631,11 +631,18 @@ void TransformOperator::updateGizmo()
         m_pActiveWidget->setMouseTracking(mTrackingEnable);
         // Crosshair cursor while any paint mode is on so the user
         // gets clear feedback that clicks will paint, not select.
-        const bool paintOn =
-            (EditModeController::instance()->isEditModeActive()
-             && EditModeController::instance()->vertexPaintEnabled())
-            || TexturePaintController::instance()->texturePaintEnabled();
-        m_pActiveWidget->setCursor(paintOn ? Qt::CrossCursor : Qt::ArrowCursor);
+        // Only override the cursor in TS_SELECT — in Translate/Rotate/
+        // Scale the gizmo is the active interaction and the user
+        // should see the default cursor over its handles.
+        if (mTransformState == TS_SELECT) {
+            const bool paintOn =
+                (EditModeController::instance()->isEditModeActive()
+                 && EditModeController::instance()->vertexPaintEnabled())
+                || TexturePaintController::instance()->texturePaintEnabled();
+            m_pActiveWidget->setCursor(paintOn ? Qt::CrossCursor : Qt::ArrowCursor);
+        } else {
+            m_pActiveWidget->setCursor(Qt::ArrowCursor);
+        }
     }
 }
 

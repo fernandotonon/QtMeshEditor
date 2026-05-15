@@ -18,11 +18,14 @@ int VertexColorBaker::rasterizeTriangle(TexturePaintBuffer& buffer,
                                         const Ogre::Vector2& uv2,
                                         const Ogre::ColourValue& c0,
                                         const Ogre::ColourValue& c1,
-                                        const Ogre::ColourValue& c2)
+                                        const Ogre::ColourValue& c2,
+                                        std::vector<uint8_t>* outCoverage)
 {
     const int W = buffer.width();
     const int H = buffer.height();
     if (W <= 0 || H <= 0) return 0;
+    if (outCoverage && static_cast<int>(outCoverage->size()) != W * H)
+        outCoverage = nullptr;
 
     // UV origin = top-left (matches TexturePaintBuffer::uvToPixel).
     auto toPix = [&](const Ogre::Vector2& uv) {
@@ -67,6 +70,8 @@ int VertexColorBaker::rasterizeTriangle(TexturePaintBuffer& buffer,
                 c0.b * b0 + c1.b * b1 + c2.b * b2,
                 c0.a * b0 + c1.a * b1 + c2.a * b2);
             buffer.setPixel(x, y, color);
+            if (outCoverage)
+                (*outCoverage)[static_cast<size_t>(y) * W + x] = 1;
             ++painted;
         }
     }
@@ -160,26 +165,17 @@ int VertexColorBaker::bake(const EditableMesh& mesh,
             Ogre::ColourValue c0 = v0.hasColor ? v0.color : Ogre::ColourValue::White;
             Ogre::ColourValue c1 = v1.hasColor ? v1.color : Ogre::ColourValue::White;
             Ogre::ColourValue c2 = v2.hasColor ? v2.color : Ogre::ColourValue::White;
-            totalPainted += rasterizeTriangle(buffer, v0.uv, v1.uv, v2.uv, c0, c1, c2);
+            totalPainted += rasterizeTriangle(buffer, v0.uv, v1.uv, v2.uv,
+                                              c0, c1, c2, &coverage);
         }
     }
 
-    // Build coverage mask by scanning pixels that differ from background.
-    if (totalPainted > 0) {
-        auto& px = buffer.data();
-        const uint8_t bgR = static_cast<uint8_t>(std::lround(options.background.r * 255.0f));
-        const uint8_t bgG = static_cast<uint8_t>(std::lround(options.background.g * 255.0f));
-        const uint8_t bgB = static_cast<uint8_t>(std::lround(options.background.b * 255.0f));
-        const uint8_t bgA = static_cast<uint8_t>(std::lround(options.background.a * 255.0f));
-        for (size_t i = 0; i < coverage.size(); ++i) {
-            const size_t off = i * 4u;
-            if (px[off + 0] != bgR || px[off + 1] != bgG ||
-                px[off + 2] != bgB || px[off + 3] != bgA) {
-                coverage[i] = 1;
-            }
-        }
+    // Coverage is built directly by the rasterizer as it writes each
+    // pixel — the old "differs from background" inference silently
+    // dropped triangles whose interpolated color equalled the
+    // background (e.g. vertex-colors==white on a white background).
+    if (totalPainted > 0)
         dilate(buffer, coverage, options.dilationPixels);
-    }
 
     return totalPainted;
 }

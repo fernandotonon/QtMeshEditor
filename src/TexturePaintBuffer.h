@@ -13,7 +13,8 @@
  * @brief RGBA8 pixel buffer with dirty-rect tracking for texture painting.
  *
  * Owns a flat `std::vector<uint8_t>` of size `width * height * 4` (RGBA8,
- * top-left origin, UV (0,0) maps to pixel (0, height-1) — i.e. V is flipped).
+ * top-left origin, UV (0,0) maps to pixel (0,0) — V is *not* flipped
+ * (Ogre + Qt convention).
  *
  * All mutations expand `dirtyRect()`. The dirty rect is the smallest pixel
  * AABB covering every pixel mutated since the last `clearDirty()` call. It
@@ -77,7 +78,7 @@ public:
     /**
      * @brief Paint a circular brush stamp at UV coordinate.
      *
-     * @param uv         Center UV in [0..1]^2. V is flipped (0 = bottom).
+     * @param uv         Center UV in [0..1]^2 (top-left origin: uv.y=0 → top).
      * @param radiusUV   Brush radius in UV-space units.
      * @param color      Brush color (alpha is interpreted as flow).
      * @param strength   0..1 — how much the brush moves the pixel toward `color`.
@@ -121,8 +122,8 @@ public:
     bool load(const std::string& path);
 
     /// Convenience: map a UV to integer pixel coordinates.
-    /// V is flipped: uv.y=0 → y=height-1, uv.y=1 → y=0. Caller is responsible
-    /// for clamping to bounds.
+    /// Top-left origin (Ogre + Qt convention): uv.y=0 → y=0,
+    /// uv.y=1 → y=height-1. Result is clamped to in-bounds texels.
     void uvToPixel(const Ogre::Vector2& uv, int& outX, int& outY) const;
 
     /// Convenience: map a pixel back to UV center. Inverse of uvToPixel.

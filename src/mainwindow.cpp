@@ -1405,6 +1405,9 @@ void MainWindow::initToolBar()
         // controllers off but left the button visually checked).
         EditModeController::instance()->setVertexPaintEnabled(false);
         TexturePaintController::instance()->setTexturePaintEnabled(false);
+        SentryReporter::addBreadcrumb(
+            "ui.action",
+            QStringLiteral("Mode switch: paint state reset"));
         QSignalBlocker b(vertexPaintButton);
         vertexPaintButton->setChecked(false);
     };

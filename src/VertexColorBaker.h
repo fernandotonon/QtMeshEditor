@@ -54,13 +54,22 @@ public:
     /// Standalone rasterizer for a single triangle in UV space.
     /// `uv0..uv2` are in [0..1]^2; `c0..c2` are colors at the verts.
     /// Updates `outBuffer` and returns the number of pixels written.
+    ///
+    /// If `outCoverage` is non-null it must have size `W*H` (row-major,
+    /// same as `outBuffer.data()` indexing). Every pixel actually written
+    /// by the rasterizer is set to 1 in `outCoverage`. This is the
+    /// authoritative coverage mask — preferred over inferring coverage
+    /// from "differs from background" since a triangle that happens to
+    /// rasterize the background color (e.g. white vertex colors over a
+    /// white background) would otherwise be invisible to dilation.
     static int rasterizeTriangle(TexturePaintBuffer& outBuffer,
                                  const Ogre::Vector2& uv0,
                                  const Ogre::Vector2& uv1,
                                  const Ogre::Vector2& uv2,
                                  const Ogre::ColourValue& c0,
                                  const Ogre::ColourValue& c1,
-                                 const Ogre::ColourValue& c2);
+                                 const Ogre::ColourValue& c2,
+                                 std::vector<uint8_t>* outCoverage = nullptr);
 
     /**
      * @brief Dilate rasterized pixels outward by `iterations` pixels.

@@ -17,7 +17,7 @@
 // position of vertex 0 (which carries UV (0,0)) on the test triangle.
 TEST(TexturePaintControllerTest, FindMeshPointForUVHitsCorrectTriangle)
 {
-    if (!tryInitOgre()) GTEST_SKIP();
+    ASSERT_TRUE(tryInitOgre());
     auto* mgr = Manager::getSingleton();
     ASSERT_NE(mgr, nullptr);
     auto* scene = mgr->getSceneMgr();

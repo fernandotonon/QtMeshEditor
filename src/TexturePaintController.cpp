@@ -824,8 +824,15 @@ void TexturePaintController::doFlushDirtyToOgre()
         Ogre::Entity* ent = m_paintMeshEntity;
         QTimer::singleShot(0, this, [this, ent]() {
             m_rebindScheduled = false;
-            if (m_paintMeshEntity == ent && m_boundSlots.empty())
-                rebindEntityDiffuseToPaintTexture(ent);
+            // The captured Ogre::Entity* could have been destroyed by the
+            // time this fires (entity removed, mesh reimport, selection
+            // change closing the session). Validate it's still both the
+            // active paint target AND a live entity SelectionSet knows
+            // about before dereferencing.
+            if (m_paintMeshEntity != ent || !m_boundSlots.empty()) return;
+            auto* sel = SelectionSet::getSingleton();
+            if (!sel || !sel->contains(ent)) return;
+            rebindEntityDiffuseToPaintTexture(ent);
         });
     }
     try {
@@ -1176,23 +1183,31 @@ void TexturePaintController::endStroke()
     //      embedded in the source FBX (no disk source) — without
     //      this they'd export with the un-painted bytes.
     if (m_target == TargetTexture && !m_originalTextureName.isEmpty()) {
-        bakeToOriginalFile();
-        try {
-            QImage img(const_cast<uchar*>(m_buffer.data().data()),
-                       m_buffer.width(), m_buffer.height(),
-                       m_buffer.width() * 4, QImage::Format_RGBA8888);
-            QByteArray bytes;
-            QBuffer qbuf(&bytes);
-            qbuf.open(QIODevice::WriteOnly);
-            if (img.save(&qbuf, "PNG")) {
-                std::vector<uint8_t> v(bytes.begin(), bytes.end());
-                EmbeddedTextureCache::store(
-                    m_originalTextureName.toStdString(), v);
-                SentryReporter::addBreadcrumb("ui.action",
-                    QStringLiteral("Paint: cached %1 bytes in EmbeddedTextureCache for '%2'")
-                        .arg(bytes.size()).arg(m_originalTextureName));
-            }
-        } catch (...) {}
+        // bakeToOriginalFile returns the on-disk path when it found and
+        // overwrote a registered file. When it returns empty, the
+        // source was embedded (no disk file) and the FBX exporter will
+        // pull from EmbeddedTextureCache instead — only do the PNG
+        // encode + cache write in that fallback case to avoid burning
+        // CPU on the common disk-backed path.
+        const QString writtenDisk = bakeToOriginalFile();
+        if (writtenDisk.isEmpty()) {
+            try {
+                QImage img(const_cast<uchar*>(m_buffer.data().data()),
+                           m_buffer.width(), m_buffer.height(),
+                           m_buffer.width() * 4, QImage::Format_RGBA8888);
+                QByteArray bytes;
+                QBuffer qbuf(&bytes);
+                qbuf.open(QIODevice::WriteOnly);
+                if (img.save(&qbuf, "PNG")) {
+                    std::vector<uint8_t> v(bytes.begin(), bytes.end());
+                    EmbeddedTextureCache::store(
+                        m_originalTextureName.toStdString(), v);
+                    SentryReporter::addBreadcrumb("ui.action",
+                        QStringLiteral("Paint: cached %1 bytes in EmbeddedTextureCache for '%2'")
+                            .arg(bytes.size()).arg(m_originalTextureName));
+                }
+            } catch (...) {}
+        }
     }
 }
 
