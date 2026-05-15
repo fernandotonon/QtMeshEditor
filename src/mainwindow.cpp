@@ -1252,66 +1252,28 @@ void MainWindow::initToolBar()
 
     auto* emPaint = EditModeController::instance();
 
-    auto* colorRow = new QHBoxLayout();
-    colorRow->addWidget(new QLabel(tr("Color:"), paintSettings));
-    auto* colorBtn = new QPushButton(paintSettings);
-    colorBtn->setFixedSize(52, 24);
-    auto syncPaintColorBtn = [colorBtn, emPaint]() {
-        const QColor c = emPaint->vertexPaintColor();
-        colorBtn->setStyleSheet(
-            QStringLiteral("background-color: %1; border: 1px solid #888; border-radius: 3px;")
-                .arg(c.name(QColor::HexRgb)));
-    };
-    syncPaintColorBtn();
-    connect(colorBtn, &QPushButton::clicked, this, [this, emPaint, syncPaintColorBtn]() {
-        SentryReporter::addBreadcrumb("ui.action", "Vertex paint color picker opened");
-        QColor c = QColorDialog::getColor(emPaint->vertexPaintColor(), this, tr("Brush color"));
-        if (c.isValid())
-            emPaint->setVertexPaintColor(c);
-        syncPaintColorBtn();
-    });
-    connect(emPaint, &EditModeController::vertexPaintChanged, this, syncPaintColorBtn);
-    colorRow->addWidget(colorBtn);
-    colorRow->addStretch();
-    paintLay->addLayout(colorRow);
+    // (Color selection deliberately removed from the brush popup —
+    // the FG/BG swatch widget on the main toolbar is now the single
+    // source of truth for the brush color. Duplicating it here would
+    // just add a second place to keep in sync.)
 
-    static const char* kPaintSwatches[] = {
-        "#ffffff", "#cccccc", "#888888", "#444444", "#000000",
-        "#ff0000", "#ff8800", "#ffff00", "#88ff00", "#00ff00",
-        "#00ff88", "#00ffff", "#0088ff", "#0000ff", "#8800ff",
-        "#ff00ff", "#ff0088", "#8b4513", "#ffd700", "#90ee90",
-        "#ff6347", "#00ced1", "#dda0dd", "#f0e68c"
-    };
-    auto* swatchGrid = new QGridLayout();
-    swatchGrid->setSpacing(3);
-    for (size_t i = 0; i < sizeof(kPaintSwatches) / sizeof(kPaintSwatches[0]); ++i) {
-        const int r = static_cast<int>(i) / 8;
-        const int col = static_cast<int>(i) % 8;
-        auto* sw = new QPushButton(paintSettings);
-        sw->setFixedSize(22, 22);
-        const QString hex = QString::fromUtf8(kPaintSwatches[i]);
-        sw->setStyleSheet(QStringLiteral("background-color: %1; border: 1px solid #666; border-radius: 2px;").arg(hex));
-        connect(sw, &QPushButton::clicked, this, [emPaint, hex, syncPaintColorBtn]() {
-            emPaint->setVertexPaintBrushColor(hex);
-            syncPaintColorBtn();
-        });
-        swatchGrid->addWidget(sw, r, col);
-    }
-    paintLay->addLayout(swatchGrid);
-
+    // Brush radius slider. Range: 0.001 → 2.0 in mesh-local units.
+    // Mapped via /1000 so int slider ticks are 1mm resolution at the
+    // low end (where users want pixel-precise dots) and still reach a
+    // 2.0 unit radius for broad washes on tall meshes.
     auto* radLabel = new QLabel(paintSettings);
     auto* radSlider = new QSlider(Qt::Horizontal, paintSettings);
-    radSlider->setRange(2, 200);
+    radSlider->setRange(1, 2000);
     auto syncRad = [radLabel, radSlider, emPaint]() {
         QSignalBlocker b(radSlider);
-        const int v = qBound(2, static_cast<int>(qRound(emPaint->vertexPaintRadius() * 100.0)), 200);
+        const int v = qBound(1, static_cast<int>(qRound(emPaint->vertexPaintRadius() * 1000.0)), 2000);
         radSlider->setValue(v);
-        radLabel->setText(tr("Radius (local): %1").arg(emPaint->vertexPaintRadius(), 0, 'f', 2));
+        radLabel->setText(tr("Radius (local): %1").arg(emPaint->vertexPaintRadius(), 0, 'f', 3));
     };
     syncRad();
     connect(radSlider, &QSlider::valueChanged, this, [this, emPaint, radLabel](int v) {
-        emPaint->setVertexPaintRadius(v / 100.0);
-        radLabel->setText(tr("Radius (local): %1").arg(emPaint->vertexPaintRadius(), 0, 'f', 2));
+        emPaint->setVertexPaintRadius(v / 1000.0);
+        radLabel->setText(tr("Radius (local): %1").arg(emPaint->vertexPaintRadius(), 0, 'f', 3));
     });
     connect(emPaint, &EditModeController::vertexPaintChanged, this, syncRad);
     paintLay->addWidget(radLabel);
@@ -1357,8 +1319,7 @@ void MainWindow::initToolBar()
     vertexPaintMenu->addAction(paintWa);
     vertexPaintButton->setMenu(vertexPaintMenu);
 
-    connect(vertexPaintMenu, &QMenu::aboutToShow, this, [syncPaintColorBtn, syncRad, syncStr, syncFalloff]() {
-        syncPaintColorBtn();
+    connect(vertexPaintMenu, &QMenu::aboutToShow, this, [syncRad, syncStr, syncFalloff]() {
         syncRad();
         syncStr();
         syncFalloff();
@@ -1385,13 +1346,218 @@ void MainWindow::initToolBar()
     QAction* vertexPaintAction = ui->objectsToolbar->addWidget(vertexPaintButton);
     vertexPaintAction->setObjectName("modeMaterialPaintBrushAction");
 
+    // Wand (smart-select) toolbar button. Lives directly under the
+    // paint brush so the user can swap between "paint" and "magic-
+    // wand select" without leaving the toolbar. Click toggles between
+    // the Paint tool and the Wand tool — paint stays the default
+    // when the button is unchecked.
+    //
+    // Icon is drawn in two QIcon modes: green (Normal) and dimmed
+    // grey (Disabled) — matching the green / grey rhythm of the
+    // surrounding topology buttons.
+    auto paintWand = [](QPixmap& pm, const QColor& color) {
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(QPen(color, 2.0, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(3.0, 15.0), QPointF(13.5, 4.5));
+        p.setBrush(color);
+        p.setPen(Qt::NoPen);
+        p.drawEllipse(QPointF(14.4, 3.6), 2.1, 2.1);  // tip ball
+        p.drawEllipse(QPointF(3.0, 15.0), 1.2, 1.2);  // handle nub
+    };
+    auto makeWandIcon = [paintWand]() -> QIcon {
+        constexpr int kSize = 18;
+        QPixmap onPm(kSize, kSize);
+        paintWand(onPm, QColor(0x7B, 0xBD, 0x2A));  // green, matches topology buttons
+        QPixmap offPm(kSize, kSize);
+        paintWand(offPm, QColor(0xB8, 0xB8, 0xB8)); // grey for disabled
+        QIcon icon;
+        icon.addPixmap(onPm,  QIcon::Normal,   QIcon::Off);
+        icon.addPixmap(onPm,  QIcon::Active,   QIcon::Off);
+        icon.addPixmap(onPm,  QIcon::Selected, QIcon::Off);
+        icon.addPixmap(onPm,  QIcon::Normal,   QIcon::On);
+        icon.addPixmap(offPm, QIcon::Disabled, QIcon::Off);
+        icon.addPixmap(offPm, QIcon::Disabled, QIcon::On);
+        return icon;
+    };
+
+    auto* wandButton = new QToolButton(ui->objectsToolbar);
+    wandButton->setCheckable(true);
+    wandButton->setIcon(makeWandIcon());
+    wandButton->setIconSize(QSize(18, 18));
+    wandButton->setToolTip(tr("Smart-select (Wand)\n"
+                              "Click a region to select pixels of similar color.\n"
+                              "Drag horizontally while clicking to widen / narrow.\n"
+                              "Click outside the mesh to clear the selection.\n"
+                              "Enabled only in Texture paint mode."));
+    wandButton->setFont(topoFont);
+    wandButton->setStyleSheet(topoBtnStyle);
+
+    auto syncWandChecked = [wandButton]() {
+        const bool wandActive =
+            TexturePaintController::instance()->brushTool()
+                == static_cast<int>(TexturePaintController::ToolSmartSelect);
+        QSignalBlocker b(wandButton);
+        wandButton->setChecked(wandActive);
+    };
+    // Wand only does something when texture paint is on AND the target
+    // is Texture (it operates on the paint buffer, not vertex colors).
+    // The disabled icon comes from QIcon's Disabled mode pixmap added
+    // in makeWandIcon, so the grey state matches the other toolbar
+    // buttons' disabled treatment.
+    auto syncWandEnabled = [wandButton]() {
+        auto* tpc = TexturePaintController::instance();
+        const bool canWand =
+            tpc->texturePaintEnabled()
+            && tpc->paintTarget() == static_cast<int>(TexturePaintController::TargetTexture);
+        wandButton->setEnabled(canWand);
+        if (!canWand && wandButton->isChecked()) {
+            // Auto-uncheck so the next paint-mode re-entry starts clean.
+            QSignalBlocker b(wandButton);
+            wandButton->setChecked(false);
+            tpc->setBrushTool(static_cast<int>(TexturePaintController::ToolPaint));
+        }
+    };
+    syncWandChecked();
+    syncWandEnabled();
+
+    connect(wandButton, &QToolButton::toggled, this, [](bool on) {
+        auto* tpc = TexturePaintController::instance();
+        const int newTool = on
+            ? static_cast<int>(TexturePaintController::ToolSmartSelect)
+            : static_cast<int>(TexturePaintController::ToolPaint);
+        tpc->setBrushTool(newTool);
+        // Make sure paint mode is on while the user is reaching for
+        // the wand — otherwise the toolbar toggle does nothing visible.
+        if (on)
+            tpc->setTexturePaintEnabled(true);
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Toolbar: Wand %1").arg(on ? "on" : "off"));
+    });
+    connect(TexturePaintController::instance(),
+            &TexturePaintController::brushToolChanged, this, syncWandChecked);
+    connect(TexturePaintController::instance(),
+            &TexturePaintController::texturePaintChanged, this, syncWandEnabled);
+    connect(TexturePaintController::instance(),
+            &TexturePaintController::paintTargetChanged, this, syncWandEnabled);
+
+    QAction* wandAction = ui->objectsToolbar->addWidget(wandButton);
+    wandAction->setObjectName("modeMaterialWandAction");
+
+    // FG/BG color swatch widget — Photoshop / GIMP style. Two overlapping
+    // rectangles showing the foreground and background colors. The user
+    // can click either to open a color picker, click the small swap
+    // arrow to flip them, or use the tiny "reset" indicator to put back
+    // FG=black, BG=white. Toolbar-resident so it's always one click away,
+    // no popup needed.
+    auto* paintColors = new QWidget(ui->objectsToolbar);
+    paintColors->setFixedSize(34, 28);
+    paintColors->setToolTip(tr("Foreground / Background colors\n"
+                               "Click either swatch to change. The 'Erase' brush\n"
+                               "paints with the BG color."));
+    auto repaintSwatch = [paintColors]() { paintColors->update(); };
+    paintColors->installEventFilter(this);
+    // Custom paint via overridden paintEvent on a private subclass would
+    // be cleaner, but a single inline filter avoids growing the class.
+    // We instead set a stylesheet-free child for each swatch.
+    {
+        auto* bg = new QPushButton(paintColors);
+        bg->setGeometry(11, 7, 18, 17);
+        bg->setObjectName("paintBgSwatch");
+        bg->setFlat(true);
+        bg->setFocusPolicy(Qt::NoFocus);
+        bg->setCursor(Qt::PointingHandCursor);
+        bg->setToolTip(tr("Background color"));
+        auto* fg = new QPushButton(paintColors);
+        fg->setGeometry(3, 0, 18, 17);
+        fg->setObjectName("paintFgSwatch");
+        fg->setFlat(true);
+        fg->setFocusPolicy(Qt::NoFocus);
+        fg->setCursor(Qt::PointingHandCursor);
+        fg->setToolTip(tr("Foreground color"));
+        // Tiny FG/BG swap arrow in the corner. A unicode glyph keeps us
+        // off icon-plugin dependencies.
+        auto* swap = new QPushButton(paintColors);
+        swap->setGeometry(20, 0, 14, 12);
+        swap->setObjectName("paintSwap");
+        swap->setFlat(true);
+        swap->setFocusPolicy(Qt::NoFocus);
+        swap->setText(QStringLiteral("⇄"));
+        swap->setToolTip(tr("Swap foreground/background colors"));
+        swap->setStyleSheet(QStringLiteral(
+            "QPushButton { color: #aaa; background: transparent; border: none; font-size: 9px; padding: 0; }"
+            "QPushButton:hover { color: #fff; }"));
+        // Default-reset glyph: tiny black-over-white squares in the
+        // opposite corner. Click puts FG=black, BG=white.
+        auto* reset = new QPushButton(paintColors);
+        reset->setGeometry(0, 18, 12, 10);
+        reset->setObjectName("paintReset");
+        reset->setFlat(true);
+        reset->setFocusPolicy(Qt::NoFocus);
+        reset->setText(QStringLiteral("◰"));
+        reset->setToolTip(tr("Reset to default foreground/background"));
+        reset->setStyleSheet(QStringLiteral(
+            "QPushButton { color: #aaa; background: transparent; border: none; font-size: 10px; padding: 0; }"
+            "QPushButton:hover { color: #fff; }"));
+
+        auto syncSwatches = [fg, bg]() {
+            auto* em = EditModeController::instance();
+            const QColor fgC = em->vertexPaintColor();
+            const QColor bgC = em->vertexPaintBackgroundColor();
+            fg->setStyleSheet(QStringLiteral(
+                "QPushButton { background-color: %1; border: 1px solid #444; border-radius: 2px; }")
+                .arg(fgC.name(QColor::HexRgb)));
+            bg->setStyleSheet(QStringLiteral(
+                "QPushButton { background-color: %1; border: 1px solid #444; border-radius: 2px; }")
+                .arg(bgC.name(QColor::HexRgb)));
+        };
+        syncSwatches();
+        connect(EditModeController::instance(), &EditModeController::vertexPaintChanged,
+                this, syncSwatches);
+
+        connect(fg, &QPushButton::clicked, this, [this, syncSwatches]() {
+            SentryReporter::addBreadcrumb("ui.action", "Toolbar: FG color picker opened");
+            auto* em = EditModeController::instance();
+            QColor c = QColorDialog::getColor(em->vertexPaintColor(), this,
+                tr("Foreground color"),
+                QColorDialog::ShowAlphaChannel);
+            if (c.isValid())
+                em->setVertexPaintColor(c);
+            syncSwatches();
+        });
+        connect(bg, &QPushButton::clicked, this, [this, syncSwatches]() {
+            SentryReporter::addBreadcrumb("ui.action", "Toolbar: BG color picker opened");
+            auto* em = EditModeController::instance();
+            QColor c = QColorDialog::getColor(em->vertexPaintBackgroundColor(), this,
+                tr("Background color"),
+                QColorDialog::ShowAlphaChannel);
+            if (c.isValid())
+                em->setVertexPaintBackgroundColor(c);
+            syncSwatches();
+        });
+        connect(swap, &QPushButton::clicked, this, [syncSwatches]() {
+            SentryReporter::addBreadcrumb("ui.action", "Toolbar: swap FG/BG colors");
+            EditModeController::instance()->swapPaintColors();
+            syncSwatches();
+        });
+        connect(reset, &QPushButton::clicked, this, [syncSwatches]() {
+            SentryReporter::addBreadcrumb("ui.action", "Toolbar: reset FG/BG colors");
+            EditModeController::instance()->resetPaintColors();
+            syncSwatches();
+        });
+    }
+    QAction* paintColorsAction = ui->objectsToolbar->addWidget(paintColors);
+    paintColorsAction->setObjectName("modeMaterialPaintColorsAction");
+
     // The paint brush is contextual:
     //  - Material Mode → texture paint (paint into the BaseColor)
     //  - Edit Mode    → vertex paint (paint vertex colors)
     //  - Other modes  → hidden
     // Switching modes turns the previous mode's brush off so we don't
     // leave a stale checked state.
-    auto refreshPaintBrushVisibility = [vertexPaintButton, vertexPaintAction]() {
+    auto refreshPaintBrushVisibility = [vertexPaintButton, vertexPaintAction,
+                                        paintColorsAction, wandButton, wandAction]() {
         const auto mode = EditorModeController::instance()->currentMode();
         const bool material = mode == EditorModeController::MaterialMode;
         // Paint brush lives in Material Mode only. The user chooses
@@ -1399,6 +1565,16 @@ void MainWindow::initToolBar()
         // picker; both run through TexturePaintController.
         vertexPaintAction->setVisible(material);
         vertexPaintButton->setEnabled(material);
+        // FG/BG swatch stays available in Edit Mode too — vertex paint
+        // runs from Edit Mode and the brush popup no longer holds a
+        // color picker, so without this the user has no toolbar
+        // access to the foreground color while painting vertex colors.
+        const bool edit = mode == EditorModeController::EditMode;
+        paintColorsAction->setVisible(material || edit);
+        wandAction->setVisible(material);
+        // wandButton enabled state is driven by syncWandEnabled —
+        // paint-on + target=Texture. Hide here when out of Material
+        // Mode but don't overrule enabled.
         // Disable both brushes AND reset the button's checked state on
         // mode change. Without resetting the checked flag, the user's
         // next click toggles "on→off" (since we silently set the
@@ -1410,6 +1586,12 @@ void MainWindow::initToolBar()
             QStringLiteral("Mode switch: paint state reset"));
         QSignalBlocker b(vertexPaintButton);
         vertexPaintButton->setChecked(false);
+        // Reset the tool to Paint on every mode entry so the wand
+        // toolbar button starts unchecked too.
+        TexturePaintController::instance()->setBrushTool(
+            static_cast<int>(TexturePaintController::ToolPaint));
+        QSignalBlocker bw(wandButton);
+        wandButton->setChecked(false);
     };
     refreshPaintBrushVisibility();
     connect(EditorModeController::instance(), &EditorModeController::modeChanged,

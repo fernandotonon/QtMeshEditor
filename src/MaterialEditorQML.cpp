@@ -3880,13 +3880,26 @@ QStringList MaterialEditorQML::getMaterialList() const
     }
     
     try {
-        Ogre::ResourceManager::ResourceMapIterator materialIterator = 
+        Ogre::ResourceManager::ResourceMapIterator materialIterator =
             Ogre::MaterialManager::getSingleton().getResourceIterator();
-        
+
         while (materialIterator.hasMoreElements()) {
             Ogre::MaterialPtr material = Ogre::static_pointer_cast<Ogre::Material>(
                 materialIterator.peekNextValue());
-            materialList.append(QString::fromStdString(material->getName()));
+            const QString name = QString::fromStdString(material->getName());
+            // Hide internal paint-pipeline materials from the user
+            // facing list. These are created at runtime by
+            // TexturePaintController (mask overlay material, hover-
+            // ring material) and EditModeController's session, so the
+            // user never authored them and shouldn't be able to
+            // accidentally select / edit / delete them.
+            if (name.startsWith(QLatin1String("QMEPaintMaskOverlay_"))
+             || name.startsWith(QLatin1String("QMEPaint_"))
+             || name.startsWith(QLatin1String("TexturePaint/"))) {
+                materialIterator.moveNext();
+                continue;
+            }
+            materialList.append(name);
             materialIterator.moveNext();
         }
     } catch (const std::exception& e) {

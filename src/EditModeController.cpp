@@ -292,6 +292,69 @@ void EditModeController::setVertexPaintBrushColor(const QString& cssColor)
     setVertexPaintColor(c);
 }
 
+void EditModeController::setVertexPaintBackgroundColor(const QColor& c)
+{
+    if (!c.isValid())
+        return;
+    QColor rgb = c.toRgb();
+    if (!rgb.isValid())
+        return;
+    // BG color is allowed to be fully transparent — that's how the user
+    // signals "erase to transparent" instead of "erase to a solid color".
+    if (m_vertexPaintBackgroundColor.rgba() == rgb.rgba())
+        return;
+    m_vertexPaintBackgroundColor = rgb;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex paint BG color: %1").arg(rgb.name(QColor::HexArgb)));
+    emit vertexPaintChanged();
+}
+
+void EditModeController::setVertexPaintBackgroundBrushColor(const QString& cssColor)
+{
+    const QString s = cssColor.trimmed();
+    if (s.isEmpty())
+        return;
+    QColor c = QColor::fromString(s);
+    if (!c.isValid())
+        c = QColor(s);
+    if (!c.isValid())
+        return;
+    setVertexPaintBackgroundColor(c);
+}
+
+void EditModeController::swapPaintColors()
+{
+    const QColor fg = m_vertexPaintColor;
+    const QColor bg = m_vertexPaintBackgroundColor;
+    m_vertexPaintColor = bg;
+    m_vertexPaintBackgroundColor = fg;
+    SentryReporter::addBreadcrumb("ui.action", "Vertex paint: FG/BG swapped");
+    emit vertexPaintChanged();
+}
+
+void EditModeController::resetPaintColors()
+{
+    // Defaults match the member initialisers in the header: FG=Fern green,
+    // BG=black. Keep these in lockstep — the toolbar tooltip and the
+    // README both call out the resetting behaviour.
+    bool changed = false;
+    const QColor defaultFg(113, 188, 120);
+    const QColor defaultBg(0, 0, 0);
+    if (m_vertexPaintColor != defaultFg) {
+        m_vertexPaintColor = defaultFg;
+        changed = true;
+    }
+    if (m_vertexPaintBackgroundColor != defaultBg) {
+        m_vertexPaintBackgroundColor = defaultBg;
+        changed = true;
+    }
+    if (changed) {
+        SentryReporter::addBreadcrumb("ui.action", "Vertex paint: FG/BG reset to default");
+        emit vertexPaintChanged();
+    }
+}
+
 void EditModeController::setVertexPaintRadius(double r)
 {
     if (r <= 0.0 || m_vertexPaintRadius == r)

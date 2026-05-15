@@ -338,9 +338,18 @@ QStringList SceneTreeModel::availableMaterials() const
     {
         auto res = it.getNext();
         QString name = QString::fromStdString(res->getName());
-        // Skip internal materials
-        if (!name.startsWith("Ogre/") && !name.startsWith("BaseWhite") && name != "GUI_Material")
-            names.append(name);
+        // Skip Ogre's built-in materials.
+        if (name.startsWith("Ogre/") || name.startsWith("BaseWhite") || name == "GUI_Material")
+            continue;
+        // Skip runtime paint-pipeline materials. These are created by
+        // TexturePaintController (paint session, mask overlay, hover
+        // ring) and aren't user-authored — they'd just clutter the
+        // submesh material dropdown.
+        if (name.startsWith("QMEPaintMaskOverlay_")
+         || name.startsWith("QMEPaint_")
+         || name.startsWith("TexturePaint/"))
+            continue;
+        names.append(name);
     }
     names.sort(Qt::CaseInsensitive);
     return names;
