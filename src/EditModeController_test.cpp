@@ -3044,9 +3044,12 @@ TEST_F(EditModeControllerMergeOpsTest, LoopCutOnTriangleAdjacencyEmitsHintAndRet
     ctrl->selectEdge(0, 2);
     QSignalSpy spy(ctrl, &EditModeController::editHintMessage);
     EXPECT_EQ(ctrl->loopCutSelection(), 0);
-    // Hint may or may not fire depending on internal walk — but in this
-    // case (welded cube triangle topology) it should.
-    EXPECT_GE(spy.count(), 0);
+    // The welded cube edge (0,2) is bordered by two triangle faces, so the
+    // tri-adjacency branch in loopCutSelection must fire and emit the hint.
+    ASSERT_GE(spy.count(), 1);
+    const QString hint = spy.takeFirst().at(0).toString();
+    EXPECT_TRUE(hint.contains("Loop cut"));
+    EXPECT_TRUE(hint.contains("Convert to Quads"));
 }
 
 // ===========================================================================
@@ -3294,10 +3297,10 @@ TEST_F(EditModeControllerMergeOpsTest, DissolveSelectionVertexModeOnCorner)
     ASSERT_TRUE(ctrl->enterEditMode());
     ctrl->setSelectionMode(EditModeController::VertexMode);
     ctrl->selectVertex(0);
-    // Dissolve may or may not produce a change depending on the corner's
-    // topology — just ensure no crash and a real integer return.
-    int n = ctrl->dissolveSelection();
-    EXPECT_GE(n, 0);
+    // Cube corner vertex 0 is incident to 5 triangles (degree 5), so it
+    // can't dissolve — `dissolveVertices` only retires verts of degree 2.
+    // Expect a clean 0 (no-op), not an error or a partial mutation.
+    EXPECT_EQ(ctrl->dissolveSelection(), 0);
 }
 
 TEST_F(EditModeControllerMergeOpsTest, DissolveSelectionEdgeModeOnEdge)
@@ -3306,7 +3309,10 @@ TEST_F(EditModeControllerMergeOpsTest, DissolveSelectionEdgeModeOnEdge)
     ASSERT_TRUE(ctrl->enterEditMode());
     ctrl->setSelectionMode(EditModeController::EdgeMode);
     ctrl->selectEdge(0, 1, false);
-    int n = ctrl->dissolveSelection();
+    // The welded cube's edge (0,1) sits between two coplanar triangles on
+    // the back face, so the edge dissolve should retire it. Even if HE
+    // refuses for some reason, the return MUST be non-negative.
+    const int n = ctrl->dissolveSelection();
     EXPECT_GE(n, 0);
 }
 
@@ -3318,20 +3324,29 @@ TEST_F(EditModeControllerMergeOpsTest, DeleteSelectionVertexModeOnCorner)
 {
     auto* ctrl = EditModeController::instance();
     ASSERT_TRUE(ctrl->enterEditMode());
+    const int trisBefore = ctrl->triangleCount();
     ctrl->setSelectionMode(EditModeController::VertexMode);
     ctrl->selectVertex(0);
-    int n = ctrl->deleteSelection();
-    EXPECT_GE(n, 0);
+    // Deleting cube corner v0 retires every triangle that uses it and the
+    // vertex itself. The exact retired-count return depends on whether
+    // `deleteVertices` returns vertex count (1) or face count (≥3) — both
+    // are positive on success; the GPU-side outcome is fewer triangles.
+    const int n = ctrl->deleteSelection();
+    EXPECT_GT(n, 0);
+    EXPECT_LT(ctrl->triangleCount(), trisBefore);
 }
 
 TEST_F(EditModeControllerMergeOpsTest, DeleteSelectionEdgeModeOnEdge)
 {
     auto* ctrl = EditModeController::instance();
     ASSERT_TRUE(ctrl->enterEditMode());
+    const int trisBefore = ctrl->triangleCount();
     ctrl->setSelectionMode(EditModeController::EdgeMode);
     ctrl->selectEdge(0, 1, false);
-    int n = ctrl->deleteSelection();
-    EXPECT_GE(n, 0);
+    // Deleting an edge retires the (up to two) triangles using it.
+    const int n = ctrl->deleteSelection();
+    EXPECT_GT(n, 0);
+    EXPECT_LT(ctrl->triangleCount(), trisBefore);
 }
 
 // ===========================================================================
@@ -3339,15 +3354,17 @@ TEST_F(EditModeControllerMergeOpsTest, DeleteSelectionEdgeModeOnEdge)
 // nothing is coplanar)
 // ===========================================================================
 
-TEST_F(EditModeControllerMergeOpsTest, ConvertToQuadsStrictThresholdMayMerge)
+TEST_F(EditModeControllerMergeOpsTest, ConvertToQuadsStrictThresholdMergesCubePairs)
 {
-    // 0 degrees is the strictest — a cube has coplanar pairs on each face,
-    // so even 0° should still produce merges. (CodeRabbit assertion that
-    // the threshold is inclusive at exactly 0°.)
+    // 0 degrees is the strictest — a cube has triangle pairs that are
+    // exactly coplanar (same face normal) on each of its 6 faces, so even
+    // a 0° threshold should produce the 6 quad merges. Asserts the
+    // threshold is inclusive at exactly 0°.
     auto* ctrl = EditModeController::instance();
     ASSERT_TRUE(ctrl->enterEditMode());
-    int merged = ctrl->convertToQuads(0.0f);
-    EXPECT_GE(merged, 0);
+    const int merged = ctrl->convertToQuads(0.0f);
+    EXPECT_EQ(merged, 6);
+    EXPECT_TRUE(ctrl->isMeshQuadBased());
 }
 
 // ===========================================================================
