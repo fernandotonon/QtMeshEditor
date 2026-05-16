@@ -22,6 +22,7 @@
 #include <QFileInfo>
 #include <QEvent>
 #include "SentryReporter.h"
+#include "UpdateVersion.h"
 #include <QDialog>
 #include <QProgressDialog>
 #include <QVBoxLayout>
@@ -3724,20 +3725,37 @@ void MainWindow::on_actionVerify_Update_triggered()
             QJsonDocument doc = QJsonDocument::fromJson(data);
             QJsonObject obj = doc.object();
 
-            // Get the tag name of the latest release
-            QString latestVersion = obj.value("tag_name").toString();
-            QString currentVersion = QApplication::applicationVersion();
-            if (latestVersion == currentVersion) {
-                // The latest release is equal to the current version
-                QMessageBox::information(nullptr, tr("Update"), tr("You're using the latest release."));
-            } else {
-                // The latest release is different from the current version
-                QMessageBox::StandardButton reply = QMessageBox::question(nullptr, tr("Update"), tr("A new version is available. Do you want to update?"), QMessageBox::Yes | QMessageBox::No);
-                // if yes, open the download link in the default browser
+            // Compare the GitHub release tag against the running build
+            // through UpdateVersion: normalises a leading `v`, handles
+            // semver suffixes, and uses QVersionNumber so e.g. 3.10.0
+            // ranks above 3.2.0 (the old string-equality test got both
+            // of those wrong). Only prompt when the remote is strictly
+            // newer — Invalid / Same / Newer all stay quiet so a
+            // malformed API response doesn't permanently nag the user.
+            const QString latestVersion = obj.value("tag_name").toString();
+            const QString currentVersion = QApplication::applicationVersion();
+            const UpdateVersion::Comparison cmp =
+                UpdateVersion::compare(currentVersion, latestVersion);
+            if (cmp == UpdateVersion::Comparison::Older) {
+                QMessageBox::StandardButton reply = QMessageBox::question(
+                    nullptr, tr("Update"),
+                    tr("A new version is available (%1 → %2). Do you want to update?")
+                        .arg(currentVersion, latestVersion),
+                    QMessageBox::Yes | QMessageBox::No);
                 if (reply == QMessageBox::Yes) {
                     QString downloadUrl = obj.value("html_url").toString();
                     QDesktopServices::openUrl(QUrl(downloadUrl));
                 }
+            } else if (cmp == UpdateVersion::Comparison::Invalid) {
+                // Don't bother the user — log it and move on.
+                Ogre::LogManager::getSingleton().logMessage(
+                    "Update check: could not parse versions '"
+                    + currentVersion.toStdString() + "' / '"
+                    + latestVersion.toStdString() + "'");
+            } else {
+                QMessageBox::information(
+                    nullptr, tr("Update"),
+                    tr("You're using the latest release."));
             }
         } else {
             // Handle the error

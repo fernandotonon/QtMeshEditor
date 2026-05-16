@@ -591,20 +591,15 @@ QJsonObject MCPServer::handleResourcesRead(const QJsonObject &params)
 
 QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
 {
-    QString name = args["name"].toString();
-
+    const QString name = args["name"].toString();
     if (name.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
     }
-
-    try {
-        // Check if material already exists
+    return runOgreOp([&]() -> QJsonObject {
         Ogre::MaterialPtr existing = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (existing) {
             return makeErrorResult(QString("Error: Material '%1' already exists").arg(name));
         }
-
-        // Create the material programmatically
         Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
             name.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
@@ -650,17 +645,11 @@ QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
 
         try { mat->load(); } catch (...) { /* headless — no GPU context */ }
 
-
-        // Serialize the created material for display
         Ogre::MaterialSerializer serializer;
         serializer.queueForExport(mat);
-        QString materialScript = QString::fromStdString(serializer.getQueuedAsString());
-
-        return makeSuccessResult(QString("Created material '%1':\n%2").arg(name).arg(materialScript));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error creating material: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+        const QString materialScript = QString::fromStdString(serializer.getQueuedAsString());
+        return makeSuccessResult(QString("Created material '%1':\n%2").arg(name, materialScript));
+    });
 }
 
 QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
@@ -733,35 +722,26 @@ QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
 
 QJsonObject MCPServer::toolGetMaterial(const QJsonObject &args)
 {
-    QString name = args["name"].toString();
-
+    const QString name = args["name"].toString();
     if (name.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
     }
-
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (!material) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(name));
         }
-
-        // Serialize the material to script text
         Ogre::MaterialSerializer serializer;
         serializer.queueForExport(material);
-        QString script = QString::fromStdString(serializer.getQueuedAsString());
-
-        return makeSuccessResult(QString("Material '%1' script:\n%2").arg(name).arg(script));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+        const QString script = QString::fromStdString(serializer.getQueuedAsString());
+        return makeSuccessResult(QString("Material '%1' script:\n%2").arg(name, script));
+    });
 }
 
 QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         QStringList materials;
         auto& matMgr = Ogre::MaterialManager::getSingleton();
         auto it = matMgr.getResourceIterator();
@@ -769,12 +749,10 @@ QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
             Ogre::ResourcePtr res = it.getNext();
             materials << QString::fromStdString(res->getName());
         }
-
         materials.sort();
-        return makeSuccessResult(QString("Available materials (%1):\n%2").arg(materials.size()).arg(materials.join("\n")));
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+        return makeSuccessResult(QString("Available materials (%1):\n%2")
+            .arg(materials.size()).arg(materials.join("\n")));
+    });
 }
 
 QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
@@ -791,25 +769,18 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
     if (materialName.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
     }
-
-    try {
-        // Verify material exists
+    return runOgreOp([&]() -> QJsonObject {
         Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().getByName(materialName.toStdString());
         if (!mat) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(materialName));
         }
-
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
             return makeErrorResult("Error: Manager not available");
         }
-
         QStringList appliedTo;
-
         if (!meshName.isEmpty()) {
             bool found = false;
-
-            // Primary: search by entity name via getEntities()
             QList<Ogre::Entity*>& entities = mgr->getEntities();
             for (Ogre::Entity* entity : entities) {
                 if (entity && QString::fromStdString(entity->getName()) == meshName) {
@@ -819,7 +790,6 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
                     break;
                 }
             }
-
             // Fallback: look up scene node by name and apply to its attached entity.
             // Handles cases where the entity name differs from the node name, or
             // getEntities() returns an incomplete / mis-cast list.
@@ -838,12 +808,10 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
                     }
                 }
             }
-
             if (!found) {
                 return makeErrorResult(QString("Error: Mesh '%1' not found").arg(meshName));
             }
         } else {
-            // Apply to selected entities
             SelectionSet* sel = SelectionSet::getSingleton();
             if (!sel || sel->getEntitiesCount() == 0) {
                 return makeErrorResult("Error: No entity specified and no entities selected");
@@ -856,12 +824,9 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
                 }
             }
         }
-
-        return makeSuccessResult(QString("Applied material '%1' to: %2").arg(materialName).arg(appliedTo.join(", ")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+        return makeSuccessResult(QString("Applied material '%1' to: %2")
+            .arg(materialName, appliedTo.join(", ")));
+    });
 }
 
 QJsonObject MCPServer::toolListMaterialPresets(const QJsonObject &)
