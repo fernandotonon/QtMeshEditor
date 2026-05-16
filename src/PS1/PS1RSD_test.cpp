@@ -102,9 +102,13 @@ TEST(PS1RSD, ParseBlenderExporterTextureLayout)
 
 TEST(PS1RSD, ParseFails_WhenFileMissing)
 {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("missing_subdir/model.rsd"));
+
     PS1RSD::RsdDescriptor d;
     QString err;
-    EXPECT_FALSE(PS1RSD::parseRsdFile(QStringLiteral("/does/not/model.rsd"), d, &err));
+    EXPECT_FALSE(PS1RSD::parseRsdFile(path, d, &err));
     EXPECT_FALSE(err.isEmpty());
 }
 

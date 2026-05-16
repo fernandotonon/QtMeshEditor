@@ -174,9 +174,13 @@ TEST(PS1TIMTest, SaveThenLoadTim16RoundTrip)
 
 TEST(PS1TIMTest, LoadFails_WhenFileMissing)
 {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("missing_subdir/model.tim"));
+
     Ogre::Image img;
     QString err;
-    EXPECT_FALSE(PS1TIM::loadTimToOgreImage(QStringLiteral("/nonexistent/dir/model.tim"), img, &err));
+    EXPECT_FALSE(PS1TIM::loadTimToOgreImage(path, img, &err));
     EXPECT_FALSE(err.isEmpty());
 }
 

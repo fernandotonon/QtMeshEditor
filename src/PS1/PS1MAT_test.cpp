@@ -353,9 +353,13 @@ TEST(PS1MAT, ParseTexturedSmooth_H_TypeTri_WithMinimalInts)
 
 TEST(PS1MAT, Rejects_ParseOpenFailure)
 {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("missing_subdir/file.mat"));
+
     QVector<PS1MAT::MatEntry> entries;
     QString err;
-    EXPECT_FALSE(PS1MAT::parseMatFile(QStringLiteral("/no/such/file.mat"), entries, &err));
+    EXPECT_FALSE(PS1MAT::parseMatFile(path, entries, &err));
     EXPECT_TRUE(entries.isEmpty());
 }
 
@@ -422,6 +426,7 @@ TEST(PS1MAT, WriteNormalizesUnknownTypeCharToC)
 
     QVector<PS1MAT::MatEntry> out;
     ASSERT_TRUE(PS1MAT::parseMatFile(path, out, &err)) << err.toStdString();
+    ASSERT_EQ(out.size(), 1);
     EXPECT_EQ(out[0].typeChar, 'C');
 }
 

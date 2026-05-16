@@ -816,7 +816,10 @@ TEST_F(PS1TMDTest, ExportImportRoundTripSingleTriangle)
 
 TEST_F(PS1TMDTest, ImportFails_WhenFileMissing)
 {
-    EXPECT_FALSE(PS1TMD::importTmd(QStringLiteral("/no/path/model.tmd"), "PS1TmdMissingMesh"));
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("missing_subdir/model.tmd"));
+    EXPECT_FALSE(PS1TMD::importTmd(path, "PS1TmdMissingMesh"));
 }
 
 TEST_F(PS1TMDTest, ImportFails_WhenBadFileMagic)
