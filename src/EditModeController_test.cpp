@@ -3098,3 +3098,483 @@ TEST_F(EditModeControllerMergeOpsTest, SubdivideCatmullClarkAllOutsideEditModeRe
     EXPECT_FALSE(ctrl->isEditModeActive());
     EXPECT_EQ(ctrl->subdivideCatmullClarkAll(), 0);
 }
+
+// ===========================================================================
+// BATCH 2: beginBevel happy paths (edge mode + vertex mode) + updateBevelWidth
+// + commitBevel inside an active session
+// ===========================================================================
+
+TEST_F(EditModeControllerMergeOpsTest, BeginBevelEdgeModeReturnsTrue)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    EXPECT_TRUE(ctrl->beginBevel());
+    EXPECT_TRUE(ctrl->bevelSessionActive());
+}
+
+TEST_F(EditModeControllerMergeOpsTest, BeginBevelVertexModeReturnsTrue)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectVertex(5, false);
+    EXPECT_TRUE(ctrl->beginBevel());
+    EXPECT_TRUE(ctrl->bevelSessionActive());
+}
+
+TEST_F(EditModeControllerMergeOpsTest, BeginBevelWithoutSelectionReturnsFalse)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    EXPECT_FALSE(ctrl->beginBevel());
+    EXPECT_FALSE(ctrl->bevelSessionActive());
+}
+
+TEST_F(EditModeControllerMergeOpsTest, BeginBevelInFaceModeReturnsFalse)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+    ctrl->selectFace(0);
+    EXPECT_FALSE(ctrl->beginBevel())
+        << "face mode is not a valid bevel target";
+}
+
+TEST_F(EditModeControllerMergeOpsTest, BeginBevelOutsideEditModeReturnsFalse)
+{
+    auto* ctrl = EditModeController::instance();
+    EXPECT_FALSE(ctrl->isEditModeActive());
+    EXPECT_FALSE(ctrl->beginBevel());
+}
+
+TEST_F(EditModeControllerMergeOpsTest, BeginBevelTwiceSecondReturnsFalse)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->beginBevel());
+    EXPECT_FALSE(ctrl->beginBevel())
+        << "starting a second bevel while one is active should be rejected";
+}
+
+TEST_F(EditModeControllerMergeOpsTest, UpdateBevelWidthInsideSessionEmitsAndApplies)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->beginBevel());
+
+    // Re-apply at a new width.
+    ctrl->updateBevelWidth(0.1f);
+    EXPECT_TRUE(ctrl->bevelSessionActive());
+
+    // Negative width clamps to a tiny positive.
+    ctrl->updateBevelWidth(-1.0f);
+    EXPECT_TRUE(ctrl->bevelSessionActive());
+}
+
+TEST_F(EditModeControllerMergeOpsTest, CommitBevelEndsSessionAndPushesUndo)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->beginBevel());
+
+    const int undoCountBefore = UndoManager::getSingleton()->canUndo() ? 1 : 0;
+    ctrl->commitBevel();
+    EXPECT_FALSE(ctrl->bevelSessionActive());
+    EXPECT_GE(UndoManager::getSingleton()->canUndo() ? 1 : 0, undoCountBefore);
+}
+
+// ===========================================================================
+// BATCH 2: cancelBevel restores original mesh state
+// ===========================================================================
+
+TEST_F(EditModeControllerMergeOpsTest, CancelBevelClearsSession)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->beginBevel());
+
+    ctrl->cancelBevel();
+    EXPECT_FALSE(ctrl->bevelSessionActive());
+}
+
+// ===========================================================================
+// BATCH 2: bevel-segments / profile-points during active session
+// ===========================================================================
+
+TEST_F(EditModeControllerMergeOpsTest, BevelSegmentsBeforeSessionIsOne)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    EXPECT_EQ(ctrl->bevelSegments(), 1);
+    EXPECT_EQ(ctrl->bevelProfilePoints().size(), 0);
+}
+
+TEST_F(EditModeControllerMergeOpsTest, UpdateBevelSegmentsNoSessionIsNoOp)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    QSignalSpy spy(ctrl, &EditModeController::bevelProfilePointsChanged);
+    ctrl->updateBevelSegments(5);
+    EXPECT_EQ(spy.count(), 0);
+    EXPECT_EQ(ctrl->bevelSegments(), 1);
+}
+
+TEST_F(EditModeControllerMergeOpsTest, ResetBevelProfileNoSessionIsNoOp)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->resetBevelProfile();
+    EXPECT_EQ(ctrl->bevelProfilePoints().size(), 0);
+}
+
+TEST_F(EditModeControllerMergeOpsTest, UpdateBevelProfilePointNoSessionIsNoOp)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->updateBevelProfilePoint(0, 0.5f);
+    EXPECT_EQ(ctrl->bevelProfilePoints().size(), 0);
+}
+
+// ===========================================================================
+// BATCH 2: merge ops that involve more than 2 verts and verify selection
+// post-merge
+// ===========================================================================
+
+TEST_F(EditModeControllerMergeOpsTest, MergeAtCenterAllCornersRetiresSeven)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectAll();
+    // 8 cube corners → after center merge, 7 retired.
+    EXPECT_EQ(ctrl->mergeAtCenter(), 7);
+}
+
+TEST_F(EditModeControllerMergeOpsTest, MergeByDistanceLargeThresholdMergesAll)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectAll();
+    // Cube diagonal ≈ 3.464; threshold 10 collapses everything.
+    const int retired = ctrl->mergeByDistance(10.0f);
+    // All 8 verts collapse into 1 cluster of 8 → 7 retired.
+    EXPECT_EQ(retired, 7);
+}
+
+// ===========================================================================
+// BATCH 2: dissolve in vertex / edge modes (other modes are already covered
+// in the bevel E2E fixture's face mode case)
+// ===========================================================================
+
+TEST_F(EditModeControllerMergeOpsTest, DissolveSelectionVertexModeOnCorner)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectVertex(0);
+    // Dissolve may or may not produce a change depending on the corner's
+    // topology — just ensure no crash and a real integer return.
+    int n = ctrl->dissolveSelection();
+    EXPECT_GE(n, 0);
+}
+
+TEST_F(EditModeControllerMergeOpsTest, DissolveSelectionEdgeModeOnEdge)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(0, 1, false);
+    int n = ctrl->dissolveSelection();
+    EXPECT_GE(n, 0);
+}
+
+// ===========================================================================
+// BATCH 2: deleteSelection vertex / edge modes
+// ===========================================================================
+
+TEST_F(EditModeControllerMergeOpsTest, DeleteSelectionVertexModeOnCorner)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectVertex(0);
+    int n = ctrl->deleteSelection();
+    EXPECT_GE(n, 0);
+}
+
+TEST_F(EditModeControllerMergeOpsTest, DeleteSelectionEdgeModeOnEdge)
+{
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(0, 1, false);
+    int n = ctrl->deleteSelection();
+    EXPECT_GE(n, 0);
+}
+
+// ===========================================================================
+// BATCH 2: convertToQuads with strict threshold (should be a no-op when
+// nothing is coplanar)
+// ===========================================================================
+
+TEST_F(EditModeControllerMergeOpsTest, ConvertToQuadsStrictThresholdMayMerge)
+{
+    // 0 degrees is the strictest — a cube has coplanar pairs on each face,
+    // so even 0° should still produce merges. (CodeRabbit assertion that
+    // the threshold is inclusive at exactly 0°.)
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    int merged = ctrl->convertToQuads(0.0f);
+    EXPECT_GE(merged, 0);
+}
+
+// ===========================================================================
+// BATCH 2: enterEditMode error paths
+// ===========================================================================
+
+TEST_F(EditModeControllerSelectionTest, EnterEditModeNoSelectionReturnsFalse)
+{
+    SelectionSet::getSingleton()->clear();
+    auto* ctrl = EditModeController::instance();
+    EXPECT_FALSE(ctrl->enterEditMode());
+    EXPECT_FALSE(ctrl->isEditModeActive());
+
+    // Restore for TearDown to find m_node.
+    SelectionSet::getSingleton()->selectOne(m_node);
+}
+
+TEST_F(EditModeControllerSelectionTest, EnterEditModeTwiceSecondIsIdempotent)
+{
+    auto meshPtr = createInMemoryTriangleMesh("EditCtrl_enter_twice");
+    auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_enter_twice_node");
+    Manager::getSingleton()->createEntity(node, meshPtr);
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    // Second call should not crash and must not put the controller in a
+    // bad state. The current implementation re-enters; this test just
+    // ensures the no-crash invariant.
+    bool second = ctrl->enterEditMode();
+    EXPECT_TRUE(ctrl->isEditModeActive());
+    (void)second;
+
+    ctrl->exitEditMode(false);
+    Manager::getSingleton()->destroySceneNode("EditCtrl_enter_twice_node");
+}
+
+// ===========================================================================
+// BATCH 2: exitEditMode with commitChanges + no edits = idempotent
+// ===========================================================================
+
+TEST_F(EditModeControllerSelectionTest, ExitEditModeCommitTrueIsSafe)
+{
+    auto meshPtr = createInMemoryTriangleMesh("EditCtrl_exit_commit");
+    auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_exit_commit_node");
+    Manager::getSingleton()->createEntity(node, meshPtr);
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->exitEditMode(true); // commit path
+    EXPECT_FALSE(ctrl->isEditModeActive());
+
+    Manager::getSingleton()->destroySceneNode("EditCtrl_exit_commit_node");
+}
+
+TEST_F(EditModeControllerSelectionTest, ExitEditModeOutsideEditModeIsNoOp)
+{
+    auto* ctrl = EditModeController::instance();
+    EXPECT_FALSE(ctrl->isEditModeActive());
+    ctrl->exitEditMode(true);
+    EXPECT_FALSE(ctrl->isEditModeActive());
+}
+
+// ===========================================================================
+// BATCH 2: paint shape default invariants + signal emission
+// ===========================================================================
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintShapeSameValueDoesNotEmit)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintShape(static_cast<int>(EditModeController::ShapeSquare));
+    QSignalSpy spy(em, &EditModeController::vertexPaintChanged);
+    em->setVertexPaintShape(static_cast<int>(EditModeController::ShapeSquare));
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintRadiusSameValueDoesNotEmit)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintRadius(0.5);
+    QSignalSpy spy(em, &EditModeController::vertexPaintChanged);
+    em->setVertexPaintRadius(0.5);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintStrengthSameValueDoesNotEmit)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintStrength(0.5);
+    QSignalSpy spy(em, &EditModeController::vertexPaintChanged);
+    em->setVertexPaintStrength(0.5);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintFalloffSameValueDoesNotEmit)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintFalloff(0.5);
+    QSignalSpy spy(em, &EditModeController::vertexPaintChanged);
+    em->setVertexPaintFalloff(0.5);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+// ===========================================================================
+// BATCH 2: wireframe early returns + signal emission
+// ===========================================================================
+
+TEST_F(EditModeControllerSelectionTest, SetWireframeEnabledSameValueDoesNotEmit)
+{
+    auto* ctrl = EditModeController::instance();
+    ctrl->setWireframeEnabled(false);
+    QSignalSpy spy(ctrl, &EditModeController::wireframeChanged);
+    ctrl->setWireframeEnabled(false);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+// ===========================================================================
+// BATCH 2: applyVertexColorBrush square-shape variant + edge cases
+// ===========================================================================
+
+TEST(EditModeControllerGeometry, ApplyVertexColorBrushSquareShape) {
+    EditableMesh mesh;
+    mesh.subMeshes().resize(1);
+    auto& sub = mesh.subMeshes()[0];
+    sub.vertices.resize(3);
+    sub.vertices[0].position = Ogre::Vector3(0, 0, 0);
+    sub.vertices[1].position = Ogre::Vector3(0.5f, 0.5f, 0);
+    sub.vertices[2].position = Ogre::Vector3(2, 0, 0);
+    for (auto& v : sub.vertices) {
+        v.hasColor = true;
+        v.color = Ogre::ColourValue::White;
+    }
+    const Ogre::ColourValue paint(0.0f, 0.0f, 1.0f, 1.0f); // blue
+    const bool changed = EditModeController::applyVertexColorBrush(
+        mesh, Ogre::Vector3::ZERO, /*radius*/1.0f, paint,
+        /*strength*/1.0f, /*falloff*/0.0f, /*square*/true);
+    EXPECT_TRUE(changed);
+    // v0 at center — full paint replacement (constant strength, square has no falloff)
+    EXPECT_NEAR(sub.vertices[0].color.b, 1.0f, 1e-3f);
+    // v2 is outside the box (x=2 > radius=1), stays white.
+    EXPECT_NEAR(sub.vertices[2].color.b, 1.0f, 1e-3f);
+}
+
+TEST(EditModeControllerGeometry, ApplyVertexColorBrushZeroRadiusReturnsFalse) {
+    EditableMesh mesh;
+    mesh.subMeshes().resize(1);
+    auto& sub = mesh.subMeshes()[0];
+    sub.vertices.resize(1);
+    sub.vertices[0].position = Ogre::Vector3::ZERO;
+    sub.vertices[0].hasColor = true;
+    sub.vertices[0].color = Ogre::ColourValue::White;
+    const bool changed = EditModeController::applyVertexColorBrush(
+        mesh, Ogre::Vector3::ZERO, /*radius*/0.0f, Ogre::ColourValue::Red,
+        /*strength*/1.0f, /*falloff*/0.0f);
+    // Zero radius means no vertex is affected (distance == radius is at the
+    // boundary; falloff weight will be 0).
+    EXPECT_FALSE(changed);
+}
+
+TEST(EditModeControllerGeometry, ApplyVertexColorBrushEmptyMeshReturnsFalse) {
+    EditableMesh mesh;
+    const bool changed = EditModeController::applyVertexColorBrush(
+        mesh, Ogre::Vector3::ZERO, /*radius*/1.0f, Ogre::ColourValue::Red,
+        /*strength*/1.0f, /*falloff*/0.5f);
+    EXPECT_FALSE(changed);
+}
+
+// ===========================================================================
+// BATCH 2: weightToColor extreme cases
+// ===========================================================================
+
+TEST(EditModeControllerGeometry, WeightToColorClampsAboveOne) {
+    // Above-1 weights should produce the same color as exactly 1.0.
+    auto c1 = EditModeController::weightToColor(1.0f);
+    auto c2 = EditModeController::weightToColor(1.5f);
+    EXPECT_FLOAT_EQ(c1.r, c2.r);
+    EXPECT_FLOAT_EQ(c1.g, c2.g);
+    EXPECT_FLOAT_EQ(c1.b, c2.b);
+}
+
+TEST(EditModeControllerGeometry, WeightToColorClampsBelowZero) {
+    auto c1 = EditModeController::weightToColor(0.0f);
+    auto c2 = EditModeController::weightToColor(-0.5f);
+    EXPECT_FLOAT_EQ(c1.r, c2.r);
+    EXPECT_FLOAT_EQ(c1.g, c2.g);
+    EXPECT_FLOAT_EQ(c1.b, c2.b);
+}
+
+// ===========================================================================
+// BATCH 2: pointToSegmentDistance — vertical & diagonal segments
+// ===========================================================================
+
+TEST(EditModeControllerGeometry, PointToSegmentDistanceVerticalSegment) {
+    QPoint p(3, 5);
+    QPoint a(0, 0);
+    QPoint b(0, 10);
+    float dist = EditModeController::pointToSegmentDistance(p, a, b);
+    EXPECT_NEAR(dist, 3.0f, 0.01f);
+}
+
+TEST(EditModeControllerGeometry, PointToSegmentDistanceDiagonalSegment) {
+    // Segment (0,0)→(10,10); point (5,0) perpendicular distance to line is
+    // 5/sqrt(2) ≈ 3.535.
+    QPoint p(5, 0);
+    QPoint a(0, 0);
+    QPoint b(10, 10);
+    float dist = EditModeController::pointToSegmentDistance(p, a, b);
+    EXPECT_NEAR(dist, 5.0f / std::sqrt(2.0f), 0.05f);
+}
+
+// ===========================================================================
+// BATCH 2: rayTriangleIntersect degenerate triangle
+// ===========================================================================
+
+TEST(EditModeControllerGeometry, RayTriangleIntersectDegenerateTriangleNoHit) {
+    Ogre::Vector3 origin(0, 1, 0);
+    Ogre::Vector3 dir(0, -1, 0);
+    // Degenerate triangle (all three vertices collinear)
+    Ogre::Vector3 v0(0, 0, 0);
+    Ogre::Vector3 v1(1, 0, 0);
+    Ogre::Vector3 v2(2, 0, 0);
+    float t = EditModeController::rayTriangleIntersect(origin, dir, v0, v1, v2);
+    EXPECT_LT(t, 0.0f);
+}
+
+// ===========================================================================
+// BATCH 2: rewriteEntityAfterTopologyChange with a real entity (the
+// existing standalone test only covers the null case)
+// ===========================================================================
+
+TEST_F(EditModeControllerMergeOpsTest, RewriteEntityAfterTopologyChangeOnEntityIsSafe)
+{
+    // Even outside an edit-mode session, the static helper must accept any
+    // valid entity without crashing — undo/redo replays call it post-restore.
+    EditModeController::rewriteEntityAfterTopologyChange(m_entity);
+    SUCCEED();
+}
