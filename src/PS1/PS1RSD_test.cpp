@@ -100,3 +100,77 @@ TEST(PS1RSD, ParseBlenderExporterTextureLayout)
     EXPECT_EQ(d.matPath, "Example Project.mat");
 }
 
+TEST(PS1RSD, ParseFails_WhenFileMissing)
+{
+    PS1RSD::RsdDescriptor d;
+    QString err;
+    EXPECT_FALSE(PS1RSD::parseRsdFile(QStringLiteral("/does/not/model.rsd"), d, &err));
+    EXPECT_FALSE(err.isEmpty());
+}
+
+TEST(PS1RSD, ParseFails_WhenNoKeyValuePairs)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("empty.rsd"));
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    f.write("@RSD940102\n# only header and comments\n; nothing\n");
+    f.close();
+
+    PS1RSD::RsdDescriptor d;
+    QString err;
+    EXPECT_FALSE(PS1RSD::parseRsdFile(path, d, &err));
+}
+
+TEST(PS1RSD, ParseAddsDefaultHeader_WhenOmitsAtSignLine)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("nohdr.rsd"));
+    const QByteArray rsdBytes =
+        "PLY=SOME.PLY\n"
+        "# comment line\n";
+
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    f.write(rsdBytes);
+    f.close();
+
+    PS1RSD::RsdDescriptor d;
+    QString err;
+    ASSERT_TRUE(PS1RSD::parseRsdFile(path, d, &err)) << err.toStdString();
+    EXPECT_EQ(d.headerId, QStringLiteral("@RSD940102"));
+    EXPECT_TRUE(d.geometryCandidates().contains(QStringLiteral("SOME.PLY")));
+}
+
+TEST(PS1RSD, ParseTexHugeIndex_AppendsChronologicallyInsteadOfSparseArray)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("bigtex.rsd"));
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    f.write("@RSD940102\nPLY=M.PLY\nTEX[300]=TOO_LARGE_INDEX.TIM\n");
+    f.close();
+
+    PS1RSD::RsdDescriptor d;
+    QString err;
+    ASSERT_TRUE(PS1RSD::parseRsdFile(path, d, &err)) << err.toStdString();
+    ASSERT_EQ(d.textures.size(), 1);
+    EXPECT_EQ(d.textures[0], QStringLiteral("TOO_LARGE_INDEX.TIM"));
+}
+
+TEST(PS1RSD, WriteFails_WhenPathNotCreatable)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("nope/out.rsd"));
+    PS1RSD::RsdDescriptor desc;
+    desc.plyPath = QStringLiteral("X.PLY");
+
+    QString err;
+    EXPECT_FALSE(PS1RSD::writeRsdFile(path, desc, &err));
+}
+
+
