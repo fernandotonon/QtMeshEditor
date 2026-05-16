@@ -381,22 +381,24 @@ bool updateClampedKnob(T& member, T newValue, T lo, T hi,
 
 void EditModeController::setVertexPaintRadius(double r)
 {
-    // Radius has no upper clamp here — the toolbar slider enforces a
-    // sensible UI range (0.001..2.0) but we allow any positive value
-    // so MCP callers / unit tests can probe edge cases.
-    if (r <= 0.0) return;
+    // Reject non-finite inputs before clamping — std::min/std::max
+    // propagate NaN, and the upper bound here is +∞ so an Inf input
+    // would pass straight through. CodeRabbit flagged this on PR #532.
+    if (!std::isfinite(r) || r <= 0.0) return;
     updateClampedKnob(m_vertexPaintRadius, r, 1e-9, std::numeric_limits<double>::infinity(),
                       "radius", [this]() { emit vertexPaintChanged(); });
 }
 
 void EditModeController::setVertexPaintStrength(double s)
 {
+    if (!std::isfinite(s)) return;
     updateClampedKnob(m_vertexPaintStrength, s, 0.0, 1.0,
                       "strength", [this]() { emit vertexPaintChanged(); });
 }
 
 void EditModeController::setVertexPaintFalloff(double f)
 {
+    if (!std::isfinite(f)) return;
     updateClampedKnob(m_vertexPaintFalloff, f, 0.0, 1.0,
                       "falloff", [this]() { emit vertexPaintChanged(); });
 }

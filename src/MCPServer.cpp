@@ -770,19 +770,20 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
         }
         QStringList appliedTo;
         if (!meshName.isEmpty()) {
+            // Use findEntityByName (which already checks getMovableType
+            // == "Entity") to avoid the ManualObject cast crash that
+            // would happen if we iterated Manager::getEntities() and
+            // static_cast'd every attached movable. CodeRabbit feedback
+            // on PR #532.
             bool found = false;
-            QList<Ogre::Entity*>& entities = mgr->getEntities();
-            for (Ogre::Entity* entity : entities) {
-                if (entity && QString::fromStdString(entity->getName()) == meshName) {
-                    entity->setMaterialName(materialName.toStdString());
-                    appliedTo << QString::fromStdString(entity->getName());
-                    found = true;
-                    break;
-                }
+            if (Ogre::Entity* entity = findEntityByName(meshName)) {
+                entity->setMaterialName(materialName.toStdString());
+                appliedTo << QString::fromStdString(entity->getName());
+                found = true;
             }
-            // Fallback: look up scene node by name and apply to its attached entity.
-            // Handles cases where the entity name differs from the node name, or
-            // getEntities() returns an incomplete / mis-cast list.
+            // Fallback: look up by scene-node name if the entity name
+            // wasn't found (entity name can differ from node name when
+            // the node was created with a custom label).
             if (!found) {
                 Ogre::SceneNode* sn = findSceneNodeByName(meshName);
                 if (sn) {

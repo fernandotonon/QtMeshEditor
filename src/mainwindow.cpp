@@ -3737,22 +3737,32 @@ void MainWindow::on_actionVerify_Update_triggered()
             const UpdateVersion::Comparison cmp =
                 UpdateVersion::compare(currentVersion, latestVersion);
             if (cmp == UpdateVersion::Comparison::Older) {
+                SentryReporter::addBreadcrumb(
+                    "ui.action",
+                    QStringLiteral("Update available: %1 -> %2")
+                        .arg(currentVersion, latestVersion));
                 QMessageBox::StandardButton reply = QMessageBox::question(
                     nullptr, tr("Update"),
                     tr("A new version is available (%1 → %2). Do you want to update?")
                         .arg(currentVersion, latestVersion),
                     QMessageBox::Yes | QMessageBox::No);
                 if (reply == QMessageBox::Yes) {
+                    SentryReporter::addBreadcrumb(
+                        "ui.action", "Open latest release page");
                     QString downloadUrl = obj.value("html_url").toString();
                     QDesktopServices::openUrl(QUrl(downloadUrl));
                 }
             } else if (cmp == UpdateVersion::Comparison::Invalid) {
+                SentryReporter::addBreadcrumb(
+                    "ui.action", "Update check returned unparsable version data");
                 // Don't bother the user — log it and move on.
                 Ogre::LogManager::getSingleton().logMessage(
                     "Update check: could not parse versions '"
                     + currentVersion.toStdString() + "' / '"
                     + latestVersion.toStdString() + "'");
             } else {
+                SentryReporter::addBreadcrumb(
+                    "ui.action", "Already on latest release");
                 QMessageBox::information(
                     nullptr, tr("Update"),
                     tr("You're using the latest release."));
