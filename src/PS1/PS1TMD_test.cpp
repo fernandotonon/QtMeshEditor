@@ -883,3 +883,427 @@ TEST_F(PS1TMDTest, ImportUvMeshAppliesSiblingTimTexture)
     } catch (...) {
     }
 }
+
+/** Flat lit triangle (mode 0x20, flag 0, ilen 3) — single shared normal. */
+static QByteArray makeMinimal20FlatLitTriTmd()
+{
+    constexpr uint32_t kTmdId = 0x41u;
+    constexpr size_t kHead = 12u;
+    constexpr size_t kObjH = 28u;
+    const size_t vAbs = kHead + kObjH;
+    const size_t nAbs = vAbs + 3u * 8u;
+    const size_t pAbs = nAbs + 1u * 8u;
+    const uint32_t vOff = static_cast<uint32_t>(vAbs - 12u);
+    const uint32_t nOff = static_cast<uint32_t>(nAbs - 12u);
+    const uint32_t pOff = static_cast<uint32_t>(pAbs - 12u);
+
+    QByteArray buf(static_cast<int>(pAbs + 4u + 12u), '\0');
+    uint8_t* d = reinterpret_cast<uint8_t*>(buf.data());
+
+    writeU32le(d, kTmdId);
+    writeU32le(d + 4, 0);
+    writeU32le(d + 8, 1);
+
+    uint8_t* oh = d + kHead;
+    writeU32le(oh, vOff);
+    writeU32le(oh + 4, 3);
+    writeU32le(oh + 8, nOff);
+    writeU32le(oh + 12, 1);
+    writeU32le(oh + 16, pOff);
+    writeU32le(oh + 20, 1);
+    writeU32le(oh + 24, 0);
+
+    writeVertex8(0, 0, 0, d + vAbs);
+    writeVertex8(4096, 0, 0, d + vAbs + 8);
+    writeVertex8(0, 4096, 0, d + vAbs + 16);
+    writeVertex8(0, 0, 4096, d + nAbs);
+
+    uint8_t* pkt = d + pAbs;
+    pkt[0] = 5;
+    pkt[1] = 3;
+    pkt[2] = 0;
+    pkt[3] = 0x20;
+    uint8_t* pay = pkt + 4;
+    pay[0] = 180;
+    pay[1] = 90;
+    pay[2] = 45;
+    pay[3] = 0;
+    writeU16le(pay + 4, 0);
+    writeU16le(pay + 6, 0);
+    writeU16le(pay + 8, 1);
+    writeU16le(pay + 10, 2);
+
+    return buf;
+}
+
+/** Lit textured triangle (mode 0x24, flag 0, ilen 5). */
+static QByteArray makeMinimal24LitTexturedTriTmd()
+{
+    constexpr uint32_t kTmdId = 0x41u;
+    constexpr size_t kHead = 12u;
+    constexpr size_t kObjH = 28u;
+    const size_t vAbs = kHead + kObjH;
+    const size_t nAbs = vAbs + 3u * 8u;
+    const size_t pAbs = nAbs + 1u * 8u;
+    const uint32_t vOff = static_cast<uint32_t>(vAbs - 12u);
+    const uint32_t nOff = static_cast<uint32_t>(nAbs - 12u);
+    const uint32_t pOff = static_cast<uint32_t>(pAbs - 12u);
+
+    QByteArray buf(static_cast<int>(pAbs + 4u + 20u), '\0');
+    uint8_t* d = reinterpret_cast<uint8_t*>(buf.data());
+
+    writeU32le(d, kTmdId);
+    writeU32le(d + 4, 0);
+    writeU32le(d + 8, 1);
+
+    uint8_t* oh = d + kHead;
+    writeU32le(oh, vOff);
+    writeU32le(oh + 4, 3);
+    writeU32le(oh + 8, nOff);
+    writeU32le(oh + 12, 1);
+    writeU32le(oh + 16, pOff);
+    writeU32le(oh + 20, 1);
+    writeU32le(oh + 24, 0);
+
+    writeVertex8(0, 0, 0, d + vAbs);
+    writeVertex8(4096, 0, 0, d + vAbs + 8);
+    writeVertex8(0, 4096, 0, d + vAbs + 16);
+    writeVertex8(0, 0, 4096, d + nAbs);
+
+    uint8_t* pkt = d + pAbs;
+    pkt[0] = 7;
+    pkt[1] = 5;
+    pkt[2] = 0;
+    pkt[3] = 0x24;
+    uint8_t* pay = pkt + 4;
+    pay[0] = 32;
+    pay[1] = 64;
+    pay[2] = 0;
+    pay[3] = 0;
+    pay[4] = 200;
+    pay[5] = 16;
+    pay[6] = 0;
+    pay[7] = 0;
+    pay[8] = 16;
+    pay[9] = 200;
+    writeU16le(pay + 12, 0);
+    writeU16le(pay + 14, 0);
+    writeU16le(pay + 16, 1);
+    writeU16le(pay + 18, 2);
+
+    return buf;
+}
+
+/** Gouraud textured triangle (mode 0x34, flag 0, ilen 6). */
+static QByteArray makeMinimal34GouraudTexturedTriTmd()
+{
+    constexpr uint32_t kTmdId = 0x41u;
+    constexpr size_t kHead = 12u;
+    constexpr size_t kObjH = 28u;
+    const size_t vAbs = kHead + kObjH;
+    const size_t nAbs = vAbs + 3u * 8u;
+    const size_t pAbs = nAbs + 3u * 8u;
+    const uint32_t vOff = static_cast<uint32_t>(vAbs - 12u);
+    const uint32_t nOff = static_cast<uint32_t>(nAbs - 12u);
+    const uint32_t pOff = static_cast<uint32_t>(pAbs - 12u);
+
+    QByteArray buf(static_cast<int>(pAbs + 4u + 24u), '\0');
+    uint8_t* d = reinterpret_cast<uint8_t*>(buf.data());
+
+    writeU32le(d, kTmdId);
+    writeU32le(d + 4, 0);
+    writeU32le(d + 8, 1);
+
+    uint8_t* oh = d + kHead;
+    writeU32le(oh, vOff);
+    writeU32le(oh + 4, 3);
+    writeU32le(oh + 8, nOff);
+    writeU32le(oh + 12, 3);
+    writeU32le(oh + 16, pOff);
+    writeU32le(oh + 20, 1);
+    writeU32le(oh + 24, 0);
+
+    writeVertex8(0, 0, 0, d + vAbs);
+    writeVertex8(4096, 0, 0, d + vAbs + 8);
+    writeVertex8(0, 4096, 0, d + vAbs + 16);
+    writeVertex8(0, 0, 4096, d + nAbs);
+    writeVertex8(0, 0, 4096, d + nAbs + 8);
+    writeVertex8(0, 0, 4096, d + nAbs + 16);
+
+    uint8_t* pkt = d + pAbs;
+    pkt[0] = 8;
+    pkt[1] = 6;
+    pkt[2] = 0;
+    pkt[3] = 0x34;
+    uint8_t* pay = pkt + 4;
+    pay[0] = 10;
+    pay[1] = 20;
+    pay[4] = 30;
+    pay[5] = 40;
+    pay[8] = 50;
+    pay[9] = 60;
+    writeU16le(pay + 12, 0);
+    writeU16le(pay + 14, 0);
+    writeU16le(pay + 16, 1);
+    writeU16le(pay + 18, 1);
+    writeU16le(pay + 20, 2);
+    writeU16le(pay + 22, 2);
+
+    return buf;
+}
+
+/** Textured quad, no light (mode 0x2d, flag 1, ilen 7). */
+static QByteArray makeMinimal2dNoLightTexturedQuadTmd()
+{
+    QByteArray buf = makeMinimal2cTexturedQuadTmd();
+    uint8_t* pkt = reinterpret_cast<uint8_t*>(buf.data()) + 12u + 28u + 4u * 8u + 1u * 8u;
+    pkt[2] = 1;
+    pkt[3] = 0x2d;
+    uint8_t* pay = pkt + 4;
+    pay[16] = 90;
+    pay[17] = 120;
+    pay[18] = 30;
+    writeU16le(pay + 20, 0);
+    writeU16le(pay + 22, 1);
+    writeU16le(pay + 24, 2);
+    writeU16le(pay + 26, 3);
+    return buf;
+}
+
+/** Gouraud textured quad (mode 0x3c, flag 0, ilen 8). */
+static QByteArray makeMinimal3cGouraudTexturedQuadTmd()
+{
+    constexpr uint32_t kTmdId = 0x41u;
+    constexpr size_t kHead = 12u;
+    constexpr size_t kObjH = 28u;
+    const size_t vAbs = kHead + kObjH;
+    const size_t nAbs = vAbs + 4u * 8u;
+    const size_t pAbs = nAbs + 4u * 8u;
+    const uint32_t vOff = static_cast<uint32_t>(vAbs - 12u);
+    const uint32_t nOff = static_cast<uint32_t>(nAbs - 12u);
+    const uint32_t pOff = static_cast<uint32_t>(pAbs - 12u);
+
+    QByteArray buf(static_cast<int>(pAbs + 4u + 32u), '\0');
+    uint8_t* d = reinterpret_cast<uint8_t*>(buf.data());
+
+    writeU32le(d, kTmdId);
+    writeU32le(d + 4, 0);
+    writeU32le(d + 8, 1);
+
+    uint8_t* oh = d + kHead;
+    writeU32le(oh, vOff);
+    writeU32le(oh + 4, 4);
+    writeU32le(oh + 8, nOff);
+    writeU32le(oh + 12, 4);
+    writeU32le(oh + 16, pOff);
+    writeU32le(oh + 20, 1);
+    writeU32le(oh + 24, 0);
+
+    writeVertex8(0, 0, 0, d + vAbs);
+    writeVertex8(4096, 0, 0, d + vAbs + 8);
+    writeVertex8(4096, 4096, 0, d + vAbs + 16);
+    writeVertex8(0, 4096, 0, d + vAbs + 24);
+    for (int i = 0; i < 4; ++i)
+        writeVertex8(0, 0, 4096, d + nAbs + static_cast<size_t>(i) * 8u);
+
+    uint8_t* pkt = d + pAbs;
+    pkt[0] = 10;
+    pkt[1] = 8;
+    pkt[2] = 0;
+    pkt[3] = 0x3c;
+    uint8_t* pay = pkt + 4;
+    pay[0] = 0;
+    pay[1] = 0;
+    pay[4] = 128;
+    pay[5] = 0;
+    pay[8] = 128;
+    pay[9] = 128;
+    pay[12] = 0;
+    pay[13] = 128;
+    writeU16le(pay + 16, 0);
+    writeU16le(pay + 18, 0);
+    writeU16le(pay + 20, 1);
+    writeU16le(pay + 22, 1);
+    writeU16le(pay + 24, 2);
+    writeU16le(pay + 26, 2);
+    writeU16le(pay + 28, 3);
+    writeU16le(pay + 30, 3);
+
+    return buf;
+}
+
+/** Gouraud textured quad, no light (mode 0x3d, flag 1, ilen 10). */
+static QByteArray makeMinimal3dGouraudTexturedQuadNoLightTmd()
+{
+    constexpr uint32_t kTmdId = 0x41u;
+    constexpr size_t kHead = 12u;
+    constexpr size_t kObjH = 28u;
+    const size_t vAbs = kHead + kObjH;
+    const size_t nAbs = vAbs + 4u * 8u;
+    const size_t pAbs = nAbs + 1u * 8u;
+    const uint32_t vOff = static_cast<uint32_t>(vAbs - 12u);
+    const uint32_t nOff = static_cast<uint32_t>(nAbs - 12u);
+    const uint32_t pOff = static_cast<uint32_t>(pAbs - 12u);
+
+    QByteArray buf(static_cast<int>(pAbs + 4u + 40u), '\0');
+    uint8_t* d = reinterpret_cast<uint8_t*>(buf.data());
+
+    writeU32le(d, kTmdId);
+    writeU32le(d + 4, 0);
+    writeU32le(d + 8, 1);
+
+    uint8_t* oh = d + kHead;
+    writeU32le(oh, vOff);
+    writeU32le(oh + 4, 4);
+    writeU32le(oh + 8, nOff);
+    writeU32le(oh + 12, 1);
+    writeU32le(oh + 16, pOff);
+    writeU32le(oh + 20, 1);
+    writeU32le(oh + 24, 0);
+
+    writeVertex8(0, 0, 0, d + vAbs);
+    writeVertex8(4096, 0, 0, d + vAbs + 8);
+    writeVertex8(4096, 4096, 0, d + vAbs + 16);
+    writeVertex8(0, 4096, 0, d + vAbs + 24);
+    writeVertex8(0, 0, 4096, d + nAbs);
+
+    uint8_t* pkt = d + pAbs;
+    pkt[0] = 12;
+    pkt[1] = 10;
+    pkt[2] = 1;
+    pkt[3] = 0x3d;
+    uint8_t* pay = pkt + 4;
+    pay[0] = 64;
+    pay[1] = 32;
+    pay[4] = 192;
+    pay[5] = 32;
+    pay[8] = 192;
+    pay[9] = 192;
+    pay[12] = 64;
+    pay[13] = 192;
+    for (int i = 0; i < 16; ++i)
+        pay[16 + i] = static_cast<uint8_t>(i + 1);
+    writeU16le(pay + 32, 0);
+    writeU16le(pay + 34, 1);
+    writeU16le(pay + 36, 2);
+    writeU16le(pay + 38, 3);
+
+    return buf;
+}
+
+static void importTmdBlobAndExpectTris(const QByteArray& blob, const std::string& meshName,
+                                       unsigned minVerts)
+{
+    QTemporaryFile tmp(QDir::tempPath() + "/qtmesh_ps1tmd_cov_XXXXXX.tmd");
+    tmp.setAutoRemove(true);
+    ASSERT_TRUE(tmp.open());
+    ASSERT_EQ(tmp.write(blob), blob.size());
+    tmp.flush();
+
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    Ogre::MeshPtr mesh = PS1TMD::importTmd(tmp.fileName(), meshName);
+    ASSERT_TRUE(mesh);
+    ASSERT_GE(mesh->getNumSubMeshes(), 1u);
+    const Ogre::SubMesh* sm = mesh->getSubMesh(0);
+    ASSERT_NE(sm->vertexData, nullptr);
+    EXPECT_GE(sm->vertexData->vertexCount, minVerts);
+    Ogre::MeshManager::getSingleton().remove(meshName);
+}
+
+TEST_F(PS1TMDTest, ImportMode20FlatLitTriangle)
+{
+    importTmdBlobAndExpectTris(makeMinimal20FlatLitTriTmd(), "PS1Tmd20Mesh", 3u);
+}
+
+TEST_F(PS1TMDTest, ImportMode24LitTexturedTriangle_HasUvs)
+{
+    const std::string meshName = "PS1Tmd24Mesh";
+    QTemporaryFile tmp(QDir::tempPath() + "/qtmesh_ps1tmd_24_XXXXXX.tmd");
+    tmp.setAutoRemove(true);
+    ASSERT_TRUE(tmp.open());
+    const QByteArray blob = makeMinimal24LitTexturedTriTmd();
+    ASSERT_EQ(tmp.write(blob), blob.size());
+    tmp.flush();
+
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    Ogre::MeshPtr mesh = PS1TMD::importTmd(tmp.fileName(), meshName);
+    ASSERT_TRUE(mesh);
+    const Ogre::VertexData* vd = mesh->getSubMesh(0)->vertexData;
+    ASSERT_NE(vd, nullptr);
+    const auto* uvEl = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
+    ASSERT_NE(uvEl, nullptr);
+    Ogre::MeshManager::getSingleton().remove(meshName);
+}
+
+TEST_F(PS1TMDTest, ImportMode34GouraudTexturedTriangle)
+{
+    importTmdBlobAndExpectTris(makeMinimal34GouraudTexturedTriTmd(), "PS1Tmd34Mesh", 3u);
+}
+
+TEST_F(PS1TMDTest, ImportMode2dNoLightTexturedQuad)
+{
+    importTmdBlobAndExpectTris(makeMinimal2dNoLightTexturedQuadTmd(), "PS1Tmd2dMesh", 4u);
+}
+
+TEST_F(PS1TMDTest, ImportMode3cGouraudTexturedQuad)
+{
+    importTmdBlobAndExpectTris(makeMinimal3cGouraudTexturedQuadTmd(), "PS1Tmd3cMesh", 4u);
+}
+
+TEST_F(PS1TMDTest, ImportMode3dGouraudTexturedQuadNoLight)
+{
+    importTmdBlobAndExpectTris(makeMinimal3dGouraudTexturedQuadNoLightTmd(), "PS1Tmd3dMesh", 4u);
+}
+
+TEST_F(PS1TMDTest, ExportEntity_NullEntityReturnsFalse)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("null.tmd"));
+    EXPECT_FALSE(PS1TMD::exportEntity(nullptr, path));
+}
+
+TEST_F(PS1TMDTest, ExportEntity_MeshWithNoSubmeshesReturnsFalse)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    const std::string meshName = "PS1TmdEmptySubmeshMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().createManual(
+        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    mesh->load();
+
+    auto* mgr = Manager::getSingleton();
+    auto* sn = mgr->addSceneNode(QStringLiteral("PS1TmdEmptySubNode"));
+    auto* ent = mgr->createEntity(sn, mesh);
+    ASSERT_NE(ent, nullptr);
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("empty.tmd"));
+    EXPECT_FALSE(PS1TMD::exportEntity(ent, path));
+
+    mgr->destroySceneNode(sn);
+    Ogre::MeshManager::getSingleton().remove(meshName);
+}
+
+TEST_F(PS1TMDTest, ImportFails_WhenPrimitiveStreamTruncated)
+{
+    QByteArray blob = makeMinimalG3Tmd();
+    blob.chop(8);
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("trunc.tmd"));
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    ASSERT_EQ(f.write(blob), blob.size());
+    f.close();
+
+    EXPECT_FALSE(PS1TMD::importTmd(path, "PS1TmdTruncMesh"));
+}

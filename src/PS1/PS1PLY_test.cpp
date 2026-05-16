@@ -659,3 +659,194 @@ TEST_F(PS1PLYOgreTest, ImportPsyqPly_ReturnsEmptyWhenContentMalformed)
 
     EXPECT_FALSE(PS1PLY::importPsyqPly(path, meshName));
 }
+
+static bool writeQuadPsyqPly(const QString& path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+    QTextStream ts(&f);
+    ts << "@PLY940102\n";
+    ts << "4 4 1\n";
+    ts << "0 0 0\n1 0 0\n1 1 0\n0 1 0\n";
+    ts << "0 0 1\n0 0 1\n0 0 1\n0 0 1\n";
+    ts << "1 0 1 2 3 0 0 0 0 0 1 2 3\n";
+    return true;
+}
+
+TEST_F(PS1PLYOgreTest, ImportPsyqPly_QuadFace_ExpandsToTwoTriangles)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("quad.ply"));
+    ASSERT_TRUE(writeQuadPsyqPly(path));
+
+    const std::string meshName = "PS1PlyQuadImportMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    Ogre::MeshPtr mesh = PS1PLY::importPsyqPly(path, meshName);
+    ASSERT_TRUE(mesh);
+    ASSERT_EQ(mesh->getNumSubMeshes(), 1u);
+    EXPECT_EQ(mesh->getSubMesh(0)->indexData->indexCount, 6u);
+
+    Ogre::MeshManager::getSingleton().remove(meshName);
+}
+
+TEST_F(PS1PLYOgreTest, ImportPsyqPlyWithFaceColors_AppliesDiffuse)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("colored.ply"));
+    {
+        QFile wf(path);
+        ASSERT_TRUE(wf.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream ts(&wf);
+        ts << "@PLY940102\n";
+        ts << "3 3 1\n";
+        ts << "0 0 0\n1 0 0\n0 1 0\n";
+        ts << "0 0 1\n0 0 1\n0 0 1\n";
+        ts << "0 0 2 1 0 0 2 1 0\n";
+    }
+
+    const std::string meshName = "PS1PlyFaceColorMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    QVector<QColor> faceColors = {QColor(255, 128, 64)};
+    Ogre::MeshPtr mesh = PS1PLY::importPsyqPlyWithFaceColors(path, meshName, faceColors);
+    ASSERT_TRUE(mesh);
+    const Ogre::VertexData* vd = mesh->getSubMesh(0)->vertexData;
+    ASSERT_NE(vd, nullptr);
+    const auto* colEl = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
+    ASSERT_NE(colEl, nullptr);
+
+    Ogre::MeshManager::getSingleton().remove(meshName);
+}
+
+TEST_F(PS1PLYOgreTest, ImportPsyqPlyWithFaceColors_WrongCountReturnsEmpty)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("bad_colors.ply"));
+    {
+        QFile wf(path);
+        ASSERT_TRUE(wf.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream ts(&wf);
+        ts << "@PLY940102\n3 1 1\n";
+        ts << "0 0 0\n1 0 0\n0 1 0\n";
+        ts << "0 0 1\n";
+        ts << "0 0 2 1 0 0 2 1 0\n";
+    }
+
+    const std::string meshName = "PS1PlyBadFaceColors";
+    QVector<QColor> faceColors = {QColor(255, 0, 0), QColor(0, 255, 0)};
+    EXPECT_FALSE(PS1PLY::importPsyqPlyWithFaceColors(path, meshName, faceColors));
+}
+
+TEST_F(PS1PLYOgreTest, ImportPsyqPlyWithFaceMaterials_UnlitSuffixOnMaterialName)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("unlit_mat.ply"));
+    {
+        QFile wf(path);
+        ASSERT_TRUE(wf.open(QIODevice::WriteOnly | QIODevice::Text));
+        QTextStream ts(&wf);
+        ts << "@PLY940102\n4 1 2\n";
+        ts << "0 0 0\n1 0 0\n1 1 0\n0 1 0\n";
+        ts << "0 0 1\n";
+        ts << "0 0 1 2 0 0 0 0 0\n";
+        ts << "0 0 2 3 0 0 0 0 0\n";
+    }
+
+    const std::string meshName = "PS1PlyUnlitMatMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    QVector<PS1PLY::FaceMaterial> mats(2);
+    mats[0].textured = true;
+    mats[0].textureIndex = 0;
+    mats[0].u = {0.f, 1.f, 1.f, 0.f};
+    mats[0].v = {0.f, 0.f, 1.f, 0.f};
+    mats[0].unlit = true;
+    mats[1].textured = false;
+    mats[1].color = QColor(200, 100, 50);
+
+    Ogre::MeshPtr mesh = PS1PLY::importPsyqPlyWithFaceMaterials(path, meshName, mats);
+    ASSERT_TRUE(mesh);
+    bool foundUnlitTex = false;
+    for (unsigned int si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        const std::string mname = mesh->getSubMesh(si)->getMaterialName();
+        if (mname.find("_tex0_nl") != std::string::npos)
+            foundUnlitTex = true;
+    }
+    EXPECT_TRUE(foundUnlitTex);
+
+    Ogre::MeshManager::getSingleton().remove(meshName);
+}
+
+TEST_F(PS1PLYOgreTest, ExportPsyqPlyFromEntity_NullEntityReturnsFalse)
+{
+    QString err;
+    EXPECT_FALSE(PS1PLY::exportPsyqPlyFromEntity(nullptr, QStringLiteral("/tmp/x.ply"), nullptr, nullptr, &err));
+    EXPECT_FALSE(err.isEmpty());
+}
+
+TEST_F(PS1PLYOgreTest, ExportPsyqPlyFromEntity_UnwritablePathSetsError)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    auto* mgr = Manager::getSingleton();
+    auto mesh = createTwoTriQuadMesh("PS1PlyExportFailMesh");
+    auto* sn = mgr->addSceneNode(QStringLiteral("PS1PlyExportFailNode"));
+    auto* ent = mgr->createEntity(sn, mesh);
+    ASSERT_NE(ent, nullptr);
+
+    QString err;
+    const QString badPath = QStringLiteral("/proc/self/mem/psyq_export.ply");
+    EXPECT_FALSE(PS1PLY::exportPsyqPlyFromEntity(ent, badPath, nullptr, nullptr, &err));
+    EXPECT_FALSE(err.isEmpty());
+
+    mgr->destroySceneNode(sn);
+    Ogre::MeshManager::getSingleton().remove(mesh->getName());
+}
+
+TEST_F(PS1PLYOgreTest, ExportPsyqPlyFromEntity_WritesQuadFaceLineWhenInputIsQuad)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString plyIn = QDir(dir.path()).filePath(QStringLiteral("quad_in.ply"));
+    ASSERT_TRUE(writeQuadPsyqPly(plyIn));
+
+    const std::string meshName = "PS1PlyQuadExportMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    Ogre::MeshPtr mesh = PS1PLY::importPsyqPly(plyIn, meshName);
+    ASSERT_TRUE(mesh);
+
+    auto* mgr = Manager::getSingleton();
+    auto* sn = mgr->addSceneNode(QStringLiteral("PS1PlyQuadExportNode"));
+    auto* ent = mgr->createEntity(sn, mesh);
+    ASSERT_NE(ent, nullptr);
+
+    const QString plyOut = QDir(dir.path()).filePath(QStringLiteral("quad_out.ply"));
+    EXPECT_TRUE(PS1PLY::exportPsyqPlyFromEntity(ent, plyOut));
+
+    int nV = 0, nN = 0, nF = 0;
+    QString face0;
+    ASSERT_TRUE(readPsyqPlyCountsAndFirstFace(plyOut, nV, nN, nF, face0));
+    EXPECT_EQ(nF, 1);
+    EXPECT_TRUE(face0.startsWith(QLatin1String("1 ")));
+
+    mgr->destroySceneNode(sn);
+    Ogre::MeshManager::getSingleton().remove(meshName);
+}
