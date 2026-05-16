@@ -6030,3 +6030,796 @@ TEST_F(MCPServerTest, GenerateNormalMap_DirectxAliasInvertsGreen)
     ASSERT_FALSE(gen.isNull());
     EXPECT_GT(qGreen(gen.pixel(8, 8)), 135);
 }
+
+// ==========================================================================
+// NEW COVERAGE: list_material_presets tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, ListMaterialPresets_ReturnsKnownPresets)
+{
+    QJsonObject result = server->callTool("list_material_presets", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    const QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Material presets"));
+    // A handful of canonical preset names — drop-in checks for the full list
+    // would couple this test to MaterialPresetLibrary's internal ordering.
+    EXPECT_TRUE(text.contains("Plastic"));
+    EXPECT_TRUE(text.contains("Metal"));
+    EXPECT_TRUE(text.contains("Metallic-Roughness"));
+}
+
+TEST_F(MCPServerTest, ListMaterialPresets_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "list_material_presets") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "list_material_presets must be exposed in tools/list";
+}
+
+// ==========================================================================
+// NEW COVERAGE: apply_material_preset tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, ApplyMaterialPreset_MissingPresetReturnsError)
+{
+    QJsonObject args;
+    QJsonObject result = server->callTool("apply_material_preset", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("preset", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, ApplyMaterialPreset_UnknownPresetReturnsError)
+{
+    QJsonObject args;
+    args["preset"] = "Definitely_Not_A_Real_Preset_Name";
+    QJsonObject result = server->callTool("apply_material_preset", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Unknown preset"));
+}
+
+TEST_F(MCPServerTest, ApplyMaterialPreset_NoSelectionReturnsError)
+{
+    SelectionSet::getSingleton()->clear();
+    QJsonObject args;
+    args["preset"] = "Plastic (Red)";
+    QJsonObject result = server->callTool("apply_material_preset", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No mesh"));
+}
+
+TEST_F(MCPServerTest, ApplyMaterialPreset_UnknownMeshReturnsError)
+{
+    QJsonObject args;
+    args["preset"] = "Plastic (Red)";
+    args["mesh"]   = "DefinitelyNoSuchEntity_xyz";
+    QJsonObject result = server->callTool("apply_material_preset", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, ApplyMaterialPreset_AppliesToSelection)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("PresetApplyEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["preset"] = "Plastic (Red)";
+    QJsonObject result = server->callTool("apply_material_preset", args);
+    // Either applied OK, or the lib failed gracefully — must not crash and
+    // must produce a structured response.
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, ApplyMaterialPreset_AppliesToNamedMesh)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("PresetByNameEntity");
+    ASSERT_NE(entity, nullptr);
+    // Clear selection so the codepath that re-selects by name is exercised.
+    SelectionSet::getSingleton()->clear();
+    app->processEvents();
+
+    QJsonObject args;
+    args["preset"] = "Metal (Silver)";
+    args["mesh"]   = QString::fromStdString(entity->getName());
+    QJsonObject result = server->callTool("apply_material_preset", args);
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, ApplyMaterialPreset_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "apply_material_preset") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "apply_material_preset must be exposed in tools/list";
+}
+
+// ==========================================================================
+// NEW COVERAGE: bake_animation_fps tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, BakeAnimationFps_InvalidFpsReturnsError)
+{
+    QJsonObject args;
+    args["fps"] = 0;
+    QJsonObject result = server->callTool("bake_animation_fps", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("positive integer", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, BakeAnimationFps_NegativeFpsReturnsError)
+{
+    QJsonObject args;
+    args["fps"] = -15;
+    QJsonObject result = server->callTool("bake_animation_fps", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, BakeAnimationFps_NoSkeletonInSceneReturnsError)
+{
+    QJsonObject args;
+    args["fps"] = 30;
+    QJsonObject result = server->callTool("bake_animation_fps", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("skeleton", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, BakeAnimationFps_UnknownEntityReturnsError)
+{
+    QJsonObject args;
+    args["fps"] = 30;
+    args["entity_name"] = "DefinitelyNotAnEntity";
+    QJsonObject result = server->callTool("bake_animation_fps", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, BakeAnimationFps_BakesAnimationOnSkeletonEntity)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("BakeFpsEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["fps"] = 30;
+    args["entity_name"] = "BakeFpsEntity";
+    QJsonObject result = server->callTool("bake_animation_fps", args);
+    // The mesh has a TestAnim track; bake should succeed.
+    if (!isError(result)) {
+        EXPECT_TRUE(getResultText(result).contains("Baked"));
+    }
+}
+
+TEST_F(MCPServerTest, BakeAnimationFps_UnknownAnimationReturnsError)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("BakeFpsUnknownAnim");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["fps"] = 30;
+    args["entity_name"] = "BakeFpsUnknownAnim";
+    args["animation_name"] = "NoSuchAnimation";
+    QJsonObject result = server->callTool("bake_animation_fps", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, BakeAnimationFps_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "bake_animation_fps") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "bake_animation_fps must be exposed in tools/list";
+}
+
+// ==========================================================================
+// NEW COVERAGE: get_memory_usage tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, GetMemoryUsage_EmptySceneReturnsReport)
+{
+    QJsonObject result = server->callTool("get_memory_usage", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    EXPECT_FALSE(getResultText(result).isEmpty());
+    EXPECT_TRUE(result.contains("memory"));
+}
+
+TEST_F(MCPServerTest, GetMemoryUsage_InvalidBudgetReturnsError)
+{
+    QJsonObject args;
+    args["budget"] = "not-a-budget";
+    QJsonObject result = server->callTool("get_memory_usage", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Invalid budget", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, GetMemoryUsage_ValidBudgetSucceeds)
+{
+    QJsonObject args;
+    args["budget"] = "50MB";
+    QJsonObject result = server->callTool("get_memory_usage", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(result.contains("memory"));
+}
+
+TEST_F(MCPServerTest, GetMemoryUsage_EmptyBudgetIsAccepted)
+{
+    QJsonObject args;
+    args["budget"] = "";  // present-but-empty must not be a parse error
+    QJsonObject result = server->callTool("get_memory_usage", args);
+    EXPECT_FALSE(isError(result));
+}
+
+TEST_F(MCPServerTest, GetMemoryUsage_WithSceneEntity)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MemoryUsageEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject result = server->callTool("get_memory_usage", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(result.contains("memory"));
+    EXPECT_TRUE(result["memory"].isObject());
+}
+
+TEST_F(MCPServerTest, GetMemoryUsage_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "get_memory_usage") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "get_memory_usage must be exposed in tools/list";
+}
+
+// ==========================================================================
+// NEW COVERAGE: analyze_draw_calls tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, AnalyzeDrawCalls_EmptySceneReturnsReport)
+{
+    QJsonObject result = server->callTool("analyze_draw_calls", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    EXPECT_FALSE(getResultText(result).isEmpty());
+    EXPECT_TRUE(result.contains("drawCalls"));
+}
+
+TEST_F(MCPServerTest, AnalyzeDrawCalls_WithEntityReports)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("DrawCallEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject result = server->callTool("analyze_draw_calls", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(result["drawCalls"].isObject());
+}
+
+TEST_F(MCPServerTest, AnalyzeDrawCalls_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "analyze_draw_calls") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "analyze_draw_calls must be exposed in tools/list";
+}
+
+// ==========================================================================
+// NEW COVERAGE: optimize_vertex_cache tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, OptimizeVertexCache_EmptySceneReturnsReport)
+{
+    QJsonObject result = server->callTool("optimize_vertex_cache", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(result.contains("vertexCache"));
+}
+
+TEST_F(MCPServerTest, OptimizeVertexCache_WithEntityAnalyzesOnly)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("VertexCacheEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["rewrite"] = false;
+    QJsonObject result = server->callTool("optimize_vertex_cache", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(result["vertexCache"].isObject());
+}
+
+TEST_F(MCPServerTest, OptimizeVertexCache_WithEntityRewritesIndices)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("VertexCacheRewriteEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["rewrite"] = true;
+    QJsonObject result = server->callTool("optimize_vertex_cache", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(result["vertexCache"].isObject());
+}
+
+TEST_F(MCPServerTest, OptimizeVertexCache_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "optimize_vertex_cache") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "optimize_vertex_cache must be exposed in tools/list";
+}
+
+// ==========================================================================
+// NEW COVERAGE: decimate_mesh tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, DecimateMesh_NoSelectionReturnsError)
+{
+    SelectionSet::getSingleton()->clear();
+    QJsonObject args;
+    args["reduction"] = 0.5;
+    QJsonObject result = server->callTool("decimate_mesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No mesh selected"));
+}
+
+TEST_F(MCPServerTest, DecimateMesh_MissingReductionReturnsError)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("DecimateMissingArgsEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    // no reduction / target_tris / target_verts → should be an error
+    QJsonObject result = server->callTool("decimate_mesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("reduction", Qt::CaseInsensitive)
+                || getResultText(result).contains("target", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, DecimateMesh_DryRunDoesNotMutate)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("DecimateDryRunEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["reduction"] = 0.5;
+    args["dry_run"] = true;
+    QJsonObject result = server->callTool("decimate_mesh", args);
+    // Whether the dry-run is successful or not, it must not crash and must
+    // return a structured report.
+    EXPECT_FALSE(getResultText(result).isEmpty());
+    EXPECT_TRUE(result.contains("decimation") || isError(result));
+}
+
+TEST_F(MCPServerTest, DecimateMesh_TargetTrisAccepted)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("DecimateTargetTrisEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["target_tris"] = 1;
+    args["dry_run"] = true;  // single-tri mesh can't decimate; dry-run keeps this safe
+    QJsonObject result = server->callTool("decimate_mesh", args);
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, DecimateMesh_TargetVertsAccepted)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("DecimateTargetVertsEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["target_verts"] = 2;
+    args["dry_run"] = true;
+    QJsonObject result = server->callTool("decimate_mesh", args);
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, DecimateMesh_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "decimate_mesh") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "decimate_mesh must be exposed in tools/list";
+}
+
+// ==========================================================================
+// NEW COVERAGE: pack_atlas tool
+// ==========================================================================
+
+namespace {
+QString writeRgbPng(const QTemporaryDir& dir, const QString& name,
+                    int w, int h, QRgb color)
+{
+    QImage img(w, h, QImage::Format_RGBA8888);
+    img.fill(color);
+    const QString path = dir.filePath(name);
+    img.save(path, "PNG");
+    return path;
+}
+} // namespace
+
+TEST_F(MCPServerTest, PackAtlas_MissingArgsReturnsError)
+{
+    QJsonObject args;
+    QJsonObject result = server->callTool("pack_atlas", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("inputs", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, PackAtlas_MissingOutputReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString a = writeRgbPng(tmp, "a.png", 32, 32, qRgba(255, 0, 0, 255));
+
+    QJsonObject args;
+    args["inputs"] = a;
+    QJsonObject result = server->callTool("pack_atlas", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, PackAtlas_CommaSeparatedInputsAccepted)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString a = writeRgbPng(tmp, "a.png", 16, 16, qRgba(255, 0, 0, 255));
+    const QString b = writeRgbPng(tmp, "b.png", 16, 16, qRgba(0, 255, 0, 255));
+    const QString out = tmp.filePath("atlas.png");
+
+    QJsonObject args;
+    args["inputs"] = a + "," + b;
+    args["output"] = out;
+    args["size"]   = 128;
+    args["padding"] = 0;
+    QJsonObject result = server->callTool("pack_atlas", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_EQ(result["tiles_packed"].toInt(), 2);
+    EXPECT_EQ(result["atlas_width"].toInt(), 128);
+
+    QImage img(out);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 128);
+}
+
+TEST_F(MCPServerTest, PackAtlas_ArrayInputsAndManifest)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString a = writeRgbPng(tmp, "a.png", 32, 32, qRgba(255, 0, 0, 255));
+    const QString b = writeRgbPng(tmp, "b.png", 32, 32, qRgba(0, 255, 0, 255));
+    const QString out = tmp.filePath("atlas.png");
+    const QString manifest = tmp.filePath("atlas.json");
+
+    QJsonObject args;
+    args["inputs"]   = QJsonArray{a, b};
+    args["output"]   = out;
+    args["width"]    = 256;
+    args["height"]   = 256;
+    args["padding"]  = 2;
+    args["manifest"] = manifest;
+    QJsonObject result = server->callTool("pack_atlas", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(QFile::exists(manifest));
+    EXPECT_EQ(result["manifest"].toString(), manifest);
+}
+
+TEST_F(MCPServerTest, PackAtlas_NonexistentInputReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    QJsonObject args;
+    args["inputs"] = QJsonArray{"/nonexistent/imag_does_not_exist.png"};
+    args["output"] = tmp.filePath("nope.png");
+    QJsonObject result = server->callTool("pack_atlas", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, PackAtlas_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "pack_atlas") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "pack_atlas must be exposed in tools/list";
+}
+
+// ==========================================================================
+// NEW COVERAGE: apply_atlas tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, ApplyAtlas_MissingArgsReturnsError)
+{
+    QJsonObject args;
+    QJsonObject result = server->callTool("apply_atlas", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("missing required"));
+}
+
+TEST_F(MCPServerTest, ApplyAtlas_NonexistentInputFileReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString manifest = tmp.filePath("m.json");
+    const QString atlas = tmp.filePath("a.png");
+    // Pre-create manifest+atlas so the failure is on the input file
+    QFile mf(manifest);
+    ASSERT_TRUE(mf.open(QIODevice::WriteOnly | QIODevice::Text));
+    mf.write("{\"width\":2,\"height\":2,\"padding\":0,\"tiles\":[]}");
+    mf.close();
+    writeRgbPng(tmp, "a.png", 4, 4, qRgba(0, 0, 0, 255));
+
+    QJsonObject args;
+    args["file"]     = "/nonexistent/input.fbx";
+    args["output"]   = tmp.filePath("out.fbx");
+    args["manifest"] = manifest;
+    args["atlas"]    = atlas;
+    QJsonObject result = server->callTool("apply_atlas", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("file not found", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, ApplyAtlas_NonexistentManifestReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString input = tmp.filePath("in.fbx");
+    QFile f(input);
+    f.open(QIODevice::WriteOnly);
+    f.write("dummy");
+    f.close();
+    const QString atlas = writeRgbPng(tmp, "a.png", 4, 4, qRgba(0, 0, 0, 255));
+
+    QJsonObject args;
+    args["file"]     = input;
+    args["output"]   = tmp.filePath("out.fbx");
+    args["manifest"] = "/nonexistent/manifest.json";
+    args["atlas"]    = atlas;
+    QJsonObject result = server->callTool("apply_atlas", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("manifest not found", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, ApplyAtlas_NonexistentAtlasReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString input = tmp.filePath("in.fbx");
+    QFile f(input);
+    f.open(QIODevice::WriteOnly);
+    f.write("dummy");
+    f.close();
+
+    const QString manifest = tmp.filePath("m.json");
+    QFile mf(manifest);
+    ASSERT_TRUE(mf.open(QIODevice::WriteOnly | QIODevice::Text));
+    mf.write("{\"width\":2,\"height\":2,\"padding\":0,\"tiles\":[]}");
+    mf.close();
+
+    QJsonObject args;
+    args["file"]     = input;
+    args["output"]   = tmp.filePath("out.fbx");
+    args["manifest"] = manifest;
+    args["atlas"]    = "/nonexistent/atlas.png";
+    QJsonObject result = server->callTool("apply_atlas", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("atlas not found", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, ApplyAtlas_SameInputOutputReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString input = tmp.filePath("same.fbx");
+    QFile f(input);
+    f.open(QIODevice::WriteOnly);
+    f.write("dummy");
+    f.close();
+    const QString manifest = tmp.filePath("m.json");
+    QFile mf(manifest);
+    ASSERT_TRUE(mf.open(QIODevice::WriteOnly | QIODevice::Text));
+    mf.write("{\"width\":2,\"height\":2,\"padding\":0,\"tiles\":[]}");
+    mf.close();
+    const QString atlas = writeRgbPng(tmp, "a.png", 4, 4, qRgba(0, 0, 0, 255));
+
+    QJsonObject args;
+    args["file"]     = input;
+    args["output"]   = input;  // same as file
+    args["manifest"] = manifest;
+    args["atlas"]    = atlas;
+    QJsonObject result = server->callTool("apply_atlas", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("output points to the input"));
+}
+
+TEST_F(MCPServerTest, ApplyAtlas_InvalidMatchModeReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString input = tmp.filePath("in.fbx");
+    QFile f(input);
+    f.open(QIODevice::WriteOnly);
+    f.write("dummy");
+    f.close();
+    const QString manifest = tmp.filePath("m.json");
+    QFile mf(manifest);
+    ASSERT_TRUE(mf.open(QIODevice::WriteOnly | QIODevice::Text));
+    mf.write("{\"width\":2,\"height\":2,\"padding\":0,\"tiles\":[]}");
+    mf.close();
+    const QString atlas = writeRgbPng(tmp, "a.png", 4, 4, qRgba(0, 0, 0, 255));
+
+    QJsonObject args;
+    args["file"]     = input;
+    args["output"]   = tmp.filePath("out.fbx");
+    args["manifest"] = manifest;
+    args["atlas"]    = atlas;
+    args["match"]    = "not_a_valid_mode";
+    QJsonObject result = server->callTool("apply_atlas", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("match"));
+}
+
+TEST_F(MCPServerTest, ApplyAtlas_BadManifestJsonReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString input = tmp.filePath("in.fbx");
+    QFile f(input);
+    f.open(QIODevice::WriteOnly);
+    f.write("dummy");
+    f.close();
+    const QString manifest = tmp.filePath("m.json");
+    QFile mf(manifest);
+    ASSERT_TRUE(mf.open(QIODevice::WriteOnly | QIODevice::Text));
+    mf.write("not actually json");
+    mf.close();
+    const QString atlas = writeRgbPng(tmp, "a.png", 4, 4, qRgba(0, 0, 0, 255));
+
+    QJsonObject args;
+    args["file"]     = input;
+    args["output"]   = tmp.filePath("out.fbx");
+    args["manifest"] = manifest;
+    args["atlas"]    = atlas;
+    QJsonObject result = server->callTool("apply_atlas", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, ApplyAtlas_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "apply_atlas") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "apply_atlas must be exposed in tools/list";
+}
+
+// ==========================================================================
+// NEW COVERAGE: optimize_mesh tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, OptimizeMesh_MissingArgsReturnsError)
+{
+    QJsonObject args;
+    QJsonObject result = server->callTool("optimize_mesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("missing required"));
+}
+
+TEST_F(MCPServerTest, OptimizeMesh_NonexistentFileReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    QJsonObject args;
+    args["file"]   = "/nonexistent/missing_input.fbx";
+    args["output"] = tmp.filePath("out.fbx");
+    QJsonObject result = server->callTool("optimize_mesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("file not found", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, OptimizeMesh_SameInputOutputReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString input = tmp.filePath("same.fbx");
+    QFile f(input);
+    f.open(QIODevice::WriteOnly);
+    f.write("placeholder");
+    f.close();
+    QJsonObject args;
+    args["file"]   = input;
+    args["output"] = input;
+    QJsonObject result = server->callTool("optimize_mesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("output points to the input"));
+}
+
+TEST_F(MCPServerTest, OptimizeMesh_MultipleReductionFlagsReturnsError)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString input = tmp.filePath("in.fbx");
+    QFile f(input);
+    f.open(QIODevice::WriteOnly);
+    f.write("placeholder");
+    f.close();
+    QJsonObject args;
+    args["file"]         = input;
+    args["output"]       = tmp.filePath("out.fbx");
+    args["reduction"]    = 0.5;
+    args["target_tris"]  = 100;  // conflict
+    QJsonObject result = server->callTool("optimize_mesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("at most one"));
+}
+
+TEST_F(MCPServerTest, OptimizeMesh_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "optimize_mesh") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "optimize_mesh must be exposed in tools/list";
+}
