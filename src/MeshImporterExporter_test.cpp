@@ -28,6 +28,10 @@
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 #include <OgreException.h>
 #include "TestHelpers.h"
+#include "RTShaderHelper.h"
+#include <OgreMaterialManager.h>
+#include <OgrePass.h>
+#include <OgreCamera.h>
 
 class MeshImporterExporterTest : public ::testing::Test {
 protected:
@@ -1772,4 +1776,429 @@ TEST_F(MeshImporterExporterTest, Importer_NormalSizedMesh_KeepsScale1) {
     EXPECT_FLOAT_EQ(scale.x, 1.0f);
     EXPECT_FLOAT_EQ(scale.y, 1.0f);
     EXPECT_FLOAT_EQ(scale.z, 1.0f);
+}
+
+// ─── PS1 / coverage helpers ─────────────────────────────────────────
+
+namespace {
+
+void writeU32le(uint8_t* p, uint32_t v)
+{
+    p[0] = uint8_t(v & 0xFF);
+    p[1] = uint8_t((v >> 8) & 0xFF);
+    p[2] = uint8_t((v >> 16) & 0xFF);
+    p[3] = uint8_t((v >> 24) & 0xFF);
+}
+
+void writeU16le(uint8_t* p, uint16_t v)
+{
+    p[0] = uint8_t(v & 0xFF);
+    p[1] = uint8_t((v >> 8) & 0xFF);
+}
+
+void writeVertex8(int16_t x, int16_t y, int16_t z, uint8_t* out8)
+{
+    writeU16le(out8 + 0, static_cast<uint16_t>(x));
+    writeU16le(out8 + 2, static_cast<uint16_t>(y));
+    writeU16le(out8 + 4, static_cast<uint16_t>(z));
+    writeU16le(out8 + 6, 0);
+}
+
+/** Minimal G3 TMD (one triangle) — same layout as PS1TMD_test. */
+QByteArray makeMinimalG3Tmd()
+{
+    constexpr uint32_t kTmdId = 0x41u;
+    constexpr size_t kHead = 12u;
+    constexpr size_t kObjH = 28u;
+    const size_t vAbs = kHead + kObjH;
+    const size_t nAbs = vAbs + 3u * 8u;
+    const size_t pAbs = nAbs + 3u * 8u;
+    const uint32_t vOff = static_cast<uint32_t>(vAbs - 12u);
+    const uint32_t nOff = static_cast<uint32_t>(nAbs - 12u);
+    const uint32_t pOff = static_cast<uint32_t>(pAbs - 12u);
+
+    QByteArray buf(static_cast<int>(pAbs + 20u), '\0');
+    uint8_t* d = reinterpret_cast<uint8_t*>(buf.data());
+
+    writeU32le(d, kTmdId);
+    writeU32le(d + 4, 0);
+    writeU32le(d + 8, 1);
+
+    uint8_t* oh = d + kHead;
+    writeU32le(oh, vOff);
+    writeU32le(oh + 4, 3);
+    writeU32le(oh + 8, nOff);
+    writeU32le(oh + 12, 3);
+    writeU32le(oh + 16, pOff);
+    writeU32le(oh + 20, 1);
+    writeU32le(oh + 24, 0);
+
+    writeVertex8(0, 0, 0, d + vAbs);
+    writeVertex8(4096, 0, 0, d + vAbs + 8);
+    writeVertex8(0, 4096, 0, d + vAbs + 16);
+
+    writeVertex8(0, 0, 4096, d + nAbs);
+    writeVertex8(0, 0, 4096, d + nAbs + 8);
+    writeVertex8(0, 0, 4096, d + nAbs + 16);
+
+    uint8_t* pkt = d + pAbs;
+    pkt[0] = 6;
+    pkt[1] = 4;
+    pkt[2] = 0;
+    pkt[3] = 0x30;
+    pkt[4] = 200;
+    pkt[5] = 200;
+    pkt[6] = 200;
+    pkt[7] = 0x30;
+    writeU16le(pkt + 8, 0);
+    writeU16le(pkt + 10, 0);
+    writeU16le(pkt + 12, 1);
+    writeU16le(pkt + 14, 1);
+    writeU16le(pkt + 16, 2);
+    writeU16le(pkt + 18, 2);
+
+    return buf;
+}
+
+void ensureBaseMaterialForTmdImport()
+{
+    if (Ogre::MaterialManager::getSingleton().getByName(
+            "BaseMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+        return;
+    }
+    Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().create(
+        "BaseMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    m->getTechnique(0)->getPass(0)->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+    m->getTechnique(0)->getPass(0)->setAmbient(1.0f, 1.0f, 1.0f);
+}
+
+bool writeMinimalPsyqPly(const QString& path)
+{
+    // Same topology as PS1PLY_test (planetish fixture): 3 verts, 3 norms, 1 triangle.
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+    QTextStream ts(&f);
+    ts << "@PLY940102\n";
+    ts << "3 3 1\n";
+    ts << "0 0 0\n";
+    ts << "1 0 0\n";
+    ts << "0 1 0\n";
+    ts << "0 0 1\n";
+    ts << "0 0 1\n";
+    ts << "0 0 1\n";
+    ts << "0 0 2 1 0 0 2 1 0\n";
+    return true;
+}
+
+} // namespace
+
+TEST_F(MeshImporterExporterTest, ImportFileDialogFilter_UsesManagerExtensions)
+{
+    const QString filter = MeshImporterExporter::importFileDialogFilter();
+    EXPECT_FALSE(filter.isEmpty());
+    EXPECT_TRUE(filter.contains(QStringLiteral(".obj")));
+    EXPECT_TRUE(filter.contains(QStringLiteral("PlayStation RSD / TMD / Psy-Q PLY")));
+}
+
+TEST_F(MeshImporterExporterTest, Importer_PlayStationTmd_CreatesEntity)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    ensureBaseMaterialForTmdImport();
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString tmdPath = QDir(dir.path()).filePath(QStringLiteral("tri.tmd"));
+    {
+        QFile wf(tmdPath);
+        ASSERT_TRUE(wf.open(QIODevice::WriteOnly));
+        const QByteArray blob = makeMinimalG3Tmd();
+        ASSERT_EQ(wf.write(blob), blob.size());
+    }
+
+    auto* manager = Manager::getSingleton();
+    const int prev = manager->getSceneNodes().size();
+    MeshImporterExporter::importer({tmdPath});
+    ASSERT_GT(manager->getSceneNodes().size(), prev);
+    auto* node = manager->getSceneNodes().last();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+}
+
+TEST_F(MeshImporterExporterTest, Importer_PsyqPly_CreatesEntity)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    ensureBaseMaterialForTmdImport();
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString plyPath = QDir(dir.path()).filePath(QStringLiteral("psyq.ply"));
+    ASSERT_TRUE(writeMinimalPsyqPly(plyPath));
+
+    auto* manager = Manager::getSingleton();
+    const int prev = manager->getSceneNodes().size();
+    MeshImporterExporter::importer({plyPath});
+    ASSERT_GT(manager->getSceneNodes().size(), prev);
+}
+
+TEST_F(MeshImporterExporterTest, Importer_PlayStationRsdWithPly_CreatesEntity)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    ensureBaseMaterialForTmdImport();
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString plyPath = QDir(dir.path()).filePath(QStringLiteral("geom.ply"));
+    ASSERT_TRUE(writeMinimalPsyqPly(plyPath));
+
+    const QString rsdPath = QDir(dir.path()).filePath(QStringLiteral("pack.rsd"));
+    {
+        QFile rf(rsdPath);
+        ASSERT_TRUE(rf.open(QIODevice::WriteOnly | QIODevice::Text));
+        rf.write("@RSD940102\nPLY=geom.ply\n");
+    }
+
+    auto* manager = Manager::getSingleton();
+    const int prev = manager->getSceneNodes().size();
+    MeshImporterExporter::importer({rsdPath});
+    ASSERT_GT(manager->getSceneNodes().size(), prev);
+}
+
+TEST_F(MeshImporterExporterTest, Importer_ObjFile_SetsUpAxisOutput)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString objPath = QDir(dir.path()).filePath(QStringLiteral("tiny.obj"));
+    {
+        QFile wf(objPath);
+        ASSERT_TRUE(wf.open(QIODevice::WriteOnly | QIODevice::Text));
+        wf.write("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    }
+
+    int upAxis = -1;
+    MeshImporterExporter::importer({objPath}, 0, nullptr, &upAxis);
+    EXPECT_GE(upAxis, 1);
+    EXPECT_LE(upAxis, 2);
+    EXPECT_FALSE(Manager::getSingleton()->getSceneNodes().isEmpty());
+}
+
+TEST_F(MeshImporterExporterTest, Importer_MalformedMeshXml_AbortsRemainingPaths)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString xmlPath = QDir(dir.path()).filePath(QStringLiteral("broken.mesh.xml"));
+    {
+        QFile wf(xmlPath);
+        ASSERT_TRUE(wf.open(QIODevice::WriteOnly | QIODevice::Text));
+        wf.write("<notmesh></notmesh>\n");
+    }
+
+    const int prev = Manager::getSingleton()->getSceneNodes().size();
+    MeshImporterExporter::importer({xmlPath});
+    EXPECT_EQ(Manager::getSingleton()->getSceneNodes().size(), prev);
+}
+
+TEST_F(SceneSaveLoadTest, ApplyNormalMapsToEntity_BuildsTangentsAndAppliesRtss)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    auto* manager = Manager::getSingleton();
+    Ogre::SceneManager* sceneMgr = manager->getSceneMgr();
+    RTShaderHelper::initialize(sceneMgr);
+
+    auto mesh = createInMemoryTriangleMesh("normal_map_tangent_mesh");
+    ASSERT_NE(mesh, nullptr);
+    auto* sn = manager->addSceneNode("NormalMapTangentNode");
+    auto* entity = manager->createEntity(sn, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
+        "NormalMapTangentMaterial",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    ASSERT_TRUE(static_cast<bool>(createSolidTexture2D("nm_tangent_diffuse.png", 0xFFFFFFFF)));
+    ASSERT_TRUE(static_cast<bool>(createSolidTexture2D("nm_tangent_normal.png", 0xFF8080FF)));
+    pass->createTextureUnitState("nm_tangent_diffuse.png");
+    auto* normalTus = pass->createTextureUnitState("nm_tangent_normal.png");
+    normalTus->setName("normal_map");
+    entity->setMaterialName(mat->getName());
+
+    MeshImporterExporter::applyNormalMapsToEntity(entity);
+
+    const Ogre::VertexData* vd = mesh->sharedVertexData;
+    ASSERT_NE(vd, nullptr);
+    EXPECT_NE(vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TANGENT), nullptr);
+
+    RTShaderHelper::shutdown(sceneMgr);
+}
+
+TEST_F(SceneSaveLoadTest, ConfigureCamera_SkipsZeroFovCamera)
+{
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("camera_zero_fov_mesh");
+    auto* sn = manager->addSceneNode("CameraZeroFovNode");
+    auto* entity = manager->createEntity(sn, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::SceneManager* sceneMgr = manager->getSceneMgr();
+    Ogre::Camera* camera = sceneMgr->hasCamera("ZeroFovCamera")
+        ? sceneMgr->getCamera("ZeroFovCamera")
+        : sceneMgr->createCamera("ZeroFovCamera");
+    if (!camera->getParentSceneNode()) {
+        auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("ZeroFovCameraNode");
+        node->attachObject(camera);
+    }
+    camera->setFOVy(Ogre::Radian(0.0f));
+    const Ogre::Vector3 before = camera->getParentSceneNode()->getPosition();
+
+    MeshImporterExporter::configureCameraForTesting(entity);
+
+    EXPECT_EQ(camera->getParentSceneNode()->getPosition(), before);
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_OgreMeshBinaryVersions_WriteFiles)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("mesh_version_export");
+    auto* sn = manager->addSceneNode("MeshVersionNode");
+    ASSERT_NE(manager->createEntity(sn, mesh), nullptr);
+
+    const char* formats[] = {
+        "Ogre Mesh (*.mesh)",
+        "Ogre Mesh v1.10+(*.mesh)",
+        "Ogre Mesh v1.8+(*.mesh)",
+        "Ogre Mesh v1.7+(*.mesh)",
+        "Ogre Mesh v1.4+(*.mesh)",
+        "Ogre Mesh v1.0+(*.mesh)",
+    };
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    for (size_t i = 0; i < sizeof(formats) / sizeof(formats[0]); ++i) {
+        const QString outPath =
+            tmpDir.path() + QStringLiteral("/mesh_v%1.mesh").arg(static_cast<int>(i));
+        EXPECT_EQ(MeshImporterExporter::exporter(sn, outPath, formats[i]), 0) << formats[i];
+        EXPECT_TRUE(QFileInfo::exists(outPath)) << formats[i];
+    }
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_FbxBinary_WritesFile)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("fbx_export_mesh");
+    auto* sn = manager->addSceneNode("FbxExportNode");
+    ASSERT_NE(manager->createEntity(sn, mesh), nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString fbxPath = tmpDir.path() + "/coverage_export.fbx";
+    EXPECT_EQ(MeshImporterExporter::exporter(sn, fbxPath, QStringLiteral("FBX Binary (*.fbx)")), 0);
+    EXPECT_TRUE(QFileInfo::exists(fbxPath));
+    EXPECT_GT(QFileInfo(fbxPath).size(), 0);
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_PlayStationTmd_WritesFile)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("tmd_export_mesh");
+    auto* sn = manager->addSceneNode("TmdExportNode");
+    ASSERT_NE(manager->createEntity(sn, mesh), nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString tmdPath = tmpDir.path() + "/coverage_export.tmd";
+    EXPECT_EQ(MeshImporterExporter::exporter(sn, tmdPath, QStringLiteral("PlayStation TMD (*.tmd)")), 0);
+    EXPECT_TRUE(QFileInfo::exists(tmdPath));
+    EXPECT_GT(QFileInfo(tmdPath).size(), 0);
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_PlayStationRsd_WritesPlyAndDescriptor)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("rsd_export_mesh");
+    auto* sn = manager->addSceneNode("RsdExportNode");
+    auto* entity = manager->createEntity(sn, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
+        "RsdExportMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(static_cast<bool>(createSolidTexture2D("rsd_export_tex.png", 0xFF336699)));
+    mat->getTechnique(0)->getPass(0)->createTextureUnitState("rsd_export_tex.png");
+    entity->setMaterialName(mat->getName());
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString rsdPath = tmpDir.path() + "/coverage_export.rsd";
+    EXPECT_EQ(MeshImporterExporter::exporter(sn, rsdPath, QStringLiteral("PlayStation RSD (*.rsd)")), 0);
+    EXPECT_TRUE(QFileInfo::exists(rsdPath));
+    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/coverage_export.ply"));
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_StlAndObjNoMtl_WritesFiles)
+{
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("stl_objnomtl_mesh");
+    auto* sn = manager->addSceneNode("StlObjNoMtlNode");
+    ASSERT_NE(manager->createEntity(sn, mesh), nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString stlPath = tmpDir.path() + "/coverage.stl";
+    const QString objPath = tmpDir.path() + "/coverage_nomtl.obj";
+    EXPECT_EQ(MeshImporterExporter::exporter(sn, stlPath, QStringLiteral("STL (*.stl)")), 0);
+    EXPECT_EQ(MeshImporterExporter::exporter(sn, objPath, QStringLiteral("OBJ without MTL (*.objnomtl)")), 0);
+    EXPECT_TRUE(QFileInfo::exists(stlPath));
+    EXPECT_TRUE(QFileInfo::exists(objPath));
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_GlbDirect_WritesFile)
+{
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("glb_direct_mesh");
+    auto* sn = manager->addSceneNode("GlbDirectNode");
+    ASSERT_NE(manager->createEntity(sn, mesh), nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString glbPath = tmpDir.path() + "/direct.glb";
+    EXPECT_EQ(MeshImporterExporter::exporter(sn, glbPath, QStringLiteral("glTF 2.0 Binary (*.glb)")), 0);
+    EXPECT_TRUE(QFileInfo::exists(glbPath));
+    EXPECT_GT(QFileInfo(glbPath).size(), 0);
+}
+
+TEST_F(SceneSaveLoadTest, ExportCurrentPose_SkeletalEntity_WritesObj)
+{
+    auto* entity = createAnimatedTestEntity("pose_skeletal_export");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString objPath = tmpDir.path() + "/pose_skeletal.obj";
+    const int result = MeshImporterExporter::exportCurrentPose(entity, objPath, QStringLiteral("OBJ (*.obj)"));
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(objPath));
+    EXPECT_GT(QFileInfo(objPath).size(), 0);
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_OgreXmlWithSkeleton_WritesMeshAndSkeletonXml)
+{
+    auto* entity = createAnimatedTestEntity("xml_skel_export_entity");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString xmlPath = tmpDir.path() + "/skel_export.mesh.xml";
+    EXPECT_EQ(MeshImporterExporter::exporter(node, xmlPath, QStringLiteral("Ogre XML (*.mesh.xml)")), 0);
+    EXPECT_TRUE(QFileInfo::exists(xmlPath));
+    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/skel_export.skeleton.xml"));
+    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/skel_export.material"));
 }
