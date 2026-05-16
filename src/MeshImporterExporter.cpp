@@ -2104,13 +2104,13 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             // bounding-box extents <0.01 — the entity loads but sits
             // entirely inside the default near-clip distance and never
             // renders. Scale the parent SceneNode so the largest
-            // dimension lands at ~1 unit. Threshold of 0.01 avoids
+            // dimension lands at ~3 units. Threshold of 0.01 avoids
             // touching sensible-scale assets (anything from a few cm up).
             if (en && en->getMesh()) {
                 const auto& bbSize = en->getBoundingBox().getSize();
                 const Ogre::Real maxExtent = std::max({bbSize.x, bbSize.y, bbSize.z});
                 if (maxExtent > 0.0f && maxExtent < 0.01f) {
-                    const Ogre::Real factor = 1.0f / maxExtent;
+                    const Ogre::Real factor = 3.0f / maxExtent;
                     sn->setScale(factor, factor, factor);
                     Ogre::LogManager::getSingleton().logMessage(
                         "MeshImporterExporter: auto-scaled '" + en->getName() +
