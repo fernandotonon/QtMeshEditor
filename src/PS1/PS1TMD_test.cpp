@@ -1,19 +1,27 @@
 #include <gtest/gtest.h>
 #include <QApplication>
-#include <QCoreApplication>
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QThread>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 
 #include <cstring>
+#include <vector>
 
 #include <OgreHardwareBufferManager.h>
+#include <OgreImage.h>
+#include <OgreMaterialManager.h>
 #include <OgreMeshManager.h>
 #include <OgreSubMesh.h>
+#include <OgreTextureManager.h>
+#include <OgreTextureUnitState.h>
 #include <OgreVertexIndexData.h>
 
+#include "PS1/PS1TIM.h"
 #include "PS1/PS1TMD.h"
 #include "Manager.h"
 #include "SelectionSet.h"
@@ -22,6 +30,19 @@
 namespace {
 
 constexpr unsigned long kSingletonSettleMs = 30;
+
+/** PS1TMD::buildMeshFromSoup clones BaseMaterial; tests only create BaseWhite*. */
+static void ensureBaseMaterialForTmdImport()
+{
+    if (Ogre::MaterialManager::getSingleton().getByName(
+            "BaseMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+        return;
+    }
+    Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().create(
+        "BaseMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    m->getTechnique(0)->getPass(0)->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+    m->getTechnique(0)->getPass(0)->setAmbient(1.0f, 1.0f, 1.0f);
+}
 
 static void writeU32le(uint8_t* p, uint32_t v)
 {
@@ -471,6 +492,7 @@ protected:
 
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed";
         createStandardOgreMaterials();
+        ensureBaseMaterialForTmdImport();
     }
 
     void TearDown() override
@@ -790,4 +812,74 @@ TEST_F(PS1TMDTest, ExportImportRoundTripSingleTriangle)
     ASSERT_TRUE(re);
     ASSERT_EQ(re->getNumSubMeshes(), 1u);
     EXPECT_EQ(re->getSubMesh(0)->vertexData->vertexCount, 3u);
+}
+
+TEST_F(PS1TMDTest, ImportFails_WhenFileMissing)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("missing_subdir/model.tmd"));
+    EXPECT_FALSE(PS1TMD::importTmd(path, "PS1TmdMissingMesh"));
+}
+
+TEST_F(PS1TMDTest, ImportFails_WhenBadFileMagic)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("badmagic.tmd"));
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    QByteArray buf(256, '\0');
+    reinterpret_cast<uint8_t*>(buf.data())[0] = 0xff;
+    f.write(buf);
+    f.close();
+
+    EXPECT_FALSE(PS1TMD::importTmd(path, "PS1TmdBadMagicMesh"));
+}
+
+TEST_F(PS1TMDTest, ImportUvMeshAppliesSiblingTimTexture)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString tmdPath =
+        QDir(dir.path()).filePath(QStringLiteral("Ps1SiblingUvModel.tmd"));
+    const QString timPath =
+        QDir(dir.path()).filePath(QStringLiteral("Ps1SiblingUvModel.tim"));
+    QFile wf(tmdPath);
+    ASSERT_TRUE(wf.open(QIODevice::WriteOnly));
+    wf.write(makeMinimal25NoLightTmd());
+    wf.close();
+
+    std::vector<uint8_t> rgba = {200, 10, 200, 255};
+    Ogre::Image img;
+    img.loadDynamicImage(rgba.data(), 1, 1, 1, Ogre::PF_BYTE_RGBA, false);
+    QString err;
+    ASSERT_TRUE(PS1TIM::saveOgreImageToTim16(img, timPath, &err)) << err.toStdString();
+
+    const std::string meshName = "PS1TmdUvSiblingMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    Ogre::MeshPtr mesh = PS1TMD::importTmd(tmdPath, meshName);
+    ASSERT_TRUE(mesh);
+
+    const std::string matName = std::string("TMD/") + meshName;
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().getByName(matName);
+    ASSERT_TRUE(mat);
+    mat->load();
+    ASSERT_GE(mat->getTechnique(0)->getPass(0)->getNumTextureUnitStates(), 1u);
+
+    EXPECT_EQ(mat->getTechnique(0)->getPass(0)->getTextureUnitState(0)->getTextureName(),
+              std::string("Ps1SiblingUvModel.tim"));
+
+    Ogre::MeshManager::getSingleton().remove(meshName);
+
+    const std::string timRes = QFileInfo(timPath).completeBaseName().toStdString() + ".tim";
+    const Ogre::ResourcePtr rp = Ogre::TextureManager::getSingleton().getByName(timRes);
+    if (rp)
+        Ogre::TextureManager::getSingleton().remove(rp->getHandle());
+    try {
+        Ogre::MaterialManager::getSingleton().remove(matName);
+    } catch (...) {
+    }
 }

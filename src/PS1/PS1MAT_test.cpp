@@ -309,3 +309,176 @@ TEST(PS1MAT, RejectsMissingHeader)
     EXPECT_FALSE(PS1MAT::parseMatFile(path, entries, &err));
     EXPECT_FALSE(err.isEmpty());
 }
+
+TEST(PS1MAT, ParseTexturedFlat_DType)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QByteArray body =
+        "@MAT940801\n"
+        "1\n"
+        "0 0 F D 0 10 20 30 40 50 60 70 80 180 160 140\n";
+
+    const QString path = writeMatFile(dir.path(), body);
+    QVector<PS1MAT::MatEntry> entries;
+    QString err;
+    ASSERT_TRUE(PS1MAT::parseMatFile(path, entries, &err)) << err.toStdString();
+    ASSERT_EQ(entries.size(), 1);
+    EXPECT_EQ(entries[0].typeChar, 'D');
+    EXPECT_TRUE(entries[0].textured);
+    EXPECT_EQ(entries[0].textureIndex, 0);
+    EXPECT_EQ(entries[0].rgb, QColor(180, 160, 140));
+    ASSERT_FALSE(entries[0].vertColors.isEmpty());
+}
+
+TEST(PS1MAT, ParseTexturedSmooth_H_TypeTri_WithMinimalInts)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    // Exactly 9 ints: tex + 8 UVs only — colour block empty ⇒ importer keeps rgb white fallback.
+    const QByteArray body =
+        "@MAT940801\n"
+        "1\n"
+        "0 0 F H 5 11 22 33 44 55 66 77 88\n";
+
+    const QString path = writeMatFile(dir.path(), body);
+    QVector<PS1MAT::MatEntry> entries;
+    QString err;
+    ASSERT_TRUE(PS1MAT::parseMatFile(path, entries, &err)) << err.toStdString();
+    ASSERT_EQ(entries.size(), 1);
+    EXPECT_TRUE(entries[0].textured);
+    EXPECT_TRUE(entries[0].vertColors.isEmpty());
+    EXPECT_EQ(entries[0].rgb, QColor(255, 255, 255));
+}
+
+TEST(PS1MAT, Rejects_ParseOpenFailure)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("missing_subdir/file.mat"));
+
+    QVector<PS1MAT::MatEntry> entries;
+    QString err;
+    EXPECT_FALSE(PS1MAT::parseMatFile(path, entries, &err));
+    EXPECT_TRUE(entries.isEmpty());
+}
+
+TEST(PS1MAT, Rejects_MissingEntryCountLine)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QByteArray body = "@MAT940801\n" "0 0 F C 1 2 3\n";
+    const QString path = writeMatFile(dir.path(), body);
+    QVector<PS1MAT::MatEntry> entries;
+    QString err;
+    EXPECT_FALSE(PS1MAT::parseMatFile(path, entries, &err));
+}
+
+TEST(PS1MAT, Rejects_ParseCountHigherThanParsableEntries)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QByteArray body =
+        "@MAT940801\n"
+        "3\n"
+        "0 0 F C 207 207 207\n"; // declares 3 entries but supplies one
+
+    const QString path = writeMatFile(dir.path(), body);
+    QVector<PS1MAT::MatEntry> entries;
+    QString err;
+    EXPECT_FALSE(PS1MAT::parseMatFile(path, entries, &err));
+    EXPECT_TRUE(err.contains(QStringLiteral("Parsed")));
+}
+
+TEST(PS1MAT, Rejects_NoParsableEntries)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QByteArray body =
+        "@MAT940801\n"
+        "1\n"
+        "junk line that does not decode\n";
+
+    const QString path = writeMatFile(dir.path(), body);
+    QVector<PS1MAT::MatEntry> entries;
+    QString err;
+    EXPECT_FALSE(PS1MAT::parseMatFile(path, entries, &err));
+}
+
+TEST(PS1MAT, WriteNormalizesUnknownTypeCharToC)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("wild.mat"));
+
+    PS1MAT::MatEntry weird;
+    weird.typeChar = 'X';
+    weird.rgb = QColor(10, 20, 30);
+    weird.vertColors.push_back(weird.rgb);
+
+    QString err;
+    ASSERT_TRUE(PS1MAT::writeMatFile(path, {weird}, &err)) << err.toStdString();
+
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString text = QString::fromLatin1(f.readAll());
+    EXPECT_TRUE(text.contains(QStringLiteral("0 0 F C ")));
+
+    QVector<PS1MAT::MatEntry> out;
+    ASSERT_TRUE(PS1MAT::parseMatFile(path, out, &err)) << err.toStdString();
+    ASSERT_EQ(out.size(), 1);
+    EXPECT_EQ(out[0].typeChar, 'C');
+}
+
+TEST(PS1MAT, WritePreservesSmoothShadingSTokenUsedByExporter)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("s.mat"));
+
+    PS1MAT::MatEntry e;
+    e.typeChar = 'T';
+    e.shadingChar = 'S'; // exporter branch keeps F/G/S verbatim
+    e.textured = true;
+    e.textureIndex = 0;
+    e.uvs = { {0, 0}, {1, 0}, {2, 0} };
+
+    QString err;
+    ASSERT_TRUE(PS1MAT::writeMatFile(path, {e}, &err)) << err.toStdString();
+
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    EXPECT_TRUE(QString::fromLatin1(f.readAll()).contains(QStringLiteral("0 0 S T ")));
+}
+
+TEST(PS1MAT, WriteHFallsBackColoursWhenCornersMissing)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("hflat.mat"));
+
+    PS1MAT::MatEntry e;
+    e.typeChar = 'H';
+    e.textured = true;
+    e.textureIndex = 1;
+    e.rgb = QColor(40, 50, 60);
+    e.uvs = { };
+
+    QString err;
+    ASSERT_TRUE(PS1MAT::writeMatFile(path, {e}, &err)) << err.toStdString();
+
+    QVector<PS1MAT::MatEntry> out;
+    ASSERT_TRUE(PS1MAT::parseMatFile(path, out, &err)) << err.toStdString();
+    ASSERT_FALSE(out.isEmpty());
+    EXPECT_EQ(out[0].textureIndex, 1);
+}
+
+TEST(PS1MAT, WriteOpenFails_WithInvalidNestedPath)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("_missing_/x.mat"));
+
+    QString err;
+    EXPECT_FALSE(PS1MAT::writeMatFile(path, {}, &err));
+}

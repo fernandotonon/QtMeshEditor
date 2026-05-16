@@ -12,6 +12,7 @@
 #include <OgreHardwareBufferManager.h>
 #include <OgreMaterialManager.h>
 #include <OgreMeshManager.h>
+#include <OgrePass.h>
 #include <OgreSubMesh.h>
 #include <OgreVertexIndexData.h>
 
@@ -200,6 +201,14 @@ TEST(PS1PLY, IsPsyqPlyFile_TrueWithPlyMeshDataCommentPrefix)
     ASSERT_EQ(f.write(data), data.size());
     f.close();
     EXPECT_TRUE(PS1PLY::isPsyqPlyFile(path));
+}
+
+TEST(PS1PLY, IsPsyqPlyFile_FalseWhenPathDoesNotExist)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("missing_subdir/m.ply"));
+    EXPECT_FALSE(PS1PLY::isPsyqPlyFile(path));
 }
 
 TEST(PS1PLY, IsPsyqPlyFile_FalseForStanfordPly)
@@ -597,4 +606,56 @@ TEST_F(PS1PLYOgreTest, ImportQuadThenExportKeepsSingleQuadFaceLine)
     EXPECT_EQ(nF, 1);
     EXPECT_LE(nN, 4);
     EXPECT_TRUE(face0.startsWith(QLatin1String("1 ")));
+}
+
+TEST_F(PS1PLYOgreTest, ConfigurePsyqRsdMaterialPass_HandlesNullAndLightingBranches)
+{
+    PS1PLY::configurePsyqRsdMaterialPass(nullptr, false, false);
+
+    Ogre::MaterialPtr probe = Ogre::MaterialManager::getSingleton().create(
+        "PsyqRsdPassProbeMat", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    Ogre::Pass* p = probe->getTechnique(0)->getPass(0);
+    ASSERT_NE(p, nullptr);
+
+    PS1PLY::configurePsyqRsdMaterialPass(p, false, true);
+    EXPECT_FALSE(p->getLightingEnabled());
+
+    PS1PLY::configurePsyqRsdMaterialPass(p, false, false);
+    EXPECT_TRUE(p->getLightingEnabled());
+
+    PS1PLY::configurePsyqRsdMaterialPass(p, true, true);
+    EXPECT_FALSE(p->getLightingEnabled());
+
+    PS1PLY::configurePsyqRsdMaterialPass(p, true, false);
+    EXPECT_TRUE(p->getLightingEnabled());
+
+    Ogre::MaterialManager::getSingleton().remove(probe);
+}
+
+TEST_F(PS1PLYOgreTest, ImportPsyqPly_ReturnsEmptyWhenFileMissing)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("missing_subdir/model.ply"));
+
+    if (auto old = Ogre::MeshManager::getSingleton().getByName("PS1PlyMissingMesh"))
+        Ogre::MeshManager::getSingleton().remove(old);
+    EXPECT_FALSE(PS1PLY::importPsyqPly(path, "PS1PlyMissingMesh"));
+}
+
+TEST_F(PS1PLYOgreTest, ImportPsyqPly_ReturnsEmptyWhenContentMalformed)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("bad.ply"));
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write("@PLY940102\nthis is not a valid psyq ply body");
+    f.close();
+
+    const std::string meshName = "PS1PlyMalformedMesh";
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    EXPECT_FALSE(PS1PLY::importPsyqPly(path, meshName));
 }
