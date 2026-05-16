@@ -491,6 +491,7 @@ protected:
         ASSERT_NE(app, nullptr);
 
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed";
+        ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
         createStandardOgreMaterials();
         ensureBaseMaterialForTmdImport();
     }
@@ -1232,7 +1233,10 @@ TEST_F(PS1TMDTest, ImportMode24LitTexturedTriangle_HasUvs)
 
     Ogre::MeshPtr mesh = PS1TMD::importTmd(tmp.fileName(), meshName);
     ASSERT_TRUE(mesh);
-    const Ogre::VertexData* vd = mesh->getSubMesh(0)->vertexData;
+    ASSERT_GE(mesh->getNumSubMeshes(), 1u);
+    const Ogre::SubMesh* sm = mesh->getSubMesh(0);
+    ASSERT_NE(sm, nullptr);
+    const Ogre::VertexData* vd = sm->vertexData;
     ASSERT_NE(vd, nullptr);
     const auto* uvEl = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
     ASSERT_NE(uvEl, nullptr);

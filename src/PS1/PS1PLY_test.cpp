@@ -795,7 +795,8 @@ TEST_F(PS1PLYOgreTest, ImportPsyqPlyWithFaceMaterials_UnlitSuffixOnMaterialName)
 TEST_F(PS1PLYOgreTest, ExportPsyqPlyFromEntity_NullEntityReturnsFalse)
 {
     QString err;
-    EXPECT_FALSE(PS1PLY::exportPsyqPlyFromEntity(nullptr, QStringLiteral("/tmp/x.ply"), nullptr, nullptr, &err));
+    const QString path = QDir(QDir::tempPath()).filePath(QStringLiteral("x.ply"));
+    EXPECT_FALSE(PS1PLY::exportPsyqPlyFromEntity(nullptr, path, nullptr, nullptr, &err));
     EXPECT_FALSE(err.isEmpty());
 }
 
@@ -809,7 +810,8 @@ TEST_F(PS1PLYOgreTest, ExportPsyqPlyFromEntity_UnwritablePathSetsError)
     ASSERT_NE(ent, nullptr);
 
     QString err;
-    const QString badPath = QStringLiteral("/proc/self/mem/psyq_export.ply");
+    const QString badPath =
+        QDir(QDir::tempPath()).filePath(QStringLiteral("nonexistent_subdir/psyq_export.ply"));
     EXPECT_FALSE(PS1PLY::exportPsyqPlyFromEntity(ent, badPath, nullptr, nullptr, &err));
     EXPECT_FALSE(err.isEmpty());
 
