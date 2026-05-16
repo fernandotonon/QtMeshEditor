@@ -6823,3 +6823,274 @@ TEST_F(MCPServerTest, OptimizeMesh_AppearsInToolList)
     }
     EXPECT_TRUE(found) << "optimize_mesh must be exposed in tools/list";
 }
+
+// ==========================================================================
+// NEW COVERAGE: simplify_animation tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, SimplifyAnimation_NoSkeletonInSceneReturnsError)
+{
+    QJsonObject args;
+    QJsonObject result = server->callTool("simplify_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("skeleton", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, SimplifyAnimation_UnknownPresetReturnsError)
+{
+    QJsonObject args;
+    args["preset"] = "definitely-not-a-real-preset";
+    QJsonObject result = server->callTool("simplify_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Unknown preset", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, SimplifyAnimation_UnknownEntityReturnsError)
+{
+    QJsonObject args;
+    args["entity_name"] = "DefinitelyNoSuchEntityForSimplify";
+    QJsonObject result = server->callTool("simplify_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, SimplifyAnimation_OnAnimatedEntitySucceeds)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("SimplifyAnimEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "SimplifyAnimEntity";
+    QJsonObject result = server->callTool("simplify_animation", args);
+    if (!isError(result)) {
+        EXPECT_TRUE(getResultText(result).contains("Simplified"));
+    }
+}
+
+TEST_F(MCPServerTest, SimplifyAnimation_UnknownAnimationReturnsError)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("SimplifyAnimUnknown");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "SimplifyAnimUnknown";
+    args["animation_name"] = "NoSuchAnimation_for_simplify";
+    QJsonObject result = server->callTool("simplify_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, SimplifyAnimation_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "simplify_animation") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+// ==========================================================================
+// NEW COVERAGE: analyze_animation tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, AnalyzeAnimation_NoSkeletonInSceneReturnsError)
+{
+    QJsonObject args;
+    QJsonObject result = server->callTool("analyze_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("skeleton", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, AnalyzeAnimation_UnknownPresetReturnsError)
+{
+    QJsonObject args;
+    args["preset"] = "neither-balanced-nor-anything-known";
+    QJsonObject result = server->callTool("analyze_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Unknown preset", Qt::CaseInsensitive));
+}
+
+TEST_F(MCPServerTest, AnalyzeAnimation_UnknownEntityReturnsError)
+{
+    QJsonObject args;
+    args["entity_name"] = "DefinitelyNoSuchEntityForAnalyze";
+    QJsonObject result = server->callTool("analyze_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, AnalyzeAnimation_OnAnimatedEntitySucceeds)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnalyzeAnimEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "AnalyzeAnimEntity";
+    QJsonObject result = server->callTool("analyze_animation", args);
+    if (!isError(result)) {
+        EXPECT_TRUE(getResultText(result).contains("Redundant-keyframe analysis", Qt::CaseInsensitive));
+    }
+}
+
+TEST_F(MCPServerTest, AnalyzeAnimation_SpecificAnimation)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnalyzeAnimSpecific");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "AnalyzeAnimSpecific";
+    args["animation_name"] = "TestAnim";
+    QJsonObject result = server->callTool("analyze_animation", args);
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, AnalyzeAnimation_UnknownAnimationReturnsError)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnalyzeAnimUnknown");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "AnalyzeAnimUnknown";
+    args["animation_name"] = "DefinitelyNoSuchAnimation";
+    QJsonObject result = server->callTool("analyze_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, AnalyzeAnimation_AppearsInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const auto& t : tools) {
+        if (t.toObject()["name"].toString() == "analyze_animation") {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+// ==========================================================================
+// NEW COVERAGE: bake_animation_fps auto-find (no entity_name)
+// ==========================================================================
+
+TEST_F(MCPServerTest, BakeAnimationFps_AutoFindsSkeletonEntity)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("BakeFpsAutoFind");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["fps"] = 30;
+    // no entity_name — should auto-find
+    QJsonObject result = server->callTool("bake_animation_fps", args);
+    if (!isError(result)) {
+        EXPECT_TRUE(getResultText(result).contains("Baked"));
+    }
+}
+
+TEST_F(MCPServerTest, BakeAnimationFps_SpecificAnimation)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("BakeFpsSpecificAnim");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["fps"] = 60;
+    args["entity_name"] = "BakeFpsSpecificAnim";
+    args["animation_name"] = "TestAnim";
+    QJsonObject result = server->callTool("bake_animation_fps", args);
+    if (!isError(result)) {
+        EXPECT_TRUE(getResultText(result).contains("Baked"));
+    }
+}
+
+// ==========================================================================
+// NEW COVERAGE: decimate_mesh non-dry-run path
+// ==========================================================================
+
+TEST_F(MCPServerTest, DecimateMesh_NonDryRunOnTriangleMesh)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("DecimateNonDryRun");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["reduction"] = 0.5;
+    // dry_run=false — exercises the non-dry-run codepath. A 1-triangle mesh
+    // can't actually decimate, so this will hit the "Decimation failed" path.
+    QJsonObject result = server->callTool("decimate_mesh", args);
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+// ==========================================================================
+// NEW COVERAGE: merge_animations with named base entity not found
+// ==========================================================================
+
+TEST_F(MCPServerTest, MergeAnimations_NamedBaseNotFoundInSkeletonEntities)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    // Need at least 2 skeleton entities for this path to be reached
+    Ogre::Entity* e1 = createAnimatedTestEntity("MergeNamedBase1");
+    Ogre::Entity* e2 = createAnimatedTestEntity("MergeNamedBase2");
+    ASSERT_NE(e1, nullptr);
+    ASSERT_NE(e2, nullptr);
+
+    QJsonObject args;
+    args["base_entity"] = "NotASkeletonEntity_NameMismatch";
+    QJsonObject result = server->callTool("merge_animations", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+// ==========================================================================
+// NEW COVERAGE: resample_animation broader paths
+// ==========================================================================
+
+TEST_F(MCPServerTest, ResampleAnimation_DecimateStepValid)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("ResampleDecimateEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "ResampleDecimateEntity";
+    args["decimate_step"] = 2;
+    QJsonObject result = server->callTool("resample_animation", args);
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, ResampleAnimation_UnknownAnimationReturnsError)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("ResampleUnknownAnim");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "ResampleUnknownAnim";
+    args["target_keyframes"] = 5;
+    args["animation_name"] = "NoSuchAnimationForResample";
+    QJsonObject result = server->callTool("resample_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
