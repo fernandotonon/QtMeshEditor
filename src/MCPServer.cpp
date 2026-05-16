@@ -651,7 +651,7 @@ QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
     if (name.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
     }
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         Ogre::MaterialPtr existing = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (existing) {
             return makeErrorResult(QString("Error: Material '%1' already exists").arg(name));
@@ -664,7 +664,10 @@ QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
         serializer.queueForExport(mat);
         const QString materialScript = QString::fromStdString(serializer.getQueuedAsString());
         return makeSuccessResult(QString("Created material '%1':\n%2").arg(name, materialScript));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
@@ -675,7 +678,7 @@ QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
         return makeErrorResult("Error: Material name is required");
     }
 
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (!material) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(name));
@@ -722,7 +725,10 @@ QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
         }
         return makeSuccessResult(QString("Modified material '%1':\n%2")
             .arg(name, modifications.join("\n")));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolGetMaterial(const QJsonObject &args)
@@ -731,7 +737,7 @@ QJsonObject MCPServer::toolGetMaterial(const QJsonObject &args)
     if (name.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
     }
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (!material) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(name));
@@ -740,13 +746,16 @@ QJsonObject MCPServer::toolGetMaterial(const QJsonObject &args)
         serializer.queueForExport(material);
         const QString script = QString::fromStdString(serializer.getQueuedAsString());
         return makeSuccessResult(QString("Material '%1' script:\n%2").arg(name, script));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
 {
     Q_UNUSED(args);
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         QStringList materials;
         auto& matMgr = Ogre::MaterialManager::getSingleton();
         auto it = matMgr.getResourceIterator();
@@ -757,7 +766,10 @@ QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
         materials.sort();
         return makeSuccessResult(QString("Available materials (%1):\n%2")
             .arg(materials.size()).arg(materials.join("\n")));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
@@ -774,7 +786,7 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
     if (materialName.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
     }
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().getByName(materialName.toStdString());
         if (!mat) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(materialName));
@@ -832,7 +844,10 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
         }
         return makeSuccessResult(QString("Applied material '%1' to: %2")
             .arg(materialName, appliedTo.join(", ")));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolListMaterialPresets(const QJsonObject &)
@@ -927,16 +942,19 @@ QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
     if (!QFile::exists(path)) {
         return makeErrorResult(QString("Error: File not found: %1").arg(path));
     }
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         mainWindow->importMeshs(QStringList{path});
         return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
             return makeErrorResult("Error: Manager not available");
@@ -1002,7 +1020,10 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
         return makeSuccessResult(QString("Mesh Information (%1 entities):\n\n%2")
             .arg(entitiesToReport.size())
             .arg(infoLines.join("\n\n")));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 // Helper: parse a vector from JSON (supports both array [x,y,z] and object {x,y,z})
@@ -1020,7 +1041,7 @@ static Ogre::Vector3 parseVector3(const QJsonValue &val) {
 
 QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
 {
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         if (!Manager::getSingletonPtr()) {
             return makeErrorResult("Error: Manager not available");
         }
@@ -1060,12 +1081,15 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
         }
         return makeSuccessResult(QString("Applied transforms to '%1':\n%2")
             .arg(QString::fromStdString(targetNode->getName()), transforms.join("\n")));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolTransformSubMesh(const QJsonObject &args)
 {
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         if (!Manager::getSingletonPtr())
             return makeErrorResult("Error: Manager not available");
         const QString entityName = args["entity_name"].toString();
@@ -1107,13 +1131,16 @@ QJsonObject MCPServer::toolTransformSubMesh(const QJsonObject &args)
             QString("transform_submesh: %1[%2]").arg(entityName).arg(subIdx));
         return makeSuccessResult(QString("Applied sub-mesh transforms to '%1' submesh %2:\n%3")
             .arg(entityName).arg(subIdx).arg(transforms.join("\n")));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolListTextures(const QJsonObject &args)
 {
     Q_UNUSED(args);
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         QStringList textures;
         auto& texMgr = Ogre::TextureManager::getSingleton();
         auto it = texMgr.getResourceIterator();
@@ -1125,7 +1152,10 @@ QJsonObject MCPServer::toolListTextures(const QJsonObject &args)
         return makeSuccessResult(QString("Available textures (%1):\n%2")
             .arg(textures.size())
             .arg(textures.isEmpty() ? "(none)" : textures.join("\n")));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolSetTexture(const QJsonObject &args)
@@ -1136,7 +1166,7 @@ QJsonObject MCPServer::toolSetTexture(const QJsonObject &args)
     if (materialName.isEmpty() || texturePath.isEmpty()) {
         return makeErrorResult("Error: Both material and texture names are required");
     }
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(materialName.toStdString());
         if (!material) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(materialName));
@@ -1153,7 +1183,10 @@ QJsonObject MCPServer::toolSetTexture(const QJsonObject &args)
         }
         return makeSuccessResult(QString("Set texture '%1' on material '%2' (unit %3)")
             .arg(texturePath, materialName).arg(textureUnit));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
@@ -1163,7 +1196,7 @@ QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
     if (path.isEmpty()) {
         return makeErrorResult("Error: Export path is required");
     }
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         SelectionSet* sel = SelectionSet::getSingleton();
         if (!sel || sel->getNodesCount() == 0) {
             return makeErrorResult("Error: No scene nodes selected. Select an object to export.");
@@ -1178,13 +1211,16 @@ QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
         }
         return makeSuccessResult(QString("Export completed to: %1 (format: %2), result code: %3")
             .arg(path, format).arg(exportResult));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
             return makeErrorResult("Error: Manager not available");
@@ -1236,7 +1272,10 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
          .arg(nodeNames.isEmpty() ? "  (none)" : "  " + nodeNames.join("\n  "))
          .arg(entityInfo.isEmpty() ? "  (none)" : entityInfo.join("\n"));
         return makeSuccessResult(sceneInfo);
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
@@ -1333,7 +1372,7 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
         }
         return makeSuccessResult(QString("Stopped animation on '%1'").arg(name));
     }
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         if (!Manager::getSingletonPtr()) {
             return makeErrorResult("Error: Manager not available");
         }
@@ -1362,13 +1401,16 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
         }
         return makeSuccessResult(QString("Started animation on '%1' (yaw: %2, pitch: %3, roll: %4 deg/sec)")
             .arg(name).arg(yaw).arg(pitch).arg(roll));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolListSkeletalAnimations(const QJsonObject &args)
 {
     Q_UNUSED(args);
-    return runOgreOp([&]() -> QJsonObject {
+    try {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) return makeErrorResult("Error: Manager not available");
         QStringList infoLines;
@@ -1397,7 +1439,10 @@ QJsonObject MCPServer::toolListSkeletalAnimations(const QJsonObject &args)
             return makeSuccessResult("No skeletal animations found in scene");
         return makeSuccessResult(QString("Skeletal animations (%1):\n%2")
             .arg(infoLines.size()).arg(infoLines.join("\n")));
-    });
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
 }
 
 QJsonObject MCPServer::toolGetAnimationInfo(const QJsonObject &args)
