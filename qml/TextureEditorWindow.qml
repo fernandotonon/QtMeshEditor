@@ -28,7 +28,13 @@ Window {
     // Mirror everything we need from TexturePaintController. The whole
     // window is invisible when no paint session is active — the
     // "Open Editor Window" button only enables once the session exists.
-    property string previewUri: TexturePaintController.previewDataUri
+    // Full-resolution preview source. Bound to fullResPreviewUrl
+    // which returns `image://paintbuffer/current?v=N` — the version
+    // number invalidates QML's Image cache on each refresh and the
+    // paintbuffer image provider hands back a QImage view of the
+    // live buffer (no PNG encode, no base64). Roughly 100x cheaper
+    // than re-encoding the buffer to a data URI every stroke.
+    property string previewUri: TexturePaintController.fullResPreviewUrl
     property string maskOverlayUri: TexturePaintController.maskOverlayDataUri
     property bool   hasSession: TexturePaintController.hasActiveSession
     property bool   hasMask: TexturePaintController.hasSelectionMask
@@ -39,7 +45,12 @@ Window {
     Connections {
         target: TexturePaintController
         function onPreviewChanged() {
-            editorWindow.previewUri = TexturePaintController.previewDataUri
+            // Inspector thumbnail update — irrelevant for the editor
+            // window itself, but keep the binding warm for the
+            // mask / UV overlays that still read other URI props.
+        }
+        function onFullResPreviewChanged() {
+            editorWindow.previewUri = TexturePaintController.fullResPreviewUrl
         }
         function onSmartSelectChanged() {
             editorWindow.maskOverlayUri = TexturePaintController.maskOverlayDataUri
@@ -205,6 +216,13 @@ Window {
             fillMode: Image.PreserveAspectFit
             smooth: false
             cache: false
+            // sourceSize: (0,0) → load the source at its native size
+            // so a 2048² texture stays 2048² in memory and renders
+            // pixel-for-pixel when the user enlarges the window
+            // past the displayed width. Without this Qt rasterises
+            // to the displayed width and pixellates when the user
+            // zooms the window.
+            sourceSize: Qt.size(0, 0)
             onSourceChanged: canvasImg.update()
         }
         // UV-island wireframe overlay (toggleable). Same source as

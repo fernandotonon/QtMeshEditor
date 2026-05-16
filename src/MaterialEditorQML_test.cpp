@@ -2806,3 +2806,113 @@ TEST_F(MaterialEditorQMLTest, ThemeColors_InputAndHeaderAreValid) {
 // shape switching / unknown-material handling is exhaustively
 // covered in MaterialPreviewRenderer_test.cpp (which kills the
 // renderer in TearDown, sidestepping the issue).
+
+// ===========================================================================
+// getMaterialList filtering
+// ===========================================================================
+//
+// Coverage for the runtime-paint-material filter added on PR #530.
+// MaterialEditorQML::getMaterialList must hide QMEPaint_, QMEPaintMaskOverlay_,
+// and TexturePaint/ materials that the paint pipeline registers at runtime
+// — these are internal and would clutter the user-facing dropdown.
+
+TEST_F(MaterialEditorQMLWithOgreTest, GetMaterialList_FiltersPaintRuntimeMaterials) {
+    // Register a few materials that look like the ones the paint
+    // pipeline creates at runtime, plus a normal user material.
+    auto& mm = Ogre::MaterialManager::getSingleton();
+    auto userMat = mm.create("UserMaterialA", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto paintSession = mm.create("QMEPaint_FooBar", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto maskOverlay = mm.create("QMEPaintMaskOverlay_X", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto ringMat = mm.create("TexturePaint/HoverRing", Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+
+    const QStringList list = editor->getMaterialList();
+    EXPECT_TRUE(list.contains("UserMaterialA"));
+    EXPECT_FALSE(list.contains("QMEPaint_FooBar"));
+    EXPECT_FALSE(list.contains("QMEPaintMaskOverlay_X"));
+    EXPECT_FALSE(list.contains("TexturePaint/HoverRing"));
+
+    // Clean up so other tests aren't polluted.
+    mm.remove(userMat);
+    mm.remove(paintSession);
+    mm.remove(maskOverlay);
+    mm.remove(ringMat);
+}
+
+TEST_F(MaterialEditorQMLTest, GetMaterialList_ReturnsEmptyWhenOgreUnavailable) {
+    // The headless MaterialEditorQMLTest fixture skips tryInitOgre, so
+    // isOgreAvailable() should return false and the function bail with
+    // an empty list (matches the safety check at the top).
+    const QStringList list = editor->getMaterialList();
+    EXPECT_TRUE(list.isEmpty());
+}
+
+// ===========================================================================
+// Setters that early-return when no Ogre material is loaded
+// ===========================================================================
+//
+// Most MaterialEditorQML::setX setters check `if (!m_ogreMaterial)` (or the
+// equivalent technique / pass guard) and return early when there's no
+// loaded material. The early-return path is reachable without Ogre but
+// most existing tests use MaterialEditorQMLWithOgreTest which has a
+// material loaded — the no-Ogre paths were uncovered.
+
+TEST_F(MaterialEditorQMLTest, Setters_EarlyReturnWithoutMaterial) {
+    // Each of these should silently no-op when no Ogre material is bound:
+    // the QObject-side property still updates (so QML bindings refresh),
+    // but no Ogre write happens. We're verifying crash-safety + state
+    // storage here. The PropertySettersAndSignals_* tests cover the
+    // signal-emission contract.
+    editor->setLightingEnabled(false);
+    EXPECT_FALSE(editor->lightingEnabled());
+
+    editor->setDepthCheckEnabled(false);
+    EXPECT_FALSE(editor->depthCheckEnabled());
+
+    editor->setDepthWriteEnabled(false);
+    EXPECT_FALSE(editor->depthWriteEnabled());
+
+    editor->setAmbientColor(QColor("#abcdef"));
+    EXPECT_EQ(editor->ambientColor(), QColor("#abcdef"));
+
+    editor->setDiffuseColor(QColor("#fedcba"));
+    EXPECT_EQ(editor->diffuseColor(), QColor("#fedcba"));
+
+    editor->setSpecularColor(QColor("#112233"));
+    EXPECT_EQ(editor->specularColor(), QColor("#112233"));
+
+    editor->setEmissiveColor(QColor("#445566"));
+    EXPECT_EQ(editor->emissiveColor(), QColor("#445566"));
+
+    editor->setShininess(64.0f);
+    EXPECT_FLOAT_EQ(editor->shininess(), 64.0f);
+}
+
+TEST_F(MaterialEditorQMLTest, GetMaterialNames_StableEnumStrings) {
+    // Helper-name lists are pure data lookups — verify they have
+    // stable, non-empty content the QML side relies on.
+    const QStringList polygonNames = editor->getPolygonModeNames();
+    const QStringList blendNames = editor->getBlendFactorNames();
+    const QStringList shadingNames = editor->getShadingModeNames();
+    EXPECT_FALSE(polygonNames.isEmpty());
+    EXPECT_FALSE(blendNames.isEmpty());
+    EXPECT_FALSE(shadingNames.isEmpty());
+    // No accidental empty entries
+    for (const QString& s : polygonNames) EXPECT_FALSE(s.isEmpty());
+    for (const QString& s : blendNames)   EXPECT_FALSE(s.isEmpty());
+    for (const QString& s : shadingNames) EXPECT_FALSE(s.isEmpty());
+}
+
+// ===========================================================================
+// MaterialEditorQML::materialPreview thin-wrapper sanity
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, MaterialPreview_UnknownMaterialReturnsSensibleString) {
+    // The wrapper delegates to MaterialPreviewRenderer; the renderer
+    // returns an empty data URI for unknown materials. Either is OK
+    // as long as we don't crash and the return type stays a QString.
+    const QString preview = editor->materialPreview("DefinitelyNotAMaterial");
+    // Should be empty or a data: URI prefix — never garbage.
+    if (!preview.isEmpty()) {
+        EXPECT_TRUE(preview.startsWith("data:")) << preview.toStdString();
+    }
+}

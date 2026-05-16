@@ -88,6 +88,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureChannelPacker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureAtlasPacker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintBufferImageProvider.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintSelectionMask.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintBuffer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UpdateVersion.cpp
