@@ -1695,7 +1695,7 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_ShortAliasUppercaseIsAppe
 // can come in with bounding-box extents below the camera near-clip
 // distance — they load but render invisible. The importer should detect
 // this and scale the parent SceneNode so the largest dimension lands
-// at ~1 unit.
+// at ~3 units.
 TEST_F(MeshImporterExporterTest, Importer_SubUnitMesh_AutoScalesParentNode) {
     ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
 
@@ -1730,8 +1730,8 @@ TEST_F(MeshImporterExporterTest, Importer_SubUnitMesh_AutoScalesParentNode) {
     auto* importedNode = manager->getSceneNodes().last();
     const Ogre::Vector3 scale = importedNode->getScale();
 
-    // Auto-scale should bring the largest dim to ~1. With a 0.005-unit
-    // extent the factor is ~200, but we test loosely (>= 50) to stay
+    // Auto-scale should bring the largest dim to ~3. With a 0.005-unit
+    // extent the factor is ~600, but we test loosely (>= 50) to stay
     // robust against future tweaks to the threshold.
     EXPECT_GE(scale.x, 50.0f) << "Sub-unit mesh did not get auto-scaled (x)";
     EXPECT_GE(scale.y, 50.0f) << "Sub-unit mesh did not get auto-scaled (y)";
