@@ -900,44 +900,34 @@ QJsonObject MCPServer::toolApplyMaterialPreset(const QJsonObject &args)
 
 QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
 {
-    QString path = args["path"].toString();
-
+    const QString path = args["path"].toString();
     if (path.isEmpty()) {
         return makeErrorResult("Error: File path is required");
     }
-
     MainWindow* mainWindow = qobject_cast<MainWindow*>(m_mainWindow);
     if (!mainWindow) {
         return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag for full functionality.");
     }
-
     if (!QFile::exists(path)) {
         return makeErrorResult(QString("Error: File not found: %1").arg(path));
     }
-
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         mainWindow->importMeshs(QStringList{path});
         return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
-
-    } catch (std::exception& e) {
-        return makeErrorResult(QString("Error loading mesh: %1").arg(e.what()));
-    }
+    });
 }
 
 QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
             return makeErrorResult("Error: Manager not available");
         }
-
         // Check if there's a selection first, otherwise report all entities
         SelectionSet* sel = SelectionSet::getSingleton();
         QList<Ogre::Entity*> entitiesToReport;
-
         if (sel && sel->getEntitiesCount() > 0) {
             for (int i = 0; i < sel->getEntitiesCount(); ++i) {
                 entitiesToReport.append(sel->getEntity(i));
@@ -945,23 +935,17 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
         } else {
             entitiesToReport = mgr->getEntities();
         }
-
         if (entitiesToReport.isEmpty()) {
             return makeSuccessResult("No entities in scene");
         }
-
         QStringList infoLines;
         for (Ogre::Entity* entity : entitiesToReport) {
             if (!entity) continue;
-
             const Ogre::MeshPtr& mesh = entity->getMesh();
             if (!mesh) continue;
-
-            // Count vertices and indices
             unsigned int totalVertices = 0;
             unsigned int totalIndices = 0;
-            unsigned int numSubMeshes = mesh->getNumSubMeshes();
-
+            const unsigned int numSubMeshes = mesh->getNumSubMeshes();
             for (unsigned int i = 0; i < numSubMeshes; ++i) {
                 Ogre::SubMesh* subMesh = mesh->getSubMesh(i);
                 if (subMesh->vertexData)
@@ -969,11 +953,8 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
                 if (subMesh->indexData)
                     totalIndices += subMesh->indexData->indexCount;
             }
-            // Shared vertex data
             if (mesh->sharedVertexData)
                 totalVertices += mesh->sharedVertexData->vertexCount;
-
-            // Get materials for sub-entities
             QStringList materials;
             for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i) {
                 Ogre::SubEntity* subEnt = entity->getSubEntity(i);
@@ -981,11 +962,9 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
                     materials << QString::fromStdString(subEnt->getMaterial()->getName());
                 }
             }
-
             Ogre::SceneNode* parentNode = entity->getParentSceneNode();
             Ogre::Vector3 pos = parentNode ? parentNode->getPosition() : Ogre::Vector3::ZERO;
             Ogre::Vector3 scale = parentNode ? parentNode->getScale() : Ogre::Vector3::UNIT_SCALE;
-
             infoLines << QString(
                 "Entity: %1\n"
                 "  Mesh: %2\n"
@@ -1004,14 +983,10 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
              .arg(pos.x).arg(pos.y).arg(pos.z)
              .arg(scale.x).arg(scale.y).arg(scale.z);
         }
-
         return makeSuccessResult(QString("Mesh Information (%1 entities):\n\n%2")
             .arg(entitiesToReport.size())
             .arg(infoLines.join("\n\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+    });
 }
 
 // Helper: parse a vector from JSON (supports both array [x,y,z] and object {x,y,z})
