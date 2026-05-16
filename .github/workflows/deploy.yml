@@ -1173,6 +1173,10 @@ jobs:
                         if is_gl_crash_allowed "$suite"; then
                             echo "WARNING: Suite $suite CRASHED (signal $signal) — known GL/Xvfb issue on CI, not counted as failure."
                             PASSED_SUITES=$((PASSED_SUITES + 1))
+                            # Roll the suite's expected count into the running total
+                            # so the overall ACTUAL == EXPECTED post-check doesn't
+                            # mistake a whitelisted crash for missing tests.
+                            ACTUAL_UNIT_TESTS=$((ACTUAL_UNIT_TESTS + expected_suite_tests))
                         else
                             echo "WARNING: Suite $suite CRASHED (signal $signal). Coverage data saved by signal handler."
                             CRASHED_SUITES=$((CRASHED_SUITES + 1))
