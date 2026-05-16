@@ -660,28 +660,21 @@ QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
         return makeErrorResult("Error: Material name is required");
     }
 
-    // Try to get the material from Ogre
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (!material) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(name));
         }
-
-        // Get the first technique and pass
         if (material->getNumTechniques() == 0) {
             return makeErrorResult(QString("Error: Material '%1' has no techniques").arg(name));
         }
-
         Ogre::Technique* technique = material->getTechnique(0);
         if (technique->getNumPasses() == 0) {
             return makeErrorResult(QString("Error: Material '%1' technique has no passes").arg(name));
         }
-
         Ogre::Pass* pass = technique->getPass(0);
 
         QStringList modifications;
-
-        // Apply modifications
         if (args.contains("ambient")) {
             QJsonArray a = args["ambient"].toArray();
             Ogre::ColourValue ambient(a[0].toDouble(), a[1].toDouble(), a[2].toDouble());
@@ -712,12 +705,9 @@ QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
             modifications << QString("emissive: %1 %2 %3")
                 .arg(e[0].toDouble()).arg(e[1].toDouble()).arg(e[2].toDouble());
         }
-
-        return makeSuccessResult(QString("Modified material '%1':\n%2").arg(name).arg(modifications.join("\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+        return makeSuccessResult(QString("Modified material '%1':\n%2")
+            .arg(name, modifications.join("\n")));
+    });
 }
 
 QJsonObject MCPServer::toolGetMaterial(const QJsonObject &args)
