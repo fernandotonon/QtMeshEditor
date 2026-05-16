@@ -2072,3 +2072,85 @@ TEST_F(EditModeControllerBevelE2ETest, EnterEditModeAfterEditDoesNotReimport) {
 
     QFile::remove(objPath);
 }
+
+// ----------------------------------------------------------------------
+// Paint knob setters — pure state, no GL required. These exercise the
+// updateClampedKnob helper introduced as part of the dedup pass that
+// collapsed the radius / strength / falloff setters into one template.
+// ----------------------------------------------------------------------
+
+TEST(EditModeControllerPaintKnobsStandalone, SetVertexPaintStrengthClampsToUnitRange)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintStrength(2.0);   // above range — clamps to 1.0
+    EXPECT_NEAR(em->vertexPaintStrength(), 1.0, 1e-9);
+    em->setVertexPaintStrength(-0.5);  // below range — clamps to 0.0
+    EXPECT_NEAR(em->vertexPaintStrength(), 0.0, 1e-9);
+    em->setVertexPaintStrength(0.42);
+    EXPECT_NEAR(em->vertexPaintStrength(), 0.42, 1e-9);
+}
+
+TEST(EditModeControllerPaintKnobsStandalone, SetVertexPaintFalloffClampsToUnitRange)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintFalloff(99.0);
+    EXPECT_NEAR(em->vertexPaintFalloff(), 1.0, 1e-9);
+    em->setVertexPaintFalloff(-1.0);
+    EXPECT_NEAR(em->vertexPaintFalloff(), 0.0, 1e-9);
+    em->setVertexPaintFalloff(0.25);
+    EXPECT_NEAR(em->vertexPaintFalloff(), 0.25, 1e-9);
+}
+
+TEST(EditModeControllerPaintKnobsStandalone, SetVertexPaintRadiusRejectsNonPositive)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintRadius(0.5);
+    EXPECT_NEAR(em->vertexPaintRadius(), 0.5, 1e-9);
+    // Zero / negative are no-ops; the previous value sticks.
+    em->setVertexPaintRadius(0.0);
+    EXPECT_NEAR(em->vertexPaintRadius(), 0.5, 1e-9);
+    em->setVertexPaintRadius(-3.0);
+    EXPECT_NEAR(em->vertexPaintRadius(), 0.5, 1e-9);
+}
+
+TEST(EditModeControllerPaintKnobsStandalone, SetVertexPaintShapeRoundTripsAcrossModes)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintShape(static_cast<int>(EditModeController::ShapeSquare));
+    EXPECT_EQ(em->vertexPaintShape(),
+              static_cast<int>(EditModeController::ShapeSquare));
+    em->setVertexPaintShape(static_cast<int>(EditModeController::ShapeRound));
+    EXPECT_EQ(em->vertexPaintShape(),
+              static_cast<int>(EditModeController::ShapeRound));
+    // Out-of-range int is rejected — shape stays at its previous value.
+    em->setVertexPaintShape(99);
+    EXPECT_EQ(em->vertexPaintShape(),
+              static_cast<int>(EditModeController::ShapeRound));
+}
+
+TEST(EditModeControllerPaintKnobsStandalone, SwapAndResetPaintColors)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintColor(QColor(10, 20, 30));
+    em->setVertexPaintBackgroundColor(QColor(200, 210, 220));
+    em->swapPaintColors();
+    EXPECT_EQ(em->vertexPaintColor().rgb(),
+              QColor(200, 210, 220).rgb());
+    EXPECT_EQ(em->vertexPaintBackgroundColor().rgb(),
+              QColor(10, 20, 30).rgb());
+    em->resetPaintColors();
+    // Defaults: FG = Fern green (#71BC78 / 113, 188, 120), BG = black.
+    EXPECT_EQ(em->vertexPaintColor().rgb(),
+              QColor(113, 188, 120).rgb());
+    EXPECT_EQ(em->vertexPaintBackgroundColor().rgb(),
+              QColor(0, 0, 0).rgb());
+}
+
+TEST(EditModeControllerPaintKnobsStandalone, SetVertexPaintBrushColorFromCssString)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintBrushColor("#ff8800");
+    EXPECT_EQ(em->vertexPaintColor().rgb(), QColor("#ff8800").rgb());
+    em->setVertexPaintBackgroundBrushColor("#001122");
+    EXPECT_EQ(em->vertexPaintBackgroundColor().rgb(), QColor("#001122").rgb());
+}
