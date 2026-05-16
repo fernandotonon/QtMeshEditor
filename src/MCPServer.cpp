@@ -1169,17 +1169,13 @@ QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
 QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
-    try {
+    return runOgreOp([]() -> QJsonObject {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
             return makeErrorResult("Error: Manager not available");
         }
-
         // Copy lists to avoid reference invalidation
-        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
-
-        // Count materials
+        const QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
         int materialCount = 0;
         auto& matMgr = Ogre::MaterialManager::getSingleton();
         auto it = matMgr.getResourceIterator();
@@ -1187,7 +1183,6 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
             it.getNext();
             materialCount++;
         }
-
         // Build scene node list and entity list by iterating nodes directly.
         // Manager::getEntities() uses static_cast<Entity*> on all attached objects,
         // which crashes on ManualObjects. Check movable type explicitly.
@@ -1197,11 +1192,9 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
         for (Ogre::SceneNode* node : nodes) {
             if (!node) continue;
             nodeNames << QString::fromStdString(node->getName());
-
             for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
                 Ogre::MovableObject* obj = node->getAttachedObject(i);
                 if (!obj || obj->getMovableType() != "Entity") continue;
-
                 Ogre::Entity* entity = static_cast<Ogre::Entity*>(obj);
                 entityCount++;
                 QString info = QString("  - %1").arg(QString::fromStdString(entity->getName()));
@@ -1215,8 +1208,7 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
                 entityInfo << info;
             }
         }
-
-        QString sceneInfo = QString(
+        const QString sceneInfo = QString(
             "Scene Information:\n"
             "- Scene Nodes: %1\n"
             "- Entities: %2\n"
@@ -1228,11 +1220,8 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
          .arg(materialCount)
          .arg(nodeNames.isEmpty() ? "  (none)" : "  " + nodeNames.join("\n  "))
          .arg(entityInfo.isEmpty() ? "  (none)" : entityInfo.join("\n"));
-
         return makeSuccessResult(sceneInfo);
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+    });
 }
 
 QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
@@ -1329,33 +1318,26 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
         }
         return makeSuccessResult(QString("Stopped animation on '%1'").arg(name));
     }
-
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         if (!Manager::getSingletonPtr()) {
             return makeErrorResult("Error: Manager not available");
         }
-
         Ogre::SceneNode* targetNode = findSceneNodeByName(name);
         if (!targetNode) {
             return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
         }
-
-        float yaw = static_cast<float>(args["yaw"].toDouble(0));
+        float yaw   = static_cast<float>(args["yaw"].toDouble(0));
         float pitch = static_cast<float>(args["pitch"].toDouble(0));
-        float roll = static_cast<float>(args["roll"].toDouble(0));
-
+        float roll  = static_cast<float>(args["roll"].toDouble(0));
         if (yaw == 0 && pitch == 0 && roll == 0) {
             yaw = 45; // default: 45 degrees/sec around Y
         }
-
         NodeAnimation anim;
         anim.node = targetNode;
         anim.yawSpeed = yaw;
         anim.pitchSpeed = pitch;
         anim.rollSpeed = roll;
         m_animations[name] = anim;
-
-        // Create and start the animation timer if needed
         if (!m_animationTimer) {
             m_animationTimer = new QTimer(this);
             connect(m_animationTimer, &QTimer::timeout, this, &MCPServer::onAnimationTick);
@@ -1363,37 +1345,28 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
         if (!m_animationTimer->isActive()) {
             m_animationTimer->start(16); // ~60fps
         }
-
         return makeSuccessResult(QString("Started animation on '%1' (yaw: %2, pitch: %3, roll: %4 deg/sec)")
             .arg(name).arg(yaw).arg(pitch).arg(roll));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+    });
 }
 
 QJsonObject MCPServer::toolListSkeletalAnimations(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
-    try {
+    return runOgreOp([]() -> QJsonObject {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) return makeErrorResult("Error: Manager not available");
-
         QStringList infoLines;
-        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
+        const QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
         for (Ogre::SceneNode* node : nodes) {
             if (!node) continue;
             for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
                 Ogre::MovableObject* obj = node->getAttachedObject(i);
                 if (!obj || obj->getMovableType() != "Entity") continue;
-
                 Ogre::Entity* entity = static_cast<Ogre::Entity*>(obj);
                 if (!entity->hasSkeleton()) continue;
-
                 Ogre::AnimationStateSet* stateSet = entity->getAllAnimationStates();
                 if (!stateSet) continue;
-
                 for (const auto &pair : stateSet->getAnimationStates()) {
                     Ogre::AnimationState* state = pair.second;
                     infoLines << QString("Entity: %1 | Animation: %2 | Length: %3s | Enabled: %4 | Loop: %5")
@@ -1405,16 +1378,11 @@ QJsonObject MCPServer::toolListSkeletalAnimations(const QJsonObject &args)
                 }
             }
         }
-
         if (infoLines.isEmpty())
             return makeSuccessResult("No skeletal animations found in scene");
-
         return makeSuccessResult(QString("Skeletal animations (%1):\n%2")
             .arg(infoLines.size()).arg(infoLines.join("\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+    });
 }
 
 QJsonObject MCPServer::toolGetAnimationInfo(const QJsonObject &args)

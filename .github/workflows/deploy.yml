@@ -1269,6 +1269,7 @@ jobs:
               --exclude '.*qrc_.*\.cpp' \
               --exclude-throw-branches \
               --exclude-unreachable-branches \
+              --gcov-ignore-errors=no_working_dir_found \
               --sonarqube=coverage.xml \
               --gcov-executable gcov \
               build \
