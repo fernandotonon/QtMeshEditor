@@ -160,8 +160,9 @@ TEST(PS1TIMTest, SaveThenLoadTim16RoundTrip)
 
     // Top-left should match (within 5-bit quantization).
     const uint8_t* d = decoded.getData();
+    const size_t stride = decoded.getWidth();
     auto px = [&](int x, int y) {
-        const size_t i = (size_t(y) * 256u + size_t(x)) * 4u;
+        const size_t i = (size_t(y) * stride + size_t(x)) * 4u;
         return std::array<uint8_t, 4>{d[i + 0], d[i + 1], d[i + 2], d[i + 3]};
     };
     const auto p00 = px(0, 0);
@@ -303,8 +304,9 @@ TEST(PS1TIMTest, LoadDecodes8bppIndexedImage)
     QString err;
     ASSERT_TRUE(PS1TIM::loadTimToOgreImage(path, img, &err)) << err.toStdString();
     const uint8_t* d = img.getData();
+    const size_t stride = img.getWidth();
     auto px = [&](int x, int y) {
-        const size_t i = (size_t(y) * 256u + size_t(x)) * 4u;
+        const size_t i = (size_t(y) * stride + size_t(x)) * 4u;
         return std::array<uint8_t, 4>{d[i + 0], d[i + 1], d[i + 2], d[i + 3]};
     };
     // First column index 11 → red

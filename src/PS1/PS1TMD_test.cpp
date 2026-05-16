@@ -31,6 +31,19 @@ namespace {
 
 constexpr unsigned long kSingletonSettleMs = 30;
 
+/** PS1TMD::buildMeshFromSoup clones BaseMaterial; tests only create BaseWhite*. */
+static void ensureBaseMaterialForTmdImport()
+{
+    if (Ogre::MaterialManager::getSingleton().getByName(
+            "BaseMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+        return;
+    }
+    Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().create(
+        "BaseMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    m->getTechnique(0)->getPass(0)->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+    m->getTechnique(0)->getPass(0)->setAmbient(1.0f, 1.0f, 1.0f);
+}
+
 static void writeU32le(uint8_t* p, uint32_t v)
 {
     p[0] = uint8_t(v & 0xFF);
@@ -479,6 +492,7 @@ protected:
 
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed";
         createStandardOgreMaterials();
+        ensureBaseMaterialForTmdImport();
     }
 
     void TearDown() override
