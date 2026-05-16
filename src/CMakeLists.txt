@@ -79,6 +79,7 @@ MaterialPresetLibrary.cpp
 MeshLodController.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
+PaintBufferImageProvider.cpp
 PaintSelectionMask.cpp
 TexturePaintBuffer.cpp
 UpdateVersion.cpp
@@ -178,6 +179,7 @@ MaterialPresetLibrary.h
 MeshLodController.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
+PaintBufferImageProvider.h
 PaintSelectionMask.h
 TexturePaintBuffer.h
 UpdateVersion.h

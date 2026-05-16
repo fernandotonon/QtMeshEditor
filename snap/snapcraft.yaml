@@ -20,6 +20,9 @@ grade: stable
 confinement: strict
 base: core24
 
+# Launcher / Snap Store sidebar (desktop entry lives in snap/gui/*.desktop).
+icon: snap/gui/icon.png
+
 platforms:
   amd64:
     build-on: [amd64]
