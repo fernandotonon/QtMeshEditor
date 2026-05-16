@@ -1004,13 +1004,11 @@ static Ogre::Vector3 parseVector3(const QJsonValue &val) {
 
 QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
 {
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         if (!Manager::getSingletonPtr()) {
             return makeErrorResult("Error: Manager not available");
         }
-
-        // If a name is provided, find and select that node first
-        QString name = args["name"].toString();
+        const QString name = args["name"].toString();
         Ogre::SceneNode* targetNode = nullptr;
         if (!name.isEmpty()) {
             targetNode = findSceneNodeByName(name);
@@ -1018,14 +1016,12 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
                 return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
             }
         } else {
-            // No name given - require something selected
             SelectionSet* sel = SelectionSet::getSingleton();
             if (!sel || sel->getNodesCount() == 0) {
                 return makeErrorResult("Error: No name provided and no scene nodes selected.");
             }
             targetNode = sel->getNodesSelectionList().first();
         }
-
         QStringList transforms;
         if (args.contains("position")) {
             Ogre::Vector3 pos = parseVector3(args["position"]);
@@ -1046,41 +1042,30 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
             targetNode->setScale(scale);
             transforms << QString("scale: %1, %2, %3").arg(scale.x).arg(scale.y).arg(scale.z);
         }
-
         return makeSuccessResult(QString("Applied transforms to '%1':\n%2")
-            .arg(QString::fromStdString(targetNode->getName()))
-            .arg(transforms.join("\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+            .arg(QString::fromStdString(targetNode->getName()), transforms.join("\n")));
+    });
 }
 
 QJsonObject MCPServer::toolTransformSubMesh(const QJsonObject &args)
 {
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         if (!Manager::getSingletonPtr())
             return makeErrorResult("Error: Manager not available");
-
-        QString entityName = args["entity_name"].toString();
+        const QString entityName = args["entity_name"].toString();
         if (entityName.isEmpty())
             return makeErrorResult("Error: entity_name is required");
-
-        int subIdx = args["submesh_index"].toInt(-1);
+        const int subIdx = args["submesh_index"].toInt(-1);
         if (subIdx < 0)
             return makeErrorResult("Error: submesh_index must be a non-negative integer");
-
         Ogre::Entity* entity = findEntityByName(entityName);
         if (!entity)
             return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
-
-        unsigned int uSubIdx = static_cast<unsigned int>(subIdx);
+        const unsigned int uSubIdx = static_cast<unsigned int>(subIdx);
         if (uSubIdx >= entity->getNumSubEntities())
             return makeErrorResult(QString("Error: submesh_index %1 out of range (entity has %2 sub-meshes)")
                 .arg(subIdx).arg(entity->getNumSubEntities()));
-
         QStringList transforms;
-
         if (args.contains("translate")) {
             Ogre::Vector3 delta = parseVector3(args["translate"]);
             SubMeshTransform::translateSubMesh(entity, uSubIdx, delta);
@@ -1100,26 +1085,19 @@ QJsonObject MCPServer::toolTransformSubMesh(const QJsonObject &args)
             SubMeshTransform::scaleSubMesh(entity, uSubIdx, scale);
             transforms << QString("scale: %1, %2, %3").arg(scale.x).arg(scale.y).arg(scale.z);
         }
-
         if (transforms.isEmpty())
             return makeErrorResult("Error: No transform specified. Provide translate, rotate, or scale.");
-
         SentryReporter::addBreadcrumb("ai.tool_call",
             QString("transform_submesh: %1[%2]").arg(entityName).arg(subIdx));
-
         return makeSuccessResult(QString("Applied sub-mesh transforms to '%1' submesh %2:\n%3")
             .arg(entityName).arg(subIdx).arg(transforms.join("\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+    });
 }
 
 QJsonObject MCPServer::toolListTextures(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         QStringList textures;
         auto& texMgr = Ogre::TextureManager::getSingleton();
         auto it = texMgr.getResourceIterator();
@@ -1127,84 +1105,64 @@ QJsonObject MCPServer::toolListTextures(const QJsonObject &args)
             Ogre::ResourcePtr res = it.getNext();
             textures << QString::fromStdString(res->getName());
         }
-
         textures.sort();
         return makeSuccessResult(QString("Available textures (%1):\n%2")
             .arg(textures.size())
             .arg(textures.isEmpty() ? "(none)" : textures.join("\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+    });
 }
 
 QJsonObject MCPServer::toolSetTexture(const QJsonObject &args)
 {
-    QString materialName = args["material"].toString();
-    QString texturePath = args["texture"].toString();
-    int textureUnit = args["unit"].toInt(0);
-
+    const QString materialName = args["material"].toString();
+    const QString texturePath = args["texture"].toString();
+    const int textureUnit = args["unit"].toInt(0);
     if (materialName.isEmpty() || texturePath.isEmpty()) {
         return makeErrorResult("Error: Both material and texture names are required");
     }
-
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(materialName.toStdString());
         if (!material) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(materialName));
         }
-
         if (material->getNumTechniques() == 0 ||
             material->getTechnique(0)->getNumPasses() == 0) {
             return makeErrorResult(QString("Error: Material '%1' has no technique/pass").arg(materialName));
         }
-
         Ogre::Pass* pass = material->getTechnique(0)->getPass(0);
-
         if (static_cast<int>(pass->getNumTextureUnitStates()) > textureUnit) {
             pass->getTextureUnitState(textureUnit)->setTextureName(texturePath.toStdString());
         } else {
             pass->createTextureUnitState(texturePath.toStdString());
         }
-
         return makeSuccessResult(QString("Set texture '%1' on material '%2' (unit %3)")
-            .arg(texturePath).arg(materialName).arg(textureUnit));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
-    }
+            .arg(texturePath, materialName).arg(textureUnit));
+    });
 }
 
 QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
 {
-    QString path = args["path"].toString();
-    QString format = args["format"].toString("Ogre Mesh (*.mesh)");
-
+    const QString path = args["path"].toString();
+    const QString format = args["format"].toString("Ogre Mesh (*.mesh)");
     if (path.isEmpty()) {
         return makeErrorResult("Error: Export path is required");
     }
-
-    try {
+    return runOgreOp([&]() -> QJsonObject {
         SelectionSet* sel = SelectionSet::getSingleton();
         if (!sel || sel->getNodesCount() == 0) {
             return makeErrorResult("Error: No scene nodes selected. Select an object to export.");
         }
-
         Ogre::SceneNode* node = sel->getSceneNode(0);
         if (!node) {
             return makeErrorResult("Error: Selected scene node is null");
         }
-
-        int exportResult = MeshImporterExporter::exporter(node, path, format);
+        const int exportResult = MeshImporterExporter::exporter(node, path, format);
         if (exportResult == 0) {
-            return makeSuccessResult(QString("Exported mesh to: %1 (format: %2)").arg(path).arg(format));
-        } else {
-            return makeSuccessResult(QString("Export completed to: %1 (format: %2), result code: %3").arg(path).arg(format).arg(exportResult));
+            return makeSuccessResult(QString("Exported mesh to: %1 (format: %2)").arg(path, format));
         }
-
-    } catch (std::exception& e) {
-        return makeErrorResult(QString("Error exporting mesh: %1").arg(e.what()));
-    }
+        return makeSuccessResult(QString("Export completed to: %1 (format: %2), result code: %3")
+            .arg(path, format).arg(exportResult));
+    });
 }
 
 QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
