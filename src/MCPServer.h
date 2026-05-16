@@ -246,10 +246,10 @@ private:
     {
         try {
             return body();
-        } catch (Ogre::Exception& e) {
+        } catch (const Ogre::Exception& e) {
             return makeErrorResult(QStringLiteral("Ogre error: %1")
                 .arg(QString::fromStdString(e.getFullDescription())));
-        } catch (const std::exception& e) {
+        } catch (const std::runtime_error& e) {
             return makeErrorResult(QStringLiteral("Error: %1").arg(e.what()));
         }
     }

@@ -3741,12 +3741,15 @@ void MainWindow::on_actionVerify_Update_triggered()
                     "ui.action",
                     QStringLiteral("Update available: %1 -> %2")
                         .arg(currentVersion, latestVersion));
-                QMessageBox::StandardButton reply = QMessageBox::question(
-                    nullptr, tr("Update"),
-                    tr("A new version is available (%1 → %2). Do you want to update?")
-                        .arg(currentVersion, latestVersion),
-                    QMessageBox::Yes | QMessageBox::No);
-                if (reply == QMessageBox::Yes) {
+                // Renamed from `reply` to dodge the outer-scope
+                // QNetworkReply* (Sonar flagged it as shadowing).
+                const QMessageBox::StandardButton userChoice =
+                    QMessageBox::question(
+                        nullptr, tr("Update"),
+                        tr("A new version is available (%1 → %2). Do you want to update?")
+                            .arg(currentVersion, latestVersion),
+                        QMessageBox::Yes | QMessageBox::No);
+                if (userChoice == QMessageBox::Yes) {
                     SentryReporter::addBreadcrumb(
                         "ui.action", "Open latest release page");
                     QString downloadUrl = obj.value("html_url").toString();

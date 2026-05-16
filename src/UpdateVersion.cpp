@@ -18,9 +18,12 @@ QString normalize(const QString& raw)
     // Cut off pre-release / build metadata. Semver lets us treat
     // anything after `-` or `+` as a non-numeric suffix; for the
     // purposes of "is there a newer stable release" we just drop it.
-    const int dash  = s.indexOf(QLatin1Char('-'));
-    const int plus  = s.indexOf(QLatin1Char('+'));
-    int cut = -1;
+    // Use qsizetype (the indexOf return type) end-to-end so a future
+    // very-long-string input doesn't silently truncate in a 32-bit
+    // signed int (Sonar flagged the previous int form).
+    const qsizetype dash = s.indexOf(QLatin1Char('-'));
+    const qsizetype plus = s.indexOf(QLatin1Char('+'));
+    qsizetype cut = -1;
     if (dash >= 0) cut = dash;
     if (plus >= 0 && (cut < 0 || plus < cut)) cut = plus;
     if (cut >= 0) s = s.left(cut);

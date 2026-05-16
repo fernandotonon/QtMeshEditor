@@ -589,6 +589,62 @@ QJsonObject MCPServer::handleResourcesRead(const QJsonObject &params)
 
 // Tool implementations
 
+namespace {
+
+/// Pull a color array from either a top-level `key` argument or a
+/// nested `colors.key` argument. Used by toolCreateMaterial — both
+/// MCP message shapes are valid, so we accept either.
+QJsonArray resolveColorArg(const QJsonObject& args, const QString& key)
+{
+    if (args.contains(key) && args[key].isArray())
+        return args[key].toArray();
+    const QJsonObject nested = args["colors"].toObject();
+    if (nested.contains(key) && nested[key].isArray())
+        return nested[key].toArray();
+    return {};
+}
+
+double resolveNumberArg(const QJsonObject& args, const QString& key, double def)
+{
+    if (args.contains(key)) return args[key].toDouble(def);
+    return args["colors"].toObject().value(key).toDouble(def);
+}
+
+/// Apply ambient / diffuse / specular / emissive colours from the
+/// MCP args onto an Ogre pass. Defaults match the historical
+/// toolCreateMaterial behaviour. Extracted as a free function so
+/// the parent handler stays under Sonar's complexity threshold.
+void applyColorsToPass(Ogre::Pass* pass, const QJsonObject& args)
+{
+    const QJsonArray amb = resolveColorArg(args, "ambient");
+    if (!amb.isEmpty())
+        pass->setAmbient(amb[0].toDouble(0.2), amb[1].toDouble(0.2), amb[2].toDouble(0.2));
+    else
+        pass->setAmbient(0.2, 0.2, 0.2);
+
+    const QJsonArray diff = resolveColorArg(args, "diffuse");
+    if (!diff.isEmpty())
+        pass->setDiffuse(diff[0].toDouble(1.0), diff[1].toDouble(1.0),
+                         diff[2].toDouble(1.0), 1.0);
+
+    const QJsonArray spec = resolveColorArg(args, "specular");
+    if (!spec.isEmpty()) {
+        pass->setSpecular(spec[0].toDouble(0.5), spec[1].toDouble(0.5),
+                          spec[2].toDouble(0.5), 1.0);
+        pass->setShininess(resolveNumberArg(args, "shininess", 32.0));
+    } else {
+        pass->setSpecular(0.5, 0.5, 0.5, 1.0);
+        pass->setShininess(32.0);
+    }
+
+    const QJsonArray emis = resolveColorArg(args, "emissive");
+    if (!emis.isEmpty())
+        pass->setSelfIllumination(emis[0].toDouble(), emis[1].toDouble(),
+                                  emis[2].toDouble());
+}
+
+} // namespace
+
 QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
 {
     const QString name = args["name"].toString();
@@ -602,49 +658,8 @@ QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
         }
         Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
             name.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-
-        // Accept colors as either top-level params (diffuse, ambient …) or
-        // nested under a "colors" object — both formats are valid.
-        auto resolveColor = [&](const QString& key) -> QJsonArray {
-            if (args.contains(key) && args[key].isArray())
-                return args[key].toArray();
-            QJsonObject nested = args["colors"].toObject();
-            if (nested.contains(key) && nested[key].isArray())
-                return nested[key].toArray();
-            return {};
-        };
-        auto resolveNumber = [&](const QString& key, double def) -> double {
-            if (args.contains(key)) return args[key].toDouble(def);
-            return args["colors"].toObject().value(key).toDouble(def);
-        };
-
-        Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
-
-        QJsonArray amb = resolveColor("ambient");
-        if (!amb.isEmpty())
-            pass->setAmbient(amb[0].toDouble(0.2), amb[1].toDouble(0.2), amb[2].toDouble(0.2));
-        else
-            pass->setAmbient(0.2, 0.2, 0.2);
-
-        QJsonArray diff = resolveColor("diffuse");
-        if (!diff.isEmpty())
-            pass->setDiffuse(diff[0].toDouble(1.0), diff[1].toDouble(1.0), diff[2].toDouble(1.0), 1.0);
-
-        QJsonArray spec = resolveColor("specular");
-        if (!spec.isEmpty()) {
-            pass->setSpecular(spec[0].toDouble(0.5), spec[1].toDouble(0.5), spec[2].toDouble(0.5), 1.0);
-            pass->setShininess(resolveNumber("shininess", 32.0));
-        } else {
-            pass->setSpecular(0.5, 0.5, 0.5, 1.0);
-            pass->setShininess(32.0);
-        }
-
-        QJsonArray emis = resolveColor("emissive");
-        if (!emis.isEmpty())
-            pass->setSelfIllumination(emis[0].toDouble(), emis[1].toDouble(), emis[2].toDouble());
-
+        applyColorsToPass(mat->getTechnique(0)->getPass(0), args);
         try { mat->load(); } catch (...) { /* headless — no GPU context */ }
-
         Ogre::MaterialSerializer serializer;
         serializer.queueForExport(mat);
         const QString materialScript = QString::fromStdString(serializer.getQueuedAsString());
@@ -1169,7 +1184,7 @@ QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
 QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
-    return runOgreOp([]() -> QJsonObject {
+    return runOgreOp([&]() -> QJsonObject {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
             return makeErrorResult("Error: Manager not available");
@@ -1353,7 +1368,7 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
 QJsonObject MCPServer::toolListSkeletalAnimations(const QJsonObject &args)
 {
     Q_UNUSED(args);
-    return runOgreOp([]() -> QJsonObject {
+    return runOgreOp([&]() -> QJsonObject {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) return makeErrorResult("Error: Manager not available");
         QStringList infoLines;
