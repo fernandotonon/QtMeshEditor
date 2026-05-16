@@ -4,6 +4,7 @@
 #include "EditableMesh.h"
 #include "Manager.h"
 #include "OgreWidget.h"
+#include "PaintBufferImageProvider.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "SpaceCamera.h"
@@ -1962,6 +1963,9 @@ void TexturePaintController::refreshPreviewUri()
             m_previewUri.clear();
             emit previewChanged();
         }
+        // Bump the full-res URL anyway so any bound Image clears.
+        ++m_fullResVersion;
+        emit fullResPreviewChanged();
         return;
     }
     // Scale down to a thumbnail before PNG-encoding. The preview
@@ -1986,6 +1990,33 @@ void TexturePaintController::refreshPreviewUri()
         m_previewUri = next;
         emit previewChanged();
     }
+    // The full-res preview channel doesn't need PNG encoding —
+    // QQuickImageProvider serves the live buffer directly on demand.
+    // Just bump the version so QML re-fetches.
+    ++m_fullResVersion;
+    emit fullResPreviewChanged();
+}
+
+QString TexturePaintController::fullResPreviewUrl() const
+{
+    // The trailing `?v=N` invalidates QML's Image cache on each
+    // refresh; the provider ignores it. Static `paintbuffer` host
+    // is registered in main.cpp so any consumer can bind to this.
+    if (m_buffer.width() <= 0 || m_buffer.height() <= 0)
+        return {};
+    return QStringLiteral("image://paintbuffer/current?v=%1").arg(m_fullResVersion);
+}
+
+QImage TexturePaintController::snapshotBufferImage() const
+{
+    if (m_buffer.width() <= 0 || m_buffer.height() <= 0) return {};
+    // Copy out — Qt may hold the QImage across thread boundaries
+    // and the underlying m_buffer could mutate (or get freed)
+    // between the provider call and the actual GPU upload.
+    QImage view(const_cast<uchar*>(m_buffer.data().data()),
+                m_buffer.width(), m_buffer.height(),
+                m_buffer.width() * 4, QImage::Format_RGBA8888);
+    return view.copy();
 }
 
 // ---------------------------------------------------------------------------
@@ -2545,6 +2576,13 @@ void TexturePaintController::openEditorWindow()
     const QString appDir = QCoreApplication::applicationDirPath();
     engine->addImportPath(appDir + "/qml");
     engine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
+
+    // Register the paintbuffer image provider so the editor window's
+    // <Image source="image://paintbuffer/current?v=…"/> can fetch
+    // the live buffer without a PNG round-trip. Engine takes
+    // ownership of the provider via QQmlEngine::addImageProvider.
+    engine->addImageProvider(QStringLiteral("paintbuffer"),
+                             new PaintBufferImageProvider());
 
     qmlRegisterSingletonType<TexturePaintController>(
         "PropertiesPanel", 1, 0, "TexturePaintController",

@@ -85,6 +85,16 @@ class TexturePaintController : public QObject
     // preview panel can render it via Image { source: ... }. Emitted on
     // every dirty-rect flush so the preview stays in sync with strokes.
     Q_PROPERTY(QString previewDataUri READ previewDataUri NOTIFY previewChanged)
+    /// Full-resolution preview URL for the detached Texture Editor
+    /// window. Returns an `image://paintbuffer/N` URL, where `N`
+    /// monotonically increases on every refresh so QML's Image
+    /// element invalidates its cache and pulls a fresh copy from
+    /// the QQuickImageProvider registered under the `paintbuffer`
+    /// scheme. The provider hands back a `QImage` view of
+    /// `m_buffer` directly — no PNG encode, no base64, no string
+    /// copy of the megabyte buffer per stroke. Roughly 100x cheaper
+    /// than the data-URI path on 2048² textures.
+    Q_PROPERTY(QString fullResPreviewUrl READ fullResPreviewUrl NOTIFY fullResPreviewChanged)
 
     // Texture slots on the currently-selected entity. Each entry is a
     // map: { label, submesh, slot, textureName }. QML reads this to
@@ -169,6 +179,12 @@ public:
 
     /// Preview data URI (PNG, base64) regenerated on every dirty flush.
     QString previewDataUri() const { return m_previewUri; }
+    /// Full-resolution preview URL — see the property doc.
+    QString fullResPreviewUrl() const;
+    /// Snapshot the current paint buffer as a QImage. Used by the
+    /// `paintbuffer` QQuickImageProvider to hand QML a fresh copy
+    /// on every request (no PNG encode, no base64).
+    QImage snapshotBufferImage() const;
 
     /// PNG data URI of the UV wireframe (white triangles on transparent
     /// background) at the current texture resolution. Lets the QML
@@ -360,6 +376,7 @@ signals:
     void paintTargetChanged();
     void slotsChanged();
     void previewChanged();
+    void fullResPreviewChanged();
     void uvOverlayChanged();
     void smartSelectChanged();
     void editorWindowChanged();
@@ -510,6 +527,10 @@ private:
 
     // Preview PNG cache.
     QString m_previewUri;
+    /// Monotonic counter appended to the full-res image URL so QML
+    /// invalidates Image cache on every refresh and re-pulls from
+    /// the `paintbuffer` provider.
+    quint64 m_fullResVersion = 0;
     /// Debounce flag: prevents stroke moves from regenerating the
     /// base64 PNG on every dirty flush (expensive at 1024×1024).
     bool m_previewRefreshScheduled = false;
