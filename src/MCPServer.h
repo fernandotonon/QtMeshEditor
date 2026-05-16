@@ -15,6 +15,8 @@
 #include <functional>
 #include <memory>
 
+#include <OgreException.h>
+
 namespace Ogre { class SceneNode; class Entity; }
 
 class MainWindow;
@@ -224,6 +226,33 @@ private:
     // Helper methods
     static QJsonObject makeErrorResult(const QString &message);
     static QJsonObject makeSuccessResult(const QString &message);
+
+    /**
+     * @brief Run an Ogre call and translate exceptions into MCP errors.
+     *
+     * 33+ tool handlers wrap their work in the same try/catch shape:
+     *
+     *     try { ... }
+     *     catch (Ogre::Exception& e) {
+     *         return makeErrorResult(QString("Ogre error: %1")...);
+     *     }
+     *
+     * Sonar flagged the bulk of those repeats as duplication. The
+     * helper keeps the same surface (return a QJsonObject) so call
+     * sites stay one-line conversions: `return runOgreOp([&]{ ... });`
+     */
+    template <typename Body>
+    static QJsonObject runOgreOp(Body&& body)
+    {
+        try {
+            return body();
+        } catch (const Ogre::Exception& e) {
+            return makeErrorResult(QStringLiteral("Ogre error: %1")
+                .arg(QString::fromStdString(e.getFullDescription())));
+        } catch (const std::runtime_error& e) {
+            return makeErrorResult(QStringLiteral("Error: %1").arg(e.what()));
+        }
+    }
     static const QMap<QString, ToolHandler>& toolHandlers();
     static bool isHeavyTool(const QString &name);
     bool ensureOgreInitialized();

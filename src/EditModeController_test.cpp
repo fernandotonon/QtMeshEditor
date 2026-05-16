@@ -21,6 +21,8 @@ The MIT License
 #include <QDir>
 #include <QFile>
 #include <QTextStream>
+#include <cmath>
+#include <limits>
 #include <set>
 #include <utility>
 #include <cmath>
@@ -2071,4 +2073,146 @@ TEST_F(EditModeControllerBevelE2ETest, EnterEditModeAfterEditDoesNotReimport) {
            "the qtme.faces.<i> binding";
 
     QFile::remove(objPath);
+}
+
+// ----------------------------------------------------------------------
+// Paint knob setters — pure state, no GL required. These exercise the
+// updateClampedKnob helper introduced as part of the dedup pass that
+// collapsed the radius / strength / falloff setters into one template.
+//
+// EditModeController is a singleton, so these tests use a fixture that
+// snapshots / restores every paint property they touch. Without this
+// the test order leaks state across cases (CodeRabbit on PR #532).
+// ----------------------------------------------------------------------
+
+class EditModeControllerPaintKnobsFixture : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        auto* em = EditModeController::instance();
+        m_radius   = em->vertexPaintRadius();
+        m_strength = em->vertexPaintStrength();
+        m_falloff  = em->vertexPaintFalloff();
+        m_shape    = em->vertexPaintShape();
+        m_fg       = em->vertexPaintColor();
+        m_bg       = em->vertexPaintBackgroundColor();
+    }
+    void TearDown() override
+    {
+        auto* em = EditModeController::instance();
+        em->setVertexPaintRadius(m_radius);
+        em->setVertexPaintStrength(m_strength);
+        em->setVertexPaintFalloff(m_falloff);
+        em->setVertexPaintShape(m_shape);
+        em->setVertexPaintColor(m_fg);
+        em->setVertexPaintBackgroundColor(m_bg);
+    }
+private:
+    double m_radius = 0;
+    double m_strength = 0;
+    double m_falloff = 0;
+    int    m_shape = 0;
+    QColor m_fg, m_bg;
+};
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintStrengthClampsToUnitRange)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintStrength(2.0);   // above range — clamps to 1.0
+    EXPECT_NEAR(em->vertexPaintStrength(), 1.0, 1e-9);
+    em->setVertexPaintStrength(-0.5);  // below range — clamps to 0.0
+    EXPECT_NEAR(em->vertexPaintStrength(), 0.0, 1e-9);
+    em->setVertexPaintStrength(0.42);
+    EXPECT_NEAR(em->vertexPaintStrength(), 0.42, 1e-9);
+}
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintFalloffClampsToUnitRange)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintFalloff(99.0);
+    EXPECT_NEAR(em->vertexPaintFalloff(), 1.0, 1e-9);
+    em->setVertexPaintFalloff(-1.0);
+    EXPECT_NEAR(em->vertexPaintFalloff(), 0.0, 1e-9);
+    em->setVertexPaintFalloff(0.25);
+    EXPECT_NEAR(em->vertexPaintFalloff(), 0.25, 1e-9);
+}
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintRadiusRejectsNonPositive)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintRadius(0.5);
+    EXPECT_NEAR(em->vertexPaintRadius(), 0.5, 1e-9);
+    // Zero / negative are no-ops; the previous value sticks.
+    em->setVertexPaintRadius(0.0);
+    EXPECT_NEAR(em->vertexPaintRadius(), 0.5, 1e-9);
+    em->setVertexPaintRadius(-3.0);
+    EXPECT_NEAR(em->vertexPaintRadius(), 0.5, 1e-9);
+}
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintRadiusRejectsNonFinite)
+{
+    // NaN / Inf must not propagate through std::min/std::max into the
+    // member (CodeRabbit on PR #532 — the upper bound for radius is
+    // +∞ so Inf would otherwise pass straight through the clamp).
+    auto* em = EditModeController::instance();
+    em->setVertexPaintRadius(0.7);
+    EXPECT_NEAR(em->vertexPaintRadius(), 0.7, 1e-9);
+    em->setVertexPaintRadius(std::numeric_limits<double>::infinity());
+    EXPECT_NEAR(em->vertexPaintRadius(), 0.7, 1e-9);
+    em->setVertexPaintRadius(std::numeric_limits<double>::quiet_NaN());
+    EXPECT_NEAR(em->vertexPaintRadius(), 0.7, 1e-9);
+}
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintStrengthAndFalloffRejectNonFinite)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintStrength(0.3);
+    em->setVertexPaintFalloff(0.4);
+    em->setVertexPaintStrength(std::numeric_limits<double>::infinity());
+    em->setVertexPaintFalloff(std::numeric_limits<double>::quiet_NaN());
+    EXPECT_NEAR(em->vertexPaintStrength(), 0.3, 1e-9);
+    EXPECT_NEAR(em->vertexPaintFalloff(), 0.4, 1e-9);
+}
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintShapeRoundTripsAcrossModes)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintShape(static_cast<int>(EditModeController::ShapeSquare));
+    EXPECT_EQ(em->vertexPaintShape(),
+              static_cast<int>(EditModeController::ShapeSquare));
+    em->setVertexPaintShape(static_cast<int>(EditModeController::ShapeRound));
+    EXPECT_EQ(em->vertexPaintShape(),
+              static_cast<int>(EditModeController::ShapeRound));
+    // Out-of-range int is rejected — shape stays at its previous value.
+    em->setVertexPaintShape(99);
+    EXPECT_EQ(em->vertexPaintShape(),
+              static_cast<int>(EditModeController::ShapeRound));
+}
+
+TEST_F(EditModeControllerPaintKnobsFixture, SwapAndResetPaintColors)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintColor(QColor(10, 20, 30));
+    em->setVertexPaintBackgroundColor(QColor(200, 210, 220));
+    em->swapPaintColors();
+    EXPECT_EQ(em->vertexPaintColor().rgb(),
+              QColor(200, 210, 220).rgb());
+    EXPECT_EQ(em->vertexPaintBackgroundColor().rgb(),
+              QColor(10, 20, 30).rgb());
+    em->resetPaintColors();
+    // Defaults: FG = Fern green (#71BC78 / 113, 188, 120), BG = black.
+    EXPECT_EQ(em->vertexPaintColor().rgb(),
+              QColor(113, 188, 120).rgb());
+    EXPECT_EQ(em->vertexPaintBackgroundColor().rgb(),
+              QColor(0, 0, 0).rgb());
+}
+
+TEST_F(EditModeControllerPaintKnobsFixture, SetVertexPaintBrushColorFromCssString)
+{
+    auto* em = EditModeController::instance();
+    em->setVertexPaintBrushColor("#ff8800");
+    EXPECT_EQ(em->vertexPaintColor().rgb(), QColor("#ff8800").rgb());
+    em->setVertexPaintBackgroundBrushColor("#001122");
+    EXPECT_EQ(em->vertexPaintBackgroundColor().rgb(), QColor("#001122").rgb());
 }

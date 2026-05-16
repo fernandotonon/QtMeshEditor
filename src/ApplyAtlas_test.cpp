@@ -149,3 +149,127 @@ TEST(ApplyAtlasStandaloneTest, RewrittenCountIgnoresUnmatchedSubmeshes)
     rep.submeshes << matched << unmatched << matched;
     EXPECT_EQ(rep.rewrittenCount(), 2);
 }
+
+TEST(ApplyAtlasStandaloneTest, ParseEmptyJsonRejected)
+{
+    const ParseResult r = parseManifestJson({});
+    EXPECT_FALSE(r.ok);
+}
+
+TEST(ApplyAtlasStandaloneTest, ParseRejectsRootNotAnObject)
+{
+    // Top-level array, not an object — typo in caller wiring.
+    const ParseResult r = parseManifestJson("[]");
+    EXPECT_FALSE(r.ok);
+}
+
+TEST(ApplyAtlasStandaloneTest, ParseAcceptsEmptyTilesArray)
+{
+    // Vacuous manifest is still well-formed: nothing to atlas, but
+    // applyToEntity will produce a "no matches" report rather than
+    // an error. Behaviour matches packing zero textures.
+    QJsonObject root;
+    root["width"] = 1024;
+    root["height"] = 1024;
+    root["padding"] = 0;
+    root["tiles"] = QJsonArray{};
+    const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Compact);
+
+    const ParseResult r = parseManifestJson(json);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_EQ(r.manifest.tiles.size(), 0);
+    EXPECT_EQ(r.manifest.width, 1024);
+}
+
+TEST(ApplyAtlasStandaloneTest, ParseRejectsMissingTilesField)
+{
+    // No "tiles" array at all — distinct error path from "tiles: []".
+    QJsonObject root;
+    root["width"] = 1024;
+    root["height"] = 1024;
+    const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Compact);
+
+    const ParseResult r = parseManifestJson(json);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains("tiles", Qt::CaseInsensitive))
+        << r.error.toStdString();
+}
+
+TEST(ApplyAtlasStandaloneTest, ParseTilesArrayWithNonObjectEntryRejected)
+{
+    QJsonObject root;
+    root["width"] = 1024;
+    root["height"] = 1024;
+    QJsonArray tiles;
+    tiles.append(QJsonValue("not-a-tile"));  // scalar instead of object
+    root["tiles"] = tiles;
+    const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Compact);
+
+    const ParseResult r = parseManifestJson(json);
+    EXPECT_FALSE(r.ok);
+}
+
+TEST(ApplyAtlasStandaloneTest, ReportJsonReflectsFailureState)
+{
+    // ok=false on the overall report should propagate, and the error
+    // message must be carried through so the caller (CLI / MCP) sees
+    // why the apply was rejected.
+    ApplyReport rep;
+    rep.ok = false;
+    rep.error = "Entity has no mesh";
+    const QJsonObject o = rep.toJson();
+    EXPECT_FALSE(o.value("ok").toBool());
+    EXPECT_EQ(o.value("error").toString().toStdString(), "Entity has no mesh");
+    EXPECT_EQ(o.value("submeshCount").toInt(), 0);
+}
+
+TEST(ApplyAtlasStandaloneTest, RewrittenCountZeroForEmptyReport)
+{
+    ApplyReport rep;
+    EXPECT_EQ(rep.rewrittenCount(), 0);
+    EXPECT_EQ(rep.submeshCount(), 0);
+}
+
+TEST(ApplyAtlasStandaloneTest, ReportJsonSerialisesEveryPerSubmeshField)
+{
+    // Sanity-check the SubmeshReport→JSON mapping doesn't drop a
+    // field — adding a new field to the struct without bumping the
+    // JSON shape is a common drift bug.
+    ApplyReport rep;
+    SubmeshReport s;
+    s.submeshIndex = 7;
+    s.materialName = "MatX";
+    s.diffuseTextureName = "diff.png";
+    s.matchedTileSource = "atlas/diff.png";
+    s.uvsRewritten = false;
+    s.materialUpdated = true;
+    s.verticesTouched = 42;
+    s.outOfRangeUVs = 3;
+    s.strippedExtraTextures = 1;
+    s.note = "skipped: out-of-range UVs";
+    rep.submeshes.append(s);
+
+    const QJsonObject o = rep.toJson();
+    const QJsonObject sub = o.value("submeshes").toArray().first().toObject();
+    EXPECT_EQ(sub.value("submeshIndex").toInt(), 7);
+    EXPECT_EQ(sub.value("materialName").toString(), QString("MatX"));
+    EXPECT_EQ(sub.value("diffuseTextureName").toString(), QString("diff.png"));
+    EXPECT_EQ(sub.value("matchedTileSource").toString(), QString("atlas/diff.png"));
+    EXPECT_FALSE(sub.value("uvsRewritten").toBool());
+    EXPECT_TRUE(sub.value("materialUpdated").toBool());
+    EXPECT_EQ(sub.value("verticesTouched").toInt(), 42);
+    EXPECT_EQ(sub.value("outOfRangeUVs").toInt(), 3);
+    EXPECT_EQ(sub.value("strippedExtraTextures").toInt(), 1);
+    EXPECT_TRUE(sub.value("note").toString().contains("skipped"));
+}
+
+TEST(ApplyAtlasStandaloneTest, ManifestParseRejectsNegativeDimensions)
+{
+    QJsonObject root;
+    root["width"] = -10;  // bogus
+    root["height"] = 1024;
+    root["tiles"] = QJsonArray{};
+    const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Compact);
+    const ParseResult r = parseManifestJson(json);
+    EXPECT_FALSE(r.ok);
+}

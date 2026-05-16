@@ -81,6 +81,7 @@ TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintSelectionMask.cpp
 TexturePaintBuffer.cpp
+UpdateVersion.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
 ApplyAtlas.cpp
@@ -179,6 +180,7 @@ TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintSelectionMask.h
 TexturePaintBuffer.h
+UpdateVersion.h
 TexturePaintController.h
 VertexColorBaker.h
 ApplyAtlas.h

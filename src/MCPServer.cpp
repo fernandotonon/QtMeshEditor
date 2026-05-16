@@ -589,77 +589,84 @@ QJsonObject MCPServer::handleResourcesRead(const QJsonObject &params)
 
 // Tool implementations
 
+namespace {
+
+/// Pull a color array from either a top-level `key` argument or a
+/// nested `colors.key` argument. Used by toolCreateMaterial — both
+/// MCP message shapes are valid, so we accept either.
+QJsonArray resolveColorArg(const QJsonObject& args, const QString& key)
+{
+    if (args.contains(key) && args[key].isArray())
+        return args[key].toArray();
+    const QJsonObject nested = args["colors"].toObject();
+    if (nested.contains(key) && nested[key].isArray())
+        return nested[key].toArray();
+    return {};
+}
+
+double resolveNumberArg(const QJsonObject& args, const QString& key, double def)
+{
+    if (args.contains(key)) return args[key].toDouble(def);
+    return args["colors"].toObject().value(key).toDouble(def);
+}
+
+/// Apply ambient / diffuse / specular / emissive colours from the
+/// MCP args onto an Ogre pass. Defaults match the historical
+/// toolCreateMaterial behaviour. Extracted as a free function so
+/// the parent handler stays under Sonar's complexity threshold.
+void applyColorsToPass(Ogre::Pass* pass, const QJsonObject& args)
+{
+    const QJsonArray amb = resolveColorArg(args, "ambient");
+    if (!amb.isEmpty())
+        pass->setAmbient(amb[0].toDouble(0.2), amb[1].toDouble(0.2), amb[2].toDouble(0.2));
+    else
+        pass->setAmbient(0.2, 0.2, 0.2);
+
+    const QJsonArray diff = resolveColorArg(args, "diffuse");
+    if (!diff.isEmpty())
+        pass->setDiffuse(diff[0].toDouble(1.0), diff[1].toDouble(1.0),
+                         diff[2].toDouble(1.0), 1.0);
+
+    const QJsonArray spec = resolveColorArg(args, "specular");
+    if (!spec.isEmpty()) {
+        pass->setSpecular(spec[0].toDouble(0.5), spec[1].toDouble(0.5),
+                          spec[2].toDouble(0.5), 1.0);
+        pass->setShininess(resolveNumberArg(args, "shininess", 32.0));
+    } else {
+        pass->setSpecular(0.5, 0.5, 0.5, 1.0);
+        pass->setShininess(32.0);
+    }
+
+    const QJsonArray emis = resolveColorArg(args, "emissive");
+    if (!emis.isEmpty())
+        pass->setSelfIllumination(emis[0].toDouble(), emis[1].toDouble(),
+                                  emis[2].toDouble());
+}
+
+} // namespace
+
 QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
 {
-    QString name = args["name"].toString();
-
+    const QString name = args["name"].toString();
     if (name.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
     }
-
     try {
-        // Check if material already exists
         Ogre::MaterialPtr existing = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (existing) {
             return makeErrorResult(QString("Error: Material '%1' already exists").arg(name));
         }
-
-        // Create the material programmatically
         Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
             name.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-
-        // Accept colors as either top-level params (diffuse, ambient …) or
-        // nested under a "colors" object — both formats are valid.
-        auto resolveColor = [&](const QString& key) -> QJsonArray {
-            if (args.contains(key) && args[key].isArray())
-                return args[key].toArray();
-            QJsonObject nested = args["colors"].toObject();
-            if (nested.contains(key) && nested[key].isArray())
-                return nested[key].toArray();
-            return {};
-        };
-        auto resolveNumber = [&](const QString& key, double def) -> double {
-            if (args.contains(key)) return args[key].toDouble(def);
-            return args["colors"].toObject().value(key).toDouble(def);
-        };
-
-        Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
-
-        QJsonArray amb = resolveColor("ambient");
-        if (!amb.isEmpty())
-            pass->setAmbient(amb[0].toDouble(0.2), amb[1].toDouble(0.2), amb[2].toDouble(0.2));
-        else
-            pass->setAmbient(0.2, 0.2, 0.2);
-
-        QJsonArray diff = resolveColor("diffuse");
-        if (!diff.isEmpty())
-            pass->setDiffuse(diff[0].toDouble(1.0), diff[1].toDouble(1.0), diff[2].toDouble(1.0), 1.0);
-
-        QJsonArray spec = resolveColor("specular");
-        if (!spec.isEmpty()) {
-            pass->setSpecular(spec[0].toDouble(0.5), spec[1].toDouble(0.5), spec[2].toDouble(0.5), 1.0);
-            pass->setShininess(resolveNumber("shininess", 32.0));
-        } else {
-            pass->setSpecular(0.5, 0.5, 0.5, 1.0);
-            pass->setShininess(32.0);
-        }
-
-        QJsonArray emis = resolveColor("emissive");
-        if (!emis.isEmpty())
-            pass->setSelfIllumination(emis[0].toDouble(), emis[1].toDouble(), emis[2].toDouble());
-
+        applyColorsToPass(mat->getTechnique(0)->getPass(0), args);
         try { mat->load(); } catch (...) { /* headless — no GPU context */ }
-
-
-        // Serialize the created material for display
         Ogre::MaterialSerializer serializer;
         serializer.queueForExport(mat);
-        QString materialScript = QString::fromStdString(serializer.getQueuedAsString());
-
-        return makeSuccessResult(QString("Created material '%1':\n%2").arg(name).arg(materialScript));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error creating material: %1").arg(QString::fromStdString(e.getFullDescription())));
+        const QString materialScript = QString::fromStdString(serializer.getQueuedAsString());
+        return makeSuccessResult(QString("Created material '%1':\n%2").arg(name, materialScript));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -671,28 +678,21 @@ QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
         return makeErrorResult("Error: Material name is required");
     }
 
-    // Try to get the material from Ogre
     try {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (!material) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(name));
         }
-
-        // Get the first technique and pass
         if (material->getNumTechniques() == 0) {
             return makeErrorResult(QString("Error: Material '%1' has no techniques").arg(name));
         }
-
         Ogre::Technique* technique = material->getTechnique(0);
         if (technique->getNumPasses() == 0) {
             return makeErrorResult(QString("Error: Material '%1' technique has no passes").arg(name));
         }
-
         Ogre::Pass* pass = technique->getPass(0);
 
         QStringList modifications;
-
-        // Apply modifications
         if (args.contains("ambient")) {
             QJsonArray a = args["ambient"].toArray();
             Ogre::ColourValue ambient(a[0].toDouble(), a[1].toDouble(), a[2].toDouble());
@@ -723,44 +723,38 @@ QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
             modifications << QString("emissive: %1 %2 %3")
                 .arg(e[0].toDouble()).arg(e[1].toDouble()).arg(e[2].toDouble());
         }
-
-        return makeSuccessResult(QString("Modified material '%1':\n%2").arg(name).arg(modifications.join("\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+        return makeSuccessResult(QString("Modified material '%1':\n%2")
+            .arg(name, modifications.join("\n")));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
 QJsonObject MCPServer::toolGetMaterial(const QJsonObject &args)
 {
-    QString name = args["name"].toString();
-
+    const QString name = args["name"].toString();
     if (name.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
     }
-
     try {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (!material) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(name));
         }
-
-        // Serialize the material to script text
         Ogre::MaterialSerializer serializer;
         serializer.queueForExport(material);
-        QString script = QString::fromStdString(serializer.getQueuedAsString());
-
-        return makeSuccessResult(QString("Material '%1' script:\n%2").arg(name).arg(script));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+        const QString script = QString::fromStdString(serializer.getQueuedAsString());
+        return makeSuccessResult(QString("Material '%1' script:\n%2").arg(name, script));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
 QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
     try {
         QStringList materials;
         auto& matMgr = Ogre::MaterialManager::getSingleton();
@@ -769,11 +763,12 @@ QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
             Ogre::ResourcePtr res = it.getNext();
             materials << QString::fromStdString(res->getName());
         }
-
         materials.sort();
-        return makeSuccessResult(QString("Available materials (%1):\n%2").arg(materials.size()).arg(materials.join("\n")));
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+        return makeSuccessResult(QString("Available materials (%1):\n%2")
+            .arg(materials.size()).arg(materials.join("\n")));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -791,38 +786,31 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
     if (materialName.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
     }
-
     try {
-        // Verify material exists
         Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().getByName(materialName.toStdString());
         if (!mat) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(materialName));
         }
-
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
             return makeErrorResult("Error: Manager not available");
         }
-
         QStringList appliedTo;
-
         if (!meshName.isEmpty()) {
+            // Use findEntityByName (which already checks getMovableType
+            // == "Entity") to avoid the ManualObject cast crash that
+            // would happen if we iterated Manager::getEntities() and
+            // static_cast'd every attached movable. CodeRabbit feedback
+            // on PR #532.
             bool found = false;
-
-            // Primary: search by entity name via getEntities()
-            QList<Ogre::Entity*>& entities = mgr->getEntities();
-            for (Ogre::Entity* entity : entities) {
-                if (entity && QString::fromStdString(entity->getName()) == meshName) {
-                    entity->setMaterialName(materialName.toStdString());
-                    appliedTo << QString::fromStdString(entity->getName());
-                    found = true;
-                    break;
-                }
+            if (Ogre::Entity* entity = findEntityByName(meshName)) {
+                entity->setMaterialName(materialName.toStdString());
+                appliedTo << QString::fromStdString(entity->getName());
+                found = true;
             }
-
-            // Fallback: look up scene node by name and apply to its attached entity.
-            // Handles cases where the entity name differs from the node name, or
-            // getEntities() returns an incomplete / mis-cast list.
+            // Fallback: look up by scene-node name if the entity name
+            // wasn't found (entity name can differ from node name when
+            // the node was created with a custom label).
             if (!found) {
                 Ogre::SceneNode* sn = findSceneNodeByName(meshName);
                 if (sn) {
@@ -838,12 +826,10 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
                     }
                 }
             }
-
             if (!found) {
                 return makeErrorResult(QString("Error: Mesh '%1' not found").arg(meshName));
             }
         } else {
-            // Apply to selected entities
             SelectionSet* sel = SelectionSet::getSingleton();
             if (!sel || sel->getEntitiesCount() == 0) {
                 return makeErrorResult("Error: No entity specified and no entities selected");
@@ -856,11 +842,11 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
                 }
             }
         }
-
-        return makeSuccessResult(QString("Applied material '%1' to: %2").arg(materialName).arg(appliedTo.join(", ")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+        return makeSuccessResult(QString("Applied material '%1' to: %2")
+            .arg(materialName, appliedTo.join(", ")));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -945,44 +931,37 @@ QJsonObject MCPServer::toolApplyMaterialPreset(const QJsonObject &args)
 
 QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
 {
-    QString path = args["path"].toString();
-
+    const QString path = args["path"].toString();
     if (path.isEmpty()) {
         return makeErrorResult("Error: File path is required");
     }
-
     MainWindow* mainWindow = qobject_cast<MainWindow*>(m_mainWindow);
     if (!mainWindow) {
         return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag for full functionality.");
     }
-
     if (!QFile::exists(path)) {
         return makeErrorResult(QString("Error: File not found: %1").arg(path));
     }
-
     try {
         mainWindow->importMeshs(QStringList{path});
         return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
-
-    } catch (std::exception& e) {
-        return makeErrorResult(QString("Error loading mesh: %1").arg(e.what()));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
 QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
     try {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
             return makeErrorResult("Error: Manager not available");
         }
-
         // Check if there's a selection first, otherwise report all entities
         SelectionSet* sel = SelectionSet::getSingleton();
         QList<Ogre::Entity*> entitiesToReport;
-
         if (sel && sel->getEntitiesCount() > 0) {
             for (int i = 0; i < sel->getEntitiesCount(); ++i) {
                 entitiesToReport.append(sel->getEntity(i));
@@ -990,23 +969,17 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
         } else {
             entitiesToReport = mgr->getEntities();
         }
-
         if (entitiesToReport.isEmpty()) {
             return makeSuccessResult("No entities in scene");
         }
-
         QStringList infoLines;
         for (Ogre::Entity* entity : entitiesToReport) {
             if (!entity) continue;
-
             const Ogre::MeshPtr& mesh = entity->getMesh();
             if (!mesh) continue;
-
-            // Count vertices and indices
             unsigned int totalVertices = 0;
             unsigned int totalIndices = 0;
-            unsigned int numSubMeshes = mesh->getNumSubMeshes();
-
+            const unsigned int numSubMeshes = mesh->getNumSubMeshes();
             for (unsigned int i = 0; i < numSubMeshes; ++i) {
                 Ogre::SubMesh* subMesh = mesh->getSubMesh(i);
                 if (subMesh->vertexData)
@@ -1014,11 +987,8 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
                 if (subMesh->indexData)
                     totalIndices += subMesh->indexData->indexCount;
             }
-            // Shared vertex data
             if (mesh->sharedVertexData)
                 totalVertices += mesh->sharedVertexData->vertexCount;
-
-            // Get materials for sub-entities
             QStringList materials;
             for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i) {
                 Ogre::SubEntity* subEnt = entity->getSubEntity(i);
@@ -1026,11 +996,9 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
                     materials << QString::fromStdString(subEnt->getMaterial()->getName());
                 }
             }
-
             Ogre::SceneNode* parentNode = entity->getParentSceneNode();
             Ogre::Vector3 pos = parentNode ? parentNode->getPosition() : Ogre::Vector3::ZERO;
             Ogre::Vector3 scale = parentNode ? parentNode->getScale() : Ogre::Vector3::UNIT_SCALE;
-
             infoLines << QString(
                 "Entity: %1\n"
                 "  Mesh: %2\n"
@@ -1049,13 +1017,12 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
              .arg(pos.x).arg(pos.y).arg(pos.z)
              .arg(scale.x).arg(scale.y).arg(scale.z);
         }
-
         return makeSuccessResult(QString("Mesh Information (%1 entities):\n\n%2")
             .arg(entitiesToReport.size())
             .arg(infoLines.join("\n\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -1078,9 +1045,7 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
         if (!Manager::getSingletonPtr()) {
             return makeErrorResult("Error: Manager not available");
         }
-
-        // If a name is provided, find and select that node first
-        QString name = args["name"].toString();
+        const QString name = args["name"].toString();
         Ogre::SceneNode* targetNode = nullptr;
         if (!name.isEmpty()) {
             targetNode = findSceneNodeByName(name);
@@ -1088,14 +1053,12 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
                 return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
             }
         } else {
-            // No name given - require something selected
             SelectionSet* sel = SelectionSet::getSingleton();
             if (!sel || sel->getNodesCount() == 0) {
                 return makeErrorResult("Error: No name provided and no scene nodes selected.");
             }
             targetNode = sel->getNodesSelectionList().first();
         }
-
         QStringList transforms;
         if (args.contains("position")) {
             Ogre::Vector3 pos = parseVector3(args["position"]);
@@ -1116,13 +1079,11 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
             targetNode->setScale(scale);
             transforms << QString("scale: %1, %2, %3").arg(scale.x).arg(scale.y).arg(scale.z);
         }
-
         return makeSuccessResult(QString("Applied transforms to '%1':\n%2")
-            .arg(QString::fromStdString(targetNode->getName()))
-            .arg(transforms.join("\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+            .arg(QString::fromStdString(targetNode->getName()), transforms.join("\n")));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -1131,26 +1092,20 @@ QJsonObject MCPServer::toolTransformSubMesh(const QJsonObject &args)
     try {
         if (!Manager::getSingletonPtr())
             return makeErrorResult("Error: Manager not available");
-
-        QString entityName = args["entity_name"].toString();
+        const QString entityName = args["entity_name"].toString();
         if (entityName.isEmpty())
             return makeErrorResult("Error: entity_name is required");
-
-        int subIdx = args["submesh_index"].toInt(-1);
+        const int subIdx = args["submesh_index"].toInt(-1);
         if (subIdx < 0)
             return makeErrorResult("Error: submesh_index must be a non-negative integer");
-
         Ogre::Entity* entity = findEntityByName(entityName);
         if (!entity)
             return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
-
-        unsigned int uSubIdx = static_cast<unsigned int>(subIdx);
+        const unsigned int uSubIdx = static_cast<unsigned int>(subIdx);
         if (uSubIdx >= entity->getNumSubEntities())
             return makeErrorResult(QString("Error: submesh_index %1 out of range (entity has %2 sub-meshes)")
                 .arg(subIdx).arg(entity->getNumSubEntities()));
-
         QStringList transforms;
-
         if (args.contains("translate")) {
             Ogre::Vector3 delta = parseVector3(args["translate"]);
             SubMeshTransform::translateSubMesh(entity, uSubIdx, delta);
@@ -1170,25 +1125,21 @@ QJsonObject MCPServer::toolTransformSubMesh(const QJsonObject &args)
             SubMeshTransform::scaleSubMesh(entity, uSubIdx, scale);
             transforms << QString("scale: %1, %2, %3").arg(scale.x).arg(scale.y).arg(scale.z);
         }
-
         if (transforms.isEmpty())
             return makeErrorResult("Error: No transform specified. Provide translate, rotate, or scale.");
-
         SentryReporter::addBreadcrumb("ai.tool_call",
             QString("transform_submesh: %1[%2]").arg(entityName).arg(subIdx));
-
         return makeSuccessResult(QString("Applied sub-mesh transforms to '%1' submesh %2:\n%3")
             .arg(entityName).arg(subIdx).arg(transforms.join("\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
 QJsonObject MCPServer::toolListTextures(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
     try {
         QStringList textures;
         auto& texMgr = Ogre::TextureManager::getSingleton();
@@ -1197,100 +1148,85 @@ QJsonObject MCPServer::toolListTextures(const QJsonObject &args)
             Ogre::ResourcePtr res = it.getNext();
             textures << QString::fromStdString(res->getName());
         }
-
         textures.sort();
         return makeSuccessResult(QString("Available textures (%1):\n%2")
             .arg(textures.size())
             .arg(textures.isEmpty() ? "(none)" : textures.join("\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
 QJsonObject MCPServer::toolSetTexture(const QJsonObject &args)
 {
-    QString materialName = args["material"].toString();
-    QString texturePath = args["texture"].toString();
-    int textureUnit = args["unit"].toInt(0);
-
+    const QString materialName = args["material"].toString();
+    const QString texturePath = args["texture"].toString();
+    const int textureUnit = args["unit"].toInt(0);
     if (materialName.isEmpty() || texturePath.isEmpty()) {
         return makeErrorResult("Error: Both material and texture names are required");
     }
-
     try {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(materialName.toStdString());
         if (!material) {
             return makeErrorResult(QString("Error: Material '%1' not found").arg(materialName));
         }
-
         if (material->getNumTechniques() == 0 ||
             material->getTechnique(0)->getNumPasses() == 0) {
             return makeErrorResult(QString("Error: Material '%1' has no technique/pass").arg(materialName));
         }
-
         Ogre::Pass* pass = material->getTechnique(0)->getPass(0);
-
         if (static_cast<int>(pass->getNumTextureUnitStates()) > textureUnit) {
             pass->getTextureUnitState(textureUnit)->setTextureName(texturePath.toStdString());
         } else {
             pass->createTextureUnitState(texturePath.toStdString());
         }
-
         return makeSuccessResult(QString("Set texture '%1' on material '%2' (unit %3)")
-            .arg(texturePath).arg(materialName).arg(textureUnit));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+            .arg(texturePath, materialName).arg(textureUnit));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
 QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
 {
-    QString path = args["path"].toString();
-    QString format = args["format"].toString("Ogre Mesh (*.mesh)");
-
+    const QString path = args["path"].toString();
+    const QString format = args["format"].toString("Ogre Mesh (*.mesh)");
     if (path.isEmpty()) {
         return makeErrorResult("Error: Export path is required");
     }
-
     try {
         SelectionSet* sel = SelectionSet::getSingleton();
         if (!sel || sel->getNodesCount() == 0) {
             return makeErrorResult("Error: No scene nodes selected. Select an object to export.");
         }
-
         Ogre::SceneNode* node = sel->getSceneNode(0);
         if (!node) {
             return makeErrorResult("Error: Selected scene node is null");
         }
-
-        int exportResult = MeshImporterExporter::exporter(node, path, format);
+        const int exportResult = MeshImporterExporter::exporter(node, path, format);
         if (exportResult == 0) {
-            return makeSuccessResult(QString("Exported mesh to: %1 (format: %2)").arg(path).arg(format));
-        } else {
-            return makeSuccessResult(QString("Export completed to: %1 (format: %2), result code: %3").arg(path).arg(format).arg(exportResult));
+            return makeSuccessResult(QString("Exported mesh to: %1 (format: %2)").arg(path, format));
         }
-
-    } catch (std::exception& e) {
-        return makeErrorResult(QString("Error exporting mesh: %1").arg(e.what()));
+        return makeSuccessResult(QString("Export completed to: %1 (format: %2), result code: %3")
+            .arg(path, format).arg(exportResult));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
 QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
     try {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
             return makeErrorResult("Error: Manager not available");
         }
-
         // Copy lists to avoid reference invalidation
-        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
-
-        // Count materials
+        const QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
         int materialCount = 0;
         auto& matMgr = Ogre::MaterialManager::getSingleton();
         auto it = matMgr.getResourceIterator();
@@ -1298,7 +1234,6 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
             it.getNext();
             materialCount++;
         }
-
         // Build scene node list and entity list by iterating nodes directly.
         // Manager::getEntities() uses static_cast<Entity*> on all attached objects,
         // which crashes on ManualObjects. Check movable type explicitly.
@@ -1308,11 +1243,9 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
         for (Ogre::SceneNode* node : nodes) {
             if (!node) continue;
             nodeNames << QString::fromStdString(node->getName());
-
             for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
                 Ogre::MovableObject* obj = node->getAttachedObject(i);
                 if (!obj || obj->getMovableType() != "Entity") continue;
-
                 Ogre::Entity* entity = static_cast<Ogre::Entity*>(obj);
                 entityCount++;
                 QString info = QString("  - %1").arg(QString::fromStdString(entity->getName()));
@@ -1326,8 +1259,7 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
                 entityInfo << info;
             }
         }
-
-        QString sceneInfo = QString(
+        const QString sceneInfo = QString(
             "Scene Information:\n"
             "- Scene Nodes: %1\n"
             "- Entities: %2\n"
@@ -1339,10 +1271,10 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
          .arg(materialCount)
          .arg(nodeNames.isEmpty() ? "  (none)" : "  " + nodeNames.join("\n  "))
          .arg(entityInfo.isEmpty() ? "  (none)" : entityInfo.join("\n"));
-
         return makeSuccessResult(sceneInfo);
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -1440,33 +1372,26 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
         }
         return makeSuccessResult(QString("Stopped animation on '%1'").arg(name));
     }
-
     try {
         if (!Manager::getSingletonPtr()) {
             return makeErrorResult("Error: Manager not available");
         }
-
         Ogre::SceneNode* targetNode = findSceneNodeByName(name);
         if (!targetNode) {
             return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
         }
-
-        float yaw = static_cast<float>(args["yaw"].toDouble(0));
+        float yaw   = static_cast<float>(args["yaw"].toDouble(0));
         float pitch = static_cast<float>(args["pitch"].toDouble(0));
-        float roll = static_cast<float>(args["roll"].toDouble(0));
-
+        float roll  = static_cast<float>(args["roll"].toDouble(0));
         if (yaw == 0 && pitch == 0 && roll == 0) {
             yaw = 45; // default: 45 degrees/sec around Y
         }
-
         NodeAnimation anim;
         anim.node = targetNode;
         anim.yawSpeed = yaw;
         anim.pitchSpeed = pitch;
         anim.rollSpeed = roll;
         m_animations[name] = anim;
-
-        // Create and start the animation timer if needed
         if (!m_animationTimer) {
             m_animationTimer = new QTimer(this);
             connect(m_animationTimer, &QTimer::timeout, this, &MCPServer::onAnimationTick);
@@ -1474,37 +1399,31 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
         if (!m_animationTimer->isActive()) {
             m_animationTimer->start(16); // ~60fps
         }
-
         return makeSuccessResult(QString("Started animation on '%1' (yaw: %2, pitch: %3, roll: %4 deg/sec)")
             .arg(name).arg(yaw).arg(pitch).arg(roll));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
 QJsonObject MCPServer::toolListSkeletalAnimations(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
     try {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) return makeErrorResult("Error: Manager not available");
-
         QStringList infoLines;
-        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
+        const QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
         for (Ogre::SceneNode* node : nodes) {
             if (!node) continue;
             for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
                 Ogre::MovableObject* obj = node->getAttachedObject(i);
                 if (!obj || obj->getMovableType() != "Entity") continue;
-
                 Ogre::Entity* entity = static_cast<Ogre::Entity*>(obj);
                 if (!entity->hasSkeleton()) continue;
-
                 Ogre::AnimationStateSet* stateSet = entity->getAllAnimationStates();
                 if (!stateSet) continue;
-
                 for (const auto &pair : stateSet->getAnimationStates()) {
                     Ogre::AnimationState* state = pair.second;
                     infoLines << QString("Entity: %1 | Animation: %2 | Length: %3s | Enabled: %4 | Loop: %5")
@@ -1516,15 +1435,13 @@ QJsonObject MCPServer::toolListSkeletalAnimations(const QJsonObject &args)
                 }
             }
         }
-
         if (infoLines.isEmpty())
             return makeSuccessResult("No skeletal animations found in scene");
-
         return makeSuccessResult(QString("Skeletal animations (%1):\n%2")
             .arg(infoLines.size()).arg(infoLines.join("\n")));
-
-    } catch (Ogre::Exception& e) {
-        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 

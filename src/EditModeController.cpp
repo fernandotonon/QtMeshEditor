@@ -355,39 +355,52 @@ void EditModeController::resetPaintColors()
     }
 }
 
-void EditModeController::setVertexPaintRadius(double r)
+namespace {
+
+/// Apply a brush double-knob change: clamp to [lo, hi], skip if unchanged,
+/// breadcrumb the new value, and emit `vertexPaintChanged`. The three
+/// setters below (radius / strength / falloff) used to be copy-pasted
+/// 8-line blocks that Sonar flagged as duplication. Returns true when
+/// the value actually changed (the caller might not care; included for
+/// future call sites that want to chain side-effects).
+template <typename T, typename Emit>
+bool updateClampedKnob(T& member, T newValue, T lo, T hi,
+                       const char* label, Emit&& emitFn)
 {
-    if (r <= 0.0 || m_vertexPaintRadius == r)
-        return;
-    m_vertexPaintRadius = r;
+    const T clamped = std::max(lo, std::min(hi, newValue));
+    if (member == clamped) return false;
+    member = clamped;
     SentryReporter::addBreadcrumb(
         "ui.action",
-        QStringLiteral("Vertex paint radius: %1").arg(m_vertexPaintRadius, 0, 'f', 3));
-    emit vertexPaintChanged();
+        QStringLiteral("Vertex paint %1: %2").arg(QLatin1String(label)).arg(clamped, 0, 'f', 3));
+    emitFn();
+    return true;
+}
+
+} // namespace
+
+void EditModeController::setVertexPaintRadius(double r)
+{
+    // Reject non-finite inputs before clamping — std::min/std::max
+    // propagate NaN, and the upper bound here is +∞ so an Inf input
+    // would pass straight through. CodeRabbit flagged this on PR #532.
+    if (!std::isfinite(r) || r <= 0.0) return;
+    updateClampedKnob(m_vertexPaintRadius, r, 1e-9, std::numeric_limits<double>::infinity(),
+                      "radius", [this]() { emit vertexPaintChanged(); });
 }
 
 void EditModeController::setVertexPaintStrength(double s)
 {
-    const double clamped = std::max(0.0, std::min(1.0, s));
-    if (m_vertexPaintStrength == clamped)
-        return;
-    m_vertexPaintStrength = clamped;
-    SentryReporter::addBreadcrumb(
-        "ui.action",
-        QStringLiteral("Vertex paint strength: %1").arg(m_vertexPaintStrength, 0, 'f', 3));
-    emit vertexPaintChanged();
+    if (!std::isfinite(s)) return;
+    updateClampedKnob(m_vertexPaintStrength, s, 0.0, 1.0,
+                      "strength", [this]() { emit vertexPaintChanged(); });
 }
 
 void EditModeController::setVertexPaintFalloff(double f)
 {
-    const double clamped = std::max(0.0, std::min(1.0, f));
-    if (m_vertexPaintFalloff == clamped)
-        return;
-    m_vertexPaintFalloff = clamped;
-    SentryReporter::addBreadcrumb(
-        "ui.action",
-        QStringLiteral("Vertex paint falloff: %1").arg(m_vertexPaintFalloff, 0, 'f', 3));
-    emit vertexPaintChanged();
+    if (!std::isfinite(f)) return;
+    updateClampedKnob(m_vertexPaintFalloff, f, 0.0, 1.0,
+                      "falloff", [this]() { emit vertexPaintChanged(); });
 }
 
 void EditModeController::setVertexPaintShape(int shape)
