@@ -8,6 +8,7 @@
 #include "ApplyAtlas.h"
 #include "NormalMapGenerator.h"
 #include "VATBaker.h"
+#include "MorphAnimationManager.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -461,7 +462,9 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("pack_atlas"), &MCPServer::toolPackAtlas},
         {QStringLiteral("apply_atlas"), &MCPServer::toolApplyAtlas},
         {QStringLiteral("optimize_mesh"), &MCPServer::toolOptimizeMesh},
-        {QStringLiteral("bake_vat"), &MCPServer::toolBakeVat}
+        {QStringLiteral("bake_vat"), &MCPServer::toolBakeVat},
+        {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
+        {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight}
     };
     return handlers;
 }
@@ -481,7 +484,8 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("bake_animation_fps"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
-        QStringLiteral("bake_vat")
+        QStringLiteral("bake_vat"),
+        QStringLiteral("list_morph_targets")
     };
     return heavyTools.contains(name);
 }
@@ -4240,6 +4244,157 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+// ---------------------------------------------------------------------------
+// Morph A6 — morph-target inspection + weight poke.
+// ---------------------------------------------------------------------------
+
+QJsonObject MCPServer::toolListMorphTargets(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "list_morph_targets");
+
+    const QString filePath = args.value("file").toString();
+    if (filePath.isEmpty())
+        return makeErrorResult("Error: missing required 'file' argument");
+    if (!QFileInfo::exists(filePath))
+        return makeErrorResult(QString("Error: file not found: %1").arg(filePath));
+
+    // Reuse the same safe import + cleanup pattern toolBakeVat uses:
+    // snapshot entities before, import, diff the new ones, RAII tear
+    // them down on exit. Without this, repeated MCP calls would
+    // accumulate scene state.
+    auto* mgr = Manager::getSingleton();
+    auto collectEntitiesSafe = [mgr]() {
+        QList<Ogre::Entity*> out;
+        const auto& nodes = mgr->getSceneNodes();
+        for (Ogre::SceneNode* node : nodes) {
+            if (!node) continue;
+            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if (!obj || obj->getMovableType() != "Entity") continue;
+                out.append(static_cast<Ogre::Entity*>(obj));
+            }
+        }
+        return out;
+    };
+
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1 for morph list").arg(filePath));
+    QSet<Ogre::Entity*> beforeSet;
+    for (Ogre::Entity* e : collectEntitiesSafe()) beforeSet.insert(e);
+
+    // Snapshot the user's selection *before* the import. The importer
+    // auto-selects newly-created entities (Manager::addSceneNode +
+    // MeshImporterExporter calls SelectionSet::append), so without
+    // restoring we'd leave the SelectionSet pointing at the entities
+    // we're about to destroy in cleanup — a use-after-free for any
+    // downstream code that iterates selection nodes / entities.
+    auto* selSet = SelectionSet::getSingleton();
+    QList<Ogre::SceneNode*> prevNodes;
+    QList<Ogre::Entity*>    prevEnts;
+    QList<Ogre::SubEntity*> prevSubs;
+    if (selSet) {
+        prevNodes = selSet->getNodesSelectionList();
+        prevEnts  = selSet->getEntitiesSelectionList();
+        prevSubs  = selSet->getSubEntitiesSelectionList();
+    }
+
+    try {
+        MeshImporterExporter::importer({filePath});
+    } catch (const std::exception& e) {
+        return makeErrorResult(QString("Importer threw: %1").arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        return makeErrorResult("Importer threw (unknown exception)");
+    }
+
+    QList<Ogre::Entity*> imported;
+    for (Ogre::Entity* e : collectEntitiesSafe()) {
+        if (!beforeSet.contains(e)) imported.append(e);
+    }
+    if (imported.isEmpty())
+        return makeErrorResult(QString("Error: failed to load mesh: %1").arg(filePath));
+
+    struct ImportCleanup {
+        Manager* mgr;
+        SelectionSet* sel;
+        QList<Ogre::Entity*> entities;
+        QList<Ogre::SceneNode*> prevNodes;
+        QList<Ogre::Entity*>    prevEnts;
+        QList<Ogre::SubEntity*> prevSubs;
+        ~ImportCleanup() {
+            if (!mgr) return;
+            try {
+                std::set<Ogre::SceneNode*> nodes;
+                for (Ogre::Entity* e : entities)
+                    if (e && e->getParentSceneNode()) nodes.insert(e->getParentSceneNode());
+                for (Ogre::SceneNode* sn : nodes) mgr->destroySceneNode(sn);
+            } catch (...) {}
+
+            // Restore the pre-import selection. Use clearList() (not
+            // clear()) because the importer-added entries point at
+            // entities we just destroyed — clear() would dereference
+            // freed memory while bookkeeping. The pointers we
+            // captured beforehand are still valid because we only
+            // destroyed the *new* (imported) nodes.
+            if (sel) {
+                try {
+                    sel->clearList();
+                    for (auto* n : prevNodes) if (n) sel->append(n);
+                    for (auto* e : prevEnts)  if (e) sel->append(e);
+                    for (auto* s : prevSubs)  if (s) sel->append(s);
+                } catch (...) {}
+            }
+        }
+    } cleanup{mgr, selSet, imported, prevNodes, prevEnts, prevSubs};
+
+    // Union targets across every imported entity (multi-entity files
+    // can split shapes across body + head meshes). Same de-dup the
+    // CLI subcommand does.
+    QStringList targets;
+    QSet<QString> seen;
+    auto* mgrMorph = MorphAnimationManager::instance();
+    for (Ogre::Entity* e : imported) {
+        for (const QString& n : mgrMorph->morphTargetsFor(e)) {
+            if (!seen.contains(n)) { seen.insert(n); targets.append(n); }
+        }
+    }
+
+    QJsonObject content;
+    content["file"] = filePath;
+    content["count"] = static_cast<int>(targets.size());
+    QJsonArray arr;
+    for (const QString& n : targets) arr.append(n);
+    content["morphTargets"] = arr;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetMorphWeight(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_morph_weight");
+
+    const QString name = args.value("name").toString();
+    if (name.isEmpty())
+        return makeErrorResult("Error: missing required 'name' argument");
+    if (!args.contains("weight"))
+        return makeErrorResult("Error: missing required 'weight' argument");
+    const double w = args.value("weight").toDouble();
+    if (!std::isfinite(w))
+        return makeErrorResult("Error: weight must be a finite number");
+
+    auto* m = MorphAnimationManager::instance();
+    if (!m->setWeightForSelection(name, w))
+        return makeErrorResult(
+            QString("Error: failed to set weight (no selection, "
+                    "or '%1' not found on the selected entity)").arg(name));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["name"] = name;
+    content["weight"] = m->weightForSelection(name);
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -5336,6 +5491,42 @@ QJsonArray MCPServer::buildToolsList()
             "(if reduction / target_tris / target_verts is provided), and animation keyframe simplify. "
             "Writes the result to `output` (extension determines format). Returns a per-stage applied/"
             "summary report plus the input/output byte counts.",
+            props,
+            required
+        );
+    }
+
+    // list_morph_targets
+    {
+        QJsonObject props;
+        props["file"] = QJsonObject{{"type", "string"}, {"description", "Path to the source mesh file."}};
+        QJsonArray required;
+        required.append("file");
+        appendTool(
+            "list_morph_targets",
+            "List named morph targets / blend shapes on a mesh file. Loads the file, "
+            "enumerates Ogre::Pose entries the importer produced (one per shape), and "
+            "returns the de-duplicated names across all imported entities. The mesh is "
+            "torn down before the tool returns, so the editor's live scene is unchanged.",
+            props,
+            required
+        );
+    }
+
+    // set_morph_weight
+    {
+        QJsonObject props;
+        props["name"]   = QJsonObject{{"type", "string"}, {"description", "Morph target name (use list_morph_targets to enumerate)."}};
+        props["weight"] = QJsonObject{{"type", "number"}, {"description", "Weight in [0..1]. Values outside the range are clamped."}};
+        QJsonArray required;
+        required.append("name");
+        required.append("weight");
+        appendTool(
+            "set_morph_weight",
+            "Set a morph-target weight on the first selected entity in the live editor. "
+            "Drives the matching Ogre::AnimationState so the mesh deforms in real time. "
+            "Returns the actual weight after clamping. Returns an error if no entity is "
+            "selected or the named target doesn't exist on the selection.",
             props,
             required
         );

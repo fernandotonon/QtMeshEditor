@@ -209,6 +209,15 @@ private:
     /// target, normals, output_dir, basename.
     QJsonObject toolBakeVat(const QJsonObject &args);
 
+    /// Morph A6: list named morph targets / blend shapes on a mesh
+    /// file. Args: `file` (path). Heavy — does a full mesh import.
+    QJsonObject toolListMorphTargets(const QJsonObject &args);
+
+    /// Morph A6: set a morph-target weight on the first selected
+    /// entity in the editor. Args: `name`, `weight` (0..1).
+    /// Light — pure state poke on a live entity.
+    QJsonObject toolSetMorphWeight(const QJsonObject &args);
+
     // Animation
     struct NodeAnimation {
         Ogre::SceneNode* node;
@@ -289,7 +298,7 @@ private:
     // 1.4.0 — added simplify_animation / analyze_animation tools
     // 1.5.0 — added bake_animation_fps tool
     // 1.6.0 — added list_material_presets / apply_material_preset (incl. PBR templates)
-    static constexpr const char* SERVER_VERSION = "1.8.0";
+    static constexpr const char* SERVER_VERSION = "1.9.0";
 };
 
 #endif // MCPSERVER_H
