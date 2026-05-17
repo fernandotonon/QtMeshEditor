@@ -4328,7 +4328,10 @@ Rectangle {
                     anchors.margins: 6
                     spacing: 4
 
-                    property var targets: MorphAnimationManager.morphTargetsForSelection()
+                    // Defensive `|| []` so an unexpected null return
+                    // doesn't crash the binding — the manager currently
+                    // always returns a QStringList, but contracts drift.
+                    property var targets: MorphAnimationManager.morphTargetsForSelection() || []
                     property int targetCount: targets.length
                     property string filter: ""
                     // Bumped on `morphWeightChanged`; sliders bind their
@@ -4342,7 +4345,7 @@ Rectangle {
                     Connections {
                         target: MorphAnimationManager
                         function onMorphTargetsChanged() {
-                            morphCol.targets = MorphAnimationManager.morphTargetsForSelection()
+                            morphCol.targets = MorphAnimationManager.morphTargetsForSelection() || []
                             morphCol.weightTick = morphCol.weightTick + 1
                         }
                         function onMorphWeightChanged(entity, name, weight) {
