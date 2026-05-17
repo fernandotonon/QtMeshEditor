@@ -945,7 +945,8 @@ jobs:
             -DCMAKE_C_FLAGS="--coverage -fprofile-arcs -ftest-coverage -O0 -DCOVERAGE_BUILD" \
             -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
             -DBUILD_QT_MESH_EDITOR=OFF \
-            -DENABLE_SENTRY=OFF
+            -DENABLE_SENTRY=OFF \
+            -DENABLE_PS1_RIP=ON
 
     - name: Run build-wrapper
       env:

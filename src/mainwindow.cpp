@@ -2164,6 +2164,24 @@ void MainWindow::initToolBar()
 
     // Initialize LLMManager
     LLMManager::instance();
+
+#ifdef ENABLE_PS1_RIP
+    QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
+    toolsMenu->setObjectName(QStringLiteral("menuTools"));
+    QMenu *experimentalMenu = toolsMenu->addMenu(tr("Experimental"));
+    QAction *ps1RipAction = experimentalMenu->addAction(tr("PS1 Runtime Ripper…"));
+    ps1RipAction->setObjectName(QStringLiteral("actionPS1RuntimeRipper"));
+    connect(ps1RipAction, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Tools > Experimental > PS1 Runtime Ripper"));
+        QMessageBox::information(
+            nullptr, QObject::tr("PS1 Runtime Ripper"),
+            QObject::tr(
+                "Experimental PS1 runtime geometry extraction is in development.\n\n"
+                "You will load an ISO and BIOS you own, run the embedded emulator, and capture "
+                "frames into the editor. See src/PS1/PS1_RIP_DESIGN.md."));
+    });
+#endif
 }
 
 const QPalette &MainWindow::darkPalette()

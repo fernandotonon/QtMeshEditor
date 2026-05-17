@@ -264,6 +264,15 @@ if(ENABLE_STABLE_DIFFUSION)
     message(STATUS "AI texture generation enabled with stable-diffusion.cpp")
 endif()
 ##############################################################
+#  PS1 runtime geometry extraction (experimental)
+##############################################################
+option(ENABLE_PS1_RIP "Enable experimental PS1 runtime geometry extraction" OFF)
+
+if(ENABLE_PS1_RIP)
+    add_definitions(-DENABLE_PS1_RIP)
+    message(STATUS "PS1 runtime geometry extraction enabled (experimental)")
+endif()
+##############################################################
 #  Sentry crash reporting and analytics
 ##############################################################
 option(ENABLE_SENTRY "Enable Sentry crash reporting and analytics" ON)
