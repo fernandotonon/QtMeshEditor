@@ -1958,41 +1958,19 @@ void TexturePaintController::refreshUvOverlay()
 
 void TexturePaintController::refreshPreviewUri()
 {
+    // Both the Inspector thumbnail and the detached editor window now
+    // consume `fullResPreviewUrl`, which is served by
+    // PaintBufferImageProvider (a QImage view of the buffer — no PNG
+    // encode, no base64). The legacy `previewDataUri` PNG path is
+    // retained as a property for binary compatibility but no longer
+    // populated; emitting `previewChanged` keeps any external observer
+    // notified without paying the encode cost on the main thread.
     if (m_buffer.width() <= 0 || m_buffer.height() <= 0) {
         if (!m_previewUri.isEmpty()) {
             m_previewUri.clear();
             emit previewChanged();
         }
-        // Bump the full-res URL anyway so any bound Image clears.
-        ++m_fullResVersion;
-        emit fullResPreviewChanged();
-        return;
     }
-    // Scale down to a thumbnail before PNG-encoding. The preview
-    // panel is 256×256; encoding a 1024² or 2048² PNG every refresh
-    // burns most of a frame on the main thread. Qt::FastTransformation
-    // is the cheapest scaler.
-    QImage src(const_cast<uchar*>(m_buffer.data().data()),
-               m_buffer.width(), m_buffer.height(),
-               m_buffer.width() * 4, QImage::Format_RGBA8888);
-    constexpr int kPreviewMax = 256;
-    QImage thumb = (m_buffer.width() > kPreviewMax || m_buffer.height() > kPreviewMax)
-        ? src.scaled(kPreviewMax, kPreviewMax,
-                     Qt::KeepAspectRatio, Qt::FastTransformation)
-        : src.copy();   // own the pixels — src points at m_buffer
-    QByteArray bytes;
-    QBuffer qbuf(&bytes);
-    qbuf.open(QIODevice::WriteOnly);
-    thumb.save(&qbuf, "PNG");
-    const QString next = QStringLiteral("data:image/png;base64,")
-                       + QString::fromLatin1(bytes.toBase64());
-    if (next != m_previewUri) {
-        m_previewUri = next;
-        emit previewChanged();
-    }
-    // The full-res preview channel doesn't need PNG encoding —
-    // QQuickImageProvider serves the live buffer directly on demand.
-    // Just bump the version so QML re-fetches.
     ++m_fullResVersion;
     emit fullResPreviewChanged();
 }
