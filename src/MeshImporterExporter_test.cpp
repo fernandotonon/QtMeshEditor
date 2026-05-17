@@ -1710,28 +1710,44 @@ TEST_F(SceneSaveLoadTest, Exporter_GltfWritesMorphTargetsIntoFile)
     ASSERT_EQ(result, 0);
     ASSERT_TRUE(QFileInfo::exists(outFile));
 
-    // Verify the .gltf JSON itself carries the morph targets.
-    // Asserting on the file shape (not a full reimport round-trip)
-    // keeps this test focused on the *exporter* behavior we control.
-    // A separate end-to-end test would belong with whichever importer
-    // pipeline reads the targets back.
+    // Parse the .gltf JSON and assert structurally: at least one
+    // mesh primitive has a non-empty `targets` array. Asserting on
+    // the file structure (not on a full reimport) keeps this test
+    // focused on the *exporter* contract we control — Assimp's
+    // reader pipeline has its own edge cases that belong with a
+    // separate end-to-end test.
+    //
+    // Note: Assimp 6.0's glTF2 exporter doesn't reliably emit
+    // `mesh.extras.targetNames` even when `aiAnimMesh::mName` is
+    // set; downstream tools that need names can recover them from
+    // our JSON sidecar (future slice) or by re-binding from the
+    // source mesh. The morph *geometry* — the value of this PR —
+    // is what we lock down here.
     QFile gltf(outFile);
     ASSERT_TRUE(gltf.open(QIODevice::ReadOnly));
-    const QString gltfBody = QString::fromUtf8(gltf.readAll());
+    QJsonDocument doc = QJsonDocument::fromJson(gltf.readAll());
     gltf.close();
+    ASSERT_TRUE(doc.isObject());
 
-    // Assimp's glTF2 exporter writes the per-primitive `targets`
-    // arrays (one POSITION accessor per morph target) — the actual
-    // deformation data this PR is responsible for. Whether it also
-    // writes `mesh.extras.targetNames` depends on Assimp's writer
-    // version; we don't assert on that here because (a) Assimp 6.0's
-    // glTF2 exporter doesn't reliably emit the names extras even
-    // when `aiAnimMesh::mName` is set, and (b) the names are
-    // recoverable from our own sidecar / re-binding if a downstream
-    // tool needs them. The morph geometry — the value of this PR —
-    // is what we lock down here.
-    EXPECT_TRUE(gltfBody.contains(QStringLiteral("targets")))
-        << "glTF should carry primitive.targets arrays for morph targets";
+    const QJsonArray meshes = doc.object().value("meshes").toArray();
+    ASSERT_GT(meshes.size(), 0);
+
+    int primitivesWithTargets = 0;
+    int totalTargets = 0;
+    for (const QJsonValue& meshVal : meshes) {
+        const QJsonArray prims = meshVal.toObject().value("primitives").toArray();
+        for (const QJsonValue& primVal : prims) {
+            const QJsonArray targets = primVal.toObject().value("targets").toArray();
+            if (!targets.isEmpty()) {
+                primitivesWithTargets++;
+                totalTargets += targets.size();
+            }
+        }
+    }
+    EXPECT_GT(primitivesWithTargets, 0)
+        << "Expected at least one mesh primitive with a non-empty `targets` array";
+    EXPECT_EQ(totalTargets, 2)
+        << "Both morph targets should land in primitive.targets";
 
     SelectionSet::getSingleton()->clearList();
     Manager::getSingleton()->destroySceneNode(node);
