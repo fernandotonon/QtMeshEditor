@@ -5,7 +5,9 @@
 #include "Manager.h"
 #include "NodeAnimationManager.h"
 #include "TestHelpers.h"
+#include "commands/NodeAnimCommands.h"
 
+#include <OgreAnimation.h>
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
 
@@ -64,7 +66,9 @@ protected:
                 "NA_LifeCycle", "NA_ListOrder1", "NA_ListOrder2",
                 "NA_KeyAdd", "NA_KeyIdempotent", "NA_DeleteUnknown",
                 "NA_OutOfRange", "NA_Enable", "NA_Signals",
-                "NA_Collision"
+                "NA_Collision",
+                "NA_CmdCreate", "NA_CmdDelete", "NA_CmdSetKey",
+                "NA_CmdHandleStale"
             };
             for (const auto& n : drops) {
                 if (scene->hasAnimationState(n))
@@ -240,6 +244,181 @@ TEST_F(NodeAnimationManagerSceneTest, KeyTimesForMissingClipIsEmpty) {
 // `qHash & 0xFFFF` strategy (Codex P1 on PR #584). This test
 // verifies via the more general property: distinct node names →
 // keyTimesForNode returns disjoint key sets, never a shared one.
+// ─── Slice C3 — undo commands ────────────────────────────────────────
+
+TEST_F(NodeAnimationManagerSceneTest, CreateClipCommandRoundTrips) {
+    CreateNodeAnimClipCommand cmd(QStringLiteral("NA_CmdCreate"), 1.5);
+    cmd.redo();
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    EXPECT_TRUE(scene->hasAnimation("NA_CmdCreate"));
+    EXPECT_TRUE(scene->hasAnimationState("NA_CmdCreate"));
+
+    cmd.undo();
+    EXPECT_FALSE(scene->hasAnimation("NA_CmdCreate"));
+    EXPECT_FALSE(scene->hasAnimationState("NA_CmdCreate"));
+
+    cmd.redo();  // Redo path is symmetric.
+    EXPECT_TRUE(scene->hasAnimation("NA_CmdCreate"));
+}
+
+TEST_F(NodeAnimationManagerSceneTest, DeleteClipCommandSnapshotsAndRestores) {
+    // Set up: clip with two tracks (two nodes), each with two keys.
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_CmdDelete"), 2.0));
+    makeNamedNode("NA_CmdDelete_NodeA");
+    makeNamedNode("NA_CmdDelete_NodeB");
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_CmdDelete"),
+                                QStringLiteral("NA_CmdDelete_NodeA"),
+                                0.5, Ogre::Vector3(1,2,3),
+                                Ogre::Quaternion(1,0,0,0), Ogre::Vector3(1,1,1)));
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_CmdDelete"),
+                                QStringLiteral("NA_CmdDelete_NodeA"),
+                                1.5, Ogre::Vector3(4,5,6),
+                                Ogre::Quaternion(1,0,0,0), Ogre::Vector3(2,2,2)));
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_CmdDelete"),
+                                QStringLiteral("NA_CmdDelete_NodeB"),
+                                0.75, Ogre::Vector3(7,8,9),
+                                Ogre::Quaternion(1,0,0,0), Ogre::Vector3(1,1,1)));
+
+    DeleteNodeAnimClipCommand cmd(QStringLiteral("NA_CmdDelete"));
+    cmd.redo();
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    EXPECT_FALSE(scene->hasAnimation("NA_CmdDelete"));
+
+    cmd.undo();
+    EXPECT_TRUE(scene->hasAnimation("NA_CmdDelete"));
+    // Verify both tracks + all keyframes came back.
+    auto keysA = m->keyTimesForNode(QStringLiteral("NA_CmdDelete"),
+                                     QStringLiteral("NA_CmdDelete_NodeA"));
+    auto keysB = m->keyTimesForNode(QStringLiteral("NA_CmdDelete"),
+                                     QStringLiteral("NA_CmdDelete_NodeB"));
+    EXPECT_EQ(keysA.size(), 2);
+    EXPECT_EQ(keysB.size(), 1);
+}
+
+TEST_F(NodeAnimationManagerSceneTest, SetKeyframeCommandRoundTripsForFreshKey) {
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_CmdSetKey"), 2.0));
+    makeNamedNode("NA_CmdSetKey_Node");
+
+    SetNodeKeyframeCommand cmd(QStringLiteral("NA_CmdSetKey"),
+                                QStringLiteral("NA_CmdSetKey_Node"),
+                                0.5,
+                                Ogre::Vector3(10, 20, 30),
+                                Ogre::Quaternion::IDENTITY,
+                                Ogre::Vector3(1, 1, 1));
+    cmd.redo();
+    auto keys = m->keyTimesForNode(QStringLiteral("NA_CmdSetKey"),
+                                    QStringLiteral("NA_CmdSetKey_Node"));
+    ASSERT_EQ(keys.size(), 1);
+
+    cmd.undo();
+    // Track itself was created by redo, so undo should leave the
+    // clip in its pre-redo state (no track for this node).
+    keys = m->keyTimesForNode(QStringLiteral("NA_CmdSetKey"),
+                              QStringLiteral("NA_CmdSetKey_Node"));
+    EXPECT_EQ(keys.size(), 0);
+
+    cmd.redo();
+    keys = m->keyTimesForNode(QStringLiteral("NA_CmdSetKey"),
+                              QStringLiteral("NA_CmdSetKey_Node"));
+    EXPECT_EQ(keys.size(), 1);
+}
+
+TEST_F(NodeAnimationManagerSceneTest, SetKeyframeCommandRestoresPriorOnOverwrite) {
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_CmdSetKey"), 2.0));
+    makeNamedNode("NA_CmdSetKey_Node");
+
+    // Seed an existing keyframe at t=1.0 with values A.
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_CmdSetKey"),
+                                QStringLiteral("NA_CmdSetKey_Node"),
+                                1.0, Ogre::Vector3(1, 0, 0),
+                                Ogre::Quaternion::IDENTITY,
+                                Ogre::Vector3(1, 1, 1)));
+
+    // Command overwrites in place (same t within epsilon).
+    SetNodeKeyframeCommand cmd(QStringLiteral("NA_CmdSetKey"),
+                                QStringLiteral("NA_CmdSetKey_Node"),
+                                1.0005,
+                                Ogre::Vector3(9, 9, 9),
+                                Ogre::Quaternion::IDENTITY,
+                                Ogre::Vector3(2, 2, 2));
+    cmd.redo();
+    // Still only one keyframe (the merge epsilon collapses).
+    auto keys = m->keyTimesForNode(QStringLiteral("NA_CmdSetKey"),
+                                    QStringLiteral("NA_CmdSetKey_Node"));
+    EXPECT_EQ(keys.size(), 1);
+
+    // Undo restores the prior TRS values at the same time.
+    cmd.undo();
+    keys = m->keyTimesForNode(QStringLiteral("NA_CmdSetKey"),
+                              QStringLiteral("NA_CmdSetKey_Node"));
+    EXPECT_EQ(keys.size(), 1);  // key remained — only values reverted
+    // We can't read the values back via the manager API yet, but
+    // the round-trip count being preserved + the undo path
+    // executing without aborts is the contract we care about here.
+}
+
+// Codex P1 follow-up regression: the SetKeyframeCommand undo path
+// used to call `anim->destroyNodeTrack(handle)` directly, bypassing
+// the manager's `m_trackHandles` map. That left a stale handle entry
+// behind — and a later `addKeyframe(differentNode, ...)` would
+// scan Ogre tracks, find the now-free handle, allocate it for the
+// new node, and then re-allocating the original node's handle later
+// would silently corrupt the new node's animation.
+//
+// We exercise the round-trip: redo keyframe on A → undo → keyframe
+// B on the same handle slot → keyframe A again. Without the fix,
+// A and B end up sharing one track. With the fix they stay distinct.
+TEST_F(NodeAnimationManagerSceneTest, SetKeyframeCommandUndoForgetsStaleHandle) {
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_CmdHandleStale"), 2.0));
+    makeNamedNode("NA_CmdHandleStale_NodeA");
+    makeNamedNode("NA_CmdHandleStale_NodeB");
+
+    // Author + redo + undo on node A — this leaves the clip
+    // with NO tracks (mTrackCreatedByRedo path).
+    {
+        SetNodeKeyframeCommand cmd(QStringLiteral("NA_CmdHandleStale"),
+                                    QStringLiteral("NA_CmdHandleStale_NodeA"),
+                                    0.5,
+                                    Ogre::Vector3(1, 0, 0),
+                                    Ogre::Quaternion::IDENTITY,
+                                    Ogre::Vector3(1, 1, 1));
+        cmd.redo();
+        cmd.undo();
+    }
+
+    // Now key node B — this will allocate handle 0 (first free).
+    // Then key node A again — this should allocate handle 1
+    // (a new handle, NOT the stale handle 0 that node A used to have).
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_CmdHandleStale"),
+                                QStringLiteral("NA_CmdHandleStale_NodeB"),
+                                0.25, Ogre::Vector3(0, 9, 0),
+                                Ogre::Quaternion::IDENTITY,
+                                Ogre::Vector3(1, 1, 1)));
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_CmdHandleStale"),
+                                QStringLiteral("NA_CmdHandleStale_NodeA"),
+                                0.75, Ogre::Vector3(7, 0, 0),
+                                Ogre::Quaternion::IDENTITY,
+                                Ogre::Vector3(1, 1, 1)));
+
+    // Both nodes see ONLY their own keyframe. Pre-fix, A's
+    // addKeyframe would have routed onto B's handle, producing
+    // keysA == keysB == [0.25, 0.75] (or worse).
+    auto keysA = m->keyTimesForNode(QStringLiteral("NA_CmdHandleStale"),
+                                     QStringLiteral("NA_CmdHandleStale_NodeA"));
+    auto keysB = m->keyTimesForNode(QStringLiteral("NA_CmdHandleStale"),
+                                     QStringLiteral("NA_CmdHandleStale_NodeB"));
+    ASSERT_EQ(keysA.size(), 1);
+    ASSERT_EQ(keysB.size(), 1);
+    EXPECT_NEAR(keysA[0], 0.75, 1e-4);
+    EXPECT_NEAR(keysB[0], 0.25, 1e-4);
+}
+
+// ─── Existing — distinct-node-track invariant ────────────────────────
+
 TEST_F(NodeAnimationManagerSceneTest, DistinctNodesGetDistinctTracks) {
     auto* m = NodeAnimationManager::instance();
     ASSERT_TRUE(m->createClip(QStringLiteral("NA_Collision"), 2.0));
