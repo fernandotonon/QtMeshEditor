@@ -17,6 +17,8 @@ The MIT License
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <cstring>
+
 #include <OgreAnimationState.h>
 #include <OgreEntity.h>
 #include <OgreHardwareVertexBuffer.h>
@@ -120,6 +122,15 @@ inline float fromShortNormalised(uint16_t s, float lo, float hi)
 // separate so the position-only path (slice 1) doesn't lock the normal
 // buffer when no one will read it — the second lock acquisition on the
 // same vbuf is cheap but pointless.
+//
+// On a submesh without `VES_NORMAL`, returns SIZE_MAX as a sentinel so
+// the caller can fail the bake with a clear error. We deliberately do
+// NOT pad with fabricated up-vectors — that produces a normal texture
+// that looks plausible but lights the mesh wrong while reporting
+// success, which is worse than refusing to bake.
+constexpr size_t kCollectNormalsMissingSentinel =
+    std::numeric_limits<size_t>::max();
+
 size_t collectPostSkinNormals(Ogre::Entity* entity,
                               std::vector<Ogre::Vector3>& out)
 {
@@ -142,15 +153,10 @@ size_t collectPostSkinNormals(Ogre::Entity* entity,
         const auto* normElem = animData->vertexDeclaration->findElementBySemantic(
             Ogre::VES_NORMAL);
         if (!normElem) {
-            // No normals on this mesh — pad with up-vectors so the
-            // texture stays rectangular and downstream consumers don't
-            // hit a frameCount × vertexCount mismatch.
-            for (size_t j = 0; j < animData->vertexCount; ++j) {
-                out.emplace_back(0.0f, 1.0f, 0.0f);
-                ++appended;
-            }
-            if (sub->useSharedVertices) sharedAppended = true;
-            continue;
+            // Missing-normal submesh: surface as a hard failure rather
+            // than fabricate up-vectors. The caller's error message
+            // identifies which submesh hit this.
+            return kCollectNormalsMissingSentinel;
         }
 
         auto vbuf = animData->vertexBufferBinding->getBuffer(normElem->getSource());
@@ -501,8 +507,16 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
         }
 
         if (opts.bakeNormals) {
-            const size_t nrmBefore = normals.size();
             const size_t nrmAppended = collectPostSkinNormals(entity, normals);
+            if (nrmAppended == kCollectNormalsMissingSentinel) {
+                entity->removeSoftwareAnimationRequest(true);
+                result.error = QStringLiteral(
+                    "frame %1 has a submesh without VES_NORMAL — "
+                    "cannot bake normals (regenerate normals on the source mesh "
+                    "or omit --normals)")
+                        .arg(f);
+                return result;
+            }
             if (nrmAppended != static_cast<size_t>(frameVerts)) {
                 entity->removeSoftwareAnimationRequest(true);
                 result.error = QStringLiteral(
@@ -510,7 +524,6 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
                         .arg(f).arg(nrmAppended).arg(frameVerts);
                 return result;
             }
-            (void)nrmBefore;
         }
     }
 
