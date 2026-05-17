@@ -4366,13 +4366,17 @@ Rectangle {
                         Item { width: parent.width - 320; height: 1 }
                         // Add from current edit — captures the user's current
                         // edit-mode geometry minus the bind-pose baseline as
-                        // a new morph target. Greyed out + tooltip when
-                        // outside edit mode (since EditableSubMesh::
-                        // originalPositions is only populated then).
+                        // a new morph target. Disabled (greyed out, forbidden
+                        // cursor) when outside edit mode because
+                        // EditableSubMesh::originalPositions is only
+                        // populated by EditModeController and the C++ method
+                        // would return false anyway.
                         Rectangle {
                             id: addBtn
+                            property bool canAddFromEdit: EditModeController.editModeActive
                             width: 56; height: 20; radius: 3
-                            color: addMa.containsMouse
+                            opacity: canAddFromEdit ? 1.0 : 0.45
+                            color: addMa.containsMouse && canAddFromEdit
                                    ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
                                    : PropertiesPanelController.controlBgColor
                             border.color: PropertiesPanelController.borderColor
@@ -4387,11 +4391,15 @@ Rectangle {
                                 id: addMa
                                 anchors.fill: parent
                                 hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
+                                enabled: addBtn.canAddFromEdit
+                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
                                 onClicked: {
                                     addNameField.text = ""
+                                    addError.text = ""
                                     addNamePopup.open()
                                 }
+                                ToolTip.visible: containsMouse && !enabled
+                                ToolTip.text: "Enter Edit Mode (Tab) to add morph targets from current edit."
                             }
                         }
                         // Reset all: walks every target and sets weight to 0.
@@ -4443,7 +4451,22 @@ Rectangle {
                                 width: 220
                                 font.pixelSize: 11
                                 onAccepted: addConfirmMa.confirm()
+                                onTextChanged: addError.text = ""
                                 Component.onCompleted: forceActiveFocus()
+                            }
+                            // Inline error: shown when the C++ side rejects
+                            // the request (duplicate name, no vertex moved,
+                            // not in edit mode, …). We deliberately keep the
+                            // popup open so the user can fix the input
+                            // without retyping.
+                            Text {
+                                id: addError
+                                text: ""
+                                visible: text.length > 0
+                                color: "#d65d5d"
+                                font.pixelSize: 10
+                                width: 220
+                                wrapMode: Text.Wrap
                             }
                             Row {
                                 spacing: 6
@@ -4461,9 +4484,22 @@ Rectangle {
                                         cursorShape: Qt.PointingHandCursor
                                         function confirm() {
                                             var n = addNameField.text.trim()
-                                            if (n.length === 0) return
-                                            MorphAnimationManager.addMorphTargetFromCurrentEdit(n)
-                                            addNamePopup.close()
+                                            if (n.length === 0) {
+                                                addError.text = "Name cannot be empty."
+                                                return
+                                            }
+                                            if (!EditModeController.editModeActive) {
+                                                addError.text = "Enter Edit Mode (Tab) before saving."
+                                                return
+                                            }
+                                            var ok = MorphAnimationManager.addMorphTargetFromCurrentEdit(n)
+                                            if (ok) {
+                                                addNamePopup.close()
+                                            } else {
+                                                // C++ rejected — likely name collision or
+                                                // no vertex moved vs the bind baseline.
+                                                addError.text = "Couldn't save: name already in use, or no vertex was edited."
+                                            }
                                         }
                                         onClicked: confirm()
                                     }
@@ -4538,6 +4574,12 @@ Rectangle {
                                 font.pixelSize: 10
                                 anchors.verticalCenter: parent.verticalCenter
                                 selectByMouse: true
+                                // Set by `Keys.onEscapePressed`; checked in
+                                // `onEditingFinished` so that hiding the
+                                // input on Escape (which causes focus loss
+                                // and fires `editingFinished`) doesn't
+                                // accidentally commit the rename.
+                                property bool cancelled: false
                                 Rectangle {
                                     anchors.fill: parent
                                     anchors.margins: -2
@@ -4548,12 +4590,13 @@ Rectangle {
                                     radius: 2
                                 }
                                 onEditingFinished: {
+                                    if (cancelled) { cancelled = false; visible = false; return }
                                     var trimmed = text.trim()
                                     if (trimmed.length > 0 && trimmed !== modelData)
                                         MorphAnimationManager.renameMorphTarget(modelData, trimmed)
                                     visible = false
                                 }
-                                Keys.onEscapePressed: visible = false
+                                Keys.onEscapePressed: { cancelled = true; visible = false }
                             }
                             Slider {
                                 id: weightSlider
