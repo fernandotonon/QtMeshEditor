@@ -15,6 +15,7 @@ The MIT License
 
 #include <OgreVector.h>
 
+#include <cstdint>
 #include <vector>
 
 namespace Ogre { class Entity; }
@@ -48,10 +49,9 @@ class VATBaker
 {
 public:
     enum class Encoding {
-        RGBA8 = 0,  ///< 8-bit per channel, normalised against bounds.
-        // Reserved for slice 2:
-        // RGBA16,
-        // RGBAF,
+        RGBA8  = 0,  ///< 8-bit per channel, normalised against bounds.   ~3 mm error on 1 m model.
+        RGBA16 = 1,  ///< 16-bit per channel, normalised against bounds. ~50× more precise than RGBA8.
+        // Reserved for follow-up: RGBAF (EXR via TinyEXR), pending vendor approval.
     };
 
     enum class Target {
@@ -69,6 +69,7 @@ public:
         double   endTime      = -1.0;     ///< < 0 → animation length.
         Encoding encoding     = Encoding::RGBA8;
         Target   target       = Target::Agnostic;
+        bool     bakeNormals  = false;    ///< Also emit `<basename>_nrm.png`.
         QString  outputDir;               ///< Required.
         QString  basename;                ///< Without extension. Defaults to animationName when empty.
     };
@@ -77,6 +78,7 @@ public:
         bool      ok = false;
         QString   error;            ///< Populated when !ok.
         QString   posTexPath;       ///< On-disk path to the position texture.
+        QString   nrmTexPath;       ///< On-disk path to the normal texture (empty when not requested).
         QString   jsonPath;         ///< On-disk path to the sidecar JSON.
         int       frameCount = 0;
         int       vertexCount = 0;
@@ -128,6 +130,51 @@ public:
         int vertexCount,
         const Ogre::Vector3& minBound,
         const Ogre::Vector3& maxBound);
+
+    /// 16-bit-per-channel variant. ~50× more precise than RGBA8 on
+    /// the same bounds (one ULP ≈ span/65535 vs span/255). Channel
+    /// order is the same; alpha is reserved at 65535.
+    static std::vector<uint16_t> encodeRGBA16(
+        const std::vector<Ogre::Vector3>& flatPositions,
+        int frameCount,
+        int vertexCount,
+        const Ogre::Vector3& minBound,
+        const Ogre::Vector3& maxBound);
+
+    /// Inverse of `encodeRGBA16`.
+    static std::vector<Ogre::Vector3> decodeRGBA16(
+        const std::vector<uint16_t>& pixels,
+        int frameCount,
+        int vertexCount,
+        const Ogre::Vector3& minBound,
+        const Ogre::Vector3& maxBound);
+
+    /// Encode unit normals (each component in [-1, 1]) into 8-bit
+    /// RGBA. Mapping: `(component + 1) * 0.5 → byte`. Alpha 255.
+    /// Same layout convention as positions.
+    static std::vector<unsigned char> encodeNormalsRGBA8(
+        const std::vector<Ogre::Vector3>& flatNormals,
+        int frameCount,
+        int vertexCount);
+
+    /// Decode normals back to unit vectors. Not re-normalised — the
+    /// caller can choose whether to renormalise.
+    static std::vector<Ogre::Vector3> decodeNormalsRGBA8(
+        const std::vector<unsigned char>& pixels,
+        int frameCount,
+        int vertexCount);
+
+    /// 16-bit-per-channel variant of `encodeNormalsRGBA8`.
+    static std::vector<uint16_t> encodeNormalsRGBA16(
+        const std::vector<Ogre::Vector3>& flatNormals,
+        int frameCount,
+        int vertexCount);
+
+    /// Inverse of `encodeNormalsRGBA16`.
+    static std::vector<Ogre::Vector3> decodeNormalsRGBA16(
+        const std::vector<uint16_t>& pixels,
+        int frameCount,
+        int vertexCount);
 
     /// Build the JSON sidecar string. Public so tests can snapshot it
     /// without writing to disk.

@@ -285,3 +285,191 @@ TEST_F(VATBakerEndToEndTest, FrameCountDerivedFromFpsAndDuration) {
     EXPECT_GE(r.frameCount, 28);
     EXPECT_LE(r.frameCount, 32);
 }
+
+// ===========================================================================
+// Slice 2 — RGBA16 + normals + sidecar fields.
+// ===========================================================================
+
+TEST(VATBakerStandalone, EncodeRGBA16RoundTrip) {
+    // 16-bit channels: ~50× more precise than RGBA8 on the same bounds.
+    const Ogre::Vector3 lo(-10.0f, -10.0f, -10.0f);
+    const Ogre::Vector3 hi( 10.0f,  10.0f,  10.0f);
+    std::vector<Ogre::Vector3> flat = {
+        { -10.0f, -10.0f, -10.0f },
+        {  10.0f,  10.0f,  10.0f },
+        {  0.0f,   0.0f,   0.0f  },
+        {  3.14159f, -2.71828f, 1.41421f },
+    };
+    auto rgba = VATBaker::encodeRGBA16(flat, 2, 2, lo, hi);
+    ASSERT_EQ(rgba.size(), 2u * 2u * 4u);
+    // Alpha reserved at 65535.
+    for (size_t i = 3; i < rgba.size(); i += 4) {
+        EXPECT_EQ(rgba[i], 65535);
+    }
+    auto round = VATBaker::decodeRGBA16(rgba, 2, 2, lo, hi);
+    ASSERT_EQ(round.size(), flat.size());
+    // One ULP at span=20 over 65535 levels ≈ 3e-4. Test loosely at 1e-3.
+    constexpr float kRGBA16Err = 1e-3f;
+    for (size_t i = 0; i < flat.size(); ++i) {
+        EXPECT_NEAR(round[i].x, flat[i].x, kRGBA16Err);
+        EXPECT_NEAR(round[i].y, flat[i].y, kRGBA16Err);
+        EXPECT_NEAR(round[i].z, flat[i].z, kRGBA16Err);
+    }
+}
+
+TEST(VATBakerStandalone, EncodeRGBA16BeatsRGBA8OnSamePoints) {
+    // The whole point of slice 2: 16-bit encoding should produce
+    // substantially smaller round-trip error than the 8-bit path.
+    const Ogre::Vector3 lo(-100.0f, -100.0f, -100.0f);
+    const Ogre::Vector3 hi( 100.0f,  100.0f,  100.0f);
+    std::vector<Ogre::Vector3> flat = {
+        { 0.0f, 0.0f, 0.0f },
+        { 12.345f, -67.89f, 42.42f },
+        { -99.9f, 0.0001f, 50.0f },
+    };
+    auto rgba8  = VATBaker::encodeRGBA8(flat, 1, 3, lo, hi);
+    auto rgba16 = VATBaker::encodeRGBA16(flat, 1, 3, lo, hi);
+    auto back8  = VATBaker::decodeRGBA8(rgba8,  1, 3, lo, hi);
+    auto back16 = VATBaker::decodeRGBA16(rgba16, 1, 3, lo, hi);
+    float worst8 = 0.0f, worst16 = 0.0f;
+    for (size_t i = 0; i < flat.size(); ++i) {
+        worst8  = std::max(worst8,  (back8[i]  - flat[i]).length());
+        worst16 = std::max(worst16, (back16[i] - flat[i]).length());
+    }
+    EXPECT_LT(worst16 * 10.0f, worst8)
+        << "RGBA16 should be >10× more accurate than RGBA8 (16=" << worst16
+        << " vs 8=" << worst8 << ")";
+}
+
+TEST(VATBakerStandalone, EncodeNormalsRGBA8RoundTrip) {
+    // Standard basis vectors round-trip cleanly within ~1/255 (no
+    // normalisation needed, just channel mapping).
+    std::vector<Ogre::Vector3> normals = {
+        Ogre::Vector3::UNIT_X,
+        Ogre::Vector3::UNIT_Y,
+        Ogre::Vector3::UNIT_Z,
+        -Ogre::Vector3::UNIT_X,
+        Ogre::Vector3::ZERO,
+    };
+    auto rgba = VATBaker::encodeNormalsRGBA8(normals, 1, 5);
+    ASSERT_EQ(rgba.size(), 5u * 4u);
+    auto round = VATBaker::decodeNormalsRGBA8(rgba, 1, 5);
+    ASSERT_EQ(round.size(), normals.size());
+    constexpr float kErr = 2.0f / 255.0f;  // 2 ULP at signed remap
+    for (size_t i = 0; i < normals.size(); ++i) {
+        EXPECT_NEAR(round[i].x, normals[i].x, kErr);
+        EXPECT_NEAR(round[i].y, normals[i].y, kErr);
+        EXPECT_NEAR(round[i].z, normals[i].z, kErr);
+    }
+}
+
+TEST(VATBakerStandalone, EncodeNormalsRGBA8ClampsOutOfRange) {
+    std::vector<Ogre::Vector3> normals = {
+        { -2.0f, 2.0f, 0.0f },  // out of [-1, 1]
+    };
+    auto rgba = VATBaker::encodeNormalsRGBA8(normals, 1, 1);
+    ASSERT_EQ(rgba.size(), 4u);
+    EXPECT_EQ(rgba[0], 0);    // -2 → -1 → 0
+    EXPECT_EQ(rgba[1], 255);  //  2 →  1 → 255
+}
+
+TEST(VATBakerStandalone, EncodeNormalsRGBA16RoundTrip) {
+    std::vector<Ogre::Vector3> normals = {
+        { 0.123456f, -0.789012f, 0.345678f },
+        Ogre::Vector3::UNIT_Y,
+    };
+    auto rgba = VATBaker::encodeNormalsRGBA16(normals, 1, 2);
+    ASSERT_EQ(rgba.size(), 2u * 4u);
+    auto round = VATBaker::decodeNormalsRGBA16(rgba, 1, 2);
+    constexpr float kErr = 2.0f / 65535.0f;
+    for (size_t i = 0; i < normals.size(); ++i) {
+        EXPECT_NEAR(round[i].x, normals[i].x, kErr);
+        EXPECT_NEAR(round[i].y, normals[i].y, kErr);
+        EXPECT_NEAR(round[i].z, normals[i].z, kErr);
+    }
+}
+
+TEST(VATBakerStandalone, EncodeNormalsReturnsEmptyOnMismatchedSize) {
+    std::vector<Ogre::Vector3> normals = { Ogre::Vector3::UNIT_X };
+    EXPECT_TRUE(VATBaker::encodeNormalsRGBA8(normals, 2, 2).empty());
+    EXPECT_TRUE(VATBaker::encodeNormalsRGBA16(normals, 2, 2).empty());
+    EXPECT_TRUE(VATBaker::decodeNormalsRGBA8({}, 1, 1).empty());
+    EXPECT_TRUE(VATBaker::decodeNormalsRGBA16({}, 1, 1).empty());
+}
+
+TEST(VATBakerStandalone, SidecarMentionsEncodingAndOptionalNrmTexture) {
+    VATBaker::BakeResult r;
+    r.frameCount  = 10;
+    r.vertexCount = 100;
+    r.posTexPath  = QStringLiteral("/tmp/Walk_pos.png");
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("Walk");
+    opts.fps           = 60.0;
+    opts.encoding      = VATBaker::Encoding::RGBA16;
+
+    // Without normals — sidecar should NOT include nrmTexture.
+    QString json = VATBaker::buildSidecarJson(r, opts);
+    auto root = QJsonDocument::fromJson(json.toUtf8()).object();
+    EXPECT_EQ(root["encoding"].toString(), QStringLiteral("rgba16"));
+    EXPECT_FALSE(root.contains(QStringLiteral("nrmTexture")));
+
+    // With normals — sidecar should include the filename (not the abs path).
+    r.nrmTexPath = QStringLiteral("/tmp/Walk_nrm.png");
+    json = VATBaker::buildSidecarJson(r, opts);
+    root = QJsonDocument::fromJson(json.toUtf8()).object();
+    EXPECT_EQ(root["nrmTexture"].toString(), QStringLiteral("Walk_nrm.png"));
+}
+
+TEST_F(VATBakerEndToEndTest, BakeWithRGBA16WritesSixteenBitPng) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_RGBA16");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 10.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("R16");
+    opts.encoding = VATBaker::Encoding::RGBA16;
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    QImage png(r.posTexPath);
+    ASSERT_FALSE(png.isNull());
+    // Qt promotes a 16-bit PNG to RGBA64; the format check is the
+    // closest the standard API gets to "this PNG is 16-bit per channel".
+    EXPECT_EQ(png.format(), QImage::Format_RGBA64);
+}
+
+TEST_F(VATBakerEndToEndTest, BakeWithNormalsWritesNormalTexture) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_Normals");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 10.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("N");
+    opts.bakeNormals = true;
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_FALSE(r.nrmTexPath.isEmpty());
+    EXPECT_TRUE(QFile::exists(r.nrmTexPath));
+    QImage png(r.nrmTexPath);
+    ASSERT_FALSE(png.isNull());
+    EXPECT_EQ(png.width(),  r.vertexCount);
+    EXPECT_EQ(png.height(), r.frameCount);
+
+    // Sidecar should reference both textures.
+    QFile jf(r.jsonPath);
+    ASSERT_TRUE(jf.open(QIODevice::ReadOnly));
+    auto root = QJsonDocument::fromJson(jf.readAll()).object();
+    EXPECT_TRUE(root.contains(QStringLiteral("nrmTexture")));
+}
