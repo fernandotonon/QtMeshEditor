@@ -690,6 +690,91 @@ static std::vector<unsigned int> compactAiMesh(aiMesh* aiM)
     return remap;
 }
 
+// Slice A4a: emit per-pose aiAnimMesh entries on an aiMesh, sourced
+// from the Ogre mesh's pose list filtered to the matching submesh.
+// `aiAnimMesh::mVertices` carries absolute deformed positions (base
+// + per-vertex delta from `Ogre::Pose::getVertexOffsets()`); the
+// vertex layout matches `aiM->mVertices` at the time of the call,
+// so the caller must run this BEFORE `compactAiMesh` and then call
+// `remapAiMeshMorphTargets` after to keep the arrays parallel.
+//
+// `new` allocations cross the Assimp C-API ownership boundary
+// (aiScene's dtor frees mAnimMeshes), so smart pointers don't fit
+// here — same convention every other aiScene field uses in this
+// file.
+static void attachMorphTargetsToAiMesh(aiMesh* aiM,
+                                       const Ogre::MeshPtr& mesh,
+                                       const Ogre::SubMesh* subMesh,
+                                       unsigned int si)
+{
+    if (!aiM || aiM->mNumVertices == 0) return;
+    const Ogre::PoseList& poseList = mesh->getPoseList();
+    if (poseList.empty()) return;
+
+    const unsigned short targetHandle = subMesh->useSharedVertices
+        ? 0
+        : static_cast<unsigned short>(si + 1);
+    std::vector<Ogre::Pose*> submeshPoses;
+    for (Ogre::Pose* p : poseList) {
+        if (p && p->getTarget() == targetHandle)
+            submeshPoses.push_back(p);
+    }
+    if (submeshPoses.empty()) return;
+
+    const unsigned int preCompactCount = aiM->mNumVertices;
+    aiM->mNumAnimMeshes = static_cast<unsigned int>(submeshPoses.size());
+    aiM->mAnimMeshes = new aiAnimMesh*[aiM->mNumAnimMeshes];  // NOSONAR — Assimp owns
+    for (size_t pi = 0; pi < submeshPoses.size(); ++pi) {
+        const Ogre::Pose* p = submeshPoses[pi];
+        auto* am = new aiAnimMesh();  // NOSONAR — Assimp owns
+        aiM->mAnimMeshes[pi] = am;
+        am->mName = aiString(p->getName());
+        am->mNumVertices = preCompactCount;
+        am->mVertices = new aiVector3D[preCompactCount];  // NOSONAR — Assimp owns
+        // Seed with base positions (vertices the pose doesn't touch
+        // keep their base location).
+        for (unsigned int v = 0; v < preCompactCount; ++v)
+            am->mVertices[v] = aiM->mVertices[v];
+        // Apply per-vertex deltas. Pose offsets are keyed by vertex
+        // index in submesh-local pre-compact space.
+        for (const auto& [vi, delta] : p->getVertexOffsets()) {
+            if (vi >= preCompactCount) continue;
+            am->mVertices[vi].x += delta.x;
+            am->mVertices[vi].y += delta.y;
+            am->mVertices[vi].z += delta.z;
+        }
+        // Non-zero default weight so post-process steps that filter
+        // "inactive" anim meshes don't drop the entry. Runtime weight
+        // is driven by the consuming app.
+        am->mWeight = 1.0f;
+    }
+}
+
+// Slice A4a: after compactAiMesh has reordered/deduped aiM's
+// vertices, apply the same remap to every attached aiAnimMesh so
+// the morph-target vertex arrays stay parallel to aiM->mVertices.
+static void remapAiMeshMorphTargets(aiMesh* aiM,
+                                    const std::vector<unsigned int>& remap,
+                                    unsigned int preCompactCount)
+{
+    if (!aiM || aiM->mNumAnimMeshes == 0) return;
+    if (remap.empty() || preCompactCount == 0) return;
+    if (aiM->mNumVertices == preCompactCount) return;  // nothing to compact
+
+    for (unsigned int ai = 0; ai < aiM->mNumAnimMeshes; ++ai) {
+        aiAnimMesh* am = aiM->mAnimMeshes[ai];
+        if (!am || !am->mVertices) continue;
+        auto* compact = new aiVector3D[aiM->mNumVertices];  // NOSONAR — Assimp owns
+        for (unsigned int oldIdx = 0; oldIdx < preCompactCount; ++oldIdx) {
+            if (remap[oldIdx] == UINT_MAX) continue;
+            compact[remap[oldIdx]] = am->mVertices[oldIdx];
+        }
+        delete[] am->mVertices;  // NOSONAR — we own this allocation
+        am->mVertices = compact;
+        am->mNumVertices = aiM->mNumVertices;
+    }
+}
+
 // Convert an Ogre skeleton animation to an aiAnimation
 static aiAnimation* buildAiAnimation(Ogre::Animation* ogreAnim, const std::string& bonePrefix = "")
 {
@@ -841,7 +926,14 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
         if (hasSkeleton)
             assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
 
-        compactAiMesh(aiM);
+        // Morph targets / blend shapes (slice A4a). Pulled into helpers
+        // below to keep this loop's nesting level reasonable and the
+        // "build then compact" two-pass structure obvious.
+        const unsigned int preCompactCount = aiM->mNumVertices;
+        attachMorphTargetsToAiMesh(aiM, mesh, subMesh, si);
+
+        const std::vector<unsigned int> remap = compactAiMesh(aiM);
+        remapAiMeshMorphTargets(aiM, remap, preCompactCount);
     }
 
     // --- Animations ---
