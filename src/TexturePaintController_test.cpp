@@ -5,6 +5,8 @@
 #include <QFile>
 #include <QImage>
 #include <QPoint>
+#include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QString>
 #include <QTemporaryDir>
@@ -101,6 +103,20 @@ struct ScenePaintFixture
         }
     }
 };
+
+// Spin the Qt event loop for `ms` real milliseconds so debounced
+// QTimer::singleShot callbacks fire. Used for tests that need to
+// observe the result of flushDirtyToOgre (16 ms) → refreshPreviewUri
+// (60 ms inside). Default 120 ms covers both with margin.
+void pumpEventsFor(int ms = 120)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, ms);
+        QCoreApplication::sendPostedEvents();
+    }
+}
 
 // Drop the controller's session + reset selection so every test starts
 // from a clean state regardless of run order.
@@ -717,7 +733,10 @@ TEST_F(TexturePaintControllerSceneTest, ClearHoveredUVEmitsMinusOne) {
 TEST_F(TexturePaintControllerSceneTest, BeginAndEndStrokeUVCompletesWithoutCrash) {
     ASSERT_TRUE(m_fix.setup(QStringLiteral("StrokeUV")));
     auto* ctrl = TexturePaintController::instance();
-    ASSERT_TRUE(ctrl->ensurePaintableTexture(16));
+    // beginStrokeUV requires paint mode on — setTexturePaintEnabled
+    // also calls ensurePaintableTexture internally.
+    ctrl->setTexturePaintEnabled(true);
+    ASSERT_TRUE(ctrl->hasActiveSession());
     EXPECT_TRUE(ctrl->beginStrokeUV(0.5, 0.5));
     ctrl->updateStrokeUV(0.6, 0.5);
     ctrl->endStrokeUV();
@@ -779,15 +798,18 @@ TEST_F(TexturePaintControllerSceneTest, LoadPaintBufferReplacesBufferWithFileByt
 TEST_F(TexturePaintControllerSceneTest, SavePaintBufferProducesReadablePNG) {
     ASSERT_TRUE(m_fix.setup(QStringLiteral("SavePNG")));
     auto* ctrl = TexturePaintController::instance();
-    ASSERT_TRUE(ctrl->ensurePaintableTexture(8));
+    // ensurePaintableTexture floors the resolution at 16 when no existing
+    // texture is bound (so request 32 to get a non-trivial known size).
+    ASSERT_TRUE(ctrl->ensurePaintableTexture(32));
+    ASSERT_EQ(ctrl->textureResolution(), 32);
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
     const QString out = tmp.path() + "/save.png";
     EXPECT_TRUE(ctrl->savePaintBuffer(out));
     QImage round(out);
     EXPECT_FALSE(round.isNull());
-    EXPECT_EQ(round.width(),  8);
-    EXPECT_EQ(round.height(), 8);
+    EXPECT_EQ(round.width(),  32);
+    EXPECT_EQ(round.height(), 32);
 }
 
 TEST_F(TexturePaintControllerSceneTest, OpenAndCloseEditorWindowFlipFlag) {
@@ -804,17 +826,17 @@ TEST_F(TexturePaintControllerSceneTest, OpenAndCloseEditorWindowFlipFlag) {
 
 TEST_F(TexturePaintControllerSceneTest, FullResVersionAdvancesPerRefresh) {
     // Bumping pixels + flushing should change the URL's `?v=N` segment so
-    // QML invalidates Image cache.
+    // QML invalidates Image cache. flushDirtyToOgre is debounced (~16 ms)
+    // and the preview refresh inside is further debounced (~60 ms), so
+    // we pump the event loop to let both timers fire.
     ASSERT_TRUE(m_fix.setup(QStringLiteral("Bump")));
     auto* ctrl = TexturePaintController::instance();
     ASSERT_TRUE(ctrl->ensurePaintableTexture(16));
     const QString url1 = ctrl->fullResPreviewUrl();
-    // Use the mask-driven write path — it calls flushDirtyToOgre which
-    // triggers a refresh on a debounce. Snapshot mode: fillMaskWithFG
-    // forces the refresh synchronously.
     ctrl->selectAllMask();
     ctrl->setBrushColor(QColor(123, 45, 67));
     ctrl->fillMaskWithFG();
+    pumpEventsFor(150);
     const QString url2 = ctrl->fullResPreviewUrl();
     EXPECT_NE(url1, url2) << "refresh must bump the version counter";
 }
@@ -835,10 +857,12 @@ TEST_F(TexturePaintControllerSceneTest, RefreshPreviewUriEmitsFullResSignal) {
     auto* ctrl = TexturePaintController::instance();
     ASSERT_TRUE(ctrl->ensurePaintableTexture(16));
     QSignalSpy spy(ctrl, &TexturePaintController::fullResPreviewChanged);
-    // Any write that ends with flushDirtyToOgre/refreshPreviewUri will do.
+    // Mask write → flushDirtyToOgre (16 ms debounce) → refreshPreviewUri
+    // (60 ms debounce inside). Pump events to let both timers fire.
     ctrl->selectAllMask();
     ctrl->setBrushColor(QColor(99, 99, 99));
     ctrl->fillMaskWithFG();
+    pumpEventsFor(150);
     EXPECT_GE(spy.count(), 1);
 }
 
