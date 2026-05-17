@@ -58,6 +58,9 @@
 #include "SpaceCamera.h"
 #include "ViewCube/ViewCubeController.h"
 #include "LLMManager.h"
+#ifdef ENABLE_PS1_RIP
+#include "PS1/runtime/PS1RipSessionWindow.h"
+#endif
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 #include "UndoManager.h"
@@ -2184,12 +2187,7 @@ void MainWindow::initToolBar()
     connect(ps1RipAction, &QAction::triggered, this, []() {
         SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                       QStringLiteral("Tools > Experimental > PS1 Runtime Ripper"));
-        QMessageBox::information(
-            nullptr, QObject::tr("PS1 Runtime Ripper"),
-            QObject::tr(
-                "Experimental PS1 runtime geometry extraction is in development.\n\n"
-                "You will load an ISO and BIOS you own, run the embedded emulator, and capture "
-                "frames into the editor. See src/PS1/PS1_RIP_DESIGN.md."));
+        PS1RipSessionWindow::showSession(nullptr);
     });
 #endif
 }

@@ -554,6 +554,10 @@ if(BUILD_TESTS)
 
     ADD_DEPENDENCIES(UnitTests ui)
 
+    if(ENABLE_PS1_RIP)
+        add_dependencies(UnitTests qtmesh_ps1core_stub)
+    endif()
+
     # On macOS, create symlinks from Ogre plugin .framework bundles into the
     # UnitTests binary directory so that plugins.cfg (PluginFolder=../) can
     # find them.  The app bundle has these in Contents/MacOS/ via INSTALL

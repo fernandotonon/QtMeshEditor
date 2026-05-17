@@ -55,7 +55,13 @@ option(ENABLE_PS1_RIP "Enable experimental PS1 runtime geometry extraction" OFF)
 
 See epic #412 for phased issues (#413–#431).
 
+## Phase 1 status
+
+- `EmuCore` + `IEmuCorePlugin` + `EmuCoreLoader` landed (#415).
+- Stub plugin `plugins/ps1core_stub/` renders a 320×240 test pattern when BIOS+ISO paths validate.
+- `PS1RipSessionWindow` + `EmuViewport` + legality dialog (#416–#417) — keyboard/gamepad input still TODO.
+
 ## Open questions
 
-- Exact plugin ABI for `EmuCore` (#415).
+- mednafen-psx plugin build/integration (replace stub for real emulation).
 - BIOS / ISO first-run legality dialog copy (#417) — requires legal review before release.

@@ -42,6 +42,21 @@ void PS1RipManager::initializeWorkerThread()
     m_worker = new PS1RipWorker();
     m_worker->moveToThread(m_workerThread);
 
+    connect(m_worker, &PS1RipWorker::emulationStarted, this, [this]() {
+        m_sessionActive = true;
+        m_paused = false;
+        emit sessionStarted();
+    });
+    connect(m_worker, &PS1RipWorker::emulationStopped, this, [this]() {
+        m_sessionActive = false;
+        m_paused = false;
+        m_captureArmed = false;
+        emit sessionStopped();
+    });
+    connect(m_worker, &PS1RipWorker::framePresented, this, &PS1RipManager::framePresented);
+    connect(m_worker, &PS1RipWorker::emulationError, this,
+            [this](const QString &msg) { reportError(msg); });
+
     connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
 
     m_workerThread->start();
@@ -65,6 +80,31 @@ void PS1RipManager::reportError(const QString &message)
     emit error(message);
 }
 
+void PS1RipManager::syncWorkerSession()
+{
+    if (!m_worker)
+        return;
+    QMetaObject::invokeMethod(m_worker, "configureSession", Qt::QueuedConnection,
+                              Q_ARG(QString, m_biosPath), Q_ARG(QString, m_isoPath));
+}
+
+bool PS1RipManager::loadBios(const QString &path)
+{
+    const QFileInfo info(path);
+    if (!info.exists() || !info.isFile()) {
+        reportError(tr("BIOS file not found: %1").arg(path));
+        return false;
+    }
+
+    if (m_sessionActive)
+        stop();
+
+    m_biosPath = info.absoluteFilePath();
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.bios.load"), m_biosPath);
+    syncWorkerSession();
+    return true;
+}
+
 bool PS1RipManager::loadIso(const QString &path)
 {
     const QFileInfo info(path);
@@ -77,13 +117,17 @@ bool PS1RipManager::loadIso(const QString &path)
         stop();
 
     m_isoPath = info.absoluteFilePath();
-    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip"),
-                                QStringLiteral("loadIso: %1").arg(m_isoPath));
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.iso.load"), m_isoPath);
+    syncWorkerSession();
     return true;
 }
 
 bool PS1RipManager::start()
 {
+    if (m_biosPath.isEmpty()) {
+        reportError(tr("No BIOS loaded"));
+        return false;
+    }
     if (m_isoPath.isEmpty()) {
         reportError(tr("No ISO loaded"));
         return false;
@@ -91,9 +135,10 @@ bool PS1RipManager::start()
     if (m_sessionActive)
         return true;
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip"), QStringLiteral("start (stub)"));
-    reportError(tr("PS1 emulator core not integrated yet"));
-    return false;
+    syncWorkerSession();
+    QMetaObject::invokeMethod(m_worker, &PS1RipWorker::startEmulation, Qt::QueuedConnection);
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip"), QStringLiteral("start"));
+    return true;
 }
 
 bool PS1RipManager::stop()
@@ -101,14 +146,9 @@ bool PS1RipManager::stop()
     if (!m_sessionActive)
         return false;
 
-    if (m_worker) {
-        QMetaObject::invokeMethod(m_worker, &PS1RipWorker::stopEmulation, Qt::QueuedConnection);
-    }
-
-    m_sessionActive = false;
     m_captureArmed = false;
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip"), QStringLiteral("stop"));
-    emit sessionStopped();
+    QMetaObject::invokeMethod(m_worker, &PS1RipWorker::stopEmulation, Qt::QueuedConnection);
     return true;
 }
 
@@ -118,8 +158,10 @@ bool PS1RipManager::pause()
         reportError(tr("No active PS1 session"));
         return false;
     }
-    reportError(tr("PS1 emulator core not integrated yet"));
-    return false;
+    QMetaObject::invokeMethod(m_worker, &PS1RipWorker::pauseEmulation, Qt::QueuedConnection);
+    m_paused = !m_paused;
+    emit pausedChanged(m_paused);
+    return true;
 }
 
 bool PS1RipManager::step()
@@ -128,8 +170,8 @@ bool PS1RipManager::step()
         reportError(tr("No active PS1 session"));
         return false;
     }
-    reportError(tr("PS1 emulator core not integrated yet"));
-    return false;
+    QMetaObject::invokeMethod(m_worker, &PS1RipWorker::stepFrame, Qt::QueuedConnection);
+    return true;
 }
 
 bool PS1RipManager::armCapture(bool armed)
