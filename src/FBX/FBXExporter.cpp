@@ -853,6 +853,34 @@ private:
             }
         }
 
+        // Morph A4b — count BlendShape / BlendShapeChannel / Shape
+        // objects. Independent of skeleton presence: a mesh can have
+        // either or both. Per submesh that has any poses:
+        //   +1 BlendShape deformer
+        //   +N BlendShapeChannel deformers (one per pose)
+        //   +N Shape geometries (one per pose)
+        if (m_mesh) {
+            const Ogre::PoseList& poseList = m_mesh->getPoseList();
+            if (!poseList.empty()) {
+                for (unsigned int si = 0; si < m_mesh->getNumSubMeshes(); ++si) {
+                    const auto* subMesh = m_mesh->getSubMesh(si);
+                    const unsigned short targetHandle = subMesh->useSharedVertices
+                        ? 0
+                        : static_cast<unsigned short>(si + 1);
+                    int posesOnThisSubmesh = 0;
+                    for (const Ogre::Pose* p : poseList) {
+                        if (p && p->getTarget() == targetHandle)
+                            ++posesOnThisSubmesh;
+                    }
+                    if (posesOnThisSubmesh > 0) {
+                        deformerCount += 1;                   // BlendShape
+                        deformerCount += posesOnThisSubmesh;  // BlendShapeChannel × N
+                        geomCount     += posesOnThisSubmesh;  // Shape × N
+                    }
+                }
+            }
+        }
+
         int totalObjects = 1 + modelCount + geomCount + matCount + nodeAttrCount +
                            deformerCount + poseCount + textureCount + videoCount +
                            animStackCount + animLayerCount +
@@ -926,6 +954,10 @@ private:
             writeMeshModels();
             writeMaterialObjects();
             writeTextureObjects();
+            // Morph A4b — BlendShape deformers run alongside skin
+            // deformers; a mesh can have either or both. Independent
+            // of skeleton presence.
+            writeBlendShapeDeformers();
         }
         if (m_hasSkeleton)
         {
@@ -1568,6 +1600,127 @@ private:
         }
     }
 
+    // ── Morph A4b: BlendShape deformers (morph targets) ──────────
+    //
+    // FBX represents blend shapes as a chain of nodes hanging off
+    // each geometry:
+    //   Geometry ←OO— Deformer("BlendShape")
+    //                 ←OO— Deformer("BlendShapeChannel", named per pose)
+    //                      ←OO— Geometry("Shape", sparse vertex deltas)
+    //
+    // The Shape node stores `Indexes` (vertex indices that move) and
+    // `Vertices` (per-vertex delta XYZ). Same Z-mirroring convention
+    // as the rest of the binary FBX export.
+    void writeBlendShapeDeformers()
+    {
+        for (size_t gi = 0; gi < m_geomIds.size(); ++gi) {
+            unsigned int si = m_geomSubmeshIndices[gi];
+            const Ogre::SubMesh* subMesh = m_mesh->getSubMesh(si);
+
+            // Collect poses targeting this submesh. Same handle rule
+            // the glTF exporter uses (slice A4a):
+            //   useSharedVertices → handle 0
+            //   else              → submesh index + 1
+            const Ogre::PoseList& poseList = m_mesh->getPoseList();
+            const unsigned short targetHandle = subMesh->useSharedVertices
+                ? 0
+                : static_cast<unsigned short>(si + 1);
+            std::vector<const Ogre::Pose*> submeshPoses;
+            for (const Ogre::Pose* p : poseList) {
+                if (p && p->getTarget() == targetHandle)
+                    submeshPoses.push_back(p);
+            }
+            if (submeshPoses.empty()) continue;
+
+            // 1) Top-level BlendShape deformer for this geometry.
+            int64_t blendShapeId = nextId();
+            m_blendShapeConns.push_back({blendShapeId, m_geomIds[gi]});
+
+            m_w.beginNode("Deformer");
+            m_w.writePropertyL(blendShapeId);
+            m_w.writePropertyS(
+                "BlendShape_" + std::to_string(si)
+                + std::string("\x00\x01", 2) + "BlendShape");
+            m_w.writePropertyS("BlendShape");
+            m_w.endProperties();
+
+            m_w.beginNode("Version");
+            m_w.writePropertyI(101);
+            m_w.endProperties(); m_w.endNodeLeaf();
+
+            m_w.endNode();  // Deformer (BlendShape)
+
+            // 2) Per-pose BlendShapeChannel + Shape pair.
+            for (const Ogre::Pose* p : submeshPoses) {
+                int64_t channelId = nextId();
+                int64_t shapeId = nextId();
+                m_channelConns.push_back({channelId, blendShapeId, shapeId, p->getName()});
+
+                // BlendShapeChannel — the user-facing weight target.
+                m_w.beginNode("Deformer");
+                m_w.writePropertyL(channelId);
+                m_w.writePropertyS(p->getName() + std::string("\x00\x01", 2)
+                                   + "SubDeformer");
+                m_w.writePropertyS("BlendShapeChannel");
+                m_w.endProperties();
+
+                m_w.beginNode("Version");
+                m_w.writePropertyI(100);
+                m_w.endProperties(); m_w.endNodeLeaf();
+
+                m_w.beginNode("DeformPercent");
+                m_w.writePropertyD(0.0);
+                m_w.endProperties(); m_w.endNodeLeaf();
+
+                m_w.beginNode("FullWeights");
+                m_w.writePropertyArrayD(std::vector<double>{100.0});
+                m_w.endProperties(); m_w.endNodeLeaf();
+
+                m_w.endNode();  // Deformer (BlendShapeChannel)
+
+                // Shape — sparse vertex-index → delta-XYZ pair.
+                // FBX stores absolute "shape" geometry as deltas
+                // relative to the base; Ogre::Pose's offsets are
+                // already in delta form so the conversion is direct.
+                std::vector<int32_t> indexes;
+                std::vector<double>  deltas;  // x0 y0 z0 x1 y1 z1 ...
+                indexes.reserve(p->getVertexOffsets().size());
+                deltas.reserve(p->getVertexOffsets().size() * 3u);
+                for (const auto& [vi, d] : p->getVertexOffsets()) {
+                    indexes.push_back(static_cast<int32_t>(vi));
+                    // FBX uses right-handed Y-up with Z mirrored on
+                    // export (same convention writeMeshModels uses
+                    // for vertex positions). Mirroring Z keeps the
+                    // morph delta consistent with the base mesh.
+                    deltas.push_back(static_cast<double>(d.x));
+                    deltas.push_back(static_cast<double>(d.y));
+                    deltas.push_back(static_cast<double>(-d.z));
+                }
+
+                m_w.beginNode("Geometry");
+                m_w.writePropertyL(shapeId);
+                m_w.writePropertyS(p->getName() + std::string("\x00\x01", 2)
+                                   + "Geometry");
+                m_w.writePropertyS("Shape");
+                m_w.endProperties();
+
+                m_w.beginNode("Version");
+                m_w.writePropertyI(100);
+                m_w.endProperties(); m_w.endNodeLeaf();
+
+                m_w.beginNode("Indexes");
+                m_w.writePropertyArrayI(indexes);
+                m_w.endProperties(); m_w.endNodeLeaf();
+
+                m_w.beginNode("Vertices");
+                m_w.writePropertyArrayD(deltas);
+                m_w.endProperties(); m_w.endNodeLeaf();
+
+                m_w.endNode();  // Geometry (Shape)
+            }
+        }
+    }
+
     // ── Animations ───────────────────────────────────────────────
     void writeAnimations()
     {
@@ -2113,6 +2266,21 @@ private:
                 writeConnection("OO", vidIt->second, texId);
         }
 
+        // Morph A4b: BlendShape chain.
+        //   Shape → BlendShapeChannel → BlendShape → Geometry
+        // Independent of skeleton presence — a mesh can be pure-morph
+        // (no skin) and still need these links, otherwise the
+        // BlendShape/Channel/Shape records sit orphaned in the file
+        // and importers ignore them.
+        if (!m_skeletonOnly) {
+            for (const auto& bs : m_blendShapeConns)
+                writeConnection("OO", bs.blendShapeId, bs.geomId);
+            for (const auto& ch : m_channelConns) {
+                writeConnection("OO", ch.channelId, ch.blendShapeId);
+                writeConnection("OO", ch.shapeGeomId, ch.channelId);
+            }
+        }
+
         if (m_hasSkeleton)
         {
             // Bone NodeAttribute → bone Model
@@ -2344,6 +2512,21 @@ private:
 
     std::vector<int64_t> m_skinIds;
     std::vector<int64_t> m_animStackIds;
+
+    // Morph A4b — BlendShape deformer family. Connections:
+    //   Geometry ←OO— BlendShape ←OO— BlendShapeChannel ←OO— Shape
+    struct BlendShapeConn {
+        int64_t blendShapeId;   // top-level "Deformer"/"BlendShape" per geometry
+        int64_t geomId;         // the owning aiGeometry
+    };
+    struct ChannelConn {
+        int64_t channelId;      // "Deformer"/"BlendShapeChannel"
+        int64_t blendShapeId;
+        int64_t shapeGeomId;    // the "Geometry"/"Shape" node carrying the deltas
+        std::string poseName;
+    };
+    std::vector<BlendShapeConn> m_blendShapeConns;
+    std::vector<ChannelConn>    m_channelConns;
 
     struct ClusterConnection {
         int64_t clusterId;
