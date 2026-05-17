@@ -4282,6 +4282,22 @@ QJsonObject MCPServer::toolListMorphTargets(const QJsonObject &args)
     QSet<Ogre::Entity*> beforeSet;
     for (Ogre::Entity* e : collectEntitiesSafe()) beforeSet.insert(e);
 
+    // Snapshot the user's selection *before* the import. The importer
+    // auto-selects newly-created entities (Manager::addSceneNode +
+    // MeshImporterExporter calls SelectionSet::append), so without
+    // restoring we'd leave the SelectionSet pointing at the entities
+    // we're about to destroy in cleanup — a use-after-free for any
+    // downstream code that iterates selection nodes / entities.
+    auto* selSet = SelectionSet::getSingleton();
+    QList<Ogre::SceneNode*> prevNodes;
+    QList<Ogre::Entity*>    prevEnts;
+    QList<Ogre::SubEntity*> prevSubs;
+    if (selSet) {
+        prevNodes = selSet->getNodesSelectionList();
+        prevEnts  = selSet->getEntitiesSelectionList();
+        prevSubs  = selSet->getSubEntitiesSelectionList();
+    }
+
     try {
         MeshImporterExporter::importer({filePath});
     } catch (const std::exception& e) {
@@ -4299,7 +4315,11 @@ QJsonObject MCPServer::toolListMorphTargets(const QJsonObject &args)
 
     struct ImportCleanup {
         Manager* mgr;
+        SelectionSet* sel;
         QList<Ogre::Entity*> entities;
+        QList<Ogre::SceneNode*> prevNodes;
+        QList<Ogre::Entity*>    prevEnts;
+        QList<Ogre::SubEntity*> prevSubs;
         ~ImportCleanup() {
             if (!mgr) return;
             try {
@@ -4308,8 +4328,23 @@ QJsonObject MCPServer::toolListMorphTargets(const QJsonObject &args)
                     if (e && e->getParentSceneNode()) nodes.insert(e->getParentSceneNode());
                 for (Ogre::SceneNode* sn : nodes) mgr->destroySceneNode(sn);
             } catch (...) {}
+
+            // Restore the pre-import selection. Use clearList() (not
+            // clear()) because the importer-added entries point at
+            // entities we just destroyed — clear() would dereference
+            // freed memory while bookkeeping. The pointers we
+            // captured beforehand are still valid because we only
+            // destroyed the *new* (imported) nodes.
+            if (sel) {
+                try {
+                    sel->clearList();
+                    for (auto* n : prevNodes) if (n) sel->append(n);
+                    for (auto* e : prevEnts)  if (e) sel->append(e);
+                    for (auto* s : prevSubs)  if (s) sel->append(s);
+                } catch (...) {}
+            }
         }
-    } cleanup{mgr, imported};
+    } cleanup{mgr, selSet, imported, prevNodes, prevEnts, prevSubs};
 
     // Union targets across every imported entity (multi-entity files
     // can split shapes across body + head meshes). Same de-dup the
