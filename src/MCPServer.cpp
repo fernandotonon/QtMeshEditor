@@ -394,6 +394,141 @@ QJsonObject MCPServer::makeSuccessResult(const QString &message)
     return result;
 }
 
+namespace {
+
+/// RAII helper: tools that need to temporarily import a mesh
+/// without touching the user's live scene state.
+///
+/// On construction:
+///   - Snapshots the current entity list (filtered to actual
+///     `Ogre::Entity` objects — `Manager::getEntities()` returns
+///     `MovableObject*` which includes ManualObjects for gizmos and
+///     the like).
+///   - Snapshots the SelectionSet's three lists. This matters
+///     because `MeshImporterExporter::importer` auto-selects the
+///     entities it creates; without restoring afterward the
+///     SelectionSet would dangle at destroyed pointers as soon as
+///     the destructor runs (CodeRabbit/Codex finding on PR #571).
+///
+/// `runImporter()` calls `MeshImporterExporter::importer` with
+/// exception guards and returns true/false. After it runs,
+/// `importedEntities()` lists the entities created by this import
+/// only (the diff against the pre-import snapshot).
+///
+/// On destruction:
+///   - Destroys every scene node parent of the imported entities.
+///   - `selSet->clearList()` (not `clear()`) — wipes the importer-
+///     added selection entries without dereferencing them
+///     (they're freed memory by this point).
+///   - Re-appends the snapshotted pre-import selection.
+class TransientImportSession {
+public:
+    explicit TransientImportSession(Manager* mgr)
+        : m_mgr(mgr)
+        , m_selSet(SelectionSet::getSingleton())
+    {
+        if (!m_mgr) return;
+        for (Ogre::Entity* e : collectEntitiesSafe()) m_beforeSet.insert(e);
+        if (m_selSet) {
+            m_prevNodes = m_selSet->getNodesSelectionList();
+            m_prevEnts  = m_selSet->getEntitiesSelectionList();
+            m_prevSubs  = m_selSet->getSubEntitiesSelectionList();
+        }
+    }
+
+    /// Run the importer for `filePath`. Returns the error message
+    /// on exception, or empty on success.
+    ///
+    /// Even on the error path, any entities the importer managed to
+    /// create before throwing are recorded into `m_imported` — so
+    /// the destructor still cleans up the partial state. Without
+    /// this, a half-successful import would leak scene nodes into
+    /// the user's live scene.
+    QString runImporter(const QString& filePath)
+    {
+        if (!m_mgr) return QStringLiteral("no Manager singleton");
+        try {
+            MeshImporterExporter::importer({filePath});
+        } catch (const std::exception& e) {
+            captureImportedEntities();
+            return QStringLiteral("Importer threw: %1").arg(QString::fromUtf8(e.what()));
+        } catch (...) {
+            captureImportedEntities();
+            return QStringLiteral("Importer threw (unknown exception)");
+        }
+        captureImportedEntities();
+        return {};
+    }
+
+    const QList<Ogre::Entity*>& importedEntities() const { return m_imported; }
+
+    ~TransientImportSession()
+    {
+        if (!m_mgr) return;
+        // Destroy newly-created scene-node parents (one per imported
+        // mesh; siblings sharing a parent are uncommon for raw imports
+        // but the set dedupes anyway).
+        try {
+            std::set<Ogre::SceneNode*> nodes;
+            for (Ogre::Entity* e : m_imported) {
+                if (e && e->getParentSceneNode()) nodes.insert(e->getParentSceneNode());
+            }
+            for (Ogre::SceneNode* sn : nodes) m_mgr->destroySceneNode(sn);
+        } catch (...) {}
+
+        // Restore selection — see class doc for rationale.
+        if (m_selSet) {
+            try {
+                m_selSet->clearList();
+                for (auto* n : m_prevNodes) if (n) m_selSet->append(n);
+                for (auto* e : m_prevEnts)  if (e) m_selSet->append(e);
+                for (auto* s : m_prevSubs)  if (s) m_selSet->append(s);
+            } catch (...) {}
+        }
+    }
+
+    TransientImportSession(const TransientImportSession&) = delete;
+    TransientImportSession& operator=(const TransientImportSession&) = delete;
+
+private:
+    /// Append every entity that's currently in the scene but wasn't
+    /// in `m_beforeSet` (i.e. created by this session) to `m_imported`.
+    /// Idempotent + dedup'd against `m_imported`, so calling it from
+    /// both the success path and the exception paths is safe.
+    void captureImportedEntities()
+    {
+        for (Ogre::Entity* e : collectEntitiesSafe()) {
+            if (!m_beforeSet.contains(e) && !m_imported.contains(e))
+                m_imported.append(e);
+        }
+    }
+
+    QList<Ogre::Entity*> collectEntitiesSafe() const
+    {
+        QList<Ogre::Entity*> out;
+        const auto& nodes = m_mgr->getSceneNodes();
+        for (Ogre::SceneNode* node : nodes) {
+            if (!node) continue;
+            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if (!obj || obj->getMovableType() != "Entity") continue;
+                out.append(static_cast<Ogre::Entity*>(obj));
+            }
+        }
+        return out;
+    }
+
+    Manager*                m_mgr = nullptr;
+    SelectionSet*           m_selSet = nullptr;
+    QSet<Ogre::Entity*>     m_beforeSet;
+    QList<Ogre::Entity*>    m_imported;
+    QList<Ogre::SceneNode*> m_prevNodes;
+    QList<Ogre::Entity*>    m_prevEnts;
+    QList<Ogre::SubEntity*> m_prevSubs;
+};
+
+} // namespace
+
 const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
 {
     static const QMap<QString, ToolHandler> handlers = {
@@ -3672,42 +3807,17 @@ QJsonObject MCPServer::toolApplyAtlas(const QJsonObject &args)
     auto* mgr = Manager::getSingletonPtr();
     if (!mgr) return makeErrorResult("Manager unavailable");
 
-    // Same scene-isolation pattern as toolOptimizeMesh: snapshot the
-    // pre-import entity set so we only mutate the new asset and we can
-    // clean up on every return path.
+    // Transient import: load the file, apply the atlas, tear it down
+    // on scope exit (with the user's prior selection restored).
     SentryReporter::addBreadcrumb("file.import",
         QString("Apply-atlas importing %1").arg(QFileInfo(filePath).fileName()));
-    QSet<Ogre::Entity*> beforeSet;
-    for (Ogre::Entity* e : mgr->getEntities()) beforeSet.insert(e);
-
-    try {
-        MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
-    } catch (const std::exception& e) {
-        return makeErrorResult(QString("Importer threw: %1").arg(QString::fromUtf8(e.what())));
-    } catch (...) {
-        return makeErrorResult("Importer threw (unknown exception type)");
-    }
-
-    QList<Ogre::Entity*> entities;
-    for (Ogre::Entity* e : mgr->getEntities())
-        if (!beforeSet.contains(e)) entities.append(e);
+    TransientImportSession session(mgr);
+    if (QString err = session.runImporter(QFileInfo(filePath).absoluteFilePath());
+        !err.isEmpty())
+        return makeErrorResult(err);
+    const QList<Ogre::Entity*>& entities = session.importedEntities();
     if (entities.isEmpty())
         return makeErrorResult(QString("Failed to load entities from %1").arg(filePath));
-
-    struct ImportCleanup {
-        Manager* mgr;
-        QList<Ogre::Entity*> imported;
-        ~ImportCleanup() {
-            if (!mgr) return;
-            try {
-                std::set<Ogre::SceneNode*> nodes;
-                for (Ogre::Entity* e : imported)
-                    if (e && e->getParentSceneNode())
-                        nodes.insert(e->getParentSceneNode());
-                for (Ogre::SceneNode* sn : nodes) mgr->destroySceneNode(sn);
-            } catch (...) {}
-        }
-    } cleanup{mgr, entities};
 
     // Register the atlas image's directory as a resource location into
     // the default group (the only group the imported materials see).
@@ -4126,66 +4236,18 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     // happened to be first in `getEntities()` and would accumulate
     // scene state across calls.
     //
-    // Use a safe-cast helper rather than `Manager::getEntities()`
-    // directly: that getter returns MovableObjects, and non-Entity
-    // attachments (ManualObject for gizmos, the brush hover ring,
-    // mask overlay clones, etc.) would crash on a raw cast. Walk the
-    // scene nodes and filter by `getMovableType() == "Entity"`.
+    // Transient import: load the file, bake the VAT, tear it down on
+    // scope exit (with the user's prior selection restored). See
+    // TransientImportSession at the top of this file for the contract.
     auto* mgr = Manager::getSingleton();
-    auto collectEntitiesSafe = [mgr]() {
-        QList<Ogre::Entity*> out;
-        const auto& nodes = mgr->getSceneNodes();
-        for (Ogre::SceneNode* node : nodes) {
-            if (!node) continue;
-            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
-                Ogre::MovableObject* obj = node->getAttachedObject(i);
-                if (!obj || obj->getMovableType() != "Entity") continue;
-                out.append(static_cast<Ogre::Entity*>(obj));
-            }
-        }
-        return out;
-    };
-
     SentryReporter::addBreadcrumb("file.import",
         QString("Importing %1 for VAT bake").arg(filePath));
-    QSet<Ogre::Entity*> beforeSet;
-    for (Ogre::Entity* e : collectEntitiesSafe()) beforeSet.insert(e);
-
-    try {
-        MeshImporterExporter::importer({filePath});
-    } catch (const std::exception& e) {
-        return makeErrorResult(QString("Importer threw: %1").arg(QString::fromUtf8(e.what())));
-    } catch (...) {
-        return makeErrorResult("Importer threw (unknown exception)");
-    }
-
-    QList<Ogre::Entity*> imported;
-    for (Ogre::Entity* e : collectEntitiesSafe()) {
-        if (!beforeSet.contains(e))
-            imported.append(e);
-    }
+    TransientImportSession session(mgr);
+    if (QString err = session.runImporter(filePath); !err.isEmpty())
+        return makeErrorResult(err);
+    const QList<Ogre::Entity*>& imported = session.importedEntities();
     if (imported.isEmpty())
         return makeErrorResult(QString("Error: failed to load mesh: %1").arg(filePath));
-
-    // RAII cleanup so the live scene returns to its pre-import state on
-    // every exit path (success or error). The VAT outputs are already
-    // on disk; no in-scene state needs to survive this tool call.
-    struct ImportCleanup {
-        Manager* mgr;
-        QList<Ogre::Entity*> entities;
-        ~ImportCleanup() {
-            if (!mgr) return;
-            try {
-                std::set<Ogre::SceneNode*> nodes;
-                for (Ogre::Entity* e : entities) {
-                    if (e && e->getParentSceneNode())
-                        nodes.insert(e->getParentSceneNode());
-                }
-                for (Ogre::SceneNode* sn : nodes)
-                    mgr->destroySceneNode(sn);
-            } catch (...) {}
-        }
-    } cleanup{mgr, imported};
 
     // Pick the bake target by skeleton presence rather than list
     // order. Some mesh formats produce auxiliary unskinned entities
@@ -4258,93 +4320,17 @@ QJsonObject MCPServer::toolListMorphTargets(const QJsonObject &args)
     if (!QFileInfo::exists(filePath))
         return makeErrorResult(QString("Error: file not found: %1").arg(filePath));
 
-    // Reuse the same safe import + cleanup pattern toolBakeVat uses:
-    // snapshot entities before, import, diff the new ones, RAII tear
-    // them down on exit. Without this, repeated MCP calls would
-    // accumulate scene state.
+    // Transient import: load the file, read what we need, tear it
+    // down on scope exit (with the user's prior selection restored).
     auto* mgr = Manager::getSingleton();
-    auto collectEntitiesSafe = [mgr]() {
-        QList<Ogre::Entity*> out;
-        const auto& nodes = mgr->getSceneNodes();
-        for (Ogre::SceneNode* node : nodes) {
-            if (!node) continue;
-            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
-                Ogre::MovableObject* obj = node->getAttachedObject(i);
-                if (!obj || obj->getMovableType() != "Entity") continue;
-                out.append(static_cast<Ogre::Entity*>(obj));
-            }
-        }
-        return out;
-    };
-
     SentryReporter::addBreadcrumb("file.import",
         QString("Importing %1 for morph list").arg(filePath));
-    QSet<Ogre::Entity*> beforeSet;
-    for (Ogre::Entity* e : collectEntitiesSafe()) beforeSet.insert(e);
-
-    // Snapshot the user's selection *before* the import. The importer
-    // auto-selects newly-created entities (Manager::addSceneNode +
-    // MeshImporterExporter calls SelectionSet::append), so without
-    // restoring we'd leave the SelectionSet pointing at the entities
-    // we're about to destroy in cleanup — a use-after-free for any
-    // downstream code that iterates selection nodes / entities.
-    auto* selSet = SelectionSet::getSingleton();
-    QList<Ogre::SceneNode*> prevNodes;
-    QList<Ogre::Entity*>    prevEnts;
-    QList<Ogre::SubEntity*> prevSubs;
-    if (selSet) {
-        prevNodes = selSet->getNodesSelectionList();
-        prevEnts  = selSet->getEntitiesSelectionList();
-        prevSubs  = selSet->getSubEntitiesSelectionList();
-    }
-
-    try {
-        MeshImporterExporter::importer({filePath});
-    } catch (const std::exception& e) {
-        return makeErrorResult(QString("Importer threw: %1").arg(QString::fromUtf8(e.what())));
-    } catch (...) {
-        return makeErrorResult("Importer threw (unknown exception)");
-    }
-
-    QList<Ogre::Entity*> imported;
-    for (Ogre::Entity* e : collectEntitiesSafe()) {
-        if (!beforeSet.contains(e)) imported.append(e);
-    }
+    TransientImportSession session(mgr);
+    if (QString err = session.runImporter(filePath); !err.isEmpty())
+        return makeErrorResult(err);
+    const QList<Ogre::Entity*>& imported = session.importedEntities();
     if (imported.isEmpty())
         return makeErrorResult(QString("Error: failed to load mesh: %1").arg(filePath));
-
-    struct ImportCleanup {
-        Manager* mgr;
-        SelectionSet* sel;
-        QList<Ogre::Entity*> entities;
-        QList<Ogre::SceneNode*> prevNodes;
-        QList<Ogre::Entity*>    prevEnts;
-        QList<Ogre::SubEntity*> prevSubs;
-        ~ImportCleanup() {
-            if (!mgr) return;
-            try {
-                std::set<Ogre::SceneNode*> nodes;
-                for (Ogre::Entity* e : entities)
-                    if (e && e->getParentSceneNode()) nodes.insert(e->getParentSceneNode());
-                for (Ogre::SceneNode* sn : nodes) mgr->destroySceneNode(sn);
-            } catch (...) {}
-
-            // Restore the pre-import selection. Use clearList() (not
-            // clear()) because the importer-added entries point at
-            // entities we just destroyed — clear() would dereference
-            // freed memory while bookkeeping. The pointers we
-            // captured beforehand are still valid because we only
-            // destroyed the *new* (imported) nodes.
-            if (sel) {
-                try {
-                    sel->clearList();
-                    for (auto* n : prevNodes) if (n) sel->append(n);
-                    for (auto* e : prevEnts)  if (e) sel->append(e);
-                    for (auto* s : prevSubs)  if (s) sel->append(s);
-                } catch (...) {}
-            }
-        }
-    } cleanup{mgr, selSet, imported, prevNodes, prevEnts, prevSubs};
 
     // Union targets across every imported entity (multi-entity files
     // can split shapes across body + head meshes). Same de-dup the
