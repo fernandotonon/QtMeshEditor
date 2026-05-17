@@ -294,20 +294,45 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
         }
     }
 
-    // One Ogre::Animation per pose so AnimationState weights drive
-    // each morph target independently. Animation name is the
-    // canonical morph-target name (MorphAnimationManager keys on it).
+    // One Ogre::Animation per *unique* morph-target name. Same-named
+    // poses across different submeshes (e.g. a "Smile" target on both
+    // body and head) all need to drive together off the same
+    // AnimationState weight, so they share one Animation with one
+    // VAT_POSE track per affected submesh. Without grouping, the
+    // second-and-later same-named poses would create a new
+    // Ogre::Animation but Ogre::Mesh enforces unique animation names —
+    // we'd either skip them (and they'd never move) or fail to import.
     const auto& poseList = ogreMesh->getPoseList();
     for (unsigned short pi = 0; pi < poseList.size(); ++pi) {
         const Ogre::Pose* pose = poseList[pi];
         if (!pose) continue;
         const Ogre::String animName = pose->getName();
         if (animName.empty()) continue;
-        if (ogreMesh->hasAnimation(animName)) continue;  // duplicate pose name; skip
-        Ogre::Animation* anim = ogreMesh->createAnimation(animName, /*length=*/0.0f);
-        Ogre::VertexAnimationTrack* track = anim->createVertexTrack(
-            pose->getTarget(), Ogre::VAT_POSE);
-        auto* kf = track->createVertexPoseKeyFrame(0.0f);
+
+        // First sighting of this name → create the Animation. Later
+        // sightings find it via hasAnimation and just append a track.
+        Ogre::Animation* anim = nullptr;
+        if (ogreMesh->hasAnimation(animName)) {
+            anim = ogreMesh->getAnimation(animName);
+        } else {
+            anim = ogreMesh->createAnimation(animName, /*length=*/0.0f);
+        }
+        if (!anim) continue;
+
+        Ogre::VertexAnimationTrack* track = nullptr;
+        const unsigned short handle = pose->getTarget();
+        if (anim->hasVertexTrack(handle)) {
+            // Same submesh + same name → rare content error. Append
+            // the pose reference to the existing keyframe so the user
+            // still gets some movement (better than silently dropping).
+            track = anim->getVertexTrack(handle);
+        } else {
+            track = anim->createVertexTrack(handle, Ogre::VAT_POSE);
+        }
+        if (!track) continue;
+        auto* kf = track->getNumKeyFrames() > 0
+                       ? static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(0))
+                       : track->createVertexPoseKeyFrame(0.0f);
         // Full influence on this pose; AnimationState weight scales it.
         kf->addPoseReference(pi, 1.0f);
     }

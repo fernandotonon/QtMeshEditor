@@ -4991,20 +4991,32 @@ int CLIPipeline::cmdMorph(int argc, char* argv[])
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
 
-    auto& entities = Manager::getSingleton()->getEntities();
-    Ogre::Entity* entity = nullptr;
-    for (auto* obj : entities) {
-        if (obj && obj->getMovableType() == "Entity") {
-            entity = static_cast<Ogre::Entity*>(obj);
-            break;
-        }
+    // Walk every imported entity, not just the first — multi-entity
+    // files (e.g. FBX with separate body + head meshes that both
+    // carry blend shapes) would otherwise lose the targets on the
+    // entities the loop missed.
+    auto& movables = Manager::getSingleton()->getEntities();
+    QList<Ogre::Entity*> entities;
+    for (auto* obj : movables) {
+        if (obj && obj->getMovableType() == "Entity")
+            entities.append(static_cast<Ogre::Entity*>(obj));
     }
-    if (!entity) {
+    if (entities.isEmpty()) {
         err() << "Error: Failed to load file: " << filePath << Qt::endl;
         return 1;
     }
 
-    const QStringList targets = MorphAnimationManager::instance()->morphTargetsFor(entity);
+    QStringList targets;
+    QSet<QString> seen;
+    for (Ogre::Entity* entity : entities) {
+        const QStringList ents = MorphAnimationManager::instance()->morphTargetsFor(entity);
+        for (const QString& n : ents) {
+            if (!seen.contains(n)) {
+                seen.insert(n);
+                targets.append(n);
+            }
+        }
+    }
 
     if (jsonOutput) {
         QJsonArray arr;
