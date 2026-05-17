@@ -21,6 +21,17 @@ Rectangle {
     // Cached row data refreshed from the controller.
     property var rows: AnimationControlController.allBoneRows()
 
+    // Slice A5b: morph-target rows for the selected entity, sourced from
+    // AnimationControlController.allMorphRows() (a Q_INVOKABLE on the
+    // same singleton that supplies `allBoneRows()` — kept on
+    // AnimationControlController on purpose so this file doesn't
+    // need a second `import` and doesn't trigger a different QML
+    // singleton chain during MainWindow construction). Each row is
+    // `{ name, keyTimes }`. Renders below the bone rows as a fixed
+    // read-only band — full selection / move / copy interaction for
+    // morph tracks is a future slice.
+    property var morphRows: AnimationControlController.allMorphRows()
+
     // Per-bone expansion state for per-channel rows. Keys are bone names,
     // values are bool. Reset when a new clip is selected (different bones).
     property var expandedBones: ({})
@@ -145,6 +156,7 @@ Rectangle {
         // signal, and dropping selection there breaks bulk drag mid-gesture.
         function onSelectionChanged() {
             root.rows = AnimationControlController.allBoneRows()
+            root.morphRows = AnimationControlController.allMorphRows()
             root.clearSelection()
             root.expandedBones = {}
         }
@@ -256,7 +268,9 @@ Rectangle {
         id: rowsView
         anchors.left: parent.left; anchors.right: parent.right
         anchors.top: header.visible ? header.bottom : parent.top
-        anchors.bottom: parent.bottom
+        // Leave room for the morph band at the bottom when it's visible
+        // — otherwise the bone list would draw over it.
+        anchors.bottom: morphBand.visible ? morphBand.top : parent.bottom
         clip: true
         model: root.rows
         spacing: 1
@@ -691,6 +705,104 @@ Rectangle {
             if (dy === 0) return
             root.scrollByPixels(dy)
             event.accepted = true
+        }
+    }
+
+    // ── Morph-target rows (slice A5b) ────────────────────────────────────────
+    // Fixed-height read-only band anchored to the bottom. One row per
+    // morph target with diamond markers at each keyframe time, sharing
+    // the bone-track timeline (same `pxPerSec`, `viewStart`). When the
+    // entity has no morphs the band collapses to height=0 so bone-only
+    // assets look exactly the same as before.
+    //
+    // Keep this strictly read-only: no MouseAreas on the diamonds, no
+    // selection toggling, no drag — full interaction lives in a future
+    // slice. The point here is to make morph-weight animation visible
+    // alongside skeletal animation, which is the load-bearing piece of
+    // #518's "dope sheet integration" acceptance criterion.
+    Rectangle {
+        id: morphBand
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        visible: morphRowsRep.count > 0
+        height: visible
+                ? (morphHeader.height + morphRowsRep.count * (root.rowHeight + 1) + 4)
+                : 0
+        color: AnimationControlController.panelColor
+        border.color: AnimationControlController.borderColor
+        border.width: 1
+
+        Rectangle {
+            id: morphHeader
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 16
+            color: Qt.darker(AnimationControlController.panelColor, 1.15)
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left; anchors.leftMargin: 6
+                text: "Morph Targets (" + morphRowsRep.count + ")"
+                color: AnimationControlController.textColor
+                font.pixelSize: 10
+                font.bold: true
+            }
+        }
+
+        Column {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: morphHeader.bottom
+            anchors.topMargin: 2
+            spacing: 1
+
+            Repeater {
+                id: morphRowsRep
+                model: root.morphRows
+
+                Item {
+                    width: parent.width
+                    height: root.rowHeight
+
+                    Rectangle {
+                        width: root.leftStripWidth; height: root.rowHeight
+                        color: AnimationControlController.panelColor
+                        border.color: AnimationControlController.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left; anchors.leftMargin: 8
+                            text: modelData.name
+                            color: AnimationControlController.textColor
+                            font.pixelSize: 10
+                            elide: Text.ElideRight
+                            width: root.leftStripWidth - 12
+                        }
+                    }
+
+                    // Right side: diamond per keyframe time. Sharing the
+                    // bone-row timeline math so they line up vertically.
+                    Item {
+                        anchors.left: parent.left; anchors.leftMargin: root.leftStripWidth
+                        anchors.right: parent.right
+                        height: root.rowHeight
+                        Repeater {
+                            model: modelData.keyTimes
+                            Rectangle {
+                                property real keyTime: modelData
+                                x: (keyTime - root.viewStart) * root.pxPerSec - width / 2
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 10; height: 10
+                                rotation: 45
+                                color: "#88ccff"  // visually distinct from bone keys (yellow)
+                                border.color: AnimationControlController.borderColor
+                                border.width: 1
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
