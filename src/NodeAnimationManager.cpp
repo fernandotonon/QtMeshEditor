@@ -73,16 +73,41 @@ NodeAnimationManager::NodeAnimationManager(QObject* parent) : QObject(parent)
 
 NodeAnimationManager::~NodeAnimationManager() = default;
 
-unsigned short NodeAnimationManager::trackHandleForNode(const QString& nodeName)
+unsigned short NodeAnimationManager::trackHandleForNode(const QString& clipName,
+                                                        const QString& nodeName)
 {
-    // qHash returns size_t / uint depending on platform. Track
-    // handles are unsigned short, so fold to 16 bits. Collisions are
-    // possible but very rare in practice — Mixamo rigs cap out
-    // around 100 bones; getting two hash collisions in one clip is
-    // ~6.5M:1 (birthday paradox on 16-bit space at N=100). If it
-    // ever matters in practice we can rev this to a per-clip
-    // {name → handle} map.
-    return static_cast<unsigned short>(qHash(nodeName) & 0xFFFFu);
+    // Per-clip allocator: first sighting of (clipName, nodeName)
+    // claims the next free handle inside the clip's Animation
+    // (Ogre's hasNodeTrack(handle) is the source of truth — we walk
+    // 0..N_handles to find the first gap). Subsequent calls find
+    // the existing handle in m_trackHandles and reuse it, so
+    // repeated addKeyframe writes go to the same NodeAnimationTrack.
+    //
+    // Replaces an earlier `qHash & 0xFFFF` strategy that silently
+    // collapsed two different node names onto the same track when
+    // their hashes collided — birthday paradox hits 50% at ~300
+    // names on a 16-bit space (Codex P1 on PR #584).
+    auto& clipMap = m_trackHandles[clipName];
+    auto it = clipMap.find(nodeName);
+    if (it != clipMap.end()) return *it;
+
+    // Allocate the lowest unused handle in the clip's track table.
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr) return 0;
+    auto* scene = mgr->getSceneMgr();
+    if (!scene) return 0;
+    const std::string sclip = clipName.toStdString();
+    Ogre::Animation* anim = scene->hasAnimation(sclip) ? scene->getAnimation(sclip) : nullptr;
+
+    unsigned short handle = 0;
+    while (anim && anim->hasNodeTrack(handle)) {
+        // Defensive cap — wrap at 65535 would happen automatically,
+        // but at that point we're well past the realistic node count.
+        if (handle == 65535) break;
+        ++handle;
+    }
+    clipMap.insert(nodeName, handle);
+    return handle;
 }
 
 Ogre::SceneNode* NodeAnimationManager::findSceneNode(const QString& nodeName)
@@ -130,6 +155,10 @@ bool NodeAnimationManager::deleteClip(const QString& name)
     if (scene->hasAnimationState(sn))
         scene->destroyAnimationState(sn);
     scene->removeAnimation(sn);
+    // Drop the clip's node→handle allocator entries — otherwise a
+    // later createClip(name, ...) would reuse stale handles that
+    // map to tracks Ogre no longer has.
+    m_trackHandles.remove(name);
 
     SentryReporter::addBreadcrumb("scene.anim.node",
         QStringLiteral("delete clip '%1'").arg(name));
@@ -162,7 +191,7 @@ bool NodeAnimationManager::addKeyframe(const QString& clipName,
     Ogre::SceneNode* node = findSceneNode(nodeName);
     if (!node) return false;
 
-    const unsigned short handle = trackHandleForNode(nodeName);
+    const unsigned short handle = trackHandleForNode(clipName, nodeName);
     Ogre::NodeAnimationTrack* track =
         anim->hasNodeTrack(handle) ? anim->getNodeTrack(handle)
                                    : anim->createNodeTrack(handle, node);
@@ -254,7 +283,14 @@ QList<double> NodeAnimationManager::keyTimesForNode(const QString& clipName,
     if (!scene->hasAnimation(sclip)) return out;
     Ogre::Animation* anim = scene->getAnimation(sclip);
     if (!anim) return out;
-    const unsigned short handle = trackHandleForNode(nodeName);
+    // Read-only lookup — don't allocate a new handle for a node that
+    // doesn't yet have one. If the {clip, node} pair was never
+    // written, return empty.
+    auto clipIt = m_trackHandles.constFind(clipName);
+    if (clipIt == m_trackHandles.constEnd()) return out;
+    auto handleIt = clipIt->constFind(nodeName);
+    if (handleIt == clipIt->constEnd()) return out;
+    const unsigned short handle = *handleIt;
     if (!anim->hasNodeTrack(handle)) return out;
     auto* track = anim->getNodeTrack(handle);
     if (!track) return out;

@@ -63,7 +63,8 @@ protected:
             const std::vector<std::string> drops = {
                 "NA_LifeCycle", "NA_ListOrder1", "NA_ListOrder2",
                 "NA_KeyAdd", "NA_KeyIdempotent", "NA_DeleteUnknown",
-                "NA_OutOfRange", "NA_Enable", "NA_Signals"
+                "NA_OutOfRange", "NA_Enable", "NA_Signals",
+                "NA_Collision"
             };
             for (const auto& n : drops) {
                 if (scene->hasAnimationState(n))
@@ -232,4 +233,40 @@ TEST_F(NodeAnimationManagerSceneTest, KeyTimesForMissingClipIsEmpty) {
     auto* m = NodeAnimationManager::instance();
     EXPECT_TRUE(m->keyTimesForNode(QStringLiteral("Nope"),
                                     QStringLiteral("Whatever")).isEmpty());
+}
+
+// Two nodes in the same clip must land on independent tracks even
+// when their names would have hash-collided under the original
+// `qHash & 0xFFFF` strategy (Codex P1 on PR #584). This test
+// verifies via the more general property: distinct node names →
+// keyTimesForNode returns disjoint key sets, never a shared one.
+TEST_F(NodeAnimationManagerSceneTest, DistinctNodesGetDistinctTracks) {
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_Collision"), 2.0));
+    auto* nodeA = makeNamedNode("NA_Collision_NodeA");
+    auto* nodeB = makeNamedNode("NA_Collision_NodeB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    EXPECT_TRUE(m->addKeyframe(QStringLiteral("NA_Collision"),
+                                QStringLiteral("NA_Collision_NodeA"),
+                                0.25, Ogre::Vector3(1,0,0),
+                                Ogre::Quaternion::IDENTITY, Ogre::Vector3(1,1,1)));
+    EXPECT_TRUE(m->addKeyframe(QStringLiteral("NA_Collision"),
+                                QStringLiteral("NA_Collision_NodeB"),
+                                0.75, Ogre::Vector3(0,1,0),
+                                Ogre::Quaternion::IDENTITY, Ogre::Vector3(1,1,1)));
+
+    auto keysA = m->keyTimesForNode(QStringLiteral("NA_Collision"),
+                                     QStringLiteral("NA_Collision_NodeA"));
+    auto keysB = m->keyTimesForNode(QStringLiteral("NA_Collision"),
+                                     QStringLiteral("NA_Collision_NodeB"));
+    // Each node sees ONLY its own keyframe. The pre-fix hash-truncation
+    // strategy would have made keysA == keysB == [0.25, 0.75] on
+    // collision, or worse, only [0.75] if the second add silently
+    // overwrote the first track's keyframe.
+    ASSERT_EQ(keysA.size(), 1);
+    ASSERT_EQ(keysB.size(), 1);
+    EXPECT_NEAR(keysA[0], 0.25, 1e-4);
+    EXPECT_NEAR(keysB[0], 0.75, 1e-4);
 }

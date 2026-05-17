@@ -11,6 +11,7 @@ The MIT License
 #ifndef NODEANIMATIONMANAGER_H
 #define NODEANIMATIONMANAGER_H
 
+#include <QHash>
 #include <QObject>
 #include <QQmlEngine>
 #include <QString>
@@ -106,15 +107,25 @@ private:
     explicit NodeAnimationManager(QObject* parent = nullptr);
     ~NodeAnimationManager() override;
 
-    /// Pick a stable track handle for `nodeName` within `clip`. Same
-    /// hash strategy across calls so two add operations on the same
-    /// node land on the same track.
-    static unsigned short trackHandleForNode(const QString& nodeName);
+    /// Per-clip {nodeName → track handle} map. Allocated lazily on
+    /// the first `addKeyframe(clip, node, …)` call for a given pair
+    /// and reused for every subsequent call. This is a collision-free
+    /// replacement for an earlier `qHash & 0xFFFF` strategy that
+    /// silently corrupted both nodes on a 16-bit hash collision
+    /// (which is realistic at typical scene sizes — birthday paradox
+    /// hits ~50% by ~300 names).
+    unsigned short trackHandleForNode(const QString& clipName,
+                                      const QString& nodeName);
 
     /// Look up a SceneNode by name on the current scene. Returns
     /// null when the node doesn't exist. Centralised so name-not-
     /// found behaviour is consistent across all setters.
     static Ogre::SceneNode* findSceneNode(const QString& nodeName);
+
+    /// `clipName → { nodeName → handle }`. Mutated by `addKeyframe`
+    /// (lazy allocation) and `deleteClip` (forgets the whole clip
+    /// entry). Lives only on the manager — no Ogre dependency.
+    QHash<QString, QHash<QString, unsigned short>> m_trackHandles;
 
     static NodeAnimationManager* s_instance;
 };
