@@ -400,7 +400,12 @@ class TexturePaintControllerSceneTest : public ::testing::Test
 protected:
     void SetUp() override
     {
-        ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
+        // Use tryInitOgre() (not canLoadMeshFiles()) to match the existing
+        // FindMeshPointForUVHitsCorrectTriangle test in this file —
+        // canLoadMeshFiles() returns false in some Linux-CI permutations
+        // even though hardware buffer creation works for the simple
+        // in-memory meshes these tests use.
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init / render window required";
         hardResetController();
     }
 
