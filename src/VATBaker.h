@@ -55,11 +55,10 @@ public:
     };
 
     enum class Target {
-        Agnostic = 0,
-        // Reserved for slice 3:
-        // Unity,
-        // Unreal,
-        // Godot,
+        Agnostic = 0,  ///< No axis swizzle, no per-engine sidecar.
+        Unity    = 1,  ///< Y-up (same as Ogre); UV-V flipped (Unity convention). Emits `.png.meta`.
+        Unreal   = 2,  ///< Z-up axis remap (x, z, y); Niagara-style U=vertex / V=frame.
+        Godot    = 3,  ///< Y-up + right-handed (same as Ogre). Emits a `.gdshader` snippet.
     };
 
     struct Options {
@@ -80,6 +79,8 @@ public:
         QString   posTexPath;       ///< On-disk path to the position texture.
         QString   nrmTexPath;       ///< On-disk path to the normal texture (empty when not requested).
         QString   jsonPath;         ///< On-disk path to the sidecar JSON.
+        QString   unityMetaPath;    ///< `.meta` sidecar, only when target=Unity.
+        QString   godotShaderPath;  ///< `.gdshader` snippet, only when target=Godot.
         int       frameCount = 0;
         int       vertexCount = 0;
         Ogre::Vector3 minBound = Ogre::Vector3::ZERO;

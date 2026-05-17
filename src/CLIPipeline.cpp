@@ -4758,12 +4758,14 @@ int CLIPipeline::cmdBakeVertexColors(int argc, char* argv[])
 int CLIPipeline::cmdVat(int argc, char* argv[])
 {
     // Parse: vat <file> --anim <name> [--fps N] [--encoding rgba8|rgba16]
+    //                                 [--target agnostic|unity|unreal|godot]
     //                                 [--normals] [-o <dir>] [--json]
     QString filePath, animName, outDir;
     double fps = 30.0;
     bool jsonOutput = false;
     bool bakeNormals = false;
     VATBaker::Encoding encoding = VATBaker::Encoding::RGBA8;
+    VATBaker::Target target = VATBaker::Target::Agnostic;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -4776,6 +4778,22 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
             else if (enc == "rgba16") encoding = VATBaker::Encoding::RGBA16;
             else {
                 err() << "Error: --encoding must be one of: rgba8, rgba16" << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--target") {
+            if (i + 1 >= argc) {
+                err() << "Error: --target requires a value (agnostic|unity|unreal|godot)" << Qt::endl;
+                return 2;
+            }
+            const QString tgt = QString(argv[++i]).toLower();
+            if      (tgt == "agnostic") target = VATBaker::Target::Agnostic;
+            else if (tgt == "unity")    target = VATBaker::Target::Unity;
+            else if (tgt == "unreal")   target = VATBaker::Target::Unreal;
+            else if (tgt == "godot")    target = VATBaker::Target::Godot;
+            else {
+                err() << "Error: --target must be one of: agnostic, unity, unreal, godot" << Qt::endl;
                 return 2;
             }
             continue;
@@ -4802,7 +4820,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
 
     if (filePath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [--encoding rgba8|rgba16] [--normals] [-o <dir>] [--json]" << Qt::endl;
+        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [--encoding rgba8|rgba16] [--target agnostic|unity|unreal|godot] [--normals] [-o <dir>] [--json]" << Qt::endl;
         return 2;
     }
     if (animName.isEmpty()) {
@@ -4856,11 +4874,19 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     opts.basename = animName;
     opts.encoding = encoding;
     opts.bakeNormals = bakeNormals;
+    opts.target = target;
+
+    const QString targetStr =
+        (target == VATBaker::Target::Unity)  ? QStringLiteral("unity")  :
+        (target == VATBaker::Target::Unreal) ? QStringLiteral("unreal") :
+        (target == VATBaker::Target::Godot)  ? QStringLiteral("godot")  :
+                                               QStringLiteral("agnostic");
 
     SentryReporter::addBreadcrumb("file.export",
-        QString("Writing VAT outputs to %1 (anim=%2, encoding=%3%4)")
+        QString("Writing VAT outputs to %1 (anim=%2, encoding=%3, target=%4%5)")
             .arg(QDir(outDir).absolutePath(), animName,
                  (encoding == VATBaker::Encoding::RGBA16) ? "rgba16" : "rgba8",
+                 targetStr,
                  bakeNormals ? ", normals" : ""));
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
     if (!result.ok) {
@@ -4881,11 +4907,16 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         if (!result.nrmTexPath.isEmpty())
             obj["nrmTexture"] = result.nrmTexPath;
         obj["sidecar"]     = result.jsonPath;
+        if (!result.unityMetaPath.isEmpty())
+            obj["unityMeta"] = result.unityMetaPath;
+        if (!result.godotShaderPath.isEmpty())
+            obj["godotShader"] = result.godotShaderPath;
         obj["frameCount"]  = result.frameCount;
         obj["vertexCount"] = result.vertexCount;
         obj["animation"]   = animName;
         obj["fps"]         = fps;
         obj["encoding"]    = encStr;
+        obj["target"]      = targetStr;
         QJsonObject bounds;
         QJsonObject lo, hi;
         lo["x"] = result.minBound.x; lo["y"] = result.minBound.y; lo["z"] = result.minBound.z;
@@ -4894,12 +4925,17 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         obj["bounds"] = bounds;
         cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
     } else {
-        cliWrite(QStringLiteral("Baked VAT for '%1' (%2 frames × %3 vertices, %4)\n")
-                     .arg(animName).arg(result.frameCount).arg(result.vertexCount).arg(encStr));
+        cliWrite(QStringLiteral("Baked VAT for '%1' (%2 frames × %3 vertices, %4, target=%5)\n")
+                     .arg(animName).arg(result.frameCount).arg(result.vertexCount)
+                     .arg(encStr, targetStr));
         cliWrite(QStringLiteral("  position texture: %1\n").arg(result.posTexPath));
         if (!result.nrmTexPath.isEmpty())
             cliWrite(QStringLiteral("  normal texture:   %1\n").arg(result.nrmTexPath));
         cliWrite(QStringLiteral("  sidecar:          %1\n").arg(result.jsonPath));
+        if (!result.unityMetaPath.isEmpty())
+            cliWrite(QStringLiteral("  unity .meta:      %1\n").arg(result.unityMetaPath));
+        if (!result.godotShaderPath.isEmpty())
+            cliWrite(QStringLiteral("  godot .gdshader:  %1\n").arg(result.godotShaderPath));
         cliWrite(QStringLiteral("  bounds: min=(%1, %2, %3) max=(%4, %5, %6)\n")
                      .arg(result.minBound.x, 0, 'f', 3)
                      .arg(result.minBound.y, 0, 'f', 3)

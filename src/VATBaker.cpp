@@ -16,6 +16,7 @@ The MIT License
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QUuid>
 
 #include <cstring>
 
@@ -385,10 +386,17 @@ QString VATBaker::buildSidecarJson(const BakeResult& result, const Options& opts
         case Encoding::RGBA8:  encStr = QStringLiteral("rgba8");  break;
         case Encoding::RGBA16: encStr = QStringLiteral("rgba16"); break;
     }
+    QString tgtStr;
+    switch (opts.target) {
+        case Target::Agnostic: tgtStr = QStringLiteral("agnostic"); break;
+        case Target::Unity:    tgtStr = QStringLiteral("unity");    break;
+        case Target::Unreal:   tgtStr = QStringLiteral("unreal");   break;
+        case Target::Godot:    tgtStr = QStringLiteral("godot");    break;
+    }
 
     QJsonObject root;
     root["version"]     = 1;
-    root["target"]      = "agnostic";
+    root["target"]      = tgtStr;
     root["encoding"]    = encStr;
     root["frameCount"]  = result.frameCount;
     root["vertexCount"] = result.vertexCount;
@@ -402,6 +410,109 @@ QString VATBaker::buildSidecarJson(const BakeResult& result, const Options& opts
     QJsonDocument doc(root);
     return QString::fromUtf8(doc.toJson(QJsonDocument::Indented));
 }
+
+// ---------------------------------------------------------------------------
+// Per-target conventions.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Apply per-engine axis swizzle to a single position vector. Sampling
+// happens in Ogre space (Y-up, right-handed); the resulting texture
+// has to be readable by the target engine without runtime fix-ups, so
+// the swizzle happens once at encode time and is documented in the
+// sidecar.
+//
+// - Agnostic / Unity / Godot — no swizzle. All three are Y-up + right-
+//   handed (Unity is Y-up; Godot is Y-up; agnostic is whatever the
+//   downstream tooling expects). Unity's vertical-flip is handled by
+//   reversing the row order, not the axes.
+// - Unreal — Z-up + left-handed. Standard Ogre→Unreal remap is
+//   `(x, y, z) → (x, z, y)` (swap Y/Z to lift "up" onto Z). Unreal
+//   handles its own LH chirality in the importer.
+inline Ogre::Vector3 swizzleForTarget(VATBaker::Target t, const Ogre::Vector3& v)
+{
+    switch (t) {
+        case VATBaker::Target::Unreal: return { v.x, v.z, v.y };
+        default:                       return v;
+    }
+}
+
+// Unity's PNG loader treats row 0 as the top of the image, whereas
+// the VAT layout has frame 0 at the top already — but Unity's auto-
+// generated UV convention then flips V again at sample time. The
+// net effect is that *for Unity*, the runtime shader would have to
+// compute `frameIndex` as `frameCount - 1 - row` if we wrote frames
+// top-down. Pre-flip the rows here so the shader can use the plain
+// `row / frameCount` indexing on every target.
+inline bool targetFlipsRowsAtWriteTime(VATBaker::Target t)
+{
+    return t == VATBaker::Target::Unity;
+}
+
+// Minimal Unity `.meta` sidecar. Hand-written rather than full Unity
+// YAML — Unity's importer is happy with the standard texture-asset
+// shape and rejects unknown keys silently. The values matter:
+//   - `guid` must be a unique 32-char hex string. Sharing a GUID
+//     between assets causes Unity to silently remap references at
+//     import time or refuse to import the duplicate altogether.
+//     We generate a fresh random GUID per bake.
+//   - `sRGBTexture: 0`  → data texture, no gamma curve.
+//   - `textureCompression: 0`  → uncompressed, lossless.
+//   - `filterMode: 0`  → point/nearest, no bilinear smearing
+//     between vertex columns.
+//   - `wrapU: 1` / `wrapV: 1`  → clamp, so OOB UVs don't wrap.
+QString buildUnityMeta()
+{
+    // QUuid::toString returns `{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}`;
+    // strip the braces and dashes to land on Unity's 32-hex-char shape.
+    const QString guid = QUuid::createUuid()
+                             .toString(QUuid::WithoutBraces)
+                             .remove(QChar('-'));
+    return QStringLiteral(
+        "fileFormatVersion: 2\n"
+        "guid: %1\n"
+        "TextureImporter:\n"
+        "  serializedVersion: 11\n"
+        "  sRGBTexture: 0\n"
+        "  textureCompression: 0\n"
+        "  filterMode: 0\n"
+        "  wrapU: 1\n"
+        "  wrapV: 1\n").arg(guid);
+}
+
+// Minimal Godot 4 spatial shader that samples the position texture
+// and applies the per-vertex offset. Users typically copy this into
+// a Material on a MeshInstance3D. Bounds + frame count are encoded
+// as uniform defaults pulled from the sidecar at bake time.
+QString buildGodotShader(int frameCount,
+                         int vertexCount,
+                         const Ogre::Vector3& lo,
+                         const Ogre::Vector3& hi)
+{
+    return QStringLiteral(
+        "shader_type spatial;\n"
+        "render_mode unshaded;\n"
+        "\n"
+        "uniform sampler2D pos_tex : filter_nearest;\n"
+        "uniform float current_frame = 0.0;\n"
+        "uniform int frame_count = %1;\n"
+        "uniform int vertex_count = %2;\n"
+        "uniform vec3 bounds_min = vec3(%3, %4, %5);\n"
+        "uniform vec3 bounds_max = vec3(%6, %7, %8);\n"
+        "\n"
+        "void vertex() {\n"
+        "    float u = (float(VERTEX_ID) + 0.5) / float(vertex_count);\n"
+        "    float v = (current_frame + 0.5) / float(frame_count);\n"
+        "    vec3 t = texture(pos_tex, vec2(u, v)).rgb;\n"
+        "    VERTEX = bounds_min + t * (bounds_max - bounds_min);\n"
+        "}\n")
+        .arg(frameCount).arg(vertexCount)
+        .arg(lo.x, 0, 'f', 6).arg(lo.y, 0, 'f', 6).arg(lo.z, 0, 'f', 6)
+        .arg(hi.x, 0, 'f', 6).arg(hi.y, 0, 'f', 6).arg(hi.z, 0, 'f', 6);
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // bake()
@@ -500,13 +611,19 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             return result;
         }
 
+        // Apply per-target axis swizzle in-place on the just-appended
+        // positions so the bounds computed below match the encoded
+        // space. (Cheaper than walking the buffer twice — and keeps
+        // the bounds → encoder → decoder chain consistent.)
         for (size_t i = before; i < flat.size(); ++i) {
+            flat[i] = swizzleForTarget(opts.target, flat[i]);
             const auto& p = flat[i];
             lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y); lo.z = std::min(lo.z, p.z);
             hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y); hi.z = std::max(hi.z, p.z);
         }
 
         if (opts.bakeNormals) {
+            const size_t nrmBefore = normals.size();
             const size_t nrmAppended = collectPostSkinNormals(entity, normals);
             if (nrmAppended == kCollectNormalsMissingSentinel) {
                 entity->removeSoftwareAnimationRequest(true);
@@ -523,6 +640,13 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
                     "frame %1 normals count (%2) differs from positions (%3)")
                         .arg(f).arg(nrmAppended).arg(frameVerts);
                 return result;
+            }
+            // Apply the same axis swizzle to normals — they live in
+            // the same coordinate frame as positions. (Direction
+            // vectors don't have a separate translation component, so
+            // the swizzle is exactly the same operation.)
+            for (size_t i = nrmBefore; i < normals.size(); ++i) {
+                normals[i] = swizzleForTarget(opts.target, normals[i]);
             }
         }
     }
@@ -548,6 +672,8 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     result.posTexPath = QDir(opts.outputDir).filePath(base + "_pos.png");
     result.jsonPath   = QDir(opts.outputDir).filePath(base + ".json");
 
+    const bool flipRows = targetFlipsRowsAtWriteTime(opts.target);
+
     // Encode + write the position texture. PNG preserves both 8-bit
     // and 16-bit channel depths; QImage handles the format switch for us.
     if (opts.encoding == Encoding::RGBA8) {
@@ -558,7 +684,8 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
         }
         QImage img(vertexCount, frameCount, QImage::Format_RGBA8888);
         for (int y = 0; y < frameCount; ++y) {
-            const unsigned char* src = rgba.data() + static_cast<size_t>(y)
+            const int srcRow = flipRows ? (frameCount - 1 - y) : y;
+            const unsigned char* src = rgba.data() + static_cast<size_t>(srcRow)
                                                       * static_cast<size_t>(vertexCount) * 4u;
             std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u);
         }
@@ -577,7 +704,8 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
         // a 16-bit PNG which Godot/Unity/Unreal all read losslessly.
         QImage img(vertexCount, frameCount, QImage::Format_RGBA64);
         for (int y = 0; y < frameCount; ++y) {
-            const uint16_t* src = rgba.data() + static_cast<size_t>(y)
+            const int srcRow = flipRows ? (frameCount - 1 - y) : y;
+            const uint16_t* src = rgba.data() + static_cast<size_t>(srcRow)
                                                 * static_cast<size_t>(vertexCount) * 4u;
             std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u * sizeof(uint16_t));
         }
@@ -600,7 +728,8 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             }
             QImage img(vertexCount, frameCount, QImage::Format_RGBA8888);
             for (int y = 0; y < frameCount; ++y) {
-                const unsigned char* src = rgba.data() + static_cast<size_t>(y)
+                const int srcRow = flipRows ? (frameCount - 1 - y) : y;
+                const unsigned char* src = rgba.data() + static_cast<size_t>(srcRow)
                                                           * static_cast<size_t>(vertexCount) * 4u;
                 std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u);
             }
@@ -617,7 +746,8 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             }
             QImage img(vertexCount, frameCount, QImage::Format_RGBA64);
             for (int y = 0; y < frameCount; ++y) {
-                const uint16_t* src = rgba.data() + static_cast<size_t>(y)
+                const int srcRow = flipRows ? (frameCount - 1 - y) : y;
+                const uint16_t* src = rgba.data() + static_cast<size_t>(srcRow)
                                                     * static_cast<size_t>(vertexCount) * 4u;
                 std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u * sizeof(uint16_t));
             }
@@ -639,6 +769,33 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     }
     jf.write(sidecar.toUtf8());
     jf.close();
+
+    // Per-engine extras — emitted alongside the JSON sidecar so a
+    // dropped-in asset folder is engine-ready without further tooling.
+    if (opts.target == Target::Unity) {
+        result.unityMetaPath = result.posTexPath + QStringLiteral(".meta");
+        QFile mf(result.unityMetaPath);
+        if (!mf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            result.error = QStringLiteral("failed to open .meta for write: %1")
+                               .arg(result.unityMetaPath);
+            return result;
+        }
+        mf.write(buildUnityMeta().toUtf8());
+        mf.close();
+    } else if (opts.target == Target::Godot) {
+        result.godotShaderPath = QDir(opts.outputDir).filePath(base + ".gdshader");
+        QFile sf(result.godotShaderPath);
+        if (!sf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            result.error = QStringLiteral("failed to open .gdshader for write: %1")
+                               .arg(result.godotShaderPath);
+            return result;
+        }
+        sf.write(buildGodotShader(frameCount, vertexCount, lo, hi).toUtf8());
+        sf.close();
+    }
+    // Target::Unreal — no extra sidecar; users wire the texture into a
+    // Niagara VAT module which references it by name. Documenting in
+    // future slice 4 (Inspector) which sidecar to expect.
 
     result.ok = true;
     return result;
