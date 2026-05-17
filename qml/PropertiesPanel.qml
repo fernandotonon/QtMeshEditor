@@ -512,10 +512,14 @@ Rectangle {
                 }
             }
 
-            Row {
+            Column {
                 width: outlinerColumn.width
-                height: 26
                 spacing: 6
+
+                Row {
+                    width: parent.width
+                    height: 26
+                    spacing: 6
 
                 Rectangle {
                     width: Math.min(parent.width - 8, mergeAnimLabel.implicitWidth + 16)
@@ -545,6 +549,7 @@ Rectangle {
                         onClicked: PropertiesPanelController.triggerMergeAnimations()
                     }
                 }
+                }  // end of inner Row holding the Merge button
 
                 // ---- Bake VAT subgroup (slice 4) ----
                 // Vertex Animation Texture export. Bakes the selected

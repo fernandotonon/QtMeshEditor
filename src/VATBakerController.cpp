@@ -98,26 +98,36 @@ bool VATBakerController::bake(const QString& animationName,
         return false;
     }
     if (animationName.isEmpty()) {
+        SentryReporter::addBreadcrumb("ui.action",
+            "VAT bake refused: animationName is required");
         emit bakeFinished(false, QString(), QStringLiteral("animationName is required"));
         return false;
     }
     if (outputDir.isEmpty()) {
+        SentryReporter::addBreadcrumb("ui.action",
+            "VAT bake refused: outputDir is required");
         emit bakeFinished(false, QString(), QStringLiteral("outputDir is required"));
         return false;
     }
 
     auto* sel = SelectionSet::getSingleton();
     if (!sel) {
+        SentryReporter::addBreadcrumb("ui.action",
+            "VAT bake refused: no SelectionSet");
         emit bakeFinished(false, QString(), QStringLiteral("no SelectionSet"));
         return false;
     }
     auto entities = sel->getResolvedEntities();
     if (entities.isEmpty() || !entities.first()) {
+        SentryReporter::addBreadcrumb("ui.action",
+            "VAT bake refused: no entity selected");
         emit bakeFinished(false, QString(), QStringLiteral("no entity selected"));
         return false;
     }
     Ogre::Entity* entity = entities.first();
     if (!entity->hasSkeleton()) {
+        SentryReporter::addBreadcrumb("ui.action",
+            "VAT bake refused: selected entity has no skeleton");
         emit bakeFinished(false, QString(), QStringLiteral("selected entity has no skeleton"));
         return false;
     }
@@ -151,9 +161,11 @@ bool VATBakerController::bake(const QString& animationName,
     // "baking..." state while bake() runs. A future slice can split
     // the per-frame sampling out if needed.
     setIsBaking(true);
-    emit bakeProgress(0, /*totalSentinel*/0);  // unknown frame count yet
+    // Reset progress before signalling so property-bound QML listeners
+    // never read a stale value through the bound members.
     m_progressDone = 0;
     m_progressTotal = 0;
+    emit bakeProgress(m_progressDone, m_progressTotal);
 
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
 

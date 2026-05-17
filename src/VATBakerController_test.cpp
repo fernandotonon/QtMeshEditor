@@ -89,6 +89,7 @@ protected:
     void SetUp() override
     {
         ASSERT_TRUE(tryInitOgre());
+        ASSERT_TRUE(canLoadMeshFiles());
         clearSelection();
     }
     void TearDown() override

@@ -28,16 +28,23 @@ The MIT License
  *     `SelectionSet` and fills the list. The Inspector calls this when
  *     selection changes (via the existing `selectionChanged` signal
  *     chain) and once on panel mount.
- *   - `bake(...)` kicks off the bake on a worker QThread so the UI
- *     doesn't freeze on long anims. Progress is emitted as
- *     `bakeProgress(int done, int total)` after each frame; the
- *     terminal signal is `bakeFinished(bool ok, QString posTexture,
- *     QString error)`.
- *   - `isBaking` is `true` between the bake call and `bakeFinished`,
- *     so the QML button can disable itself.
+ *   - `bake(...)` runs the bake synchronously in slice 4. Sampling an
+ *     Ogre animation state off-thread races with `Manager`'s per-frame
+ *     updates, so a true producer/consumer split has to wait for a
+ *     dedicated slice. `bakeFinished(bool ok, QString posTexture,
+ *     QString error)` is emitted exactly once per `bake()` call —
+ *     including the validation-failure paths, *except* the "already
+ *     baking" guard which returns false without emitting (so the
+ *     in-flight bake's `bakeFinished` is the only one observable).
+ *   - `bakeProgress(int done, int total)` fires twice in slice 4:
+ *     once at start (`done=total=0`) and once at end (both set to the
+ *     frame count). Future slices add per-frame progress.
+ *   - `isBaking` flips to `true` at the start of `bake()` and back to
+ *     `false` after `bakeFinished` is emitted — QML uses it to gate
+ *     the Bake button.
  *
- * The baker itself is pure-data (`VATBaker::bake`); this class only
- * handles thread orchestration + QML exposure.
+ * The baker itself is pure-data (`VATBaker::bake`); this class handles
+ * argument validation, signal emission, and QML exposure.
  */
 class VATBakerController : public QObject
 {
@@ -64,11 +71,14 @@ public:
     /// QML calls this on mount and after selection changes.
     Q_INVOKABLE void refreshAnimations();
 
-    /// Start a bake on a worker thread. Returns false synchronously if
-    /// the bake can't even start (no selection, no animation, bake
-    /// already in progress); in that case `bakeFinished` is NOT
-    /// emitted. Returns true if the worker was kicked off; the result
-    /// arrives via `bakeFinished`.
+    /// Run a bake. Returns true if validation passed and `VATBaker::bake`
+    /// was invoked; `bakeFinished(ok, posTexture, error)` is then
+    /// emitted before this returns with the bake outcome. Returns
+    /// false on a refused-to-start condition; in that case
+    /// `bakeFinished(false, ..., reason)` is also emitted (so QML
+    /// callers can rely on a single observable channel), except for
+    /// the "already baking" guard where the in-flight bake will emit
+    /// its own `bakeFinished` separately.
     ///
     /// `encoding` and `target` accept the same string values as the
     /// `qtmesh vat` CLI subcommand.

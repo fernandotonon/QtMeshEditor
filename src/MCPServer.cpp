@@ -4119,13 +4119,33 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     // Snapshot pre-existing entities so we only operate on (and clean
     // up) the entities this call imported — without this, MCP tools
     // sharing the live editor's scene would bake whichever mesh
-    // happened to be first in `getEntities()` (Codex P1) and would
-    // accumulate scene state across calls (Codex P2).
+    // happened to be first in `getEntities()` and would accumulate
+    // scene state across calls.
+    //
+    // Use a safe-cast helper rather than `Manager::getEntities()`
+    // directly: that getter returns MovableObjects, and non-Entity
+    // attachments (ManualObject for gizmos, the brush hover ring,
+    // mask overlay clones, etc.) would crash on a raw cast. Walk the
+    // scene nodes and filter by `getMovableType() == "Entity"`.
     auto* mgr = Manager::getSingleton();
+    auto collectEntitiesSafe = [mgr]() {
+        QList<Ogre::Entity*> out;
+        const auto& nodes = mgr->getSceneNodes();
+        for (Ogre::SceneNode* node : nodes) {
+            if (!node) continue;
+            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if (!obj || obj->getMovableType() != "Entity") continue;
+                out.append(static_cast<Ogre::Entity*>(obj));
+            }
+        }
+        return out;
+    };
+
     SentryReporter::addBreadcrumb("file.import",
         QString("Importing %1 for VAT bake").arg(filePath));
     QSet<Ogre::Entity*> beforeSet;
-    for (Ogre::Entity* e : mgr->getEntities()) beforeSet.insert(e);
+    for (Ogre::Entity* e : collectEntitiesSafe()) beforeSet.insert(e);
 
     try {
         MeshImporterExporter::importer({filePath});
@@ -4136,7 +4156,7 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     }
 
     QList<Ogre::Entity*> imported;
-    for (Ogre::Entity* e : mgr->getEntities()) {
+    for (Ogre::Entity* e : collectEntitiesSafe()) {
         if (!beforeSet.contains(e))
             imported.append(e);
     }
@@ -4163,8 +4183,16 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
         }
     } cleanup{mgr, imported};
 
-    Ogre::Entity* entity = imported.first();
-    if (!entity->hasSkeleton())
+    // Pick the bake target by skeleton presence rather than list
+    // order. Some mesh formats produce auxiliary unskinned entities
+    // alongside the skinned mesh (e.g. helper geometry), and bailing
+    // out on the first imported entity would falsely report "no
+    // skeleton" when a valid one exists elsewhere in the import.
+    Ogre::Entity* entity = nullptr;
+    for (Ogre::Entity* e : imported) {
+        if (e && e->hasSkeleton()) { entity = e; break; }
+    }
+    if (!entity)
         return makeErrorResult("Error: mesh has no skeleton — cannot bake VAT");
 
     VATBaker::Options opts;
