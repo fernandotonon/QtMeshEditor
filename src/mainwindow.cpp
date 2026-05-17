@@ -74,6 +74,7 @@
 #include "EditModeController.h"
 #include "TexturePaintController.h"
 #include "PaintBufferImageProvider.h"
+#include "VATBakerController.h"
 #include "EditorModeController.h"
 #include <QDockWidget>
 #include <QQuickWidget>
@@ -541,6 +542,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<TexturePaintController>("PropertiesPanel", 1, 0, "TexturePaintController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return TexturePaintController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<VATBakerController>("PropertiesPanel", 1, 0, "VATBakerController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return VATBakerController::qmlInstance(engine, nullptr);
             });
 
         // Same image provider the detached editor window uses — serves the

@@ -7,6 +7,7 @@
 #include "TextureAtlasPacker.h"
 #include "ApplyAtlas.h"
 #include "NormalMapGenerator.h"
+#include "VATBaker.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -459,7 +460,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("generate_normal_map"), &MCPServer::toolGenerateNormalMap},
         {QStringLiteral("pack_atlas"), &MCPServer::toolPackAtlas},
         {QStringLiteral("apply_atlas"), &MCPServer::toolApplyAtlas},
-        {QStringLiteral("optimize_mesh"), &MCPServer::toolOptimizeMesh}
+        {QStringLiteral("optimize_mesh"), &MCPServer::toolOptimizeMesh},
+        {QStringLiteral("bake_vat"), &MCPServer::toolBakeVat}
     };
     return handlers;
 }
@@ -478,7 +480,8 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("simplify_animation"),
         QStringLiteral("bake_animation_fps"),
         QStringLiteral("save_scene"),
-        QStringLiteral("open_scene")
+        QStringLiteral("open_scene"),
+        QStringLiteral("bake_vat")
     };
     return heavyTools.contains(name);
 }
@@ -4077,6 +4080,104 @@ QJsonObject MCPServer::toolOptimizeMesh(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "bake_vat");
+
+    const QString filePath  = args.value("file").toString();
+    const QString animName  = args.value("anim").toString();
+    const QString outputDir = args.value("output_dir").toString();
+    if (filePath.isEmpty() || animName.isEmpty() || outputDir.isEmpty())
+        return makeErrorResult(
+            "Error: missing required 'file', 'anim', or 'output_dir' arguments");
+    if (!QFileInfo::exists(filePath))
+        return makeErrorResult(QString("Error: file not found: %1").arg(filePath));
+
+    const double fps = args.contains("fps") ? args.value("fps").toDouble() : 30.0;
+    if (fps <= 0.0)
+        return makeErrorResult("Error: fps must be > 0");
+
+    const QString encStr = args.value("encoding").toString().toLower();
+    VATBaker::Encoding encoding = VATBaker::Encoding::RGBA8;
+    if (encStr == "rgba16") encoding = VATBaker::Encoding::RGBA16;
+    else if (!encStr.isEmpty() && encStr != "rgba8")
+        return makeErrorResult("Error: encoding must be one of: rgba8, rgba16");
+
+    const QString tgtStr = args.value("target").toString().toLower();
+    VATBaker::Target target = VATBaker::Target::Agnostic;
+    if      (tgtStr == "unity")  target = VATBaker::Target::Unity;
+    else if (tgtStr == "unreal") target = VATBaker::Target::Unreal;
+    else if (tgtStr == "godot")  target = VATBaker::Target::Godot;
+    else if (!tgtStr.isEmpty() && tgtStr != "agnostic")
+        return makeErrorResult(
+            "Error: target must be one of: agnostic, unity, unreal, godot");
+
+    const bool bakeNormals = args.value("normals").toBool(false);
+    const QString basename = args.value("basename").toString();
+
+    // Load via MeshImporterExporter (same path the CLI subcommand uses).
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1 for VAT bake").arg(filePath));
+    MeshImporterExporter::importer({filePath});
+
+    auto& entities = Manager::getSingleton()->getEntities();
+    Ogre::Entity* entity = nullptr;
+    for (auto* obj : entities) {
+        if (obj && obj->getMovableType() == "Entity") {
+            entity = static_cast<Ogre::Entity*>(obj);
+            break;
+        }
+    }
+    if (!entity)
+        return makeErrorResult(QString("Error: failed to load mesh: %1").arg(filePath));
+    if (!entity->hasSkeleton())
+        return makeErrorResult("Error: mesh has no skeleton — cannot bake VAT");
+
+    VATBaker::Options opts;
+    opts.animationName = animName;
+    opts.fps = fps;
+    opts.outputDir = outputDir;
+    opts.basename = basename.isEmpty() ? animName : basename;
+    opts.encoding = encoding;
+    opts.target = target;
+    opts.bakeNormals = bakeNormals;
+
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Writing VAT outputs to %1 (anim=%2)").arg(outputDir, animName));
+
+    VATBaker::BakeResult result = VATBaker::bake(entity, opts);
+    if (!result.ok)
+        return makeErrorResult(QString("VAT bake failed: %1").arg(result.error));
+
+    QJsonObject content;
+    content["ok"]          = true;
+    content["posTexture"]  = result.posTexPath;
+    if (!result.nrmTexPath.isEmpty())
+        content["nrmTexture"] = result.nrmTexPath;
+    content["sidecar"]     = result.jsonPath;
+    if (!result.unityMetaPath.isEmpty())
+        content["unityMeta"] = result.unityMetaPath;
+    if (!result.godotShaderPath.isEmpty())
+        content["godotShader"] = result.godotShaderPath;
+    content["frameCount"]  = result.frameCount;
+    content["vertexCount"] = result.vertexCount;
+    content["animation"]   = animName;
+    content["fps"]         = fps;
+    content["encoding"]    = (encoding == VATBaker::Encoding::RGBA16) ? "rgba16" : "rgba8";
+    content["target"]      =
+        (target == VATBaker::Target::Unity)  ? "unity"  :
+        (target == VATBaker::Target::Unreal) ? "unreal" :
+        (target == VATBaker::Target::Godot)  ? "godot"  : "agnostic";
+    QJsonObject bounds, lo, hi;
+    lo["x"] = result.minBound.x; lo["y"] = result.minBound.y; lo["z"] = result.minBound.z;
+    hi["x"] = result.maxBound.x; hi["y"] = result.maxBound.y; hi["z"] = result.maxBound.z;
+    bounds["min"] = lo; bounds["max"] = hi;
+    content["bounds"] = bounds;
+
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -5173,6 +5274,33 @@ QJsonArray MCPServer::buildToolsList()
             "(if reduction / target_tris / target_verts is provided), and animation keyframe simplify. "
             "Writes the result to `output` (extension determines format). Returns a per-stage applied/"
             "summary report plus the input/output byte counts.",
+            props,
+            required
+        );
+    }
+
+    // bake_vat
+    {
+        QJsonObject props;
+        props["file"]       = QJsonObject{{"type", "string"}, {"description", "Path to the source mesh (any format the importer accepts: .mesh, .fbx, .gltf, etc.)."}};
+        props["anim"]       = QJsonObject{{"type", "string"}, {"description", "Animation clip name to bake (use list_skeletal_animations to enumerate)."}};
+        props["fps"]        = QJsonObject{{"type", "number"}, {"description", "Sample rate in frames per second. Default 30."}};
+        props["encoding"]   = QJsonObject{{"type", "string"}, {"description", "Texture encoding: 'rgba8' (~3 mm error on a 1 m model) or 'rgba16' (~50× more precise). Default 'rgba8'."}};
+        props["target"]     = QJsonObject{{"type", "string"}, {"description", "Engine target: 'agnostic' (default), 'unity' (writes .meta + flips rows), 'unreal' (Y/Z axis swizzle), 'godot' (writes .gdshader template)."}};
+        props["normals"]    = QJsonObject{{"type", "boolean"}, {"description", "Also bake a normal texture (<basename>_nrm.png). Default false."}};
+        props["output_dir"] = QJsonObject{{"type", "string"}, {"description", "Directory to write the position/normal textures + sidecar into. Created if missing."}};
+        props["basename"]   = QJsonObject{{"type", "string"}, {"description", "Base filename (no extension) for the outputs. Defaults to `anim` when empty."}};
+        QJsonArray required;
+        required.append("file");
+        required.append("anim");
+        required.append("output_dir");
+        appendTool(
+            "bake_vat",
+            "Bake a skeletal animation into a Vertex Animation Texture (VAT). The output is a position "
+            "texture (one row per frame, one column per vertex) + a JSON sidecar describing the layout, "
+            "ready for a runtime shader to replay the animation without skinning. Supports four engine "
+            "targets (agnostic / unity / unreal / godot) with appropriate axis swizzles + per-engine "
+            "sidecars. Optionally bakes a normal texture for lit shaders.",
             props,
             required
         );

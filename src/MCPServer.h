@@ -203,6 +203,11 @@ private:
     /// optimizations end-to-end on a single asset and writes the result.
     /// Per-stage applied/summary report on success.
     QJsonObject toolOptimizeMesh(const QJsonObject &args);
+    /// Phase VAT slice 4: bake a skeletal animation to a Vertex
+    /// Animation Texture + JSON sidecar. Args mirror the
+    /// `qtmesh vat` CLI subcommand: file, anim, fps, encoding,
+    /// target, normals, output_dir, basename.
+    QJsonObject toolBakeVat(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {
