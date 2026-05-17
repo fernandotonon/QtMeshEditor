@@ -357,6 +357,13 @@ bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
             readVertexData(subMesh->vertexData, editSub.vertices);
         }
 
+        // Snapshot the bind positions so morph-target authoring can
+        // recover the pre-edit baseline even after edit-mode ops have
+        // already committed their changes back to the GPU buffer.
+        editSub.originalPositions.reserve(editSub.vertices.size());
+        for (const auto& v : editSub.vertices)
+            editSub.originalPositions.push_back(v.position);
+
         if (mesh->hasSkeleton()) {
             const Ogre::SubMesh::VertexBoneAssignmentList& boneAssignments =
                 subMesh->useSharedVertices ? mesh->getBoneAssignments() : subMesh->getBoneAssignments();

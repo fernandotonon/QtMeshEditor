@@ -346,6 +346,7 @@ TEST_F(MorphAnimationManagerSceneTest, RenameRejectsCollisionAndIdempotentName) 
     node->attachObject(entity);
 
     auto* sel = SelectionSet::getSingleton();
+    ASSERT_NE(sel, nullptr);
     sel->append(entity);
 
     auto* m = MorphAnimationManager::instance();
@@ -369,6 +370,7 @@ TEST_F(MorphAnimationManagerSceneTest, DeleteUnknownTargetIsRejected) {
     node->attachObject(entity);
 
     auto* sel = SelectionSet::getSingleton();
+    ASSERT_NE(sel, nullptr);
     sel->append(entity);
 
     auto* m = MorphAnimationManager::instance();
@@ -387,6 +389,7 @@ TEST_F(MorphAnimationManagerSceneTest, AddMorphTargetFromEditNoEditableMeshRetur
     node->attachObject(entity);
 
     auto* sel = SelectionSet::getSingleton();
+    ASSERT_NE(sel, nullptr);
     sel->append(entity);
 
     auto* m = MorphAnimationManager::instance();
@@ -404,4 +407,39 @@ TEST_F(MorphAnimationManagerSceneTest, AddMorphTargetFromEditNoSelectionReturnsF
     EXPECT_FALSE(m->addMorphTargetFromCurrentEdit(QStringLiteral("X")));
     EXPECT_FALSE(m->renameMorphTarget(QStringLiteral("A"), QStringLiteral("B")));
     EXPECT_FALSE(m->deleteMorphTarget(QStringLiteral("X")));
+}
+
+// Direct exercise of the AddMorphTargetCommand path with a hand-built
+// slice. Mirrors what the manager's addMorphTargetFromCurrentEdit
+// will do once the edit-mode capture path is wired up: take the
+// `originalPositions` snapshot from EditableMesh, diff against the
+// edited `vertices`, push the resulting offsets through the command.
+// We don't depend on EditableMesh here — we just construct the slice
+// the same way the manager would after a real edit-mode session.
+TEST_F(MorphAnimationManagerSceneTest, AddMorphTargetUndoableViaUndoManager) {
+    auto mesh = createMorphTestMesh("Morph_AddUndo");
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    auto* entity = scene->createEntity("Morph_AddUndoEnt", mesh->getName());
+    auto* node = scene->getRootSceneNode()->createChildSceneNode();
+    node->attachObject(entity);
+
+    auto* undo = UndoManager::getSingleton();
+    ASSERT_NE(undo, nullptr);
+
+    const size_t poseCountBefore = mesh->getPoseCount();
+    std::vector<MorphPoseSlice> slices{makeSlice(1, 2, 0.5f)};
+    undo->push(new AddMorphTargetCommand(entity,
+                                          QStringLiteral("Surprise"),
+                                          slices));
+
+    EXPECT_TRUE(mesh->hasAnimation("Surprise"));
+    EXPECT_EQ(mesh->getPoseCount(), poseCountBefore + 1);
+
+    undo->undo();
+    EXPECT_FALSE(mesh->hasAnimation("Surprise"));
+    EXPECT_EQ(mesh->getPoseCount(), poseCountBefore);
+
+    undo->redo();
+    EXPECT_TRUE(mesh->hasAnimation("Surprise"));
+    EXPECT_EQ(mesh->getPoseCount(), poseCountBefore + 1);
 }

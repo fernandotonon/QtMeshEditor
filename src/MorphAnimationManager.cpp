@@ -24,9 +24,6 @@ The MIT License
 #include <OgreEntity.h>
 #include <OgreMesh.h>
 #include <OgrePose.h>
-#include <OgreSubMesh.h>
-#include <OgreVertexIndexData.h>
-#include <OgreHardwareBuffer.h>
 
 #include <algorithm>
 
@@ -168,43 +165,25 @@ bool MorphAnimationManager::setWeightForSelection(const QString& name, double w)
 
 namespace {
 
-// Read submesh `s`'s bind-pose vertex positions back from the GPU/CPU
-// vertex buffer. Returns false on any size/layout mismatch so the
-// caller treats it as "couldn't capture; skip this submesh." The
-// returned positions are in submesh-local index order — they line up
-// 1:1 with EditableMesh::SubMesh::vertices, which is what the importer
-// reads in the first place. This is the same shape Ogre::Pose
-// expects (uint32 vertexIndex → Vector3f offset).
-bool readBindPositions(Ogre::SubMesh* sub, std::vector<Ogre::Vector3>& out)
-{
-    if (!sub || !sub->vertexData) return false;
-    Ogre::VertexData* vd = sub->vertexData;
-    const Ogre::VertexElement* posElem =
-        vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-    if (!posElem) return false;
-    auto vbuf = vd->vertexBufferBinding->getBuffer(posElem->getSource());
-    if (!vbuf) return false;
-    const size_t numVerts = vd->vertexCount;
-    out.resize(numVerts);
-    auto* base = static_cast<unsigned char*>(
-        vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-    if (!base) return false;
-    const size_t stride = vbuf->getVertexSize();
-    for (size_t i = 0; i < numVerts; ++i) {
-        float* p = nullptr;
-        posElem->baseVertexPointerToElement(base + i * stride, &p);
-        out[i] = Ogre::Vector3(p[0], p[1], p[2]);
-    }
-    vbuf->unlock();
-    return true;
-}
-
-// Walk the per-submesh edited positions on the EditableMesh (set up
-// by `EditableMesh::loadFromOgreMesh` and mutated by edit-mode ops)
-// and diff against the live mesh's bind positions. Returns the
-// sparse delta map per submesh. Submeshes that didn't change at all
-// (no per-vertex motion) get no slice entry, mirroring the importer's
-// "lazy createPose" rule.
+// Walk the per-submesh edited positions on the EditableMesh and diff
+// against the bind-position snapshot taken at `loadFromOgreMesh` time
+// (`EditableSubMesh::originalPositions`). Returns the sparse delta
+// map per submesh. Submeshes that didn't change at all get no slice
+// entry, mirroring the importer's "lazy createPose" rule.
+//
+// We diff against the captured snapshot rather than re-reading the
+// live mesh vertex buffer because edit-mode ops continuously
+// `commitToEntity` — by the time the user clicks "save morph", the
+// GPU buffer already holds the edited positions, so a re-read would
+// produce a zero diff for every vertex. The snapshot was captured
+// once at edit-mode entry, before any mutation, so it remains a
+// valid baseline regardless of how many edit ops ran.
+//
+// Submeshes with `useSharedVertices=true` share a single vertex
+// pool. EditableMesh::loadFromOgreMesh handles that by copying the
+// shared positions into each affected submesh's `vertices` and
+// `originalPositions`, so this code path doesn't need to special-
+// case it — every submesh carries its own baseline.
 std::vector<MorphPoseSlice> capturePoseSlicesFromEdit(
     Ogre::Entity* entity, const EditableMesh* edit)
 {
@@ -218,16 +197,17 @@ std::vector<MorphPoseSlice> capturePoseSlicesFromEdit(
     const size_t n = std::min(subs.size(), meshSubCount);
 
     for (size_t s = 0; s < n; ++s) {
-        Ogre::SubMesh* sub = mesh->getSubMesh(static_cast<unsigned short>(s));
-        if (!sub) continue;
-        std::vector<Ogre::Vector3> bindPositions;
-        if (!readBindPositions(sub, bindPositions)) continue;
-        if (subs[s].vertices.size() != bindPositions.size()) continue;
+        const auto& bindPositions = subs[s].originalPositions;
+        // Mismatch typically means the submesh was modified
+        // topologically (insert/delete vertex) — we can't meaningfully
+        // diff against a different-shaped baseline, so skip it.
+        if (bindPositions.size() != subs[s].vertices.size()) continue;
 
         MorphPoseSlice slice;
         slice.submeshHandle = static_cast<unsigned short>(s + 1);
         for (size_t vi = 0; vi < bindPositions.size(); ++vi) {
-            const Ogre::Vector3 delta = subs[s].vertices[vi].position - bindPositions[vi];
+            const Ogre::Vector3 delta =
+                subs[s].vertices[vi].position - bindPositions[vi];
             if (delta.squaredLength() <= 1e-12f) continue;
             slice.offsets[static_cast<unsigned int>(vi)] =
                 Ogre::Vector3f(delta.x, delta.y, delta.z);
