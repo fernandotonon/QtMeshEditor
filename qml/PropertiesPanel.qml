@@ -4331,11 +4331,22 @@ Rectangle {
                     property var targets: MorphAnimationManager.morphTargetsForSelection()
                     property int targetCount: targets.length
                     property string filter: ""
+                    // Bumped on `morphWeightChanged`; sliders bind their
+                    // `value` to a function call gated on this counter so
+                    // weight changes from any code path (Reset all,
+                    // dope-sheet scrubs in later slices, MCP, etc.) flow
+                    // back into the UI rather than going stale until the
+                    // delegate is recreated.
+                    property int weightTick: 0
 
                     Connections {
                         target: MorphAnimationManager
                         function onMorphTargetsChanged() {
                             morphCol.targets = MorphAnimationManager.morphTargetsForSelection()
+                            morphCol.weightTick = morphCol.weightTick + 1
+                        }
+                        function onMorphWeightChanged(entity, name, weight) {
+                            morphCol.weightTick = morphCol.weightTick + 1
                         }
                     }
 
@@ -4411,7 +4422,11 @@ Rectangle {
                                 id: weightSlider
                                 from: 0; to: 1; stepSize: 0.01
                                 width: parent.width - 200
-                                value: MorphAnimationManager.weightForSelection(modelData)
+                                // Bind to `weightTick` so changes that
+                                // bypass user drag (Reset all, MCP, future
+                                // dope-sheet scrubs) refresh the readout.
+                                value: (morphCol.weightTick,
+                                        MorphAnimationManager.weightForSelection(modelData))
                                 anchors.verticalCenter: parent.verticalCenter
                                 onMoved: MorphAnimationManager.setWeightForSelection(modelData, value)
                             }
