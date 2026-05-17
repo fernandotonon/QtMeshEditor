@@ -1688,9 +1688,12 @@ TEST_F(SceneSaveLoadTest, Exporter_GltfPreservesMorphTargets)
         kf->addPoseReference(pi, 1.0f);
     }
 
+    // The exporter looks up the entity via the SceneNode's name
+    // (see MeshImporterExporter::exporter line 2277). Use
+    // Manager::addSceneNode to get a stable name + matching entity.
+    auto* node = Manager::getSingleton()->addSceneNode("morph_rt_ent");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* entity = sceneMgr->createEntity("morph_rt_ent", mesh->getName());
-    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto* entity = sceneMgr->createEntity(node->getName(), mesh->getName());
     node->attachObject(entity);
     ASSERT_EQ(mesh->getPoseList().size(), 2u);
 
@@ -1703,9 +1706,11 @@ TEST_F(SceneSaveLoadTest, Exporter_GltfPreservesMorphTargets)
     ASSERT_TRUE(QFileInfo::exists(outFile));
 
     // Clean up the source entity + mesh before reimporting so we're
-    // not getting a false-positive from cached state.
-    sceneMgr->destroyEntity(entity);
-    sceneMgr->getRootSceneNode()->removeAndDestroyChild(node);
+    // not getting a false-positive from cached state. Also clear
+    // the SelectionSet (addSceneNode auto-selects) so the reimport's
+    // own auto-selection isn't compounded with stale pointers.
+    SelectionSet::getSingleton()->clearList();
+    Manager::getSingleton()->destroySceneNode(node);
     Ogre::MeshManager::getSingleton().remove(mesh);
     mesh.reset();
 
