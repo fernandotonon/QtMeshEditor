@@ -2248,6 +2248,9 @@ TEST_F(SceneSaveLoadTest, Exporter_FbxBinary_WritesBlendShapeRecords)
         << "FBX should carry a BlendShape deformer record";
     EXPECT_TRUE(body.contains("BlendShapeChannel"))
         << "FBX should carry per-pose BlendShapeChannel records";
+    EXPECT_TRUE(body.contains("Shape"))
+        << "FBX should carry the per-pose Shape geometry payload "
+           "(the actual vertex-delta data, not just the channel record)";
     EXPECT_TRUE(body.contains("JawOpen"))
         << "FBX should preserve the first morph target name";
     EXPECT_TRUE(body.contains("Smile"))

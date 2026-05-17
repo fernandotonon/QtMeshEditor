@@ -2266,6 +2266,21 @@ private:
                 writeConnection("OO", vidIt->second, texId);
         }
 
+        // Morph A4b: BlendShape chain.
+        //   Shape → BlendShapeChannel → BlendShape → Geometry
+        // Independent of skeleton presence — a mesh can be pure-morph
+        // (no skin) and still need these links, otherwise the
+        // BlendShape/Channel/Shape records sit orphaned in the file
+        // and importers ignore them.
+        if (!m_skeletonOnly) {
+            for (const auto& bs : m_blendShapeConns)
+                writeConnection("OO", bs.blendShapeId, bs.geomId);
+            for (const auto& ch : m_channelConns) {
+                writeConnection("OO", ch.channelId, ch.blendShapeId);
+                writeConnection("OO", ch.shapeGeomId, ch.channelId);
+            }
+        }
+
         if (m_hasSkeleton)
         {
             // Bone NodeAttribute → bone Model
@@ -2297,15 +2312,6 @@ private:
                 {
                     writeConnection("OO", cc.clusterId, cc.skinId);
                     writeConnection("OO", m_boneModelIds[cc.boneHandle], cc.clusterId);
-                }
-
-                // Morph A4b: BlendShape chain.
-                //   Shape → BlendShapeChannel → BlendShape → Geometry
-                for (const auto& bs : m_blendShapeConns)
-                    writeConnection("OO", bs.blendShapeId, bs.geomId);
-                for (const auto& ch : m_channelConns) {
-                    writeConnection("OO", ch.channelId, ch.blendShapeId);
-                    writeConnection("OO", ch.shapeGeomId, ch.channelId);
                 }
             }
 
