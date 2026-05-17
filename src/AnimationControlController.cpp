@@ -899,6 +899,48 @@ QVariantList AnimationControlController::allBoneRows() const
     return rows;
 }
 
+QVariantList AnimationControlController::allMorphRows() const
+{
+    QVariantList rows;
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return rows;
+    const auto entities = sel->getResolvedEntities();
+    if (entities.isEmpty() || !entities.first()) return rows;
+    Ogre::Entity* entity = entities.first();
+    if (!entity) return rows;
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return rows;
+    const Ogre::PoseList& poseList = mesh->getPoseList();
+    if (poseList.empty()) return rows;
+
+    // Each pose has a matching `Ogre::Animation` (see MeshProcessor:
+    // import-time one-animation-per-pose pattern). Read the keyframe
+    // times off the animation's VAT_POSE track; in A1 every animation
+    // carries a single t=0 keyframe, but future slices may add more.
+    for (const Ogre::Pose* pose : poseList) {
+        if (!pose) continue;
+        const Ogre::String poseName = pose->getName();
+        if (poseName.empty()) continue;
+
+        QVariantList keyTimes;
+        if (mesh->hasAnimation(poseName)) {
+            Ogre::Animation* anim = mesh->getAnimation(poseName);
+            const auto& vtracks = anim->_getVertexTrackList();
+            for (const auto& [handle, track] : vtracks) {
+                if (!track) continue;
+                for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i)
+                    keyTimes.append(static_cast<double>(track->getKeyFrame(i)->getTime()));
+            }
+        }
+
+        QVariantMap row;
+        row[QStringLiteral("name")]     = QString::fromStdString(poseName);
+        row[QStringLiteral("keyTimes")] = keyTimes;
+        rows.append(row);
+    }
+    return rows;
+}
+
 bool AnimationControlController::moveKeyframe(const QString& boneName,
                                               double oldTime, double newTime)
 {

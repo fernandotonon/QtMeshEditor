@@ -196,6 +196,15 @@ public:
     /// Returns an empty list when no animation is selected.
     Q_INVOKABLE QVariantList allBoneRows() const;
 
+    /// Slice A5: enumerate morph-target tracks for the selected
+    /// entity so the dope sheet can render them alongside bone
+    /// tracks. Each entry: `{ name: QString, keyTimes: [double] }`.
+    /// In A1's importer-emitted Animations, every pose's track has
+    /// a single keyframe at t=0; future slices may add per-time
+    /// keys when authoring lands. Returns empty when there's no
+    /// selection or the entity has no morph targets.
+    Q_INVOKABLE QVariantList allMorphRows() const;
+
     /// Move a keyframe on `boneName`'s track from `oldTime` to `newTime`
     /// (both seconds). Match tolerance is 1 ms — same as the existing
     /// keyframe-tick comparison. Refuses the move if `newTime` collides
