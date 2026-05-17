@@ -23,6 +23,7 @@ public:
     bool hasIso() const { return !m_isoPath.isEmpty(); }
     bool hasBios() const { return !m_biosPath.isEmpty(); }
     bool isSessionActive() const { return m_sessionActive; }
+    bool isStartPending() const { return m_startPending; }
     bool isPaused() const { return m_paused; }
     bool isCaptureArmed() const { return m_captureArmed; }
     QString isoPath() const { return m_isoPath; }
@@ -65,6 +66,7 @@ private:
     QString m_biosPath;
     QString m_isoPath;
     bool m_sessionActive = false;
+    bool m_startPending = false;
     bool m_paused = false;
     bool m_captureArmed = false;
 

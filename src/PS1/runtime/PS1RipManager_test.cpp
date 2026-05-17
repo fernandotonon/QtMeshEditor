@@ -118,4 +118,33 @@ TEST_F(PS1RipManagerTest, ArmCaptureWithoutSession)
     EXPECT_FALSE(manager->captureFrame());
 }
 
+TEST_F(PS1RipManagerTest, StopCancelsPendingStart)
+{
+    if (!stubPluginAvailable())
+        GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
+
+    QTemporaryFile bios(QDir::tempPath() + "/qtmesh_bios2_XXXXXX.bin");
+    QTemporaryFile iso(QDir::tempPath() + "/qtmesh_iso2_XXXXXX.bin");
+    ASSERT_TRUE(bios.open());
+    ASSERT_TRUE(iso.open());
+    bios.write("bios");
+    iso.write("iso");
+    bios.close();
+    iso.close();
+
+    ASSERT_TRUE(manager->loadBios(bios.fileName()));
+    ASSERT_TRUE(manager->loadIso(iso.fileName()));
+
+    QSignalSpy startedSpy(manager, &PS1RipManager::sessionStarted);
+    ASSERT_TRUE(manager->start());
+    EXPECT_TRUE(manager->isStartPending());
+
+    ASSERT_TRUE(manager->stop());
+    EXPECT_FALSE(manager->isStartPending());
+    EXPECT_FALSE(manager->isSessionActive());
+
+    ASSERT_FALSE(startedSpy.wait(500));
+    EXPECT_TRUE(startedSpy.empty());
+}
+
 #endif // ENABLE_PS1_RIP

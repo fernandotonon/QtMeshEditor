@@ -38,8 +38,20 @@ bool PS1RipWorker::ensureCore(QString *errorOut)
     return static_cast<bool>(m_core);
 }
 
+void PS1RipWorker::cancelPendingStart()
+{
+    requestCancelStart();
+    if (m_running)
+        stopEmulation();
+}
+
 void PS1RipWorker::startEmulation()
 {
+    if (m_startSuperseded.load(std::memory_order_acquire)) {
+        m_startSuperseded.store(false, std::memory_order_release);
+        return;
+    }
+
     if (m_running)
         return;
 
@@ -64,6 +76,12 @@ void PS1RipWorker::startEmulation()
     }
 
     m_core->reset();
+
+    if (m_startSuperseded.load(std::memory_order_acquire)) {
+        m_startSuperseded.store(false, std::memory_order_release);
+        return;
+    }
+
     m_running = true;
     m_paused = false;
     m_frameTimer->start();
@@ -72,6 +90,8 @@ void PS1RipWorker::startEmulation()
 
 void PS1RipWorker::stopEmulation()
 {
+    clearStartCancel();
+
     if (!m_running && !m_frameTimer->isActive())
         return;
 

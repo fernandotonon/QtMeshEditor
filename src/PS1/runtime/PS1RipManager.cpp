@@ -43,19 +43,23 @@ void PS1RipManager::initializeWorkerThread()
     m_worker->moveToThread(m_workerThread);
 
     connect(m_worker, &PS1RipWorker::emulationStarted, this, [this]() {
+        m_startPending = false;
         m_sessionActive = true;
         m_paused = false;
         emit sessionStarted();
     });
     connect(m_worker, &PS1RipWorker::emulationStopped, this, [this]() {
+        m_startPending = false;
         m_sessionActive = false;
         m_paused = false;
         m_captureArmed = false;
         emit sessionStopped();
     });
+    connect(m_worker, &PS1RipWorker::emulationError, this, [this](const QString &msg) {
+        m_startPending = false;
+        reportError(msg);
+    });
     connect(m_worker, &PS1RipWorker::framePresented, this, &PS1RipManager::framePresented);
-    connect(m_worker, &PS1RipWorker::emulationError, this,
-            [this](const QString &msg) { reportError(msg); });
 
     connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
 
@@ -132,9 +136,11 @@ bool PS1RipManager::start()
         reportError(tr("No ISO loaded"));
         return false;
     }
-    if (m_sessionActive)
+    if (m_sessionActive || m_startPending)
         return true;
 
+    m_worker->clearStartCancel();
+    m_startPending = true;
     syncWorkerSession();
     QMetaObject::invokeMethod(m_worker, &PS1RipWorker::startEmulation, Qt::QueuedConnection);
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip"), QStringLiteral("start"));
@@ -143,11 +149,20 @@ bool PS1RipManager::start()
 
 bool PS1RipManager::stop()
 {
-    if (!m_sessionActive)
+    if (!m_sessionActive && !m_startPending)
         return false;
 
     m_captureArmed = false;
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip"), QStringLiteral("stop"));
+
+    if (m_startPending && !m_sessionActive) {
+        m_startPending = false;
+        m_worker->requestCancelStart();
+        QMetaObject::invokeMethod(m_worker, &PS1RipWorker::cancelPendingStart, Qt::QueuedConnection);
+        return true;
+    }
+
+    m_startPending = false;
     QMetaObject::invokeMethod(m_worker, &PS1RipWorker::stopEmulation, Qt::QueuedConnection);
     return true;
 }

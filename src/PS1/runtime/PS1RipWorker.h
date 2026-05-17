@@ -6,6 +6,7 @@
 #include <QString>
 #include <QtGlobal>
 
+#include <atomic>
 #include <memory>
 
 class EmuCore;
@@ -22,9 +23,13 @@ public:
     explicit PS1RipWorker(QObject *parent = nullptr);
     ~PS1RipWorker() override;
 
+    void clearStartCancel() { m_startSuperseded.store(false, std::memory_order_release); }
+    void requestCancelStart() { m_startSuperseded.store(true, std::memory_order_release); }
+
 public slots:
     void configureSession(const QString &biosPath, const QString &isoPath);
     void startEmulation();
+    void cancelPendingStart();
     void stopEmulation();
     void pauseEmulation();
     void stepFrame();
@@ -48,6 +53,7 @@ private:
     QTimer *m_frameTimer = nullptr;
     bool m_running = false;
     bool m_paused = false;
+    std::atomic<bool> m_startSuperseded{false};
 };
 
 #endif // PS1RIPWORKER_H

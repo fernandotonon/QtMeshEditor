@@ -55,6 +55,11 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     statusBar()->addPermanentWidget(m_statusLabel);
 
     connect(m_manager, &PS1RipManager::framePresented, this, &PS1RipSessionWindow::onFrame);
+    connect(m_manager, &PS1RipManager::sessionStarted, this, [this]() {
+        m_statusLabel->setText(tr("Running (stub core — test pattern only)"));
+    });
+    connect(m_manager, &PS1RipManager::sessionStopped, this,
+            [this]() { m_statusLabel->setText(tr("Stopped")); });
     connect(m_manager, &PS1RipManager::error, this, &PS1RipSessionWindow::onError);
 
     const QString savedBios = QSettings().value(QString::fromLatin1(kSettingsGroup) + QLatin1Char('/')
@@ -154,8 +159,14 @@ void PS1RipSessionWindow::onStep()
 
 void PS1RipSessionWindow::onReset()
 {
+    if (!m_manager->isSessionActive() && !m_manager->isStartPending()) {
+        m_manager->start();
+        return;
+    }
+
+    connect(m_manager, &PS1RipManager::sessionStopped, this,
+            [this]() { m_manager->start(); }, Qt::SingleShotConnection);
     m_manager->stop();
-    m_manager->start();
 }
 
 void PS1RipSessionWindow::onFrame(const QImage &frame, quint64 frameIndex)
