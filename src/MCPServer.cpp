@@ -438,19 +438,25 @@ public:
 
     /// Run the importer for `filePath`. Returns the error message
     /// on exception, or empty on success.
+    ///
+    /// Even on the error path, any entities the importer managed to
+    /// create before throwing are recorded into `m_imported` — so
+    /// the destructor still cleans up the partial state. Without
+    /// this, a half-successful import would leak scene nodes into
+    /// the user's live scene.
     QString runImporter(const QString& filePath)
     {
         if (!m_mgr) return QStringLiteral("no Manager singleton");
         try {
             MeshImporterExporter::importer({filePath});
         } catch (const std::exception& e) {
+            captureImportedEntities();
             return QStringLiteral("Importer threw: %1").arg(QString::fromUtf8(e.what()));
         } catch (...) {
+            captureImportedEntities();
             return QStringLiteral("Importer threw (unknown exception)");
         }
-        for (Ogre::Entity* e : collectEntitiesSafe()) {
-            if (!m_beforeSet.contains(e)) m_imported.append(e);
-        }
+        captureImportedEntities();
         return {};
     }
 
@@ -485,6 +491,18 @@ public:
     TransientImportSession& operator=(const TransientImportSession&) = delete;
 
 private:
+    /// Append every entity that's currently in the scene but wasn't
+    /// in `m_beforeSet` (i.e. created by this session) to `m_imported`.
+    /// Idempotent + dedup'd against `m_imported`, so calling it from
+    /// both the success path and the exception paths is safe.
+    void captureImportedEntities()
+    {
+        for (Ogre::Entity* e : collectEntitiesSafe()) {
+            if (!m_beforeSet.contains(e) && !m_imported.contains(e))
+                m_imported.append(e);
+        }
+    }
+
     QList<Ogre::Entity*> collectEntitiesSafe() const
     {
         QList<Ogre::Entity*> out;
