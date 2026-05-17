@@ -4116,20 +4116,54 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     const QString basename = args.value("basename").toString();
 
     // Load via MeshImporterExporter (same path the CLI subcommand uses).
+    // Snapshot pre-existing entities so we only operate on (and clean
+    // up) the entities this call imported — without this, MCP tools
+    // sharing the live editor's scene would bake whichever mesh
+    // happened to be first in `getEntities()` (Codex P1) and would
+    // accumulate scene state across calls (Codex P2).
+    auto* mgr = Manager::getSingleton();
     SentryReporter::addBreadcrumb("file.import",
         QString("Importing %1 for VAT bake").arg(filePath));
-    MeshImporterExporter::importer({filePath});
+    QSet<Ogre::Entity*> beforeSet;
+    for (Ogre::Entity* e : mgr->getEntities()) beforeSet.insert(e);
 
-    auto& entities = Manager::getSingleton()->getEntities();
-    Ogre::Entity* entity = nullptr;
-    for (auto* obj : entities) {
-        if (obj && obj->getMovableType() == "Entity") {
-            entity = static_cast<Ogre::Entity*>(obj);
-            break;
-        }
+    try {
+        MeshImporterExporter::importer({filePath});
+    } catch (const std::exception& e) {
+        return makeErrorResult(QString("Importer threw: %1").arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        return makeErrorResult("Importer threw (unknown exception)");
     }
-    if (!entity)
+
+    QList<Ogre::Entity*> imported;
+    for (Ogre::Entity* e : mgr->getEntities()) {
+        if (!beforeSet.contains(e))
+            imported.append(e);
+    }
+    if (imported.isEmpty())
         return makeErrorResult(QString("Error: failed to load mesh: %1").arg(filePath));
+
+    // RAII cleanup so the live scene returns to its pre-import state on
+    // every exit path (success or error). The VAT outputs are already
+    // on disk; no in-scene state needs to survive this tool call.
+    struct ImportCleanup {
+        Manager* mgr;
+        QList<Ogre::Entity*> entities;
+        ~ImportCleanup() {
+            if (!mgr) return;
+            try {
+                std::set<Ogre::SceneNode*> nodes;
+                for (Ogre::Entity* e : entities) {
+                    if (e && e->getParentSceneNode())
+                        nodes.insert(e->getParentSceneNode());
+                }
+                for (Ogre::SceneNode* sn : nodes)
+                    mgr->destroySceneNode(sn);
+            } catch (...) {}
+        }
+    } cleanup{mgr, imported};
+
+    Ogre::Entity* entity = imported.first();
     if (!entity->hasSkeleton())
         return makeErrorResult("Error: mesh has no skeleton — cannot bake VAT");
 
