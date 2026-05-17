@@ -5,9 +5,11 @@
 #include "SentryReporter.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QFileDialog>
+#include <QTimer>
 #include <QLabel>
 #include <QMessageBox>
 #include <QSettings>
@@ -55,11 +57,15 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     connect(m_manager, &PS1RipManager::framePresented, this, &PS1RipSessionWindow::onFrame);
     connect(m_manager, &PS1RipManager::error, this, &PS1RipSessionWindow::onError);
 
-    const QString bios = QSettings().value(QString::fromLatin1(kSettingsGroup) + QLatin1Char('/')
-                                               + QString::fromLatin1(kBiosKey))
-                                 .toString();
-    if (!bios.isEmpty())
-        m_manager->loadBios(bios);
+    const QString savedBios = QSettings().value(QString::fromLatin1(kSettingsGroup) + QLatin1Char('/')
+                                                  + QString::fromLatin1(kBiosKey))
+                                    .toString();
+    if (!savedBios.isEmpty()) {
+        QTimer::singleShot(0, this, [this, savedBios]() {
+            if (m_manager->loadBios(savedBios))
+                m_statusLabel->setText(tr("BIOS: %1").arg(savedBios));
+        });
+    }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.viewport.open"),
                                 QStringLiteral("PS1 rip session window opened"));
@@ -95,9 +101,11 @@ void PS1RipSessionWindow::closeEvent(QCloseEvent *event)
 
 void PS1RipSessionWindow::pickBios()
 {
+    QWidget *dialogParent = isVisible() ? this : QApplication::activeWindow();
     const QString path = QFileDialog::getOpenFileName(
-        this, tr("Select PS1 BIOS"), QString(),
-        tr("BIOS images (*.bin *.rom);;All files (*)"));
+        dialogParent, tr("Select PS1 BIOS"), QString(),
+        tr("BIOS images (*.bin *.rom);;All files (*)"),
+        nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty())
         return;
 
@@ -110,9 +118,11 @@ void PS1RipSessionWindow::pickBios()
 
 void PS1RipSessionWindow::pickIso()
 {
+    QWidget *dialogParent = isVisible() ? this : QApplication::activeWindow();
     const QString path = QFileDialog::getOpenFileName(
-        this, tr("Select PS1 disc image"), QString(),
-        tr("Disc images (*.bin *.cue *.iso *.img);;All files (*)"));
+        dialogParent, tr("Select PS1 disc image"), QString(),
+        tr("Disc images (*.bin *.cue *.iso *.img);;All files (*)"),
+        nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty())
         return;
 
