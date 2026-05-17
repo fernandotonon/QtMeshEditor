@@ -21,6 +21,7 @@
 #include "EditableMesh.h"
 #include "TexturePaintBuffer.h"
 #include "VertexColorBaker.h"
+#include "VATBaker.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -1065,6 +1066,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "decimate") rc = cmdDecimate(argc, argv);
     else if (cmd == "optimize") rc = cmdOptimize(argc, argv);
     else if (cmd == "bake-vertex-colors") rc = cmdBakeVertexColors(argc, argv);
+    else if (cmd == "vat") rc = cmdVat(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -4749,6 +4751,130 @@ int CLIPipeline::cmdBakeVertexColors(int argc, char* argv[])
         cliWrite(QStringLiteral("Baked %1 pixels into %2×%2 texture: %3\n")
                      .arg(painted).arg(resolution).arg(outputPath));
         cliWrite(QStringLiteral("  dilation: %1 px\n").arg(dilation));
+    }
+    return 0;
+}
+
+int CLIPipeline::cmdVat(int argc, char* argv[])
+{
+    // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--json]
+    QString filePath, animName, outDir;
+    double fps = 30.0;
+    bool jsonOutput = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "vat" || arg == "--cli") continue;
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if ((arg == "--anim" || arg == "--animation") && i + 1 < argc) {
+            animName = QString(argv[++i]); continue;
+        }
+        if (arg == "--fps" && i + 1 < argc) {
+            bool ok = false;
+            const double v = QString(argv[++i]).toDouble(&ok);
+            if (!ok || v <= 0.0) {
+                err() << "Error: --fps must be a positive number" << Qt::endl;
+                return 2;
+            }
+            fps = v; continue;
+        }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outDir = QString(argv[++i]); continue;
+        }
+        if (!arg.startsWith("-") && filePath.isEmpty()) {
+            filePath = arg; continue;
+        }
+    }
+
+    if (filePath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--json]" << Qt::endl;
+        return 2;
+    }
+    if (animName.isEmpty()) {
+        err() << "Error: --anim <name> is required." << Qt::endl;
+        return 2;
+    }
+    if (outDir.isEmpty()) {
+        // Default: <input_basename>_vat/ next to the input file.
+        QFileInfo fi(filePath);
+        outDir = fi.absoluteDir().filePath(fi.completeBaseName() + "_vat");
+    }
+
+    QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.vat",
+        QString("VAT bake .%1 anim=%2 fps=%3").arg(fi.suffix(), animName).arg(fps));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    auto& entities = Manager::getSingleton()->getEntities();
+    Ogre::Entity* entity = nullptr;
+    for (auto* obj : entities) {
+        if (obj && obj->getMovableType() == "Entity") {
+            entity = static_cast<Ogre::Entity*>(obj);
+            break;
+        }
+    }
+    if (!entity) {
+        SentryReporter::captureMessage(
+            QString("CLI vat: import failed (.%1)").arg(fi.suffix()), "error");
+        err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        return 1;
+    }
+    if (!entity->hasSkeleton()) {
+        err() << "Error: File has no skeleton — cannot bake VAT." << Qt::endl;
+        return 1;
+    }
+
+    VATBaker::Options opts;
+    opts.animationName = animName;
+    opts.fps = fps;
+    opts.outputDir = outDir;
+    opts.basename = animName;
+
+    VATBaker::BakeResult result = VATBaker::bake(entity, opts);
+    if (!result.ok) {
+        SentryReporter::captureMessage(
+            QString("CLI vat: bake failed (%1)").arg(result.error), "error");
+        err() << "Error: VAT bake failed: " << result.error << Qt::endl;
+        return 1;
+    }
+
+    if (jsonOutput) {
+        QJsonObject obj;
+        obj["ok"]          = true;
+        obj["posTexture"]  = result.posTexPath;
+        obj["sidecar"]     = result.jsonPath;
+        obj["frameCount"]  = result.frameCount;
+        obj["vertexCount"] = result.vertexCount;
+        obj["animation"]   = animName;
+        obj["fps"]         = fps;
+        QJsonObject bounds;
+        QJsonObject lo, hi;
+        lo["x"] = result.minBound.x; lo["y"] = result.minBound.y; lo["z"] = result.minBound.z;
+        hi["x"] = result.maxBound.x; hi["y"] = result.maxBound.y; hi["z"] = result.maxBound.z;
+        bounds["min"] = lo; bounds["max"] = hi;
+        obj["bounds"] = bounds;
+        cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(QStringLiteral("Baked VAT for '%1' (%2 frames × %3 vertices)\n")
+                     .arg(animName).arg(result.frameCount).arg(result.vertexCount));
+        cliWrite(QStringLiteral("  position texture: %1\n").arg(result.posTexPath));
+        cliWrite(QStringLiteral("  sidecar:          %1\n").arg(result.jsonPath));
+        cliWrite(QStringLiteral("  bounds: min=(%1, %2, %3) max=(%4, %5, %6)\n")
+                     .arg(result.minBound.x, 0, 'f', 3)
+                     .arg(result.minBound.y, 0, 'f', 3)
+                     .arg(result.minBound.z, 0, 'f', 3)
+                     .arg(result.maxBound.x, 0, 'f', 3)
+                     .arg(result.maxBound.y, 0, 'f', 3)
+                     .arg(result.maxBound.z, 0, 'f', 3));
     }
     return 0;
 }
