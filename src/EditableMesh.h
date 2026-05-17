@@ -124,6 +124,14 @@ struct EditableSubMesh {
     std::vector<EditableFace> faces;
     std::string materialName;
     bool usesSharedVertices = false;
+
+    /// Per-vertex bind positions captured at `loadFromOgreMesh()` time.
+    /// Immutable after load — edit-mode ops mutate `vertices[].position`
+    /// but never touch this array. Morph-target authoring diffs
+    /// `vertices[].position - originalPositions[i]` to recover the
+    /// pre-edit-vs-current delta even after commits have written the
+    /// edits back to the GPU buffer.
+    std::vector<Ogre::Vector3> originalPositions;
 };
 
 /**

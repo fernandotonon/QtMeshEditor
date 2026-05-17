@@ -69,6 +69,7 @@ commands/BoneTransformCommand.cpp
 commands/AddKeyframeCommand.cpp
 commands/ApplyMaterialCommand.cpp
 commands/DeleteKeyframeCommand.cpp
+commands/MorphCommands.cpp
 commands/SkeletonResolver.cpp
 BoneDragRelease.cpp
 PropertiesPanelController.cpp

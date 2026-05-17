@@ -10,8 +10,12 @@ The MIT License
 
 #include "MorphAnimationManager.h"
 
+#include "EditModeController.h"
+#include "EditableMesh.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
+#include "UndoManager.h"
+#include "commands/MorphCommands.h"
 
 #include <QCoreApplication>
 #include <QThread>
@@ -157,4 +161,154 @@ bool MorphAnimationManager::setWeightForSelection(const QString& name, double w)
     auto ents = sel->getResolvedEntities();
     if (ents.isEmpty()) return false;
     return setWeight(ents.first(), name, static_cast<float>(w));
+}
+
+namespace {
+
+// Walk the per-submesh edited positions on the EditableMesh and diff
+// against the bind-position snapshot taken at `loadFromOgreMesh` time
+// (`EditableSubMesh::originalPositions`). Returns the sparse delta
+// map per submesh. Submeshes that didn't change at all get no slice
+// entry, mirroring the importer's "lazy createPose" rule.
+//
+// We diff against the captured snapshot rather than re-reading the
+// live mesh vertex buffer because edit-mode ops continuously
+// `commitToEntity` — by the time the user clicks "save morph", the
+// GPU buffer already holds the edited positions, so a re-read would
+// produce a zero diff for every vertex. The snapshot was captured
+// once at edit-mode entry, before any mutation, so it remains a
+// valid baseline regardless of how many edit ops ran.
+//
+// Submeshes with `useSharedVertices=true` share a single vertex
+// pool. EditableMesh::loadFromOgreMesh handles that by copying the
+// shared positions into each affected submesh's `vertices` and
+// `originalPositions`, so this code path doesn't need to special-
+// case it — every submesh carries its own baseline.
+std::vector<MorphPoseSlice> capturePoseSlicesFromEdit(
+    Ogre::Entity* entity, const EditableMesh* edit)
+{
+    std::vector<MorphPoseSlice> slices;
+    if (!entity || !edit) return slices;
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return slices;
+
+    const auto& subs = edit->subMeshes();
+    const size_t meshSubCount = mesh->getNumSubMeshes();
+    const size_t n = std::min(subs.size(), meshSubCount);
+
+    for (size_t s = 0; s < n; ++s) {
+        const auto& bindPositions = subs[s].originalPositions;
+        // Mismatch typically means the submesh was modified
+        // topologically (insert/delete vertex) — we can't meaningfully
+        // diff against a different-shaped baseline, so skip it.
+        if (bindPositions.size() != subs[s].vertices.size()) continue;
+
+        MorphPoseSlice slice;
+        slice.submeshHandle = static_cast<unsigned short>(s + 1);
+        for (size_t vi = 0; vi < bindPositions.size(); ++vi) {
+            const Ogre::Vector3 delta =
+                subs[s].vertices[vi].position - bindPositions[vi];
+            if (delta.squaredLength() <= 1e-12f) continue;
+            slice.offsets[static_cast<unsigned int>(vi)] =
+                Ogre::Vector3f(delta.x, delta.y, delta.z);
+        }
+        if (!slice.offsets.empty()) slices.push_back(std::move(slice));
+    }
+    return slices;
+}
+
+// Reject names that would collide with an existing pose on the mesh.
+// Same-named poses across submeshes are allowed by Ogre, but for
+// authoring we treat "name already in use" as a no-op so the UI
+// can show "rename existing" instead of silently shadowing.
+bool nameAlreadyInUse(Ogre::Mesh* mesh, const QString& name)
+{
+    if (!mesh) return false;
+    const std::string sn = name.toStdString();
+    const auto& poseList = mesh->getPoseList();
+    for (const Ogre::Pose* p : poseList) {
+        if (p && p->getName() == sn) return true;
+    }
+    return false;
+}
+
+} // namespace
+
+bool MorphAnimationManager::addMorphTargetFromCurrentEdit(const QString& name)
+{
+    assertMainThread();
+    if (name.trimmed().isEmpty()) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return false;
+
+    if (nameAlreadyInUse(mesh.get(), name)) return false;
+
+    auto* edit = EditModeController::instance();
+    if (!edit) return false;
+    EditableMesh* editable = edit->currentMesh();
+    if (!editable) return false;
+
+    auto slices = capturePoseSlicesFromEdit(entity, editable);
+    if (slices.empty()) return false;
+
+    auto* undo = UndoManager::getSingleton();
+    if (!undo) return false;
+    undo->push(new AddMorphTargetCommand(entity, name, slices));
+
+    emit morphTargetsChanged();
+    return true;
+}
+
+bool MorphAnimationManager::renameMorphTarget(const QString& oldName,
+                                              const QString& newName)
+{
+    assertMainThread();
+    const QString trimmedNew = newName.trimmed();
+    if (oldName.isEmpty() || trimmedNew.isEmpty() || oldName == trimmedNew)
+        return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return false;
+    if (!nameAlreadyInUse(mesh.get(), oldName)) return false;
+    if (nameAlreadyInUse(mesh.get(), trimmedNew)) return false;
+
+    auto* undo = UndoManager::getSingleton();
+    if (!undo) return false;
+    undo->push(new RenameMorphTargetCommand(entity, oldName, trimmedNew));
+
+    emit morphTargetsChanged();
+    return true;
+}
+
+bool MorphAnimationManager::deleteMorphTarget(const QString& name)
+{
+    assertMainThread();
+    if (name.isEmpty()) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return false;
+    if (!nameAlreadyInUse(mesh.get(), name)) return false;
+
+    auto* undo = UndoManager::getSingleton();
+    if (!undo) return false;
+    undo->push(new DeleteMorphTargetCommand(entity, name));
+
+    emit morphTargetsChanged();
+    return true;
 }

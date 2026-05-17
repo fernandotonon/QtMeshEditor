@@ -298,6 +298,29 @@ TEST_F(EditableMeshTest, LoadFromEntityTriangleMesh) {
     // The in-memory triangle mesh uses shared vertices
     EXPECT_TRUE(editMesh.subMeshes()[0].usesSharedVertices);
 
+    // `originalPositions` snapshot is captured at load time and used by
+    // morph-target authoring to recover the pre-edit baseline even after
+    // edit-mode ops have already committed back to the GPU buffer.
+    // Same size as `vertices`, and equal element-wise immediately after
+    // load. Shared-vertex submeshes get a copy of the shared-pool
+    // baseline, so this assertion covers Codex slice A3 P1 #2 too.
+    const auto& sub = editMesh.subMeshes()[0];
+    ASSERT_EQ(sub.originalPositions.size(), sub.vertices.size());
+    for (size_t i = 0; i < sub.vertices.size(); ++i) {
+        EXPECT_FLOAT_EQ(sub.originalPositions[i].x, sub.vertices[i].position.x);
+        EXPECT_FLOAT_EQ(sub.originalPositions[i].y, sub.vertices[i].position.y);
+        EXPECT_FLOAT_EQ(sub.originalPositions[i].z, sub.vertices[i].position.z);
+    }
+
+    // Mutating `vertices[].position` (simulates an edit-mode op) must
+    // NOT touch the snapshot. This is the invariant the morph diff
+    // path depends on — without it, `vertices - originalPositions`
+    // would always be zero after the first commit.
+    editMesh.subMeshes()[0].vertices[0].position = Ogre::Vector3(99, 88, 77);
+    EXPECT_FLOAT_EQ(editMesh.subMeshes()[0].originalPositions[0].x, 0.0f);
+    EXPECT_FLOAT_EQ(editMesh.subMeshes()[0].originalPositions[0].y, 0.0f);
+    EXPECT_FLOAT_EQ(editMesh.subMeshes()[0].originalPositions[0].z, 0.0f);
+
     // Cleanup
     Manager::getSingleton()->destroySceneNode("EditableMesh_triangle_node");
 }
