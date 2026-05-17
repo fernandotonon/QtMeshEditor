@@ -67,7 +67,8 @@ protected:
                 "NA_KeyAdd", "NA_KeyIdempotent", "NA_DeleteUnknown",
                 "NA_OutOfRange", "NA_Enable", "NA_Signals",
                 "NA_Collision",
-                "NA_CmdCreate", "NA_CmdDelete", "NA_CmdSetKey"
+                "NA_CmdCreate", "NA_CmdDelete", "NA_CmdSetKey",
+                "NA_CmdHandleStale"
             };
             for (const auto& n : drops) {
                 if (scene->hasAnimationState(n))
@@ -357,6 +358,63 @@ TEST_F(NodeAnimationManagerSceneTest, SetKeyframeCommandRestoresPriorOnOverwrite
     // We can't read the values back via the manager API yet, but
     // the round-trip count being preserved + the undo path
     // executing without aborts is the contract we care about here.
+}
+
+// Codex P1 follow-up regression: the SetKeyframeCommand undo path
+// used to call `anim->destroyNodeTrack(handle)` directly, bypassing
+// the manager's `m_trackHandles` map. That left a stale handle entry
+// behind — and a later `addKeyframe(differentNode, ...)` would
+// scan Ogre tracks, find the now-free handle, allocate it for the
+// new node, and then re-allocating the original node's handle later
+// would silently corrupt the new node's animation.
+//
+// We exercise the round-trip: redo keyframe on A → undo → keyframe
+// B on the same handle slot → keyframe A again. Without the fix,
+// A and B end up sharing one track. With the fix they stay distinct.
+TEST_F(NodeAnimationManagerSceneTest, SetKeyframeCommandUndoForgetsStaleHandle) {
+    auto* m = NodeAnimationManager::instance();
+    ASSERT_TRUE(m->createClip(QStringLiteral("NA_CmdHandleStale"), 2.0));
+    makeNamedNode("NA_CmdHandleStale_NodeA");
+    makeNamedNode("NA_CmdHandleStale_NodeB");
+
+    // Author + redo + undo on node A — this leaves the clip
+    // with NO tracks (mTrackCreatedByRedo path).
+    {
+        SetNodeKeyframeCommand cmd(QStringLiteral("NA_CmdHandleStale"),
+                                    QStringLiteral("NA_CmdHandleStale_NodeA"),
+                                    0.5,
+                                    Ogre::Vector3(1, 0, 0),
+                                    Ogre::Quaternion::IDENTITY,
+                                    Ogre::Vector3(1, 1, 1));
+        cmd.redo();
+        cmd.undo();
+    }
+
+    // Now key node B — this will allocate handle 0 (first free).
+    // Then key node A again — this should allocate handle 1
+    // (a new handle, NOT the stale handle 0 that node A used to have).
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_CmdHandleStale"),
+                                QStringLiteral("NA_CmdHandleStale_NodeB"),
+                                0.25, Ogre::Vector3(0, 9, 0),
+                                Ogre::Quaternion::IDENTITY,
+                                Ogre::Vector3(1, 1, 1)));
+    ASSERT_TRUE(m->addKeyframe(QStringLiteral("NA_CmdHandleStale"),
+                                QStringLiteral("NA_CmdHandleStale_NodeA"),
+                                0.75, Ogre::Vector3(7, 0, 0),
+                                Ogre::Quaternion::IDENTITY,
+                                Ogre::Vector3(1, 1, 1)));
+
+    // Both nodes see ONLY their own keyframe. Pre-fix, A's
+    // addKeyframe would have routed onto B's handle, producing
+    // keysA == keysB == [0.25, 0.75] (or worse).
+    auto keysA = m->keyTimesForNode(QStringLiteral("NA_CmdHandleStale"),
+                                     QStringLiteral("NA_CmdHandleStale_NodeA"));
+    auto keysB = m->keyTimesForNode(QStringLiteral("NA_CmdHandleStale"),
+                                     QStringLiteral("NA_CmdHandleStale_NodeB"));
+    ASSERT_EQ(keysA.size(), 1);
+    ASSERT_EQ(keysB.size(), 1);
+    EXPECT_NEAR(keysA[0], 0.75, 1e-4);
+    EXPECT_NEAR(keysB[0], 0.25, 1e-4);
 }
 
 // ─── Existing — distinct-node-track invariant ────────────────────────

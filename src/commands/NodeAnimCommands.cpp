@@ -12,6 +12,7 @@ The MIT License
 
 #include "../Manager.h"
 #include "../NodeAnimationManager.h"
+#include "../SentryReporter.h"
 
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
@@ -111,12 +112,16 @@ CreateNodeAnimClipCommand::CreateNodeAnimClipCommand(const QString& name,
 
 void CreateNodeAnimClipCommand::redo()
 {
+    SentryReporter::addBreadcrumb("scene.anim.node.cmd",
+        QStringLiteral("redo: create clip '%1'").arg(mName));
     if (auto* m = NodeAnimationManager::instance())
         m->createClip(mName, mLength);
 }
 
 void CreateNodeAnimClipCommand::undo()
 {
+    SentryReporter::addBreadcrumb("scene.anim.node.cmd",
+        QStringLiteral("undo: create clip '%1'").arg(mName));
     if (auto* m = NodeAnimationManager::instance())
         m->deleteClip(mName);
 }
@@ -140,12 +145,17 @@ DeleteNodeAnimClipCommand::DeleteNodeAnimClipCommand(const QString& name,
 
 void DeleteNodeAnimClipCommand::redo()
 {
+    SentryReporter::addBreadcrumb("scene.anim.node.cmd",
+        QStringLiteral("redo: delete clip '%1'").arg(mName));
     if (auto* m = NodeAnimationManager::instance())
         m->deleteClip(mName);
 }
 
 void DeleteNodeAnimClipCommand::undo()
 {
+    SentryReporter::addBreadcrumb("scene.anim.node.cmd",
+        QStringLiteral("undo: delete clip '%1' (restore %2 track(s))")
+            .arg(mName).arg(mTracks.size()));
     rebuildClipFromSnapshot(mName, mLength, mTracks);
 }
 
@@ -210,6 +220,9 @@ SetNodeKeyframeCommand::SetNodeKeyframeCommand(const QString& clipName,
 
 void SetNodeKeyframeCommand::redo()
 {
+    SentryReporter::addBreadcrumb("scene.anim.node.cmd",
+        QStringLiteral("redo: keyframe '%1':'%2'@%3")
+            .arg(mClipName, mNodeName).arg(mNew.time, 0, 'f', 3));
     auto* m = NodeAnimationManager::instance();
     if (!m) return;
 
@@ -233,6 +246,9 @@ void SetNodeKeyframeCommand::redo()
 
 void SetNodeKeyframeCommand::undo()
 {
+    SentryReporter::addBreadcrumb("scene.anim.node.cmd",
+        QStringLiteral("undo: keyframe '%1':'%2'@%3")
+            .arg(mClipName, mNodeName).arg(mNew.time, 0, 'f', 3));
     auto* scene = sceneMgr();
     if (!scene) return;
     const std::string sclip = mClipName.toStdString();
@@ -273,9 +289,16 @@ void SetNodeKeyframeCommand::undo()
             }
         }
         // If we created the track in redo, drop the whole (now-empty)
-        // track so the clip returns to its pre-redo state.
+        // track so the clip returns to its pre-redo state. Also tell
+        // the manager to forget its `{clip, node} → handle` entry —
+        // otherwise the stale handle would shadow a later addKeyframe
+        // for a different node, corrupting that node's animation.
+        // Same class of bug as Codex P1 on PR #584 (hash-truncation
+        // collisions), just in the undo path.
         if (mTrackCreatedByRedo && track->getNumKeyFrames() == 0) {
             anim->destroyNodeTrack(handle);
+            if (auto* m = NodeAnimationManager::instance())
+                m->forgetTrackHandle(mClipName, mNodeName);
         }
     }
 }

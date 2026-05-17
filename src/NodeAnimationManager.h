@@ -97,6 +97,15 @@ public:
                                          double qw, double qx, double qy, double qz,
                                          double sx, double sy, double sz);
 
+    /// Forget the {clipName, nodeName} → handle entry in
+    /// `m_trackHandles`. Used by `SetNodeKeyframeCommand::undo`
+    /// when it has to `destroyNodeTrack` the track it created in
+    /// redo — without this, the stale handle would shadow a later
+    /// `addKeyframe` for a different node and corrupt that node's
+    /// animation (same class of bug as the original `qHash` issue
+    /// PR #584 fixed, just in a different code path).
+    void forgetTrackHandle(const QString& clipName, const QString& nodeName);
+
 signals:
     /// The set of clips visible on the scene changed (create / delete).
     void clipsChanged();

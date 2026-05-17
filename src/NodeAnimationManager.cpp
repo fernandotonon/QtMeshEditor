@@ -222,6 +222,16 @@ bool NodeAnimationManager::addKeyframe(const QString& clipName,
     return true;
 }
 
+void NodeAnimationManager::forgetTrackHandle(const QString& clipName,
+                                             const QString& nodeName)
+{
+    assertMainThread();
+    auto it = m_trackHandles.find(clipName);
+    if (it == m_trackHandles.end()) return;
+    it->remove(nodeName);
+    if (it->isEmpty()) m_trackHandles.erase(it);
+}
+
 bool NodeAnimationManager::setClipEnabled(const QString& name, bool enabled)
 {
     assertMainThread();
