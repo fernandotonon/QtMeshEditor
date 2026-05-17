@@ -1,15 +1,26 @@
 #include "PS1RipWorker.h"
+#include "CaptureBuffer.h"
 #include "EmuCore.h"
 #include "EmuCoreLoader.h"
 #include "EmuFramebuffer.h"
+#include "GpuCommandParser.h"
+#include "RipperHooks.h"
 
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QTimer>
 
 #include <cstring>
 
 PS1RipWorker::PS1RipWorker(QObject *parent)
     : QObject(parent)
+    , m_captureBuffer(std::make_unique<CaptureBuffer>())
+    , m_ripperHooks(std::make_unique<RipperHooks>())
 {
+    m_ripperHooks->setArmedFlag(&m_captureArmed);
+    m_ripperHooks->setBuffer(m_captureBuffer.get());
+
     m_frameTimer = new QTimer(this);
     m_frameTimer->setTimerType(Qt::PreciseTimer);
     m_frameTimer->setInterval(16);
@@ -75,6 +86,7 @@ void PS1RipWorker::startEmulation()
         return;
     }
 
+    m_core->setHooks(m_ripperHooks.get());
     m_core->reset();
 
     if (m_startSuperseded.load(std::memory_order_acquire)) {
@@ -128,6 +140,37 @@ void PS1RipWorker::runFrameTick()
     m_core->runFrame();
     const EmuFramebuffer &fb = m_core->framebuffer();
     emit framePresented(framebufferToImage(fb), fb.frameIndex);
+}
+
+void PS1RipWorker::setCaptureArmed(bool armed)
+{
+    m_captureArmed.store(armed, std::memory_order_release);
+}
+
+void PS1RipWorker::finalizeFrameCapture()
+{
+    if (!m_captureArmed.load(std::memory_order_acquire)) {
+        emit emulationError(tr("Capture is not armed"));
+        return;
+    }
+
+    const QVector<PrimRecord> &prims = m_captureBuffer->prims();
+    if (prims.isEmpty()) {
+        emit emulationError(tr("No primitives captured in the current frame"));
+        return;
+    }
+
+    const QString captureId = QString::number(QDateTime::currentMSecsSinceEpoch());
+    const QString dir = QDir::temp().filePath(QStringLiteral("qtmesh_ps1_capture"));
+    QDir().mkpath(dir);
+    const QString csvPath = dir + QLatin1Char('/') + captureId + QStringLiteral(".csv");
+    QFile file(csvPath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        file.write(GpuCommandParser::primsToCsv(prims).toUtf8());
+        file.close();
+    }
+
+    emit frameCaptureReady(captureId, prims.size());
 }
 
 QImage PS1RipWorker::framebufferToImage(const EmuFramebuffer &fb)

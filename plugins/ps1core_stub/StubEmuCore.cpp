@@ -1,4 +1,5 @@
 #include "StubEmuCore.h"
+#include "StubCaptureSynth.h"
 
 #include <QFileInfo>
 
@@ -43,6 +44,7 @@ void StubEmuCore::runFrame()
     EmuFramebuffer &buf = m_buffers[static_cast<size_t>(m_writeIndex)];
     buf.frameIndex = ++m_frameIndex;
     fillTestPattern(buf);
+    stubEmitCaptureSample(m_hooks);
 
     m_readIndex = m_writeIndex;
     m_writeIndex = (m_writeIndex + 1) % 3;

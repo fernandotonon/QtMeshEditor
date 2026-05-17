@@ -9,8 +9,10 @@
 #include <atomic>
 #include <memory>
 
+class CaptureBuffer;
 class EmuCore;
 class QTimer;
+class RipperHooks;
 
 /**
  * Runs EmuCore on a dedicated QThread owned by PS1RipManager (#415).
@@ -26,6 +28,8 @@ public:
     void clearStartCancel() { m_startSuperseded.store(false, std::memory_order_release); }
     void requestCancelStart() { m_startSuperseded.store(true, std::memory_order_release); }
 
+    const CaptureBuffer *captureBuffer() const { return m_captureBuffer.get(); }
+
 public slots:
     void configureSession(const QString &biosPath, const QString &isoPath);
     void startEmulation();
@@ -33,12 +37,15 @@ public slots:
     void stopEmulation();
     void pauseEmulation();
     void stepFrame();
+    void setCaptureArmed(bool armed);
+    void finalizeFrameCapture();
 
 signals:
     void emulationStarted();
     void emulationStopped();
     void framePresented(const QImage &frame, quint64 frameIndex);
     void emulationError(const QString &message);
+    void frameCaptureReady(const QString &captureId, int primCount);
 
 private slots:
     void runFrameTick();
@@ -54,6 +61,10 @@ private:
     bool m_running = false;
     bool m_paused = false;
     std::atomic<bool> m_startSuperseded{false};
+    std::atomic<bool> m_captureArmed{false};
+
+    std::unique_ptr<CaptureBuffer> m_captureBuffer;
+    std::unique_ptr<RipperHooks> m_ripperHooks;
 };
 
 #endif // PS1RIPWORKER_H
