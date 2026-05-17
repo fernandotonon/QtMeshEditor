@@ -277,7 +277,13 @@ Rectangle {
         id: rowsView
         anchors.left: parent.left; anchors.right: parent.right
         anchors.top: header.visible ? header.bottom : parent.top
-        anchors.bottom: parent.bottom
+        // Reserve space at the bottom for the morph band when it's
+        // visible. Anchoring both to `parent.bottom` would have them
+        // overlap and (under some layout pressures) hit a QML
+        // assertion when both layouts run during a redraw — drove
+        // the SIGSEGV crashes on MCPServerTest + MainWindowTest
+        // visibility-toggle tests in CI.
+        anchors.bottom: morphBand.visible ? morphBand.top : parent.bottom
         clip: true
         model: root.rows
         spacing: 1
