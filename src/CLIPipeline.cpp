@@ -22,6 +22,7 @@
 #include "TexturePaintBuffer.h"
 #include "VertexColorBaker.h"
 #include "VATBaker.h"
+#include "MorphAnimationManager.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -1067,6 +1068,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "optimize") rc = cmdOptimize(argc, argv);
     else if (cmd == "bake-vertex-colors") rc = cmdBakeVertexColors(argc, argv);
     else if (cmd == "vat") rc = cmdVat(argc, argv);
+    else if (cmd == "morph") rc = cmdMorph(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -4943,6 +4945,83 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                      .arg(result.maxBound.x, 0, 'f', 3)
                      .arg(result.maxBound.y, 0, 'f', 3)
                      .arg(result.maxBound.z, 0, 'f', 3));
+    }
+    return 0;
+}
+
+int CLIPipeline::cmdMorph(int argc, char* argv[])
+{
+    // Parse: morph <file> --list [--json]
+    QString filePath;
+    bool listMode = false;
+    bool jsonOutput = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "morph" || arg == "--cli") continue;
+        if (arg == "--list") { listMode = true; continue; }
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if (!arg.startsWith("-") && filePath.isEmpty()) {
+            filePath = arg; continue;
+        }
+    }
+
+    if (filePath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh morph <file> --list [--json]" << Qt::endl;
+        return 2;
+    }
+    if (!listMode) {
+        err() << "Error: morph subcommand requires --list (other modes land in follow-up slices)." << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.morph",
+        QString("Morph list .%1").arg(fi.suffix()));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1 for morph list").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    auto& entities = Manager::getSingleton()->getEntities();
+    Ogre::Entity* entity = nullptr;
+    for (auto* obj : entities) {
+        if (obj && obj->getMovableType() == "Entity") {
+            entity = static_cast<Ogre::Entity*>(obj);
+            break;
+        }
+    }
+    if (!entity) {
+        err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    const QStringList targets = MorphAnimationManager::instance()->morphTargetsFor(entity);
+
+    if (jsonOutput) {
+        QJsonArray arr;
+        for (const QString& n : targets) arr.append(n);
+        QJsonObject root;
+        root["file"]  = filePath;
+        root["count"] = static_cast<int>(targets.size());
+        root["morphTargets"] = arr;
+        cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+    } else {
+        if (targets.isEmpty()) {
+            cliWrite(QStringLiteral("No morph targets / blend shapes found.\n"));
+        } else {
+            cliWrite(QStringLiteral("Morph targets (%1):\n").arg(targets.size()));
+            for (const QString& n : targets)
+                cliWrite(QStringLiteral("  %1\n").arg(n));
+        }
     }
     return 0;
 }

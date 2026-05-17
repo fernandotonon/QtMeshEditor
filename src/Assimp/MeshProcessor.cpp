@@ -129,6 +129,26 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
         }
     }
 
+    // Process morph targets / blend shapes. Assimp parks each shape's
+    // deformed positions in `aiAnimMesh::mVertices`; we store them
+    // verbatim and convert to per-vertex deltas later, at mesh-build
+    // time, where we already have the base positions in hand for the
+    // Ogre::Pose constructor. Apply the same Z-up axis bake the base
+    // vertex pass uses so the shape and base agree on coordinate frame.
+    for(auto am = 0u; am < mesh->mNumAnimMeshes; am++) {
+        const aiAnimMesh* anim = mesh->mAnimMeshes[am];
+        if (!anim || !anim->mVertices || anim->mNumVertices != mesh->mNumVertices) continue;
+        MorphTargetData target;
+        target.name = anim->mName.length > 0 ? anim->mName.C_Str()
+                                              : (std::string("Shape_") + std::to_string(am));
+        target.positions.reserve(anim->mNumVertices);
+        for (auto i = 0u; i < anim->mNumVertices; i++) {
+            Ogre::Vector3 v(anim->mVertices[i].x, anim->mVertices[i].y, anim->mVertices[i].z);
+            target.positions.push_back(m_isZup ? R_x90 * v : v);
+        }
+        subMeshData->morphTargets.push_back(std::move(target));
+    }
+
     return subMeshData;
 }
 
@@ -240,6 +260,57 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
     // Set the bounding box and bounding sphere radius
     ogreMesh->_setBounds(Ogre::AxisAlignedBox(minCoords, maxCoords));
     ogreMesh->_setBoundingSphereRadius((maxCoords - minCoords).length() / 2.0f);
+
+    // Morph targets / blend shapes → Ogre::Pose entries on the mesh.
+    // Build per-submesh delta poses: Ogre `Pose` stores per-vertex
+    // offsets relative to the base mesh. Each pose targets a specific
+    // submesh (index 1-based in Ogre; 0 means "shared vertex data",
+    // which our importer never uses — every aiMesh gets its own
+    // SubMesh::vertexData).
+    //
+    // For each pose we also create a single VAT_POSE animation
+    // ("MorphTrack_<name>") with a one-keyframe track at full
+    // influence; the MorphAnimationManager will use the matching
+    // AnimationState weight to drive live preview without us having
+    // to mutate vertex buffers ourselves.
+    for (size_t s = 0; s < subMeshesData.size(); ++s) {
+        const auto* smd = subMeshesData[s];
+        if (smd->morphTargets.empty()) continue;
+        // Submesh handle is 1-based: 0 = shared, 1..N = per-submesh.
+        const unsigned short targetSubmesh = static_cast<unsigned short>(s + 1);
+        for (const auto& mt : smd->morphTargets) {
+            if (mt.positions.size() != smd->vertices.size()) continue;
+            // Skip a target that's identical to the base (rare but
+            // happens with badly-authored FBX) — Ogre's pose blender
+            // would do nothing useful and the per-vertex delta vector
+            // would be all-zero.
+            Ogre::Pose* pose = ogreMesh->createPose(targetSubmesh,
+                                                   mt.name);
+            for (size_t vi = 0; vi < mt.positions.size(); ++vi) {
+                const Ogre::Vector3 delta = mt.positions[vi] - smd->vertices[vi];
+                if (delta.squaredLength() <= 1e-12f) continue;
+                pose->addVertex(vi, delta);
+            }
+        }
+    }
+
+    // One Ogre::Animation per pose so AnimationState weights drive
+    // each morph target independently. Animation name is the
+    // canonical morph-target name (MorphAnimationManager keys on it).
+    const auto& poseList = ogreMesh->getPoseList();
+    for (unsigned short pi = 0; pi < poseList.size(); ++pi) {
+        const Ogre::Pose* pose = poseList[pi];
+        if (!pose) continue;
+        const Ogre::String animName = pose->getName();
+        if (animName.empty()) continue;
+        if (ogreMesh->hasAnimation(animName)) continue;  // duplicate pose name; skip
+        Ogre::Animation* anim = ogreMesh->createAnimation(animName, /*length=*/0.0f);
+        Ogre::VertexAnimationTrack* track = anim->createVertexTrack(
+            pose->getTarget(), Ogre::VAT_POSE);
+        auto* kf = track->createVertexPoseKeyFrame(0.0f);
+        // Full influence on this pose; AnimationState weight scales it.
+        kf->addPoseReference(pi, 1.0f);
+    }
 
     // Compile the mesh
     ogreMesh->load();

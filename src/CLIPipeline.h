@@ -125,6 +125,11 @@ public:
     /// positions only.
     static int cmdVat(int argc, char* argv[]);
 
+    /// List the morph targets / blend shapes on a mesh file. Slice A1
+    /// surfaces a `--list` mode only; subsequent slices add `--set`,
+    /// `--add`, `--delete` once the in-memory authoring path lands.
+    static int cmdMorph(int argc, char* argv[]);
+
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);
 };

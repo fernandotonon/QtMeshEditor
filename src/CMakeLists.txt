@@ -87,6 +87,7 @@ TexturePaintController.cpp
 VertexColorBaker.cpp
 VATBaker.cpp
 VATBakerController.cpp
+MorphAnimationManager.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp

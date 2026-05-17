@@ -4,6 +4,16 @@
 #include <assimp/scene.h>
 #include "MaterialProcessor.h"
 
+/// One blend-shape / morph target on a SubMeshData. Stored as the
+/// absolute per-vertex positions of the deformed shape (matches what
+/// Assimp gives us via `aiAnimMesh::mVertices`); MeshProcessor
+/// converts these to per-vertex deltas relative to `vertices` when
+/// creating the Ogre::Pose entries at mesh-build time.
+struct MorphTargetData {
+    std::string name;                       ///< From `aiAnimMesh::mName`; empty when the source had no name.
+    std::vector<Ogre::Vector3> positions;   ///< Absolute deformed positions, same vertex order as `SubMeshData::vertices`.
+};
+
 struct SubMeshData {
     std::vector<Ogre::Vector3> vertices;
     std::vector<Ogre::Vector3> normals;
@@ -13,6 +23,7 @@ struct SubMeshData {
     std::vector<Ogre::ColourValue> colors;
     std::vector<unsigned long> indices;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
+    std::vector<MorphTargetData> morphTargets;  ///< Empty when source had no blend shapes.
     unsigned int materialIndex;
 };
 
