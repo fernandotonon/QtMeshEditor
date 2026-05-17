@@ -103,6 +103,78 @@ inline float fromByteNormalised(unsigned char b, float lo, float hi)
     return lo + (static_cast<float>(b) / 255.0f) * (hi - lo);
 }
 
+inline uint16_t toShortNormalised(float v, float lo, float hi)
+{
+    if (hi <= lo) return 0;
+    const float t = (v - lo) / (hi - lo);
+    const float clamped = std::clamp(t, 0.0f, 1.0f);
+    return static_cast<uint16_t>(std::lround(clamped * 65535.0f));
+}
+
+inline float fromShortNormalised(uint16_t s, float lo, float hi)
+{
+    return lo + (static_cast<float>(s) / 65535.0f) * (hi - lo);
+}
+
+// Same submesh walk as collectPostSkinPositions but for normals. Kept
+// separate so the position-only path (slice 1) doesn't lock the normal
+// buffer when no one will read it — the second lock acquisition on the
+// same vbuf is cheap but pointless.
+size_t collectPostSkinNormals(Ogre::Entity* entity,
+                              std::vector<Ogre::Vector3>& out)
+{
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return 0;
+
+    size_t appended = 0;
+    bool sharedAppended = false;
+
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (!sub) continue;
+        if (sub->useSharedVertices && sharedAppended) continue;
+
+        Ogre::VertexData* animData = sub->useSharedVertices
+            ? entity->_getSkelAnimVertexData()
+            : entity->getSubEntity(si)->_getSkelAnimVertexData();
+        if (!animData) continue;
+
+        const auto* normElem = animData->vertexDeclaration->findElementBySemantic(
+            Ogre::VES_NORMAL);
+        if (!normElem) {
+            // No normals on this mesh — pad with up-vectors so the
+            // texture stays rectangular and downstream consumers don't
+            // hit a frameCount × vertexCount mismatch.
+            for (size_t j = 0; j < animData->vertexCount; ++j) {
+                out.emplace_back(0.0f, 1.0f, 0.0f);
+                ++appended;
+            }
+            if (sub->useSharedVertices) sharedAppended = true;
+            continue;
+        }
+
+        auto vbuf = animData->vertexBufferBinding->getBuffer(normElem->getSource());
+        if (!vbuf) continue;
+
+        auto* bytes = static_cast<unsigned char*>(
+            vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        const size_t vstride = vbuf->getVertexSize();
+
+        for (size_t j = 0; j < animData->vertexCount; ++j) {
+            Ogre::Real* pNorm = nullptr;
+            normElem->baseVertexPointerToElement(bytes + j * vstride, &pNorm);
+            out.emplace_back(pNorm[0], pNorm[1], pNorm[2]);
+            ++appended;
+        }
+
+        vbuf->unlock();
+
+        if (sub->useSharedVertices) sharedAppended = true;
+    }
+
+    return appended;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -155,6 +227,144 @@ std::vector<Ogre::Vector3> VATBaker::decodeRGBA8(
     return out;
 }
 
+std::vector<uint16_t> VATBaker::encodeRGBA16(
+    const std::vector<Ogre::Vector3>& flatPositions,
+    int frameCount,
+    int vertexCount,
+    const Ogre::Vector3& minBound,
+    const Ogre::Vector3& maxBound)
+{
+    const size_t expected = static_cast<size_t>(frameCount)
+                          * static_cast<size_t>(vertexCount);
+    std::vector<uint16_t> out;
+    if (frameCount <= 0 || vertexCount <= 0) return out;
+    if (flatPositions.size() != expected) return out;
+    out.resize(expected * 4u, 0);
+    for (size_t i = 0; i < expected; ++i) {
+        const auto& p = flatPositions[i];
+        out[i * 4 + 0] = toShortNormalised(p.x, minBound.x, maxBound.x);
+        out[i * 4 + 1] = toShortNormalised(p.y, minBound.y, maxBound.y);
+        out[i * 4 + 2] = toShortNormalised(p.z, minBound.z, maxBound.z);
+        out[i * 4 + 3] = 65535;
+    }
+    return out;
+}
+
+std::vector<Ogre::Vector3> VATBaker::decodeRGBA16(
+    const std::vector<uint16_t>& pixels,
+    int frameCount,
+    int vertexCount,
+    const Ogre::Vector3& minBound,
+    const Ogre::Vector3& maxBound)
+{
+    const size_t expected = static_cast<size_t>(frameCount)
+                          * static_cast<size_t>(vertexCount);
+    std::vector<Ogre::Vector3> out;
+    if (frameCount <= 0 || vertexCount <= 0) return out;
+    if (pixels.size() != expected * 4u) return out;
+    out.reserve(expected);
+    for (size_t i = 0; i < expected; ++i) {
+        Ogre::Vector3 p;
+        p.x = fromShortNormalised(pixels[i * 4 + 0], minBound.x, maxBound.x);
+        p.y = fromShortNormalised(pixels[i * 4 + 1], minBound.y, maxBound.y);
+        p.z = fromShortNormalised(pixels[i * 4 + 2], minBound.z, maxBound.z);
+        out.push_back(p);
+    }
+    return out;
+}
+
+std::vector<unsigned char> VATBaker::encodeNormalsRGBA8(
+    const std::vector<Ogre::Vector3>& flatNormals,
+    int frameCount,
+    int vertexCount)
+{
+    const size_t expected = static_cast<size_t>(frameCount)
+                          * static_cast<size_t>(vertexCount);
+    std::vector<unsigned char> out;
+    if (frameCount <= 0 || vertexCount <= 0) return out;
+    if (flatNormals.size() != expected) return out;
+    out.resize(expected * 4u, 0);
+    for (size_t i = 0; i < expected; ++i) {
+        // Normals come in as unit vectors in [-1, 1]; remap to [0, 1]
+        // for the unsigned byte channel.
+        const auto& n = flatNormals[i];
+        const float nx = std::clamp((n.x + 1.0f) * 0.5f, 0.0f, 1.0f);
+        const float ny = std::clamp((n.y + 1.0f) * 0.5f, 0.0f, 1.0f);
+        const float nz = std::clamp((n.z + 1.0f) * 0.5f, 0.0f, 1.0f);
+        out[i * 4 + 0] = static_cast<unsigned char>(std::lround(nx * 255.0f));
+        out[i * 4 + 1] = static_cast<unsigned char>(std::lround(ny * 255.0f));
+        out[i * 4 + 2] = static_cast<unsigned char>(std::lround(nz * 255.0f));
+        out[i * 4 + 3] = 255;
+    }
+    return out;
+}
+
+std::vector<Ogre::Vector3> VATBaker::decodeNormalsRGBA8(
+    const std::vector<unsigned char>& pixels,
+    int frameCount,
+    int vertexCount)
+{
+    const size_t expected = static_cast<size_t>(frameCount)
+                          * static_cast<size_t>(vertexCount);
+    std::vector<Ogre::Vector3> out;
+    if (frameCount <= 0 || vertexCount <= 0) return out;
+    if (pixels.size() != expected * 4u) return out;
+    out.reserve(expected);
+    for (size_t i = 0; i < expected; ++i) {
+        Ogre::Vector3 n;
+        n.x = (static_cast<float>(pixels[i * 4 + 0]) / 255.0f) * 2.0f - 1.0f;
+        n.y = (static_cast<float>(pixels[i * 4 + 1]) / 255.0f) * 2.0f - 1.0f;
+        n.z = (static_cast<float>(pixels[i * 4 + 2]) / 255.0f) * 2.0f - 1.0f;
+        out.push_back(n);
+    }
+    return out;
+}
+
+std::vector<uint16_t> VATBaker::encodeNormalsRGBA16(
+    const std::vector<Ogre::Vector3>& flatNormals,
+    int frameCount,
+    int vertexCount)
+{
+    const size_t expected = static_cast<size_t>(frameCount)
+                          * static_cast<size_t>(vertexCount);
+    std::vector<uint16_t> out;
+    if (frameCount <= 0 || vertexCount <= 0) return out;
+    if (flatNormals.size() != expected) return out;
+    out.resize(expected * 4u, 0);
+    for (size_t i = 0; i < expected; ++i) {
+        const auto& n = flatNormals[i];
+        const float nx = std::clamp((n.x + 1.0f) * 0.5f, 0.0f, 1.0f);
+        const float ny = std::clamp((n.y + 1.0f) * 0.5f, 0.0f, 1.0f);
+        const float nz = std::clamp((n.z + 1.0f) * 0.5f, 0.0f, 1.0f);
+        out[i * 4 + 0] = static_cast<uint16_t>(std::lround(nx * 65535.0f));
+        out[i * 4 + 1] = static_cast<uint16_t>(std::lround(ny * 65535.0f));
+        out[i * 4 + 2] = static_cast<uint16_t>(std::lround(nz * 65535.0f));
+        out[i * 4 + 3] = 65535;
+    }
+    return out;
+}
+
+std::vector<Ogre::Vector3> VATBaker::decodeNormalsRGBA16(
+    const std::vector<uint16_t>& pixels,
+    int frameCount,
+    int vertexCount)
+{
+    const size_t expected = static_cast<size_t>(frameCount)
+                          * static_cast<size_t>(vertexCount);
+    std::vector<Ogre::Vector3> out;
+    if (frameCount <= 0 || vertexCount <= 0) return out;
+    if (pixels.size() != expected * 4u) return out;
+    out.reserve(expected);
+    for (size_t i = 0; i < expected; ++i) {
+        Ogre::Vector3 n;
+        n.x = (static_cast<float>(pixels[i * 4 + 0]) / 65535.0f) * 2.0f - 1.0f;
+        n.y = (static_cast<float>(pixels[i * 4 + 1]) / 65535.0f) * 2.0f - 1.0f;
+        n.z = (static_cast<float>(pixels[i * 4 + 2]) / 65535.0f) * 2.0f - 1.0f;
+        out.push_back(n);
+    }
+    return out;
+}
+
 QString VATBaker::buildSidecarJson(const BakeResult& result, const Options& opts)
 {
     QJsonObject bounds;
@@ -164,16 +374,24 @@ QString VATBaker::buildSidecarJson(const BakeResult& result, const Options& opts
     bounds["min"] = lo;
     bounds["max"] = hi;
 
+    QString encStr;
+    switch (opts.encoding) {
+        case Encoding::RGBA8:  encStr = QStringLiteral("rgba8");  break;
+        case Encoding::RGBA16: encStr = QStringLiteral("rgba16"); break;
+    }
+
     QJsonObject root;
     root["version"]     = 1;
     root["target"]      = "agnostic";
-    root["encoding"]    = "rgba8";
+    root["encoding"]    = encStr;
     root["frameCount"]  = result.frameCount;
     root["vertexCount"] = result.vertexCount;
     root["fps"]         = opts.fps;
     root["animation"]   = opts.animationName;
     root["bounds"]      = bounds;
     root["posTexture"]  = QFileInfo(result.posTexPath).fileName();
+    if (!result.nrmTexPath.isEmpty())
+        root["nrmTexture"] = QFileInfo(result.nrmTexPath).fileName();
 
     QJsonDocument doc(root);
     return QString::fromUtf8(doc.toJson(QJsonDocument::Indented));
@@ -244,9 +462,12 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
 
     // First sample to discover the vertex count + seed the bounds.
     std::vector<Ogre::Vector3> flat;
+    std::vector<Ogre::Vector3> normals;  // populated only when opts.bakeNormals
     Ogre::Vector3 lo(std::numeric_limits<float>::infinity());
     Ogre::Vector3 hi(-std::numeric_limits<float>::infinity());
     flat.reserve(static_cast<size_t>(frameCount) * 1024);
+    if (opts.bakeNormals)
+        normals.reserve(static_cast<size_t>(frameCount) * 1024);
 
     int vertexCount = -1;
     for (int f = 0; f < frameCount; ++f) {
@@ -278,6 +499,19 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y); lo.z = std::min(lo.z, p.z);
             hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y); hi.z = std::max(hi.z, p.z);
         }
+
+        if (opts.bakeNormals) {
+            const size_t nrmBefore = normals.size();
+            const size_t nrmAppended = collectPostSkinNormals(entity, normals);
+            if (nrmAppended != static_cast<size_t>(frameVerts)) {
+                entity->removeSoftwareAnimationRequest(true);
+                result.error = QStringLiteral(
+                    "frame %1 normals count (%2) differs from positions (%3)")
+                        .arg(f).arg(nrmAppended).arg(frameVerts);
+                return result;
+            }
+            (void)nrmBefore;
+        }
     }
 
     entity->removeSoftwareAnimationRequest(true);
@@ -301,24 +535,85 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     result.posTexPath = QDir(opts.outputDir).filePath(base + "_pos.png");
     result.jsonPath   = QDir(opts.outputDir).filePath(base + ".json");
 
-    // Encode + write the position texture.
-    auto rgba = encodeRGBA8(flat, frameCount, vertexCount, lo, hi);
-    if (rgba.empty()) {
-        result.error = QStringLiteral("encodeRGBA8 produced empty buffer");
-        return result;
+    // Encode + write the position texture. PNG preserves both 8-bit
+    // and 16-bit channel depths; QImage handles the format switch for us.
+    if (opts.encoding == Encoding::RGBA8) {
+        auto rgba = encodeRGBA8(flat, frameCount, vertexCount, lo, hi);
+        if (rgba.empty()) {
+            result.error = QStringLiteral("encodeRGBA8 produced empty buffer");
+            return result;
+        }
+        QImage img(vertexCount, frameCount, QImage::Format_RGBA8888);
+        for (int y = 0; y < frameCount; ++y) {
+            const unsigned char* src = rgba.data() + static_cast<size_t>(y)
+                                                      * static_cast<size_t>(vertexCount) * 4u;
+            std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u);
+        }
+        if (!img.save(result.posTexPath, "PNG")) {
+            result.error = QStringLiteral("failed to write position texture: %1")
+                               .arg(result.posTexPath);
+            return result;
+        }
+    } else {  // RGBA16
+        auto rgba = encodeRGBA16(flat, frameCount, vertexCount, lo, hi);
+        if (rgba.empty()) {
+            result.error = QStringLiteral("encodeRGBA16 produced empty buffer");
+            return result;
+        }
+        // Format_RGBA64 is 16 bits per channel — Qt's `save("PNG")` writes
+        // a 16-bit PNG which Godot/Unity/Unreal all read losslessly.
+        QImage img(vertexCount, frameCount, QImage::Format_RGBA64);
+        for (int y = 0; y < frameCount; ++y) {
+            const uint16_t* src = rgba.data() + static_cast<size_t>(y)
+                                                * static_cast<size_t>(vertexCount) * 4u;
+            std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u * sizeof(uint16_t));
+        }
+        if (!img.save(result.posTexPath, "PNG")) {
+            result.error = QStringLiteral("failed to write 16-bit position texture: %1")
+                               .arg(result.posTexPath);
+            return result;
+        }
     }
-    QImage img(vertexCount, frameCount, QImage::Format_RGBA8888);
-    // Row-by-row copy. QImage's stride may differ from the packed
-    // `vertexCount * 4` we generate, so copy line-by-line.
-    for (int y = 0; y < frameCount; ++y) {
-        const unsigned char* src = rgba.data() + static_cast<size_t>(y)
-                                                  * static_cast<size_t>(vertexCount) * 4u;
-        std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u);
-    }
-    if (!img.save(result.posTexPath, "PNG")) {
-        result.error = QStringLiteral("failed to write position texture: %1")
-                           .arg(result.posTexPath);
-        return result;
+
+    // Normal texture — only when requested. Same layout / size, normals
+    // mapped from [-1, 1] → [0, MAX] per channel.
+    if (opts.bakeNormals) {
+        result.nrmTexPath = QDir(opts.outputDir).filePath(base + "_nrm.png");
+        if (opts.encoding == Encoding::RGBA8) {
+            auto rgba = encodeNormalsRGBA8(normals, frameCount, vertexCount);
+            if (rgba.empty()) {
+                result.error = QStringLiteral("encodeNormalsRGBA8 produced empty buffer");
+                return result;
+            }
+            QImage img(vertexCount, frameCount, QImage::Format_RGBA8888);
+            for (int y = 0; y < frameCount; ++y) {
+                const unsigned char* src = rgba.data() + static_cast<size_t>(y)
+                                                          * static_cast<size_t>(vertexCount) * 4u;
+                std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u);
+            }
+            if (!img.save(result.nrmTexPath, "PNG")) {
+                result.error = QStringLiteral("failed to write normal texture: %1")
+                                   .arg(result.nrmTexPath);
+                return result;
+            }
+        } else {  // RGBA16
+            auto rgba = encodeNormalsRGBA16(normals, frameCount, vertexCount);
+            if (rgba.empty()) {
+                result.error = QStringLiteral("encodeNormalsRGBA16 produced empty buffer");
+                return result;
+            }
+            QImage img(vertexCount, frameCount, QImage::Format_RGBA64);
+            for (int y = 0; y < frameCount; ++y) {
+                const uint16_t* src = rgba.data() + static_cast<size_t>(y)
+                                                    * static_cast<size_t>(vertexCount) * 4u;
+                std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u * sizeof(uint16_t));
+            }
+            if (!img.save(result.nrmTexPath, "PNG")) {
+                result.error = QStringLiteral("failed to write 16-bit normal texture: %1")
+                                   .arg(result.nrmTexPath);
+                return result;
+            }
+        }
     }
 
     // Sidecar.

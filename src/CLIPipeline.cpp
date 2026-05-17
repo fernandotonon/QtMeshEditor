@@ -4757,15 +4757,29 @@ int CLIPipeline::cmdBakeVertexColors(int argc, char* argv[])
 
 int CLIPipeline::cmdVat(int argc, char* argv[])
 {
-    // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--json]
+    // Parse: vat <file> --anim <name> [--fps N] [--encoding rgba8|rgba16]
+    //                                 [--normals] [-o <dir>] [--json]
     QString filePath, animName, outDir;
     double fps = 30.0;
     bool jsonOutput = false;
+    bool bakeNormals = false;
+    VATBaker::Encoding encoding = VATBaker::Encoding::RGBA8;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
         if (arg == "vat" || arg == "--cli") continue;
         if (arg == "--json") { jsonOutput = true; continue; }
+        if (arg == "--normals") { bakeNormals = true; continue; }
+        if (arg == "--encoding" && i + 1 < argc) {
+            const QString enc = QString(argv[++i]).toLower();
+            if (enc == "rgba8")      encoding = VATBaker::Encoding::RGBA8;
+            else if (enc == "rgba16") encoding = VATBaker::Encoding::RGBA16;
+            else {
+                err() << "Error: --encoding must be one of: rgba8, rgba16" << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if ((arg == "--anim" || arg == "--animation") && i + 1 < argc) {
             animName = QString(argv[++i]); continue;
         }
@@ -4788,7 +4802,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
 
     if (filePath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--json]" << Qt::endl;
+        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [--encoding rgba8|rgba16] [--normals] [-o <dir>] [--json]" << Qt::endl;
         return 2;
     }
     if (animName.isEmpty()) {
@@ -4838,6 +4852,8 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     opts.fps = fps;
     opts.outputDir = outDir;
     opts.basename = animName;
+    opts.encoding = encoding;
+    opts.bakeNormals = bakeNormals;
 
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
     if (!result.ok) {
@@ -4847,15 +4863,22 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         return 1;
     }
 
+    const QString encStr = (encoding == VATBaker::Encoding::RGBA16)
+                               ? QStringLiteral("rgba16")
+                               : QStringLiteral("rgba8");
+
     if (jsonOutput) {
         QJsonObject obj;
         obj["ok"]          = true;
         obj["posTexture"]  = result.posTexPath;
+        if (!result.nrmTexPath.isEmpty())
+            obj["nrmTexture"] = result.nrmTexPath;
         obj["sidecar"]     = result.jsonPath;
         obj["frameCount"]  = result.frameCount;
         obj["vertexCount"] = result.vertexCount;
         obj["animation"]   = animName;
         obj["fps"]         = fps;
+        obj["encoding"]    = encStr;
         QJsonObject bounds;
         QJsonObject lo, hi;
         lo["x"] = result.minBound.x; lo["y"] = result.minBound.y; lo["z"] = result.minBound.z;
@@ -4864,9 +4887,11 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         obj["bounds"] = bounds;
         cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
     } else {
-        cliWrite(QStringLiteral("Baked VAT for '%1' (%2 frames × %3 vertices)\n")
-                     .arg(animName).arg(result.frameCount).arg(result.vertexCount));
+        cliWrite(QStringLiteral("Baked VAT for '%1' (%2 frames × %3 vertices, %4)\n")
+                     .arg(animName).arg(result.frameCount).arg(result.vertexCount).arg(encStr));
         cliWrite(QStringLiteral("  position texture: %1\n").arg(result.posTexPath));
+        if (!result.nrmTexPath.isEmpty())
+            cliWrite(QStringLiteral("  normal texture:   %1\n").arg(result.nrmTexPath));
         cliWrite(QStringLiteral("  sidecar:          %1\n").arg(result.jsonPath));
         cliWrite(QStringLiteral("  bounds: min=(%1, %2, %3) max=(%4, %5, %6)\n")
                      .arg(result.minBound.x, 0, 'f', 3)
