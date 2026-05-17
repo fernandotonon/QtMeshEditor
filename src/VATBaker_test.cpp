@@ -186,11 +186,10 @@ TEST(VATBakerStandalone, BakeInvalidFpsReports) {
 }
 
 // ===========================================================================
-// End-to-end (requires Ogre + an animated entity).
-//
-// We don't ship a tiny animated mesh in the test data, so the heavy
-// integration test loads media/models/robot.mesh through the standard
-// helper. That mesh ships with a built-in skeleton + an "Idle" anim.
+// End-to-end — uses createAnimatedTestEntity() so it works in any CI
+// permutation regardless of whether media/models/robot.mesh is on the
+// resource path. The in-memory entity has a 3-vertex triangle skinned
+// to a 2-bone skeleton with a 1.0s "TestAnim" track.
 // ===========================================================================
 
 class VATBakerEndToEndTest : public ::testing::Test
@@ -200,83 +199,89 @@ protected:
     {
         ASSERT_TRUE(tryInitOgre()) << "Ogre init required";
     }
-};
 
-TEST_F(VATBakerEndToEndTest, BakeRobotIdleProducesTextureAndSidecar) {
-    const QString robotPath = testRobotMeshPath();
-    if (robotPath.isEmpty()) {
-        GTEST_SKIP() << "robot.mesh not found in expected locations";
-    }
-    auto* mgr = Manager::getSingleton();
-    ASSERT_NE(mgr, nullptr);
-    auto* scene = mgr->getSceneMgr();
-    ASSERT_NE(scene, nullptr);
-
-    // Load the mesh directly so we don't carry an importer dependency.
-    Ogre::MeshPtr mesh;
-    try {
-        mesh = Ogre::MeshManager::getSingleton().load(
-            QFileInfo(robotPath).fileName().toStdString(),
-            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    } catch (...) {
-        GTEST_SKIP() << "robot.mesh not loadable via TextureManager (resource path mismatch)";
-    }
-    if (!mesh) GTEST_SKIP() << "robot mesh ptr null";
-
-    auto* entity = scene->createEntity("VAT_RobotTest", mesh->getName());
-    ASSERT_NE(entity, nullptr);
-    auto* node = scene->getRootSceneNode()->createChildSceneNode();
-    node->attachObject(entity);
-    if (!entity->hasSkeleton()) {
-        scene->getRootSceneNode()->removeAndDestroyChild(node);
-        scene->destroyEntity(entity);
-        GTEST_SKIP() << "robot has no skeleton in this test runner";
-    }
-
-    // Pick whatever animation exists — robot.mesh historically ships
-    // with "Idle" and "Walk" but we don't want to hard-fail on naming.
-    auto* states = entity->getAllAnimationStates();
-    QString animName;
-    if (states) {
-        auto it = states->getAnimationStateIterator();
-        if (it.hasMoreElements()) {
-            animName = QString::fromStdString(it.getNext()->getAnimationName());
+    void TearDown() override
+    {
+        // Drop anything the prior test built so the singleton scene
+        // doesn't accumulate cruft between tests.
+        if (auto* mgr = Manager::getSingletonPtr()) {
+            if (auto* scene = mgr->getSceneMgr()) {
+                try { scene->destroyAllEntities(); } catch (...) {}
+                try { scene->getRootSceneNode()->removeAndDestroyAllChildren(); } catch (...) {}
+            }
         }
     }
-    if (animName.isEmpty()) {
-        scene->getRootSceneNode()->removeAndDestroyChild(node);
-        scene->destroyEntity(entity);
-        GTEST_SKIP() << "no animation on robot mesh";
-    }
+};
+
+TEST_F(VATBakerEndToEndTest, BakesInMemoryAnimatedTriangle) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_Bake");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
 
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
+
     VATBaker::Options opts;
-    opts.animationName = animName;
-    opts.fps = 20.0;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 10.0;                          // 1.0 s × 10 fps → 10 frames
     opts.outputDir = tmp.path();
-    opts.basename = QStringLiteral("Test");
+    opts.basename = QStringLiteral("E2E");
 
     auto r = VATBaker::bake(entity, opts);
-    EXPECT_TRUE(r.ok) << "bake error: " << r.error.toStdString();
+    ASSERT_TRUE(r.ok) << "bake error: " << r.error.toStdString();
     EXPECT_GT(r.frameCount, 0);
-    EXPECT_GT(r.vertexCount, 0);
+    EXPECT_EQ(r.vertexCount, 3);              // matches the test triangle
     EXPECT_TRUE(QFile::exists(r.posTexPath));
     EXPECT_TRUE(QFile::exists(r.jsonPath));
-    // Texture dimensions match the layout: width = vertexCount, height = frameCount.
+
+    // Texture layout: width = vertexCount, height = frameCount.
     QImage png(r.posTexPath);
-    EXPECT_FALSE(png.isNull());
+    ASSERT_FALSE(png.isNull());
     EXPECT_EQ(png.width(),  r.vertexCount);
     EXPECT_EQ(png.height(), r.frameCount);
 
-    // Sidecar is valid JSON with the expected fields.
+    // Sidecar JSON parses + has the expected fields.
     QFile jf(r.jsonPath);
     ASSERT_TRUE(jf.open(QIODevice::ReadOnly));
     auto doc = QJsonDocument::fromJson(jf.readAll());
-    EXPECT_TRUE(doc.isObject());
+    ASSERT_TRUE(doc.isObject());
     EXPECT_EQ(doc.object()["frameCount"].toInt(),  r.frameCount);
     EXPECT_EQ(doc.object()["vertexCount"].toInt(), r.vertexCount);
+    EXPECT_EQ(doc.object()["animation"].toString(), QStringLiteral("TestAnim"));
+    EXPECT_DOUBLE_EQ(doc.object()["fps"].toDouble(), 10.0);
+}
 
-    scene->getRootSceneNode()->removeAndDestroyChild(node);
-    scene->destroyEntity(entity);
+TEST_F(VATBakerEndToEndTest, RejectsMissingAnimationOnLiveEntity) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_MissAnim");
+    ASSERT_NE(entity, nullptr);
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("NotARealAnim");
+    opts.fps = 30.0;
+    opts.outputDir = QStringLiteral("/tmp");
+
+    auto r = VATBaker::bake(entity, opts);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains(QStringLiteral("not found")))
+        << "expected 'not found' in error, got: " << r.error.toStdString();
+}
+
+TEST_F(VATBakerEndToEndTest, FrameCountDerivedFromFpsAndDuration) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_FrameCount");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    // 1.0 s animation × 30 fps → ~30 frames.
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 30.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("FC");
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_GE(r.frameCount, 28);
+    EXPECT_LE(r.frameCount, 32);
 }
