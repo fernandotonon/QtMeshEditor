@@ -690,9 +690,22 @@ Rectangle {
     // QQuickWidget inside QDockWidget can swallow wheel events on macOS;
     // routing them through here guarantees the rows scroll regardless.
     function scrollByPixels(dy) {
-        if (dy === 0 || !rowsView.visible) return
-        var maxY = Math.max(0, rowsView.contentHeight - rowsView.height)
-        rowsView.contentY = Math.max(0, Math.min(maxY, rowsView.contentY - dy))
+        if (dy === 0) return
+        // Scroll the bone list as before; ListView handles its own
+        // clamping in contentY assignments below.
+        if (rowsView.visible) {
+            var maxY = Math.max(0, rowsView.contentHeight - rowsView.height)
+            rowsView.contentY = Math.max(0, Math.min(maxY, rowsView.contentY - dy))
+        }
+        // Also scroll the morph band when it has overflowing content.
+        // We disable Flickable.interactive (so drag-marquee passes
+        // through to timelineArea) which removes Flickable's own wheel
+        // handling — proxy it here. Same dy as the bone list so a single
+        // wheel notch advances both views consistently.
+        if (morphBand.visible && morphList.contentHeight > morphList.height) {
+            var maxMY = morphList.contentHeight - morphList.height
+            morphList.contentY = Math.max(0, Math.min(maxMY, morphList.contentY - dy))
+        }
     }
 
     WheelHandler {
@@ -773,6 +786,13 @@ Rectangle {
             clip: true
             contentHeight: morphCol.height
             boundsBehavior: Flickable.StopAtBounds
+            // Match `rowsView` and disable left-drag flicking — the
+            // root timelineArea owns marquee selection over empty
+            // pixels and Flickable would otherwise grab those drags.
+            // Wheel scrolling still works because the root WheelHandler
+            // is routed through `scrollByPixels` rather than relying on
+            // Flickable's own wheel handling.
+            interactive: false
 
             Column {
                 id: morphCol
