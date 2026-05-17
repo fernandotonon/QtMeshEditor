@@ -885,7 +885,11 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
                     am->mVertices[vi].y += kv.second.y;
                     am->mVertices[vi].z += kv.second.z;
                 }
-                am->mWeight = 0.0f;  // glTF: weight at export time = 0; runtime drives it.
+                // Non-zero default weight so post-process steps that
+                // filter "inactive" anim meshes don't drop the entry.
+                // glTF runtime weight is driven by the consuming app;
+                // this is purely the static authoring value.
+                am->mWeight = 1.0f;
             }
         }
 

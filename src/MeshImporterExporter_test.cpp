@@ -1671,13 +1671,15 @@ TEST_F(SceneSaveLoadTest, Exporter_GltfWritesMorphTargetsIntoFile)
     auto mesh = createInMemoryTriangleMesh("morph_rt_mesh");
     ASSERT_NE(mesh, nullptr);
 
-    // Two poses on submesh 1 (the only one in createInMemoryTriangleMesh).
+    // Two poses targeting the shared vertex data (handle 0).
+    // createInMemoryTriangleMesh sets useSharedVertices=true on its
+    // only submesh, so morph poses live at handle 0, not handle 1.
     {
-        Ogre::Pose* p = mesh->createPose(1, "JawOpen");
+        Ogre::Pose* p = mesh->createPose(0, "JawOpen");
         p->addVertex(0, Ogre::Vector3(0, -0.1f, 0));
     }
     {
-        Ogre::Pose* p = mesh->createPose(1, "Smile");
+        Ogre::Pose* p = mesh->createPose(0, "Smile");
         p->addVertex(1, Ogre::Vector3(0.05f, 0.02f, 0));
         p->addVertex(2, Ogre::Vector3(-0.05f, 0.02f, 0));
     }
