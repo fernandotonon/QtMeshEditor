@@ -2200,6 +2200,60 @@ TEST_F(SceneSaveLoadTest, Exporter_FbxBinary_WritesFile)
     EXPECT_GT(QFileInfo(fbxPath).size(), 0);
 }
 
+// Morph A4b — FBX binary writes BlendShape / BlendShapeChannel /
+// Shape records for each pose. Asserting on byte signatures in the
+// binary file (the FBX node tag strings appear verbatim in the
+// payload) is enough to lock the exporter behavior without a full
+// reimport round-trip — Assimp's FBX reader is a separate concern.
+TEST_F(SceneSaveLoadTest, Exporter_FbxBinary_WritesBlendShapeRecords)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("fbx_morph_mesh");
+
+    // Two poses on the shared-vertex submesh (target handle = 0).
+    {
+        Ogre::Pose* p = mesh->createPose(0, "JawOpen");
+        p->addVertex(0, Ogre::Vector3(0, -0.1f, 0));
+    }
+    {
+        Ogre::Pose* p = mesh->createPose(0, "Smile");
+        p->addVertex(1, Ogre::Vector3(0.05f, 0.02f, 0));
+        p->addVertex(2, Ogre::Vector3(-0.05f, 0.02f, 0));
+    }
+
+    auto* sn = manager->addSceneNode("FbxMorphNode");
+    ASSERT_NE(manager->createEntity(sn, mesh), nullptr);
+    ASSERT_EQ(mesh->getPoseList().size(), 2u);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString fbxPath = tmpDir.path() + "/morph_export.fbx";
+
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, fbxPath,
+                                              QStringLiteral("FBX Binary (*.fbx)")),
+              0);
+    ASSERT_TRUE(QFileInfo::exists(fbxPath));
+
+    QFile fbx(fbxPath);
+    ASSERT_TRUE(fbx.open(QIODevice::ReadOnly));
+    const QByteArray body = fbx.readAll();
+    fbx.close();
+
+    // FBX binary stores node tags as length-prefixed ASCII strings
+    // inside the Objects/Connections records. The strings appear
+    // verbatim in the file body; the simplest deterministic check
+    // is byte-level contains.
+    EXPECT_TRUE(body.contains("BlendShape"))
+        << "FBX should carry a BlendShape deformer record";
+    EXPECT_TRUE(body.contains("BlendShapeChannel"))
+        << "FBX should carry per-pose BlendShapeChannel records";
+    EXPECT_TRUE(body.contains("JawOpen"))
+        << "FBX should preserve the first morph target name";
+    EXPECT_TRUE(body.contains("Smile"))
+        << "FBX should preserve the second morph target name";
+}
+
 TEST_F(SceneSaveLoadTest, Exporter_PlayStationTmd_WritesFile)
 {
     ASSERT_TRUE(canLoadMeshFiles());
