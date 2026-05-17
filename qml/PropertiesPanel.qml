@@ -1089,7 +1089,11 @@ Rectangle {
             property int activeSlot: TexturePaintController.activeSlotIndex
             property int brushTool: TexturePaintController.brushTool
             property int paintTarget: TexturePaintController.paintTarget
-            property string previewUri: TexturePaintController.previewDataUri
+            // image://paintbuffer/current?v=N — served by PaintBufferImageProvider.
+            // Switching from PNG-encoded data URIs eliminates the per-stroke
+            // blink (each new base64 string was a fresh load) and drops the
+            // PNG encode + base64 churn off the main thread.
+            property string previewUri: TexturePaintController.fullResPreviewUrl
             property string maskOverlayUri: TexturePaintController.maskOverlayDataUri
             property bool hasMask: TexturePaintController.hasSelectionMask
             property int maskCount: TexturePaintController.selectedPixelCount
@@ -1111,8 +1115,8 @@ Rectangle {
                     texPaintCol.slots = TexturePaintController.textureSlots
                     texPaintCol.activeSlot = TexturePaintController.activeSlotIndex
                 }
-                function onPreviewChanged() {
-                    texPaintCol.previewUri = TexturePaintController.previewDataUri
+                function onFullResPreviewChanged() {
+                    texPaintCol.previewUri = TexturePaintController.fullResPreviewUrl
                 }
                 function onBrushToolChanged() {
                     texPaintCol.brushTool = TexturePaintController.brushTool

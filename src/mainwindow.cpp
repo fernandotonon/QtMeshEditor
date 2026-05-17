@@ -73,6 +73,7 @@
 #include "AssetBrowserController.h"
 #include "EditModeController.h"
 #include "TexturePaintController.h"
+#include "PaintBufferImageProvider.h"
 #include "EditorModeController.h"
 #include <QDockWidget>
 #include <QQuickWidget>
@@ -541,6 +542,14 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return TexturePaintController::qmlInstance(engine, nullptr);
             });
+
+        // Same image provider the detached editor window uses — serves the
+        // live paint buffer as a QImage view (no PNG encode, no base64).
+        // Without this the Inspector thumbnail had to PNG-encode + reload
+        // a brand-new data URI per refresh, which visibly blinked the
+        // thumbnail during a paint stroke.
+        m_propertiesPanel->engine()->addImageProvider(
+            QStringLiteral("paintbuffer"), new PaintBufferImageProvider());
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
         if (auto* root = m_propertiesPanel->rootObject()) {
