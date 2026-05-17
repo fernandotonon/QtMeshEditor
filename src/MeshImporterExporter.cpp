@@ -841,7 +841,72 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
         if (hasSkeleton)
             assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
 
-        compactAiMesh(aiM);
+        // Morph targets / blend shapes (slice A4a). Build aiAnimMesh
+        // entries *before* compactAiMesh so the pose-vertex indices
+        // match the pre-compact `mVertices` layout, then let
+        // compactAiMesh remap them. Each pose on this submesh becomes
+        // one aiAnimMesh whose `mVertices` carry the absolute
+        // deformed positions (base + delta). Assimp's glTF exporter
+        // then writes them as `mesh.primitives[i].targets[j]`.
+        std::vector<Ogre::Pose*> submeshPoses;
+        const Ogre::PoseList& poseList = mesh->getPoseList();
+        const unsigned short targetHandle = subMesh->useSharedVertices
+            ? 0
+            : static_cast<unsigned short>(si + 1);
+        for (Ogre::Pose* p : poseList) {
+            if (!p) continue;
+            if (p->getTarget() != targetHandle) continue;
+            submeshPoses.push_back(p);
+        }
+        const unsigned int preCompactCount = aiM->mNumVertices;
+        if (!submeshPoses.empty() && preCompactCount > 0) {
+            aiM->mNumAnimMeshes = static_cast<unsigned int>(submeshPoses.size());
+            aiM->mAnimMeshes = new aiAnimMesh*[aiM->mNumAnimMeshes];
+            for (size_t pi = 0; pi < submeshPoses.size(); ++pi) {
+                const Ogre::Pose* p = submeshPoses[pi];
+                aiAnimMesh* am = new aiAnimMesh();
+                aiM->mAnimMeshes[pi] = am;
+                am->mName = aiString(p->getName());
+                am->mNumVertices = preCompactCount;
+                am->mVertices = new aiVector3D[preCompactCount];
+                // Seed with base positions (so vertices the pose
+                // doesn't touch stay at the base mesh's location).
+                for (unsigned int v = 0; v < preCompactCount; ++v)
+                    am->mVertices[v] = aiM->mVertices[v];
+                // Apply the pose's per-vertex deltas. Ogre's
+                // VertexOffsetMap is keyed by vertex index in
+                // submesh-local space, which matches aiMesh's
+                // pre-compact vertex order.
+                const auto& offsets = p->getVertexOffsets();
+                for (const auto& kv : offsets) {
+                    const unsigned int vi = kv.first;
+                    if (vi >= preCompactCount) continue;
+                    am->mVertices[vi].x += kv.second.x;
+                    am->mVertices[vi].y += kv.second.y;
+                    am->mVertices[vi].z += kv.second.z;
+                }
+                am->mWeight = 0.0f;  // glTF: weight at export time = 0; runtime drives it.
+            }
+        }
+
+        const std::vector<unsigned int> remap = compactAiMesh(aiM);
+        // Apply the same compaction to every aiAnimMesh's vertex
+        // array so all `mVertices` arrays stay parallel.
+        if (aiM->mNumAnimMeshes > 0 && !remap.empty()
+            && preCompactCount > 0 && aiM->mNumVertices != preCompactCount) {
+            for (unsigned int ai = 0; ai < aiM->mNumAnimMeshes; ++ai) {
+                aiAnimMesh* am = aiM->mAnimMeshes[ai];
+                if (!am || !am->mVertices) continue;
+                auto* compact = new aiVector3D[aiM->mNumVertices];
+                for (unsigned int oldIdx = 0; oldIdx < preCompactCount; ++oldIdx) {
+                    if (remap[oldIdx] == UINT_MAX) continue;
+                    compact[remap[oldIdx]] = am->mVertices[oldIdx];
+                }
+                delete[] am->mVertices;
+                am->mVertices = compact;
+                am->mNumVertices = aiM->mNumVertices;
+            }
+        }
     }
 
     // --- Animations ---

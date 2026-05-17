@@ -1655,6 +1655,77 @@ TEST_F(SceneSaveLoadTest, Exporter_DefaultNoStripAnimations_PreservesAnimations)
     EXPECT_EQ(reimportedEntity->getMesh()->getSkeleton()->getNumAnimations(), originalAnimCount);
 }
 
+// ─── Morph A4a: glTF morph-target export round-trip ───────────────
+
+TEST_F(SceneSaveLoadTest, Exporter_GltfPreservesMorphTargets)
+{
+    // Build an entity with two named morph targets — same shape the
+    // FBX importer produces (per-submesh Ogre::Pose + matching
+    // VAT_POSE Animation). The glTF exporter should walk every
+    // submesh's pose list, package them as aiAnimMesh entries on
+    // each aiMesh, and Assimp's glTF writer should land them as
+    // primitive.targets so a reimport recreates the poses.
+    auto mesh = createInMemoryTriangleMesh("morph_rt_mesh");
+    ASSERT_NE(mesh, nullptr);
+
+    // Two poses on submesh 1 (the only one in createInMemoryTriangleMesh).
+    {
+        Ogre::Pose* p = mesh->createPose(1, "JawOpen");
+        p->addVertex(0, Ogre::Vector3(0, -0.1f, 0));
+    }
+    {
+        Ogre::Pose* p = mesh->createPose(1, "Smile");
+        p->addVertex(1, Ogre::Vector3(0.05f, 0.02f, 0));
+        p->addVertex(2, Ogre::Vector3(-0.05f, 0.02f, 0));
+    }
+    // Matching animations so a reimport can drive them via
+    // AnimationState weights (same pattern MeshProcessor produces).
+    const auto& poseList = mesh->getPoseList();
+    for (unsigned short pi = 0; pi < poseList.size(); ++pi) {
+        Ogre::Animation* anim = mesh->createAnimation(poseList[pi]->getName(), 0.0f);
+        auto* track = anim->createVertexTrack(poseList[pi]->getTarget(), Ogre::VAT_POSE);
+        auto* kf = track->createVertexPoseKeyFrame(0.0f);
+        kf->addPoseReference(pi, 1.0f);
+    }
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* entity = sceneMgr->createEntity("morph_rt_ent", mesh->getName());
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    node->attachObject(entity);
+    ASSERT_EQ(mesh->getPoseList().size(), 2u);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString outFile = tmpDir.path() + "/morph_rt.gltf";
+
+    const int result = MeshImporterExporter::exporter(node, outFile, "glTF 2.0 (*.gltf)");
+    ASSERT_EQ(result, 0);
+    ASSERT_TRUE(QFileInfo::exists(outFile));
+
+    // Clean up the source entity + mesh before reimporting so we're
+    // not getting a false-positive from cached state.
+    sceneMgr->destroyEntity(entity);
+    sceneMgr->getRootSceneNode()->removeAndDestroyChild(node);
+    Ogre::MeshManager::getSingleton().remove(mesh);
+    mesh.reset();
+
+    MeshImporterExporter::importer({outFile});
+    const auto& nodes = Manager::getSingleton()->getSceneNodes();
+    ASSERT_FALSE(nodes.empty());
+    auto* reimported = dynamic_cast<Ogre::Entity*>(nodes.front()->getAttachedObject(0));
+    ASSERT_NE(reimported, nullptr);
+
+    const auto& reimportedPoses = reimported->getMesh()->getPoseList();
+    EXPECT_EQ(reimportedPoses.size(), 2u)
+        << "glTF export+reimport should preserve both morph targets";
+
+    QSet<QString> names;
+    for (const Ogre::Pose* p : reimportedPoses)
+        if (p) names.insert(QString::fromStdString(p->getName()));
+    EXPECT_TRUE(names.contains(QStringLiteral("JawOpen")));
+    EXPECT_TRUE(names.contains(QStringLiteral("Smile")));
+}
+
 // ─── gltf short-alias format tests ─────────────────────────────────
 
 TEST(MeshImporterExporterStandaloneTest, FormatFileURI_GltfShortAlias)
