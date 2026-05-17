@@ -4306,6 +4306,126 @@ Rectangle {
                     }
                 }
             }
+
+            // ---- Morph Targets / Blend Shapes (slice A2) ----
+            // Per-pose weight sliders, sourced from MorphAnimationManager.
+            // Lives at the bottom of the Animations section, outside the
+            // per-entity repeater above — morph data is read from the
+            // SelectionSet's first entity to keep the surface focused.
+            // Authoring (add/rename/delete) lands in A3.
+            Rectangle {
+                width: parent.width - 16
+                visible: morphCol.targetCount > 0
+                height: morphCol.implicitHeight + 12
+                color: PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                radius: 3
+
+                Column {
+                    id: morphCol
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    spacing: 4
+
+                    property var targets: MorphAnimationManager.morphTargetsForSelection()
+                    property int targetCount: targets.length
+                    property string filter: ""
+
+                    Connections {
+                        target: MorphAnimationManager
+                        function onMorphTargetsChanged() {
+                            morphCol.targets = MorphAnimationManager.morphTargetsForSelection()
+                        }
+                    }
+
+                    Row {
+                        spacing: 4
+                        width: parent.width
+                        Text {
+                            text: "Morph Targets (" + morphCol.targetCount + ")"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Item { width: parent.width - 260; height: 1 }
+                        // Reset all: walks every target and sets weight to 0.
+                        Rectangle {
+                            width: 60; height: 20; radius: 3
+                            color: resetMa.containsMouse
+                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                   : PropertiesPanelController.controlBgColor
+                            border.color: PropertiesPanelController.borderColor
+                            anchors.verticalCenter: parent.verticalCenter
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Reset all"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 9
+                            }
+                            MouseArea {
+                                id: resetMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    for (var i = 0; i < morphCol.targets.length; ++i)
+                                        MorphAnimationManager.setWeightForSelection(morphCol.targets[i], 0)
+                                }
+                            }
+                        }
+                    }
+
+                    // Filter / search — characters often have 50+ blend
+                    // shapes, scanning a flat list is hopeless without
+                    // a typeahead box.
+                    TextField {
+                        id: filterField
+                        width: parent.width
+                        placeholderText: "Filter targets…"
+                        font.pixelSize: 10
+                        onTextChanged: morphCol.filter = text
+                        visible: morphCol.targetCount > 6
+                    }
+
+                    // One row per target. Hidden when filter doesn't match.
+                    Repeater {
+                        model: morphCol.targets
+                        Row {
+                            width: morphCol.width
+                            spacing: 4
+                            visible: morphCol.filter === ""
+                                  || modelData.toLowerCase().indexOf(morphCol.filter.toLowerCase()) >= 0
+                            height: visible ? 22 : 0
+
+                            Text {
+                                text: modelData
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                                width: 120
+                                elide: Text.ElideRight
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            Slider {
+                                id: weightSlider
+                                from: 0; to: 1; stepSize: 0.01
+                                width: parent.width - 200
+                                value: MorphAnimationManager.weightForSelection(modelData)
+                                anchors.verticalCenter: parent.verticalCenter
+                                onMoved: MorphAnimationManager.setWeightForSelection(modelData, value)
+                            }
+                            Text {
+                                text: weightSlider.value.toFixed(2)
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                                width: 36
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
