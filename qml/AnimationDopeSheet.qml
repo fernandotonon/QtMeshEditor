@@ -726,8 +726,18 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         visible: morphRowsRep.count > 0
+
+        // Cap the band at ~40% of the dope-sheet height so high-count
+        // blendshape rigs (Mixamo characters routinely ship 50+) can't
+        // push the bone tracks off-screen. When the content needs more
+        // room, morphList becomes scrollable internally.
+        readonly property int naturalContentHeight:
+            morphHeader.height + morphRowsRep.count * (root.rowHeight + 1) + 4
+        readonly property int maxBandHeight:
+            Math.max(morphHeader.height + root.rowHeight + 6,
+                     Math.floor(root.height * 0.4))
         height: visible
-                ? (morphHeader.height + morphRowsRep.count * (root.rowHeight + 1) + 4)
+                ? Math.min(naturalContentHeight, maxBandHeight)
                 : 0
         color: AnimationControlController.panelColor
         border.color: AnimationControlController.borderColor
@@ -750,54 +760,71 @@ Rectangle {
             }
         }
 
-        Column {
+        // Scrollable list when content exceeds the capped height. Plain
+        // Flickable + Column (instead of ListView) so the existing
+        // Repeater-rendered rows continue to work unchanged.
+        Flickable {
+            id: morphList
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: morphHeader.bottom
+            anchors.bottom: parent.bottom
             anchors.topMargin: 2
-            spacing: 1
+            clip: true
+            contentHeight: morphCol.height
+            boundsBehavior: Flickable.StopAtBounds
 
-            Repeater {
-                id: morphRowsRep
-                model: root.morphRows
+            Column {
+                id: morphCol
+                width: parent.width
+                spacing: 1
 
-                Item {
-                    width: parent.width
-                    height: root.rowHeight
+                Repeater {
+                    id: morphRowsRep
+                    model: root.morphRows
 
-                    Rectangle {
-                        width: root.leftStripWidth; height: root.rowHeight
-                        color: AnimationControlController.panelColor
-                        border.color: AnimationControlController.borderColor
-                        border.width: 1
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.left: parent.left; anchors.leftMargin: 8
-                            text: modelData.name
-                            color: AnimationControlController.textColor
-                            font.pixelSize: 10
-                            elide: Text.ElideRight
-                            width: root.leftStripWidth - 12
-                        }
-                    }
-
-                    // Right side: diamond per keyframe time. Sharing the
-                    // bone-row timeline math so they line up vertically.
                     Item {
-                        anchors.left: parent.left; anchors.leftMargin: root.leftStripWidth
-                        anchors.right: parent.right
+                        width: parent.width
                         height: root.rowHeight
-                        Repeater {
-                            model: modelData.keyTimes
-                            Rectangle {
-                                property real keyTime: modelData
-                                x: (keyTime - root.viewStart) * root.pxPerSec - width / 2
+
+                        Rectangle {
+                            width: root.leftStripWidth; height: root.rowHeight
+                            color: AnimationControlController.panelColor
+                            border.color: AnimationControlController.borderColor
+                            border.width: 1
+                            Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: 10; height: 10
-                                rotation: 45
-                                color: "#88ccff"  // visually distinct from bone keys (yellow)
-                                border.color: AnimationControlController.borderColor
-                                border.width: 1
+                                anchors.left: parent.left; anchors.leftMargin: 8
+                                text: modelData.name
+                                color: AnimationControlController.textColor
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                                width: root.leftStripWidth - 12
+                            }
+                        }
+
+                        // Right side: diamond per keyframe time. Sharing
+                        // the bone-row timeline math so they line up
+                        // vertically. `clip: true` so off-screen diamonds
+                        // (from pan/zoom) don't bleed into the name strip
+                        // or neighboring rows, matching the bone tracks.
+                        Item {
+                            anchors.left: parent.left; anchors.leftMargin: root.leftStripWidth
+                            anchors.right: parent.right
+                            height: root.rowHeight
+                            clip: true
+                            Repeater {
+                                model: modelData.keyTimes
+                                Rectangle {
+                                    property real keyTime: modelData
+                                    x: (keyTime - root.viewStart) * root.pxPerSec - width / 2
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 10; height: 10
+                                    rotation: 45
+                                    color: "#88ccff"  // visually distinct from bone keys (yellow)
+                                    border.color: AnimationControlController.borderColor
+                                    border.width: 1
+                                }
                             }
                         }
                     }
