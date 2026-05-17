@@ -924,12 +924,20 @@ QVariantList AnimationControlController::allMorphRows() const
 
         QVariantList keyTimes;
         if (mesh->hasAnimation(poseName)) {
+            // The importer (MeshProcessor) groups same-named poses
+            // across submeshes into a single Animation with one
+            // VAT_POSE track per submesh. Pull only the track
+            // matching this pose's target handle — otherwise a
+            // shape that appears on body + head would show its
+            // diamonds twice in the dope sheet.
             Ogre::Animation* anim = mesh->getAnimation(poseName);
-            const auto& vtracks = anim->_getVertexTrackList();
-            for (const auto& [handle, track] : vtracks) {
-                if (!track) continue;
-                for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i)
-                    keyTimes.append(static_cast<double>(track->getKeyFrame(i)->getTime()));
+            const unsigned short handle = pose->getTarget();
+            if (anim->hasVertexTrack(handle)) {
+                Ogre::VertexAnimationTrack* track = anim->getVertexTrack(handle);
+                if (track && track->getAnimationType() == Ogre::VAT_POSE) {
+                    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i)
+                        keyTimes.append(static_cast<double>(track->getKeyFrame(i)->getTime()));
+                }
             }
         }
 
