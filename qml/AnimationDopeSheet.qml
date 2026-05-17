@@ -160,15 +160,17 @@ Rectangle {
         function onKeyframeTicksChanged()  { root.rows = AnimationControlController.allBoneRows() }
     }
 
-    // Refresh the morph band whenever the morph manager's data changes
-    // (selection moved to a different entity, or a weight was set
-    // through any path — Inspector slider, MCP, future authoring).
+    // Refresh the morph band when the manager's target list changes
+    // (selection moved to a different entity). We deliberately don't
+    // listen to `morphWeightChanged` here — its payload includes an
+    // `Ogre::Entity*` raw pointer which Qt 6 can't safely marshal to
+    // JS, and binding the slot crashed the QML engine on some Linux/
+    // Xvfb CI runners. The dope sheet's per-row keyTimes are
+    // structural, not weight-driven, so we don't lose anything by
+    // skipping per-weight notifications.
     Connections {
         target: MorphAnimationManager
         function onMorphTargetsChanged() {
-            root.morphRows = AnimationControlController.allMorphRows()
-        }
-        function onMorphWeightChanged(entity, name, weight) {
             root.morphRows = AnimationControlController.allMorphRows()
         }
     }
