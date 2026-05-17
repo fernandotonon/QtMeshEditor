@@ -512,10 +512,14 @@ Rectangle {
                 }
             }
 
-            Row {
+            Column {
                 width: outlinerColumn.width
-                height: 26
                 spacing: 6
+
+                Row {
+                    width: parent.width
+                    height: 26
+                    spacing: 6
 
                 Rectangle {
                     width: Math.min(parent.width - 8, mergeAnimLabel.implicitWidth + 16)
@@ -543,6 +547,219 @@ Rectangle {
                         enabled: PropertiesPanelController.mergeAnimationsEnabled
                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
                         onClicked: PropertiesPanelController.triggerMergeAnimations()
+                    }
+                }
+                }  // end of inner Row holding the Merge button
+
+                // ---- Bake VAT subgroup (slice 4) ----
+                // Vertex Animation Texture export. Bakes the selected
+                // animation into a position texture (one row per
+                // frame, one column per vertex) + JSON sidecar that a
+                // runtime shader can replay without skinning. Drops
+                // into Unity / Unreal / Godot directly via the target
+                // dropdown.
+                Rectangle {
+                    width: parent.width - 16
+                    height: vatCol.implicitHeight + 12
+                    color: PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    radius: 3
+
+                    Column {
+                        id: vatCol
+                        anchors.fill: parent
+                        anchors.margins: 6
+                        spacing: 4
+                        property var animList: VATBakerController.availableAnimations
+                        property string animName: animList.length > 0 ? animList[0] : ""
+                        property real fps: 30
+                        property string encoding: "rgba8"
+                        property string target: "agnostic"
+                        property bool normals: false
+                        property string outputDir: ""
+                        property string lastResultText: ""
+                        property bool lastOk: false
+
+                        Connections {
+                            target: VATBakerController
+                            function onAvailableAnimationsChanged() {
+                                vatCol.animList = VATBakerController.availableAnimations
+                                if (vatCol.animList.indexOf(vatCol.animName) < 0)
+                                    vatCol.animName = vatCol.animList.length > 0 ? vatCol.animList[0] : ""
+                            }
+                            function onBakeFinished(ok, posTex, err) {
+                                vatCol.lastOk = ok
+                                vatCol.lastResultText = ok
+                                    ? "✓ " + posTex
+                                    : "✗ " + err
+                            }
+                        }
+
+                        Text {
+                            text: "Bake VAT"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            font.bold: true
+                        }
+                        Text {
+                            text: "Vertex Animation Texture — one row per frame, one column per vertex. " +
+                                  "Use a runtime shader to play the animation without skinning."
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                            opacity: 0.7
+                            wrapMode: Text.Wrap
+                            width: parent.width
+                        }
+
+                        // Animation picker
+                        Row {
+                            spacing: 4
+                            width: parent.width
+                            Text {
+                                text: "Anim:"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                                width: 60
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            ComboBox {
+                                id: animPicker
+                                model: vatCol.animList
+                                currentIndex: model.indexOf(vatCol.animName)
+                                onCurrentTextChanged: vatCol.animName = currentText
+                                width: parent.width - 64
+                                font.pixelSize: 10
+                                enabled: !VATBakerController.isBaking && model.length > 0
+                            }
+                        }
+
+                        // FPS
+                        Row {
+                            spacing: 4
+                            width: parent.width
+                            Text {
+                                text: "FPS:"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                                width: 60
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            SpinBox {
+                                from: 1; to: 120; value: 30
+                                onValueChanged: vatCol.fps = value
+                                width: parent.width - 64
+                                font.pixelSize: 10
+                                enabled: !VATBakerController.isBaking
+                            }
+                        }
+
+                        // Encoding + target on one row
+                        Row {
+                            spacing: 4
+                            width: parent.width
+                            Text {
+                                text: "Format:"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                                width: 60
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            ComboBox {
+                                model: ["rgba8", "rgba16"]
+                                onCurrentTextChanged: vatCol.encoding = currentText
+                                width: (parent.width - 68) / 2
+                                font.pixelSize: 10
+                                enabled: !VATBakerController.isBaking
+                            }
+                            ComboBox {
+                                model: ["agnostic", "unity", "unreal", "godot"]
+                                onCurrentTextChanged: vatCol.target = currentText
+                                width: (parent.width - 68) / 2
+                                font.pixelSize: 10
+                                enabled: !VATBakerController.isBaking
+                            }
+                        }
+
+                        // Normals checkbox
+                        Row {
+                            spacing: 4
+                            CheckBox {
+                                text: "Bake normals (lit shaders)"
+                                onCheckedChanged: vatCol.normals = checked
+                                font.pixelSize: 10
+                                enabled: !VATBakerController.isBaking
+                            }
+                        }
+
+                        // Output dir + picker
+                        Row {
+                            spacing: 4
+                            width: parent.width
+                            Text {
+                                text: "Out:"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                                width: 60
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            TextField {
+                                id: outField
+                                text: vatCol.outputDir
+                                onTextChanged: vatCol.outputDir = text
+                                placeholderText: "/path/to/vat/output"
+                                width: parent.width - 64
+                                font.pixelSize: 10
+                                enabled: !VATBakerController.isBaking
+                            }
+                        }
+
+                        // Bake button + status
+                        Rectangle {
+                            width: parent.width
+                            height: 26
+                            radius: 3
+                            color: bakeMa.containsMouse && bakeMa.enabled
+                                ? PropertiesPanelController.highlightColor
+                                : PropertiesPanelController.headerColor
+                            opacity: bakeMa.enabled ? 1.0 : 0.45
+                            border.color: PropertiesPanelController.borderColor
+                            border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: VATBakerController.isBaking ? "Baking…" : "Bake VAT"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                            }
+                            MouseArea {
+                                id: bakeMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                enabled: !VATBakerController.isBaking
+                                          && vatCol.animName !== ""
+                                          && vatCol.outputDir !== ""
+                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                                onClicked: {
+                                    VATBakerController.bake(
+                                        vatCol.animName,
+                                        vatCol.fps,
+                                        vatCol.encoding,
+                                        vatCol.target,
+                                        vatCol.normals,
+                                        vatCol.outputDir,
+                                        "")
+                                }
+                            }
+                        }
+
+                        Text {
+                            visible: vatCol.lastResultText !== ""
+                            text: vatCol.lastResultText
+                            color: vatCol.lastOk ? "#60c060" : "#e06060"
+                            font.pixelSize: 9
+                            wrapMode: Text.Wrap
+                            width: parent.width
+                        }
                     }
                 }
             }

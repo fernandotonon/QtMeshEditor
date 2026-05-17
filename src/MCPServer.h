@@ -203,6 +203,11 @@ private:
     /// optimizations end-to-end on a single asset and writes the result.
     /// Per-stage applied/summary report on success.
     QJsonObject toolOptimizeMesh(const QJsonObject &args);
+    /// Phase VAT slice 4: bake a skeletal animation to a Vertex
+    /// Animation Texture + JSON sidecar. Args mirror the
+    /// `qtmesh vat` CLI subcommand: file, anim, fps, encoding,
+    /// target, normals, output_dir, basename.
+    QJsonObject toolBakeVat(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {
@@ -284,7 +289,7 @@ private:
     // 1.4.0 — added simplify_animation / analyze_animation tools
     // 1.5.0 — added bake_animation_fps tool
     // 1.6.0 — added list_material_presets / apply_material_preset (incl. PBR templates)
-    static constexpr const char* SERVER_VERSION = "1.7.0";
+    static constexpr const char* SERVER_VERSION = "1.8.0";
 };
 
 #endif // MCPSERVER_H

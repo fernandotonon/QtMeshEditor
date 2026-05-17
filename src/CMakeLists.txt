@@ -86,6 +86,7 @@ UpdateVersion.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
 VATBaker.cpp
+VATBakerController.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
