@@ -97,6 +97,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBakerController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MorphAnimationManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MorphCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
