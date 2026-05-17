@@ -198,7 +198,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### PS1 formats (static) and runtime extraction (experimental)
 
 - **Static parsers** (`src/PS1/`): `PS1TMD`, `PS1TIM`, `PS1RSD`, `PS1PLY`, `PS1MAT` for known PlayStation mesh/texture formats.
-- **Runtime extraction** (`src/PS1/runtime/`, epic #412): `ENABLE_PS1_RIP` (OFF by default). When ON, `PS1RipManager` singleton coordinates emulator embedding, GPU/GTE capture, VRAM dumps, and reconstruction into Ogre meshes. Design doc: `src/PS1/PS1_RIP_DESIGN.md`. CI enables the flag on Linux test builds only. Sentry breadcrumbs use category `ps1.rip`.
+- **Runtime extraction** (`src/PS1/runtime/`, epic #412): `ENABLE_PS1_RIP` (OFF by default). When ON, `PS1RipManager` runs an `EmuCore` plugin from `<app>/PS1Cores/` on a worker thread; stub core `qtmesh_ps1core_stub` ships for CI/dev. Session UI: **Tools → Experimental → PS1 Runtime Ripper…** (`PS1RipSessionWindow`, `EmuViewport`). Design doc: `src/PS1/PS1_RIP_DESIGN.md`. CI enables the flag on Linux test builds only. Sentry breadcrumbs use category `ps1.rip`.
 
 ### Mesh Import/Export
 

@@ -1,13 +1,19 @@
 #ifndef PS1RIPWORKER_H
 #define PS1RIPWORKER_H
 
+#include <QImage>
 #include <QObject>
 #include <QString>
 #include <QtGlobal>
 
+#include <atomic>
+#include <memory>
+
+class EmuCore;
+class QTimer;
+
 /**
- * Worker-thread stub for the PS1 emulator core (Phase 1+).
- * Lives on a dedicated QThread owned by PS1RipManager.
+ * Runs EmuCore on a dedicated QThread owned by PS1RipManager (#415).
  */
 class PS1RipWorker : public QObject
 {
@@ -15,9 +21,15 @@ class PS1RipWorker : public QObject
 
 public:
     explicit PS1RipWorker(QObject *parent = nullptr);
+    ~PS1RipWorker() override;
+
+    void clearStartCancel() { m_startSuperseded.store(false, std::memory_order_release); }
+    void requestCancelStart() { m_startSuperseded.store(true, std::memory_order_release); }
 
 public slots:
+    void configureSession(const QString &biosPath, const QString &isoPath);
     void startEmulation();
+    void cancelPendingStart();
     void stopEmulation();
     void pauseEmulation();
     void stepFrame();
@@ -25,12 +37,23 @@ public slots:
 signals:
     void emulationStarted();
     void emulationStopped();
-    void frameAdvanced(quint64 frameIndex);
+    void framePresented(const QImage &frame, quint64 frameIndex);
+    void emulationError(const QString &message);
+
+private slots:
+    void runFrameTick();
 
 private:
+    bool ensureCore(QString *errorOut);
+    static QImage framebufferToImage(const class EmuFramebuffer &fb);
+
+    QString m_biosPath;
+    QString m_isoPath;
+    std::unique_ptr<EmuCore> m_core;
+    QTimer *m_frameTimer = nullptr;
     bool m_running = false;
     bool m_paused = false;
-    quint64 m_frameIndex = 0;
+    std::atomic<bool> m_startSuperseded{false};
 };
 
 #endif // PS1RIPWORKER_H
