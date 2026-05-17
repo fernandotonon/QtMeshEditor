@@ -218,6 +218,19 @@ private:
     /// Light — pure state poke on a live entity.
     QJsonObject toolSetMorphWeight(const QJsonObject &args);
 
+    /// Node-anim C6: list node-animation clips on the live scene.
+    /// No args. Light — pure read.
+    QJsonObject toolListNodeAnimations(const QJsonObject &args);
+
+    /// Node-anim C6: create a new named clip on the live scene.
+    /// Args: `name`, `length` (seconds). Light.
+    QJsonObject toolAddNodeAnimationClip(const QJsonObject &args);
+
+    /// Node-anim C6: write a transform keyframe on a clip+node.
+    /// Args: `clip`, `node`, `time` (seconds), `translate` ([x,y,z]),
+    /// `rotation` ([w,x,y,z] quaternion), `scale` ([x,y,z]). Light.
+    QJsonObject toolSetNodeKeyframe(const QJsonObject &args);
+
     // Animation
     struct NodeAnimation {
         Ogre::SceneNode* node;
