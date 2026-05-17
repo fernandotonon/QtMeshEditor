@@ -528,6 +528,47 @@ TEST_F(VATBakerEndToEndTest, UnityTargetWritesPngMetaSidecar) {
     EXPECT_TRUE(body.contains("TextureImporter:"));
     EXPECT_TRUE(body.contains("sRGBTexture: 0"));
     EXPECT_TRUE(body.contains("filterMode: 0"));
+    EXPECT_FALSE(body.contains("guid: 00000000000000000000000000000000"))
+        << ".meta must use a unique GUID — sharing one with another asset "
+           "causes Unity to silently remap references at import time";
+}
+
+TEST_F(VATBakerEndToEndTest, UnityMetaGuidIsUniquePerBake) {
+    // Unity asset GUIDs must be globally unique; two bakes with the
+    // same target should never produce the same GUID in the .meta.
+    auto* entity = createAnimatedTestEntity("VAT_E2E_UnityGuid");
+    ASSERT_NE(entity, nullptr);
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    auto extractGuid = [](const QString& path) -> QString {
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly)) return {};
+        const QByteArray body = f.readAll();
+        const int idx = body.indexOf("guid: ");
+        if (idx < 0) return {};
+        const int eol = body.indexOf('\n', idx + 6);
+        return QString::fromUtf8(body.mid(idx + 6, eol - (idx + 6)));
+    };
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 10.0;
+    opts.outputDir = tmp.path();
+    opts.target = VATBaker::Target::Unity;
+
+    opts.basename = QStringLiteral("A");
+    auto r1 = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r1.ok);
+    opts.basename = QStringLiteral("B");
+    auto r2 = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r2.ok);
+
+    const QString g1 = extractGuid(r1.unityMetaPath);
+    const QString g2 = extractGuid(r2.unityMetaPath);
+    EXPECT_FALSE(g1.isEmpty());
+    EXPECT_EQ(g1.size(), 32) << "Unity GUID must be 32 hex chars";
+    EXPECT_NE(g1, g2);
 }
 
 TEST_F(VATBakerEndToEndTest, GodotTargetWritesShaderTemplate) {

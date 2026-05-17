@@ -4782,7 +4782,11 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
             }
             continue;
         }
-        if (arg == "--target" && i + 1 < argc) {
+        if (arg == "--target") {
+            if (i + 1 >= argc) {
+                err() << "Error: --target requires a value (agnostic|unity|unreal|godot)" << Qt::endl;
+                return 2;
+            }
             const QString tgt = QString(argv[++i]).toLower();
             if      (tgt == "agnostic") target = VATBaker::Target::Agnostic;
             else if (tgt == "unity")    target = VATBaker::Target::Unity;

@@ -16,6 +16,7 @@ The MIT License
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QUuid>
 
 #include <cstring>
 
@@ -452,6 +453,10 @@ inline bool targetFlipsRowsAtWriteTime(VATBaker::Target t)
 // Minimal Unity `.meta` sidecar. Hand-written rather than full Unity
 // YAML — Unity's importer is happy with the standard texture-asset
 // shape and rejects unknown keys silently. The values matter:
+//   - `guid` must be a unique 32-char hex string. Sharing a GUID
+//     between assets causes Unity to silently remap references at
+//     import time or refuse to import the duplicate altogether.
+//     We generate a fresh random GUID per bake.
 //   - `sRGBTexture: 0`  → data texture, no gamma curve.
 //   - `textureCompression: 0`  → uncompressed, lossless.
 //   - `filterMode: 0`  → point/nearest, no bilinear smearing
@@ -459,16 +464,21 @@ inline bool targetFlipsRowsAtWriteTime(VATBaker::Target t)
 //   - `wrapU: 1` / `wrapV: 1`  → clamp, so OOB UVs don't wrap.
 QString buildUnityMeta()
 {
+    // QUuid::toString returns `{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}`;
+    // strip the braces and dashes to land on Unity's 32-hex-char shape.
+    const QString guid = QUuid::createUuid()
+                             .toString(QUuid::WithoutBraces)
+                             .remove(QChar('-'));
     return QStringLiteral(
         "fileFormatVersion: 2\n"
-        "guid: 00000000000000000000000000000000\n"
+        "guid: %1\n"
         "TextureImporter:\n"
         "  serializedVersion: 11\n"
         "  sRGBTexture: 0\n"
         "  textureCompression: 0\n"
         "  filterMode: 0\n"
         "  wrapU: 1\n"
-        "  wrapV: 1\n");
+        "  wrapV: 1\n").arg(guid);
 }
 
 // Minimal Godot 4 spatial shader that samples the position texture
