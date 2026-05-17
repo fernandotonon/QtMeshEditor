@@ -4363,7 +4363,37 @@ Rectangle {
                             font.bold: true
                             anchors.verticalCenter: parent.verticalCenter
                         }
-                        Item { width: parent.width - 260; height: 1 }
+                        Item { width: parent.width - 320; height: 1 }
+                        // Add from current edit — captures the user's current
+                        // edit-mode geometry minus the bind-pose baseline as
+                        // a new morph target. Greyed out + tooltip when
+                        // outside edit mode (since EditableSubMesh::
+                        // originalPositions is only populated then).
+                        Rectangle {
+                            id: addBtn
+                            width: 56; height: 20; radius: 3
+                            color: addMa.containsMouse
+                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                   : PropertiesPanelController.controlBgColor
+                            border.color: PropertiesPanelController.borderColor
+                            anchors.verticalCenter: parent.verticalCenter
+                            Text {
+                                anchors.centerIn: parent
+                                text: "+ Add…"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 9
+                            }
+                            MouseArea {
+                                id: addMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    addNameField.text = ""
+                                    addNamePopup.open()
+                                }
+                            }
+                        }
                         // Reset all: walks every target and sets weight to 0.
                         Rectangle {
                             width: 60; height: 20; radius: 3
@@ -4391,6 +4421,72 @@ Rectangle {
                         }
                     }
 
+                    // Inline name-entry popup for "Add from edit…". Kept
+                    // simple (no styled component) so a misbehaving custom
+                    // dialog can't break the rest of the panel — Popup is
+                    // a built-in Qt Quick Controls primitive with no
+                    // singleton dependencies.
+                    Popup {
+                        id: addNamePopup
+                        modal: true
+                        focus: true
+                        width: 240
+                        contentItem: Column {
+                            spacing: 6
+                            Text {
+                                text: "New morph target name:"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 11
+                            }
+                            TextField {
+                                id: addNameField
+                                width: 220
+                                font.pixelSize: 11
+                                onAccepted: addConfirmMa.confirm()
+                                Component.onCompleted: forceActiveFocus()
+                            }
+                            Row {
+                                spacing: 6
+                                Rectangle {
+                                    width: 60; height: 20; radius: 3
+                                    color: addConfirmMa.containsMouse
+                                           ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                           : PropertiesPanelController.controlBgColor
+                                    border.color: PropertiesPanelController.borderColor
+                                    Text { anchors.centerIn: parent; text: "Save"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                                    MouseArea {
+                                        id: addConfirmMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        function confirm() {
+                                            var n = addNameField.text.trim()
+                                            if (n.length === 0) return
+                                            MorphAnimationManager.addMorphTargetFromCurrentEdit(n)
+                                            addNamePopup.close()
+                                        }
+                                        onClicked: confirm()
+                                    }
+                                }
+                                Rectangle {
+                                    width: 60; height: 20; radius: 3
+                                    color: addCancelMa.containsMouse
+                                           ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                           : PropertiesPanelController.controlBgColor
+                                    border.color: PropertiesPanelController.borderColor
+                                    Text { anchors.centerIn: parent; text: "Cancel"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                                    MouseArea {
+                                        id: addCancelMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: addNamePopup.close()
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Filter / search — characters often have 50+ blend
                     // shapes, scanning a flat list is hopeless without
                     // a typeahead box.
@@ -4413,18 +4509,56 @@ Rectangle {
                                   || modelData.toLowerCase().indexOf(morphCol.filter.toLowerCase()) >= 0
                             height: visible ? 22 : 0
 
+                            // Name — double-click to rename in place,
+                            // matching the per-animation rename UX above.
                             Text {
+                                id: morphNameText
+                                visible: !morphNameEdit.visible
                                 text: modelData
                                 color: PropertiesPanelController.textColor
                                 font.pixelSize: 10
                                 width: 120
                                 elide: Text.ElideRight
                                 anchors.verticalCenter: parent.verticalCenter
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onDoubleClicked: {
+                                        morphNameEdit.text = modelData
+                                        morphNameEdit.visible = true
+                                        morphNameEdit.forceActiveFocus()
+                                        morphNameEdit.selectAll()
+                                    }
+                                }
+                            }
+                            TextInput {
+                                id: morphNameEdit
+                                visible: false
+                                width: 120
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                                selectByMouse: true
+                                Rectangle {
+                                    anchors.fill: parent
+                                    anchors.margins: -2
+                                    z: -1
+                                    color: PropertiesPanelController.inputColor
+                                    border.color: PropertiesPanelController.highlightColor
+                                    border.width: 1
+                                    radius: 2
+                                }
+                                onEditingFinished: {
+                                    var trimmed = text.trim()
+                                    if (trimmed.length > 0 && trimmed !== modelData)
+                                        MorphAnimationManager.renameMorphTarget(modelData, trimmed)
+                                    visible = false
+                                }
+                                Keys.onEscapePressed: visible = false
                             }
                             Slider {
                                 id: weightSlider
                                 from: 0; to: 1; stepSize: 0.01
-                                width: parent.width - 200
+                                width: parent.width - 222
                                 // Bind to `weightTick` so changes that
                                 // bypass user drag (Reset all, MCP, future
                                 // dope-sheet scrubs) refresh the readout.
@@ -4439,6 +4573,30 @@ Rectangle {
                                 font.pixelSize: 10
                                 width: 36
                                 anchors.verticalCenter: parent.verticalCenter
+                            }
+                            // Delete (×) — drops the pose + animation
+                            // through DeleteMorphTargetCommand so Ctrl+Z
+                            // restores it.
+                            Rectangle {
+                                width: 18; height: 18; radius: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: morphDelMa.containsMouse
+                                       ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                       : "transparent"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "×"
+                                    color: PropertiesPanelController.textColor
+                                    font.pixelSize: 12
+                                    font.bold: true
+                                }
+                                MouseArea {
+                                    id: morphDelMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: MorphAnimationManager.deleteMorphTarget(modelData)
+                                }
                             }
                         }
                     }
