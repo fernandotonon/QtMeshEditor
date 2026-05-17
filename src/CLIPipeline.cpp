@@ -4825,6 +4825,8 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
 
     SentryReporter::addBreadcrumb("cli.vat",
         QString("VAT bake .%1 anim=%2 fps=%3").arg(fi.suffix(), animName).arg(fps));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1").arg(fi.absoluteFilePath()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
 
@@ -4855,6 +4857,11 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     opts.encoding = encoding;
     opts.bakeNormals = bakeNormals;
 
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Writing VAT outputs to %1 (anim=%2, encoding=%3%4)")
+            .arg(QDir(outDir).absolutePath(), animName,
+                 (encoding == VATBaker::Encoding::RGBA16) ? "rgba16" : "rgba8",
+                 bakeNormals ? ", normals" : ""));
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
     if (!result.ok) {
         SentryReporter::captureMessage(
