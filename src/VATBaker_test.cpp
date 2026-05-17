@@ -473,3 +473,165 @@ TEST_F(VATBakerEndToEndTest, BakeWithNormalsWritesNormalTexture) {
     auto root = QJsonDocument::fromJson(jf.readAll()).object();
     EXPECT_TRUE(root.contains(QStringLiteral("nrmTexture")));
 }
+
+// ===========================================================================
+// Slice 3 — per-engine targets.
+// ===========================================================================
+
+TEST(VATBakerStandalone, SidecarTargetFieldReflectsOption) {
+    // Sidecar should encode the target name so the runtime shader and
+    // any asset-pipeline tooling knows the convention the bake used.
+    VATBaker::BakeResult r;
+    r.frameCount = 10; r.vertexCount = 100;
+    r.posTexPath = QStringLiteral("/tmp/Walk_pos.png");
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("Walk");
+    opts.fps = 30.0;
+
+    for (auto [t, want] : std::initializer_list<std::pair<VATBaker::Target, QString>>{
+            {VATBaker::Target::Agnostic, QStringLiteral("agnostic")},
+            {VATBaker::Target::Unity,    QStringLiteral("unity")},
+            {VATBaker::Target::Unreal,   QStringLiteral("unreal")},
+            {VATBaker::Target::Godot,    QStringLiteral("godot")}}) {
+        opts.target = t;
+        const QString json = VATBaker::buildSidecarJson(r, opts);
+        auto root = QJsonDocument::fromJson(json.toUtf8()).object();
+        EXPECT_EQ(root["target"].toString(), want)
+            << "target enum " << static_cast<int>(t) << " should serialise as '" << want.toStdString() << "'";
+    }
+}
+
+TEST_F(VATBakerEndToEndTest, UnityTargetWritesPngMetaSidecar) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_Unity");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 10.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("U");
+    opts.target = VATBaker::Target::Unity;
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_FALSE(r.unityMetaPath.isEmpty());
+    EXPECT_TRUE(QFile::exists(r.unityMetaPath));
+    // Quick sanity check on contents — Unity's importer treats the
+    // file as YAML; we wrote the standard texture-asset section.
+    QFile mf(r.unityMetaPath);
+    ASSERT_TRUE(mf.open(QIODevice::ReadOnly));
+    const QByteArray body = mf.readAll();
+    EXPECT_TRUE(body.contains("TextureImporter:"));
+    EXPECT_TRUE(body.contains("sRGBTexture: 0"));
+    EXPECT_TRUE(body.contains("filterMode: 0"));
+}
+
+TEST_F(VATBakerEndToEndTest, GodotTargetWritesShaderTemplate) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_Godot");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 10.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("G");
+    opts.target = VATBaker::Target::Godot;
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_FALSE(r.godotShaderPath.isEmpty());
+    EXPECT_TRUE(QFile::exists(r.godotShaderPath));
+    QFile sf(r.godotShaderPath);
+    ASSERT_TRUE(sf.open(QIODevice::ReadOnly));
+    const QByteArray body = sf.readAll();
+    // Spot-check the shader has the expected entry point + uniforms.
+    EXPECT_TRUE(body.contains("shader_type spatial"));
+    EXPECT_TRUE(body.contains("uniform sampler2D pos_tex"));
+    EXPECT_TRUE(body.contains("void vertex()"));
+    // Frame + vertex counts are template-substituted from the bake.
+    EXPECT_TRUE(body.contains("frame_count = "
+                              + QByteArray::number(r.frameCount)));
+    EXPECT_TRUE(body.contains("vertex_count = "
+                              + QByteArray::number(r.vertexCount)));
+}
+
+TEST_F(VATBakerEndToEndTest, UnrealTargetSwizzlesPositionsXZY) {
+    // Unreal target swaps Y/Z (Ogre Y-up → Unreal Z-up). The bake's
+    // bounds should reflect that the *output* space has Y/Z swapped
+    // versus the source mesh's local AABB. The animated test entity
+    // moves a vertex along X+ during the keyframe, so X is non-zero
+    // and Y/Z stay near zero in Ogre space — after the swap, Z
+    // should be > Y in the bounds extent.
+    auto* entity = createAnimatedTestEntity("VAT_E2E_Unreal");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options agnosticOpts;
+    agnosticOpts.animationName = QStringLiteral("TestAnim");
+    agnosticOpts.fps = 10.0;
+    agnosticOpts.outputDir = tmp.path();
+    agnosticOpts.basename = QStringLiteral("A");
+    auto agnostic = VATBaker::bake(entity, agnosticOpts);
+    ASSERT_TRUE(agnostic.ok) << agnostic.error.toStdString();
+
+    VATBaker::Options unrealOpts = agnosticOpts;
+    unrealOpts.basename = QStringLiteral("UE");
+    unrealOpts.target = VATBaker::Target::Unreal;
+    auto unreal = VATBaker::bake(entity, unrealOpts);
+    ASSERT_TRUE(unreal.ok) << unreal.error.toStdString();
+
+    // Y and Z bounds should swap between agnostic and unreal.
+    EXPECT_NEAR(unreal.minBound.x, agnostic.minBound.x, 1e-4);
+    EXPECT_NEAR(unreal.minBound.y, agnostic.minBound.z, 1e-4)
+        << "Unreal target should put Ogre.Z into output.Y";
+    EXPECT_NEAR(unreal.minBound.z, agnostic.minBound.y, 1e-4)
+        << "Unreal target should put Ogre.Y into output.Z";
+    EXPECT_NEAR(unreal.maxBound.y, agnostic.maxBound.z, 1e-4);
+    EXPECT_NEAR(unreal.maxBound.z, agnostic.maxBound.y, 1e-4);
+}
+
+TEST_F(VATBakerEndToEndTest, UnityRowsAreVerticallyFlipped) {
+    // Unity convention: pre-flip rows so the runtime shader uses
+    // plain `frameIndex / frameCount` indexing. Compare the agnostic
+    // and unity PNGs — row 0 of unity should equal row (frameCount-1)
+    // of agnostic.
+    auto* entity = createAnimatedTestEntity("VAT_E2E_UnityFlip");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options a; a.animationName = QStringLiteral("TestAnim");
+    a.fps = 10.0; a.outputDir = tmp.path(); a.basename = QStringLiteral("AG");
+    auto agnostic = VATBaker::bake(entity, a);
+    ASSERT_TRUE(agnostic.ok);
+
+    VATBaker::Options u = a;
+    u.basename = QStringLiteral("UNI");
+    u.target = VATBaker::Target::Unity;
+    auto unity = VATBaker::bake(entity, u);
+    ASSERT_TRUE(unity.ok);
+
+    QImage ag(agnostic.posTexPath);
+    QImage un(unity.posTexPath);
+    ASSERT_FALSE(ag.isNull());
+    ASSERT_FALSE(un.isNull());
+    ASSERT_EQ(ag.width(),  un.width());
+    ASSERT_EQ(ag.height(), un.height());
+
+    // Unity row 0 == agnostic last row.
+    const int lastRow = ag.height() - 1;
+    for (int x = 0; x < ag.width(); ++x) {
+        EXPECT_EQ(ag.pixel(x, lastRow), un.pixel(x, 0))
+            << "Unity row 0 should match agnostic last row at x=" << x;
+    }
+}
