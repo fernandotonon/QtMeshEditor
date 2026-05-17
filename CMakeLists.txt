@@ -271,6 +271,7 @@ option(ENABLE_PS1_RIP "Enable experimental PS1 runtime geometry extraction" OFF)
 if(ENABLE_PS1_RIP)
     add_definitions(-DENABLE_PS1_RIP)
     message(STATUS "PS1 runtime geometry extraction enabled (experimental)")
+    add_subdirectory(plugins/ps1core_stub)
 endif()
 ##############################################################
 #  Sentry crash reporting and analytics

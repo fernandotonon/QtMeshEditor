@@ -131,6 +131,17 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1TIM.cpp
     )
 
+    if(ENABLE_PS1_RIP)
+        list(APPEND TEST_SRC_FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/EmuCoreLoader.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/EmuViewport.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipLegalityDialog.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipManager.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipSessionWindow.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipWorker.cpp
+        )
+    endif()
+
     set(TEST_HEADER_FILES
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationBlender.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationControlController.h
@@ -361,6 +372,10 @@ if(BUILD_TESTS)
         )
         
         target_link_libraries(${target_name} ${COMMON_TEST_LIBRARIES})
+
+        if(ENABLE_PS1_RIP)
+            add_dependencies(${target_name} qtmesh_ps1core_stub)
+        endif()
         
         # Add dependency on UI generation
         ADD_DEPENDENCIES(${target_name} ui)
@@ -390,6 +405,10 @@ if(BUILD_TESTS)
         )
         
         target_link_libraries(${target_name} ${COMMON_TEST_LIBRARIES})
+
+        if(ENABLE_PS1_RIP)
+            add_dependencies(${target_name} qtmesh_ps1core_stub)
+        endif()
         
         # Add dependency on UI generation
         ADD_DEPENDENCIES(${target_name} ui)
