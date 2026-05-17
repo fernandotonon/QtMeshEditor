@@ -198,8 +198,35 @@ TEST_F(MorphAnimationManagerSceneTest, SetWeightEmitsSignalOnRealChange) {
 
     auto* m = MorphAnimationManager::instance();
     QSignalSpy spy(m, &MorphAnimationManager::morphWeightChanged);
-    m->setWeight(entity, QStringLiteral("JawOpen"), 0.5f);
-    EXPECT_GE(spy.count(), 1);
+
+    // First write emits.
+    EXPECT_TRUE(m->setWeight(entity, QStringLiteral("JawOpen"), 0.5f));
+    const int afterFirst = spy.count();
+    EXPECT_GE(afterFirst, 1);
+
+    // Idempotent write must NOT emit again — same value, same enabled state.
+    EXPECT_TRUE(m->setWeight(entity, QStringLiteral("JawOpen"), 0.5f));
+    EXPECT_EQ(spy.count(), afterFirst);
+
+    // Different value DOES emit.
+    EXPECT_TRUE(m->setWeight(entity, QStringLiteral("JawOpen"), 0.7f));
+    EXPECT_GT(spy.count(), afterFirst);
+}
+
+TEST_F(MorphAnimationManagerSceneTest, EmptyNameRejectedForValidEntity) {
+    // Empty-name rejection is also exercised standalone with a null
+    // entity, but a passing test there could hide a regression where
+    // empty-name handling becomes entity-dependent. Re-test with a
+    // valid live entity to lock the contract.
+    auto mesh = createMorphTestMesh("Morph_EmptyName");
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    auto* entity = scene->createEntity("Morph_EmptyNameEnt", mesh->getName());
+    auto* node = scene->getRootSceneNode()->createChildSceneNode();
+    node->attachObject(entity);
+
+    auto* m = MorphAnimationManager::instance();
+    EXPECT_FALSE(m->setWeight(entity, QString(), 0.5f));
+    EXPECT_FLOAT_EQ(m->weight(entity, QString()), 0.0f);
 }
 
 TEST_F(MorphAnimationManagerSceneTest, SelectionDrivenAccessorsResolveFirstEntity) {

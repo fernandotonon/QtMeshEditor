@@ -280,15 +280,16 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
         const unsigned short targetSubmesh = static_cast<unsigned short>(s + 1);
         for (const auto& mt : smd->morphTargets) {
             if (mt.positions.size() != smd->vertices.size()) continue;
-            // Skip a target that's identical to the base (rare but
-            // happens with badly-authored FBX) — Ogre's pose blender
-            // would do nothing useful and the per-vertex delta vector
-            // would be all-zero.
-            Ogre::Pose* pose = ogreMesh->createPose(targetSubmesh,
-                                                   mt.name);
+            // Lazy `createPose`: scan for the first non-zero delta
+            // before allocating the Ogre::Pose. Identical-to-base
+            // targets (rare with hand-authored content, more common
+            // with auto-exported FBX) would otherwise leave an empty
+            // pose on the mesh + an empty Animation referencing it.
+            Ogre::Pose* pose = nullptr;
             for (size_t vi = 0; vi < mt.positions.size(); ++vi) {
                 const Ogre::Vector3 delta = mt.positions[vi] - smd->vertices[vi];
                 if (delta.squaredLength() <= 1e-12f) continue;
+                if (!pose) pose = ogreMesh->createPose(targetSubmesh, mt.name);
                 pose->addVertex(vi, delta);
             }
         }

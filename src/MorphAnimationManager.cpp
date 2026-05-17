@@ -13,6 +13,9 @@ The MIT License
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 
+#include <QCoreApplication>
+#include <QThread>
+
 #include <OgreAnimationState.h>
 #include <OgreEntity.h>
 #include <OgreMesh.h>
@@ -20,21 +23,38 @@ The MIT License
 
 #include <algorithm>
 
+namespace {
+
+// Per the project's singleton-on-main-thread convention (CLAUDE.md:
+// "All run on the main thread."), assert any cross-thread access at
+// the lifecycle entry points so a regression surfaces loudly in
+// debug builds.
+inline void assertMainThread()
+{
+    Q_ASSERT(QCoreApplication::instance());
+    Q_ASSERT(QThread::currentThread() == QCoreApplication::instance()->thread());
+}
+
+} // namespace
+
 MorphAnimationManager* MorphAnimationManager::s_instance = nullptr;
 
 MorphAnimationManager* MorphAnimationManager::instance()
 {
+    assertMainThread();
     if (!s_instance) s_instance = new MorphAnimationManager();
     return s_instance;
 }
 
 MorphAnimationManager* MorphAnimationManager::qmlInstance(QQmlEngine*, QJSEngine*)
 {
+    assertMainThread();
     return instance();
 }
 
 void MorphAnimationManager::kill()
 {
+    assertMainThread();
     if (!s_instance) return;
     delete s_instance;
     s_instance = nullptr;
@@ -73,7 +93,15 @@ float MorphAnimationManager::weight(Ogre::Entity* entity, const QString& name) c
     const std::string sn = name.toStdString();
     if (!states->hasAnimationState(sn)) return 0.0f;
     auto* state = states->getAnimationState(sn);
-    return state ? state->getWeight() : 0.0f;
+    if (!state) return 0.0f;
+    // Ogre's AnimationState defaults to weight=1.0 but is disabled
+    // until first use. From a user-facing perspective, "this morph
+    // target hasn't been touched yet" should read as 0.0, not 1.0 —
+    // the slider in the Inspector starts at 0, not at full influence.
+    // We only surface the live weight once the state is enabled (which
+    // setWeight() flips), so the contract is: disabled ⇒ 0; enabled ⇒
+    // whatever we wrote.
+    return state->getEnabled() ? state->getWeight() : 0.0f;
 }
 
 bool MorphAnimationManager::setWeight(Ogre::Entity* entity, const QString& name, float w)
