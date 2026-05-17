@@ -2,7 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import AnimationControl 1.0
-import PropertiesPanel 1.0  // MorphAnimationManager (slice A5)
 
 // Multi-bone dope sheet with multi-select, bulk move, and copy/paste.
 // One row per animated bone with diamond markers at each keyframe time.
@@ -21,12 +20,6 @@ Rectangle {
 
     // Cached row data refreshed from the controller.
     property var rows: AnimationControlController.allBoneRows()
-
-    // Slice A5: morph-target rows for the selected entity. Each
-    // entry is `{ name, keyTimes }`. Renders below the bone rows
-    // as a read-only band — full selection/move/copy interaction
-    // for morph tracks is a follow-up slice.
-    property var morphRows: AnimationControlController.allMorphRows()
 
     // Per-bone expansion state for per-channel rows. Keys are bone names,
     // values are bool. Reset when a new clip is selected (different bones).
@@ -152,27 +145,11 @@ Rectangle {
         // signal, and dropping selection there breaks bulk drag mid-gesture.
         function onSelectionChanged() {
             root.rows = AnimationControlController.allBoneRows()
-            root.morphRows = AnimationControlController.allMorphRows()
             root.clearSelection()
             root.expandedBones = {}
         }
         function onBoneRowsChanged()       { root.rows = AnimationControlController.allBoneRows() }
         function onKeyframeTicksChanged()  { root.rows = AnimationControlController.allBoneRows() }
-    }
-
-    // Refresh the morph band when the manager's target list changes
-    // (selection moved to a different entity). We deliberately don't
-    // listen to `morphWeightChanged` here — its payload includes an
-    // `Ogre::Entity*` raw pointer which Qt 6 can't safely marshal to
-    // JS, and binding the slot crashed the QML engine on some Linux/
-    // Xvfb CI runners. The dope sheet's per-row keyTimes are
-    // structural, not weight-driven, so we don't lose anything by
-    // skipping per-weight notifications.
-    Connections {
-        target: MorphAnimationManager
-        function onMorphTargetsChanged() {
-            root.morphRows = AnimationControlController.allMorphRows()
-        }
     }
 
     // Cross-platform "primary" modifier — Ctrl on Win/Linux, Cmd (Meta) on macOS.
@@ -279,13 +256,7 @@ Rectangle {
         id: rowsView
         anchors.left: parent.left; anchors.right: parent.right
         anchors.top: header.visible ? header.bottom : parent.top
-        // Reserve space at the bottom for the morph band when it's
-        // visible. Anchoring both to `parent.bottom` would have them
-        // overlap and (under some layout pressures) hit a QML
-        // assertion when both layouts run during a redraw — drove
-        // the SIGSEGV crashes on MCPServerTest + MainWindowTest
-        // visibility-toggle tests in CI.
-        anchors.bottom: morphBand.visible ? morphBand.top : parent.bottom
+        anchors.bottom: parent.bottom
         clip: true
         model: root.rows
         spacing: 1
@@ -569,87 +540,6 @@ Rectangle {
                                             rowDelegate.boneName, originalTime, target)
                                     }
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Morph-target rows (slice A5) ─────────────────────────────────────────
-    // Read-only band anchored to the bottom of the dope sheet. Shows
-    // one row per Ogre::Pose on the selected entity, with diamond
-    // markers at each keyframe time. Selection / move / copy
-    // interaction is a follow-up — A5 ships visibility only.
-    Rectangle {
-        id: morphBand
-        anchors.left: parent.left; anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: visible ? (morphHeader.height + morphRowsCol.implicitHeight) : 0
-        color: AnimationControlController.panelColor
-        border.color: AnimationControlController.borderColor
-        visible: root.morphRows.length > 0
-
-        Rectangle {
-            id: morphHeader
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.top: parent.top
-            height: 18
-            color: AnimationControlController.headerColor
-            border.color: AnimationControlController.borderColor
-            Text {
-                anchors.left: parent.left; anchors.leftMargin: 6
-                anchors.verticalCenter: parent.verticalCenter
-                text: "Morph Targets (" + root.morphRows.length + ")"
-                color: AnimationControlController.textColor
-                font.pixelSize: 10; font.bold: true
-            }
-        }
-
-        Column {
-            id: morphRowsCol
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.top: morphHeader.bottom
-            spacing: 1
-
-            Repeater {
-                model: root.morphRows
-                delegate: Item {
-                    width: morphRowsCol.width
-                    height: root.rowHeight
-
-                    // Name strip
-                    Rectangle {
-                        width: root.leftStripWidth; height: parent.height
-                        color: AnimationControlController.panelColor
-                        border.color: AnimationControlController.borderColor; border.width: 1
-                        Text {
-                            anchors.fill: parent
-                            anchors.leftMargin: 6
-                            verticalAlignment: Text.AlignVCenter
-                            text: modelData.name
-                            color: AnimationControlController.textColor
-                            elide: Text.ElideRight
-                            font.pixelSize: 11
-                        }
-                    }
-
-                    // Track strip with diamonds at each keyframe.
-                    Item {
-                        anchors.left: parent.left; anchors.leftMargin: root.leftStripWidth
-                        anchors.right: parent.right
-                        height: parent.height
-                        Repeater {
-                            model: modelData.keyTimes
-                            delegate: Rectangle {
-                                property real keyTime: modelData
-                                width: 8; height: 8; radius: 1
-                                rotation: 45
-                                color: "#c08040"
-                                border.color: AnimationControlController.borderColor
-                                anchors.verticalCenter: parent.verticalCenter
-                                x: (keyTime - root.viewStart) * root.pxPerSec - width / 2
                             }
                         }
                     }
