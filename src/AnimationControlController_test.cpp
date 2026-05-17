@@ -15,6 +15,13 @@
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
 #include <OgreKeyFrame.h>
+#include <OgreMesh.h>
+#include <OgreMeshManager.h>
+#include <OgrePose.h>
+#include <OgreSceneManager.h>
+#include <OgreSceneNode.h>
+#include <OgreSubMesh.h>
+#include <OgreEntity.h>
 
 class AnimationControlControllerTest : public ::testing::Test {
 protected:
@@ -1763,3 +1770,70 @@ TEST_F(AnimationControlControllerTest, DeleteKeyframeIsUndoableViaQUndoStack) {
     app->processEvents();
     EXPECT_EQ(track->getNumKeyFrames(), countBefore - 1);
 }
+
+// ── Slice A5: allMorphRows for dope sheet ─────────────────────────────────
+
+TEST_F(AnimationControlControllerTest, AllMorphRowsEmptyWhenNoSelection) {
+    SelectionSet::getSingleton()->clear();
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->allMorphRows().isEmpty());
+}
+
+TEST_F(AnimationControlControllerTest, AllMorphRowsEmptyForMeshWithoutPoses) {
+    // createAnimatedTestEntity has bones but no morph targets;
+    // allMorphRows must return an empty list (not crash).
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("Morph_NoPoses");
+    ASSERT_NE(entity, nullptr);
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->allMorphRows().isEmpty());
+}
+
+TEST_F(AnimationControlControllerTest, AllMorphRowsListsPoseNamesAndKeyTimes) {
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    // Build a fresh mesh + entity with two named poses + matching
+    // VAT_POSE animations — mirrors what MeshProcessor produces from
+    // an FBX blend shape. Pose targets handle 0 (shared-vertex
+    // submesh) to match createInMemoryTriangleMesh's layout.
+    auto mesh = createInMemoryTriangleMesh("Morph_AllRows");
+    ASSERT_NE(mesh, nullptr);
+    {
+        Ogre::Pose* p = mesh->createPose(0, "JawOpen");
+        p->addVertex(0, Ogre::Vector3(0, -0.1f, 0));
+    }
+    {
+        Ogre::Pose* p = mesh->createPose(0, "Smile");
+        p->addVertex(1, Ogre::Vector3(0.05f, 0.02f, 0));
+    }
+    const auto& poseList = mesh->getPoseList();
+    for (unsigned short pi = 0; pi < poseList.size(); ++pi) {
+        Ogre::Animation* a = mesh->createAnimation(poseList[pi]->getName(), 0.0f);
+        auto* track = a->createVertexTrack(poseList[pi]->getTarget(), Ogre::VAT_POSE);
+        auto* kf = track->createVertexPoseKeyFrame(0.0f);
+        kf->addPoseReference(pi, 1.0f);
+    }
+
+    auto* node = Manager::getSingleton()->addSceneNode("Morph_AllRows_Node");
+    auto* entity = Manager::getSingleton()->getSceneMgr()->createEntity(node->getName(), mesh->getName());
+    node->attachObject(entity);
+    SelectionSet::getSingleton()->selectOne(node);
+    app->processEvents();
+
+    auto* ctrl = AnimationControlController::instance();
+    QVariantList rows = ctrl->allMorphRows();
+    ASSERT_EQ(rows.size(), 2);
+    QSet<QString> names;
+    for (const QVariant& v : rows) {
+        const QVariantMap row = v.toMap();
+        names.insert(row["name"].toString());
+        // Each pose's Animation has a single keyframe at t=0.
+        const QVariantList times = row["keyTimes"].toList();
+        ASSERT_EQ(times.size(), 1);
+        EXPECT_NEAR(times.first().toDouble(), 0.0, 1e-6);
+    }
+    EXPECT_TRUE(names.contains(QStringLiteral("JawOpen")));
+    EXPECT_TRUE(names.contains(QStringLiteral("Smile")));
+}
+
+
