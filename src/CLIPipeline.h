@@ -119,6 +119,12 @@ public:
     /// Surfaces VertexColorBaker via the CLI for headless asset pipelines.
     static int cmdBakeVertexColors(int argc, char* argv[]);
 
+    /// Bake a skeletal animation into a Vertex Animation Texture (VAT)
+    /// + JSON sidecar. Surfaces `VATBaker::bake()` over the CLI for
+    /// headless asset pipelines. Slice 1: engine-agnostic / RGBA8 /
+    /// positions only.
+    static int cmdVat(int argc, char* argv[]);
+
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);
 };

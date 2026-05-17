@@ -94,6 +94,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UpdateVersion.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexColorBaker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
