@@ -27,8 +27,12 @@ uint32_t CaptureBuffer::addMatrix(MatrixRecord matrix)
 {
     matrix.hash = GteCapture::hashMatrix(matrix);
     const auto found = m_matrixIndexByHash.constFind(matrix.hash);
-    if (found != m_matrixIndexByHash.constEnd())
-        return found.value();
+    if (found != m_matrixIndexByHash.constEnd()) {
+        const uint32_t existingId = found.value();
+        if (existingId < static_cast<uint32_t>(m_matrices.size())
+            && GteCapture::matricesEqual(m_matrices[static_cast<int>(existingId)], matrix))
+            return existingId;
+    }
 
     const uint32_t id = static_cast<uint32_t>(m_matrices.size());
     m_matrices.append(matrix);

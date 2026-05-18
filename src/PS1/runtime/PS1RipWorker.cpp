@@ -162,13 +162,24 @@ void PS1RipWorker::finalizeFrameCapture()
 
     const QString captureId = QString::number(QDateTime::currentMSecsSinceEpoch());
     const QString dir = QDir::temp().filePath(QStringLiteral("qtmesh_ps1_capture"));
-    QDir().mkpath(dir);
+    if (!QDir().mkpath(dir)) {
+        emit emulationError(tr("Failed to create capture directory: %1").arg(dir));
+        return;
+    }
+
     const QString csvPath = dir + QLatin1Char('/') + captureId + QStringLiteral(".csv");
     QFile file(csvPath);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        file.write(GpuCommandParser::primsToCsv(prims).toUtf8());
-        file.close();
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        emit emulationError(tr("Failed to write capture file: %1").arg(csvPath));
+        return;
     }
+
+    const QByteArray csv = GpuCommandParser::primsToCsv(prims).toUtf8();
+    if (file.write(csv) != csv.size()) {
+        emit emulationError(tr("Failed to write capture data: %1").arg(csvPath));
+        return;
+    }
+    file.close();
 
     emit frameCaptureReady(captureId, prims.size());
 }

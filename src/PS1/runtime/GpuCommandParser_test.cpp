@@ -80,6 +80,7 @@ TEST(GpuCommandParserTest, ParsesTexturedTriangle)
     ASSERT_EQ(result.prims.size(), 1);
     EXPECT_EQ(result.prims[0].kind, PrimKind::TexturedTri);
     EXPECT_EQ(result.prims[0].clut, 0x0810u);
+    EXPECT_EQ(result.prims[0].tpage, 0x0810u);
 }
 
 TEST(GpuCommandParserTest, ParsesGouraudTriangle)
@@ -100,6 +101,48 @@ TEST(GpuCommandParserTest, ParsesGouraudTriangle)
     EXPECT_EQ(result.prims[0].verts[0].r, 255);
     EXPECT_EQ(result.prims[0].verts[1].g, 255);
     EXPECT_EQ(result.prims[0].verts[2].b, 255);
+}
+
+TEST(GpuCommandParserTest, ParsesTexturedGouraudTriangle)
+{
+    const uint32_t words[] = {
+        colorCmd(0x34, 255, 0, 0),
+        pos(10, 20),
+        0x08100808u,
+        0x0000FF00u,
+        pos(30, 20),
+        0x08100808u,
+        0x00FF0000u,
+        pos(20, 40),
+        0x08100808u,
+    };
+
+    const auto result = GpuCommandParser::parseGp0(words, 9);
+    ASSERT_TRUE(result.error.isEmpty()) << result.error.toStdString();
+    ASSERT_EQ(result.prims.size(), 1);
+    EXPECT_EQ(result.prims[0].kind, PrimKind::TexturedTri);
+    EXPECT_EQ(result.prims[0].verts[2].b, 255);
+}
+
+TEST(GpuCommandParserTest, ParsesTexturedQuad)
+{
+    const uint32_t words[] = {
+        colorCmd(0x2C, 10, 20, 30),
+        pos(0, 0),
+        0x08100808u,
+        pos(32, 0),
+        0x08100808u,
+        pos(32, 32),
+        0x08100808u,
+        pos(0, 32),
+        0x08100808u,
+    };
+
+    const auto result = GpuCommandParser::parseGp0(words, 9);
+    ASSERT_TRUE(result.error.isEmpty()) << result.error.toStdString();
+    ASSERT_EQ(result.prims.size(), 1);
+    EXPECT_EQ(result.prims[0].kind, PrimKind::TexturedQuad);
+    EXPECT_EQ(result.prims[0].vertexCount, 4);
 }
 
 TEST(GpuCommandParserTest, SkipsVramCopyCommands)

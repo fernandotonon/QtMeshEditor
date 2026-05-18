@@ -29,8 +29,9 @@ void decodeUvTpageClut(uint32_t word, int16_t &u, int16_t &v, uint16_t &clut, ui
 {
     u = static_cast<int16_t>(word & 0xFF);
     v = static_cast<int16_t>((word >> 8) & 0xFF);
-    clut = static_cast<uint16_t>((word >> 16) & 0xFFFF);
-    (void)tpage;
+    const uint16_t upper = static_cast<uint16_t>((word >> 16) & 0xFFFF);
+    clut = upper;
+    tpage = upper;
 }
 
 PrimKind kindFromOpcode(uint8_t cmd, uint8_t &vertexCount)
@@ -139,10 +140,36 @@ bool parseGouraudTri(const uint32_t *words, size_t wordCount, size_t &index, Pri
     return true;
 }
 
+bool parseTexturedGouraudTri(const uint32_t *words, size_t wordCount, size_t &index, PrimRecord &out,
+                             QString &error)
+{
+    if (index + 9 > wordCount) {
+        error = QStringLiteral("textured gouraud triangle: packet too short");
+        return false;
+    }
+
+    const uint32_t cmdWord = words[index++];
+    out.semiTrans = static_cast<uint8_t>((cmdWord >> 24) & 0x3);
+    decodeColor24(cmdWord >> 8, out.verts[0].r, out.verts[0].g, out.verts[0].b);
+    decodeScreenPos(words[index++], out.verts[0].x, out.verts[0].y);
+    decodeUvTpageClut(words[index++], out.verts[0].u, out.verts[0].v, out.clut, out.tpage);
+
+    for (int v = 1; v < 3; ++v) {
+        const uint32_t colorWord = words[index++];
+        decodeColor24(colorWord, out.verts[v].r, out.verts[v].g, out.verts[v].b);
+        decodeScreenPos(words[index++], out.verts[v].x, out.verts[v].y);
+        decodeUvTpageClut(words[index++], out.verts[v].u, out.verts[v].v, out.clut, out.tpage);
+    }
+
+    out.kind = PrimKind::TexturedTri;
+    out.vertexCount = 3;
+    return true;
+}
+
 bool parseTexturedQuad(const uint32_t *words, size_t wordCount, size_t &index, PrimRecord &out,
                        QString &error)
 {
-    if (index + 13 > wordCount) {
+    if (index + 9 > wordCount) {
         error = QStringLiteral("textured quad: packet too short");
         return false;
     }
@@ -265,11 +292,11 @@ size_t packetWordCount(uint8_t cmd)
     if (cmd >= 0x28 && cmd <= 0x2B)
         return 5;
     if (cmd >= 0x2C && cmd <= 0x2F)
-        return 13;
+        return 9;
     if (cmd >= 0x30 && cmd <= 0x33)
         return 6;
     if (cmd >= 0x34 && cmd <= 0x37)
-        return 13;
+        return 9;
     if (cmd >= 0x38 && cmd <= 0x3B)
         return 8;
     if (cmd >= 0x60 && cmd <= 0x7F)
@@ -323,6 +350,8 @@ GpuCommandParser::ParseResult GpuCommandParser::parseGp0(const uint32_t *words, 
             ok = parseTexturedQuad(words, wordCount, index, prim, result.error);
         else if (cmd >= 0x30 && cmd <= 0x33)
             ok = parseGouraudTri(words, wordCount, index, prim, result.error);
+        else if (cmd >= 0x34 && cmd <= 0x37)
+            ok = parseTexturedGouraudTri(words, wordCount, index, prim, result.error);
         else if (cmd >= 0x38 && cmd <= 0x3B)
             ok = parseGouraudQuad(words, wordCount, index, prim, result.error);
         else if (cmd >= 0x60 && cmd <= 0x7F)
