@@ -7310,3 +7310,27 @@ TEST_F(MCPServerTest, MirrorPose_UnknownSrcRejected)
     QJsonObject r = server->callTool("mirror_pose", args);
     EXPECT_TRUE(isError(r));
 }
+
+TEST_F(MCPServerTest, SavePoseLibrary_MissingPathRejected)
+{
+    QJsonObject empty;
+    QJsonObject r = server->callTool("save_pose_library", empty);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("path"));
+}
+
+TEST_F(MCPServerTest, LoadPoseLibrary_MissingPathRejected)
+{
+    QJsonObject empty;
+    QJsonObject r = server->callTool("load_pose_library", empty);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("path"));
+}
+
+TEST_F(MCPServerTest, LoadPoseLibrary_MissingFileRejected)
+{
+    QJsonObject args;
+    args["path"] = "/nonexistent/path/no.poselib";
+    QJsonObject r = server->callTool("load_pose_library", args);
+    EXPECT_TRUE(isError(r));
+}
