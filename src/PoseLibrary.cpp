@@ -522,6 +522,17 @@ bool PoseLibrary::applyPoseForSelection(const QString& name)
     return applyPose(ents.first(), name);
 }
 
+bool PoseLibrary::applyPoseMaskedForSelection(const QString& name,
+                                              const QStringList& boneNames)
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty()) return false;
+    QSet<QString> mask(boneNames.cbegin(), boneNames.cend());
+    return applyPoseMasked(ents.first(), name, mask);
+}
+
 bool PoseLibrary::deletePoseForSelection(const QString& name)
 {
     auto* sel = SelectionSet::getSingleton();
