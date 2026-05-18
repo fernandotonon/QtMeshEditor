@@ -174,6 +174,21 @@ QStringList PoseLibrary::listPoses(Ogre::Entity* entity) const
     return it->order;
 }
 
+bool PoseLibrary::forgetEntity(Ogre::Entity* entity)
+{
+    assertMainThread();
+    if (!entity) return false;
+    if (!m_byEntity.contains(entity)) return false;
+    m_byEntity.remove(entity);
+    return true;
+}
+
+void PoseLibrary::clearAll()
+{
+    assertMainThread();
+    m_byEntity.clear();
+}
+
 bool PoseLibrary::savePoseForSelection(const QString& name)
 {
     auto* sel = SelectionSet::getSingleton();

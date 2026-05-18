@@ -45,6 +45,10 @@ protected:
         ASSERT_TRUE(canLoadMeshFiles())
             << "skinned entity creation requires GL (Xvfb in CI)";
         if (auto* sel = SelectionSet::getSingleton()) sel->clear();
+        // Singleton survives across tests. Wipe its state so a
+        // previous test's saved poses don't leak into the next
+        // (Ogre often hands out the same Entity* on recreate).
+        PoseLibrary::instance()->clearAll();
     }
     void TearDown() override
     {
@@ -55,6 +59,7 @@ protected:
                 try { scene->getRootSceneNode()->removeAndDestroyAllChildren(); } catch (...) {}
             }
         }
+        PoseLibrary::instance()->clearAll();
     }
 };
 
@@ -190,4 +195,18 @@ TEST_F(PoseLibrarySceneTest, NoSelectionGivesEmptyListAndRejectsMutators) {
     EXPECT_FALSE(lib->savePoseForSelection(QStringLiteral("X")));
     EXPECT_FALSE(lib->applyPoseForSelection(QStringLiteral("X")));
     EXPECT_FALSE(lib->deletePoseForSelection(QStringLiteral("X")));
+}
+
+TEST_F(PoseLibrarySceneTest, ForgetEntityDropsEverythingForThatEntity) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_Forget");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+    lib->savePose(entity, QStringLiteral("A"));
+    lib->savePose(entity, QStringLiteral("B"));
+    EXPECT_EQ(lib->listPoses(entity).size(), 2);
+
+    EXPECT_TRUE(lib->forgetEntity(entity));
+    EXPECT_TRUE(lib->listPoses(entity).isEmpty());
+    // Idempotent — forgetting again is a no-op false.
+    EXPECT_FALSE(lib->forgetEntity(entity));
 }

@@ -85,6 +85,17 @@ public:
     /// All pose names on `entity` in save-order.
     QStringList listPoses(Ogre::Entity* entity) const;
 
+    /// Drop every entry on `entity` (called when an entity is
+    /// destroyed or a scene closes). No-op if `entity` was never
+    /// saved. Returns `true` when something was actually erased so
+    /// the caller can tell whether to refresh the UI.
+    bool forgetEntity(Ogre::Entity* entity);
+
+    /// Drop every entry across every entity. Used by tests to
+    /// isolate cases that share the singleton, and by the future
+    /// "close project" path to wipe the library.
+    void clearAll();
+
     /// QML-friendly variants that resolve `entity` from
     /// SelectionSet's first entity. Used by the future Inspector
     /// "Pose Library" subgroup.
