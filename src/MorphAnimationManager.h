@@ -70,6 +70,29 @@ public:
     Q_INVOKABLE double weightForSelection(const QString& name) const;
     Q_INVOKABLE bool setWeightForSelection(const QString& name, double w);
 
+    /// Authoring (slice A3). All three push a QUndoCommand on the
+    /// shared UndoManager stack so Ctrl+Z reverses the change. All
+    /// return false on no-op (entity missing, name collision, etc.).
+
+    /// Create a new morph target whose vertex positions match the
+    /// current edit state. Snapshots `EditableMesh` (or whatever the
+    /// current edit state of the selected entity is) against the
+    /// mesh's bind positions and stores the non-zero deltas as a new
+    /// Ogre::Pose + matching VAT_POSE Animation. Falls back to a
+    /// no-op if the user isn't in edit mode for the entity, or no
+    /// vertex actually moved. `name` must be unique on the mesh.
+    Q_INVOKABLE bool addMorphTargetFromCurrentEdit(const QString& name);
+
+    /// Rename a morph target. Internally destroys + recreates the
+    /// same-named Pose + Animation under the new name (Ogre 14.5
+    /// doesn't expose `setName` on Pose).
+    Q_INVOKABLE bool renameMorphTarget(const QString& oldName,
+                                       const QString& newName);
+
+    /// Delete a morph target. Drops the matching Pose(s) and
+    /// Animation, and resets any AnimationState that referenced it.
+    Q_INVOKABLE bool deleteMorphTarget(const QString& name);
+
 signals:
     /// Emitted when a morph weight on any entity is changed via
     /// `setWeight`. QML uses this to re-fetch values.

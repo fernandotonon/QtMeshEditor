@@ -69,6 +69,8 @@ commands/BoneTransformCommand.cpp
 commands/AddKeyframeCommand.cpp
 commands/ApplyMaterialCommand.cpp
 commands/DeleteKeyframeCommand.cpp
+commands/MorphCommands.cpp
+commands/NodeAnimCommands.cpp
 commands/SkeletonResolver.cpp
 BoneDragRelease.cpp
 PropertiesPanelController.cpp
@@ -88,6 +90,7 @@ VertexColorBaker.cpp
 VATBaker.cpp
 VATBakerController.cpp
 MorphAnimationManager.cpp
+NodeAnimationManager.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp

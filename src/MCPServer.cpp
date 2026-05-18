@@ -9,6 +9,7 @@
 #include "NormalMapGenerator.h"
 #include "VATBaker.h"
 #include "MorphAnimationManager.h"
+#include "NodeAnimationManager.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -599,7 +600,10 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("optimize_mesh"), &MCPServer::toolOptimizeMesh},
         {QStringLiteral("bake_vat"), &MCPServer::toolBakeVat},
         {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
-        {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight}
+        {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight},
+        {QStringLiteral("list_node_animations"), &MCPServer::toolListNodeAnimations},
+        {QStringLiteral("add_node_animation_clip"), &MCPServer::toolAddNodeAnimationClip},
+        {QStringLiteral("set_node_keyframe"), &MCPServer::toolSetNodeKeyframe}
     };
     return handlers;
 }
@@ -4381,6 +4385,162 @@ QJsonObject MCPServer::toolSetMorphWeight(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+// ---------------------------------------------------------------------------
+// Node-anim C6 — clip + keyframe authoring on the live scene.
+// ---------------------------------------------------------------------------
+// These tools operate on the LIVE scene (not a transient import) — same
+// surface as `set_morph_weight`. The agent is expected to drive them
+// in concert with `load_mesh` / `save_scene` if it wants persistence.
+
+QJsonObject MCPServer::toolListNodeAnimations(const QJsonObject & /*args*/)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "list_node_animations");
+    auto* m = NodeAnimationManager::instance();
+    const QStringList clips = m ? m->listClips() : QStringList();
+
+    QJsonArray arr;
+    for (const QString& n : clips) arr.append(n);
+    QJsonObject content;
+    content["count"] = static_cast<int>(clips.size());
+    content["clips"] = arr;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolAddNodeAnimationClip(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "add_node_animation_clip");
+
+    const QString name = args.value("name").toString();
+    if (name.isEmpty())
+        return makeErrorResult("Error: missing required 'name' argument");
+    if (!args.contains("length"))
+        return makeErrorResult("Error: missing required 'length' argument");
+    // Strict number check first — see set_node_keyframe rationale.
+    const QJsonValue lengthV = args.value("length");
+    if (!lengthV.isDouble())
+        return makeErrorResult("Error: 'length' must be a number");
+    const double length = lengthV.toDouble();
+    if (!std::isfinite(length) || length <= 0.0)
+        return makeErrorResult("Error: length must be a positive finite number");
+
+    auto* m = NodeAnimationManager::instance();
+    if (!m->createClip(name, length))
+        return makeErrorResult(
+            QString("Error: failed to create clip (name '%1' may already exist)").arg(name));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["name"] = name;
+    content["length"] = length;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+// Parse an optional N-element numeric JSON array argument. Returns
+// `def` when the key is missing. Sets `ok = false` and populates
+// `err` on wrong arity or any non-numeric element. Pulled out of
+// `toolSetNodeKeyframe` so the dispatcher stays under SonarCloud's
+// cognitive-complexity threshold and the inner lambdas don't exceed
+// the 20-line cap.
+template <int N>
+static bool readNumericArray(const QJsonObject& args, const char* key,
+                             double out[N], bool& present, QString& err)
+{
+    present = false;
+    err.clear();
+    if (!args.contains(key)) return true;
+    present = true;
+    const QJsonArray a = args.value(key).toArray();
+    if (a.size() != N) {
+        err = QStringLiteral("Error: '%1' must be an array of %2 numbers")
+                  .arg(key).arg(N);
+        return false;
+    }
+    for (int i = 0; i < N; ++i) {
+        if (!a[i].isDouble()) {
+            err = QStringLiteral("Error: '%1'[%2] must be a number")
+                      .arg(key).arg(i);
+            return false;
+        }
+        const double v = a[i].toDouble();
+        // Extremely large literals (e.g. `1e400`) JSON-parse as Doubles
+        // but produce Inf, which would silently propagate into the
+        // keyframe. Reject NaN / Inf the same way time / length do.
+        if (!std::isfinite(v)) {
+            err = QStringLiteral("Error: '%1'[%2] must be a finite number")
+                      .arg(key).arg(i);
+            return false;
+        }
+        out[i] = v;
+    }
+    return true;
+}
+
+QJsonObject MCPServer::toolSetNodeKeyframe(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_node_keyframe");
+
+    const QString clip = args.value("clip").toString();
+    const QString node = args.value("node").toString();
+    if (clip.isEmpty())
+        return makeErrorResult("Error: missing required 'clip' argument");
+    if (node.isEmpty())
+        return makeErrorResult("Error: missing required 'node' argument");
+    if (!args.contains("time"))
+        return makeErrorResult("Error: missing required 'time' argument");
+    // Strict number check first: QJsonValue::toDouble() silently
+    // returns 0.0 on non-numeric inputs (string, bool, null), which
+    // would create a phantom keyframe at t=0 from a caller bug like
+    // `"time": "0.5"`. Reject any non-Double type up front.
+    const QJsonValue timeV = args.value("time");
+    if (!timeV.isDouble())
+        return makeErrorResult("Error: 'time' must be a number");
+    const double time = timeV.toDouble();
+    if (!std::isfinite(time) || time < 0.0)
+        return makeErrorResult("Error: time must be a non-negative finite number");
+
+    // Translate / rotation / scale all default to identity / one when
+    // omitted, so the agent can author "snapshot pose at time T" with
+    // just the clip/node/time triple. Each is parsed strictly:
+    // wrong-arity arrays AND non-numeric elements return an error.
+    QString err;
+    bool present = false;
+    double t[3] = {0, 0, 0};
+    double r[4] = {1, 0, 0, 0};
+    double s[3] = {1, 1, 1};
+    if (!readNumericArray<3>(args, "translate", t, present, err))
+        return makeErrorResult(err);
+    if (!readNumericArray<4>(args, "rotation", r, present, err))
+        return makeErrorResult(err);
+    if (!readNumericArray<3>(args, "scale", s, present, err))
+        return makeErrorResult(err);
+    const Ogre::Vector3 translate(static_cast<Ogre::Real>(t[0]),
+                                  static_cast<Ogre::Real>(t[1]),
+                                  static_cast<Ogre::Real>(t[2]));
+    const Ogre::Quaternion rotation(static_cast<Ogre::Real>(r[0]),
+                                    static_cast<Ogre::Real>(r[1]),
+                                    static_cast<Ogre::Real>(r[2]),
+                                    static_cast<Ogre::Real>(r[3]));
+    const Ogre::Vector3 scale(static_cast<Ogre::Real>(s[0]),
+                              static_cast<Ogre::Real>(s[1]),
+                              static_cast<Ogre::Real>(s[2]));
+
+    auto* m = NodeAnimationManager::instance();
+    if (!m->addKeyframe(clip, node, time, translate, rotation, scale))
+        return makeErrorResult(
+            QString("Error: failed to set keyframe (clip '%1' missing, node '%2' missing, "
+                    "or time %3 out of range)").arg(clip, node).arg(time, 0, 'f', 3));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["clip"] = clip;
+    content["node"] = node;
+    content["time"] = time;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -5513,6 +5673,60 @@ QJsonArray MCPServer::buildToolsList()
             "Drives the matching Ogre::AnimationState so the mesh deforms in real time. "
             "Returns the actual weight after clamping. Returns an error if no entity is "
             "selected or the named target doesn't exist on the selection.",
+            props,
+            required
+        );
+    }
+
+    // list_node_animations
+    {
+        QJsonObject props;
+        appendTool(
+            "list_node_animations",
+            "List node-animation clips on the live scene. Returns the clip names "
+            "in scene-creation order. Use add_node_animation_clip to create new clips "
+            "and set_node_keyframe to populate them.",
+            props
+        );
+    }
+
+    // add_node_animation_clip
+    {
+        QJsonObject props;
+        props["name"]   = QJsonObject{{"type", "string"}, {"description", "Unique clip name. Must not collide with any existing animation on the scene."}};
+        props["length"] = QJsonObject{{"type", "number"}, {"description", "Clip duration in seconds. Must be > 0."}};
+        QJsonArray required;
+        required.append("name");
+        required.append("length");
+        appendTool(
+            "add_node_animation_clip",
+            "Create a new node-animation clip on the live scene. The clip is empty "
+            "(no tracks) until set_node_keyframe writes one. Returns an error on "
+            "name collision with an existing animation or non-positive length.",
+            props,
+            required
+        );
+    }
+
+    // set_node_keyframe
+    {
+        QJsonObject props;
+        props["clip"]      = QJsonObject{{"type", "string"}, {"description", "Clip name (use list_node_animations to enumerate)."}};
+        props["node"]      = QJsonObject{{"type", "string"}, {"description", "SceneNode name to animate. Must exist on the live scene."}};
+        props["time"]      = QJsonObject{{"type", "number"}, {"description", "Keyframe time in seconds, 0..clip length."}};
+        props["translate"] = QJsonObject{{"type", "array"},  {"description", "Position [x, y, z]. Defaults to [0,0,0] when omitted."}};
+        props["rotation"]  = QJsonObject{{"type", "array"},  {"description", "Rotation quaternion [w, x, y, z]. Defaults to identity when omitted."}};
+        props["scale"]     = QJsonObject{{"type", "array"},  {"description", "Scale [x, y, z]. Defaults to [1,1,1] when omitted."}};
+        QJsonArray required;
+        required.append("clip");
+        required.append("node");
+        required.append("time");
+        appendTool(
+            "set_node_keyframe",
+            "Write a transform keyframe on a (clip, node) track. If a keyframe within "
+            "1ms of `time` already exists, it's updated in place — same idempotency "
+            "behaviour as the Inspector. Returns an error on missing clip / missing "
+            "node / out-of-range time / malformed TRS arrays.",
             props,
             required
         );

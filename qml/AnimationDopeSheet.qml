@@ -21,6 +21,17 @@ Rectangle {
     // Cached row data refreshed from the controller.
     property var rows: AnimationControlController.allBoneRows()
 
+    // Slice A5b: morph-target rows for the selected entity, sourced from
+    // AnimationControlController.allMorphRows() (a Q_INVOKABLE on the
+    // same singleton that supplies `allBoneRows()` — kept on
+    // AnimationControlController on purpose so this file doesn't
+    // need a second `import` and doesn't trigger a different QML
+    // singleton chain during MainWindow construction). Each row is
+    // `{ name, keyTimes }`. Renders below the bone rows as a fixed
+    // read-only band — full selection / move / copy interaction for
+    // morph tracks is a future slice.
+    property var morphRows: AnimationControlController.allMorphRows()
+
     // Per-bone expansion state for per-channel rows. Keys are bone names,
     // values are bool. Reset when a new clip is selected (different bones).
     property var expandedBones: ({})
@@ -145,6 +156,7 @@ Rectangle {
         // signal, and dropping selection there breaks bulk drag mid-gesture.
         function onSelectionChanged() {
             root.rows = AnimationControlController.allBoneRows()
+            root.morphRows = AnimationControlController.allMorphRows()
             root.clearSelection()
             root.expandedBones = {}
         }
@@ -256,7 +268,9 @@ Rectangle {
         id: rowsView
         anchors.left: parent.left; anchors.right: parent.right
         anchors.top: header.visible ? header.bottom : parent.top
-        anchors.bottom: parent.bottom
+        // Leave room for the morph band at the bottom when it's visible
+        // — otherwise the bone list would draw over it.
+        anchors.bottom: morphBand.visible ? morphBand.top : parent.bottom
         clip: true
         model: root.rows
         spacing: 1
@@ -676,9 +690,22 @@ Rectangle {
     // QQuickWidget inside QDockWidget can swallow wheel events on macOS;
     // routing them through here guarantees the rows scroll regardless.
     function scrollByPixels(dy) {
-        if (dy === 0 || !rowsView.visible) return
-        var maxY = Math.max(0, rowsView.contentHeight - rowsView.height)
-        rowsView.contentY = Math.max(0, Math.min(maxY, rowsView.contentY - dy))
+        if (dy === 0) return
+        // Scroll the bone list as before; ListView handles its own
+        // clamping in contentY assignments below.
+        if (rowsView.visible) {
+            var maxY = Math.max(0, rowsView.contentHeight - rowsView.height)
+            rowsView.contentY = Math.max(0, Math.min(maxY, rowsView.contentY - dy))
+        }
+        // Also scroll the morph band when it has overflowing content.
+        // We disable Flickable.interactive (so drag-marquee passes
+        // through to timelineArea) which removes Flickable's own wheel
+        // handling — proxy it here. Same dy as the bone list so a single
+        // wheel notch advances both views consistently.
+        if (morphBand.visible && morphList.contentHeight > morphList.height) {
+            var maxMY = morphList.contentHeight - morphList.height
+            morphList.contentY = Math.max(0, Math.min(maxMY, morphList.contentY - dy))
+        }
     }
 
     WheelHandler {
@@ -691,6 +718,138 @@ Rectangle {
             if (dy === 0) return
             root.scrollByPixels(dy)
             event.accepted = true
+        }
+    }
+
+    // ── Morph-target rows (slice A5b) ────────────────────────────────────────
+    // Fixed-height read-only band anchored to the bottom. One row per
+    // morph target with diamond markers at each keyframe time, sharing
+    // the bone-track timeline (same `pxPerSec`, `viewStart`). When the
+    // entity has no morphs the band collapses to height=0 so bone-only
+    // assets look exactly the same as before.
+    //
+    // Keep this strictly read-only: no MouseAreas on the diamonds, no
+    // selection toggling, no drag — full interaction lives in a future
+    // slice. The point here is to make morph-weight animation visible
+    // alongside skeletal animation, which is the load-bearing piece of
+    // #518's "dope sheet integration" acceptance criterion.
+    Rectangle {
+        id: morphBand
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        visible: morphRowsRep.count > 0
+
+        // Cap the band at ~40% of the dope-sheet height so high-count
+        // blendshape rigs (Mixamo characters routinely ship 50+) can't
+        // push the bone tracks off-screen. When the content needs more
+        // room, morphList becomes scrollable internally.
+        readonly property int naturalContentHeight:
+            morphHeader.height + morphRowsRep.count * (root.rowHeight + 1) + 4
+        readonly property int maxBandHeight:
+            Math.max(morphHeader.height + root.rowHeight + 6,
+                     Math.floor(root.height * 0.4))
+        height: visible
+                ? Math.min(naturalContentHeight, maxBandHeight)
+                : 0
+        color: AnimationControlController.panelColor
+        border.color: AnimationControlController.borderColor
+        border.width: 1
+
+        Rectangle {
+            id: morphHeader
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 16
+            color: Qt.darker(AnimationControlController.panelColor, 1.15)
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left; anchors.leftMargin: 6
+                text: "Morph Targets (" + morphRowsRep.count + ")"
+                color: AnimationControlController.textColor
+                font.pixelSize: 10
+                font.bold: true
+            }
+        }
+
+        // Scrollable list when content exceeds the capped height. Plain
+        // Flickable + Column (instead of ListView) so the existing
+        // Repeater-rendered rows continue to work unchanged.
+        Flickable {
+            id: morphList
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: morphHeader.bottom
+            anchors.bottom: parent.bottom
+            anchors.topMargin: 2
+            clip: true
+            contentHeight: morphCol.height
+            boundsBehavior: Flickable.StopAtBounds
+            // Match `rowsView` and disable left-drag flicking — the
+            // root timelineArea owns marquee selection over empty
+            // pixels and Flickable would otherwise grab those drags.
+            // Wheel scrolling still works because the root WheelHandler
+            // is routed through `scrollByPixels` rather than relying on
+            // Flickable's own wheel handling.
+            interactive: false
+
+            Column {
+                id: morphCol
+                width: parent.width
+                spacing: 1
+
+                Repeater {
+                    id: morphRowsRep
+                    model: root.morphRows
+
+                    Item {
+                        width: parent.width
+                        height: root.rowHeight
+
+                        Rectangle {
+                            width: root.leftStripWidth; height: root.rowHeight
+                            color: AnimationControlController.panelColor
+                            border.color: AnimationControlController.borderColor
+                            border.width: 1
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left; anchors.leftMargin: 8
+                                text: modelData.name
+                                color: AnimationControlController.textColor
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                                width: root.leftStripWidth - 12
+                            }
+                        }
+
+                        // Right side: diamond per keyframe time. Sharing
+                        // the bone-row timeline math so they line up
+                        // vertically. `clip: true` so off-screen diamonds
+                        // (from pan/zoom) don't bleed into the name strip
+                        // or neighboring rows, matching the bone tracks.
+                        Item {
+                            anchors.left: parent.left; anchors.leftMargin: root.leftStripWidth
+                            anchors.right: parent.right
+                            height: root.rowHeight
+                            clip: true
+                            Repeater {
+                                model: modelData.keyTimes
+                                Rectangle {
+                                    property real keyTime: modelData
+                                    x: (keyTime - root.viewStart) * root.pxPerSec - width / 2
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 10; height: 10
+                                    rotation: 45
+                                    color: "#88ccff"  // visually distinct from bone keys (yellow)
+                                    border.color: AnimationControlController.borderColor
+                                    border.width: 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -7094,3 +7094,147 @@ TEST_F(MCPServerTest, ResampleAnimation_UnknownAnimationReturnsError)
     EXPECT_TRUE(isError(result));
     EXPECT_TRUE(getResultText(result).contains("not found"));
 }
+
+// ==========================================================================
+// Node-anim C6 — MCP tool dispatcher round-trips
+// ==========================================================================
+
+TEST_F(MCPServerTest, AddNodeAnimationClip_MissingArgsRejected)
+{
+    QJsonObject empty;
+    QJsonObject r1 = server->callTool("add_node_animation_clip", empty);
+    EXPECT_TRUE(isError(r1));
+    EXPECT_TRUE(getResultText(r1).contains("name"));
+
+    QJsonObject nameOnly;
+    nameOnly["name"] = "MCP_C6_NameOnly";
+    QJsonObject r2 = server->callTool("add_node_animation_clip", nameOnly);
+    EXPECT_TRUE(isError(r2));
+    EXPECT_TRUE(getResultText(r2).contains("length"));
+
+    QJsonObject zeroLen;
+    zeroLen["name"] = "MCP_C6_ZeroLen";
+    zeroLen["length"] = 0.0;
+    QJsonObject r3 = server->callTool("add_node_animation_clip", zeroLen);
+    EXPECT_TRUE(isError(r3));
+    EXPECT_TRUE(getResultText(r3).contains("positive"));
+}
+
+TEST_F(MCPServerTest, AddNodeAnimationClipThenList)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "scene creation requires GL (Xvfb in CI)";
+
+    QJsonObject create;
+    create["name"] = "MCP_C6_RoundTrip";
+    create["length"] = 1.5;
+    QJsonObject r1 = server->callTool("add_node_animation_clip", create);
+    EXPECT_FALSE(isError(r1));
+
+    QJsonObject listArgs;
+    QJsonObject r2 = server->callTool("list_node_animations", listArgs);
+    EXPECT_FALSE(isError(r2));
+    EXPECT_TRUE(getResultText(r2).contains("MCP_C6_RoundTrip"));
+}
+
+TEST_F(MCPServerTest, SetNodeKeyframe_RejectsMissingClip)
+{
+    QJsonObject args;
+    args["clip"] = "MCP_C6_DoesNotExist";
+    args["node"] = "AnyNode";
+    args["time"] = 0.5;
+    QJsonObject r = server->callTool("set_node_keyframe", args);
+    EXPECT_TRUE(isError(r));
+}
+
+TEST_F(MCPServerTest, SetNodeKeyframe_RejectsMalformedTransformArray)
+{
+    QJsonObject create;
+    create["name"] = "MCP_C6_BadTRS";
+    create["length"] = 1.0;
+    server->callTool("add_node_animation_clip", create);
+
+    QJsonObject args;
+    args["clip"] = "MCP_C6_BadTRS";
+    args["node"] = "SomeNode";
+    args["time"] = 0.0;
+    // Wrong arity on translate.
+    args["translate"] = QJsonArray{1.0, 2.0};  // missing z
+    QJsonObject r = server->callTool("set_node_keyframe", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("translate"));
+}
+
+// Codex P1 follow-ups on PR #586: QJsonValue::toDouble() silently
+// returns 0.0 on non-numeric input. Without explicit `isDouble()`
+// guards, callers passing `"time": "abc"` or
+// `"translate": ["x", 1, 2]` would create phantom keyframes at t=0
+// or with zeroed components — corrupting authored data without a
+// visible error. These tests lock the strict-validation contract.
+
+TEST_F(MCPServerTest, SetNodeKeyframe_RejectsNonNumericTime)
+{
+    QJsonObject create;
+    create["name"] = "MCP_C6_StrictTime";
+    create["length"] = 1.0;
+    server->callTool("add_node_animation_clip", create);
+
+    QJsonObject args;
+    args["clip"] = "MCP_C6_StrictTime";
+    args["node"] = "SomeNode";
+    args["time"] = "0.5";  // STRING instead of number
+    QJsonObject r = server->callTool("set_node_keyframe", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("time"));
+    EXPECT_TRUE(getResultText(r).contains("number"));
+}
+
+TEST_F(MCPServerTest, SetNodeKeyframe_RejectsNonNumericTRSComponent)
+{
+    QJsonObject create;
+    create["name"] = "MCP_C6_StrictTRS";
+    create["length"] = 1.0;
+    server->callTool("add_node_animation_clip", create);
+
+    QJsonObject args;
+    args["clip"] = "MCP_C6_StrictTRS";
+    args["node"] = "SomeNode";
+    args["time"] = 0.0;
+    args["translate"] = QJsonArray{QString("x"), 1.0, 2.0};  // string in slot 0
+    QJsonObject r = server->callTool("set_node_keyframe", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("translate"));
+}
+
+TEST_F(MCPServerTest, AddNodeAnimationClip_RejectsNonNumericLength)
+{
+    QJsonObject args;
+    args["name"] = "MCP_C6_StrictLen";
+    args["length"] = "1.5";  // STRING instead of number
+    QJsonObject r = server->callTool("add_node_animation_clip", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("length"));
+    EXPECT_TRUE(getResultText(r).contains("number"));
+}
+
+// CodeRabbit nit on PR #587 — reject NaN / Inf TRS components.
+// Extremely large literals (1e400) JSON-parse as Doubles but produce
+// Inf, which would silently propagate into the keyframe. Round-trips
+// through Ogre and exporters would then NaN-cascade.
+TEST_F(MCPServerTest, SetNodeKeyframe_RejectsNonFiniteTRSComponent)
+{
+    QJsonObject create;
+    create["name"] = "MCP_C6_FiniteTRS";
+    create["length"] = 1.0;
+    server->callTool("add_node_animation_clip", create);
+
+    QJsonObject args;
+    args["clip"] = "MCP_C6_FiniteTRS";
+    args["node"] = "SomeNode";
+    args["time"] = 0.0;
+    // 1e400 → Inf at JSON parse time.
+    args["translate"] = QJsonArray{1e400, 0.0, 0.0};
+    QJsonObject r = server->callTool("set_node_keyframe", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("translate"));
+    EXPECT_TRUE(getResultText(r).contains("finite"));
+}
