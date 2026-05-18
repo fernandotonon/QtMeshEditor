@@ -261,6 +261,12 @@ private:
     /// in memory. Args: `path`.
     QJsonObject toolLoadPoseLibrary(const QJsonObject &args);
 
+    /// Pose-lib D5: apply a saved pose only to a subset of bones.
+    /// Args: `name` (pose), `bones` (JSON array of bone-name
+    /// strings). Use case: facial expression without disturbing
+    /// the body pose.
+    QJsonObject toolApplyPoseMasked(const QJsonObject &args);
+
     // Animation
     struct NodeAnimation {
         Ogre::SceneNode* node;

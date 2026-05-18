@@ -611,7 +611,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("delete_pose"), &MCPServer::toolDeletePose},
         {QStringLiteral("mirror_pose"), &MCPServer::toolMirrorPose},
         {QStringLiteral("save_pose_library"), &MCPServer::toolSavePoseLibrary},
-        {QStringLiteral("load_pose_library"), &MCPServer::toolLoadPoseLibrary}
+        {QStringLiteral("load_pose_library"), &MCPServer::toolLoadPoseLibrary},
+        {QStringLiteral("apply_pose_masked"), &MCPServer::toolApplyPoseMasked}
     };
     return handlers;
 }
@@ -4701,6 +4702,45 @@ QJsonObject MCPServer::toolLoadPoseLibrary(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+QJsonObject MCPServer::toolApplyPoseMasked(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "apply_pose_masked");
+    const QString name = args.value("name").toString();
+    if (name.isEmpty())
+        return makeErrorResult("Error: missing required 'name' argument");
+    if (!args.contains("bones"))
+        return makeErrorResult("Error: missing required 'bones' argument");
+    const QJsonValue bonesV = args.value("bones");
+    if (!bonesV.isArray())
+        return makeErrorResult("Error: 'bones' must be an array of bone-name strings");
+
+    // Strict-parse: every entry must be a string. A non-string slot
+    // would silently degrade to empty (toString returns "") and the
+    // mask would match unintended bones.
+    QStringList boneNames;
+    const QJsonArray arr = bonesV.toArray();
+    for (int i = 0; i < arr.size(); ++i) {
+        if (!arr[i].isString())
+            return makeErrorResult(
+                QString("Error: 'bones'[%1] must be a string").arg(i));
+        boneNames << arr[i].toString();
+    }
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->applyPoseMaskedForSelection(name, boneNames))
+        return makeErrorResult(
+            QString("Error: failed to apply pose '%1' masked "
+                    "(no selection, no skeleton, or pose not found)")
+                .arg(name));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["name"] = name;
+    content["bone_count"] = boneNames.size();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -6003,6 +6043,26 @@ QJsonArray MCPServer::buildToolsList()
             "Returns error when there's no selection, the file is "
             "missing, or the JSON / schema is malformed (in-memory "
             "library is preserved on parse failure).",
+            props,
+            required
+        );
+    }
+
+    // apply_pose_masked
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Pose name (use list_poses to enumerate)."}};
+        props["bones"] = QJsonObject{{"type", "array"},  {"description", "Bone names to apply. Bones NOT in this list keep their current TRS. Empty list = no-op (returns success but touches no bones)."}};
+        QJsonArray required;
+        required.append("name");
+        required.append("bones");
+        appendTool(
+            "apply_pose_masked",
+            "Apply a saved pose to ONLY the listed bones. Use case: "
+            "snap to a facial expression without disturbing the "
+            "current body pose, or apply an arm gesture without "
+            "re-posing legs. Bones in the list but missing from the "
+            "skeleton (LOD change) are skipped silently.",
             props,
             required
         );

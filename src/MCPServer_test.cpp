@@ -7334,3 +7334,41 @@ TEST_F(MCPServerTest, LoadPoseLibrary_MissingFileRejected)
     QJsonObject r = server->callTool("load_pose_library", args);
     EXPECT_TRUE(isError(r));
 }
+
+TEST_F(MCPServerTest, ApplyPoseMasked_MissingNameRejected)
+{
+    QJsonObject args;
+    args["bones"] = QJsonArray{"Spine"};
+    QJsonObject r = server->callTool("apply_pose_masked", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("name"));
+}
+
+TEST_F(MCPServerTest, ApplyPoseMasked_MissingBonesRejected)
+{
+    QJsonObject args;
+    args["name"] = "MCP_AnyPose";
+    QJsonObject r = server->callTool("apply_pose_masked", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("bones"));
+}
+
+TEST_F(MCPServerTest, ApplyPoseMasked_NonArrayBonesRejected)
+{
+    QJsonObject args;
+    args["name"] = "MCP_AnyPose";
+    args["bones"] = "not an array";
+    QJsonObject r = server->callTool("apply_pose_masked", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("bones"));
+}
+
+TEST_F(MCPServerTest, ApplyPoseMasked_NonStringBoneRejected)
+{
+    QJsonObject args;
+    args["name"] = "MCP_AnyPose";
+    args["bones"] = QJsonArray{"OK", 42};  // int instead of string
+    QJsonObject r = server->callTool("apply_pose_masked", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("bones"));
+}

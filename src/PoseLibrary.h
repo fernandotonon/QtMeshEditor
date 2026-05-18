@@ -171,6 +171,12 @@ public:
     /// "Pose Library" subgroup.
     Q_INVOKABLE bool savePoseForSelection(const QString& name);
     Q_INVOKABLE bool applyPoseForSelection(const QString& name);
+
+    /// Selection wrapper for D5 apply-with-mask. `boneNames` is a
+    /// QML/MCP-friendly QStringList; internally converted to QSet
+    /// for the underlying `applyPoseMasked` call.
+    Q_INVOKABLE bool applyPoseMaskedForSelection(const QString& name,
+                                                  const QStringList& boneNames);
     Q_INVOKABLE bool deletePoseForSelection(const QString& name);
     Q_INVOKABLE bool mirrorPoseForSelection(const QString& srcName,
                                              const QString& dstName);
