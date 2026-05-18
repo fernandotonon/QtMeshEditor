@@ -2489,7 +2489,17 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             err() << "Error: schema mismatch in " << filePath << Qt::endl;
             return 1;
         }
-        const QJsonArray poses = root.value("poses").toArray();
+        // Validate `poses` is actually an array — a schema-matching
+        // file with `poses` missing or non-array would otherwise
+        // silently report "No poses in library" with exit 0,
+        // masking corruption (Codex P2 on PR #604, same bug class
+        // as the loadPoseLibrary fix in #603).
+        const QJsonValue posesV = root.value("poses");
+        if (!posesV.isArray()) {
+            err() << "Error: malformed 'poses' field in " << filePath << Qt::endl;
+            return 1;
+        }
+        const QJsonArray poses = posesV.toArray();
         QStringList names;
         for (const QJsonValue& v : poses) {
             const QString n = v.toObject().value("name").toString();
