@@ -383,6 +383,71 @@ TEST_F(PoseLibrarySceneTest, LoadLibraryWipesExistingPosesFirst) {
     EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("InMemoryOnly")));
 }
 
+// ─── Slice D5 — apply-with-mask ──────────────────────────────────────
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseMaskedTouchesOnlyListedBones) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_Masked");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    // Need at least 2 bones to verify the mask actually filters.
+    ASSERT_GE(skel->getNumBones(), 2);
+
+    // Save a pose where every bone is at +X=7.
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+        skel->getBone(i)->setPosition(Ogre::Vector3(7, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("AllSeven")));
+
+    // Move every bone back to origin so apply has something to do.
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+        skel->getBone(i)->setPosition(Ogre::Vector3::ZERO);
+
+    // Mask: only bone[0]. Apply should touch bone[0] only.
+    QSet<QString> mask;
+    mask.insert(QString::fromStdString(skel->getBone(0)->getName()));
+    EXPECT_TRUE(lib->applyPoseMasked(entity, QStringLiteral("AllSeven"), mask));
+
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().x, 7.0f);
+    // Bone 1 wasn't in the mask — must still be at origin.
+    EXPECT_FLOAT_EQ(skel->getBone(1)->getPosition().x, 0.0f);
+}
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseMaskedRejectsUnknownPoseAndMissingEntity) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_MaskedReject");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    QSet<QString> empty;
+    // Unknown pose → false (even with empty mask).
+    EXPECT_FALSE(lib->applyPoseMasked(entity, QStringLiteral("NoSuch"), empty));
+    // Null entity → false.
+    EXPECT_FALSE(lib->applyPoseMasked(nullptr, QStringLiteral("Any"), empty));
+    // Empty pose name → false.
+    EXPECT_FALSE(lib->applyPoseMasked(entity, QString(), empty));
+}
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseMaskedWithEmptyMaskAppliesNothing) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_MaskedEmpty");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    // Save a pose with bone[0] at +Z=4.
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 4));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Reference")));
+
+    // Move bone back to origin.
+    skel->getBone(0)->setPosition(Ogre::Vector3::ZERO);
+
+    // Empty mask = nothing to apply. Returns true (pose found
+    // successfully) but bone stays at origin — empty mask is the
+    // documented "no bones" interpretation, not "all bones".
+    QSet<QString> empty;
+    EXPECT_TRUE(lib->applyPoseMasked(entity, QStringLiteral("Reference"), empty));
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().z, 0.0f);
+}
+
 // ─── Slice D4 — bone name flip + mirror pose ─────────────────────────
 
 TEST(PoseLibraryStandalone, FlipBoneName_MixamoLowercaseSuffix) {

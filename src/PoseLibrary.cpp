@@ -148,6 +148,44 @@ bool PoseLibrary::applyPose(Ogre::Entity* entity, const QString& name)
     return true;
 }
 
+bool PoseLibrary::applyPoseMasked(Ogre::Entity* entity,
+                                  const QString& name,
+                                  const QSet<QString>& boneFilter)
+{
+    assertMainThread();
+    if (!entity || name.isEmpty()) return false;
+    auto storeIt = m_byEntity.constFind(entity);
+    if (storeIt == m_byEntity.constEnd()) return false;
+    auto poseIt = storeIt->byName.constFind(name);
+    if (poseIt == storeIt->byName.constEnd()) return false;
+
+    auto* skel = skeletonOf(entity);
+    if (!skel) return false;
+
+    int boneCount = 0;
+    int filteredOut = 0;
+    int missingBones = 0;
+    for (auto it = poseIt->cbegin(); it != poseIt->cend(); ++it) {
+        // Filter check first — names not in the mask are skipped
+        // without consulting the skeleton, so "applies only to the
+        // jaw" is a single hash lookup per pose entry.
+        if (!boneFilter.contains(it.key())) { ++filteredOut; continue; }
+        const std::string boneName = it.key().toStdString();
+        if (!skel->hasBone(boneName)) { ++missingBones; continue; }
+        Ogre::Bone* bone = skel->getBone(boneName);
+        if (!bone) { ++missingBones; continue; }
+        bone->setPosition(it.value().translate);
+        bone->setOrientation(it.value().rotation);
+        bone->setScale(it.value().scale);
+        ++boneCount;
+    }
+
+    SentryReporter::addBreadcrumb("scene.anim.pose",
+        QStringLiteral("apply pose '%1' masked (%2 bones, %3 filtered, %4 missing)")
+            .arg(name).arg(boneCount).arg(filteredOut).arg(missingBones));
+    return true;
+}
+
 bool PoseLibrary::deletePose(Ogre::Entity* entity, const QString& name)
 {
     assertMainThread();

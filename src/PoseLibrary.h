@@ -14,6 +14,7 @@ The MIT License
 #include <QHash>
 #include <QObject>
 #include <QQmlEngine>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QtQml/qqmlregistration.h>
@@ -75,6 +76,18 @@ public:
     /// silently (handles partial skeletons / future LOD changes).
     /// Returns false when the pose name isn't found on `entity`.
     bool applyPose(Ogre::Entity* entity, const QString& name);
+
+    /// Apply a saved pose to a SUBSET of the entity's bones —
+    /// only bones whose names appear in `boneFilter` are touched.
+    /// Use case: apply a facial expression without disturbing the
+    /// body pose, or apply an arm gesture without re-posing the
+    /// legs. Empty `boneFilter` is treated as "no bones at all"
+    /// (matches the strict-filter interpretation; pass the full
+    /// `applyPose` for "everything"). Returns false when the pose
+    /// name isn't found.
+    bool applyPoseMasked(Ogre::Entity* entity,
+                          const QString& name,
+                          const QSet<QString>& boneFilter);
 
     /// Drop a saved pose. Returns false when the name doesn't exist.
     bool deletePose(Ogre::Entity* entity, const QString& name);
