@@ -6,6 +6,7 @@
 #include "VramViewerWidget.h"
 
 #include <QAction>
+#include <QSignalBlocker>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDateTime>
@@ -56,6 +57,10 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     auto *armCapAct = toolbar->addAction(tr("Arm Capture"));
     armCapAct->setCheckable(true);
     connect(armCapAct, &QAction::toggled, this, [this](bool on) { m_manager->armCapture(on); });
+    connect(m_manager, &PS1RipManager::sessionStopped, this, [armCapAct]() {
+        QSignalBlocker blocker(armCapAct);
+        armCapAct->setChecked(false);
+    });
     auto *captureAct = toolbar->addAction(tr("Capture Frame"));
     connect(captureAct, &QAction::triggered, this, &PS1RipSessionWindow::onCaptureFrame);
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));

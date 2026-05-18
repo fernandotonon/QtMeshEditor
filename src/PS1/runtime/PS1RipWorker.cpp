@@ -7,6 +7,7 @@
 #include "EmuFramebuffer.h"
 #include "GpuCommandParser.h"
 #include "RipperHooks.h"
+#include "SentryReporter.h"
 #include "VramSnapshot.h"
 
 #include <QDateTime>
@@ -187,6 +188,8 @@ void PS1RipWorker::finalizeFrameCapture()
     }
     file.close();
 
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture"),
+                                QStringLiteral("%1 prims:%2").arg(captureId).arg(prims.size()));
     emit frameCaptureReady(captureId, CaptureSnapshot::fromBuffer(*m_captureBuffer), prims.size());
 }
 

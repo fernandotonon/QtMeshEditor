@@ -51,12 +51,11 @@ ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix
     float mx = 0.0f;
     float my = 0.0f;
     float mz = 0.0f;
-    if (matrix && GteInverse::screenToModel(*matrix, v.x, v.y, v.z, mx, my, mz)) {
-        GteInverse::psxScreenToWorld(mx, my, mz, out.px, out.py, out.pz);
-    } else {
+    if (matrix && GteInverse::screenToModel(*matrix, v.x, v.y, v.z, mx, my, mz))
+        GteInverse::modelToEditor(mx, my, mz, out.px, out.py, out.pz);
+    else
         GteInverse::psxScreenToWorld(static_cast<float>(v.x), static_cast<float>(v.y),
                                      static_cast<float>(v.z), out.px, out.py, out.pz);
-    }
 
     if (textured) {
         out.u = static_cast<float>(v.u) / 256.0f;

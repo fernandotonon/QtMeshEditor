@@ -27,7 +27,7 @@ Ogre::MaterialPtr ensureMaterial(const QString &name)
     Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
         matName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     Ogre::Pass *pass = mat->getTechnique(0)->getPass(0);
-    pass->setLightingEnabled(true);
+    pass->setLightingEnabled(false);
     pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
     pass->setDiffuse(Ogre::ColourValue::White);
     return mat;
@@ -142,11 +142,17 @@ bool PS1RipMeshBuilder::attachToScene(const ReconstructedMesh &mesh, const QStri
     Ogre::SceneNode *node = mgr->addSceneNode(nodeName);
     Ogre::Entity *entity = mgr->createEntity(node, ogreMesh);
 
+    if (!entity) {
+        if (errorOut)
+            *errorOut = QStringLiteral("Failed to create Ogre entity for reconstructed mesh");
+        return false;
+    }
+
     if (resultOut) {
         resultOut->sceneNode = node;
         resultOut->entity = entity;
         resultOut->vertexCount = mesh.vertexCount;
         resultOut->triangleCount = mesh.triangleCount;
     }
-    return entity != nullptr;
+    return true;
 }
