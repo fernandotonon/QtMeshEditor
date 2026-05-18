@@ -53,10 +53,11 @@ TEST(GpuCommandParserTest, ParsesDrawModeAndSprite)
     ASSERT_EQ(result.prims.size(), 1);
     EXPECT_EQ(result.prims[0].kind, PrimKind::Sprite);
 
-    const uint32_t modeWords[] = {0x000000E1u, 0x00001234u};
-    const auto modeResult = GpuCommandParser::parseGp0(modeWords, 2);
+    const uint32_t modeWords[] = {0xE1u | (0x1234u << 8)};
+    const auto modeResult = GpuCommandParser::parseGp0(modeWords, 1);
     ASSERT_TRUE(modeResult.error.isEmpty()) << modeResult.error.toStdString();
     EXPECT_EQ(modeResult.drawModes.size(), 1);
+    EXPECT_EQ(modeResult.drawModes[0].drawModeBits, modeWords[0]);
 
     const QString csv = GpuCommandParser::primsToCsv(result.prims);
     EXPECT_TRUE(csv.contains(QStringLiteral("kind,vertexCount")));
@@ -79,6 +80,43 @@ TEST(GpuCommandParserTest, ParsesTexturedTriangle)
     ASSERT_EQ(result.prims.size(), 1);
     EXPECT_EQ(result.prims[0].kind, PrimKind::TexturedTri);
     EXPECT_EQ(result.prims[0].clut, 0x0810u);
+}
+
+TEST(GpuCommandParserTest, ParsesGouraudTriangle)
+{
+    const uint32_t words[] = {
+        colorCmd(0x30, 255, 0, 0),
+        pos(10, 20),
+        0x0000FF00u,
+        pos(30, 20),
+        0x00FF0000u,
+        pos(20, 40),
+    };
+
+    const auto result = GpuCommandParser::parseGp0(words, 6);
+    ASSERT_TRUE(result.error.isEmpty()) << result.error.toStdString();
+    ASSERT_EQ(result.prims.size(), 1);
+    EXPECT_EQ(result.prims[0].kind, PrimKind::ShadedTri);
+    EXPECT_EQ(result.prims[0].verts[0].r, 255);
+    EXPECT_EQ(result.prims[0].verts[1].g, 255);
+    EXPECT_EQ(result.prims[0].verts[2].b, 255);
+}
+
+TEST(GpuCommandParserTest, SkipsVramCopyCommands)
+{
+    const uint32_t words[] = {
+        colorCmd(0x20, 1, 2, 3),
+        pos(0, 0),
+        pos(10, 0),
+        pos(5, 10),
+        0x000000C0u,
+        0x00000000u,
+        0x00000000u,
+    };
+
+    const auto result = GpuCommandParser::parseGp0(words, 7);
+    ASSERT_TRUE(result.error.isEmpty()) << result.error.toStdString();
+    ASSERT_EQ(result.prims.size(), 1);
 }
 
 #endif // ENABLE_PS1_RIP

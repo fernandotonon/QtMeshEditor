@@ -117,15 +117,18 @@ bool parseTexturedTri(const uint32_t *words, size_t wordCount, size_t &index, Pr
 bool parseGouraudTri(const uint32_t *words, size_t wordCount, size_t &index, PrimRecord &out,
                      QString &error)
 {
-    if (index + 7 > wordCount) {
+    // psx-spx: cmd carries vertex-0 color; then (x,y) for v0; color+(x,y) for v1 and v2.
+    if (index + 6 > wordCount) {
         error = QStringLiteral("gouraud triangle: packet too short");
         return false;
     }
 
     const uint32_t cmdWord = words[index++];
     out.semiTrans = static_cast<uint8_t>((cmdWord >> 24) & 0x3);
+    decodeColor24(cmdWord >> 8, out.verts[0].r, out.verts[0].g, out.verts[0].b);
+    decodeScreenPos(words[index++], out.verts[0].x, out.verts[0].y);
 
-    for (int v = 0; v < 3; ++v) {
+    for (int v = 1; v < 3; ++v) {
         const uint32_t colorWord = words[index++];
         decodeColor24(colorWord, out.verts[v].r, out.verts[v].g, out.verts[v].b);
         decodeScreenPos(words[index++], out.verts[v].x, out.verts[v].y);
@@ -193,15 +196,17 @@ bool parseMonoQuad(const uint32_t *words, size_t wordCount, size_t &index, PrimR
 bool parseGouraudQuad(const uint32_t *words, size_t wordCount, size_t &index, PrimRecord &out,
                       QString &error)
 {
-    if (index + 9 > wordCount) {
+    if (index + 8 > wordCount) {
         error = QStringLiteral("gouraud quad: packet too short");
         return false;
     }
 
     const uint32_t cmdWord = words[index++];
     out.semiTrans = static_cast<uint8_t>((cmdWord >> 24) & 0x3);
+    decodeColor24(cmdWord >> 8, out.verts[0].r, out.verts[0].g, out.verts[0].b);
+    decodeScreenPos(words[index++], out.verts[0].x, out.verts[0].y);
 
-    for (int v = 0; v < 4; ++v) {
+    for (int v = 1; v < 4; ++v) {
         const uint32_t colorWord = words[index++];
         decodeColor24(colorWord, out.verts[v].r, out.verts[v].g, out.verts[v].b);
         decodeScreenPos(words[index++], out.verts[v].x, out.verts[v].y);
@@ -236,18 +241,18 @@ bool parseSprite(const uint32_t *words, size_t wordCount, size_t &index, PrimRec
     return true;
 }
 
-bool parseDrawMode(const uint32_t *words, size_t wordCount, size_t &index, DrawModeRecord &out,
-                   QString &error)
+bool parseDrawingEnv(const uint32_t *words, size_t wordCount, size_t &index, DrawModeRecord &out,
+                     QString &error)
 {
-    if (index + 2 > wordCount) {
-        error = QStringLiteral("draw mode: packet too short");
+    if (index + 1 > wordCount) {
+        error = QStringLiteral("drawing environment: packet too short");
         return false;
     }
 
     const uint32_t cmdWord = words[index++];
-    out.drawModeBits = words[index++];
+    out.drawModeBits = cmdWord;
     out.tpage = static_cast<uint16_t>((cmdWord >> 16) & 0xFFFF);
-    out.clut = static_cast<uint16_t>(out.drawModeBits & 0xFFFF);
+    out.clut = static_cast<uint16_t>((cmdWord >> 16) & 0xFFFF);
     return true;
 }
 
@@ -262,17 +267,17 @@ size_t packetWordCount(uint8_t cmd)
     if (cmd >= 0x2C && cmd <= 0x2F)
         return 13;
     if (cmd >= 0x30 && cmd <= 0x33)
-        return 7;
+        return 6;
     if (cmd >= 0x34 && cmd <= 0x37)
         return 13;
     if (cmd >= 0x38 && cmd <= 0x3B)
-        return 9;
+        return 8;
     if (cmd >= 0x60 && cmd <= 0x7F)
         return 4;
-    if (cmd == 0xE1)
-        return 2;
-    if (cmd == 0xA0)
-        return 3; // minimum; variable in hardware — tests use fixed uploads
+    if (cmd >= 0xE1 && cmd <= 0xE6)
+        return 1;
+    if (cmd == 0xA0 || cmd == 0xC0)
+        return 3; // minimum header; variable in hardware — tests use fixed uploads
     return 0;
 }
 
@@ -290,7 +295,7 @@ GpuCommandParser::ParseResult GpuCommandParser::parseGp0(const uint32_t *words, 
 
         if (cmd >= 0xE1 && cmd <= 0xE6) {
             DrawModeRecord mode{};
-            if (!parseDrawMode(words, wordCount, index, mode, result.error))
+            if (!parseDrawingEnv(words, wordCount, index, mode, result.error))
                 break;
             result.drawModes.append(mode);
             continue;
