@@ -8,14 +8,15 @@
 bool TextureDecoder::TileKey::operator==(const TileKey &other) const
 {
     return tpage == other.tpage && clutX == other.clutX && clutY == other.clutY
-           && bitDepth == other.bitDepth;
+           && bitDepth == other.bitDepth && regionOnPage == other.regionOnPage;
 }
 
 size_t qHash(const TextureDecoder::TileKey &key, size_t seed)
 {
     return qHash(static_cast<uint>(key.tpage), seed) ^ qHash(static_cast<uint>(key.clutX), seed << 1)
            ^ qHash(static_cast<uint>(key.clutY), seed << 2)
-           ^ qHash(static_cast<int>(key.bitDepth), seed << 3);
+           ^ qHash(static_cast<int>(key.bitDepth), seed << 3)
+           ^ qHash(key.regionOnPage, seed << 4);
 }
 
 void TextureDecoder::clearCache()
@@ -32,13 +33,6 @@ QImage TextureDecoder::cachedTile(const TileKey &key) const
 QImage TextureDecoder::decodeTile(const VramSnapshot &vram, const TileKey &key,
                                   const QRect &regionOnPage, QString *errorOut)
 {
-    if (m_cache.contains(key)) {
-        ++m_stats.cacheHits;
-        return m_cache.value(key);
-    }
-
-    ++m_stats.cacheMisses;
-
     const QRect page = VramSnapshot::tpageRect(key.tpage);
     QRect region = regionOnPage.isValid() ? regionOnPage : QRect(0, 0, 256, 256);
     region = region.intersected(QRect(0, 0, 256, 256));
@@ -47,6 +41,15 @@ QImage TextureDecoder::decodeTile(const VramSnapshot &vram, const TileKey &key,
             *errorOut = QStringLiteral("Texture region is empty");
         return {};
     }
+
+    TileKey cacheKey = key;
+    cacheKey.regionOnPage = region;
+    if (m_cache.contains(cacheKey)) {
+        ++m_stats.cacheHits;
+        return m_cache.value(cacheKey);
+    }
+
+    ++m_stats.cacheMisses;
 
     QImage img(region.width(), region.height(), QImage::Format_ARGB32);
     img.fill(Qt::transparent);
@@ -102,7 +105,7 @@ QImage TextureDecoder::decodeTile(const VramSnapshot &vram, const TileKey &key,
         }
     }
 
-    m_cache.insert(key, img);
+    m_cache.insert(cacheKey, img);
     ++m_stats.decodedTiles;
     m_stats.rgbaBytes += img.sizeInBytes();
     return img;

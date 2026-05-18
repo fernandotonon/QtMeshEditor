@@ -25,6 +25,7 @@ public:
         uint16_t clutX = 0;
         uint16_t clutY = 0;
         BitDepth bitDepth = BitDepth::Bpp15;
+        QRect regionOnPage;
 
         bool operator==(const TileKey &other) const;
     };
@@ -40,6 +41,7 @@ public:
                       QString *errorOut = nullptr);
     QImage cachedTile(const TileKey &key) const;
     DecodeStats stats() const { return m_stats; }
+    /** Call when VRAM content changes; cached tiles are keyed by region + tpage/clut. */
     void clearCache();
 
 private:
