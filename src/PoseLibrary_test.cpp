@@ -212,6 +212,89 @@ TEST_F(PoseLibrarySceneTest, ForgetEntityDropsEverythingForThatEntity) {
     EXPECT_FALSE(lib->forgetEntity(entity));
 }
 
+// ─── Slice D4 — bone name flip + mirror pose ─────────────────────────
+
+TEST(PoseLibraryStandalone, FlipBoneName_MixamoLowercaseSuffix) {
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("Hand_l")),
+              QStringLiteral("Hand_r"));
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("Hand_r")),
+              QStringLiteral("Hand_l"));
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("mixamorig_LeftUpLeg_l")),
+              QStringLiteral("mixamorig_LeftUpLeg_r"));
+}
+
+TEST(PoseLibraryStandalone, FlipBoneName_UppercaseSuffix) {
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("Hand_L")),
+              QStringLiteral("Hand_R"));
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("Hand.R")),
+              QStringLiteral("Hand.L"));
+}
+
+TEST(PoseLibraryStandalone, FlipBoneName_LeftRightPrefix) {
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("LeftHand")),
+              QStringLiteral("RightHand"));
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("RightArm")),
+              QStringLiteral("LeftArm"));
+    // Edge case: prefix MUST be followed by uppercase / underscore /
+    // end. "Lefty" should NOT flip to "Righty".
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("Lefty")),
+              QStringLiteral("Lefty"));
+}
+
+TEST(PoseLibraryStandalone, FlipBoneName_CentreLineUntouched) {
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("Spine")),
+              QStringLiteral("Spine"));
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("Hips")),
+              QStringLiteral("Hips"));
+    EXPECT_EQ(PoseLibrary::flipBoneName(QStringLiteral("Head_End")),
+              QStringLiteral("Head_End"));
+}
+
+TEST_F(PoseLibrarySceneTest, MirrorPoseProducesXFlippedSnapshot) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_Mirror");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    // Set bone[0] to a non-symmetric pose; capture as "src".
+    skel->getBone(0)->setPosition(Ogre::Vector3(2, 3, 4));
+    skel->getBone(0)->setOrientation(Ogre::Quaternion(0.5, 0.5, 0.5, 0.5));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("src")));
+
+    EXPECT_TRUE(lib->mirrorPose(entity,
+                                 QStringLiteral("src"),
+                                 QStringLiteral("dst")));
+    EXPECT_TRUE(lib->hasPose(entity, QStringLiteral("dst")));
+
+    // Reset bone, apply mirrored — should see X-flipped values.
+    skel->getBone(0)->setPosition(Ogre::Vector3::ZERO);
+    skel->getBone(0)->setOrientation(Ogre::Quaternion::IDENTITY);
+    lib->applyPose(entity, QStringLiteral("dst"));
+    const auto pos = skel->getBone(0)->getPosition();
+    const auto rot = skel->getBone(0)->getOrientation();
+    EXPECT_FLOAT_EQ(pos.x, -2.0f);
+    EXPECT_FLOAT_EQ(pos.y, 3.0f);
+    EXPECT_FLOAT_EQ(pos.z, 4.0f);
+    // Quaternion: keep w + x, flip y + z.
+    EXPECT_FLOAT_EQ(rot.w, 0.5f);
+    EXPECT_FLOAT_EQ(rot.x, 0.5f);
+    EXPECT_FLOAT_EQ(rot.y, -0.5f);
+    EXPECT_FLOAT_EQ(rot.z, -0.5f);
+}
+
+TEST_F(PoseLibrarySceneTest, MirrorPoseRejectsMissingSourceAndEmptyDst) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_MirrorReject");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    EXPECT_FALSE(lib->mirrorPose(entity, QStringLiteral("NoSuchSrc"),
+                                  QStringLiteral("dst")));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("ok")));
+    EXPECT_FALSE(lib->mirrorPose(entity, QStringLiteral("ok"), QString()));
+    EXPECT_FALSE(lib->mirrorPose(nullptr, QStringLiteral("ok"),
+                                  QStringLiteral("dst")));
+}
+
 // ─── Slice D3 — undo commands ────────────────────────────────────────
 
 TEST_F(PoseLibrarySceneTest, SavePoseCommandRoundTripsForFreshPose) {
