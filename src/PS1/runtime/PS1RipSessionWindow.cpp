@@ -53,6 +53,11 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     auto *resetAct = toolbar->addAction(tr("Reset"));
     connect(resetAct, &QAction::triggered, this, &PS1RipSessionWindow::onReset);
     toolbar->addSeparator();
+    auto *armCapAct = toolbar->addAction(tr("Arm Capture"));
+    armCapAct->setCheckable(true);
+    connect(armCapAct, &QAction::toggled, this, [this](bool on) { m_manager->armCapture(on); });
+    auto *captureAct = toolbar->addAction(tr("Capture Frame"));
+    connect(captureAct, &QAction::triggered, this, &PS1RipSessionWindow::onCaptureFrame);
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
     connect(dumpVramAct, &QAction::triggered, this, &PS1RipSessionWindow::onDumpVram);
 
@@ -73,6 +78,7 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
             [this]() { m_statusLabel->setText(tr("Stopped")); });
     connect(m_manager, &PS1RipManager::error, this, &PS1RipSessionWindow::onError);
     connect(m_manager, &PS1RipManager::vramDumped, this, &PS1RipSessionWindow::onVramDumped);
+    connect(m_manager, &PS1RipManager::meshBuilt, this, &PS1RipSessionWindow::onMeshBuilt);
 
     const QString savedBios = QSettings().value(QString::fromLatin1(kSettingsGroup) + QLatin1Char('/')
                                                   + QString::fromLatin1(kBiosKey))
@@ -197,6 +203,20 @@ void PS1RipSessionWindow::onDumpVram()
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("ps1_rip_dump_vram"));
     m_manager->dumpVRAM();
+}
+
+void PS1RipSessionWindow::onCaptureFrame()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("ps1_rip_capture_frame"));
+    m_manager->captureFrame();
+}
+
+void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int vertexCount, int triangleCount)
+{
+    m_statusLabel->setText(tr("Mesh built: %1 (%2 verts, %3 tris) — see main scene")
+                               .arg(captureId)
+                               .arg(vertexCount)
+                               .arg(triangleCount));
 }
 
 void PS1RipSessionWindow::onVramDumped(const QString &captureId, const QString &pngPath,

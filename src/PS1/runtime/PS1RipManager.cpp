@@ -1,4 +1,7 @@
 #include "PS1RipManager.h"
+#include "CaptureSnapshot.h"
+#include "MeshReconstructor.h"
+#include "PS1RipMeshBuilder.h"
 #include "PS1RipWorker.h"
 #include "SentryReporter.h"
 
@@ -40,6 +43,7 @@ PS1RipManager::~PS1RipManager()
 void PS1RipManager::initializeWorkerThread()
 {
     qRegisterMetaType<QVector<uint16_t>>("QVector<uint16_t>");
+    qRegisterMetaType<CaptureSnapshot>("CaptureSnapshot");
 
     m_workerThread = new QThread(this);
     m_worker = new PS1RipWorker();
@@ -64,11 +68,31 @@ void PS1RipManager::initializeWorkerThread()
         reportError(msg);
     });
     connect(m_worker, &PS1RipWorker::framePresented, this, &PS1RipManager::framePresented);
-    connect(m_worker, &PS1RipWorker::frameCaptureReady, this, [this](const QString &captureId, int) {
-        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-                                      QStringLiteral("ps1_rip_frame:%1").arg(captureId));
-        emit frameCaptured(captureId);
-    });
+    connect(m_worker, &PS1RipWorker::frameCaptureReady, this,
+            [this](const QString &captureId, const CaptureSnapshot &snapshot, int) {
+                SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                              QStringLiteral("ps1_rip_frame:%1").arg(captureId));
+
+                emit frameCaptured(captureId);
+
+                const ReconstructedMesh mesh = MeshReconstructor::reconstruct(snapshot);
+                if (mesh.isEmpty()) {
+                    reportError(tr("Capture produced no reconstructable geometry"));
+                    return;
+                }
+
+                PS1RipMeshBuilder::BuildResult built;
+                QString buildErr;
+                if (!PS1RipMeshBuilder::attachToScene(mesh, captureId, &built, &buildErr)) {
+                    reportError(buildErr);
+                    return;
+                }
+
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("ps1.rip.mesh.built"),
+                    QStringLiteral("%1 verts %2 tris").arg(built.vertexCount).arg(built.triangleCount));
+                emit meshBuilt(captureId, built.vertexCount, built.triangleCount);
+            });
     connect(m_worker, &PS1RipWorker::vramDumpReady, this,
             [this](const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                    const QImage &preview) {

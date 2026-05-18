@@ -1,5 +1,7 @@
 #include "PS1RipWorker.h"
 #include "CaptureBuffer.h"
+#include "CaptureSnapshot.h"
+#include "CaptureSnapshot.h"
 #include "EmuCore.h"
 #include "EmuCoreLoader.h"
 #include "EmuFramebuffer.h"
@@ -185,7 +187,7 @@ void PS1RipWorker::finalizeFrameCapture()
     }
     file.close();
 
-    emit frameCaptureReady(captureId, prims.size());
+    emit frameCaptureReady(captureId, CaptureSnapshot::fromBuffer(*m_captureBuffer), prims.size());
 }
 
 void PS1RipWorker::dumpVram()

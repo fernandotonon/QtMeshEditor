@@ -76,6 +76,15 @@ See epic #412 for phased issues (#413–#431).
 - `dumpVRAM()` saves `<AppData>/ps1_rip/captures/<id>_vram.png` and feeds `VramViewerWidget` in the session window.
 - Stub core fills CLUT + 4/8/15 bpp test regions each frame via `stubFillVramPattern`.
 
+## Phase 4 status (#422)
+
+- `CaptureSnapshot` copies worker `CaptureBuffer` to the main thread for reconstruction.
+- `GteInverse` approximates GTE screen→model un-projection; PS1 Y-down → editor Y-up.
+- `MeshReconstructor` groups primitives by `matrixId` + texture key, triangulates quads, emits vertex color + UV.
+- `PS1RipMeshBuilder` creates Ogre mesh/submeshes and attaches `PS1Capture_<id>` to the live scene via `Manager`.
+- `captureFrame` builds mesh automatically; session toolbar adds **Arm Capture** / **Capture Frame**.
+- Sentry breadcrumb `ps1.rip.mesh.built` with vertex/triangle counts.
+
 ## Open questions
 
 - mednafen-psx plugin build/integration (replace stub for real emulation).
