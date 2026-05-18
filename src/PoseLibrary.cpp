@@ -361,7 +361,7 @@ bool PoseLibrary::savePoseLibrary(Ogre::Entity* entity, const QString& filePath)
     }
     if (!file.commit()) return false;
 
-    SentryReporter::addBreadcrumb("scene.anim.pose",
+    SentryReporter::addBreadcrumb("file.export",
         QStringLiteral("save library to '%1' (%2 poses)")
             .arg(filePath).arg(entIt->order.size()));
     return true;
@@ -382,13 +382,13 @@ bool PoseLibrary::loadPoseLibrary(Ogre::Entity* entity, const QString& filePath)
     const QJsonObject root = doc.object();
     if (root.value("schema").toString() != QString::fromLatin1(kPoseLibSchemaV1))
         return false;
-    const QJsonArray poses = root.value("poses").toArray();
-
-    // Wipe the existing per-entity entry — the file is canonical
-    // for this load. Partial overlay would be confusing UX (which
-    // pose wins on name collision?), so we go with replacement.
-    m_byEntity.remove(entity);
-    auto& store = m_byEntity[entity];
+    // Codex P1 on PR #602: validate the payload shape BEFORE wiping
+    // the in-memory library. A schema-matching file with `poses`
+    // missing or non-array would otherwise silently drop the user's
+    // existing data and return success.
+    const QJsonValue posesV = root.value("poses");
+    if (!posesV.isArray()) return false;
+    const QJsonArray poses = posesV.toArray();
 
     auto readVec3 = [](const QJsonArray& a, const Ogre::Vector3& def) -> Ogre::Vector3 {
         if (a.size() != 3) return def;
@@ -404,7 +404,11 @@ bool PoseLibrary::loadPoseLibrary(Ogre::Entity* entity, const QString& filePath)
                                 static_cast<Ogre::Real>(a[3].toDouble()));
     };
 
+    // Build the new library entry off to the side so any parse
+    // failure leaves the in-memory store untouched.
+    EntityPoses staging;
     for (const QJsonValue& p : poses) {
+        if (!p.isObject()) continue;
         const QJsonObject pObj = p.toObject();
         const QString name = pObj.value("name").toString();
         if (name.isEmpty()) continue;
@@ -421,13 +425,25 @@ bool PoseLibrary::loadPoseLibrary(Ogre::Entity* entity, const QString& filePath)
                                   Ogre::Vector3(1, 1, 1));
             snapshot.insert(it.key(), trs);
         }
-        store.byName.insert(name, snapshot);
-        store.order.append(name);
+        // Codex P2 on PR #602: only append `order` on first sighting
+        // of the name so duplicate entries in the file don't leave
+        // `order` with phantom names that survive a `deletePose`.
+        // Later occurrences of the same name overwrite the snapshot
+        // (last-write-wins) like a regular `savePose` does.
+        const bool isFirstSighting = !staging.byName.contains(name);
+        staging.byName.insert(name, snapshot);
+        if (isFirstSighting) staging.order.append(name);
     }
 
-    SentryReporter::addBreadcrumb("scene.anim.pose",
+    // All-or-nothing replacement: now we know the file parsed
+    // cleanly, swap the per-entity entry. Partial overlay would be
+    // confusing UX (which pose wins on name collision?), so we go
+    // with replacement.
+    m_byEntity.insert(entity, staging);
+
+    SentryReporter::addBreadcrumb("file.import",
         QStringLiteral("load library from '%1' (%2 poses)")
-            .arg(filePath).arg(store.order.size()));
+            .arg(filePath).arg(staging.order.size()));
     emit posesChanged(entity);
     return true;
 }
