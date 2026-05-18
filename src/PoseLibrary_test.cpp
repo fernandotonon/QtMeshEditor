@@ -303,6 +303,33 @@ TEST_F(PoseLibrarySceneTest, ApplyPoseCommandRestoresPreApplyState) {
     EXPECT_FLOAT_EQ(pos.z, 3.0f);
 }
 
+// Codex P1 on PR #595 — when ApplyPoseCommand::redo fails (pose
+// name not found in the library), undo MUST also be a no-op.
+// Restoring `mPreApply` would clobber any bone edits the user made
+// after the failed apply with stale snapshot values.
+TEST_F(PoseLibrarySceneTest, ApplyPoseCommandUndoNoOpWhenRedoFailed) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdApplyFail");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+
+    // Pre-apply bone position. The command will capture this as
+    // mPreApply at construction.
+    skel->getBone(0)->setPosition(Ogre::Vector3(2, 2, 2));
+    ApplyPoseCommand cmd(entity, QStringLiteral("PoseDoesNotExist"));
+
+    // Move the bone — these edits are what undo MUST preserve.
+    skel->getBone(0)->setPosition(Ogre::Vector3(9, 9, 9));
+
+    cmd.redo();  // No-op — pose doesn't exist.
+    // Bone still at user-edited position; redo didn't apply.
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().x, 9.0f);
+
+    cmd.undo();  // Must NOT revert to (2,2,2) — that would clobber the user edit.
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().x, 9.0f);
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().y, 9.0f);
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().z, 9.0f);
+}
+
 TEST_F(PoseLibrarySceneTest, DeletePoseCommandIsNoOpForUnknownName) {
     Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdDelMissing");
     ASSERT_NE(entity, nullptr);

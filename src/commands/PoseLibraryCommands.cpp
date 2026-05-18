@@ -99,6 +99,11 @@ SavePoseCommand::SavePoseCommand(Ogre::Entity* entity,
     : QUndoCommand(parent), mEntity(entity), mName(name)
 {
     setText(QStringLiteral("Save pose \"%1\"").arg(name));
+    // Bail early on invalid inputs — match the redo/undo no-op
+    // guard so speculative-construction can't accidentally hit
+    // the PoseLibrary singleton with null/empty args. CodeRabbit
+    // major on PR #595.
+    if (!entity || name.isEmpty()) return;
     mNewSnapshot = capturePose(entity);
 
     // Snapshot the prior content if a same-name pose already
@@ -149,6 +154,7 @@ DeletePoseCommand::DeletePoseCommand(Ogre::Entity* entity,
     : QUndoCommand(parent), mEntity(entity), mName(name)
 {
     setText(QStringLiteral("Delete pose \"%1\"").arg(name));
+    if (!entity || name.isEmpty()) return;  // see SavePoseCommand
     auto* lib = PoseLibrary::instance();
     if (lib && lib->hasPose(entity, name)) {
         mWasPresent = true;
@@ -187,6 +193,7 @@ ApplyPoseCommand::ApplyPoseCommand(Ogre::Entity* entity,
     : QUndoCommand(parent), mEntity(entity), mName(name)
 {
     setText(QStringLiteral("Apply pose \"%1\"").arg(name));
+    if (!entity || name.isEmpty()) return;  // see SavePoseCommand
     // Capture the live bone TRS BEFORE redo applies the saved
     // pose. Undo will write these back.
     mPreApply = capturePose(entity);
@@ -194,16 +201,24 @@ ApplyPoseCommand::ApplyPoseCommand(Ogre::Entity* entity,
 
 void ApplyPoseCommand::redo()
 {
+    mRedoApplied = false;
     if (!mEntity) return;
     auto* lib = PoseLibrary::instance();
-    if (lib) lib->applyPose(mEntity, mName);
-    SentryReporter::addBreadcrumb("scene.anim.pose.cmd",
-        QStringLiteral("redo: apply '%1'").arg(mName));
+    if (lib && lib->applyPose(mEntity, mName)) {
+        mRedoApplied = true;
+        SentryReporter::addBreadcrumb("scene.anim.pose.cmd",
+            QStringLiteral("redo: apply '%1'").arg(mName));
+    }
 }
 
 void ApplyPoseCommand::undo()
 {
     if (!mEntity) return;
+    // No-op when redo didn't actually apply (stale / missing pose
+    // name). Restoring `mPreApply` in that case would clobber any
+    // bone edits the user made after the failed apply (Codex P1
+    // on PR #595).
+    if (!mRedoApplied) return;
     applyPose(mEntity, mPreApply);
     SentryReporter::addBreadcrumb("scene.anim.pose.cmd",
         QStringLiteral("undo: apply '%1'").arg(mName));
