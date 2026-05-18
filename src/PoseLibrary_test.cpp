@@ -6,6 +6,7 @@
 #include "PoseLibrary.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
+#include "commands/PoseLibraryCommands.h"
 
 #include <OgreBone.h>
 #include <OgreEntity.h>
@@ -209,4 +210,106 @@ TEST_F(PoseLibrarySceneTest, ForgetEntityDropsEverythingForThatEntity) {
     EXPECT_TRUE(lib->listPoses(entity).isEmpty());
     // Idempotent — forgetting again is a no-op false.
     EXPECT_FALSE(lib->forgetEntity(entity));
+}
+
+// ─── Slice D3 — undo commands ────────────────────────────────────────
+
+TEST_F(PoseLibrarySceneTest, SavePoseCommandRoundTripsForFreshPose) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdSaveNew");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    SavePoseCommand cmd(entity, QStringLiteral("First"));
+    cmd.redo();
+    EXPECT_TRUE(lib->hasPose(entity, QStringLiteral("First")));
+
+    cmd.undo();
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("First")));
+
+    cmd.redo();
+    EXPECT_TRUE(lib->hasPose(entity, QStringLiteral("First")));
+}
+
+TEST_F(PoseLibrarySceneTest, SavePoseCommandRestoresPriorOnOverwrite) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdOverwrite");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    // Seed an initial pose at bone[0] position (1,0,0).
+    skel->getBone(0)->setPosition(Ogre::Vector3(1, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("X")));
+
+    // Move bone, then overwrite via command. After undo the
+    // library should still contain the FIRST pose's data — so a
+    // subsequent apply restores (1,0,0), not the (5,5,5) we wrote.
+    skel->getBone(0)->setPosition(Ogre::Vector3(5, 5, 5));
+    SavePoseCommand cmd(entity, QStringLiteral("X"));
+    cmd.redo();
+    cmd.undo();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3::ZERO);
+    lib->applyPose(entity, QStringLiteral("X"));
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().x, 1.0f);
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().y, 0.0f);
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().z, 0.0f);
+}
+
+TEST_F(PoseLibrarySceneTest, DeletePoseCommandRoundTrips) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdDelete");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(7, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Y")));
+
+    DeletePoseCommand cmd(entity, QStringLiteral("Y"));
+    cmd.redo();
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("Y")));
+
+    cmd.undo();
+    EXPECT_TRUE(lib->hasPose(entity, QStringLiteral("Y")));
+
+    // Apply after undo should restore the original 7,0,0.
+    skel->getBone(0)->setPosition(Ogre::Vector3::ZERO);
+    lib->applyPose(entity, QStringLiteral("Y"));
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().x, 7.0f);
+}
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseCommandRestoresPreApplyState) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdApply");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    // Save a pose with bone at (10, 0, 0).
+    skel->getBone(0)->setPosition(Ogre::Vector3(10, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("PosePos10")));
+
+    // Move bone to (3, 3, 3) — this is the pre-apply state.
+    skel->getBone(0)->setPosition(Ogre::Vector3(3, 3, 3));
+
+    ApplyPoseCommand cmd(entity, QStringLiteral("PosePos10"));
+    cmd.redo();
+    // After redo bone is at the saved pose's position.
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().x, 10.0f);
+
+    cmd.undo();
+    // After undo bone is back at the (3,3,3) snapshot.
+    const auto pos = skel->getBone(0)->getPosition();
+    EXPECT_FLOAT_EQ(pos.x, 3.0f);
+    EXPECT_FLOAT_EQ(pos.y, 3.0f);
+    EXPECT_FLOAT_EQ(pos.z, 3.0f);
+}
+
+TEST_F(PoseLibrarySceneTest, DeletePoseCommandIsNoOpForUnknownName) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_CmdDelMissing");
+    ASSERT_NE(entity, nullptr);
+    // Construct + redo + undo on a name that doesn't exist — both
+    // sides should be safe no-ops (no crash, no stray pose).
+    DeletePoseCommand cmd(entity, QStringLiteral("Missing"));
+    cmd.redo();
+    cmd.undo();
+    EXPECT_FALSE(PoseLibrary::instance()->hasPose(entity, QStringLiteral("Missing")));
 }
