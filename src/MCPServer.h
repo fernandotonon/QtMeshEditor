@@ -252,6 +252,15 @@ private:
     /// Args: `src` (existing pose), `dst` (output pose name).
     QJsonObject toolMirrorPose(const QJsonObject &args);
 
+    /// Pose-lib D-Project: write the first-selected entity's pose
+    /// library to a `.poselib` sidecar JSON file. Args: `path`.
+    QJsonObject toolSavePoseLibrary(const QJsonObject &args);
+
+    /// Pose-lib D-Project: load a `.poselib` sidecar into the
+    /// first-selected entity's library, replacing whatever was
+    /// in memory. Args: `path`.
+    QJsonObject toolLoadPoseLibrary(const QJsonObject &args);
+
     // Animation
     struct NodeAnimation {
         Ogre::SceneNode* node;

@@ -609,7 +609,9 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("save_pose"), &MCPServer::toolSavePose},
         {QStringLiteral("apply_pose"), &MCPServer::toolApplyPose},
         {QStringLiteral("delete_pose"), &MCPServer::toolDeletePose},
-        {QStringLiteral("mirror_pose"), &MCPServer::toolMirrorPose}
+        {QStringLiteral("mirror_pose"), &MCPServer::toolMirrorPose},
+        {QStringLiteral("save_pose_library"), &MCPServer::toolSavePoseLibrary},
+        {QStringLiteral("load_pose_library"), &MCPServer::toolLoadPoseLibrary}
     };
     return handlers;
 }
@@ -4656,6 +4658,49 @@ QJsonObject MCPServer::toolMirrorPose(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+QJsonObject MCPServer::toolSavePoseLibrary(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "save_pose_library");
+    const QString path = args.value("path").toString();
+    if (path.isEmpty())
+        return makeErrorResult("Error: missing required 'path' argument");
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->savePoseLibraryForSelection(path))
+        return makeErrorResult(
+            QString("Error: failed to save library to '%1' "
+                    "(no selection, empty library, or unwritable path)")
+                .arg(path));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["path"] = path;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolLoadPoseLibrary(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "load_pose_library");
+    const QString path = args.value("path").toString();
+    if (path.isEmpty())
+        return makeErrorResult("Error: missing required 'path' argument");
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->loadPoseLibraryForSelection(path))
+        return makeErrorResult(
+            QString("Error: failed to load library from '%1' "
+                    "(no selection, file missing, or malformed JSON/schema)")
+                .arg(path));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["path"] = path;
+    content["count"] = static_cast<int>(lib->listPosesForSelection().size());
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -5923,6 +5968,41 @@ QJsonArray MCPServer::buildToolsList()
             "naming. TRS flip: pos.x → -pos.x, rotation (w,x,y,z) → (w,x,-y,-z), "
             "scale.x → -scale.x. Centre-line bones (Spine, Hips, Head) get "
             "the X-flipped TRS in place. Writes the result under `dst`.",
+            props,
+            required
+        );
+    }
+
+    // save_pose_library
+    {
+        QJsonObject props;
+        props["path"] = QJsonObject{{"type", "string"}, {"description", "Destination `.poselib` file path. Written atomically via QSaveFile. Side-by-side with the asset is the recommended location."}};
+        QJsonArray required;
+        required.append("path");
+        appendTool(
+            "save_pose_library",
+            "Persist the first selected entity's pose library to a "
+            "`.poselib` sidecar JSON (schema `qtmesheditor.poselib.v1`). "
+            "Returns error when there's no selection, the library is "
+            "empty, or the path is unwritable.",
+            props,
+            required
+        );
+    }
+
+    // load_pose_library
+    {
+        QJsonObject props;
+        props["path"] = QJsonObject{{"type", "string"}, {"description", "Source `.poselib` file path. Schema-validated; malformed files don't disturb in-memory library."}};
+        QJsonArray required;
+        required.append("path");
+        appendTool(
+            "load_pose_library",
+            "Load a `.poselib` sidecar JSON into the first selected "
+            "entity's library, **replacing** the in-memory contents. "
+            "Returns error when there's no selection, the file is "
+            "missing, or the JSON / schema is malformed (in-memory "
+            "library is preserved on parse failure).",
             props,
             required
         );

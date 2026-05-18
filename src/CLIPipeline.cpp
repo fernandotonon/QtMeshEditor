@@ -554,6 +554,9 @@ void CLIPipeline::printUsage()
         "                                    Export a single posed frame as static mesh\n"
         "  pose <file> --animation <name> --count N -o <pattern>\n"
         "                                    Export N evenly spaced frames (use %02d in pattern)\n"
+        "  pose <library.poselib> --library list [--json]\n"
+        "                                    List pose names in a `.poselib` sidecar JSON file.\n"
+        "                                    No mesh load needed; reads the file directly.\n"
         "  scan [path] [options]           Scan directory for 3D asset issues (default path: .)\n"
         "  material <file> --preset <name> [-o <output>]\n"
         "                                  Apply a built-in material preset to every sub-entity\n"
@@ -2399,9 +2402,20 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
 
 int CLIPipeline::cmdPose(int argc, char* argv[])
 {
-    // Parse: pose <file> --animation <name> --time <t> -o <output>
-    //        pose <file> --animation <name> --count N -o <pattern>
+    // Two modes:
+    //   pose <file> --animation <name> --time <t> -o <output>
+    //   pose <file> --animation <name> --count N -o <pattern>
+    //     (skeleton-anim frame export — pre-existing path)
+    //
+    //   pose <library.poselib> --library list [--json]
+    //     (list pose names in a `.poselib` sidecar JSON, no mesh
+    //     load needed — added with D-Project. Future modes will
+    //     extend this with --library apply <name> -o out.fbx
+    //     once the round-trip exporter lands.)
     QString filePath, outputPath, animName;
+    QString libraryOp;          // "list" only for now
+    bool libraryMode = false;
+    bool jsonOutput = false;
     float time = -1.0f;
     int count = 0;
 
@@ -2420,6 +2434,12 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             count = QString(argv[++i]).toInt();
             continue;
         }
+        if (arg == "--library" && i + 1 < argc) {
+            libraryMode = true;
+            libraryOp = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--json") { jsonOutput = true; continue; }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString(argv[++i]);
             continue;
@@ -2428,6 +2448,75 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             filePath = arg;
             continue;
         }
+    }
+
+    if (libraryMode) {
+        // Library mode: filePath is the .poselib sidecar, not a
+        // mesh. The PoseLibrary singleton needs an entity to key
+        // poses against; we use a temporary "CLI pose-list anchor"
+        // entity for this — no skeleton, just an anchor.
+        if (libraryOp != QStringLiteral("list")) {
+            err() << "Error: --library currently supports only 'list'." << Qt::endl;
+            err() << "       --library apply needs the round-trip exporter (follow-up)." << Qt::endl;
+            return 2;
+        }
+        if (filePath.isEmpty()) {
+            err() << "Error: No input file specified." << Qt::endl;
+            err() << "Usage: qtmesh pose <library.poselib> --library list [--json]" << Qt::endl;
+            return 2;
+        }
+        QFileInfo libFi(filePath);
+        if (!libFi.exists()) {
+            err() << "Error: File not found: " << filePath << Qt::endl;
+            return 1;
+        }
+        // Read JSON directly — we don't need an Ogre scene at all.
+        QFile f(filePath);
+        if (!f.open(QIODevice::ReadOnly)) {
+            err() << "Error: Cannot open " << filePath << Qt::endl;
+            return 1;
+        }
+        const QByteArray bytes = f.readAll();
+        f.close();
+        QJsonParseError pe{};
+        const QJsonDocument doc = QJsonDocument::fromJson(bytes, &pe);
+        if (pe.error != QJsonParseError::NoError || !doc.isObject()) {
+            err() << "Error: malformed JSON in " << filePath << Qt::endl;
+            return 1;
+        }
+        const QJsonObject root = doc.object();
+        if (root.value("schema").toString() != QStringLiteral("qtmesheditor.poselib.v1")) {
+            err() << "Error: schema mismatch in " << filePath << Qt::endl;
+            return 1;
+        }
+        const QJsonArray poses = root.value("poses").toArray();
+        QStringList names;
+        for (const QJsonValue& v : poses) {
+            const QString n = v.toObject().value("name").toString();
+            if (!n.isEmpty()) names << n;
+        }
+
+        SentryReporter::addBreadcrumb("cli.pose",
+            QString("Library list .%1 (%2 poses)").arg(libFi.suffix()).arg(names.size()));
+
+        if (jsonOutput) {
+            QJsonArray arr;
+            for (const QString& n : names) arr.append(n);
+            QJsonObject out;
+            out["file"]  = filePath;
+            out["count"] = static_cast<int>(names.size());
+            out["poses"] = arr;
+            cliWrite(QString::fromUtf8(QJsonDocument(out).toJson(QJsonDocument::Indented)));
+        } else {
+            if (names.isEmpty()) {
+                cliWrite(QStringLiteral("No poses in library.\n"));
+            } else {
+                cliWrite(QStringLiteral("Poses (%1):\n").arg(names.size()));
+                for (const QString& n : names)
+                    cliWrite(QStringLiteral("  %1\n").arg(n));
+            }
+        }
+        return 0;
     }
 
     if (filePath.isEmpty()) {
