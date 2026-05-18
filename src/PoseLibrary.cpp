@@ -224,48 +224,21 @@ bool PoseLibrary::mirrorPose(Ogre::Entity* entity,
 {
     assertMainThread();
     if (!entity || srcName.isEmpty() || dstName.isEmpty()) return false;
-    if (!hasPose(entity, srcName)) return false;
     auto* skel = skeletonOf(entity);
     if (!skel) return false;
 
-    // Capture the source pose into a snapshot via round-trip-apply
-    // — same idiom the command path uses, for the same reason:
-    // PoseLibrary's public API doesn't expose direct pose
-    // contents.
-    PoseSnapshot src;
-    {
-        // Save the live state, apply src, capture, restore.
-        PoseSnapshot live;
-        live.reserve(skel->getNumBones());
-        for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
-            Ogre::Bone* bone = skel->getBone(i);
-            if (!bone) continue;
-            BonePoseSnapshot bs;
-            bs.translate = bone->getPosition();
-            bs.rotation = bone->getOrientation();
-            bs.scale = bone->getScale();
-            live.insert(QString::fromStdString(bone->getName()), bs);
-        }
-        applyPose(entity, srcName);
-        for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
-            Ogre::Bone* bone = skel->getBone(i);
-            if (!bone) continue;
-            BonePoseSnapshot bs;
-            bs.translate = bone->getPosition();
-            bs.rotation = bone->getOrientation();
-            bs.scale = bone->getScale();
-            src.insert(QString::fromStdString(bone->getName()), bs);
-        }
-        // Restore the live state.
-        for (auto it = live.cbegin(); it != live.cend(); ++it) {
-            const std::string n = it.key().toStdString();
-            if (!skel->hasBone(n)) continue;
-            Ogre::Bone* b = skel->getBone(n);
-            b->setPosition(it.value().translate);
-            b->setOrientation(it.value().rotation);
-            b->setScale(it.value().scale);
-        }
-    }
+    // Read the source pose directly from m_byEntity. Codex P2 on
+    // PR #597: an earlier draft re-captured the entire live
+    // skeleton after applyPose, which silently pulled in live
+    // bone values for any bone NOT in the saved pose (LOD diff,
+    // partial save). Reading from the stored snapshot keeps mirror
+    // deterministic — only the bones that were actually saved
+    // contribute to the result.
+    auto entIt = m_byEntity.constFind(entity);
+    if (entIt == m_byEntity.constEnd()) return false;
+    auto poseIt = entIt->byName.constFind(srcName);
+    if (poseIt == entIt->byName.constEnd()) return false;
+    const PoseSnapshot& src = *poseIt;
 
     // Build the mirrored snapshot: for each source bone, look up
     // its mirrored counterpart's name and write the X-flipped TRS
@@ -290,45 +263,23 @@ bool PoseLibrary::mirrorPose(Ogre::Entity* entity,
         mirrored.insert(flipped, bs);
     }
 
-    // Apply the mirrored snapshot to the live skeleton and call
-    // savePose under dstName — same write-pattern the commands use
-    // so the per-entity order list stays consistent.
-    PoseSnapshot liveBeforeWrite;
-    liveBeforeWrite.reserve(skel->getNumBones());
-    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
-        Ogre::Bone* bone = skel->getBone(i);
-        if (!bone) continue;
-        BonePoseSnapshot bs;
-        bs.translate = bone->getPosition();
-        bs.rotation = bone->getOrientation();
-        bs.scale = bone->getScale();
-        liveBeforeWrite.insert(QString::fromStdString(bone->getName()), bs);
-    }
-    // Write the mirrored TRS to the live skeleton.
-    for (auto it = mirrored.cbegin(); it != mirrored.cend(); ++it) {
-        const std::string n = it.key().toStdString();
-        if (!skel->hasBone(n)) continue;
-        Ogre::Bone* b = skel->getBone(n);
-        b->setPosition(it.value().translate);
-        b->setOrientation(it.value().rotation);
-        b->setScale(it.value().scale);
-    }
-    const bool ok = savePose(entity, dstName);
-    // Restore the live state.
-    for (auto it = liveBeforeWrite.cbegin(); it != liveBeforeWrite.cend(); ++it) {
-        const std::string n = it.key().toStdString();
-        if (!skel->hasBone(n)) continue;
-        Ogre::Bone* b = skel->getBone(n);
-        b->setPosition(it.value().translate);
-        b->setOrientation(it.value().rotation);
-        b->setScale(it.value().scale);
-    }
+    // Write the mirrored snapshot directly into m_byEntity. We're
+    // already inside the class, and the live skeleton isn't a
+    // necessary intermediate — bypassing `savePose` here also
+    // avoids the round-trip-apply that the public surface would
+    // require. Preserves the byName + order parallel storage and
+    // emits posesChanged just like a normal save would.
+    auto& store = m_byEntity[entity];
+    const bool isOverwrite = store.byName.contains(dstName);
+    store.byName.insert(dstName, mirrored);
+    if (!isOverwrite) store.order.append(dstName);
 
-    if (ok) {
-        SentryReporter::addBreadcrumb("scene.anim.pose",
-            QStringLiteral("mirror '%1' -> '%2'").arg(srcName, dstName));
-    }
-    return ok;
+    SentryReporter::addBreadcrumb("scene.anim.pose",
+        QStringLiteral("mirror '%1' -> '%2' (%3 bones%4)")
+            .arg(srcName, dstName).arg(mirrored.size())
+            .arg(isOverwrite ? QStringLiteral(", overwrite") : QString()));
+    emit posesChanged(entity);
+    return true;
 }
 
 bool PoseLibrary::forgetEntity(Ogre::Entity* entity)
