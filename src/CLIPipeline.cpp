@@ -2507,18 +2507,29 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
         MeshImporterExporter::importer({meshFi.absoluteFilePath()});
         auto& movables = Manager::getSingleton()->getEntities();
         Ogre::Entity* entity = nullptr;
+        Ogre::Entity* firstAnyEntity = nullptr;
+        // CodeRabbit Major on PR #606: prefer the first SKINNED
+        // entity. Multi-entity imports often include an unskinned
+        // helper (collision proxy, prop) first; if we picked it,
+        // apply would fail with "no skeleton" even though a valid
+        // rigged mesh loaded later in the scene. Track both so we
+        // can give a precise error: "no entity at all" vs "found
+        // entities but none skinned".
         for (auto* obj : movables) {
-            if (obj && obj->getMovableType() == "Entity") {
-                entity = static_cast<Ogre::Entity*>(obj);
+            if (!obj || obj->getMovableType() != "Entity") continue;
+            auto* e = static_cast<Ogre::Entity*>(obj);
+            if (!firstAnyEntity) firstAnyEntity = e;
+            if (e->hasSkeleton()) {
+                entity = e;
                 break;
             }
         }
-        if (!entity) {
+        if (!firstAnyEntity) {
             err() << "Error: Failed to load mesh: " << filePath << Qt::endl;
             return 1;
         }
-        if (!entity->hasSkeleton()) {
-            err() << "Error: Mesh has no skeleton — cannot apply a pose." << Qt::endl;
+        if (!entity) {
+            err() << "Error: Loaded mesh has no skinned entity — cannot apply a pose." << Qt::endl;
             return 1;
         }
 
@@ -2545,6 +2556,8 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
         // FBX/glTF it preserves the skeleton, for STL/OBJ it
         // bakes the posed mesh down to triangles.
         QFileInfo outFi(outputPath);
+        SentryReporter::addBreadcrumb("file.export",
+            QString("Exporting posed mesh to %1").arg(outFi.absoluteFilePath()));
         const int result = MeshImporterExporter::exportCurrentPose(entity, outFi.absoluteFilePath());
         if (result != 0) {
             err() << "Error: Export failed: " << outputPath << Qt::endl;
