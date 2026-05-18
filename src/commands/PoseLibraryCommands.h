@@ -100,6 +100,12 @@ private:
     // Bone TRS values as they were BEFORE redo applied the saved
     // pose. Undo writes these back.
     PoseLibSnapshot mPreApply;
+    // True only when the most recent redo() actually applied the
+    // pose. If the pose name was missing / library returned false,
+    // redo is a no-op and undo MUST also be a no-op — otherwise
+    // we'd clobber user edits made after the failed apply with the
+    // stale `mPreApply` snapshot (Codex P1 on PR #595).
+    bool mRedoApplied = false;
 };
 
 #endif // POSE_LIBRARY_COMMANDS_H
