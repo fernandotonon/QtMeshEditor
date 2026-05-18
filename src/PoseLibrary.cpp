@@ -160,6 +160,7 @@ bool PoseLibrary::deletePose(Ogre::Entity* entity, const QString& name)
 
 bool PoseLibrary::hasPose(Ogre::Entity* entity, const QString& name) const
 {
+    assertMainThread();
     if (!entity || name.isEmpty()) return false;
     auto it = m_byEntity.constFind(entity);
     if (it == m_byEntity.constEnd()) return false;
@@ -168,6 +169,7 @@ bool PoseLibrary::hasPose(Ogre::Entity* entity, const QString& name) const
 
 QStringList PoseLibrary::listPoses(Ogre::Entity* entity) const
 {
+    assertMainThread();
     if (!entity) return {};
     auto it = m_byEntity.constFind(entity);
     if (it == m_byEntity.constEnd()) return {};
@@ -180,13 +182,20 @@ bool PoseLibrary::forgetEntity(Ogre::Entity* entity)
     if (!entity) return false;
     if (!m_byEntity.contains(entity)) return false;
     m_byEntity.remove(entity);
+    SentryReporter::addBreadcrumb("scene.anim.pose",
+        QStringLiteral("forget entity (entity-side teardown)"));
     return true;
 }
 
 void PoseLibrary::clearAll()
 {
     assertMainThread();
+    const int n = m_byEntity.size();
     m_byEntity.clear();
+    if (n > 0) {
+        SentryReporter::addBreadcrumb("scene.anim.pose",
+            QStringLiteral("clear all (%1 entities)").arg(n));
+    }
 }
 
 bool PoseLibrary::savePoseForSelection(const QString& name)
