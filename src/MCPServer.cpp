@@ -4463,7 +4463,16 @@ static bool readNumericArray(const QJsonObject& args, const char* key,
                       .arg(key).arg(i);
             return false;
         }
-        out[i] = a[i].toDouble();
+        const double v = a[i].toDouble();
+        // Extremely large literals (e.g. `1e400`) JSON-parse as Doubles
+        // but produce Inf, which would silently propagate into the
+        // keyframe. Reject NaN / Inf the same way time / length do.
+        if (!std::isfinite(v)) {
+            err = QStringLiteral("Error: '%1'[%2] must be a finite number")
+                      .arg(key).arg(i);
+            return false;
+        }
+        out[i] = v;
     }
     return true;
 }

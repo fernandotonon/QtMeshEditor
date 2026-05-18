@@ -7215,3 +7215,26 @@ TEST_F(MCPServerTest, AddNodeAnimationClip_RejectsNonNumericLength)
     EXPECT_TRUE(getResultText(r).contains("length"));
     EXPECT_TRUE(getResultText(r).contains("number"));
 }
+
+// CodeRabbit nit on PR #587 — reject NaN / Inf TRS components.
+// Extremely large literals (1e400) JSON-parse as Doubles but produce
+// Inf, which would silently propagate into the keyframe. Round-trips
+// through Ogre and exporters would then NaN-cascade.
+TEST_F(MCPServerTest, SetNodeKeyframe_RejectsNonFiniteTRSComponent)
+{
+    QJsonObject create;
+    create["name"] = "MCP_C6_FiniteTRS";
+    create["length"] = 1.0;
+    server->callTool("add_node_animation_clip", create);
+
+    QJsonObject args;
+    args["clip"] = "MCP_C6_FiniteTRS";
+    args["node"] = "SomeNode";
+    args["time"] = 0.0;
+    // 1e400 → Inf at JSON parse time.
+    args["translate"] = QJsonArray{1e400, 0.0, 0.0};
+    QJsonObject r = server->callTool("set_node_keyframe", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("translate"));
+    EXPECT_TRUE(getResultText(r).contains("finite"));
+}
