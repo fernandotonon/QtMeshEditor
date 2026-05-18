@@ -5093,29 +5093,36 @@ int CLIPipeline::cmdNodeAnim(int argc, char* argv[])
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
 
-    // Verify the import actually produced anything. A corrupt or
-    // unsupported-but-existing file would otherwise produce
-    // "No node animations found" with exit code 0 — masking real
-    // load failures in CI/audit workflows. Same guard cmdMorph uses.
-    auto& movables = Manager::getSingleton()->getEntities();
-    bool hasAnyEntity = false;
-    for (auto* obj : movables) {
-        if (obj && obj->getMovableType() == "Entity") {
-            hasAnyEntity = true;
-            break;
-        }
-    }
-    if (!hasAnyEntity) {
-        err() << "Error: Failed to load file: " << filePath << Qt::endl;
-        return 1;
-    }
-
     // The NodeAnimationManager reads from the SceneManager's animation
     // table, which is what `importer()` populated. Round-trip the
     // listClips() Q_INVOKABLE so the CLI output matches whatever an
     // MCP agent would see on the same file via list_node_animations.
     auto* m = NodeAnimationManager::instance();
     QStringList clips = m ? m->listClips() : QStringList();
+
+    // Soft "import failed" guard: node-animation clips are scene-level
+    // data and CAN exist independently of entities (animated empties,
+    // pure transform-only scenes). So we can't use cmdMorph's strict
+    // "no entities" check — that would false-positive on a valid
+    // load that just happens to have neither meshes nor clips. The
+    // softer signal is "neither dimension produced anything": no
+    // entities AND no clips, which only happens for corrupt /
+    // unsupported files. Valid empty scenes still exit 0 with
+    // "No node animations found".
+    if (clips.isEmpty()) {
+        auto& movables = Manager::getSingleton()->getEntities();
+        bool hasAnyEntity = false;
+        for (auto* obj : movables) {
+            if (obj && obj->getMovableType() == "Entity") {
+                hasAnyEntity = true;
+                break;
+            }
+        }
+        if (!hasAnyEntity) {
+            err() << "Error: Failed to load file: " << filePath << Qt::endl;
+            return 1;
+        }
+    }
 
     if (jsonOutput) {
         QJsonArray arr;
