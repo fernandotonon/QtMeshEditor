@@ -331,6 +331,16 @@ bool PoseLibrary::deletePoseForSelection(const QString& name)
     return deletePose(ents.first(), name);
 }
 
+bool PoseLibrary::mirrorPoseForSelection(const QString& srcName,
+                                          const QString& dstName)
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty()) return false;
+    return mirrorPose(ents.first(), srcName, dstName);
+}
+
 QStringList PoseLibrary::listPosesForSelection() const
 {
     auto* sel = SelectionSet::getSingleton();

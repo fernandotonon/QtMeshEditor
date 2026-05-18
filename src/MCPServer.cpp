@@ -608,7 +608,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("list_poses"), &MCPServer::toolListPoses},
         {QStringLiteral("save_pose"), &MCPServer::toolSavePose},
         {QStringLiteral("apply_pose"), &MCPServer::toolApplyPose},
-        {QStringLiteral("delete_pose"), &MCPServer::toolDeletePose}
+        {QStringLiteral("delete_pose"), &MCPServer::toolDeletePose},
+        {QStringLiteral("mirror_pose"), &MCPServer::toolMirrorPose}
     };
     return handlers;
 }
@@ -4630,6 +4631,31 @@ QJsonObject MCPServer::toolDeletePose(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+QJsonObject MCPServer::toolMirrorPose(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "mirror_pose");
+    const QString src = args.value("src").toString();
+    const QString dst = args.value("dst").toString();
+    if (src.isEmpty())
+        return makeErrorResult("Error: missing required 'src' argument");
+    if (dst.isEmpty())
+        return makeErrorResult("Error: missing required 'dst' argument");
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->mirrorPoseForSelection(src, dst))
+        return makeErrorResult(
+            QString("Error: failed to mirror pose '%1' → '%2' "
+                    "(no selection, no skeleton, or src not found)")
+                .arg(src, dst));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["src"] = src;
+    content["dst"] = dst;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -5877,6 +5903,26 @@ QJsonArray MCPServer::buildToolsList()
             "delete_pose",
             "Drop a saved pose from the first selected entity's library. "
             "Returns error when the pose name isn't found.",
+            props,
+            required
+        );
+    }
+
+    // mirror_pose
+    {
+        QJsonObject props;
+        props["src"] = QJsonObject{{"type", "string"}, {"description", "Existing pose name to mirror (use list_poses to enumerate)."}};
+        props["dst"] = QJsonObject{{"type", "string"}, {"description", "Output pose name. Overwrites in place if same as `src`."}};
+        QJsonArray required;
+        required.append("src");
+        required.append("dst");
+        appendTool(
+            "mirror_pose",
+            "Mirror a saved pose across the YZ plane using the bone-name "
+            "heuristic. Recognises `_l`/`_r`, `.L`/`.R`, and `Left*`/`Right*` "
+            "naming. TRS flip: pos.x → -pos.x, rotation (w,x,y,z) → (w,x,-y,-z), "
+            "scale.x → -scale.x. Centre-line bones (Spine, Hips, Head) get "
+            "the X-flipped TRS in place. Writes the result under `dst`.",
             props,
             required
         );
