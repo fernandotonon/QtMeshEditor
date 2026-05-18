@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QSignalSpy>
 #include <QTemporaryFile>
+#include <QTest>
 
 #include "PS1/runtime/PS1RipManager.h"
 
@@ -145,6 +146,38 @@ TEST_F(PS1RipManagerTest, StopCancelsPendingStart)
 
     ASSERT_FALSE(startedSpy.wait(500));
     EXPECT_TRUE(startedSpy.empty());
+}
+
+TEST_F(PS1RipManagerTest, ArmedCaptureAccumulatesPrimitives)
+{
+    if (!stubPluginAvailable())
+        GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
+
+    QTemporaryFile bios(QDir::tempPath() + "/qtmesh_bios_cap_XXXXXX.bin");
+    QTemporaryFile iso(QDir::tempPath() + "/qtmesh_iso_cap_XXXXXX.bin");
+    ASSERT_TRUE(bios.open());
+    ASSERT_TRUE(iso.open());
+    bios.write("bios");
+    iso.write("iso");
+    bios.close();
+    iso.close();
+
+    ASSERT_TRUE(manager->loadBios(bios.fileName()));
+    ASSERT_TRUE(manager->loadIso(iso.fileName()));
+    ASSERT_TRUE(manager->armCapture(true));
+
+    QSignalSpy startedSpy(manager, &PS1RipManager::sessionStarted);
+    ASSERT_TRUE(manager->start());
+    ASSERT_TRUE(startedSpy.wait(3000));
+
+    QTest::qWait(100);
+
+    QSignalSpy captureSpy(manager, &PS1RipManager::frameCaptured);
+    ASSERT_TRUE(manager->captureFrame());
+    ASSERT_TRUE(captureSpy.wait(3000));
+    EXPECT_FALSE(captureSpy.empty());
+
+    manager->stop();
 }
 
 #endif // ENABLE_PS1_RIP

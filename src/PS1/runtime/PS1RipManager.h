@@ -60,6 +60,7 @@ private:
     void shutdownWorkerThread();
     void reportError(const QString &message);
     void syncWorkerSession();
+    void syncWorkerCaptureArmed();
 
     static PS1RipManager *s_instance;
 

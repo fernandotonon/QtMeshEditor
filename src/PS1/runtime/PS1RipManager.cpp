@@ -53,6 +53,7 @@ void PS1RipManager::initializeWorkerThread()
         m_sessionActive = false;
         m_paused = false;
         m_captureArmed = false;
+        syncWorkerCaptureArmed();
         emit sessionStopped();
     });
     connect(m_worker, &PS1RipWorker::emulationError, this, [this](const QString &msg) {
@@ -60,6 +61,11 @@ void PS1RipManager::initializeWorkerThread()
         reportError(msg);
     });
     connect(m_worker, &PS1RipWorker::framePresented, this, &PS1RipManager::framePresented);
+    connect(m_worker, &PS1RipWorker::frameCaptureReady, this, [this](const QString &captureId, int) {
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                      QStringLiteral("ps1_rip_frame:%1").arg(captureId));
+        emit frameCaptured(captureId);
+    });
 
     connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
 
@@ -90,6 +96,16 @@ void PS1RipManager::syncWorkerSession()
         return;
     QMetaObject::invokeMethod(m_worker, "configureSession", Qt::QueuedConnection,
                               Q_ARG(QString, m_biosPath), Q_ARG(QString, m_isoPath));
+}
+
+void PS1RipManager::syncWorkerCaptureArmed()
+{
+    if (!m_worker)
+        return;
+    PS1RipWorker *worker = m_worker;
+    const bool armed = m_captureArmed;
+    QMetaObject::invokeMethod(worker, [worker, armed]() { worker->setCaptureArmed(armed); },
+                              Qt::QueuedConnection);
 }
 
 bool PS1RipManager::loadBios(const QString &path)
@@ -153,6 +169,7 @@ bool PS1RipManager::stop()
         return false;
 
     m_captureArmed = false;
+    syncWorkerCaptureArmed();
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip"), QStringLiteral("stop"));
 
     if (m_startPending && !m_sessionActive) {
@@ -192,8 +209,15 @@ bool PS1RipManager::step()
 bool PS1RipManager::armCapture(bool armed)
 {
     m_captureArmed = armed;
-    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip"),
-                                  armed ? QStringLiteral("armCapture") : QStringLiteral("disarmCapture"));
+    if (armed) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("ps1_rip_arm_capture"));
+    } else {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("ps1_rip_disarm_capture"));
+    }
+
+    syncWorkerCaptureArmed();
     return true;
 }
 
@@ -203,8 +227,14 @@ bool PS1RipManager::captureFrame()
         reportError(tr("Capture is not armed"));
         return false;
     }
-    reportError(tr("Capture pipeline not implemented yet"));
-    return false;
+    if (!m_sessionActive) {
+        reportError(tr("No active PS1 session"));
+        return false;
+    }
+    PS1RipWorker *worker = m_worker;
+    QMetaObject::invokeMethod(worker, [worker]() { worker->finalizeFrameCapture(); },
+                              Qt::QueuedConnection);
+    return true;
 }
 
 bool PS1RipManager::captureScene(int seconds)

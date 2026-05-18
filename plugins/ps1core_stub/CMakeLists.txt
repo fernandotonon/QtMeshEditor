@@ -5,6 +5,7 @@ endif()
 set(PS1_RUNTIME_INCLUDE "${CMAKE_SOURCE_DIR}/src/PS1/runtime")
 
 add_library(qtmesh_ps1core_stub MODULE
+    StubCaptureSynth.cpp
     StubEmuCore.cpp
     StubEmuCorePlugin.cpp
 )
