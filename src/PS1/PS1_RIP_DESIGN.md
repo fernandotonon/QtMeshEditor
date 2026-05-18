@@ -68,6 +68,14 @@ See epic #412 for phased issues (#413–#431).
 - Stub core emits seven primitive flavors per frame when capture is armed.
 - `armCapture` / `captureFrame` wire capture to the worker thread; CSV dump to temp for verification.
 
+## Phase 3 status (#420 / #421)
+
+- `VramSnapshot` — full 1024×512×16-bit VRAM buffer, view modes (RGB555, 4bpp index, 8bpp index, CLUT preview), PNG export.
+- `RipperHooks::onVramWrite` mirrors GPU uploads into the worker-owned snapshot.
+- `TextureDecoder` — CLUT-aware 4/8/15 bpp tile decode with `TileKey` cache and STP/alpha via `PsxVramColor`.
+- `dumpVRAM()` saves `<AppData>/ps1_rip/captures/<id>_vram.png` and feeds `VramViewerWidget` in the session window.
+- Stub core fills CLUT + 4/8/15 bpp test regions each frame via `stubFillVramPattern`.
+
 ## Open questions
 
 - mednafen-psx plugin build/integration (replace stub for real emulation).

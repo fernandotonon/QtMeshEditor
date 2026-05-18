@@ -6,6 +6,8 @@
 
 #include <atomic>
 
+class VramSnapshot;
+
 /**
  * Concrete EmuHooks that records into CaptureBuffer when capture is armed (#418).
  */
@@ -14,6 +16,7 @@ class RipperHooks final : public EmuHooks
 public:
     void setArmedFlag(std::atomic<bool> *armed) { m_armed = armed; }
     void setBuffer(CaptureBuffer *buffer) { m_buffer = buffer; }
+    void setVram(VramSnapshot *vram) { m_vram = vram; }
 
     bool isCaptureEnabled() const override;
 
@@ -30,6 +33,7 @@ public:
 private:
     std::atomic<bool> *m_armed = nullptr;
     CaptureBuffer *m_buffer = nullptr;
+    VramSnapshot *m_vram = nullptr;
 };
 
 #endif // RIPPERHOOKS_H

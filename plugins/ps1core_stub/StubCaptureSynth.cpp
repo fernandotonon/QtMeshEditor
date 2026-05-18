@@ -2,6 +2,10 @@
 
 #include "CaptureTypes.h"
 #include "EmuHooks.h"
+#include "PsxVramColor.h"
+
+#include <QVector>
+#include <QtGlobal>
 
 void stubEmitCaptureSample(EmuHooks *hooks)
 {
@@ -60,4 +64,51 @@ void stubEmitCaptureSample(EmuHooks *hooks)
     hooks->onDrawMode(mode);
 
     hooks->onFrameEnd();
+}
+
+void stubFillVramPattern(EmuHooks *hooks, std::uint64_t frameIndex)
+{
+    if (!hooks)
+        return;
+
+    QVector<uint16_t> clutRow(16);
+    for (int i = 0; i < 16; ++i) {
+        const uint8_t v = static_cast<uint8_t>((i * 16 + static_cast<int>(frameIndex % 16)) & 0xFF);
+        clutRow[i] = PsxVramColor::rgbaToBgr555(v, static_cast<uint8_t>(255 - v), 128, 255);
+    }
+    hooks->onVramWrite(0, 480, 16, 1, clutRow.constData());
+
+    QVector<uint16_t> block4(64 * 32);
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            uint16_t word = 0;
+            for (int nibble = 0; nibble < 4; ++nibble) {
+                const int idx = (x * 4 + nibble + y + static_cast<int>(frameIndex)) % 16;
+                word |= static_cast<uint16_t>(idx << (nibble * 4));
+            }
+            block4[y * 64 + x] = word;
+        }
+    }
+    hooks->onVramWrite(0, 0, 64, 32, block4.constData());
+
+    QVector<uint16_t> block8(128 * 32);
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 128; ++x) {
+            const uint8_t lo = static_cast<uint8_t>((x + y + static_cast<int>(frameIndex)) & 0xFF);
+            const uint8_t hi = static_cast<uint8_t>((x * 2 + y + static_cast<int>(frameIndex)) & 0xFF);
+            block8[y * 128 + x] = static_cast<uint16_t>(lo | (static_cast<uint16_t>(hi) << 8));
+        }
+    }
+    hooks->onVramWrite(64, 0, 128, 32, block8.constData());
+
+    QVector<uint16_t> block15(64 * 32);
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            const uint8_t r = static_cast<uint8_t>((x * 4 + y) & 0xFF);
+            const uint8_t g = static_cast<uint8_t>((32 + y + static_cast<int>(frameIndex)) & 0xFF);
+            const uint8_t b = static_cast<uint8_t>((x * 2 + y) & 0xFF);
+            block15[y * 64 + x] = PsxVramColor::rgbaToBgr555(r, g, b, (x & 1) ? 128 : 255);
+        }
+    }
+    hooks->onVramWrite(0, 256, 64, 32, block15.constData());
 }

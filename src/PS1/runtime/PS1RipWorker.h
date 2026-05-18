@@ -4,12 +4,14 @@
 #include <QImage>
 #include <QObject>
 #include <QString>
+#include <QVector>
 #include <QtGlobal>
 
 #include <atomic>
 #include <memory>
 
 class CaptureBuffer;
+class VramSnapshot;
 class EmuCore;
 class QTimer;
 class RipperHooks;
@@ -39,6 +41,7 @@ public slots:
     void stepFrame();
     void setCaptureArmed(bool armed);
     void finalizeFrameCapture();
+    void dumpVram();
 
 signals:
     void emulationStarted();
@@ -46,6 +49,8 @@ signals:
     void framePresented(const QImage &frame, quint64 frameIndex);
     void emulationError(const QString &message);
     void frameCaptureReady(const QString &captureId, int primCount);
+    void vramDumpReady(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
+                       const QImage &nativePreview);
 
 private slots:
     void runFrameTick();
@@ -65,6 +70,7 @@ private:
 
     std::unique_ptr<CaptureBuffer> m_captureBuffer;
     std::unique_ptr<RipperHooks> m_ripperHooks;
+    std::unique_ptr<VramSnapshot> m_vram;
 };
 
 #endif // PS1RIPWORKER_H

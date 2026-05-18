@@ -4,6 +4,7 @@
 
 #include <QFileInfo>
 #include <QMetaObject>
+#include <QMetaType>
 
 PS1RipManager *PS1RipManager::s_instance = nullptr;
 
@@ -38,6 +39,8 @@ PS1RipManager::~PS1RipManager()
 
 void PS1RipManager::initializeWorkerThread()
 {
+    qRegisterMetaType<QVector<uint16_t>>("QVector<uint16_t>");
+
     m_workerThread = new QThread(this);
     m_worker = new PS1RipWorker();
     m_worker->moveToThread(m_workerThread);
@@ -66,6 +69,13 @@ void PS1RipManager::initializeWorkerThread()
                                       QStringLiteral("ps1_rip_frame:%1").arg(captureId));
         emit frameCaptured(captureId);
     });
+    connect(m_worker, &PS1RipWorker::vramDumpReady, this,
+            [this](const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
+                   const QImage &preview) {
+                SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.vram.dump"),
+                                            QStringLiteral("%1:%2").arg(captureId, pngPath));
+                emit vramDumped(captureId, pngPath, cells, preview);
+            });
 
     connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
 
@@ -257,6 +267,7 @@ bool PS1RipManager::dumpVRAM()
         reportError(tr("No active PS1 session"));
         return false;
     }
-    reportError(tr("VRAM dump not implemented yet"));
-    return false;
+    PS1RipWorker *worker = m_worker;
+    QMetaObject::invokeMethod(worker, &PS1RipWorker::dumpVram, Qt::QueuedConnection);
+    return true;
 }

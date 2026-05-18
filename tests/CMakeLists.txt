@@ -147,6 +147,9 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipSessionWindow.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipWorker.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/RipperHooks.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/TextureDecoder.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/VramSnapshot.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/VramViewerWidget.cpp
         )
     endif()
 
