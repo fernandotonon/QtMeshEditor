@@ -1,6 +1,8 @@
 #ifndef PS1RIPWORKER_H
 #define PS1RIPWORKER_H
 
+#include "CaptureSnapshot.h"
+
 #include <QImage>
 #include <QObject>
 #include <QString>
@@ -48,7 +50,7 @@ signals:
     void emulationStopped();
     void framePresented(const QImage &frame, quint64 frameIndex);
     void emulationError(const QString &message);
-    void frameCaptureReady(const QString &captureId, int primCount);
+    void frameCaptureReady(const QString &captureId, const CaptureSnapshot &snapshot, int primCount);
     void vramDumpReady(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                        const QImage &nativePreview);
 

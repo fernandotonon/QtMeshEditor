@@ -35,8 +35,10 @@ private slots:
     void onFrame(const QImage &frame, quint64 frameIndex);
     void onError(const QString &message);
     void onDumpVram();
+    void onCaptureFrame();
     void onVramDumped(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                       const QImage &nativePreview);
+    void onMeshBuilt(const QString &captureId, int vertexCount, int triangleCount);
 
 private:
     void updateFps(quint64 frameIndex);
