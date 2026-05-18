@@ -91,6 +91,7 @@ VATBaker.cpp
 VATBakerController.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
+PoseLibrary.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
