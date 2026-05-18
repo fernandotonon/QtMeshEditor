@@ -4437,6 +4437,37 @@ QJsonObject MCPServer::toolAddNodeAnimationClip(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+// Parse an optional N-element numeric JSON array argument. Returns
+// `def` when the key is missing. Sets `ok = false` and populates
+// `err` on wrong arity or any non-numeric element. Pulled out of
+// `toolSetNodeKeyframe` so the dispatcher stays under SonarCloud's
+// cognitive-complexity threshold and the inner lambdas don't exceed
+// the 20-line cap.
+template <int N>
+static bool readNumericArray(const QJsonObject& args, const char* key,
+                             double out[N], bool& present, QString& err)
+{
+    present = false;
+    err.clear();
+    if (!args.contains(key)) return true;
+    present = true;
+    const QJsonArray a = args.value(key).toArray();
+    if (a.size() != N) {
+        err = QStringLiteral("Error: '%1' must be an array of %2 numbers")
+                  .arg(key).arg(N);
+        return false;
+    }
+    for (int i = 0; i < N; ++i) {
+        if (!a[i].isDouble()) {
+            err = QStringLiteral("Error: '%1'[%2] must be a number")
+                      .arg(key).arg(i);
+            return false;
+        }
+        out[i] = a[i].toDouble();
+    }
+    return true;
+}
+
 QJsonObject MCPServer::toolSetNodeKeyframe(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "set_node_keyframe");
@@ -4460,63 +4491,31 @@ QJsonObject MCPServer::toolSetNodeKeyframe(const QJsonObject &args)
     if (!std::isfinite(time) || time < 0.0)
         return makeErrorResult("Error: time must be a non-negative finite number");
 
-    // Translate / rotation / scale all default to identity if omitted,
-    // so the agent can author "snapshot the current pose at time T"
-    // by passing just the clip/node/time triple. Each is parsed
-    // strictly: malformed arrays AND non-numeric components return
-    // an error rather than silently falling back to defaults (which
-    // would mask agent bugs).
-    auto parseVec3 = [&](const char* key, const Ogre::Vector3& def,
-                         bool& ok, QString& err) -> Ogre::Vector3 {
-        ok = true;
-        if (!args.contains(key)) return def;
-        const QJsonArray a = args.value(key).toArray();
-        if (a.size() != 3) {
-            ok = false;
-            err = QStringLiteral("Error: '%1' must be an array of 3 numbers").arg(key);
-            return def;
-        }
-        for (int i = 0; i < 3; ++i) {
-            if (!a[i].isDouble()) {
-                ok = false;
-                err = QStringLiteral("Error: '%1'[%2] must be a number").arg(key).arg(i);
-                return def;
-            }
-        }
-        return Ogre::Vector3(static_cast<Ogre::Real>(a[0].toDouble()),
-                             static_cast<Ogre::Real>(a[1].toDouble()),
-                             static_cast<Ogre::Real>(a[2].toDouble()));
-    };
-    auto parseQuat = [&](const char* key, const Ogre::Quaternion& def,
-                         bool& ok, QString& err) -> Ogre::Quaternion {
-        ok = true;
-        if (!args.contains(key)) return def;
-        const QJsonArray a = args.value(key).toArray();
-        if (a.size() != 4) {
-            ok = false;
-            err = QStringLiteral("Error: '%1' must be an array of 4 numbers (w,x,y,z)").arg(key);
-            return def;
-        }
-        for (int i = 0; i < 4; ++i) {
-            if (!a[i].isDouble()) {
-                ok = false;
-                err = QStringLiteral("Error: '%1'[%2] must be a number").arg(key).arg(i);
-                return def;
-            }
-        }
-        return Ogre::Quaternion(static_cast<Ogre::Real>(a[0].toDouble()),
-                                static_cast<Ogre::Real>(a[1].toDouble()),
-                                static_cast<Ogre::Real>(a[2].toDouble()),
-                                static_cast<Ogre::Real>(a[3].toDouble()));
-    };
-
-    bool ok = true; QString err;
-    const Ogre::Vector3 translate = parseVec3("translate", Ogre::Vector3::ZERO, ok, err);
-    if (!ok) return makeErrorResult(err);
-    const Ogre::Quaternion rotation = parseQuat("rotation", Ogre::Quaternion::IDENTITY, ok, err);
-    if (!ok) return makeErrorResult(err);
-    const Ogre::Vector3 scale = parseVec3("scale", Ogre::Vector3(1, 1, 1), ok, err);
-    if (!ok) return makeErrorResult(err);
+    // Translate / rotation / scale all default to identity / one when
+    // omitted, so the agent can author "snapshot pose at time T" with
+    // just the clip/node/time triple. Each is parsed strictly:
+    // wrong-arity arrays AND non-numeric elements return an error.
+    QString err;
+    bool present = false;
+    double t[3] = {0, 0, 0};
+    double r[4] = {1, 0, 0, 0};
+    double s[3] = {1, 1, 1};
+    if (!readNumericArray<3>(args, "translate", t, present, err))
+        return makeErrorResult(err);
+    if (!readNumericArray<4>(args, "rotation", r, present, err))
+        return makeErrorResult(err);
+    if (!readNumericArray<3>(args, "scale", s, present, err))
+        return makeErrorResult(err);
+    const Ogre::Vector3 translate(static_cast<Ogre::Real>(t[0]),
+                                  static_cast<Ogre::Real>(t[1]),
+                                  static_cast<Ogre::Real>(t[2]));
+    const Ogre::Quaternion rotation(static_cast<Ogre::Real>(r[0]),
+                                    static_cast<Ogre::Real>(r[1]),
+                                    static_cast<Ogre::Real>(r[2]),
+                                    static_cast<Ogre::Real>(r[3]));
+    const Ogre::Vector3 scale(static_cast<Ogre::Real>(s[0]),
+                              static_cast<Ogre::Real>(s[1]),
+                              static_cast<Ogre::Real>(s[2]));
 
     auto* m = NodeAnimationManager::instance();
     if (!m->addKeyframe(clip, node, time, translate, rotation, scale))
