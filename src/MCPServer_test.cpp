@@ -7163,3 +7163,55 @@ TEST_F(MCPServerTest, SetNodeKeyframe_RejectsMalformedTransformArray)
     EXPECT_TRUE(isError(r));
     EXPECT_TRUE(getResultText(r).contains("translate"));
 }
+
+// Codex P1 follow-ups on PR #586: QJsonValue::toDouble() silently
+// returns 0.0 on non-numeric input. Without explicit `isDouble()`
+// guards, callers passing `"time": "abc"` or
+// `"translate": ["x", 1, 2]` would create phantom keyframes at t=0
+// or with zeroed components — corrupting authored data without a
+// visible error. These tests lock the strict-validation contract.
+
+TEST_F(MCPServerTest, SetNodeKeyframe_RejectsNonNumericTime)
+{
+    QJsonObject create;
+    create["name"] = "MCP_C6_StrictTime";
+    create["length"] = 1.0;
+    server->callTool("add_node_animation_clip", create);
+
+    QJsonObject args;
+    args["clip"] = "MCP_C6_StrictTime";
+    args["node"] = "SomeNode";
+    args["time"] = "0.5";  // STRING instead of number
+    QJsonObject r = server->callTool("set_node_keyframe", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("time"));
+    EXPECT_TRUE(getResultText(r).contains("number"));
+}
+
+TEST_F(MCPServerTest, SetNodeKeyframe_RejectsNonNumericTRSComponent)
+{
+    QJsonObject create;
+    create["name"] = "MCP_C6_StrictTRS";
+    create["length"] = 1.0;
+    server->callTool("add_node_animation_clip", create);
+
+    QJsonObject args;
+    args["clip"] = "MCP_C6_StrictTRS";
+    args["node"] = "SomeNode";
+    args["time"] = 0.0;
+    args["translate"] = QJsonArray{QString("x"), 1.0, 2.0};  // string in slot 0
+    QJsonObject r = server->callTool("set_node_keyframe", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("translate"));
+}
+
+TEST_F(MCPServerTest, AddNodeAnimationClip_RejectsNonNumericLength)
+{
+    QJsonObject args;
+    args["name"] = "MCP_C6_StrictLen";
+    args["length"] = "1.5";  // STRING instead of number
+    QJsonObject r = server->callTool("add_node_animation_clip", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("length"));
+    EXPECT_TRUE(getResultText(r).contains("number"));
+}

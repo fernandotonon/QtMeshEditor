@@ -4416,7 +4416,11 @@ QJsonObject MCPServer::toolAddNodeAnimationClip(const QJsonObject &args)
         return makeErrorResult("Error: missing required 'name' argument");
     if (!args.contains("length"))
         return makeErrorResult("Error: missing required 'length' argument");
-    const double length = args.value("length").toDouble();
+    // Strict number check first — see set_node_keyframe rationale.
+    const QJsonValue lengthV = args.value("length");
+    if (!lengthV.isDouble())
+        return makeErrorResult("Error: 'length' must be a number");
+    const double length = lengthV.toDouble();
     if (!std::isfinite(length) || length <= 0.0)
         return makeErrorResult("Error: length must be a positive finite number");
 
@@ -4445,15 +4449,23 @@ QJsonObject MCPServer::toolSetNodeKeyframe(const QJsonObject &args)
         return makeErrorResult("Error: missing required 'node' argument");
     if (!args.contains("time"))
         return makeErrorResult("Error: missing required 'time' argument");
-    const double time = args.value("time").toDouble();
+    // Strict number check first: QJsonValue::toDouble() silently
+    // returns 0.0 on non-numeric inputs (string, bool, null), which
+    // would create a phantom keyframe at t=0 from a caller bug like
+    // `"time": "0.5"`. Reject any non-Double type up front.
+    const QJsonValue timeV = args.value("time");
+    if (!timeV.isDouble())
+        return makeErrorResult("Error: 'time' must be a number");
+    const double time = timeV.toDouble();
     if (!std::isfinite(time) || time < 0.0)
         return makeErrorResult("Error: time must be a non-negative finite number");
 
     // Translate / rotation / scale all default to identity if omitted,
     // so the agent can author "snapshot the current pose at time T"
     // by passing just the clip/node/time triple. Each is parsed
-    // strictly: malformed arrays return an error rather than silently
-    // falling back to defaults (which would mask agent bugs).
+    // strictly: malformed arrays AND non-numeric components return
+    // an error rather than silently falling back to defaults (which
+    // would mask agent bugs).
     auto parseVec3 = [&](const char* key, const Ogre::Vector3& def,
                          bool& ok, QString& err) -> Ogre::Vector3 {
         ok = true;
@@ -4463,6 +4475,13 @@ QJsonObject MCPServer::toolSetNodeKeyframe(const QJsonObject &args)
             ok = false;
             err = QStringLiteral("Error: '%1' must be an array of 3 numbers").arg(key);
             return def;
+        }
+        for (int i = 0; i < 3; ++i) {
+            if (!a[i].isDouble()) {
+                ok = false;
+                err = QStringLiteral("Error: '%1'[%2] must be a number").arg(key).arg(i);
+                return def;
+            }
         }
         return Ogre::Vector3(static_cast<Ogre::Real>(a[0].toDouble()),
                              static_cast<Ogre::Real>(a[1].toDouble()),
@@ -4477,6 +4496,13 @@ QJsonObject MCPServer::toolSetNodeKeyframe(const QJsonObject &args)
             ok = false;
             err = QStringLiteral("Error: '%1' must be an array of 4 numbers (w,x,y,z)").arg(key);
             return def;
+        }
+        for (int i = 0; i < 4; ++i) {
+            if (!a[i].isDouble()) {
+                ok = false;
+                err = QStringLiteral("Error: '%1'[%2] must be a number").arg(key).arg(i);
+                return def;
+            }
         }
         return Ogre::Quaternion(static_cast<Ogre::Real>(a[0].toDouble()),
                                 static_cast<Ogre::Real>(a[1].toDouble()),
