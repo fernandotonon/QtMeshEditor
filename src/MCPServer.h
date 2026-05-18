@@ -231,6 +231,22 @@ private:
     /// `rotation` ([w,x,y,z] quaternion), `scale` ([x,y,z]). Light.
     QJsonObject toolSetNodeKeyframe(const QJsonObject &args);
 
+    /// Pose-lib D-MCP: list saved pose names on the first selected
+    /// entity. Light read; returns `{ count, poses: [name…] }`.
+    QJsonObject toolListPoses(const QJsonObject &args);
+
+    /// Pose-lib D-MCP: capture current bone-TRS on the first
+    /// selected entity under `name`. Overwrites in place if the
+    /// name already exists. Args: `name`.
+    QJsonObject toolSavePose(const QJsonObject &args);
+
+    /// Pose-lib D-MCP: snap the first selected entity to a saved
+    /// pose. Args: `name`. Returns error when no such pose.
+    QJsonObject toolApplyPose(const QJsonObject &args);
+
+    /// Pose-lib D-MCP: drop a saved pose by name. Args: `name`.
+    QJsonObject toolDeletePose(const QJsonObject &args);
+
     // Animation
     struct NodeAnimation {
         Ogre::SceneNode* node;

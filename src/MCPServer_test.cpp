@@ -7238,3 +7238,48 @@ TEST_F(MCPServerTest, SetNodeKeyframe_RejectsNonFiniteTRSComponent)
     EXPECT_TRUE(getResultText(r).contains("translate"));
     EXPECT_TRUE(getResultText(r).contains("finite"));
 }
+
+// ==========================================================================
+// Pose-lib D-MCP — round-trips against the live PoseLibrary singleton
+// ==========================================================================
+
+TEST_F(MCPServerTest, ListPoses_EmptyWhenNoSelection)
+{
+    // No entity selected, no skinned entity to bind to — list should
+    // come back empty without throwing.
+    QJsonObject r = server->callTool("list_poses", QJsonObject{});
+    EXPECT_FALSE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("\"count\": 0"));
+}
+
+TEST_F(MCPServerTest, SavePose_MissingNameRejected)
+{
+    QJsonObject empty;
+    QJsonObject r = server->callTool("save_pose", empty);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("name"));
+}
+
+TEST_F(MCPServerTest, ApplyPose_MissingNameRejected)
+{
+    QJsonObject r = server->callTool("apply_pose", QJsonObject{});
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("name"));
+}
+
+TEST_F(MCPServerTest, DeletePose_UnknownNameRejected)
+{
+    QJsonObject args;
+    args["name"] = "MCP_PoseDoesNotExist";
+    QJsonObject r = server->callTool("delete_pose", args);
+    EXPECT_TRUE(isError(r));
+}
+
+TEST_F(MCPServerTest, SavePose_NoSelectionRejected)
+{
+    // No selection set up — save should fail with a helpful error.
+    QJsonObject args;
+    args["name"] = "MCP_NoSelPose";
+    QJsonObject r = server->callTool("save_pose", args);
+    EXPECT_TRUE(isError(r));
+}
