@@ -176,6 +176,161 @@ QStringList PoseLibrary::listPoses(Ogre::Entity* entity) const
     return it->order;
 }
 
+QString PoseLibrary::flipBoneName(const QString& boneName)
+{
+    // Mixamo / generic _l ↔ _r suffix. Case-preserving on the
+    // suffix letter so "BoneL" stays uppercase, "bone_l" stays
+    // lowercase, etc.
+    if (boneName.endsWith(QStringLiteral("_l"))) {
+        return boneName.left(boneName.size() - 2) + QStringLiteral("_r");
+    }
+    if (boneName.endsWith(QStringLiteral("_r"))) {
+        return boneName.left(boneName.size() - 2) + QStringLiteral("_l");
+    }
+    if (boneName.endsWith(QStringLiteral("_L"))) {
+        return boneName.left(boneName.size() - 2) + QStringLiteral("_R");
+    }
+    if (boneName.endsWith(QStringLiteral("_R"))) {
+        return boneName.left(boneName.size() - 2) + QStringLiteral("_L");
+    }
+    // Blender .L / .R convention.
+    if (boneName.endsWith(QStringLiteral(".L"))) {
+        return boneName.left(boneName.size() - 2) + QStringLiteral(".R");
+    }
+    if (boneName.endsWith(QStringLiteral(".R"))) {
+        return boneName.left(boneName.size() - 2) + QStringLiteral(".L");
+    }
+    // Maya Left / Right prefix. We require the prefix to be
+    // followed by an uppercase letter so "Lefty" isn't flipped
+    // to "Righty"; the convention is "LeftHand", "RightArm" etc.
+    auto hasPrefixWord = [&](const QString& prefix) {
+        if (!boneName.startsWith(prefix)) return false;
+        if (boneName.size() == prefix.size()) return true;
+        const QChar next = boneName.at(prefix.size());
+        return next.isUpper() || next == QLatin1Char('_');
+    };
+    if (hasPrefixWord(QStringLiteral("Left"))) {
+        return QStringLiteral("Right") + boneName.mid(4);
+    }
+    if (hasPrefixWord(QStringLiteral("Right"))) {
+        return QStringLiteral("Left") + boneName.mid(5);
+    }
+    return boneName;
+}
+
+bool PoseLibrary::mirrorPose(Ogre::Entity* entity,
+                             const QString& srcName,
+                             const QString& dstName)
+{
+    assertMainThread();
+    if (!entity || srcName.isEmpty() || dstName.isEmpty()) return false;
+    if (!hasPose(entity, srcName)) return false;
+    auto* skel = skeletonOf(entity);
+    if (!skel) return false;
+
+    // Capture the source pose into a snapshot via round-trip-apply
+    // — same idiom the command path uses, for the same reason:
+    // PoseLibrary's public API doesn't expose direct pose
+    // contents.
+    PoseSnapshot src;
+    {
+        // Save the live state, apply src, capture, restore.
+        PoseSnapshot live;
+        live.reserve(skel->getNumBones());
+        for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+            Ogre::Bone* bone = skel->getBone(i);
+            if (!bone) continue;
+            BonePoseSnapshot bs;
+            bs.translate = bone->getPosition();
+            bs.rotation = bone->getOrientation();
+            bs.scale = bone->getScale();
+            live.insert(QString::fromStdString(bone->getName()), bs);
+        }
+        applyPose(entity, srcName);
+        for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+            Ogre::Bone* bone = skel->getBone(i);
+            if (!bone) continue;
+            BonePoseSnapshot bs;
+            bs.translate = bone->getPosition();
+            bs.rotation = bone->getOrientation();
+            bs.scale = bone->getScale();
+            src.insert(QString::fromStdString(bone->getName()), bs);
+        }
+        // Restore the live state.
+        for (auto it = live.cbegin(); it != live.cend(); ++it) {
+            const std::string n = it.key().toStdString();
+            if (!skel->hasBone(n)) continue;
+            Ogre::Bone* b = skel->getBone(n);
+            b->setPosition(it.value().translate);
+            b->setOrientation(it.value().rotation);
+            b->setScale(it.value().scale);
+        }
+    }
+
+    // Build the mirrored snapshot: for each source bone, look up
+    // its mirrored counterpart's name and write the X-flipped TRS
+    // under that key. Bones whose flipped name is the same as the
+    // original (centre-line: Spine, Hips, Head, etc.) get the
+    // reflected TRS in place.
+    PoseSnapshot mirrored;
+    mirrored.reserve(src.size());
+    for (auto it = src.cbegin(); it != src.cend(); ++it) {
+        const QString flipped = flipBoneName(it.key());
+        BonePoseSnapshot bs;
+        const auto& s = it.value();
+        bs.translate = Ogre::Vector3(-s.translate.x, s.translate.y, s.translate.z);
+        // X-symmetric reflection of a quaternion: keep w, x; flip y, z.
+        // Equivalent to conjugating by the reflection-X transform.
+        bs.rotation = Ogre::Quaternion(s.rotation.w, s.rotation.x,
+                                       -s.rotation.y, -s.rotation.z);
+        // Negative scale.x is the standard mirror trick — preserves
+        // volume and produces the correct mirrored orientation when
+        // the renderer applies the bone transform.
+        bs.scale = Ogre::Vector3(-s.scale.x, s.scale.y, s.scale.z);
+        mirrored.insert(flipped, bs);
+    }
+
+    // Apply the mirrored snapshot to the live skeleton and call
+    // savePose under dstName — same write-pattern the commands use
+    // so the per-entity order list stays consistent.
+    PoseSnapshot liveBeforeWrite;
+    liveBeforeWrite.reserve(skel->getNumBones());
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+        Ogre::Bone* bone = skel->getBone(i);
+        if (!bone) continue;
+        BonePoseSnapshot bs;
+        bs.translate = bone->getPosition();
+        bs.rotation = bone->getOrientation();
+        bs.scale = bone->getScale();
+        liveBeforeWrite.insert(QString::fromStdString(bone->getName()), bs);
+    }
+    // Write the mirrored TRS to the live skeleton.
+    for (auto it = mirrored.cbegin(); it != mirrored.cend(); ++it) {
+        const std::string n = it.key().toStdString();
+        if (!skel->hasBone(n)) continue;
+        Ogre::Bone* b = skel->getBone(n);
+        b->setPosition(it.value().translate);
+        b->setOrientation(it.value().rotation);
+        b->setScale(it.value().scale);
+    }
+    const bool ok = savePose(entity, dstName);
+    // Restore the live state.
+    for (auto it = liveBeforeWrite.cbegin(); it != liveBeforeWrite.cend(); ++it) {
+        const std::string n = it.key().toStdString();
+        if (!skel->hasBone(n)) continue;
+        Ogre::Bone* b = skel->getBone(n);
+        b->setPosition(it.value().translate);
+        b->setOrientation(it.value().rotation);
+        b->setScale(it.value().scale);
+    }
+
+    if (ok) {
+        SentryReporter::addBreadcrumb("scene.anim.pose",
+            QStringLiteral("mirror '%1' -> '%2'").arg(srcName, dstName));
+    }
+    return ok;
+}
+
 bool PoseLibrary::forgetEntity(Ogre::Entity* entity)
 {
     assertMainThread();

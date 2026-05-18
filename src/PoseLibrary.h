@@ -85,6 +85,42 @@ public:
     /// All pose names on `entity` in save-order.
     QStringList listPoses(Ogre::Entity* entity) const;
 
+    /// Mirror a saved pose across the YZ plane (X = symmetry axis,
+    /// the convention every common rig follows). Reads `srcName`
+    /// from the library on `entity`, flips each bone's TRS by:
+    ///   - mapping the bone name via the `_l`/`_r`, `.L`/`.R`,
+    ///     `Left`/`Right` heuristic (so a left-hand keyframe lands
+    ///     on the right hand, and vice-versa);
+    ///   - reflecting the position's X component (pos.x → -pos.x);
+    ///   - flipping the Y/Z parts of the rotation quaternion
+    ///     (w,x,y,z → w,x,-y,-z), which is the X-axis-symmetric
+    ///     reflection of an orientation;
+    ///   - negating scale.x so the volume stays right and the
+    ///     mirrored bone aligns with the mirrored axis.
+    ///
+    /// Bones whose names don't match the heuristic (centre-line
+    /// bones like Spine, Hips) keep their TRS reflected in place.
+    ///
+    /// Writes the result under `dstName`. Returns false if `entity`
+    /// is null, has no skeleton, `srcName` doesn't exist, or
+    /// `dstName` is empty. `srcName == dstName` is allowed and
+    /// overwrites the source.
+    bool mirrorPose(Ogre::Entity* entity,
+                    const QString& srcName,
+                    const QString& dstName);
+
+    /// Heuristic name flip for mirror-pose. Recognises three
+    /// common rig conventions:
+    ///   - suffix `_l` ↔ `_r` (`Mixamo_Hand_l` ↔ `Mixamo_Hand_r`)
+    ///   - suffix `.L` ↔ `.R` (Blender convention, case-preserved)
+    ///   - prefix `Left` ↔ `Right` (Maya convention, case-preserved)
+    /// Returns the original name unchanged when no rule matches —
+    /// centre-line bones (`Spine`, `Hips`, `Head`) flow through
+    /// untouched and just have their TRS reflected in place.
+    /// Pure function with no Ogre dependency — exposed publicly
+    /// for tests and so future apply-with-mask code can reuse it.
+    static QString flipBoneName(const QString& boneName);
+
     /// Drop every entry on `entity` (called when an entity is
     /// destroyed or a scene closes). No-op if `entity` was never
     /// saved. Returns `true` when something was actually erased so
