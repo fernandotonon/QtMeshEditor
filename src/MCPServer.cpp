@@ -5912,7 +5912,7 @@ QJsonArray MCPServer::buildToolsList()
     {
         QJsonObject props;
         props["src"] = QJsonObject{{"type", "string"}, {"description", "Existing pose name to mirror (use list_poses to enumerate)."}};
-        props["dst"] = QJsonObject{{"type", "string"}, {"description", "Output pose name. Overwrites in place if same as `src`."}};
+        props["dst"] = QJsonObject{{"type", "string"}, {"description", "Output pose name. **Overwrites any existing pose at this name**, including poses unrelated to `src` — pick a unique name (or list_poses first) to avoid silent clobber."}};
         QJsonArray required;
         required.append("src");
         required.append("dst");
