@@ -8,6 +8,8 @@
 #include "TestHelpers.h"
 #include "commands/PoseLibraryCommands.h"
 
+#include <QTemporaryDir>
+
 #include <OgreBone.h>
 #include <OgreEntity.h>
 #include <OgreSkeleton.h>
@@ -210,6 +212,113 @@ TEST_F(PoseLibrarySceneTest, ForgetEntityDropsEverythingForThatEntity) {
     EXPECT_TRUE(lib->listPoses(entity).isEmpty());
     // Idempotent — forgetting again is a no-op false.
     EXPECT_FALSE(lib->forgetEntity(entity));
+}
+
+// ─── Slice D-Project — .poselib sidecar persistence ─────────────────
+
+TEST_F(PoseLibrarySceneTest, SaveAndLoadLibraryRoundTripsViaSidecar) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/test.poselib";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_Sidecar");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(3, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Pose1")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 5, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Pose2")));
+
+    EXPECT_TRUE(lib->savePoseLibrary(entity, path));
+
+    // Wipe the in-memory library and reload from disk.
+    lib->forgetEntity(entity);
+    EXPECT_TRUE(lib->listPoses(entity).isEmpty());
+
+    EXPECT_TRUE(lib->loadPoseLibrary(entity, path));
+    QStringList names = lib->listPoses(entity);
+    ASSERT_EQ(names.size(), 2);
+    EXPECT_EQ(names[0], QStringLiteral("Pose1"));
+    EXPECT_EQ(names[1], QStringLiteral("Pose2"));
+
+    // Apply the first pose to confirm TRS round-tripped.
+    skel->getBone(0)->setPosition(Ogre::Vector3::ZERO);
+    lib->applyPose(entity, QStringLiteral("Pose1"));
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().x, 3.0f);
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().y, 0.0f);
+}
+
+TEST_F(PoseLibrarySceneTest, SaveLibraryRejectsEmptyLibraryOrInvalidPath) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_SidecarReject");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    QTemporaryDir tmp;
+    const QString validPath = tmp.path() + "/empty.poselib";
+
+    // No poses saved yet → false (don't write an empty library file).
+    EXPECT_FALSE(lib->savePoseLibrary(entity, validPath));
+
+    // Empty path → false.
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("X")));
+    EXPECT_FALSE(lib->savePoseLibrary(entity, QString()));
+
+    // Null entity → false.
+    EXPECT_FALSE(lib->savePoseLibrary(nullptr, validPath));
+}
+
+TEST_F(PoseLibrarySceneTest, LoadLibraryRejectsMissingFileAndBadSchema) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_SidecarLoadReject");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    QTemporaryDir tmp;
+    // Missing file
+    EXPECT_FALSE(lib->loadPoseLibrary(entity, tmp.path() + "/nope.poselib"));
+
+    // Bad JSON
+    {
+        const QString p = tmp.path() + "/bad.poselib";
+        QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("{ this is not JSON");
+        f.close();
+        EXPECT_FALSE(lib->loadPoseLibrary(entity, p));
+    }
+
+    // Valid JSON, wrong schema string
+    {
+        const QString p = tmp.path() + "/wrongschema.poselib";
+        QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("{\"schema\": \"wrong\", \"poses\": []}");
+        f.close();
+        EXPECT_FALSE(lib->loadPoseLibrary(entity, p));
+    }
+}
+
+TEST_F(PoseLibrarySceneTest, LoadLibraryWipesExistingPosesFirst) {
+    QTemporaryDir tmp;
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_SidecarWipe");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    // Build a sidecar with one pose "FromFile".
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("FromFile")));
+    const QString path = tmp.path() + "/one.poselib";
+    ASSERT_TRUE(lib->savePoseLibrary(entity, path));
+
+    // Add a different in-memory pose that's NOT in the file.
+    lib->forgetEntity(entity);
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("InMemoryOnly")));
+    EXPECT_EQ(lib->listPoses(entity).size(), 1);
+
+    // Load wipes "InMemoryOnly" and replaces with file's "FromFile".
+    EXPECT_TRUE(lib->loadPoseLibrary(entity, path));
+    QStringList names = lib->listPoses(entity);
+    ASSERT_EQ(names.size(), 1);
+    EXPECT_EQ(names[0], QStringLiteral("FromFile"));
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("InMemoryOnly")));
 }
 
 // ─── Slice D4 — bone name flip + mirror pose ─────────────────────────

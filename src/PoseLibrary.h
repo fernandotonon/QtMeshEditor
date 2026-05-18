@@ -85,6 +85,27 @@ public:
     /// All pose names on `entity` in save-order.
     QStringList listPoses(Ogre::Entity* entity) const;
 
+    /// Persist this entity's pose library to a `.poselib` sidecar
+    /// JSON file. Returns false on write error (path unwritable,
+    /// no entity, no poses to save). The file format is
+    /// `qtmesheditor.poselib.v1` — see `loadPoseLibrary` for the
+    /// shape contract. Side-by-side with the source asset is the
+    /// recommended location so the library follows the asset
+    /// through version control.
+    Q_INVOKABLE bool savePoseLibrary(Ogre::Entity* entity, const QString& filePath) const;
+
+    /// Load a `.poselib` sidecar JSON file and replace this
+    /// entity's in-memory library with its contents. Returns false
+    /// on read / parse error (file missing, JSON malformed, schema
+    /// mismatch). Existing poses on the entity are wiped first so
+    /// the result reflects the file 1:1 (no partial-overlay).
+    /// Emits `posesChanged` so the Inspector / dope-sheet refresh.
+    Q_INVOKABLE bool loadPoseLibrary(Ogre::Entity* entity, const QString& filePath);
+
+    /// Selection wrappers — same pattern as save/apply/delete.
+    Q_INVOKABLE bool savePoseLibraryForSelection(const QString& filePath) const;
+    Q_INVOKABLE bool loadPoseLibraryForSelection(const QString& filePath);
+
     /// Mirror a saved pose across the YZ plane (X = symmetry axis,
     /// the convention every common rig follows). Reads `srcName`
     /// from the library on `entity`, flips each bone's TRS by:

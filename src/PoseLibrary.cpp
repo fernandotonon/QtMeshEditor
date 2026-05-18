@@ -14,6 +14,11 @@ The MIT License
 #include "SentryReporter.h"
 
 #include <QCoreApplication>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
 #include <QThread>
 
 #include <OgreBone.h>
@@ -302,6 +307,147 @@ void PoseLibrary::clearAll()
         SentryReporter::addBreadcrumb("scene.anim.pose",
             QStringLiteral("clear all (%1 entities)").arg(n));
     }
+}
+
+namespace {
+
+// Schema string written into / verified out of the sidecar JSON.
+// Bump when the format changes incompatibly so loadPoseLibrary can
+// reject older files cleanly.
+constexpr const char* kPoseLibSchemaV1 = "qtmesheditor.poselib.v1";
+
+} // namespace
+
+bool PoseLibrary::savePoseLibrary(Ogre::Entity* entity, const QString& filePath) const
+{
+    assertMainThread();
+    if (!entity || filePath.isEmpty()) return false;
+    auto entIt = m_byEntity.constFind(entity);
+    if (entIt == m_byEntity.constEnd()) return false;
+    if (entIt->order.isEmpty()) return false;
+
+    QJsonArray poses;
+    for (const QString& name : entIt->order) {
+        auto poseIt = entIt->byName.constFind(name);
+        if (poseIt == entIt->byName.constEnd()) continue;
+        QJsonObject bones;
+        for (auto bIt = poseIt->cbegin(); bIt != poseIt->cend(); ++bIt) {
+            const auto& trs = bIt.value();
+            QJsonObject bone;
+            bone["t"] = QJsonArray{ trs.translate.x, trs.translate.y, trs.translate.z };
+            bone["r"] = QJsonArray{ trs.rotation.w, trs.rotation.x,
+                                     trs.rotation.y, trs.rotation.z };
+            bone["s"] = QJsonArray{ trs.scale.x, trs.scale.y, trs.scale.z };
+            bones[bIt.key()] = bone;
+        }
+        QJsonObject poseObj;
+        poseObj["name"] = name;
+        poseObj["bones"] = bones;
+        poses.append(poseObj);
+    }
+
+    QJsonObject root;
+    root["schema"] = kPoseLibSchemaV1;
+    root["poses"] = poses;
+
+    // QSaveFile gives atomic write: temp file + rename on commit, so
+    // a power loss / kill -9 mid-write doesn't leave a half-written
+    // sidecar that loadPoseLibrary later rejects.
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    if (file.write(QJsonDocument(root).toJson(QJsonDocument::Indented)) < 0) {
+        file.cancelWriting();
+        return false;
+    }
+    if (!file.commit()) return false;
+
+    SentryReporter::addBreadcrumb("scene.anim.pose",
+        QStringLiteral("save library to '%1' (%2 poses)")
+            .arg(filePath).arg(entIt->order.size()));
+    return true;
+}
+
+bool PoseLibrary::loadPoseLibrary(Ogre::Entity* entity, const QString& filePath)
+{
+    assertMainThread();
+    if (!entity || filePath.isEmpty()) return false;
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    const QByteArray bytes = file.readAll();
+    file.close();
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &parseError);
+    if (parseError.error != QJsonParseError::NoError) return false;
+    if (!doc.isObject()) return false;
+    const QJsonObject root = doc.object();
+    if (root.value("schema").toString() != QString::fromLatin1(kPoseLibSchemaV1))
+        return false;
+    const QJsonArray poses = root.value("poses").toArray();
+
+    // Wipe the existing per-entity entry — the file is canonical
+    // for this load. Partial overlay would be confusing UX (which
+    // pose wins on name collision?), so we go with replacement.
+    m_byEntity.remove(entity);
+    auto& store = m_byEntity[entity];
+
+    auto readVec3 = [](const QJsonArray& a, const Ogre::Vector3& def) -> Ogre::Vector3 {
+        if (a.size() != 3) return def;
+        return Ogre::Vector3(static_cast<Ogre::Real>(a[0].toDouble()),
+                             static_cast<Ogre::Real>(a[1].toDouble()),
+                             static_cast<Ogre::Real>(a[2].toDouble()));
+    };
+    auto readQuat = [](const QJsonArray& a, const Ogre::Quaternion& def) -> Ogre::Quaternion {
+        if (a.size() != 4) return def;
+        return Ogre::Quaternion(static_cast<Ogre::Real>(a[0].toDouble()),
+                                static_cast<Ogre::Real>(a[1].toDouble()),
+                                static_cast<Ogre::Real>(a[2].toDouble()),
+                                static_cast<Ogre::Real>(a[3].toDouble()));
+    };
+
+    for (const QJsonValue& p : poses) {
+        const QJsonObject pObj = p.toObject();
+        const QString name = pObj.value("name").toString();
+        if (name.isEmpty()) continue;
+        PoseSnapshot snapshot;
+        const QJsonObject bones = pObj.value("bones").toObject();
+        for (auto it = bones.constBegin(); it != bones.constEnd(); ++it) {
+            const QJsonObject boneObj = it.value().toObject();
+            BonePoseSnapshot trs;
+            trs.translate = readVec3(boneObj.value("t").toArray(),
+                                      Ogre::Vector3::ZERO);
+            trs.rotation = readQuat(boneObj.value("r").toArray(),
+                                     Ogre::Quaternion::IDENTITY);
+            trs.scale = readVec3(boneObj.value("s").toArray(),
+                                  Ogre::Vector3(1, 1, 1));
+            snapshot.insert(it.key(), trs);
+        }
+        store.byName.insert(name, snapshot);
+        store.order.append(name);
+    }
+
+    SentryReporter::addBreadcrumb("scene.anim.pose",
+        QStringLiteral("load library from '%1' (%2 poses)")
+            .arg(filePath).arg(store.order.size()));
+    emit posesChanged(entity);
+    return true;
+}
+
+bool PoseLibrary::savePoseLibraryForSelection(const QString& filePath) const
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty()) return false;
+    return savePoseLibrary(ents.first(), filePath);
+}
+
+bool PoseLibrary::loadPoseLibraryForSelection(const QString& filePath)
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty()) return false;
+    return loadPoseLibrary(ents.first(), filePath);
 }
 
 bool PoseLibrary::savePoseForSelection(const QString& name)
