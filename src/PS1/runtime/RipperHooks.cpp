@@ -1,4 +1,5 @@
 #include "RipperHooks.h"
+#include "VramSnapshot.h"
 
 bool RipperHooks::isCaptureEnabled() const
 {
@@ -35,11 +36,9 @@ void RipperHooks::onGpuPrim(const PrimRecord &prim)
 
 void RipperHooks::onVramWrite(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels)
 {
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)pixels;
+    if (!m_vram || !pixels)
+        return;
+    m_vram->writeRect(x, y, w, h, pixels);
 }
 
 void RipperHooks::onVramRead(uint16_t x, uint16_t y, uint16_t w, uint16_t h)

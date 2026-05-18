@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QString>
 #include <QThread>
+#include <QVector>
 
 class PS1RipWorker;
 
@@ -48,7 +49,8 @@ signals:
     void framePresented(const QImage &frame, quint64 frameIndex);
     void frameCaptured(const QString &captureId);
     void sceneCaptured(const QString &captureId);
-    void vramDumped(const QString &captureId);
+    void vramDumped(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
+                    const QImage &nativePreview);
     void error(const QString &message);
     void pausedChanged(bool paused);
 

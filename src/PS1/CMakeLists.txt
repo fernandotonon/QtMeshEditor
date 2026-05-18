@@ -32,6 +32,9 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipSessionWindow.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/RipperHooks.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/TextureDecoder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/VramSnapshot.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/VramViewerWidget.cpp
     )
     list(APPEND HEADER_FILES
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/CaptureBuffer.h
@@ -46,6 +49,10 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipSessionWindow.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipWorker.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxVramColor.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/TextureDecoder.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/VramSnapshot.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/VramViewerWidget.h
     )
 endif()
 

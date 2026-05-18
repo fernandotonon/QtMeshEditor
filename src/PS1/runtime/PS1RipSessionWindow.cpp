@@ -3,11 +3,13 @@
 #include "PS1RipLegalityDialog.h"
 #include "PS1RipManager.h"
 #include "SentryReporter.h"
+#include "VramViewerWidget.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDateTime>
+#include <QDockWidget>
 #include <QFileDialog>
 #include <QTimer>
 #include <QLabel>
@@ -50,6 +52,15 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     connect(stepAct, &QAction::triggered, this, &PS1RipSessionWindow::onStep);
     auto *resetAct = toolbar->addAction(tr("Reset"));
     connect(resetAct, &QAction::triggered, this, &PS1RipSessionWindow::onReset);
+    toolbar->addSeparator();
+    auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
+    connect(dumpVramAct, &QAction::triggered, this, &PS1RipSessionWindow::onDumpVram);
+
+    m_vramViewer = new VramViewerWidget(this);
+    auto *vramDock = new QDockWidget(tr("VRAM"), this);
+    vramDock->setWidget(m_vramViewer);
+    vramDock->setMinimumHeight(220);
+    addDockWidget(Qt::BottomDockWidgetArea, vramDock);
 
     m_statusLabel = new QLabel(this);
     statusBar()->addPermanentWidget(m_statusLabel);
@@ -61,6 +72,7 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     connect(m_manager, &PS1RipManager::sessionStopped, this,
             [this]() { m_statusLabel->setText(tr("Stopped")); });
     connect(m_manager, &PS1RipManager::error, this, &PS1RipSessionWindow::onError);
+    connect(m_manager, &PS1RipManager::vramDumped, this, &PS1RipSessionWindow::onVramDumped);
 
     const QString savedBios = QSettings().value(QString::fromLatin1(kSettingsGroup) + QLatin1Char('/')
                                                   + QString::fromLatin1(kBiosKey))
@@ -179,6 +191,20 @@ void PS1RipSessionWindow::onFrame(const QImage &frame, quint64 frameIndex)
 void PS1RipSessionWindow::onError(const QString &message)
 {
     QMessageBox::warning(this, tr("PS1 Runtime Ripper"), message);
+}
+
+void PS1RipSessionWindow::onDumpVram()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("ps1_rip_dump_vram"));
+    m_manager->dumpVRAM();
+}
+
+void PS1RipSessionWindow::onVramDumped(const QString &captureId, const QString &pngPath,
+                                       const QVector<uint16_t> &cells, const QImage &nativePreview)
+{
+    if (m_vramViewer)
+        m_vramViewer->setVramData(cells, nativePreview);
+    m_statusLabel->setText(tr("VRAM dumped: %1 → %2").arg(captureId, pngPath));
 }
 
 void PS1RipSessionWindow::updateFps(quint64 frameIndex)

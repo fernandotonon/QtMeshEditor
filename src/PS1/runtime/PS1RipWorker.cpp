@@ -5,10 +5,12 @@
 #include "EmuFramebuffer.h"
 #include "GpuCommandParser.h"
 #include "RipperHooks.h"
+#include "VramSnapshot.h"
 
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QStandardPaths>
 #include <QTimer>
 
 #include <cstring>
@@ -17,9 +19,11 @@ PS1RipWorker::PS1RipWorker(QObject *parent)
     : QObject(parent)
     , m_captureBuffer(std::make_unique<CaptureBuffer>())
     , m_ripperHooks(std::make_unique<RipperHooks>())
+    , m_vram(std::make_unique<VramSnapshot>())
 {
     m_ripperHooks->setArmedFlag(&m_captureArmed);
     m_ripperHooks->setBuffer(m_captureBuffer.get());
+    m_ripperHooks->setVram(m_vram.get());
 
     m_frameTimer = new QTimer(this);
     m_frameTimer->setTimerType(Qt::PreciseTimer);
@@ -182,6 +186,32 @@ void PS1RipWorker::finalizeFrameCapture()
     file.close();
 
     emit frameCaptureReady(captureId, prims.size());
+}
+
+void PS1RipWorker::dumpVram()
+{
+    if (!m_running) {
+        emit emulationError(tr("No active emulation session"));
+        return;
+    }
+
+    const QString captureId = QString::number(QDateTime::currentMSecsSinceEpoch());
+    const QString baseDir =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/ps1_rip/captures");
+    if (!QDir().mkpath(baseDir)) {
+        emit emulationError(tr("Failed to create capture directory: %1").arg(baseDir));
+        return;
+    }
+
+    const QString pngPath = baseDir + QLatin1Char('/') + captureId + QStringLiteral("_vram.png");
+    if (!m_vram->savePng(pngPath)) {
+        emit emulationError(tr("Failed to write VRAM PNG: %1").arg(pngPath));
+        return;
+    }
+
+    const QVector<uint16_t> cells = m_vram->mutablePixels();
+    const QImage preview = m_vram->toImage(VramSnapshot::ViewMode::Native16);
+    emit vramDumpReady(captureId, pngPath, cells, preview);
 }
 
 QImage PS1RipWorker::framebufferToImage(const EmuFramebuffer &fb)

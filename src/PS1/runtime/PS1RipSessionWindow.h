@@ -1,11 +1,14 @@
 #ifndef PS1RIPSESSIONWINDOW_H
 #define PS1RIPSESSIONWINDOW_H
 
+#include <QImage>
 #include <QMainWindow>
+#include <QVector>
 
 class EmuViewport;
 class QLabel;
 class PS1RipManager;
+class VramViewerWidget;
 
 /** Temporary host for emulator viewport + transport (#416 / #417). */
 class PS1RipSessionWindow : public QMainWindow
@@ -31,12 +34,16 @@ private slots:
     void onReset();
     void onFrame(const QImage &frame, quint64 frameIndex);
     void onError(const QString &message);
+    void onDumpVram();
+    void onVramDumped(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
+                      const QImage &nativePreview);
 
 private:
     void updateFps(quint64 frameIndex);
     void addRecentIso(const QString &path);
 
     EmuViewport *m_viewport = nullptr;
+    VramViewerWidget *m_vramViewer = nullptr;
     QLabel *m_statusLabel = nullptr;
     PS1RipManager *m_manager = nullptr;
     qint64 m_lastFrameMs = 0;
