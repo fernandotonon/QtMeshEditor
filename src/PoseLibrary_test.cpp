@@ -297,6 +297,68 @@ TEST_F(PoseLibrarySceneTest, LoadLibraryRejectsMissingFileAndBadSchema) {
     }
 }
 
+// Codex P1 on PR #602: a schema-matching file with `poses` missing
+// or non-array must NOT wipe the in-memory library. Earlier draft
+// did the wipe before validating the array, silently dropping the
+// user's data on a malformed file.
+TEST_F(PoseLibrarySceneTest, LoadLibraryWithMissingPosesArrayPreservesInMemoryLibrary) {
+    QTemporaryDir tmp;
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_PreserveOnBad");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Keep")));
+    EXPECT_EQ(lib->listPoses(entity).size(), 1);
+
+    // Schema matches, but `poses` is a string, not an array.
+    const QString p = tmp.path() + "/badposes.poselib";
+    QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write("{\"schema\": \"qtmesheditor.poselib.v1\", \"poses\": \"oops\"}");
+    f.close();
+
+    EXPECT_FALSE(lib->loadPoseLibrary(entity, p));
+    // In-memory library must still contain "Keep".
+    EXPECT_EQ(lib->listPoses(entity).size(), 1);
+    EXPECT_TRUE(lib->hasPose(entity, QStringLiteral("Keep")));
+}
+
+// Codex P2 on PR #602: duplicate pose names in the sidecar must not
+// leave `order` with phantom entries that survive a `deletePose`
+// (causing listPoses to show a name that hasPose disagrees about).
+TEST_F(PoseLibrarySceneTest, LoadLibraryDeduplicatesDuplicateNamesInFile) {
+    QTemporaryDir tmp;
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_DupNames");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    // Hand-write a file with two entries under the same name.
+    const QString p = tmp.path() + "/dup.poselib";
+    QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write(R"({
+      "schema": "qtmesheditor.poselib.v1",
+      "poses": [
+        {"name": "A", "bones": {}},
+        {"name": "A", "bones": {}},
+        {"name": "B", "bones": {}}
+      ]
+    })");
+    f.close();
+
+    EXPECT_TRUE(lib->loadPoseLibrary(entity, p));
+    const QStringList names = lib->listPoses(entity);
+    // Should be ["A", "B"] not ["A", "A", "B"].
+    ASSERT_EQ(names.size(), 2);
+    EXPECT_EQ(names[0], QStringLiteral("A"));
+    EXPECT_EQ(names[1], QStringLiteral("B"));
+
+    // After deleting "A", listPoses must not contain a phantom "A".
+    EXPECT_TRUE(lib->deletePose(entity, QStringLiteral("A")));
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("A")));
+    const QStringList afterDelete = lib->listPoses(entity);
+    ASSERT_EQ(afterDelete.size(), 1);
+    EXPECT_EQ(afterDelete[0], QStringLiteral("B"));
+}
+
 TEST_F(PoseLibrarySceneTest, LoadLibraryWipesExistingPosesFirst) {
     QTemporaryDir tmp;
     Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_SidecarWipe");
