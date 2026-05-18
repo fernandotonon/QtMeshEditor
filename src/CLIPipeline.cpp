@@ -5093,6 +5093,23 @@ int CLIPipeline::cmdNodeAnim(int argc, char* argv[])
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
 
+    // Verify the import actually produced anything. A corrupt or
+    // unsupported-but-existing file would otherwise produce
+    // "No node animations found" with exit code 0 — masking real
+    // load failures in CI/audit workflows. Same guard cmdMorph uses.
+    auto& movables = Manager::getSingleton()->getEntities();
+    bool hasAnyEntity = false;
+    for (auto* obj : movables) {
+        if (obj && obj->getMovableType() == "Entity") {
+            hasAnyEntity = true;
+            break;
+        }
+    }
+    if (!hasAnyEntity) {
+        err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        return 1;
+    }
+
     // The NodeAnimationManager reads from the SceneManager's animation
     // table, which is what `importer()` populated. Round-trip the
     // listClips() Q_INVOKABLE so the CLI output matches whatever an
