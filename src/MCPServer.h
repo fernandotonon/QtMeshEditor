@@ -247,6 +247,11 @@ private:
     /// Pose-lib D-MCP: drop a saved pose by name. Args: `name`.
     QJsonObject toolDeletePose(const QJsonObject &args);
 
+    /// Pose-lib D-MCP: mirror a saved pose across the YZ plane
+    /// using the _l/_r/.L/.R/Left/Right bone-name heuristic.
+    /// Args: `src` (existing pose), `dst` (output pose name).
+    QJsonObject toolMirrorPose(const QJsonObject &args);
+
     // Animation
     struct NodeAnimation {
         Ogre::SceneNode* node;

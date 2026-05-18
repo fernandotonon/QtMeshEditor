@@ -138,6 +138,8 @@ public:
     Q_INVOKABLE bool savePoseForSelection(const QString& name);
     Q_INVOKABLE bool applyPoseForSelection(const QString& name);
     Q_INVOKABLE bool deletePoseForSelection(const QString& name);
+    Q_INVOKABLE bool mirrorPoseForSelection(const QString& srcName,
+                                             const QString& dstName);
     Q_INVOKABLE QStringList listPosesForSelection() const;
 
 signals:

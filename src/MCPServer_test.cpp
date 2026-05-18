@@ -7283,3 +7283,30 @@ TEST_F(MCPServerTest, SavePose_NoSelectionRejected)
     QJsonObject r = server->callTool("save_pose", args);
     EXPECT_TRUE(isError(r));
 }
+
+TEST_F(MCPServerTest, MirrorPose_MissingSrcRejected)
+{
+    QJsonObject args;
+    args["dst"] = "MCP_MirrorDst";
+    QJsonObject r = server->callTool("mirror_pose", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("src"));
+}
+
+TEST_F(MCPServerTest, MirrorPose_MissingDstRejected)
+{
+    QJsonObject args;
+    args["src"] = "MCP_MirrorSrc";
+    QJsonObject r = server->callTool("mirror_pose", args);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("dst"));
+}
+
+TEST_F(MCPServerTest, MirrorPose_UnknownSrcRejected)
+{
+    QJsonObject args;
+    args["src"] = "MCP_NoSuchPose";
+    args["dst"] = "MCP_AnyDst";
+    QJsonObject r = server->callTool("mirror_pose", args);
+    EXPECT_TRUE(isError(r));
+}
