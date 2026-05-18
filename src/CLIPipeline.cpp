@@ -23,6 +23,7 @@
 #include "VertexColorBaker.h"
 #include "VATBaker.h"
 #include "MorphAnimationManager.h"
+#include "NodeAnimationManager.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -682,6 +683,9 @@ void CLIPipeline::printUsage()
         "                                    unreal (Y/Z axis swap), godot (.gdshader template).\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
+        "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
+        "                                    animated lights — anything non-skeletal). Authoring on the CLI\n"
+        "                                    side needs the C5 glTF/FBX exporter round-trip first.\n"
         "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
@@ -1077,6 +1081,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "bake-vertex-colors") rc = cmdBakeVertexColors(argc, argv);
     else if (cmd == "vat") rc = cmdVat(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
+    else if (cmd == "nodeanim") rc = cmdNodeAnim(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -5040,6 +5045,75 @@ int CLIPipeline::cmdMorph(int argc, char* argv[])
         } else {
             cliWrite(QStringLiteral("Morph targets (%1):\n").arg(targets.size()));
             for (const QString& n : targets)
+                cliWrite(QStringLiteral("  %1\n").arg(n));
+        }
+    }
+    return 0;
+}
+
+int CLIPipeline::cmdNodeAnim(int argc, char* argv[])
+{
+    // Parse: nodeanim <file> --list [--json]
+    QString filePath;
+    bool listMode = false;
+    bool jsonOutput = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "nodeanim" || arg == "--cli") continue;
+        if (arg == "--list") { listMode = true; continue; }
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if (!arg.startsWith("-") && filePath.isEmpty()) {
+            filePath = arg; continue;
+        }
+    }
+
+    if (filePath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh nodeanim <file> --list [--json]" << Qt::endl;
+        return 2;
+    }
+    if (!listMode) {
+        err() << "Error: nodeanim subcommand requires --list (other modes need C5 exporter round-trip)." << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.nodeanim",
+        QString("NodeAnim list .%1").arg(fi.suffix()));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1 for nodeanim list").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    // The NodeAnimationManager reads from the SceneManager's animation
+    // table, which is what `importer()` populated. Round-trip the
+    // listClips() Q_INVOKABLE so the CLI output matches whatever an
+    // MCP agent would see on the same file via list_node_animations.
+    auto* m = NodeAnimationManager::instance();
+    QStringList clips = m ? m->listClips() : QStringList();
+
+    if (jsonOutput) {
+        QJsonArray arr;
+        for (const QString& n : clips) arr.append(n);
+        QJsonObject root;
+        root["file"]  = filePath;
+        root["count"] = static_cast<int>(clips.size());
+        root["clips"] = arr;
+        cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+    } else {
+        if (clips.isEmpty()) {
+            cliWrite(QStringLiteral("No node animations found.\n"));
+        } else {
+            cliWrite(QStringLiteral("Node animations (%1):\n").arg(clips.size()));
+            for (const QString& n : clips)
                 cliWrite(QStringLiteral("  %1\n").arg(n));
         }
     }
