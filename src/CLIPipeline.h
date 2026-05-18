@@ -130,6 +130,15 @@ public:
     /// `--add`, `--delete` once the in-memory authoring path lands.
     static int cmdMorph(int argc, char* argv[]);
 
+    /// Inspect node-animation clips on a scene file. Slice C-CLI
+    /// initial surface: `--list [--json]` lists clips that have at
+    /// least one NodeAnimationTrack (typically created via
+    /// in-editor authoring or the C6 MCP tools and round-tripped
+    /// through the scene exporter). Authoring on the CLI side
+    /// (`--add-clip`, `--add-keyframe`, `-o out.gltf`) needs the
+    /// glTF/FBX exporter round-trip from C5 first.
+    static int cmdNodeAnim(int argc, char* argv[]);
+
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);
 };
