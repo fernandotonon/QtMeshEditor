@@ -61,6 +61,13 @@ See epic #412 for phased issues (#413–#431).
 - Stub plugin `plugins/ps1core_stub/` renders a 320×240 test pattern when BIOS+ISO paths validate.
 - `PS1RipSessionWindow` + `EmuViewport` + legality dialog (#416–#417) — keyboard/gamepad input still TODO.
 
+## Phase 2 status
+
+- `CaptureTypes`, `GpuCommandParser`, `CaptureBuffer`, `RipperHooks` (#418).
+- GTE matrix hash dedupe + `cameraMatrixId` heuristic (#419).
+- Stub core emits seven primitive flavors per frame when capture is armed.
+- `armCapture` / `captureFrame` wire capture to the worker thread; CSV dump to temp for verification.
+
 ## Open questions
 
 - mednafen-psx plugin build/integration (replace stub for real emulation).

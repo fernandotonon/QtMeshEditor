@@ -136,12 +136,16 @@ if(BUILD_TESTS)
 
     if(ENABLE_PS1_RIP)
         list(APPEND TEST_SRC_FILES
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/CaptureBuffer.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/EmuCoreLoader.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/EmuViewport.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/GpuCommandParser.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/GteCapture.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipLegalityDialog.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipManager.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipSessionWindow.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipWorker.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/RipperHooks.cpp
         )
     endif()
 
