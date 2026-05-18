@@ -10,6 +10,7 @@
 #include "VATBaker.h"
 #include "MorphAnimationManager.h"
 #include "NodeAnimationManager.h"
+#include "PoseLibrary.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -603,7 +604,11 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight},
         {QStringLiteral("list_node_animations"), &MCPServer::toolListNodeAnimations},
         {QStringLiteral("add_node_animation_clip"), &MCPServer::toolAddNodeAnimationClip},
-        {QStringLiteral("set_node_keyframe"), &MCPServer::toolSetNodeKeyframe}
+        {QStringLiteral("set_node_keyframe"), &MCPServer::toolSetNodeKeyframe},
+        {QStringLiteral("list_poses"), &MCPServer::toolListPoses},
+        {QStringLiteral("save_pose"), &MCPServer::toolSavePose},
+        {QStringLiteral("apply_pose"), &MCPServer::toolApplyPose},
+        {QStringLiteral("delete_pose"), &MCPServer::toolDeletePose}
     };
     return handlers;
 }
@@ -4541,6 +4546,90 @@ QJsonObject MCPServer::toolSetNodeKeyframe(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+// ---------------------------------------------------------------------------
+// Pose-lib D-MCP — named bone-TRS snapshots on the live scene.
+// ---------------------------------------------------------------------------
+// All four tools operate on the first selected entity, same surface as
+// `set_morph_weight` / `set_node_keyframe`. The agent is expected to
+// drive `load_mesh` / `save_scene` around them for persistence — the
+// `.poselib` sidecar arrives with D-Project.
+
+QJsonObject MCPServer::toolListPoses(const QJsonObject & /*args*/)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "list_poses");
+    auto* lib = PoseLibrary::instance();
+    const QStringList poses = lib ? lib->listPosesForSelection() : QStringList();
+
+    QJsonArray arr;
+    for (const QString& n : poses) arr.append(n);
+    QJsonObject content;
+    content["count"] = static_cast<int>(poses.size());
+    content["poses"] = arr;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSavePose(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "save_pose");
+    const QString name = args.value("name").toString();
+    if (name.isEmpty())
+        return makeErrorResult("Error: missing required 'name' argument");
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->savePoseForSelection(name))
+        return makeErrorResult(
+            QString("Error: failed to save pose '%1' (no selection or unskinned entity)")
+                .arg(name));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["name"] = name;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolApplyPose(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "apply_pose");
+    const QString name = args.value("name").toString();
+    if (name.isEmpty())
+        return makeErrorResult("Error: missing required 'name' argument");
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->applyPoseForSelection(name))
+        return makeErrorResult(
+            QString("Error: failed to apply pose '%1' (no selection, unskinned entity, "
+                    "or pose name not found in this entity's library)")
+                .arg(name));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["name"] = name;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolDeletePose(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "delete_pose");
+    const QString name = args.value("name").toString();
+    if (name.isEmpty())
+        return makeErrorResult("Error: missing required 'name' argument");
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->deletePoseForSelection(name))
+        return makeErrorResult(
+            QString("Error: pose '%1' not found on the first selected entity")
+                .arg(name));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["name"] = name;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -5727,6 +5816,67 @@ QJsonArray MCPServer::buildToolsList()
             "1ms of `time` already exists, it's updated in place — same idempotency "
             "behaviour as the Inspector. Returns an error on missing clip / missing "
             "node / out-of-range time / malformed TRS arrays.",
+            props,
+            required
+        );
+    }
+
+    // list_poses
+    {
+        QJsonObject props;
+        appendTool(
+            "list_poses",
+            "List saved bone-TRS poses on the first selected entity. Returns "
+            "the names in insertion order. Use save_pose to capture and "
+            "apply_pose to snap back.",
+            props
+        );
+    }
+
+    // save_pose
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Pose name. Overwrites any existing same-name pose in place."}};
+        QJsonArray required;
+        required.append("name");
+        appendTool(
+            "save_pose",
+            "Capture the current bone-TRS state of the first selected entity as "
+            "a named pose. Use cases: T-pose / A-pose / neutral reference frames, "
+            "named facial expressions. Returns error when no entity is selected "
+            "or the entity has no skeleton.",
+            props,
+            required
+        );
+    }
+
+    // apply_pose
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Pose name (use list_poses to enumerate)."}};
+        QJsonArray required;
+        required.append("name");
+        appendTool(
+            "apply_pose",
+            "Snap the first selected entity back to a saved pose — writes every "
+            "captured bone TRS onto the skeleton instance. Bones present at save "
+            "time but missing now are skipped silently (handles LOD changes). "
+            "Snap-apply only; time-blended apply lands in D6.",
+            props,
+            required
+        );
+    }
+
+    // delete_pose
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Pose name to remove."}};
+        QJsonArray required;
+        required.append("name");
+        appendTool(
+            "delete_pose",
+            "Drop a saved pose from the first selected entity's library. "
+            "Returns error when the pose name isn't found.",
             props,
             required
         );
