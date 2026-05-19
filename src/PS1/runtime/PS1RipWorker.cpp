@@ -1,7 +1,6 @@
 #include "PS1RipWorker.h"
 #include "CaptureBuffer.h"
 #include "CaptureSnapshot.h"
-#include "CaptureSnapshot.h"
 #include "EmuCore.h"
 #include "EmuCoreLoader.h"
 #include "EmuFramebuffer.h"
@@ -159,7 +158,7 @@ void PS1RipWorker::runFrameTick()
     const EmuFramebuffer &fb = m_core->framebuffer();
     emit framePresented(framebufferToImage(fb), fb.frameIndex);
 
-    if ((fb.frameIndex % 30) == 0 && m_vram && !m_vram->isEmpty()) {
+    if ((fb.frameIndex % 30) == 0 && m_vram && m_vram->hasVisibleContent(32)) {
         const QVector<uint16_t> cells = m_vram->mutablePixels();
         emit vramFrameUpdated(cells, m_vram->toImage(VramSnapshot::ViewMode::Native16));
     }
@@ -168,6 +167,8 @@ void PS1RipWorker::runFrameTick()
 void PS1RipWorker::setCaptureArmed(bool armed)
 {
     m_captureArmed.store(armed, std::memory_order_release);
+    if (armed)
+        m_captureBuffer->clear();
 }
 
 void PS1RipWorker::setJoypadButton(unsigned port, unsigned buttonId, bool pressed)
@@ -184,47 +185,73 @@ void PS1RipWorker::resetJoypad(unsigned port)
 
 void PS1RipWorker::finalizeFrameCapture()
 {
-    if (!m_captureArmed.load(std::memory_order_acquire)) {
-        emit emulationError(tr("Capture is not armed"));
+    if (!m_running || !m_core) {
+        emit sessionWarning(tr("No active emulation session — press Start and wait for gameplay"));
         return;
     }
 
+    if (!m_captureArmed.load(std::memory_order_acquire)) {
+        emit sessionWarning(tr("Capture is not armed"));
+        return;
+    }
+
+    m_core->runFrame();
+    m_core->syncCaptureMirrors();
+    m_core->ingestCaptureFrame();
+
     const QVector<PrimRecord> &prims = m_captureBuffer->prims();
     if (prims.isEmpty()) {
-        emit emulationError(tr("No primitives captured in the current frame"));
+        emit sessionWarning(
+            tr("No primitives captured — let the game render for a few seconds, keep Arm Capture on, "
+               "then try again"));
         return;
     }
 
     const QString captureId = QString::number(QDateTime::currentMSecsSinceEpoch());
     const QString dir = QDir::temp().filePath(QStringLiteral("qtmesh_ps1_capture"));
     if (!QDir().mkpath(dir)) {
-        emit emulationError(tr("Failed to create capture directory: %1").arg(dir));
+        emit sessionWarning(tr("Failed to create capture directory: %1").arg(dir));
         return;
     }
 
     const QString csvPath = dir + QLatin1Char('/') + captureId + QStringLiteral(".csv");
     QFile file(csvPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        emit emulationError(tr("Failed to write capture file: %1").arg(csvPath));
+        emit sessionWarning(tr("Failed to write capture file: %1").arg(csvPath));
         return;
     }
 
     const QByteArray csv = GpuCommandParser::primsToCsv(prims).toUtf8();
     if (file.write(csv) != csv.size()) {
-        emit emulationError(tr("Failed to write capture data: %1").arg(csvPath));
+        emit sessionWarning(tr("Failed to write capture data: %1").arg(csvPath));
         return;
     }
     file.close();
 
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture"),
                                 QStringLiteral("%1 prims:%2").arg(captureId).arg(prims.size()));
-    emit frameCaptureReady(captureId, CaptureSnapshot::fromBuffer(*m_captureBuffer), prims.size());
+    QVector<uint16_t> vramCells;
+    if (m_vram && !m_vram->isEmpty())
+        vramCells = m_vram->mutablePixels();
+
+    emit frameCaptureReady(captureId, CaptureSnapshot::fromBuffer(*m_captureBuffer, vramCells),
+                           prims.size());
 }
 
 void PS1RipWorker::dumpVram()
 {
-    if (!m_running) {
-        emit emulationError(tr("No active emulation session"));
+    if (!m_running || !m_core) {
+        emit sessionWarning(tr("No active emulation session — press Start before dumping VRAM"));
+        return;
+    }
+
+    m_core->runFrame();
+    m_core->syncCaptureMirrors();
+
+    if (!m_vram || !m_vram->hasVisibleContent(8)) {
+        emit sessionWarning(
+            tr("VRAM mirror is still empty — confirm the game is running (video in the viewport), "
+               "then try again."));
         return;
     }
 
@@ -232,13 +259,13 @@ void PS1RipWorker::dumpVram()
     const QString baseDir =
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/ps1_rip/captures");
     if (!QDir().mkpath(baseDir)) {
-        emit emulationError(tr("Failed to create capture directory: %1").arg(baseDir));
+        emit sessionWarning(tr("Failed to create capture directory: %1").arg(baseDir));
         return;
     }
 
     const QString pngPath = baseDir + QLatin1Char('/') + captureId + QStringLiteral("_vram.png");
     if (!m_vram->savePng(pngPath)) {
-        emit emulationError(tr("Failed to write VRAM PNG: %1").arg(pngPath));
+        emit sessionWarning(tr("Failed to write VRAM PNG: %1").arg(pngPath));
         return;
     }
 

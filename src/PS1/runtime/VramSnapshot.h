@@ -28,6 +28,8 @@ public:
 
     void clear(uint16_t fill = 0);
     bool isEmpty() const;
+    /** True when at least @p minNonZero cells are non-zero (VRAM may be mostly black in-game). */
+    bool hasVisibleContent(int minNonZero = 64) const;
 
     void writeRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels);
     uint16_t pixel(int x, int y) const;

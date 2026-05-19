@@ -76,6 +76,7 @@ void PS1RipManager::initializeWorkerThread()
         reportError(msg);
         emit sessionStopped();
     });
+    connect(m_worker, &PS1RipWorker::sessionWarning, this, &PS1RipManager::reportError);
     connect(m_worker, &PS1RipWorker::framePresented, this, &PS1RipManager::framePresented);
     connect(m_worker, &PS1RipWorker::frameCaptureReady, this,
             [this](const QString &captureId, const CaptureSnapshot &snapshot, int) {
@@ -92,8 +93,14 @@ void PS1RipManager::initializeWorkerThread()
 
                 PS1RipMeshBuilder::BuildResult built;
                 QString buildErr;
-                if (!PS1RipMeshBuilder::attachToScene(mesh, captureId, &built, &buildErr)) {
-                    reportError(buildErr);
+                try {
+                    if (!PS1RipMeshBuilder::attachToScene(mesh, captureId, &snapshot, &built, &buildErr)) {
+                        reportError(buildErr.isEmpty() ? tr("Failed to build capture mesh")
+                                                     : buildErr);
+                        return;
+                    }
+                } catch (const std::exception &e) {
+                    reportError(tr("Failed to build capture mesh: %1").arg(QString::fromUtf8(e.what())));
                     return;
                 }
 

@@ -1,12 +1,17 @@
 #include "MeshReconstructor.h"
 
 #include "GteInverse.h"
+#include "PsxCaptureFilters.h"
 
 #include <OgreColourValue.h>
 
 #include <QHash>
 
+#include <cmath>
+
 namespace {
+
+constexpr float kMaxVertexRadius = 64.0f;
 
 uint32_t packDiffuse(uint8_t r, uint8_t g, uint8_t b)
 {
@@ -51,11 +56,24 @@ ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix
     float mx = 0.0f;
     float my = 0.0f;
     float mz = 0.0f;
-    if (matrix && GteInverse::screenToModel(*matrix, v.x, v.y, v.z, mx, my, mz))
-        GteInverse::modelToEditor(mx, my, mz, out.px, out.py, out.pz);
-    else
+    if (matrix && GteInverse::screenToModel(*matrix, v.x, v.y, v.z, mx, my, mz)) {
+        float wx = 0.0f;
+        float wy = 0.0f;
+        float wz = 0.0f;
+        GteInverse::modelToEditor(mx, my, mz, wx, wy, wz);
+        const float radius = std::sqrt(wx * wx + wy * wy + wz * wz);
+        if (std::isfinite(radius) && radius <= kMaxVertexRadius) {
+            out.px = wx;
+            out.py = wy;
+            out.pz = wz;
+        } else {
+            GteInverse::psxScreenToWorld(static_cast<float>(v.x), static_cast<float>(v.y),
+                                         static_cast<float>(v.z), out.px, out.py, out.pz);
+        }
+    } else {
         GteInverse::psxScreenToWorld(static_cast<float>(v.x), static_cast<float>(v.y),
                                      static_cast<float>(v.z), out.px, out.py, out.pz);
+    }
 
     if (textured) {
         out.u = static_cast<float>(v.u) / 256.0f;
@@ -110,6 +128,9 @@ ReconstructedMesh MeshReconstructor::reconstruct(const CaptureSnapshot &snapshot
     QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> groupsByMatrix;
 
     for (const PrimRecord &prim : snapshot.prims) {
+        if (!PsxCaptureFilters::isOnScreenPrim(prim))
+            continue;
+
         const MatrixRecord *matrix = nullptr;
         if (prim.matrixId < static_cast<uint32_t>(snapshot.matrices.size()))
             matrix = &snapshot.matrices[static_cast<int>(prim.matrixId)];

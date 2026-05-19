@@ -36,6 +36,10 @@ add_custom_command(TARGET qtmesh_ps1core_libretro POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_BINARY_DIR}/ps1core_libretro.json
         $<TARGET_FILE_DIR:qtmesh_ps1core_libretro>/ps1core_libretro.json
+    COMMAND ${CMAKE_COMMAND} -E env
+        bash "${CMAKE_SOURCE_DIR}/scripts/install-ps1-libretro-core.sh"
+        "$<TARGET_FILE_DIR:qtmesh_ps1core_libretro>"
+    COMMENT "Installing mednafen_psx_libretro into PS1Cores (if missing)"
 )
 
 if(BUILD_TESTS AND TARGET UnitTests)

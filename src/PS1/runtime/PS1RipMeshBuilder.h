@@ -1,6 +1,7 @@
 #ifndef PS1RIPMESHBUILDER_H
 #define PS1RIPMESHBUILDER_H
 
+#include "CaptureSnapshot.h"
 #include "MeshReconstructor.h"
 
 #include <QString>
@@ -22,7 +23,8 @@ public:
     };
 
     static bool attachToScene(const ReconstructedMesh &mesh, const QString &captureId,
-                              BuildResult *resultOut, QString *errorOut = nullptr);
+                              const CaptureSnapshot *textureSource, BuildResult *resultOut,
+                              QString *errorOut = nullptr);
 };
 
 #endif // PS1RIPMESHBUILDER_H

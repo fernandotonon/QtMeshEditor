@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT_DIR="${1:-$ROOT/build/debug}/PS1Cores"
+OUT_DIR="${1:-$ROOT/build/debug/PS1Cores}"
 mkdir -p "$OUT_DIR"
 
 install_file() {

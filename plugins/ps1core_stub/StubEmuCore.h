@@ -20,6 +20,7 @@ public:
     void reset() override;
     const EmuFramebuffer &framebuffer() const override;
     void setHooks(EmuHooks *hooks) override;
+    void syncCaptureMirrors() override;
 
 private:
     void fillTestPattern(EmuFramebuffer &buf);

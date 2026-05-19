@@ -67,7 +67,8 @@ See epic #412 for phased issues (#413–#431).
 
 - `CaptureTypes`, `GpuCommandParser`, `CaptureBuffer`, `RipperHooks` (#418).
 - GTE matrix hash dedupe + `cameraMatrixId` heuristic (#419).
-- Stub core emits seven primitive flavors per frame when capture is armed.
+- **Libretro capture path:** `RipperHooks::ingestSystemRamForGpuCapture` runs `PsxGteRamScanner` (heuristic matrix find) + `PsxGpuRamScanner` (linear GP0 decode with correct low-byte opcodes) each frame while armed.
+- **Stub core** still emits synthetic primitives/VRAM for CI when `QTMESH_PS1_FORCE_STUB=1` or no libretro core is present.
 - `armCapture` / `captureFrame` wire capture to the worker thread; CSV dump to temp for verification.
 
 ## Phase 3 status (#420 / #421)
@@ -76,17 +77,46 @@ See epic #412 for phased issues (#413–#431).
 - `RipperHooks::onVramWrite` mirrors GPU uploads into the worker-owned snapshot.
 - `TextureDecoder` — CLUT-aware 4/8/15 bpp tile decode with `TileKey` cache and STP/alpha via `PsxVramColor`.
 - `dumpVRAM()` saves `<AppData>/ps1_rip/captures/<id>_vram.png` and feeds `VramViewerWidget` in the session window.
-- Stub core fills CLUT + 4/8/15 bpp test regions each frame via `stubFillVramPattern`.
-- Libretro path mirrors **live VRAM** from the core memory map and scans **main RAM** for GP0 packets (`PsxGpuRamScanner`) when capture is armed.
+- **Libretro:** `syncVramFromCore()` mirrors live core VRAM every frame; capture snapshots include a VRAM cell copy for textured mesh export.
+- Stub core fills CLUT + 4/8/15 bpp test regions each frame via `stubFillVramPattern` (CI only).
 
 ## Phase 4 status (#422)
 
-- `CaptureSnapshot` copies worker `CaptureBuffer` to the main thread for reconstruction.
+- `CaptureSnapshot` copies worker `CaptureBuffer` + VRAM cells to the main thread for reconstruction.
 - `GteInverse` approximates GTE screen→model un-projection; PS1 Y-down → editor Y-up.
 - `MeshReconstructor` groups primitives by `matrixId` + texture key, triangulates quads, emits vertex color + UV.
-- `PS1RipMeshBuilder` creates Ogre mesh/submeshes and attaches `PS1Capture_<id>` to the live scene via `Manager`.
+- `PS1RipMeshBuilder` creates Ogre mesh/submeshes, binds decoded TPAGE/CLUT textures when VRAM is present, and attaches `PS1Capture_<id>` to the live scene via `Manager`.
 - `captureFrame` builds mesh automatically; session toolbar adds **Arm Capture** / **Capture Frame**.
 - Sentry breadcrumb `ps1.rip.mesh.built` with vertex/triangle counts.
+
+## Troubleshooting
+
+### Viewport shows colored rectangles (RGB gradient), not the game
+
+The **stub** core is active (`coreId=stub`). It draws a test pattern and synthetic capture data — not your disc.
+
+1. Confirm `mednafen_psx_libretro` is next to the app:
+   ```bash
+   ls -la build_local/bin/PS1Cores/mednafen_psx_libretro.so   # Linux
+   ```
+2. If missing, install it:
+   ```bash
+   ./scripts/install-ps1-libretro-core.sh build_local/bin
+   ```
+   Rebuild also runs this via `qtmesh_ps1core_libretro` POST_BUILD when network is available.
+3. Status bar should say **Running** with gamepad hints (libretro), not **Running (stub — test pattern only)**.
+4. Unset `QTMESH_PS1_FORCE_STUB` (CI sets this; it forces the stub even when libretro is installed).
+5. Use a valid BIOS (`scph1001.bin` / region-matched) and prefer **`.cue`** for `.bin`/`.iso` rips.
+
+### VRAM dump says “empty”, then “No active PS1 session”
+
+1. **Empty while the game viewport is black** — the mirror is filled from libretro each frame. Press **Start**, wait until you see gameplay in the PS1 viewport, then dump again.
+2. **Session died after the warning** — non-fatal dump/capture issues use `sessionWarning` only. Older builds used `emulationError` and stopped the session, so a second dump showed “no session”.
+3. **Hardware renderer (mednafen default)** — `RETRO_MEMORY_VIDEO_RAM` is often **not** exposed (VRAM stays on the GPU). QtMeshEditor falls back to mirroring the **visible framebuffer** into the top-left of the VRAM snapshot so dump/preview still work. This is **not** the full 1024×512 texture atlas — only what is on screen. Full VRAM needs a software-renderer core build that exports memory maps (future improvement).
+
+### Capture mesh is a triangle “blob” (normal size, wrong shape)
+
+Capture is **not** a true GPU hook — it heuristically scans main RAM for GP0 command packets. Expect coarse triangle soup, not level geometry. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass to reduce noise. Quality improvements need ordering-table / DMA hooks (future work).
 
 ## Open questions
 

@@ -78,6 +78,12 @@ void StubEmuCore::setHooks(EmuHooks *hooks)
     m_hooks = hooks;
 }
 
+void StubEmuCore::syncCaptureMirrors()
+{
+    if (m_hooks)
+        stubFillVramPattern(m_hooks, m_frameIndex);
+}
+
 void StubEmuCore::fillTestPattern(EmuFramebuffer &buf)
 {
     const int w = buf.width;

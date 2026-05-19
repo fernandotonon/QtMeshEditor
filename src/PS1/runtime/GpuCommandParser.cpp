@@ -310,69 +310,96 @@ size_t packetWordCount(uint8_t cmd)
 
 } // namespace
 
+GpuCommandParser::Gp0Step GpuCommandParser::stepGp0(const uint32_t *words, size_t wordCount)
+{
+    Gp0Step step;
+    if (!words || wordCount == 0)
+        return step;
+
+    size_t index = 0;
+    const size_t startIndex = 0;
+    const uint8_t cmd = static_cast<uint8_t>(words[index] & 0xFF);
+
+    if (cmd >= 0xE1 && cmd <= 0xE6) {
+        if (!parseDrawingEnv(words, wordCount, index, step.drawMode, step.error))
+            return step;
+        step.hasDrawMode = true;
+        step.wordsConsumed = index - startIndex;
+        return step;
+    }
+
+    if (cmd == 0xA0 || cmd == 0xC0) {
+        const size_t skip = packetWordCount(cmd);
+        if (skip == 0 || index + skip > wordCount) {
+            step.error = QStringLiteral("VRAM copy packet truncated");
+            return step;
+        }
+        index += skip;
+        step.wordsConsumed = index - startIndex;
+        return step;
+    }
+
+    PrimRecord prim{};
+    bool ok = false;
+    if (cmd >= 0x20 && cmd <= 0x23)
+        ok = parseMonoTri(words, wordCount, index, prim, step.error);
+    else if (cmd >= 0x24 && cmd <= 0x27)
+        ok = parseTexturedTri(words, wordCount, index, prim, step.error);
+    else if (cmd >= 0x28 && cmd <= 0x2B)
+        ok = parseMonoQuad(words, wordCount, index, prim, step.error);
+    else if (cmd >= 0x2C && cmd <= 0x2F)
+        ok = parseTexturedQuad(words, wordCount, index, prim, step.error);
+    else if (cmd >= 0x30 && cmd <= 0x33)
+        ok = parseGouraudTri(words, wordCount, index, prim, step.error);
+    else if (cmd >= 0x34 && cmd <= 0x37)
+        ok = parseTexturedGouraudTri(words, wordCount, index, prim, step.error);
+    else if (cmd >= 0x38 && cmd <= 0x3B)
+        ok = parseGouraudQuad(words, wordCount, index, prim, step.error);
+    else if (cmd >= 0x60 && cmd <= 0x7F)
+        ok = parseSprite(words, wordCount, index, prim, step.error);
+    else {
+        const size_t skip = packetWordCount(cmd);
+        if (skip == 0)
+            return step;
+        if (index + skip > wordCount) {
+            step.error = QStringLiteral("packet truncated for opcode 0x%1").arg(cmd, 2, 16, QChar('0'));
+            return step;
+        }
+        index += skip;
+        step.wordsConsumed = index - startIndex;
+        return step;
+    }
+
+    if (!ok)
+        return step;
+
+    step.prim = prim;
+    step.hasPrim = true;
+    step.wordsConsumed = index - startIndex;
+    return step;
+}
+
 GpuCommandParser::ParseResult GpuCommandParser::parseGp0(const uint32_t *words, size_t wordCount)
 {
     ParseResult result;
     if (!words || wordCount == 0)
         return result;
 
-    size_t index = 0;
-    while (index < wordCount) {
-        const uint8_t cmd = static_cast<uint8_t>(words[index] & 0xFF);
-
-        if (cmd >= 0xE1 && cmd <= 0xE6) {
-            DrawModeRecord mode{};
-            if (!parseDrawingEnv(words, wordCount, index, mode, result.error))
-                break;
-            result.drawModes.append(mode);
-            continue;
-        }
-
-        if (cmd == 0xA0 || cmd == 0xC0) {
-            const size_t skip = packetWordCount(cmd);
-            if (skip == 0 || index + skip > wordCount) {
-                result.error = QStringLiteral("VRAM copy packet truncated");
-                break;
-            }
-            index += skip;
-            continue;
-        }
-
-        PrimRecord prim{};
-        bool ok = false;
-        if (cmd >= 0x20 && cmd <= 0x23)
-            ok = parseMonoTri(words, wordCount, index, prim, result.error);
-        else if (cmd >= 0x24 && cmd <= 0x27)
-            ok = parseTexturedTri(words, wordCount, index, prim, result.error);
-        else if (cmd >= 0x28 && cmd <= 0x2B)
-            ok = parseMonoQuad(words, wordCount, index, prim, result.error);
-        else if (cmd >= 0x2C && cmd <= 0x2F)
-            ok = parseTexturedQuad(words, wordCount, index, prim, result.error);
-        else if (cmd >= 0x30 && cmd <= 0x33)
-            ok = parseGouraudTri(words, wordCount, index, prim, result.error);
-        else if (cmd >= 0x34 && cmd <= 0x37)
-            ok = parseTexturedGouraudTri(words, wordCount, index, prim, result.error);
-        else if (cmd >= 0x38 && cmd <= 0x3B)
-            ok = parseGouraudQuad(words, wordCount, index, prim, result.error);
-        else if (cmd >= 0x60 && cmd <= 0x7F)
-            ok = parseSprite(words, wordCount, index, prim, result.error);
-        else {
-            const size_t skip = packetWordCount(cmd);
-            if (skip == 0) {
-                result.error = QStringLiteral("unknown GP0 opcode 0x%1").arg(cmd, 2, 16, QChar('0'));
-                break;
-            }
-            if (index + skip > wordCount) {
-                result.error = QStringLiteral("packet truncated for opcode 0x%1").arg(cmd, 2, 16, QChar('0'));
-                break;
-            }
-            index += skip;
-            continue;
-        }
-
-        if (!ok)
+    size_t offset = 0;
+    while (offset < wordCount) {
+        const Gp0Step step = stepGp0(words + offset, wordCount - offset);
+        if (step.wordsConsumed == 0)
             break;
-        result.prims.append(prim);
+
+        offset += step.wordsConsumed;
+        if (!step.error.isEmpty()) {
+            result.error = step.error;
+            break;
+        }
+        if (step.hasDrawMode)
+            result.drawModes.append(step.drawMode);
+        if (step.hasPrim)
+            result.prims.append(step.prim);
     }
 
     return result;
