@@ -14,6 +14,7 @@ The MIT License
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUuid>
@@ -377,17 +378,52 @@ std::vector<Ogre::Vector3> VATBaker::decodeNormalsRGBA16(
 
 QString VATBaker::buildSidecarJson(const BakeResult& result, const Options& opts)
 {
-    QJsonObject bounds;
+    // We emit a SUPERSET of OpenVAT's sidecar fields so the same
+    // .json file feeds both our own consumers (Godot/Unity harnesses,
+    // future Inspector UI) AND off-the-shelf OpenVAT shaders for
+    // Blender/Unreal/Unity from https://github.com/JustNiko/OpenVAT.
+    //
+    // Both schemas describe the same data — frame count, vertex
+    // count, normalized bounds, texture filename. The differences
+    // are just key naming + structure (objects vs. arrays). Rather
+    // than force every existing consumer to migrate, we publish
+    // both shapes side-by-side. New consumers can pick whichever
+    // names match the conventions they already use.
+    //
+    // OpenVAT keys (mirrored at top level):
+    //   name                       <- our "animation"
+    //   format                     <- derived from encoding ("Animated.Vat.UnsignedShort" / "Byte")
+    //   numFrames                  <- our "frameCount"
+    //   numVertices                <- our "vertexCount"
+    //   framerate                  <- our "fps"
+    //   texture                    <- our "posTexture"
+    //   approximateBounds.min/max  <- our "bounds.min/max", flat arrays
+
+    // Our own (legacy) bounds shape — object-of-named-fields, kept
+    // for backward compat with shaders we already wrote against it.
     QJsonObject lo, hi;
     lo["x"] = result.minBound.x; lo["y"] = result.minBound.y; lo["z"] = result.minBound.z;
     hi["x"] = result.maxBound.x; hi["y"] = result.maxBound.y; hi["z"] = result.maxBound.z;
+    QJsonObject bounds;
     bounds["min"] = lo;
     bounds["max"] = hi;
 
+    // OpenVAT-style bounds — flat-array form their shaders read.
+    QJsonObject approxBounds;
+    approxBounds["min"] = QJsonArray{ result.minBound.x, result.minBound.y, result.minBound.z };
+    approxBounds["max"] = QJsonArray{ result.maxBound.x, result.maxBound.y, result.maxBound.z };
+
     QString encStr;
+    QString openvatFormat;
     switch (opts.encoding) {
-        case Encoding::RGBA8:  encStr = QStringLiteral("rgba8");  break;
-        case Encoding::RGBA16: encStr = QStringLiteral("rgba16"); break;
+        case Encoding::RGBA8:
+            encStr = QStringLiteral("rgba8");
+            openvatFormat = QStringLiteral("Animated.Vat.Byte");
+            break;
+        case Encoding::RGBA16:
+            encStr = QStringLiteral("rgba16");
+            openvatFormat = QStringLiteral("Animated.Vat.UnsignedShort");
+            break;
     }
     QString tgtStr;
     switch (opts.target) {
@@ -397,7 +433,10 @@ QString VATBaker::buildSidecarJson(const BakeResult& result, const Options& opts
         case Target::Godot:    tgtStr = QStringLiteral("godot");    break;
     }
 
+    const QString posFile = QFileInfo(result.posTexPath).fileName();
+
     QJsonObject root;
+    // ── Our (canonical, versioned) keys ──────────────────────────
     root["version"]     = 1;
     root["target"]      = tgtStr;
     root["encoding"]    = encStr;
@@ -406,9 +445,21 @@ QString VATBaker::buildSidecarJson(const BakeResult& result, const Options& opts
     root["fps"]         = opts.fps;
     root["animation"]   = opts.animationName;
     root["bounds"]      = bounds;
-    root["posTexture"]  = QFileInfo(result.posTexPath).fileName();
+    root["posTexture"]  = posFile;
     if (!result.nrmTexPath.isEmpty())
         root["nrmTexture"] = QFileInfo(result.nrmTexPath).fileName();
+
+    // ── OpenVAT alias keys (https://github.com/JustNiko/OpenVAT) ──
+    // Same data, OpenVAT's naming. A consumer using OpenVAT's
+    // off-the-shelf Blender / UE / Unity shaders can drop our .json
+    // in without modification.
+    root["name"]              = opts.animationName;
+    root["format"]            = openvatFormat;
+    root["numFrames"]         = result.frameCount;
+    root["numVertices"]       = result.vertexCount;
+    root["framerate"]         = opts.fps;
+    root["texture"]           = posFile;
+    root["approximateBounds"] = approxBounds;
 
     QJsonDocument doc(root);
     return QString::fromUtf8(doc.toJson(QJsonDocument::Indented));

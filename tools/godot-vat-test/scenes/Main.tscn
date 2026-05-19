@@ -1,0 +1,157 @@
+[gd_scene load_steps=11 format=3 uid="uid://b0vk1vatdemo01"]
+
+[ext_resource type="Script" path="res://scripts/Main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/VATPlayer.gd" id="2_vatplayer"]
+[ext_resource type="Script" path="res://scripts/SkeletalLoader.gd" id="3_skeletal"]
+
+[sub_resource type="Environment" id="Environment_default"]
+background_mode = 1
+background_color = Color(0.1, 0.11, 0.13, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.5, 0.55, 0.6, 1)
+ambient_light_energy = 0.4
+ssao_enabled = false
+glow_enabled = false
+adjustment_enabled = true
+adjustment_contrast = 1.1
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_floor"]
+size = Vector2(8, 8)
+subdivide_width = 4
+subdivide_depth = 4
+
+[sub_resource type="StandardMaterial3D" id="Material_floor"]
+albedo_color = Color(0.18, 0.18, 0.2, 1)
+roughness = 0.9
+
+[sub_resource type="BoxMesh" id="BoxMesh_placeholder"]
+size = Vector3(0.6, 1.8, 0.3)
+
+[sub_resource type="StandardMaterial3D" id="Material_placeholder_left"]
+albedo_color = Color(0.45, 0.7, 0.45, 1)
+roughness = 0.8
+
+[sub_resource type="StandardMaterial3D" id="Material_placeholder_right"]
+albedo_color = Color(0.45, 0.55, 0.85, 1)
+roughness = 0.8
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_default")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.354, 0.354, 0, 0.707, 0.707, -0.5, -0.612, 0.612, 2, 4, 2)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.9239, 0.3827, 0, -0.3827, 0.9239, 0, 1.4, 3.5)
+fov = 50.0
+
+[node name="Ground" type="Node3D" parent="."]
+
+[node name="Floor" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+mesh = SubResource("PlaneMesh_floor")
+surface_material_override/0 = SubResource("Material_floor")
+
+[node name="Skeletal" type="Node3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.9, 0, 0)
+script = ExtResource("3_skeletal")
+gltf_path = "res://assets/Rumba Dancing_mixamo.com_/source.gltf"
+
+[node name="Placeholder" type="MeshInstance3D" parent="Ground/Skeletal"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+mesh = SubResource("BoxMesh_placeholder")
+surface_material_override/0 = SubResource("Material_placeholder_left")
+
+[node name="LabelLeft" type="Label3D" parent="Ground/Skeletal"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.1, 0)
+text = "Skeletal (live)"
+font_size = 32
+modulate = Color(0.45, 0.95, 0.45, 1)
+billboard = 1
+no_depth_test = true
+
+[node name="VAT" type="MeshInstance3D" parent="Ground" node_paths=PackedStringArray()]
+; 180° rotation around Y so the VAT mesh faces the camera the same
+; way the SkeletalLoader-instanced glTF does. Godot's glTF importer
+; auto-flips the imported scene to match Godot's `forward = -Z`
+; convention (glTF authors with `forward = +Z`); we attach the
+; mesh resource directly here so we have to apply that rotation
+; ourselves. Without this the VAT character looks "backwards"
+; relative to the live-skinned ground-truth on the left.
+transform = Transform3D(-1, 0, -1.62921e-07, 0, 1, 0, 1.62921e-07, 0, -1, 0.9, 0, 0)
+mesh = SubResource("BoxMesh_placeholder")
+surface_material_override/0 = SubResource("Material_placeholder_right")
+script = ExtResource("2_vatplayer")
+bake_dir = "res://assets/Rumba Dancing_mixamo.com_"
+source_gltf = "res://assets/Rumba Dancing_mixamo.com_/source.gltf"
+frame_interp = true
+
+[node name="LabelRight" type="Label3D" parent="Ground/VAT"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.1, 0)
+text = "VAT (replay)"
+font_size = 32
+modulate = Color(0.55, 0.7, 1, 1)
+billboard = 1
+no_depth_test = true
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Title" type="Label" parent="UI"]
+offset_left = 16.0
+offset_top = 12.0
+offset_right = 800.0
+offset_bottom = 40.0
+text = "QtMeshEditor VAT Test Harness — Godot 4"
+theme_override_font_sizes/font_size = 18
+
+[node name="Status" type="Label" parent="UI"]
+offset_left = 16.0
+offset_top = 40.0
+offset_right = 600.0
+offset_bottom = 64.0
+text = "Loading…"
+theme_override_font_sizes/font_size = 14
+modulate = Color(0.8, 0.85, 1, 1)
+
+[node name="Encoding" type="Label" parent="UI"]
+offset_left = 16.0
+offset_top = 64.0
+offset_right = 600.0
+offset_bottom = 88.0
+text = "Set the VAT node's bake_dir → reload scene"
+theme_override_font_sizes/font_size = 12
+modulate = Color(0.7, 0.75, 0.85, 1)
+
+[node name="Controls" type="HBoxContainer" parent="UI"]
+offset_left = 16.0
+offset_top = 100.0
+offset_right = 400.0
+offset_bottom = 132.0
+
+[node name="PauseButton" type="Button" parent="UI/Controls"]
+custom_minimum_size = Vector2(120, 32)
+text = "Pause"
+
+[node name="Help" type="Label" parent="UI"]
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -260.0
+offset_top = -80.0
+offset_right = -16.0
+offset_bottom = -16.0
+text = "Space: pause/resume
+R: reset VAT to frame 0
+←/→: step ±1 frame (paused)
+1: toggle Skeletal (live) side
+2: toggle VAT (replay) side"
+theme_override_font_sizes/font_size = 12
+modulate = Color(0.7, 0.75, 0.85, 1)
+horizontal_alignment = 2

@@ -303,6 +303,83 @@ TEST_F(VATBakerEndToEndTest, ProducesDistinctRowsAcrossFrames) {
         << "between setTimePosition + collectPostSkinPositions calls.";
 }
 
+// OpenVAT compatibility — the sidecar must publish a superset of
+// the JustNiko/OpenVAT field names so off-the-shelf shaders for
+// Blender/UE/Unity can consume our bakes without modification.
+//
+// We don't replace our own keys; we add OpenVAT's as aliases.
+TEST_F(VATBakerEndToEndTest, SidecarPublishesOpenVATAliases) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_OpenVAT");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 30.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("OV");
+    opts.encoding = VATBaker::Encoding::RGBA16;  // → Animated.Vat.UnsignedShort
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+
+    QFile jf(r.jsonPath);
+    ASSERT_TRUE(jf.open(QIODevice::ReadOnly));
+    const auto doc = QJsonDocument::fromJson(jf.readAll());
+    ASSERT_TRUE(doc.isObject());
+    const auto root = doc.object();
+
+    // Our canonical keys still present (no regression).
+    EXPECT_EQ(root["frameCount"].toInt(),  r.frameCount);
+    EXPECT_EQ(root["vertexCount"].toInt(), r.vertexCount);
+    EXPECT_DOUBLE_EQ(root["fps"].toDouble(), 30.0);
+    EXPECT_EQ(root["animation"].toString(), QStringLiteral("TestAnim"));
+    ASSERT_TRUE(root["bounds"].isObject());
+    ASSERT_TRUE(root["bounds"].toObject()["min"].isObject());
+
+    // OpenVAT aliases present + carry the same values.
+    EXPECT_EQ(root["numFrames"].toInt(),     r.frameCount);
+    EXPECT_EQ(root["numVertices"].toInt(),   r.vertexCount);
+    EXPECT_DOUBLE_EQ(root["framerate"].toDouble(), 30.0);
+    EXPECT_EQ(root["name"].toString(),       QStringLiteral("TestAnim"));
+    EXPECT_EQ(root["format"].toString(),     QStringLiteral("Animated.Vat.UnsignedShort"));
+    EXPECT_EQ(root["texture"].toString(),    root["posTexture"].toString());
+
+    // OpenVAT-style flat-array bounds.
+    ASSERT_TRUE(root["approximateBounds"].isObject());
+    const auto ab = root["approximateBounds"].toObject();
+    ASSERT_TRUE(ab["min"].isArray());
+    ASSERT_TRUE(ab["max"].isArray());
+    EXPECT_EQ(ab["min"].toArray().size(), 3);
+    EXPECT_EQ(ab["max"].toArray().size(), 3);
+    // And they match our object-style bounds.
+    EXPECT_DOUBLE_EQ(ab["min"].toArray()[0].toDouble(),
+                     root["bounds"].toObject()["min"].toObject()["x"].toDouble());
+    EXPECT_DOUBLE_EQ(ab["max"].toArray()[2].toDouble(),
+                     root["bounds"].toObject()["max"].toObject()["z"].toDouble());
+}
+
+TEST_F(VATBakerEndToEndTest, OpenVATFormatStringMatchesEncoding) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_OpenVATFmt");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 30.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("OVFmt8");
+    opts.encoding = VATBaker::Encoding::RGBA8;
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok);
+    QFile jf(r.jsonPath); ASSERT_TRUE(jf.open(QIODevice::ReadOnly));
+    auto root = QJsonDocument::fromJson(jf.readAll()).object();
+    EXPECT_EQ(root["format"].toString(), QStringLiteral("Animated.Vat.Byte"));
+}
+
 TEST_F(VATBakerEndToEndTest, RejectsMissingAnimationOnLiveEntity) {
     auto* entity = createAnimatedTestEntity("VAT_E2E_MissAnim");
     ASSERT_NE(entity, nullptr);
