@@ -256,19 +256,23 @@ inline QString openvatFormatFloat(float v) {
 // Build the openvat sidecar JSON. Returned string is a single root
 // object with `os-remap` at the top level. Optional `_origin` key
 // documents our source coordinate space for shader authors.
+// `lo`/`hi` are expected to already be on the 0.1 OpenVAT grid (use
+// openvatRoundMin/openvatRoundMax to snap before calling). We just
+// format them; rounding here would silently re-snap rounded values
+// and decouple the sidecar from whatever the texture encoder used.
 QString buildOpenVATSidecar(int frameCount,
                             const Ogre::Vector3& lo,
                             const Ogre::Vector3& hi)
 {
     QJsonArray jMin {
-        openvatFormatFloat(openvatRoundMin(lo.x)),
-        openvatFormatFloat(openvatRoundMin(lo.y)),
-        openvatFormatFloat(openvatRoundMin(lo.z))
+        openvatFormatFloat(lo.x),
+        openvatFormatFloat(lo.y),
+        openvatFormatFloat(lo.z)
     };
     QJsonArray jMax {
-        openvatFormatFloat(openvatRoundMax(hi.x)),
-        openvatFormatFloat(openvatRoundMax(hi.y)),
-        openvatFormatFloat(openvatRoundMax(hi.z))
+        openvatFormatFloat(hi.x),
+        openvatFormatFloat(hi.y),
+        openvatFormatFloat(hi.z)
     };
     QJsonObject osRemap;
     osRemap["Min"]    = jMin;
@@ -277,9 +281,15 @@ QString buildOpenVATSidecar(int frameCount,
 
     QJsonObject root;
     root["os-remap"] = osRemap;
-    // Non-conflicting extension key so consumers can swizzle correctly.
-    // OpenVAT shaders ignore unknown top-level keys.
-    root["_origin"]  = QStringLiteral("ogre-y-up-rh");
+    // Non-standard extension keys — openvat consumer shaders ignore
+    // unknown top-level fields. `_producer` identifies the tool that
+    // wrote the file. `_axes` documents the source coordinate
+    // convention so shader authors know what swizzle to apply on read
+    // (the openvat Godot reference shader hardcodes a Blender→Godot
+    // `vec3(x, z, -y)` swizzle; our output is Y-up right-handed Ogre,
+    // which needs a different one).
+    root["_producer"] = QStringLiteral("QtMeshEditor");
+    root["_axes"]     = QStringLiteral("y-up-rh");
 
     QJsonDocument doc(root);
     return QString::fromUtf8(doc.toJson(QJsonDocument::Indented));
@@ -482,17 +492,31 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     if (hi.y <= lo.y) hi.y = lo.y + 1.0f;
     if (hi.z <= lo.z) hi.z = lo.z + 1.0f;
 
+    // OpenVAT consumers decode positions against the JSON sidecar's
+    // Min/Max — which are rounded outward to the nearest 0.1. The
+    // texture must be encoded against the SAME rounded bounds, or
+    // every sample drifts by up to one rounding step (~0.05 per axis
+    // on a 1-unit model). Both halves of the os-remap contract live
+    // off `roundedLo`/`roundedHi` from here on.
+    const Ogre::Vector3 roundedLo(openvatRoundMin(lo.x),
+                                  openvatRoundMin(lo.y),
+                                  openvatRoundMin(lo.z));
+    const Ogre::Vector3 roundedHi(openvatRoundMax(hi.x),
+                                  openvatRoundMax(hi.y),
+                                  openvatRoundMax(hi.z));
+
     result.frameCount  = frameCount;
     result.vertexCount = vertexCount;
-    result.minBound    = lo;
-    result.maxBound    = hi;
+    result.minBound    = roundedLo;
+    result.maxBound    = roundedHi;
 
     QDir().mkpath(opts.outputDir);
     const QString base = opts.basename.isEmpty() ? opts.animationName : opts.basename;
     result.posTexPath = QDir(opts.outputDir).filePath(base + "_pos.png");
     result.jsonPath   = QDir(opts.outputDir).filePath(base + "-remap_info.json");
 
-    auto packed = packOpenVAT16(flat, normals, frameCount, vertexCount, lo, hi);
+    auto packed = packOpenVAT16(flat, normals, frameCount, vertexCount,
+                                roundedLo, roundedHi);
     if (packed.empty()) {
         result.error = QStringLiteral("OpenVAT pack produced empty buffer");
         return result;
@@ -523,7 +547,7 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
         return result;
     }
 
-    const QString sidecar = buildOpenVATSidecar(frameCount, lo, hi);
+    const QString sidecar = buildOpenVATSidecar(frameCount, roundedLo, roundedHi);
     QFile jf(result.jsonPath);
     if (!jf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         result.error = QStringLiteral("failed to open OpenVAT sidecar for write: %1")

@@ -39,7 +39,12 @@ FPS=30
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --fps) FPS="$2"; shift 2 ;;
+        --fps)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "Error: --fps requires a value" >&2
+                exit 2
+            fi
+            FPS="$2"; shift 2 ;;
         *) echo "Unknown arg: $1"; exit 2 ;;
     esac
 done

@@ -1,2 +1,2 @@
 m_EditorVersion: 2022.3.40f1
-m_EditorVersionWithRevision: 2022.3.40f1 (placeholder — Unity Hub will offer to upgrade on first open)
+m_EditorVersionWithRevision: 2022.3.40f1 (33b15b5fcb9b)

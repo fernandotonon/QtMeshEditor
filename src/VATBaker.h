@@ -39,9 +39,9 @@ namespace Ogre { class Entity; }
  *
  * Source space is Ogre Y-up right-handed. Consumer shaders typically
  * apply a swizzle on read (the Godot reference shader does `vec3(x, z,
- * -y)` to land in Godot's convention). We document our origin via the
- * non-conflicting `_origin: "ogre-y-up-rh"` key — openvat shaders ignore
- * unknown top-level fields.
+ * -y)` to land in Godot's convention). We document this via the
+ * non-conflicting `_axes: "y-up-rh"` + `_producer: "QtMeshEditor"`
+ * extension keys — openvat shaders ignore unknown top-level fields.
  *
  * Pure-data API on purpose — no QObject, no Ogre::Root assumption beyond
  * the entity being live; easier to unit-test.

@@ -2,9 +2,11 @@
 #
 # bake_and_stage.sh (Unity edition)
 # --------------------------------
-# Bakes a VAT for `--target unity` and stages everything into
+# Bakes an OpenVAT (sharpen3d/openvat) VAT and stages everything into
 # tools/unity-vat-test/Assets/VAT/Bakes/<basename_anim>/.
-# Unity auto-imports the .png + .meta sidecar on next focus.
+# Output: <basename>_pos.png (16-bit RGB packed positions+normals)
+#         <basename>-remap_info.json (os-remap sidecar)
+# Unity auto-imports both on next focus.
 #
 # Run from the QtMeshEditor repo root:
 #   ./tools/unity-vat-test/bake_and_stage.sh \
@@ -30,7 +32,12 @@ ANIM="$1"; shift
 FPS=30
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --fps) FPS="$2"; shift 2 ;;
+        --fps)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "Error: --fps requires a value" >&2
+                exit 2
+            fi
+            FPS="$2"; shift 2 ;;
         *) echo "Unknown arg: $1"; exit 2 ;;
     esac
 done
@@ -72,7 +79,7 @@ echo "Done. In Unity:"
 echo "  1. Open this project: $SCRIPT_DIR/"
 echo "     Unity Hub → Add → select tools/unity-vat-test/"
 echo "  2. Open scene: Assets/VAT/Scenes/VATTest.unity"
-echo "  3. The VATPlayer auto-fills from sidecar.json + bake textures."
+echo "  3. The VATPlayer auto-fills from <basename>-remap_info.json + the packed texture."
 echo
 echo "Files staged:"
 ls -la "$STAGE_DIR"

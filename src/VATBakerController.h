@@ -84,6 +84,11 @@ public:
                           const QString& outputDir,
                           const QString& basename = QString());
 
+    /// Open a native folder picker. Returns the selected absolute path
+    /// or an empty string if the user cancelled. Used by the Inspector
+    /// "Browse…" button on the output-dir row.
+    Q_INVOKABLE QString chooseOutputDir(const QString& startDir = QString());
+
 signals:
     void availableAnimationsChanged();
     void isBakingChanged();

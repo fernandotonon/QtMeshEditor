@@ -14,6 +14,13 @@ The MIT License
 #include "SentryReporter.h"
 #include "VATBaker.h"
 
+#include <QApplication>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QStandardPaths>
+#include <QWidget>
+
 #include <OgreAnimationState.h>
 #include <OgreEntity.h>
 
@@ -168,4 +175,35 @@ bool VATBakerController::bake(const QString& animationName,
 
     emit bakeFinished(result.ok, result.posTexPath, result.error);
     return true;
+}
+
+QString VATBakerController::chooseOutputDir(const QString& startDir)
+{
+    QString seed = startDir;
+    if (seed.isEmpty() || !QFileInfo(seed).isDir())
+        seed = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (seed.isEmpty())
+        seed = QDir::homePath();
+
+    // Mirror the MaterialEditorQML::openFileDialog dance: process pending
+    // events + raise the active window before opening the dialog, and
+    // force the Qt-rendered dialog rather than the native one. Native
+    // file dialogs hosted from inside a QQuickWidget have been observed
+    // to silently no-op on macOS — DontUseNativeDialog reliably opens.
+    QApplication::processEvents();
+    QWidget* parent = QApplication::activeWindow();
+    if (parent) {
+        parent->raise();
+        parent->activateWindow();
+    }
+    QApplication::processEvents();
+
+    const QString chosen = QFileDialog::getExistingDirectory(
+        parent,
+        QStringLiteral("Choose OpenVAT output folder"),
+        seed,
+        QFileDialog::ShowDirsOnly
+            | QFileDialog::DontUseNativeDialog
+            | QFileDialog::DontUseCustomDirectoryIcons);
+    return chosen;
 }

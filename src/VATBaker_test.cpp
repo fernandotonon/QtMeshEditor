@@ -15,6 +15,7 @@
 #include <OgreVector.h>
 
 #include <cmath>
+#include <cstring>
 
 // ===========================================================================
 // Validation guards on VATBaker::bake() — exercised without an Ogre scene
@@ -48,13 +49,15 @@ TEST(VATBakerStandalone, BakeInvalidFpsReports) {
 }
 
 TEST(VATBakerStandalone, BuildSidecarJsonProducesOsRemap) {
-    // Sanity-check the sidecar emitter without running a bake. Round
-    // numbers so we can test the rounding-outward behavior cleanly.
+    // BakeResult.minBound/maxBound are the already-rounded OpenVAT
+    // bounds (snapped by bake() before encoding the texture and emitting
+    // the sidecar — so the texture and JSON agree to the bit). Feed the
+    // formatter rounded values and verify they survive verbatim.
     VATBaker::BakeResult r;
     r.frameCount  = 30;
     r.vertexCount = 5000;
-    r.minBound = Ogre::Vector3(-1.23f, -2.34f, -3.45f);
-    r.maxBound = Ogre::Vector3( 1.23f,  2.34f,  3.45f);
+    r.minBound = Ogre::Vector3(-1.3f, -2.4f, -3.5f);
+    r.maxBound = Ogre::Vector3( 1.3f,  2.4f,  3.5f);
     r.posTexPath = QStringLiteral("/tmp/Walk_pos.png");
 
     VATBaker::Options opts;
@@ -78,9 +81,7 @@ TEST(VATBakerStandalone, BuildSidecarJsonProducesOsRemap) {
     ASSERT_TRUE(minArr[0].isString())
         << "OpenVAT shaders expect string-formatted Min[i]";
 
-    // Rounding outward to nearest 0.1:
-    //   min.x = -1.23 → floor(-12.3)/10 = -1.3
-    //   max.x =  1.23 →  ceil( 12.3)/10 =  1.3
+    // BakeResult bounds carry through verbatim — no second rounding.
     EXPECT_FLOAT_EQ(minArr[0].toString().toFloat(), -1.3f);
     EXPECT_FLOAT_EQ(maxArr[0].toString().toFloat(),  1.3f);
 }
@@ -167,15 +168,19 @@ TEST_F(VATBakerEndToEndTest, ProducesDistinctRowsAcrossFrames) {
     ASSERT_EQ(png.height(), r.frameCount * 2);
     ASSERT_GT(png.width(), 0);
 
-    // Scan the position half (rows 0 .. frameCount-1) for any adjacent
-    // pair of rows that differs in any column.
+    // Scan the position half (rows 0..frameCount-1) for any adjacent
+    // pair of rows that differs in any byte. We compare raw scanline
+    // bytes rather than QImage::pixel() — pixel() truncates 16-bit
+    // RGBX64 channels to 8-bit QRgb, which could hide sub-byte motion
+    // when bounds are wide. A bake that genuinely steps through the
+    // animation will always produce row-to-row deltas in 16-bit space.
+    const qsizetype stride = png.bytesPerLine();
     bool foundDifference = false;
     for (int row = 0; row + 1 < r.frameCount && !foundDifference; ++row) {
-        for (int col = 0; col < png.width(); ++col) {
-            if (png.pixel(col, row) != png.pixel(col, row + 1)) {
-                foundDifference = true;
-                break;
-            }
+        const uchar* a = png.constScanLine(row);
+        const uchar* b = png.constScanLine(row + 1);
+        if (std::memcmp(a, b, static_cast<size_t>(stride)) != 0) {
+            foundDifference = true;
         }
     }
     EXPECT_TRUE(foundDifference)
@@ -251,25 +256,29 @@ TEST_F(VATBakerEndToEndTest, OpenVATBoundsRoundedOutwardToTenth) {
     const auto minArr = osRemap["Min"].toArray();
     const auto maxArr = osRemap["Max"].toArray();
 
+    // The sidecar's Min/Max arrays MUST equal `r.minBound`/`r.maxBound`
+    // exactly — that's the contract guaranteeing the texture (encoded
+    // against `r.minBound`/`r.maxBound`) decodes correctly through the
+    // sidecar that a consumer reads. Any drift between the two is a
+    // P1 correctness bug.
     for (int i = 0; i < 3; ++i) {
-        const float actualMin = (i == 0) ? r.minBound.x
-                              : (i == 1) ? r.minBound.y
-                                         : r.minBound.z;
-        const float actualMax = (i == 0) ? r.maxBound.x
-                              : (i == 1) ? r.maxBound.y
-                                         : r.maxBound.z;
-        const float roundedMin = minArr[i].toString().toFloat();
-        const float roundedMax = maxArr[i].toString().toFloat();
-        EXPECT_LE(roundedMin, actualMin + 1e-6f)
-            << "Min[" << i << "] (" << roundedMin
-            << ") must be at-or-below actual bound (" << actualMin << ")";
-        EXPECT_GE(roundedMax, actualMax - 1e-6f)
-            << "Max[" << i << "] (" << roundedMax
-            << ") must be at-or-above actual bound (" << actualMax << ")";
-        EXPECT_LT(std::abs(roundedMin * 10.0f - std::round(roundedMin * 10.0f)), 1e-3f)
-            << "Min[" << i << "] not on a 0.1 grid: " << roundedMin;
-        EXPECT_LT(std::abs(roundedMax * 10.0f - std::round(roundedMax * 10.0f)), 1e-3f)
-            << "Max[" << i << "] not on a 0.1 grid: " << roundedMax;
+        const float reportedMin = (i == 0) ? r.minBound.x
+                                : (i == 1) ? r.minBound.y
+                                           : r.minBound.z;
+        const float reportedMax = (i == 0) ? r.maxBound.x
+                                : (i == 1) ? r.maxBound.y
+                                           : r.maxBound.z;
+        const float sidecarMin = minArr[i].toString().toFloat();
+        const float sidecarMax = maxArr[i].toString().toFloat();
+        EXPECT_FLOAT_EQ(sidecarMin, reportedMin)
+            << "sidecar Min[" << i << "] must equal BakeResult.minBound";
+        EXPECT_FLOAT_EQ(sidecarMax, reportedMax)
+            << "sidecar Max[" << i << "] must equal BakeResult.maxBound";
+        // Both must land on a multiple of 0.1 (within FP).
+        EXPECT_LT(std::abs(sidecarMin * 10.0f - std::round(sidecarMin * 10.0f)), 1e-3f)
+            << "Min[" << i << "] not on a 0.1 grid: " << sidecarMin;
+        EXPECT_LT(std::abs(sidecarMax * 10.0f - std::round(sidecarMax * 10.0f)), 1e-3f)
+            << "Max[" << i << "] not on a 0.1 grid: " << sidecarMax;
     }
 }
 
@@ -303,10 +312,13 @@ TEST_F(VATBakerEndToEndTest, RejectsMissingAnimationOnLiveEntity) {
     auto* entity = createAnimatedTestEntity("VAT_E2E_MissAnim");
     ASSERT_NE(entity, nullptr);
 
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
     VATBaker::Options opts;
     opts.animationName = QStringLiteral("NotARealAnim");
     opts.fps = 30.0;
-    opts.outputDir = QStringLiteral("/tmp");
+    opts.outputDir = tmp.path();
 
     auto r = VATBaker::bake(entity, opts);
     EXPECT_FALSE(r.ok);
