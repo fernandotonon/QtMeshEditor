@@ -619,7 +619,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         OgreTerrain_d
         OgreRTShaderSystem_d
         OgreVolume_d
-        OgreOverlay_d)
+        OgreOverlay_d
+        OgreMeshLodGenerator_d)
 
     FOREACH(ogrelib ${OGRELIBLIST})
         IF(WIN32)
@@ -647,12 +648,12 @@ else()
         OgreTerrain
         OgreRTShaderSystem
         OgreVolume
-        OgreOverlay)
+        OgreOverlay
+        OgreMeshLodGenerator)
     IF(APPLE) # this is just for test, it is not using OgreBites yet. TODO: remove
         SET(OGRELIBLIST ${OGRELIBLIST}
             OgreBites
             OgreBullet
-            OgreMeshLodGenerator
             RenderSystem_GL3Plus
         )
     ENDIF()

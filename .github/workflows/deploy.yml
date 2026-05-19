@@ -352,6 +352,28 @@ jobs:
         rm -f "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
       shell: bash
 
+    - name: Verify OgreMeshLodGenerator.dll is packaged
+      run: |
+            $dest = "${{github.workspace}}/bin/OgreMeshLodGenerator.dll"
+            if (-not (Test-Path $dest)) {
+                $candidates = @(
+                    "${{github.workspace}}/ogre-build/SDK/bin/OgreMeshLodGenerator.dll",
+                    "${{github.workspace}}/ogre-build/SDK/bin/Release/OgreMeshLodGenerator.dll"
+                )
+                foreach ($src in $candidates) {
+                    if (Test-Path $src) {
+                        Copy-Item $src $dest -Force
+                        Write-Host "Copied OgreMeshLodGenerator.dll from $src"
+                        break
+                    }
+                }
+            }
+            if (-not (Test-Path $dest)) {
+                Write-Error "OgreMeshLodGenerator.dll is missing from the Windows package (LOD/decimate requires this DLL)."
+                exit 1
+            }
+      shell: powershell
+
     - name: Copy assimp dll to the binary folder
       run: |
             Write-Host "Checking available DLL files:"
