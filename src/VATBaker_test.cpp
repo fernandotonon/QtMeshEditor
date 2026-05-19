@@ -251,6 +251,58 @@ TEST_F(VATBakerEndToEndTest, BakesInMemoryAnimatedTriangle) {
     EXPECT_DOUBLE_EQ(doc.object()["fps"].toDouble(), 10.0);
 }
 
+// Regression — VATBaker used to write bind-pose data into every row
+// of the position texture (every frame identical) because the bake
+// loop didn't bump Ogre's per-frame counters between samples and so
+// `Entity::cacheBoneMatrices` short-circuited after the first call.
+// This test caught it would have caught it: it bakes a real animated
+// entity, opens the PNG, and asserts that adjacent rows are NOT byte-
+// identical. Without the fix `pixelsDiffer` evaluates to false and
+// the test fails loudly.
+TEST_F(VATBakerEndToEndTest, ProducesDistinctRowsAcrossFrames) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_FramesDiffer");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 10.0;       // 1.0 s × 10 fps → 10 frames
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("FramesDiffer");
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << "bake error: " << r.error.toStdString();
+    ASSERT_GE(r.frameCount, 2) << "need at least 2 frames to compare rows";
+
+    QImage png(r.posTexPath);
+    ASSERT_FALSE(png.isNull());
+    ASSERT_EQ(png.height(), r.frameCount);
+    ASSERT_GT(png.width(), 0);
+
+    // Walk every column for every (frame, frame+1) pair. If ANY pair
+    // of adjacent rows differs at ANY column, the animation is being
+    // sampled correctly. If all pairs are byte-identical, the bake
+    // is static and the bug is back.
+    bool foundDifference = false;
+    for (int row = 0; row + 1 < png.height() && !foundDifference; ++row) {
+        for (int col = 0; col < png.width(); ++col) {
+            if (png.pixel(col, row) != png.pixel(col, row + 1)) {
+                foundDifference = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(foundDifference)
+        << "VAT position texture is byte-identical across all frames — "
+        << "bake captured a single pose instead of stepping through "
+        << "the animation. Check that the bake loop bumps the Ogre "
+        << "per-frame counter (Root::_fireFrameRenderingQueued) "
+        << "between setTimePosition + collectPostSkinPositions calls.";
+}
+
 TEST_F(VATBakerEndToEndTest, RejectsMissingAnimationOnLiveEntity) {
     auto* entity = createAnimatedTestEntity("VAT_E2E_MissAnim");
     ASSERT_NE(entity, nullptr);

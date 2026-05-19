@@ -21,9 +21,12 @@ The MIT License
 #include <cstring>
 
 #include <OgreAnimationState.h>
+#include <OgreCommon.h>
 #include <OgreEntity.h>
+#include <OgreFrameListener.h>
 #include <OgreHardwareVertexBuffer.h>
 #include <OgreMesh.h>
+#include <OgreRoot.h>
 #include <OgreSkeleton.h>
 #include <OgreSubEntity.h>
 #include <OgreSubMesh.h>
@@ -592,6 +595,27 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
                        : t0 + span * (static_cast<double>(f)
                                        / static_cast<double>(frameCount - 1));
         state->setTimePosition(static_cast<Ogre::Real>(t));
+        // Bump the AnimationStateSet's dirty counter so
+        // Entity::_updateAnimation sees the new state. Without this,
+        // setTimePosition is a no-op when the requested time happens
+        // to match the prior value (e.g. frame 0 at t=0 after fresh
+        // setEnabled). The editor's AnimationControlController calls
+        // this same method after every setTimePosition.
+        states->_notifyDirty();
+        // Bump Ogre's global frame counter so
+        // Entity::cacheBoneMatrices reads the AnimationState (the
+        // cache key on line 1300 of OgreEntity.cpp is
+        // Root::getNextFrameNumber). In a headless bake we never
+        // call Root::renderOneFrame, so without this manual bump
+        // the bone matrices are computed once for the first frame
+        // and then cached forever — every subsequent setTimePosition
+        // updates state.time but the SW-skinned vertex buffer never
+        // gets re-blended, so every row of the bake's position
+        // texture ends up identical to row 0. The Godot test harness
+        // (#371 follow-up) exposed this; tests passed because they
+        // only checked file dimensions, not per-row content.
+        Ogre::FrameEvent ev{}; ev.timeSinceLastFrame = 0.0f; ev.timeSinceLastEvent = 0.0f;
+        Ogre::Root::getSingleton()._fireFrameRenderingQueued(ev);
 
         const size_t before = flat.size();
         const size_t appended = collectPostSkinPositions(entity, flat);
