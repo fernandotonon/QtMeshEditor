@@ -14,16 +14,19 @@ The MIT License
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QUuid>
 
 #include <cstring>
 
 #include <OgreAnimationState.h>
+#include <OgreCommon.h>
 #include <OgreEntity.h>
+#include <OgreFrameListener.h>
 #include <OgreHardwareVertexBuffer.h>
 #include <OgreMesh.h>
+#include <OgreRoot.h>
 #include <OgreSkeleton.h>
 #include <OgreSubEntity.h>
 #include <OgreSubMesh.h>
@@ -93,19 +96,6 @@ size_t collectPostSkinPositions(Ogre::Entity* entity,
     return appended;
 }
 
-inline unsigned char toByteNormalised(float v, float lo, float hi)
-{
-    if (hi <= lo) return 0;
-    const float t = (v - lo) / (hi - lo);
-    const float clamped = std::clamp(t, 0.0f, 1.0f);
-    return static_cast<unsigned char>(std::lround(clamped * 255.0f));
-}
-
-inline float fromByteNormalised(unsigned char b, float lo, float hi)
-{
-    return lo + (static_cast<float>(b) / 255.0f) * (hi - lo);
-}
-
 inline uint16_t toShortNormalised(float v, float lo, float hi)
 {
     if (hi <= lo) return 0;
@@ -114,15 +104,7 @@ inline uint16_t toShortNormalised(float v, float lo, float hi)
     return static_cast<uint16_t>(std::lround(clamped * 65535.0f));
 }
 
-inline float fromShortNormalised(uint16_t s, float lo, float hi)
-{
-    return lo + (static_cast<float>(s) / 65535.0f) * (hi - lo);
-}
-
-// Same submesh walk as collectPostSkinPositions but for normals. Kept
-// separate so the position-only path (slice 1) doesn't lock the normal
-// buffer when no one will read it — the second lock acquisition on the
-// same vbuf is cheap but pointless.
+// Same submesh walk as collectPostSkinPositions but for normals.
 //
 // On a submesh without `VES_NORMAL`, returns SIZE_MAX as a sentinel so
 // the caller can fail the bake with a clear error. We deliberately do
@@ -185,331 +167,181 @@ size_t collectPostSkinNormals(Ogre::Entity* entity,
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Static encoders (public for tests).
+// Sidecar emission.
 // ---------------------------------------------------------------------------
 
-std::vector<unsigned char> VATBaker::encodeRGBA8(
-    const std::vector<Ogre::Vector3>& flatPositions,
-    int frameCount,
-    int vertexCount,
-    const Ogre::Vector3& minBound,
-    const Ogre::Vector3& maxBound)
+namespace { QString buildOpenVATSidecar(int frameCount,
+                                        const Ogre::Vector3& lo,
+                                        const Ogre::Vector3& hi); }
+
+QString VATBaker::buildSidecarJson(const BakeResult& result,
+                                   const Options& /*opts*/)
 {
-    const size_t expected = static_cast<size_t>(frameCount)
-                          * static_cast<size_t>(vertexCount);
-    std::vector<unsigned char> out;
-    if (frameCount <= 0 || vertexCount <= 0) return out;
-    if (flatPositions.size() != expected) return out;
-    out.resize(expected * 4u, 0);
-    for (size_t i = 0; i < expected; ++i) {
-        const auto& p = flatPositions[i];
-        out[i * 4 + 0] = toByteNormalised(p.x, minBound.x, maxBound.x);
-        out[i * 4 + 1] = toByteNormalised(p.y, minBound.y, maxBound.y);
-        out[i * 4 + 2] = toByteNormalised(p.z, minBound.z, maxBound.z);
-        out[i * 4 + 3] = 255;
-    }
-    return out;
+    return buildOpenVATSidecar(result.frameCount,
+                               result.minBound,
+                               result.maxBound);
 }
 
-std::vector<Ogre::Vector3> VATBaker::decodeRGBA8(
-    const std::vector<unsigned char>& pixels,
-    int frameCount,
-    int vertexCount,
-    const Ogre::Vector3& minBound,
-    const Ogre::Vector3& maxBound)
-{
-    const size_t expected = static_cast<size_t>(frameCount)
-                          * static_cast<size_t>(vertexCount);
-    std::vector<Ogre::Vector3> out;
-    if (frameCount <= 0 || vertexCount <= 0) return out;
-    if (pixels.size() != expected * 4u) return out;
-    out.reserve(expected);
-    for (size_t i = 0; i < expected; ++i) {
-        Ogre::Vector3 p;
-        p.x = fromByteNormalised(pixels[i * 4 + 0], minBound.x, maxBound.x);
-        p.y = fromByteNormalised(pixels[i * 4 + 1], minBound.y, maxBound.y);
-        p.z = fromByteNormalised(pixels[i * 4 + 2], minBound.z, maxBound.z);
-        out.push_back(p);
-    }
-    return out;
+// ---------------------------------------------------------------------------
+// OpenVAT sidecar + texture packing.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// ─── OpenVAT compatibility ───────────────────────────────────────────
+//
+// Reference: https://github.com/sharpen3d/openvat
+// (the Blender add-on by sharpen3d, "OpenVAT-Engine_Tools" submodule)
+//
+// What OpenVAT consumers expect:
+//
+//   1. Sidecar JSON shape (file is `<basename>-remap_info.json`):
+//
+//        { "os-remap": { "Min": ["-1.20000000","0.00000000","-1.10000000"],
+//                        "Max": ["1.10000000","2.00000000","0.40000000"],
+//                        "Frames": 71 } }
+//
+//      `Min`/`Max` are quoted 8-decimal-place strings (matches the
+//      Blender add-on's `CustomEncoder` output in utils.py:135-139),
+//      rounded OUTWARD to the nearest 0.1 (floor for min, ceil for max
+//      — utils.py:186-191 / round_to_nearest_ten). Frames is a bare
+//      integer.
+//
+//   2. Texture is one 16-bit-per-channel PNG, RGB (no alpha):
+//        height = 2 * frameCount, width = vertexCount
+//        rows  [0   .. frameCount)        → positions
+//        rows  [frameCount .. 2*frameCount) → normals
+//      The Godot reference shader computes
+//        `int frame_count = resolution.y / 2;`
+//      and applies `normals_uv_shift = vec2(0.0, 0.5);` when sampling
+//      the normal half. (See OpenVAT-Engine_Tools GLSL shader L75-100.)
+//
+//   3. Channel encoding:
+//        positions: linear normalize to [Min, Max] like our existing path.
+//        normals:   (n + 1) * 0.5 → channel, decoded with `2*c - 1`.
+//        Both written as 16-bit unsigned (PNG16 / `Format_RGBX64`).
+//
+//   4. Sampling convention: rows=frames + cols=verts, **frame 0 at
+//      the top of the texture** (the Blender add-on writes top-down
+//      in pixel-space; the shader flips V on read with `1.0 - …`).
+//      Same orientation as our Agnostic / Godot / Unreal targets.
+//
+// We don't apply any axis swizzle. OpenVAT consumers traditionally
+// run their own swizzle on read (the Godot reference shader does
+// `vec3(x, z, -y)` to go Blender → Godot). We document the source
+// space (Ogre Y-up RH) in the sidecar via an extra non-conflicting
+// `_origin` key so a consumer's shader knows what swizzle to apply.
+
+// Round a float OUTWARD to the nearest 0.1 — floor for min, ceil for
+// max — matching openvat's `round_to_nearest_ten` (utils.py:186-188).
+// We never want a bound tighter than the actual data, so even on a
+// value already exactly at 0.1 we still pad outward by 0.1 to match
+// the Blender add-on's behavior (their math.floor(v*10)/10 yields the
+// same value, then min/max are intentionally not snapped tighter).
+inline float openvatRoundMin(float v) {
+    // floor(v * 10) / 10 — pulls down to the nearest multiple of 0.1.
+    return std::floor(v * 10.0f) / 10.0f;
+}
+inline float openvatRoundMax(float v) {
+    // ceil(v * 10) / 10 — pushes up to the nearest multiple of 0.1.
+    return std::ceil(v * 10.0f) / 10.0f;
 }
 
-std::vector<uint16_t> VATBaker::encodeRGBA16(
-    const std::vector<Ogre::Vector3>& flatPositions,
-    int frameCount,
-    int vertexCount,
-    const Ogre::Vector3& minBound,
-    const Ogre::Vector3& maxBound)
-{
-    const size_t expected = static_cast<size_t>(frameCount)
-                          * static_cast<size_t>(vertexCount);
-    std::vector<uint16_t> out;
-    if (frameCount <= 0 || vertexCount <= 0) return out;
-    if (flatPositions.size() != expected) return out;
-    out.resize(expected * 4u, 0);
-    for (size_t i = 0; i < expected; ++i) {
-        const auto& p = flatPositions[i];
-        out[i * 4 + 0] = toShortNormalised(p.x, minBound.x, maxBound.x);
-        out[i * 4 + 1] = toShortNormalised(p.y, minBound.y, maxBound.y);
-        out[i * 4 + 2] = toShortNormalised(p.z, minBound.z, maxBound.z);
-        out[i * 4 + 3] = 65535;
-    }
-    return out;
+// Format a float as an 8-decimal-place string with trailing zeros
+// preserved (matches openvat's `CustomEncoder` `"%.8f"`).
+inline QString openvatFormatFloat(float v) {
+    return QString::number(static_cast<double>(v), 'f', 8);
 }
 
-std::vector<Ogre::Vector3> VATBaker::decodeRGBA16(
-    const std::vector<uint16_t>& pixels,
-    int frameCount,
-    int vertexCount,
-    const Ogre::Vector3& minBound,
-    const Ogre::Vector3& maxBound)
+// Build the openvat sidecar JSON. Returned string is a single root
+// object with `os-remap` at the top level. Optional `_origin` key
+// documents our source coordinate space for shader authors.
+// `lo`/`hi` are expected to already be on the 0.1 OpenVAT grid (use
+// openvatRoundMin/openvatRoundMax to snap before calling). We just
+// format them; rounding here would silently re-snap rounded values
+// and decouple the sidecar from whatever the texture encoder used.
+QString buildOpenVATSidecar(int frameCount,
+                            const Ogre::Vector3& lo,
+                            const Ogre::Vector3& hi)
 {
-    const size_t expected = static_cast<size_t>(frameCount)
-                          * static_cast<size_t>(vertexCount);
-    std::vector<Ogre::Vector3> out;
-    if (frameCount <= 0 || vertexCount <= 0) return out;
-    if (pixels.size() != expected * 4u) return out;
-    out.reserve(expected);
-    for (size_t i = 0; i < expected; ++i) {
-        Ogre::Vector3 p;
-        p.x = fromShortNormalised(pixels[i * 4 + 0], minBound.x, maxBound.x);
-        p.y = fromShortNormalised(pixels[i * 4 + 1], minBound.y, maxBound.y);
-        p.z = fromShortNormalised(pixels[i * 4 + 2], minBound.z, maxBound.z);
-        out.push_back(p);
-    }
-    return out;
-}
-
-std::vector<unsigned char> VATBaker::encodeNormalsRGBA8(
-    const std::vector<Ogre::Vector3>& flatNormals,
-    int frameCount,
-    int vertexCount)
-{
-    const size_t expected = static_cast<size_t>(frameCount)
-                          * static_cast<size_t>(vertexCount);
-    std::vector<unsigned char> out;
-    if (frameCount <= 0 || vertexCount <= 0) return out;
-    if (flatNormals.size() != expected) return out;
-    out.resize(expected * 4u, 0);
-    for (size_t i = 0; i < expected; ++i) {
-        // Normals come in as unit vectors in [-1, 1]; remap to [0, 1]
-        // for the unsigned byte channel.
-        const auto& n = flatNormals[i];
-        const float nx = std::clamp((n.x + 1.0f) * 0.5f, 0.0f, 1.0f);
-        const float ny = std::clamp((n.y + 1.0f) * 0.5f, 0.0f, 1.0f);
-        const float nz = std::clamp((n.z + 1.0f) * 0.5f, 0.0f, 1.0f);
-        out[i * 4 + 0] = static_cast<unsigned char>(std::lround(nx * 255.0f));
-        out[i * 4 + 1] = static_cast<unsigned char>(std::lround(ny * 255.0f));
-        out[i * 4 + 2] = static_cast<unsigned char>(std::lround(nz * 255.0f));
-        out[i * 4 + 3] = 255;
-    }
-    return out;
-}
-
-std::vector<Ogre::Vector3> VATBaker::decodeNormalsRGBA8(
-    const std::vector<unsigned char>& pixels,
-    int frameCount,
-    int vertexCount)
-{
-    const size_t expected = static_cast<size_t>(frameCount)
-                          * static_cast<size_t>(vertexCount);
-    std::vector<Ogre::Vector3> out;
-    if (frameCount <= 0 || vertexCount <= 0) return out;
-    if (pixels.size() != expected * 4u) return out;
-    out.reserve(expected);
-    for (size_t i = 0; i < expected; ++i) {
-        Ogre::Vector3 n;
-        n.x = (static_cast<float>(pixels[i * 4 + 0]) / 255.0f) * 2.0f - 1.0f;
-        n.y = (static_cast<float>(pixels[i * 4 + 1]) / 255.0f) * 2.0f - 1.0f;
-        n.z = (static_cast<float>(pixels[i * 4 + 2]) / 255.0f) * 2.0f - 1.0f;
-        out.push_back(n);
-    }
-    return out;
-}
-
-std::vector<uint16_t> VATBaker::encodeNormalsRGBA16(
-    const std::vector<Ogre::Vector3>& flatNormals,
-    int frameCount,
-    int vertexCount)
-{
-    const size_t expected = static_cast<size_t>(frameCount)
-                          * static_cast<size_t>(vertexCount);
-    std::vector<uint16_t> out;
-    if (frameCount <= 0 || vertexCount <= 0) return out;
-    if (flatNormals.size() != expected) return out;
-    out.resize(expected * 4u, 0);
-    for (size_t i = 0; i < expected; ++i) {
-        const auto& n = flatNormals[i];
-        const float nx = std::clamp((n.x + 1.0f) * 0.5f, 0.0f, 1.0f);
-        const float ny = std::clamp((n.y + 1.0f) * 0.5f, 0.0f, 1.0f);
-        const float nz = std::clamp((n.z + 1.0f) * 0.5f, 0.0f, 1.0f);
-        out[i * 4 + 0] = static_cast<uint16_t>(std::lround(nx * 65535.0f));
-        out[i * 4 + 1] = static_cast<uint16_t>(std::lround(ny * 65535.0f));
-        out[i * 4 + 2] = static_cast<uint16_t>(std::lround(nz * 65535.0f));
-        out[i * 4 + 3] = 65535;
-    }
-    return out;
-}
-
-std::vector<Ogre::Vector3> VATBaker::decodeNormalsRGBA16(
-    const std::vector<uint16_t>& pixels,
-    int frameCount,
-    int vertexCount)
-{
-    const size_t expected = static_cast<size_t>(frameCount)
-                          * static_cast<size_t>(vertexCount);
-    std::vector<Ogre::Vector3> out;
-    if (frameCount <= 0 || vertexCount <= 0) return out;
-    if (pixels.size() != expected * 4u) return out;
-    out.reserve(expected);
-    for (size_t i = 0; i < expected; ++i) {
-        Ogre::Vector3 n;
-        n.x = (static_cast<float>(pixels[i * 4 + 0]) / 65535.0f) * 2.0f - 1.0f;
-        n.y = (static_cast<float>(pixels[i * 4 + 1]) / 65535.0f) * 2.0f - 1.0f;
-        n.z = (static_cast<float>(pixels[i * 4 + 2]) / 65535.0f) * 2.0f - 1.0f;
-        out.push_back(n);
-    }
-    return out;
-}
-
-QString VATBaker::buildSidecarJson(const BakeResult& result, const Options& opts)
-{
-    QJsonObject bounds;
-    QJsonObject lo, hi;
-    lo["x"] = result.minBound.x; lo["y"] = result.minBound.y; lo["z"] = result.minBound.z;
-    hi["x"] = result.maxBound.x; hi["y"] = result.maxBound.y; hi["z"] = result.maxBound.z;
-    bounds["min"] = lo;
-    bounds["max"] = hi;
-
-    QString encStr;
-    switch (opts.encoding) {
-        case Encoding::RGBA8:  encStr = QStringLiteral("rgba8");  break;
-        case Encoding::RGBA16: encStr = QStringLiteral("rgba16"); break;
-    }
-    QString tgtStr;
-    switch (opts.target) {
-        case Target::Agnostic: tgtStr = QStringLiteral("agnostic"); break;
-        case Target::Unity:    tgtStr = QStringLiteral("unity");    break;
-        case Target::Unreal:   tgtStr = QStringLiteral("unreal");   break;
-        case Target::Godot:    tgtStr = QStringLiteral("godot");    break;
-    }
+    QJsonArray jMin {
+        openvatFormatFloat(lo.x),
+        openvatFormatFloat(lo.y),
+        openvatFormatFloat(lo.z)
+    };
+    QJsonArray jMax {
+        openvatFormatFloat(hi.x),
+        openvatFormatFloat(hi.y),
+        openvatFormatFloat(hi.z)
+    };
+    QJsonObject osRemap;
+    osRemap["Min"]    = jMin;
+    osRemap["Max"]    = jMax;
+    osRemap["Frames"] = frameCount;
 
     QJsonObject root;
-    root["version"]     = 1;
-    root["target"]      = tgtStr;
-    root["encoding"]    = encStr;
-    root["frameCount"]  = result.frameCount;
-    root["vertexCount"] = result.vertexCount;
-    root["fps"]         = opts.fps;
-    root["animation"]   = opts.animationName;
-    root["bounds"]      = bounds;
-    root["posTexture"]  = QFileInfo(result.posTexPath).fileName();
-    if (!result.nrmTexPath.isEmpty())
-        root["nrmTexture"] = QFileInfo(result.nrmTexPath).fileName();
+    root["os-remap"] = osRemap;
+    // Non-standard extension keys — openvat consumer shaders ignore
+    // unknown top-level fields. `_producer` identifies the tool that
+    // wrote the file. `_axes` documents the source coordinate
+    // convention so shader authors know what swizzle to apply on read
+    // (the openvat Godot reference shader hardcodes a Blender→Godot
+    // `vec3(x, z, -y)` swizzle; our output is Y-up right-handed Ogre,
+    // which needs a different one).
+    root["_producer"] = QStringLiteral("QtMeshEditor");
+    root["_axes"]     = QStringLiteral("y-up-rh");
 
     QJsonDocument doc(root);
     return QString::fromUtf8(doc.toJson(QJsonDocument::Indented));
 }
 
-// ---------------------------------------------------------------------------
-// Per-target conventions.
-// ---------------------------------------------------------------------------
-
-namespace {
-
-// Apply per-engine axis swizzle to a single position vector. Sampling
-// happens in Ogre space (Y-up, right-handed); the resulting texture
-// has to be readable by the target engine without runtime fix-ups, so
-// the swizzle happens once at encode time and is documented in the
-// sidecar.
-//
-// - Agnostic / Unity / Godot — no swizzle. All three are Y-up + right-
-//   handed (Unity is Y-up; Godot is Y-up; agnostic is whatever the
-//   downstream tooling expects). Unity's vertical-flip is handled by
-//   reversing the row order, not the axes.
-// - Unreal — Z-up + left-handed. Standard Ogre→Unreal remap is
-//   `(x, y, z) → (x, z, y)` (swap Y/Z to lift "up" onto Z). Unreal
-//   handles its own LH chirality in the importer.
-inline Ogre::Vector3 swizzleForTarget(VATBaker::Target t, const Ogre::Vector3& v)
+// Encode `flat` positions + `normals` into a single contiguous buffer
+// laid out as a packed 16-bit RGB image:
+//   row 0..frameCount-1      = positions (3 channels: x, y, z)
+//   row frameCount..2*N-1    = normals   (3 channels: x, y, z)
+// width  = vertexCount, height = 2 * frameCount.
+// Positions are normalized into [lo..hi]; normals into [0..1] via
+// (n+1)/2. Output buffer is row-major, 3 uint16 per pixel.
+std::vector<uint16_t> packOpenVAT16(
+    const std::vector<Ogre::Vector3>& flat,
+    const std::vector<Ogre::Vector3>& normals,
+    int frameCount,
+    int vertexCount,
+    const Ogre::Vector3& lo,
+    const Ogre::Vector3& hi)
 {
-    switch (t) {
-        case VATBaker::Target::Unreal: return { v.x, v.z, v.y };
-        default:                       return v;
+    const size_t framesCount = static_cast<size_t>(frameCount);
+    const size_t vcount      = static_cast<size_t>(vertexCount);
+    const size_t imgHeight   = framesCount * 2u;
+    const size_t pixels      = imgHeight * vcount;
+
+    std::vector<uint16_t> out;
+    if (frameCount <= 0 || vertexCount <= 0) return out;
+    if (flat.size()    != framesCount * vcount) return out;
+    if (normals.size() != framesCount * vcount) return out;
+
+    out.resize(pixels * 3u, 0);
+
+    // Top half: positions normalized to [lo..hi].
+    for (size_t i = 0; i < framesCount * vcount; ++i) {
+        const auto& p = flat[i];
+        out[i * 3 + 0] = toShortNormalised(p.x, lo.x, hi.x);
+        out[i * 3 + 1] = toShortNormalised(p.y, lo.y, hi.y);
+        out[i * 3 + 2] = toShortNormalised(p.z, lo.z, hi.z);
     }
-}
-
-// Unity's PNG loader treats row 0 as the top of the image, whereas
-// the VAT layout has frame 0 at the top already — but Unity's auto-
-// generated UV convention then flips V again at sample time. The
-// net effect is that *for Unity*, the runtime shader would have to
-// compute `frameIndex` as `frameCount - 1 - row` if we wrote frames
-// top-down. Pre-flip the rows here so the shader can use the plain
-// `row / frameCount` indexing on every target.
-inline bool targetFlipsRowsAtWriteTime(VATBaker::Target t)
-{
-    return t == VATBaker::Target::Unity;
-}
-
-// Minimal Unity `.meta` sidecar. Hand-written rather than full Unity
-// YAML — Unity's importer is happy with the standard texture-asset
-// shape and rejects unknown keys silently. The values matter:
-//   - `guid` must be a unique 32-char hex string. Sharing a GUID
-//     between assets causes Unity to silently remap references at
-//     import time or refuse to import the duplicate altogether.
-//     We generate a fresh random GUID per bake.
-//   - `sRGBTexture: 0`  → data texture, no gamma curve.
-//   - `textureCompression: 0`  → uncompressed, lossless.
-//   - `filterMode: 0`  → point/nearest, no bilinear smearing
-//     between vertex columns.
-//   - `wrapU: 1` / `wrapV: 1`  → clamp, so OOB UVs don't wrap.
-QString buildUnityMeta()
-{
-    // QUuid::toString returns `{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}`;
-    // strip the braces and dashes to land on Unity's 32-hex-char shape.
-    const QString guid = QUuid::createUuid()
-                             .toString(QUuid::WithoutBraces)
-                             .remove(QChar('-'));
-    return QStringLiteral(
-        "fileFormatVersion: 2\n"
-        "guid: %1\n"
-        "TextureImporter:\n"
-        "  serializedVersion: 11\n"
-        "  sRGBTexture: 0\n"
-        "  textureCompression: 0\n"
-        "  filterMode: 0\n"
-        "  wrapU: 1\n"
-        "  wrapV: 1\n").arg(guid);
-}
-
-// Minimal Godot 4 spatial shader that samples the position texture
-// and applies the per-vertex offset. Users typically copy this into
-// a Material on a MeshInstance3D. Bounds + frame count are encoded
-// as uniform defaults pulled from the sidecar at bake time.
-QString buildGodotShader(int frameCount,
-                         int vertexCount,
-                         const Ogre::Vector3& lo,
-                         const Ogre::Vector3& hi)
-{
-    return QStringLiteral(
-        "shader_type spatial;\n"
-        "render_mode unshaded;\n"
-        "\n"
-        "uniform sampler2D pos_tex : filter_nearest;\n"
-        "uniform float current_frame = 0.0;\n"
-        "uniform int frame_count = %1;\n"
-        "uniform int vertex_count = %2;\n"
-        "uniform vec3 bounds_min = vec3(%3, %4, %5);\n"
-        "uniform vec3 bounds_max = vec3(%6, %7, %8);\n"
-        "\n"
-        "void vertex() {\n"
-        "    float u = (float(VERTEX_ID) + 0.5) / float(vertex_count);\n"
-        "    float v = (current_frame + 0.5) / float(frame_count);\n"
-        "    vec3 t = texture(pos_tex, vec2(u, v)).rgb;\n"
-        "    VERTEX = bounds_min + t * (bounds_max - bounds_min);\n"
-        "}\n")
-        .arg(frameCount).arg(vertexCount)
-        .arg(lo.x, 0, 'f', 6).arg(lo.y, 0, 'f', 6).arg(lo.z, 0, 'f', 6)
-        .arg(hi.x, 0, 'f', 6).arg(hi.y, 0, 'f', 6).arg(hi.z, 0, 'f', 6);
+    // Bottom half: normals (n+1)/2 → [0..65535].
+    const size_t offset = framesCount * vcount;
+    for (size_t i = 0; i < framesCount * vcount; ++i) {
+        const auto& n = normals[i];
+        const float nx = std::clamp((n.x + 1.0f) * 0.5f, 0.0f, 1.0f);
+        const float ny = std::clamp((n.y + 1.0f) * 0.5f, 0.0f, 1.0f);
+        const float nz = std::clamp((n.z + 1.0f) * 0.5f, 0.0f, 1.0f);
+        const size_t off = (offset + i) * 3u;
+        out[off + 0] = static_cast<uint16_t>(std::lround(nx * 65535.0f));
+        out[off + 1] = static_cast<uint16_t>(std::lround(ny * 65535.0f));
+        out[off + 2] = static_cast<uint16_t>(std::lround(nz * 65535.0f));
+    }
+    return out;
 }
 
 } // namespace
@@ -577,14 +409,12 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     // happening (which is the case during a headless bake).
     entity->addSoftwareAnimationRequest(true);
 
-    // First sample to discover the vertex count + seed the bounds.
     std::vector<Ogre::Vector3> flat;
-    std::vector<Ogre::Vector3> normals;  // populated only when opts.bakeNormals
+    std::vector<Ogre::Vector3> normals;
     Ogre::Vector3 lo(std::numeric_limits<float>::infinity());
     Ogre::Vector3 hi(-std::numeric_limits<float>::infinity());
     flat.reserve(static_cast<size_t>(frameCount) * 1024);
-    if (opts.bakeNormals)
-        normals.reserve(static_cast<size_t>(frameCount) * 1024);
+    normals.reserve(static_cast<size_t>(frameCount) * 1024);
 
     int vertexCount = -1;
     for (int f = 0; f < frameCount; ++f) {
@@ -592,6 +422,22 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
                        : t0 + span * (static_cast<double>(f)
                                        / static_cast<double>(frameCount - 1));
         state->setTimePosition(static_cast<Ogre::Real>(t));
+        // Bump the AnimationStateSet's dirty counter so
+        // Entity::_updateAnimation sees the new state. Without this,
+        // setTimePosition is a no-op when the requested time happens
+        // to match the prior value (e.g. frame 0 at t=0 after fresh
+        // setEnabled). The editor's AnimationControlController calls
+        // this same method after every setTimePosition.
+        states->_notifyDirty();
+        // Bump Ogre's global frame counter so Entity::cacheBoneMatrices
+        // reads the AnimationState (cache key in OgreEntity.cpp:1300 is
+        // Root::getNextFrameNumber). In a headless bake we never call
+        // Root::renderOneFrame, so without this manual bump the bone
+        // matrices are computed once for the first frame and cached
+        // forever — every row of the bake's position texture would end
+        // up identical to row 0.
+        Ogre::FrameEvent ev{}; ev.timeSinceLastFrame = 0.0f; ev.timeSinceLastEvent = 0.0f;
+        Ogre::Root::getSingleton()._fireFrameRenderingQueued(ev);
 
         const size_t before = flat.size();
         const size_t appended = collectPostSkinPositions(entity, flat);
@@ -611,191 +457,116 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             return result;
         }
 
-        // Apply per-target axis swizzle in-place on the just-appended
-        // positions so the bounds computed below match the encoded
-        // space. (Cheaper than walking the buffer twice — and keeps
-        // the bounds → encoder → decoder chain consistent.)
         for (size_t i = before; i < flat.size(); ++i) {
-            flat[i] = swizzleForTarget(opts.target, flat[i]);
             const auto& p = flat[i];
             lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y); lo.z = std::min(lo.z, p.z);
             hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y); hi.z = std::max(hi.z, p.z);
         }
 
-        if (opts.bakeNormals) {
-            const size_t nrmBefore = normals.size();
-            const size_t nrmAppended = collectPostSkinNormals(entity, normals);
-            if (nrmAppended == kCollectNormalsMissingSentinel) {
-                entity->removeSoftwareAnimationRequest(true);
-                result.error = QStringLiteral(
-                    "frame %1 has a submesh without VES_NORMAL — "
-                    "cannot bake normals (regenerate normals on the source mesh "
-                    "or omit --normals)")
-                        .arg(f);
-                return result;
-            }
-            if (nrmAppended != static_cast<size_t>(frameVerts)) {
-                entity->removeSoftwareAnimationRequest(true);
-                result.error = QStringLiteral(
-                    "frame %1 normals count (%2) differs from positions (%3)")
-                        .arg(f).arg(nrmAppended).arg(frameVerts);
-                return result;
-            }
-            // Apply the same axis swizzle to normals — they live in
-            // the same coordinate frame as positions. (Direction
-            // vectors don't have a separate translation component, so
-            // the swizzle is exactly the same operation.)
-            for (size_t i = nrmBefore; i < normals.size(); ++i) {
-                normals[i] = swizzleForTarget(opts.target, normals[i]);
-            }
+        const size_t nrmAppended = collectPostSkinNormals(entity, normals);
+        if (nrmAppended == kCollectNormalsMissingSentinel) {
+            entity->removeSoftwareAnimationRequest(true);
+            result.error = QStringLiteral(
+                "frame %1 has a submesh without VES_NORMAL — "
+                "OpenVAT requires per-vertex normals "
+                "(regenerate normals on the source mesh and re-import)")
+                    .arg(f);
+            return result;
+        }
+        if (nrmAppended != static_cast<size_t>(frameVerts)) {
+            entity->removeSoftwareAnimationRequest(true);
+            result.error = QStringLiteral(
+                "frame %1 normals count (%2) differs from positions (%3)")
+                    .arg(f).arg(nrmAppended).arg(frameVerts);
+            return result;
         }
     }
 
     entity->removeSoftwareAnimationRequest(true);
 
-    // Degenerate bounds (single point on an axis): pad by 1 unit so the
-    // encoder doesn't divide-by-zero and the runtime decode reads back
-    // the constant value. Choice of pad is irrelevant — every sample
-    // lands at the same byte.
+    // Degenerate bounds (single point on an axis): pad so the encoder
+    // doesn't divide-by-zero and the runtime decode reads back the
+    // constant value. Choice of pad is irrelevant — every sample lands
+    // at the same byte.
     if (hi.x <= lo.x) hi.x = lo.x + 1.0f;
     if (hi.y <= lo.y) hi.y = lo.y + 1.0f;
     if (hi.z <= lo.z) hi.z = lo.z + 1.0f;
 
+    // OpenVAT consumers decode positions against the JSON sidecar's
+    // Min/Max — which are rounded outward to the nearest 0.1. The
+    // texture must be encoded against the SAME rounded bounds, or
+    // every sample drifts by up to one rounding step (~0.05 per axis
+    // on a 1-unit model). Both halves of the os-remap contract live
+    // off `roundedLo`/`roundedHi` from here on.
+    const Ogre::Vector3 roundedLo(openvatRoundMin(lo.x),
+                                  openvatRoundMin(lo.y),
+                                  openvatRoundMin(lo.z));
+    const Ogre::Vector3 roundedHi(openvatRoundMax(hi.x),
+                                  openvatRoundMax(hi.y),
+                                  openvatRoundMax(hi.z));
+
     result.frameCount  = frameCount;
     result.vertexCount = vertexCount;
-    result.minBound    = lo;
-    result.maxBound    = hi;
+    result.minBound    = roundedLo;
+    result.maxBound    = roundedHi;
 
-    // Ensure output dir exists.
     QDir().mkpath(opts.outputDir);
     const QString base = opts.basename.isEmpty() ? opts.animationName : opts.basename;
     result.posTexPath = QDir(opts.outputDir).filePath(base + "_pos.png");
-    result.jsonPath   = QDir(opts.outputDir).filePath(base + ".json");
+    result.jsonPath   = QDir(opts.outputDir).filePath(base + "-remap_info.json");
 
-    const bool flipRows = targetFlipsRowsAtWriteTime(opts.target);
-
-    // Encode + write the position texture. PNG preserves both 8-bit
-    // and 16-bit channel depths; QImage handles the format switch for us.
-    if (opts.encoding == Encoding::RGBA8) {
-        auto rgba = encodeRGBA8(flat, frameCount, vertexCount, lo, hi);
-        if (rgba.empty()) {
-            result.error = QStringLiteral("encodeRGBA8 produced empty buffer");
-            return result;
-        }
-        QImage img(vertexCount, frameCount, QImage::Format_RGBA8888);
-        for (int y = 0; y < frameCount; ++y) {
-            const int srcRow = flipRows ? (frameCount - 1 - y) : y;
-            const unsigned char* src = rgba.data() + static_cast<size_t>(srcRow)
-                                                      * static_cast<size_t>(vertexCount) * 4u;
-            std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u);
-        }
-        if (!img.save(result.posTexPath, "PNG")) {
-            result.error = QStringLiteral("failed to write position texture: %1")
-                               .arg(result.posTexPath);
-            return result;
-        }
-    } else {  // RGBA16
-        auto rgba = encodeRGBA16(flat, frameCount, vertexCount, lo, hi);
-        if (rgba.empty()) {
-            result.error = QStringLiteral("encodeRGBA16 produced empty buffer");
-            return result;
-        }
-        // Format_RGBA64 is 16 bits per channel — Qt's `save("PNG")` writes
-        // a 16-bit PNG which Godot/Unity/Unreal all read losslessly.
-        QImage img(vertexCount, frameCount, QImage::Format_RGBA64);
-        for (int y = 0; y < frameCount; ++y) {
-            const int srcRow = flipRows ? (frameCount - 1 - y) : y;
-            const uint16_t* src = rgba.data() + static_cast<size_t>(srcRow)
-                                                * static_cast<size_t>(vertexCount) * 4u;
-            std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u * sizeof(uint16_t));
-        }
-        if (!img.save(result.posTexPath, "PNG")) {
-            result.error = QStringLiteral("failed to write 16-bit position texture: %1")
-                               .arg(result.posTexPath);
-            return result;
+    auto packed = packOpenVAT16(flat, normals, frameCount, vertexCount,
+                                roundedLo, roundedHi);
+    if (packed.empty()) {
+        result.error = QStringLiteral("OpenVAT pack produced empty buffer");
+        return result;
+    }
+    const int imgHeight = frameCount * 2;
+    // RGBX64 is Qt's 16-bit-per-channel 4-channel format. The X channel
+    // is padding; PNG can store 3-channel data losslessly but Qt's PNG
+    // writer infers RGB-vs-RGBA from the QImage format, and Format_RGB
+    // doesn't exist at 16-bit precision. Padding to RGBX64 costs a few
+    // hundred KB on a 5828×142 image — acceptable for a one-off bake.
+    QImage img(vertexCount, imgHeight, QImage::Format_RGBX64);
+    img.fill(0);
+    for (int y = 0; y < imgHeight; ++y) {
+        const uint16_t* src = packed.data()
+                            + static_cast<size_t>(y)
+                              * static_cast<size_t>(vertexCount) * 3u;
+        auto* dst = reinterpret_cast<uint16_t*>(img.scanLine(y));
+        for (int x = 0; x < vertexCount; ++x) {
+            dst[x * 4 + 0] = src[x * 3 + 0];
+            dst[x * 4 + 1] = src[x * 3 + 1];
+            dst[x * 4 + 2] = src[x * 3 + 2];
+            dst[x * 4 + 3] = 65535;
         }
     }
-
-    // Normal texture — only when requested. Same layout / size, normals
-    // mapped from [-1, 1] → [0, MAX] per channel.
-    if (opts.bakeNormals) {
-        result.nrmTexPath = QDir(opts.outputDir).filePath(base + "_nrm.png");
-        if (opts.encoding == Encoding::RGBA8) {
-            auto rgba = encodeNormalsRGBA8(normals, frameCount, vertexCount);
-            if (rgba.empty()) {
-                result.error = QStringLiteral("encodeNormalsRGBA8 produced empty buffer");
-                return result;
-            }
-            QImage img(vertexCount, frameCount, QImage::Format_RGBA8888);
-            for (int y = 0; y < frameCount; ++y) {
-                const int srcRow = flipRows ? (frameCount - 1 - y) : y;
-                const unsigned char* src = rgba.data() + static_cast<size_t>(srcRow)
-                                                          * static_cast<size_t>(vertexCount) * 4u;
-                std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u);
-            }
-            if (!img.save(result.nrmTexPath, "PNG")) {
-                result.error = QStringLiteral("failed to write normal texture: %1")
-                                   .arg(result.nrmTexPath);
-                return result;
-            }
-        } else {  // RGBA16
-            auto rgba = encodeNormalsRGBA16(normals, frameCount, vertexCount);
-            if (rgba.empty()) {
-                result.error = QStringLiteral("encodeNormalsRGBA16 produced empty buffer");
-                return result;
-            }
-            QImage img(vertexCount, frameCount, QImage::Format_RGBA64);
-            for (int y = 0; y < frameCount; ++y) {
-                const int srcRow = flipRows ? (frameCount - 1 - y) : y;
-                const uint16_t* src = rgba.data() + static_cast<size_t>(srcRow)
-                                                    * static_cast<size_t>(vertexCount) * 4u;
-                std::memcpy(img.scanLine(y), src, static_cast<size_t>(vertexCount) * 4u * sizeof(uint16_t));
-            }
-            if (!img.save(result.nrmTexPath, "PNG")) {
-                result.error = QStringLiteral("failed to write 16-bit normal texture: %1")
-                                   .arg(result.nrmTexPath);
-                return result;
-            }
-        }
+    if (!img.save(result.posTexPath, "PNG")) {
+        result.error = QStringLiteral("failed to write OpenVAT texture: %1")
+                           .arg(result.posTexPath);
+        return result;
     }
 
-    // Sidecar.
-    const QString sidecar = buildSidecarJson(result, opts);
+    const QString sidecar = buildOpenVATSidecar(frameCount, roundedLo, roundedHi);
     QFile jf(result.jsonPath);
     if (!jf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        result.error = QStringLiteral("failed to open JSON for write: %1")
+        result.error = QStringLiteral("failed to open OpenVAT sidecar for write: %1")
                            .arg(result.jsonPath);
         return result;
     }
-    jf.write(sidecar.toUtf8());
+    const QByteArray sidecarBytes = sidecar.toUtf8();
+    const qint64 written = jf.write(sidecarBytes);
     jf.close();
-
-    // Per-engine extras — emitted alongside the JSON sidecar so a
-    // dropped-in asset folder is engine-ready without further tooling.
-    if (opts.target == Target::Unity) {
-        result.unityMetaPath = result.posTexPath + QStringLiteral(".meta");
-        QFile mf(result.unityMetaPath);
-        if (!mf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            result.error = QStringLiteral("failed to open .meta for write: %1")
-                               .arg(result.unityMetaPath);
-            return result;
-        }
-        mf.write(buildUnityMeta().toUtf8());
-        mf.close();
-    } else if (opts.target == Target::Godot) {
-        result.godotShaderPath = QDir(opts.outputDir).filePath(base + ".gdshader");
-        QFile sf(result.godotShaderPath);
-        if (!sf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            result.error = QStringLiteral("failed to open .gdshader for write: %1")
-                               .arg(result.godotShaderPath);
-            return result;
-        }
-        sf.write(buildGodotShader(frameCount, vertexCount, lo, hi).toUtf8());
-        sf.close();
+    if (written != sidecarBytes.size()) {
+        // Short write — disk full, network volume hiccup, etc. Surface
+        // it instead of leaving a truncated sidecar behind that the
+        // consumer would read partially and misdecode against.
+        QFile::remove(result.jsonPath);
+        result.error = QStringLiteral(
+            "short write to OpenVAT sidecar %1 (wrote %2 of %3 bytes)")
+                .arg(result.jsonPath).arg(written).arg(sidecarBytes.size());
+        return result;
     }
-    // Target::Unreal — no extra sidecar; users wire the texture into a
-    // Niagara VAT module which references it by name. Documenting in
-    // future slice 4 (Inspector) which sidecar to expect.
 
     result.ok = true;
     return result;

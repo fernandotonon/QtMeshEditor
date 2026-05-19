@@ -415,6 +415,21 @@ jobs:
             }
       shell: powershell
 
+    - name: Verify Windows package DLL dependencies
+      run: |
+            $mingw = "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin"
+            $objdump = "$mingw/objdump.exe"
+            $ogreSdk = "${{github.workspace}}/ogre-build/SDK/bin"
+            if (-not (Test-Path $ogreSdk)) {
+              $ogreSdk = "${{github.workspace}}/ogre-build/SDK/bin/Release"
+            }
+            pwsh -File "${{github.workspace}}/scripts/verify-windows-package-dlls.ps1" `
+              -BinDir "${{github.workspace}}/bin" `
+              -Objdump $objdump `
+              -OgreSdkBin $ogreSdk `
+              -CopyMissingOgreDlls
+      shell: powershell
+
     - name: Remove test-only dance models from package
       run: |
             Remove-Item "${{github.workspace}}/bin/media/models/Twist Dance.fbx" -ErrorAction SilentlyContinue

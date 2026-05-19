@@ -1,0 +1,31 @@
+; Godot 4 project for verifying QtMeshEditor's VAT export.
+;
+; What it does:
+;   - Loads a VAT bake (PNG + JSON sidecar) at the path you set in the
+;     VATPlayer scene's `bake_dir` export.
+;   - Drives the `current_frame` shader uniform from the project's idle
+;     loop at the sidecar's `fps`, looping at `frame_count`.
+;   - Renders the original glTF mesh on the LEFT (live-skinned ground
+;     truth via AnimationPlayer) and the VAT-driven mesh on the RIGHT
+;     (vertex shader playback, no skeleton bound) side-by-side.
+;
+; If the silhouettes match, the VAT export is faithful.
+
+config_version=5
+
+[application]
+
+config/name="VAT Test Harness"
+config/description="Side-by-side comparison of QtMeshEditor VAT bake vs live skeletal animation."
+run/main_scene="res://scenes/Main.tscn"
+config/features=PackedStringArray("4.2", "Forward Plus")
+
+[debug]
+
+gdscript/warnings/untyped_declaration=1
+gdscript/warnings/unsafe_property_access=0
+
+[rendering]
+
+textures/default_filters/use_nearest_mipmap_filter=true
+anti_aliasing/quality/msaa_3d=2
