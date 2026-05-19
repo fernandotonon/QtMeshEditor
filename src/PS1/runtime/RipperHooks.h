@@ -19,6 +19,7 @@ public:
     void setVram(VramSnapshot *vram) { m_vram = vram; }
 
     bool isCaptureEnabled() const override;
+    void ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize) override;
 
     void onFrameBegin() override;
     void onFrameEnd() override;

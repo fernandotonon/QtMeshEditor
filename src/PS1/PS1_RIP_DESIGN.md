@@ -58,8 +58,10 @@ See epic #412 for phased issues (#413–#431).
 ## Phase 1 status
 
 - `EmuCore` + `IEmuCorePlugin` + `EmuCoreLoader` landed (#415).
-- Stub plugin `plugins/ps1core_stub/` renders a 320×240 test pattern when BIOS+ISO paths validate.
+- **Libretro host** `plugins/ps1core_libretro/` loads `mednafen_psx_libretro` / `beetle_psx_*` from `PS1Cores/`, system paths, or `QTMESH_PS1_LIBRETRO_CORE`. Runs a real ISO when BIOS + disc image are set.
+- Stub plugin `plugins/ps1core_stub/` remains for CI (test pattern + synthetic capture).
 - `PS1RipSessionWindow` + `EmuViewport` + legality dialog (#416–#417) — keyboard/gamepad input still TODO.
+- Install helper: `scripts/install-ps1-libretro-core.sh` copies a distro libretro core into `build/bin/PS1Cores/`.
 
 ## Phase 2 status
 
@@ -75,8 +77,9 @@ See epic #412 for phased issues (#413–#431).
 - `TextureDecoder` — CLUT-aware 4/8/15 bpp tile decode with `TileKey` cache and STP/alpha via `PsxVramColor`.
 - `dumpVRAM()` saves `<AppData>/ps1_rip/captures/<id>_vram.png` and feeds `VramViewerWidget` in the session window.
 - Stub core fills CLUT + 4/8/15 bpp test regions each frame via `stubFillVramPattern`.
+- Libretro path mirrors **live VRAM** from the core memory map and scans **main RAM** for GP0 packets (`PsxGpuRamScanner`) when capture is armed.
 
 ## Open questions
 
-- mednafen-psx plugin build/integration (replace stub for real emulation).
+- libretro core packaging for Windows/macOS CI (Linux: apt `libretro-beetle-psx` + install script).
 - BIOS / ISO first-run legality dialog copy (#417) — requires legal review before release.

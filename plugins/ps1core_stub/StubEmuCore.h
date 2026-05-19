@@ -15,6 +15,7 @@ public:
     QString coreId() const override;
     bool loadBios(const QString &biosPath) override;
     bool loadIso(const QString &isoPath) override;
+    bool boot(QString *errorOut) override;
     void runFrame() override;
     void reset() override;
     const EmuFramebuffer &framebuffer() const override;

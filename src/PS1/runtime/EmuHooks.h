@@ -3,6 +3,7 @@
 
 #include "CaptureTypes.h"
 
+#include <cstddef>
 #include <cstdint>
 
 /**
@@ -31,6 +32,13 @@ public:
     }
     virtual void onVramRead(uint16_t x, uint16_t y, uint16_t w, uint16_t h) { (void)x; (void)y; (void)w; (void)h; }
     virtual void onDrawMode(const DrawModeRecord &mode) { (void)mode; }
+
+    /** Libretro path: scan main RAM for GP0 packets when capture is armed (#418). */
+    virtual void ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize)
+    {
+        (void)ram;
+        (void)byteSize;
+    }
 };
 
 #endif // EMUHOOKS_H

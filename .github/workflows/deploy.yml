@@ -911,7 +911,8 @@ jobs:
       run: |
             sudo apt-get update
             sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libx11-dev xvfb \
-                mesa-utils libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0
+                mesa-utils libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0 \
+                libretro-beetle-psx
             # Start Xvfb with GLX support for Ogre GL initialization
             Xvfb :99 -screen 0 1024x768x24 +extension GLX > /dev/null 2>&1 &
             sleep 3
@@ -997,6 +998,9 @@ jobs:
             sudo cp -R /usr/local/lib/OGRE/* ./bin || true
             sudo cp -R /usr/local/lib/OGRE/* ./build/bin/ || true
             sudo cp -R /usr/local/lib/OGRE/* ./build/debug/ || true
+
+    - name: Install libretro PSX core for PS1 rip tests
+      run: ./scripts/install-ps1-libretro-core.sh build/debug
 
     - name: Run Comprehensive Test Suite
       env:

@@ -146,6 +146,10 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipManager.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipSessionWindow.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipWorker.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxBiosValidator.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxDiscResolver.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxJoypadState.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxGpuRamScanner.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/RipperHooks.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/TextureDecoder.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/VramSnapshot.cpp
@@ -386,6 +390,9 @@ if(BUILD_TESTS)
 
         if(ENABLE_PS1_RIP)
             add_dependencies(${target_name} qtmesh_ps1core_stub)
+            if(TARGET qtmesh_ps1core_libretro)
+                add_dependencies(${target_name} qtmesh_ps1core_libretro)
+            endif()
         endif()
         
         # Add dependency on UI generation
@@ -419,6 +426,9 @@ if(BUILD_TESTS)
 
         if(ENABLE_PS1_RIP)
             add_dependencies(${target_name} qtmesh_ps1core_stub)
+            if(TARGET qtmesh_ps1core_libretro)
+                add_dependencies(${target_name} qtmesh_ps1core_libretro)
+            endif()
         endif()
         
         # Add dependency on UI generation

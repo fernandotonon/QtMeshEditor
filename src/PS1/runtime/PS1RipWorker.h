@@ -40,17 +40,20 @@ public slots:
     void pauseEmulation();
     void stepFrame();
     void setCaptureArmed(bool armed);
+    void setJoypadButton(unsigned port, unsigned buttonId, bool pressed);
+    void resetJoypad(unsigned port = 0);
     void finalizeFrameCapture();
     void dumpVram();
 
 signals:
-    void emulationStarted();
+    void emulationStarted(const QString &coreId);
     void emulationStopped();
     void framePresented(const QImage &frame, quint64 frameIndex);
     void emulationError(const QString &message);
     void frameCaptureReady(const QString &captureId, int primCount);
     void vramDumpReady(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                        const QImage &nativePreview);
+    void vramFrameUpdated(const QVector<uint16_t> &cells, const QImage &nativePreview);
 
 private slots:
     void runFrameTick();
