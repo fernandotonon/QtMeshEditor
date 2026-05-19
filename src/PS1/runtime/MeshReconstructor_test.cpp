@@ -1,5 +1,6 @@
 #include "CaptureSnapshot.h"
 #include "MeshReconstructor.h"
+#include "MeshTopologyHash.h"
 #include "PsxCaptureFilters.h"
 
 #include <gtest/gtest.h>
@@ -91,6 +92,31 @@ TEST(MeshReconstructorTest, IgnoresOffscreenPrimitives)
     const ReconstructedMesh mesh = MeshReconstructor::reconstruct(snap);
     ASSERT_FALSE(mesh.isEmpty());
     EXPECT_EQ(mesh.triangleCount, 1);
+}
+
+TEST(MeshReconstructorTest, DedupesIdenticalInstances)
+{
+    CaptureSnapshot snap;
+    snap.matrices.append(identityMatrix());
+    MatrixRecord shifted = identityMatrix();
+    shifted.tr[0] = 512;
+    snap.matrices.append(shifted);
+    MatrixRecord shifted2 = identityMatrix();
+    shifted2.tr[0] = 1024;
+    snap.matrices.append(shifted2);
+
+    snap.prims.append(coloredTri(16, 16, 0));
+    snap.prims.append(coloredTri(80, 16, 1));
+    snap.prims.append(coloredTri(144, 16, 2));
+
+    const ReconstructedCaptureSet loose =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose);
+    EXPECT_EQ(loose.capturedPartCount, 3);
+    EXPECT_EQ(loose.uniqueCount(), 1);
+    EXPECT_EQ(loose.instanceCount(), 3);
+    EXPECT_EQ(loose.instances[0].uniqueMeshIndex, 0);
+    EXPECT_EQ(loose.instances[1].uniqueMeshIndex, 0);
+    EXPECT_EQ(loose.instances[2].uniqueMeshIndex, 0);
 }
 
 TEST(MeshReconstructorTest, KeepsPartiallyOnScreenPrimitives)

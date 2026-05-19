@@ -30,6 +30,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GpuCommandParser.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GteCapture.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipMeshBuilder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipLegalityDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipManager.cpp
@@ -52,6 +53,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/CaptureTypes.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GteInverse.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipMeshBuilder.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuCore.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuCoreLoader.h

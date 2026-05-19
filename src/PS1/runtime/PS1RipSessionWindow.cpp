@@ -18,12 +18,14 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QStatusBar>
+#include <QCheckBox>
 #include <QToolBar>
 
 namespace {
 constexpr auto kSettingsGroup = "ps1Rip";
 constexpr auto kBiosKey = "biosPath";
 constexpr auto kRecentIsoKey = "recentIsos";
+constexpr auto kDedupeStrictKey = "dedupeStrict";
 } // namespace
 
 PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
@@ -64,6 +66,20 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     });
     auto *captureAct = toolbar->addAction(tr("Capture Frame"));
     connect(captureAct, &QAction::triggered, this, &PS1RipSessionWindow::onCaptureFrame);
+    auto *strictDedupe = new QCheckBox(tr("Strict dedupe"), this);
+    strictDedupe->setToolTip(tr("Bit-exact topology hash (off = 0.01 position snap)"));
+    strictDedupe->setChecked(
+        QSettings().value(QString::fromLatin1(kSettingsGroup) + QLatin1Char('/')
+                              + QString::fromLatin1(kDedupeStrictKey), false)
+            .toBool());
+    m_manager->setDedupeStrict(strictDedupe->isChecked());
+    connect(strictDedupe, &QCheckBox::toggled, this, [this](bool on) {
+        m_manager->setDedupeStrict(on);
+        QSettings().setValue(QString::fromLatin1(kSettingsGroup) + QLatin1Char('/')
+                                 + QString::fromLatin1(kDedupeStrictKey),
+                             on);
+    });
+    toolbar->addWidget(strictDedupe);
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
     connect(dumpVramAct, &QAction::triggered, this, &PS1RipSessionWindow::onDumpVram);
 
@@ -238,12 +254,17 @@ void PS1RipSessionWindow::onCaptureFrame()
     m_manager->captureFrame();
 }
 
-void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int vertexCount, int triangleCount)
+void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes,
+                                    int instanceCount, int vertexCount, int triangleCount)
 {
-    m_statusLabel->setText(tr("Mesh built: %1 (%2 verts, %3 tris) — see main scene")
-                               .arg(captureId)
-                               .arg(vertexCount)
-                               .arg(triangleCount));
+    m_statusLabel->setText(
+        tr("Mesh %1 — captured %2 / unique %3 / instances %4 (%5 verts, %6 tris)")
+            .arg(captureId)
+            .arg(capturedParts)
+            .arg(uniqueMeshes)
+            .arg(instanceCount)
+            .arg(vertexCount)
+            .arg(triangleCount));
 }
 
 void PS1RipSessionWindow::onVramDumped(const QString &captureId, const QString &pngPath,

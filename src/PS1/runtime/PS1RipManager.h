@@ -42,6 +42,9 @@ public:
     bool captureScene(int seconds);
     bool dumpVRAM();
 
+    bool dedupeStrict() const { return m_dedupeStrict; }
+    void setDedupeStrict(bool strict) { m_dedupeStrict = strict; }
+
     void setJoypadPressed(unsigned port, unsigned buttonId, bool pressed);
     void resetJoypad(unsigned port = 0);
 
@@ -53,7 +56,8 @@ signals:
     void sessionStopped();
     void framePresented(const QImage &frame, quint64 frameIndex);
     void frameCaptured(const QString &captureId);
-    void meshBuilt(const QString &captureId, int vertexCount, int triangleCount);
+    void meshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
+                   int vertexCount, int triangleCount);
     void sceneCaptured(const QString &captureId);
     void vramDumped(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                     const QImage &nativePreview);
@@ -79,6 +83,7 @@ private:
     bool m_startPending = false;
     bool m_paused = false;
     bool m_captureArmed = false;
+    bool m_dedupeStrict = false;
 
     QThread *m_workerThread = nullptr;
     PS1RipWorker *m_worker = nullptr;

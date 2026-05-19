@@ -80,14 +80,15 @@ See epic #412 for phased issues (#413–#431).
 - **Libretro:** `syncVramFromCore()` mirrors live core VRAM every frame; capture snapshots include a VRAM cell copy for textured mesh export.
 - Stub core fills CLUT + 4/8/15 bpp test regions each frame via `stubFillVramPattern` (CI only).
 
-## Phase 4 status (#422)
+## Phase 4 status (#422 / #423)
 
 - `CaptureSnapshot` copies worker `CaptureBuffer` + VRAM cells to the main thread for reconstruction.
 - `GteInverse` approximates GTE screen→model un-projection; PS1 Y-down → editor Y-up.
 - `MeshReconstructor` groups primitives by `matrixId` + texture key, triangulates quads, emits vertex color + UV.
-- `PS1RipMeshBuilder` creates Ogre mesh/submeshes, binds decoded TPAGE/CLUT textures when VRAM is present, and attaches `PS1Capture_<id>` to the live scene via `Manager`.
-- `captureFrame` builds mesh automatically; session toolbar adds **Arm Capture** / **Capture Frame**.
-- Sentry breadcrumb `ps1.rip.mesh.built` with vertex/triangle counts.
+- `MeshTopologyHash` + `reconstructDeduped()` collapse identical topology (loose 0.01 snap vs strict bit-exact) into unique meshes with instance centroids (#423).
+- `PS1RipMeshBuilder::attachCaptureSetToScene` places one `PS1Capture_<id>_instN` SceneNode per instance at the captured world position.
+- Session toolbar **Strict dedupe** toggle (persisted in QSettings); status shows captured / unique / instance counts.
+- Sentry breadcrumbs `ps1.rip.mesh.built` and `ps1.rip.dedupe.summary`.
 
 ## Troubleshooting
 

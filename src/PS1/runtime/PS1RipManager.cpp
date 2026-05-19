@@ -1,6 +1,7 @@
 #include "PS1RipManager.h"
 #include "CaptureSnapshot.h"
 #include "MeshReconstructor.h"
+#include "MeshTopologyHash.h"
 #include "PS1RipMeshBuilder.h"
 #include "PS1RipWorker.h"
 #include "PsxDiscResolver.h"
@@ -85,8 +86,11 @@ void PS1RipManager::initializeWorkerThread()
 
                 emit frameCaptured(captureId);
 
-                const ReconstructedMesh mesh = MeshReconstructor::reconstruct(snapshot);
-                if (mesh.isEmpty()) {
+                const MeshDedupeMode dedupeMode =
+                    m_dedupeStrict ? MeshDedupeMode::Strict : MeshDedupeMode::Loose;
+                const ReconstructedCaptureSet captureSet =
+                    MeshReconstructor::reconstructDeduped(snapshot, dedupeMode);
+                if (captureSet.isEmpty()) {
                     reportError(tr("Capture produced no reconstructable geometry"));
                     return;
                 }
@@ -94,7 +98,8 @@ void PS1RipManager::initializeWorkerThread()
                 PS1RipMeshBuilder::BuildResult built;
                 QString buildErr;
                 try {
-                    if (!PS1RipMeshBuilder::attachToScene(mesh, captureId, &snapshot, &built, &buildErr)) {
+                    if (!PS1RipMeshBuilder::attachCaptureSetToScene(captureSet, captureId, &snapshot,
+                                                                    &built, &buildErr)) {
                         reportError(buildErr.isEmpty() ? tr("Failed to build capture mesh")
                                                      : buildErr);
                         return;
@@ -105,9 +110,17 @@ void PS1RipManager::initializeWorkerThread()
                 }
 
                 SentryReporter::addBreadcrumb(
+                    QStringLiteral("ps1.rip.dedupe.summary"),
+                    QStringLiteral("captured=%1 unique=%2 instances=%3 mode=%4")
+                        .arg(captureSet.capturedPartCount)
+                        .arg(captureSet.uniqueCount())
+                        .arg(captureSet.instanceCount())
+                        .arg(m_dedupeStrict ? QStringLiteral("strict") : QStringLiteral("loose")));
+                SentryReporter::addBreadcrumb(
                     QStringLiteral("ps1.rip.mesh.built"),
                     QStringLiteral("%1 verts %2 tris").arg(built.vertexCount).arg(built.triangleCount));
-                emit meshBuilt(captureId, built.vertexCount, built.triangleCount);
+                emit meshBuilt(captureId, captureSet.capturedPartCount, captureSet.uniqueCount(),
+                               captureSet.instanceCount(), built.vertexCount, built.triangleCount);
             });
     connect(m_worker, &PS1RipWorker::vramFrameUpdated, this,
             [this](const QVector<uint16_t> &cells, const QImage &preview) {

@@ -1,6 +1,7 @@
 #include "MeshReconstructor.h"
 
 #include "GteInverse.h"
+#include "MeshTopologyHash.h"
 #include "PsxCaptureFilters.h"
 
 #include <OgreColourValue.h>
@@ -117,14 +118,8 @@ void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix, SubMeshAc
     }
 }
 
-} // namespace
-
-ReconstructedMesh MeshReconstructor::reconstruct(const CaptureSnapshot &snapshot)
+QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> buildMatrixGroups(const CaptureSnapshot &snapshot)
 {
-    ReconstructedMesh result;
-    if (snapshot.prims.isEmpty())
-        return result;
-
     QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> groupsByMatrix;
 
     for (const PrimRecord &prim : snapshot.prims) {
@@ -141,25 +136,99 @@ ReconstructedMesh MeshReconstructor::reconstruct(const CaptureSnapshot &snapshot
             acc.materialName = textureMaterialName(prim.tpage, prim.clut);
         emitPrimitive(prim, matrix, acc);
     }
+    return groupsByMatrix;
+}
 
-    int subIndex = 0;
+ReconstructedMesh meshFromMatrixGroup(uint32_t matrixId,
+                                      const QHash<quint64, SubMeshAccumulator> &texGroups)
+{
+    ReconstructedMesh result;
+    result.meshName = QStringLiteral("ps1_part_%1").arg(matrixId);
+
+    for (auto texIt = texGroups.constBegin(); texIt != texGroups.constEnd(); ++texIt) {
+        const SubMeshAccumulator &acc = texIt.value();
+        if (acc.vertices.isEmpty() || acc.indices.size() < 3)
+            continue;
+
+        ReconstructedSubMesh sub;
+        sub.materialName = acc.materialName;
+        sub.vertices = acc.vertices;
+        sub.indices = acc.indices;
+        result.subMeshes.append(sub);
+        result.vertexCount += acc.vertices.size();
+        result.triangleCount += acc.indices.size() / 3;
+    }
+    return result;
+}
+
+QVector<ReconstructedMesh> buildParts(const CaptureSnapshot &snapshot)
+{
+    QVector<ReconstructedMesh> parts;
+    const QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> groupsByMatrix =
+        buildMatrixGroups(snapshot);
+
     for (auto matIt = groupsByMatrix.constBegin(); matIt != groupsByMatrix.constEnd(); ++matIt) {
-        for (auto texIt = matIt.value().constBegin(); texIt != matIt.value().constEnd(); ++texIt) {
-            const SubMeshAccumulator &acc = texIt.value();
-            if (acc.vertices.isEmpty() || acc.indices.size() < 3)
-                continue;
+        ReconstructedMesh part = meshFromMatrixGroup(matIt.key(), matIt.value());
+        if (!part.isEmpty())
+            parts.append(part);
+    }
+    return parts;
+}
 
-            ReconstructedSubMesh sub;
-            sub.materialName = acc.materialName;
-            sub.vertices = acc.vertices;
-            sub.indices = acc.indices;
-            result.subMeshes.append(sub);
-            result.vertexCount += acc.vertices.size();
-            result.triangleCount += acc.indices.size() / 3;
-            ++subIndex;
+ReconstructedMesh flattenParts(const QVector<ReconstructedMesh> &parts)
+{
+    ReconstructedMesh merged;
+    merged.meshName = QStringLiteral("ps1_capture");
+    for (const ReconstructedMesh &part : parts) {
+        for (const ReconstructedSubMesh &sub : part.subMeshes)
+            merged.subMeshes.append(sub);
+        merged.vertexCount += part.vertexCount;
+        merged.triangleCount += part.triangleCount;
+    }
+    return merged;
+}
+
+} // namespace
+
+ReconstructedMesh MeshReconstructor::reconstruct(const CaptureSnapshot &snapshot)
+{
+    return flattenParts(buildParts(snapshot));
+}
+
+ReconstructedCaptureSet MeshReconstructor::reconstructDeduped(const CaptureSnapshot &snapshot,
+                                                            MeshDedupeMode dedupeMode)
+{
+    ReconstructedCaptureSet result;
+    const QVector<ReconstructedMesh> parts = buildParts(snapshot);
+    result.capturedPartCount = parts.size();
+    if (parts.isEmpty())
+        return result;
+
+    QHash<quint64, int> hashToUnique;
+
+    for (const ReconstructedMesh &part : parts) {
+        float cx = 0.0f;
+        float cy = 0.0f;
+        float cz = 0.0f;
+        const ReconstructedMesh local = MeshTopologyHash::centered(part, cx, cy, cz);
+        const quint64 h = MeshTopologyHash::hashMesh(local, dedupeMode);
+
+        int uniqueIndex = hashToUnique.value(h, -1);
+        if (uniqueIndex < 0) {
+            uniqueIndex = result.uniqueMeshes.size();
+            hashToUnique.insert(h, uniqueIndex);
+            ReconstructedMesh unique = local;
+            unique.meshName = QStringLiteral("ps1_unique_%1").arg(uniqueIndex);
+            result.uniqueMeshes.append(unique);
         }
+
+        ReconstructedInstance inst;
+        inst.uniqueMeshIndex = uniqueIndex;
+        inst.px = cx;
+        inst.py = cy;
+        inst.pz = cz;
+        result.instances.append(inst);
     }
 
-    result.meshName = QStringLiteral("ps1_capture");
     return result;
 }

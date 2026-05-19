@@ -145,6 +145,7 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/GpuCommandParser.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/GteCapture.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructor.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshTopologyHash.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipMeshBuilder.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipLegalityDialog.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipManager.cpp
