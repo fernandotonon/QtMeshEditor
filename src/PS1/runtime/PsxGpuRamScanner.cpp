@@ -4,6 +4,7 @@
 #include "RipperHooks.h"
 
 #include <QSet>
+#include <QString>
 
 #include <algorithm>
 #include <cstring>
@@ -32,7 +33,7 @@ void PsxGpuRamScanner::captureFromSystemRam(const uint8_t *ram, size_t byteSize,
         return;
 
     const size_t wordCount = byteSize / 4;
-    QSet<uint64_t> seen;
+    QSet<QString> seen;
 
     hooks->onFrameBegin();
 
@@ -51,12 +52,10 @@ void PsxGpuRamScanner::captureFromSystemRam(const uint8_t *ram, size_t byteSize,
             continue;
 
         for (const PrimRecord &prim : result.prims) {
-            uint64_t key = 0;
-            key ^= static_cast<uint64_t>(prim.kind) << 56;
-            key ^= static_cast<uint64_t>(prim.verts[0].x) << 32;
-            key ^= static_cast<uint64_t>(prim.verts[0].y);
-            key ^= static_cast<uint64_t>(prim.verts[1].x) << 16;
-            key ^= static_cast<uint64_t>(prim.verts[1].y);
+            QString key = QStringLiteral("%1|%2").arg(static_cast<int>(prim.kind)).arg(prim.vertexCount);
+            for (int v = 0; v < 4; ++v)
+                key += QStringLiteral("|%1,%2").arg(prim.verts[v].x).arg(prim.verts[v].y);
+            key += QStringLiteral("|%1,%2|%3").arg(prim.tpage).arg(prim.clut).arg(prim.semiTrans);
             if (seen.contains(key))
                 continue;
             seen.insert(key);
@@ -64,8 +63,6 @@ void PsxGpuRamScanner::captureFromSystemRam(const uint8_t *ram, size_t byteSize,
         }
         for (const DrawModeRecord &mode : result.drawModes)
             hooks->onDrawMode(mode);
-
-        offset += maxWords / 4;
     }
 
     hooks->onFrameEnd();

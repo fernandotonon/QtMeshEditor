@@ -1,7 +1,5 @@
 #include "LibretroHost.h"
 
-#include "libretro/libretro_api.h"
-
 #include <QObject>
 
 template<typename T>

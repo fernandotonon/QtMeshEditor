@@ -51,6 +51,28 @@ TEST(PsxDiscResolver, GeneratesCueForIso)
     EXPECT_TRUE(text.contains(QFileInfo(isoPath).absoluteFilePath().toUtf8()));
 }
 
+TEST(PsxDiscResolver, AcceptsCueWithLowercaseFileDirective)
+{
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+
+    const QString binPath = temp.filePath(QStringLiteral("disc.bin"));
+    {
+        QFile bin(binPath);
+        ASSERT_TRUE(bin.open(QIODevice::WriteOnly));
+        bin.write(QByteArray(2048, '\0'));
+    }
+
+    const QString cuePath = temp.filePath(QStringLiteral("disc.cue"));
+    QFile cue(cuePath);
+    ASSERT_TRUE(cue.open(QIODevice::WriteOnly));
+    cue.write("rem generated\nfile \"disc.bin\" binary\n  track 01 mode2/2352\n    index 01 00:00:00\n");
+    cue.close();
+
+    const PsxDiscResolveResult result = PsxDiscResolver::resolve(cuePath);
+    ASSERT_TRUE(result.ok) << result.errorMessage.toUtf8().constData();
+}
+
 TEST(PsxDiscResolver, AcceptsCueWithLeadingRemLines)
 {
     QTemporaryDir temp;

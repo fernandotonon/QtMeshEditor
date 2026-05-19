@@ -235,7 +235,7 @@ void EmuViewport::paintEvent(QPaintEvent *event)
         const bool focused = hasFocus();
         painter.setPen(focused ? QColor(180, 255, 180) : QColor(255, 220, 120));
         const QString help = focused
-                                 ? tr("Arrows · X/Enter/LMB=✕ · Z/RMB=○ · P=Start · Space=○ · Tab=Select")
+                                 ? tr("Arrows · X/Enter/Space/LMB=✕ · Z/RMB=○ · P=Start · Tab=Select")
                                  : tr("Click viewport for input");
         const QRect helpRect(8, height() - 28, width() - 16, 20);
         painter.drawText(helpRect, Qt::AlignLeft | Qt::AlignVCenter, help);

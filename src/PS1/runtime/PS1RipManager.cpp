@@ -69,8 +69,12 @@ void PS1RipManager::initializeWorkerThread()
     connect(m_worker, &PS1RipWorker::emulationError, this, [this](const QString &msg) {
         m_startPending = false;
         m_sessionActive = false;
+        m_paused = false;
+        m_captureArmed = false;
         m_activeCoreId.clear();
+        syncWorkerCaptureArmed();
         reportError(msg);
+        emit sessionStopped();
     });
     connect(m_worker, &PS1RipWorker::framePresented, this, &PS1RipManager::framePresented);
     connect(m_worker, &PS1RipWorker::frameCaptureReady, this,
@@ -178,7 +182,8 @@ bool PS1RipManager::loadBios(const QString &path)
         stop();
 
     m_biosPath = info.absoluteFilePath();
-    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.bios.load"), m_biosPath);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("ps1_bios:%1").arg(info.fileName()));
     syncWorkerSession();
     return true;
 }
@@ -202,7 +207,8 @@ bool PS1RipManager::loadIso(const QString &path)
     }
 
     m_isoPath = disc.loadPath;
-    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.iso.load"), m_isoPath);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("ps1_disc:%1").arg(QFileInfo(m_isoPath).fileName()));
     syncWorkerSession();
     return true;
 }

@@ -129,9 +129,10 @@ PsxDiscResolveResult PsxDiscResolver::resolve(const QString &userPath)
             QByteArray fileLine;
             while (!cueFile.atEnd()) {
                 const QByteArray line = cueFile.readLine().trimmed();
-                if (line.isEmpty() || line.startsWith("REM"))
+                const QByteArray upper = line.toUpper();
+                if (upper.isEmpty() || upper.startsWith("REM"))
                     continue;
-                if (line.startsWith("FILE \"")) {
+                if (upper.startsWith("FILE \"")) {
                     fileLine = line;
                     break;
                 }

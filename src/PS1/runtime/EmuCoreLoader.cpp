@@ -95,7 +95,7 @@ std::unique_ptr<EmuCore> EmuCoreLoader::loadCore(QString *errorOut)
                     return core;
                 }
 
-                lastError = QObject::tr("Host plugin %1 declined to create a core (missing libretro .so?)")
+                lastError = QObject::tr("Host plugin %1 declined to create a core (missing libretro core?)")
                                 .arg(fileName);
             }
         }
