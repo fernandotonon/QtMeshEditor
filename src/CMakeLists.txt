@@ -627,6 +627,18 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             INSTALL(FILES ${OGRE_PLUGIN_DIR_DBG}/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         ENDIF()
     ENDFOREACH(ogrelib)
+    IF(WIN32 AND OGRE_PLUGIN_DIR_DBG)
+        file(GLOB _OGRE_WIN_RUNTIME_DLLS_DBG
+            "${OGRE_PLUGIN_DIR_DBG}/Ogre*.dll"
+            "${OGRE_PLUGIN_DIR_DBG}/Plugin_*.dll"
+            "${OGRE_PLUGIN_DIR_DBG}/Codec_*.dll"
+            "${OGRE_PLUGIN_DIR_DBG}/RenderSystem_*.dll"
+            "${OGRE_PLUGIN_DIR_DBG}/cg.dll")
+        if(_OGRE_WIN_RUNTIME_DLLS_DBG)
+            install(FILES ${_OGRE_WIN_RUNTIME_DLLS_DBG}
+                    DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        endif()
+    ENDIF()
 else()
     IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
         SET(OGRELIBLIST cg
@@ -687,6 +699,20 @@ else()
             ENDIF()
         ENDIF()
     ENDFOREACH(ogrelib)
+    # Windows: also install every Ogre runtime DLL beside the plugins dir so component
+    # libraries (e.g. OgreMeshLodGenerator.dll) cannot be omitted from OGRELIBLIST.
+    IF(WIN32 AND OGRE_PLUGIN_DIR)
+        file(GLOB _OGRE_WIN_RUNTIME_DLLS
+            "${OGRE_PLUGIN_DIR}/Ogre*.dll"
+            "${OGRE_PLUGIN_DIR}/Plugin_*.dll"
+            "${OGRE_PLUGIN_DIR}/Codec_*.dll"
+            "${OGRE_PLUGIN_DIR}/RenderSystem_*.dll"
+            "${OGRE_PLUGIN_DIR}/cg.dll")
+        if(_OGRE_WIN_RUNTIME_DLLS)
+            install(FILES ${_OGRE_WIN_RUNTIME_DLLS}
+                    DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        endif()
+    ENDIF()
 endif()
 
 ##############################################################
