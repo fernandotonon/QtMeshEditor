@@ -270,14 +270,24 @@ func _process(delta: float) -> void:
 ##   rows [0 .. frame_count)              → positions (normalized to [bounds_min..bounds_max])
 ##   rows [frame_count .. 2*frame_count)  → normals   (encoded as (n+1)/2)
 ##
-## We compute V for the position half as:
-##   v_pos = (current_frame + 0.5) / (2 * frame_count)
-## and for the normal half by shifting half a texture down:
-##   v_nrm = v_pos + 0.5
+## Frame sampling: we compute integer row indices (current_row, next_row)
+## from `current_frame`, look up both rows via `texelFetch` (bypassing
+## the sampler so there's zero chance of nearest-filter rounding from a
+## boundary frame slipping into the normal half), then linearly blend
+## between them based on the fractional part of `current_frame`. This
+## mirrors how sharpen3d's reference shader sequences a packed-normals
+## bake — integer rows + manual blend, no reliance on the sampler.
 ##
 ## No axis swizzle on read — the bake's `_axes: "y-up-rh"` matches
 ## Godot's convention. (The openvat Godot reference shader swizzles
 ## `vec3(x, z, -y)` because *its* bakes come from Blender's Z-up RH.)
+##
+## Normals are negated on read. The FBX → Ogre import path applies
+## `aiProcess_ConvertToLeftHanded` which flips winding without
+## flipping the captured normal vector — they come out pointing into
+## the surface. Without this negation the lighting is computed
+## against backward-facing normals ("dark where there should be
+## light" symptom).
 func _builtin_shader_code() -> String:
 	return """
 shader_type spatial;
@@ -299,18 +309,33 @@ varying vec2 uv0_pass;
 
 void vertex() {
 	int global_vid = vertex_offset + VERTEX_ID;
-	float u = (float(global_vid) + 0.5) / float(vertex_count);
-	// Total texture height is 2 × frame_count; position rows live in
-	// the upper half (frame_count rows), normal rows live in the
-	// lower half (frame_count rows).
-	float v_pos = (current_frame + 0.5) / float(frame_count * 2);
-	float v_nrm = v_pos + 0.5;
 
-	vec3 t = texture(pos_tex, vec2(u, v_pos)).rgb;
-	VERTEX = bounds_min + t * (bounds_max - bounds_min);
+	// Manual row arithmetic — `current_frame` is continuous, but the
+	// texture is row-addressed. We split into integer current/next rows
+	// and a fractional blend, then sample both rows directly via
+	// `texelFetch`. Avoids sampler nearest-rounding ambiguity at the
+	// half-texture boundary (rows N-1 and N are physically adjacent
+	// but live in different semantic halves — position vs. normal —
+	// and a sampler that rounds the wrong way produces the one-frame
+	// blob/glitch).
+	int safe_frame_count = max(frame_count, 1);
+	int curr_row = int(floor(current_frame)) % safe_frame_count;
+	if (curr_row < 0) curr_row += safe_frame_count;
+	int next_row = (curr_row + 1) % safe_frame_count;
+	float blend = fract(current_frame);
 
-	vec3 n = texture(pos_tex, vec2(u, v_nrm)).rgb * 2.0 - 1.0;
-	NORMAL = normalize(n);
+	// Position: sample rows in the top half [0..N-1].
+	vec3 p_curr = texelFetch(pos_tex, ivec2(global_vid, curr_row), 0).rgb;
+	vec3 p_next = texelFetch(pos_tex, ivec2(global_vid, next_row), 0).rgb;
+	vec3 p = mix(p_curr, p_next, blend);
+	VERTEX = bounds_min + p * (bounds_max - bounds_min);
+
+	// Normal: sample rows in the bottom half [N..2N-1].
+	vec3 n_curr = texelFetch(pos_tex, ivec2(global_vid, curr_row + safe_frame_count), 0).rgb;
+	vec3 n_next = texelFetch(pos_tex, ivec2(global_vid, next_row + safe_frame_count), 0).rgb;
+	vec3 n = mix(n_curr, n_next, blend) * 2.0 - 1.0;
+	// See block comment above for why we negate.
+	NORMAL = -normalize(n);
 
 	uv0_pass = UV;
 }

@@ -4,13 +4,20 @@
 // Texture layout (matches the openvat reference shader's "Packed
 // Normals" mode):
 //   height = 2 × _FrameCount
-//   rows [0 .. _FrameCount)          — positions, normalized to [Min..Max]
+//   rows [0 .. _FrameCount)            — positions, normalized to [Min..Max]
 //   rows [_FrameCount .. 2×_FrameCount) — normals,  encoded (n+1)/2
 //
-// We compute V for the position half as
-//   v_pos = (_CurrentFrame + 0.5) / (2 × _FrameCount)
-// and for the normal half by shifting half a texture down:
-//   v_nrm = v_pos + 0.5
+// Frame sampling: we compute integer row indices (curr, next) from
+// `_CurrentFrame`, fetch both rows via `Load()` (Unity's texelFetch —
+// bypasses the sampler so nearest-filter rounding at the half-texture
+// boundary can't slip a position sample into the normal half), then
+// lerp() based on the fractional part of `_CurrentFrame`. Mirrors
+// sharpen3d's reference shader behavior: integer rows + manual blend,
+// no reliance on sampler rounding.
+//
+// Normals are negated on read — the FBX → Ogre import applies
+// `aiProcess_ConvertToLeftHanded` which flips winding without flipping
+// the captured normal vector, so the baked normals point inward.
 //
 // Works in BiRP. For URP/HDRP, swap `Tags { "LightMode"="ForwardBase" }`
 // for `"LightMode"="UniversalForward"` and replace `UnityCG.cginc` /
@@ -48,7 +55,13 @@ Shader "Hidden/QTM/VAT" {
             #include "AutoLight.cginc"
             #include "Lighting.cginc"
 
-            sampler2D _PosTex;
+            // Texture2D + sampler split so we can call `.Load()` for
+            // texelFetch-style integer-coordinate sampling. The sampler
+            // is still wired (some Unity paths still query it for
+            // metadata) but we never sample through it.
+            Texture2D _PosTex;
+            SamplerState sampler_PosTex;
+
             float     _CurrentFrame;
             int       _FrameCount;
             int       _VertexCount;
@@ -71,23 +84,35 @@ Shader "Hidden/QTM/VAT" {
 
             v2f vert(appdata IN) {
                 int globalVid = _VertexOffset + (int)IN.vid;
-                float u = (globalVid + 0.5) / (float)_VertexCount;
 
-                // Position rows live in the upper half (frame_count rows
-                // out of 2 × frame_count total), so divide by twice the
-                // frame count. Normal rows are shifted down by half the
-                // texture height (= 0.5 in UV).
-                float v_pos = (_CurrentFrame + 0.5) / (float)(_FrameCount * 2);
-                float v_nrm = v_pos + 0.5;
+                // Manual row arithmetic — _CurrentFrame is continuous,
+                // but the texture is row-addressed. Split into integer
+                // current/next rows and a fractional blend, fetch both
+                // rows directly via Load(), then lerp. Avoids the
+                // half-texture boundary glitch where a sampler's
+                // nearest-rounding picks a row from the normal half
+                // when sampling the position half (one-frame blob).
+                int safeFrameCount = max(_FrameCount, 1);
+                int currRow = ((int)floor(_CurrentFrame)) % safeFrameCount;
+                if (currRow < 0) currRow += safeFrameCount;
+                int nextRow = (currRow + 1) % safeFrameCount;
+                float blend = frac(_CurrentFrame);
 
-                float3 t = tex2Dlod(_PosTex, float4(u, v_pos, 0, 0)).rgb;
-                float3 modelVertex = _BoundsMin.xyz + t * (_BoundsMax.xyz - _BoundsMin.xyz);
+                // Position: integer-coord fetches from the top half.
+                float3 pCurr = _PosTex.Load(int3(globalVid, currRow, 0)).rgb;
+                float3 pNext = _PosTex.Load(int3(globalVid, nextRow, 0)).rgb;
+                float3 p = lerp(pCurr, pNext, blend);
+                float3 modelVertex = _BoundsMin.xyz + p * (_BoundsMax.xyz - _BoundsMin.xyz);
 
                 v2f OUT;
                 OUT.pos = UnityObjectToClipPos(float4(modelVertex, 1.0));
 
-                float3 n = tex2Dlod(_PosTex, float4(u, v_nrm, 0, 0)).rgb * 2.0 - 1.0;
-                OUT.worldNrm = normalize(mul((float3x3)unity_ObjectToWorld, n));
+                // Normal: rows in the bottom half [N..2N-1].
+                float3 nCurr = _PosTex.Load(int3(globalVid, currRow + safeFrameCount, 0)).rgb;
+                float3 nNext = _PosTex.Load(int3(globalVid, nextRow + safeFrameCount, 0)).rgb;
+                float3 n = lerp(nCurr, nNext, blend) * 2.0 - 1.0;
+                // See header comment for why we negate.
+                OUT.worldNrm = normalize(mul((float3x3)unity_ObjectToWorld, -n));
                 OUT.worldPos = mul(unity_ObjectToWorld, float4(modelVertex, 1.0)).xyz;
                 return OUT;
             }
