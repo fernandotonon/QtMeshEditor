@@ -14,6 +14,13 @@ The MIT License
 #include "SentryReporter.h"
 #include "VATBaker.h"
 
+#include <QApplication>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QStandardPaths>
+#include <QWidget>
+
 #include <OgreAnimationState.h>
 #include <OgreEntity.h>
 
@@ -86,9 +93,6 @@ void VATBakerController::setIsBaking(bool b)
 
 bool VATBakerController::bake(const QString& animationName,
                               double fps,
-                              const QString& encoding,
-                              const QString& target,
-                              bool bakeNormals,
                               const QString& outputDir,
                               const QString& basename)
 {
@@ -134,24 +138,16 @@ bool VATBakerController::bake(const QString& animationName,
 
     VATBaker::Options opts;
     opts.animationName = animationName;
-    opts.fps = fps;
-    opts.outputDir = outputDir;
-    opts.basename = basename.isEmpty() ? animationName : basename;
-    opts.bakeNormals = bakeNormals;
+    opts.fps           = fps;
+    opts.outputDir     = outputDir;
+    opts.basename      = basename.isEmpty() ? animationName : basename;
 
-    const QString enc = encoding.toLower();
-    if      (enc == "rgba16") opts.encoding = VATBaker::Encoding::RGBA16;
-    else                       opts.encoding = VATBaker::Encoding::RGBA8;
-
-    const QString tgt = target.toLower();
-    if      (tgt == "unity")  opts.target = VATBaker::Target::Unity;
-    else if (tgt == "unreal") opts.target = VATBaker::Target::Unreal;
-    else if (tgt == "godot")  opts.target = VATBaker::Target::Godot;
-    else                       opts.target = VATBaker::Target::Agnostic;
-
-    SentryReporter::addBreadcrumb("ui.action",
-        QStringLiteral("VAT bake start: anim=%1 fps=%2 encoding=%3 target=%4 normals=%5")
-            .arg(animationName).arg(fps).arg(enc, tgt).arg(bakeNormals ? "yes" : "no"));
+    // file.export — this is an output-writing operation, not a UI
+    // click. Sentry split-by-category keeps file telemetry isolated
+    // from generic UI noise.
+    SentryReporter::addBreadcrumb("file.export",
+        QStringLiteral("OpenVAT bake start: anim=%1 fps=%2 → %3")
+            .arg(animationName).arg(fps).arg(outputDir));
 
     // The Ogre animation state lives on the main thread; sampling
     // from a worker would race with Manager's per-frame updates.
@@ -174,7 +170,7 @@ bool VATBakerController::bake(const QString& animationName,
     emit bakeProgress(m_progressDone, m_progressTotal);
     setIsBaking(false);
 
-    SentryReporter::addBreadcrumb("ui.action",
+    SentryReporter::addBreadcrumb("file.export",
         result.ok
             ? QStringLiteral("VAT bake ok: %1 frames × %2 vertices → %3")
                   .arg(result.frameCount).arg(result.vertexCount).arg(result.posTexPath)
@@ -182,4 +178,43 @@ bool VATBakerController::bake(const QString& animationName,
 
     emit bakeFinished(result.ok, result.posTexPath, result.error);
     return true;
+}
+
+QString VATBakerController::chooseOutputDir(const QString& startDir)
+{
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("OpenVAT output folder picker opened (seed=%1)").arg(startDir));
+
+    QString seed = startDir;
+    if (seed.isEmpty() || !QFileInfo(seed).isDir())
+        seed = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (seed.isEmpty())
+        seed = QDir::homePath();
+
+    // Mirror the MaterialEditorQML::openFileDialog dance: process pending
+    // events + raise the active window before opening the dialog, and
+    // force the Qt-rendered dialog rather than the native one. Native
+    // file dialogs hosted from inside a QQuickWidget have been observed
+    // to silently no-op on macOS — DontUseNativeDialog reliably opens.
+    QApplication::processEvents();
+    QWidget* parent = QApplication::activeWindow();
+    if (parent) {
+        parent->raise();
+        parent->activateWindow();
+    }
+    QApplication::processEvents();
+
+    const QString chosen = QFileDialog::getExistingDirectory(
+        parent,
+        QStringLiteral("Choose OpenVAT output folder"),
+        seed,
+        QFileDialog::ShowDirsOnly
+            | QFileDialog::DontUseNativeDialog
+            | QFileDialog::DontUseCustomDirectoryIcons);
+
+    SentryReporter::addBreadcrumb("ui.action",
+        chosen.isEmpty()
+            ? QStringLiteral("OpenVAT output folder picker cancelled")
+            : QStringLiteral("OpenVAT output folder picker accepted: %1").arg(chosen));
+    return chosen;
 }

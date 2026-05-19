@@ -7,9 +7,9 @@
  * Usage:
  *   QtMeshEditor → VAT → Build Test Scene
  *
- * Scans Assets/VAT/Bakes/*\/ for a sidecar+textures+source.gltf
- * triple, instantiates the source mesh's prefab on the left
- * (skeletal, ground truth) and on the right (VAT-driven), and
+ * Scans Assets/VAT/Bakes/*\/ for an OpenVAT sidecar + packed PNG +
+ * source.gltf triple, instantiates the source mesh's prefab on the
+ * left (skeletal, ground truth) and on the right (VAT-driven), and
  * sets up the camera + light.
  */
 
@@ -64,27 +64,33 @@ public static class VATTestSetup {
         floorMat.color = new Color(0.18f, 0.18f, 0.20f);
         floor.GetComponent<Renderer>().sharedMaterial = floorMat;
 
-        // Find the bake's source mesh, position texture, normal texture, sidecar
-        string posTexPath = Directory.GetFiles(bakeDir, "*_pos.png").FirstOrDefault();
-        string nrmTexPath = Directory.GetFiles(bakeDir, "*_nrm.png").FirstOrDefault();
-        string sidecarPath = Directory.GetFiles(bakeDir, "*.json").FirstOrDefault();
-        string gltfPath = Path.Combine(bakeDir, "source.gltf");
+        // Find the bake's source mesh, packed texture, OpenVAT sidecar.
+        // Normalize all Directory.GetFiles output to forward slashes —
+        // AssetDatabase.LoadAssetAtPath expects project-relative paths
+        // with `/`, but on Windows GetFiles returns `\` which silently
+        // returns null from the load.
+        string posTexPath   = ToAssetPath(Directory.GetFiles(bakeDir, "*_pos.png").FirstOrDefault());
+        string sidecarPath  = ToAssetPath(Directory.GetFiles(bakeDir, "*-remap_info.json").FirstOrDefault());
+        string gltfPath     = ToAssetPath(Path.Combine(bakeDir, "source.gltf"));
         if (posTexPath == null || sidecarPath == null || !File.Exists(gltfPath)) {
             EditorUtility.DisplayDialog("VAT Test Setup",
-                "Bake folder is incomplete (missing PNG / JSON / source.gltf).",
+                "Bake folder is incomplete (missing _pos.png / -remap_info.json / source.gltf).\n\n" +
+                "Did you run the latest bake_and_stage.sh? The output format changed to " +
+                "OpenVAT — one packed PNG + os-remap JSON.",
                 "OK");
             return;
         }
         AssetDatabase.Refresh();
         var posTex     = AssetDatabase.LoadAssetAtPath<Texture2D>(posTexPath);
-        var nrmTex     = nrmTexPath != null ? AssetDatabase.LoadAssetAtPath<Texture2D>(nrmTexPath) : null;
         var sidecarTxt = AssetDatabase.LoadAssetAtPath<TextAsset>(sidecarPath);
         var gltfPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(gltfPath);
 
         if (gltfPrefab == null) {
             EditorUtility.DisplayDialog("VAT Test Setup",
                 "Unity didn't import source.gltf as a prefab yet.\n\n" +
-                "Right-click on it in the Project pane → Reimport, then re-run this menu.",
+                "Right-click on it in the Project pane → Reimport, then re-run this menu. " +
+                "If you're on a clean project, ensure `com.unity.cloud.gltfast` is " +
+                "installed (see Packages/manifest.json).",
                 "OK");
             return;
         }
@@ -102,7 +108,7 @@ public static class VATTestSetup {
         var rightGO = (GameObject)PrefabUtility.InstantiatePrefab(gltfPrefab);
         rightGO.name = "VAT (replay)";
         rightGO.transform.position = new Vector3(0.9f, 0, 0);
-        ConvertToVATTarget(rightGO, posTex, nrmTex, sidecarTxt);
+        ConvertToVATTarget(rightGO, posTex, sidecarTxt);
         AddLabel(rightGO, "VAT (replay)", new Color(0.55f, 0.7f, 1f));
 
         EditorSceneManager.SaveScene(scene, "Assets/VAT/Scenes/VATTest.unity");
@@ -113,17 +119,27 @@ public static class VATTestSetup {
         const string root = "Assets/VAT/Bakes";
         if (!Directory.Exists(root)) return null;
         foreach (var d in Directory.GetDirectories(root)) {
-            if (Directory.GetFiles(d, "*.json").Length > 0
+            if (Directory.GetFiles(d, "*-remap_info.json").Length > 0
                 && Directory.GetFiles(d, "*_pos.png").Length > 0
                 && File.Exists(Path.Combine(d, "source.gltf"))) {
-                return d;
+                return ToAssetPath(d);
             }
         }
         return null;
     }
 
+    /// <summary>
+    /// AssetDatabase.LoadAssetAtPath wants project-relative paths with
+    /// forward slashes. Directory.GetFiles returns OS-native paths
+    /// (backslashes on Windows). Normalize.
+    /// </summary>
+    private static string ToAssetPath(string p) {
+        if (string.IsNullOrEmpty(p)) return null;
+        return p.Replace('\\', '/');
+    }
+
     private static void ConvertToVATTarget(GameObject root, Texture2D posTex,
-                                           Texture2D nrmTex, TextAsset sidecarTxt) {
+                                           TextAsset sidecarTxt) {
         var skinned = root.GetComponentInChildren<SkinnedMeshRenderer>();
         if (skinned == null) {
             Debug.LogError("[VATTestSetup] expected SkinnedMeshRenderer in the glTF prefab");
@@ -137,7 +153,6 @@ public static class VATTestSetup {
         // Also drop Animator/Animation so they don't compete.
         var animator = targetGO.GetComponentInParent<Animator>();
         if (animator != null) Object.DestroyImmediate(animator);
-        // Strip any leftover Animation component too.
         foreach (var a in root.GetComponentsInChildren<Animation>()) {
             Object.DestroyImmediate(a);
         }
@@ -149,7 +164,6 @@ public static class VATTestSetup {
 
         var player = targetGO.AddComponent<VATPlayer>();
         player.posTex      = posTex;
-        player.nrmTex      = nrmTex;
         player.sidecarJson = sidecarTxt;
         player.vatShader   = Shader.Find("Hidden/QTM/VAT");
     }

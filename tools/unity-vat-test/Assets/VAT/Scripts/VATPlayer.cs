@@ -1,30 +1,38 @@
 /*
- * VATPlayer — Unity component that drives a MeshRenderer's
- * material from a QtMeshEditor VAT bake (PNG + JSON sidecar).
+ * VATPlayer — Unity component that drives a MeshRenderer's material
+ * from a QtMeshEditor OpenVAT (sharpen3d/openvat) bake.
+ *
+ * Sidecar shape (OpenVAT canonical):
+ *   { "os-remap": { "Min": ["...","...","..."],
+ *                   "Max": ["...","...","..."],
+ *                   "Frames": <int> } }
+ *
+ * Texture shape:
+ *   16-bit RGB PNG, width = vertexCount, height = 2 × Frames.
+ *   Top half  rows [0..Frames)        — positions, normalized to [Min..Max]
+ *   Bottom half rows [Frames..2×Frames) — normals,  encoded (n+1)/2
  *
  * Setup:
  *   1. Drop the bake folder under Assets/VAT/Bakes/<name>/. Unity
- *      auto-imports the PNGs. Click the position PNG and in the
- *      Inspector:
+ *      auto-imports the PNG. Click the texture and in the Inspector:
  *         sRGB (Color Texture): OFF
  *         Filter Mode: Point
  *         Compression: None
  *         Wrap Mode: Clamp
- *      (The .meta written by `qtmesh vat --target unity` already
- *      sets these, but if you bake outside Unity verify them.)
+ *      (The .meta written by `bake_and_stage.sh` already sets these,
+ *      but if you bake outside the staging flow verify them.)
  *   2. Add a MeshFilter + MeshRenderer to a GameObject. Assign the
  *      original mesh (Read/Write enabled on the importer).
  *   3. Add this VATPlayer component. Drag in:
- *         posTex      — the position PNG
- *         nrmTex      — the normal PNG (optional)
- *         sidecarJson — the .json TextAsset
- *      Or call LoadFromResources("VAT/Bakes/MyClip") at runtime.
+ *         posTex      — the packed PNG (positions + normals)
+ *         sidecarJson — the *-remap_info.json TextAsset
  *   4. The component creates a Material with the VAT shader and
- *      drives currentFrame in Update() at the sidecar's fps.
+ *      drives currentFrame in Update() at `fpsOverride` (OpenVAT does
+ *      not carry a framerate in the sidecar).
  *
  * Multi-submesh meshes work: a Material is created per submesh,
- * each with its own vertex_offset uniform pointing at the right
- * column slice of the bake's monolithic position texture.
+ * each with its own _VertexOffset uniform pointing at the right
+ * column slice of the bake's monolithic texture.
  */
 
 using System;
@@ -36,50 +44,41 @@ using UnityEditor;
 #endif
 
 [Serializable]
-public class VATSidecarBounds {
-    public float[] min;
-    public float[] max;
-}
-
-[Serializable]
-public class VATSidecar {
-    public int    version;
-    public string target;
-    public string encoding;
-    public int    frameCount;
-    public int    vertexCount;
-    public float  fps;
-    public string animation;
-    public VATSidecarBounds bounds;
-    public string posTexture;
-    public string nrmTexture;
+public class OpenVATBlock {
+    // Unity's JsonUtility doesn't allow `os-remap` (the hyphen) as a
+    // C# identifier, so we hand-parse this slot from raw JSON in
+    // VATPlayer. The wrapper class here is only used internally for
+    // serialization-tagged float lists.
+    public List<string> Min = new List<string>();
+    public List<string> Max = new List<string>();
+    public int Frames;
 }
 
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
 public class VATPlayer : MonoBehaviour {
 
-    [Tooltip("Position texture (RGBA8 or RGBA16) baked by qtmesh vat.")]
+    [Tooltip("Packed VAT texture (16-bit RGB, height = 2 × Frames) baked by qtmesh vat.")]
     public Texture2D posTex;
 
-    [Tooltip("Optional normal texture (same layout). Bound when present.")]
-    public Texture2D nrmTex;
-
-    [Tooltip("Sidecar JSON TextAsset emitted by qtmesh vat.")]
+    [Tooltip("OpenVAT sidecar JSON TextAsset emitted by qtmesh vat (*-remap_info.json).")]
     public TextAsset sidecarJson;
 
     [Tooltip("Shader to use. If left null, the default Hidden/QTM/VAT shader is loaded.")]
     public Shader vatShader;
 
-    [Tooltip("True = bilinear interp on V axis (frame blending). False = nearest neighbour, bit-exact playback.")]
-    public bool frameInterp = false;
+    [Tooltip("Playback frames per second. OpenVAT's sidecar doesn't carry the framerate (positions are resampled at bake time), so the player drives playback at this rate. Default 30 matches qtmesh vat's --fps default.")]
+    public float fpsOverride = 30f;
 
     [Tooltip("Optional clamp: only play this many frames at the head of the bake. -1 = full clip.")]
     public int loopFrames = -1;
 
     [SerializeField] private float _currentFrame = 0f;
 
-    private VATSidecar _sidecar;
+    private int _frameCount;
+    private int _vertexCount;
+    private Vector3 _boundsMin;
+    private Vector3 _boundsMax;
     private Material[] _materials;
     private MeshFilter _mf;
     private int _shaderPropCurrentFrame;
@@ -98,32 +97,32 @@ public class VATPlayer : MonoBehaviour {
     }
 
     void Update() {
-        if (_sidecar == null || _materials == null || _materials.Length == 0) return;
-        int loop = (loopFrames > 0) ? loopFrames : _sidecar.frameCount;
-        _currentFrame = (_currentFrame + Time.deltaTime * _sidecar.fps) % loop;
+        if (_materials == null || _materials.Length == 0 || _frameCount <= 0) return;
+        // Clamp `loopFrames` to `_frameCount`. A larger value would push
+        // `_currentFrame` past the position half of the packed texture
+        // and into the normal half, rendering garbage rows as positions.
+        int loop = (loopFrames > 0) ? Mathf.Min(loopFrames, _frameCount) : _frameCount;
+        _currentFrame = (_currentFrame + Time.deltaTime * fpsOverride) % loop;
         for (int i = 0; i < _materials.Length; i++) {
             _materials[i].SetFloat(_shaderPropCurrentFrame, _currentFrame);
         }
     }
 
     /// <summary>
-    /// (Re)builds per-submesh materials with correct vertex_offset
+    /// (Re)builds per-submesh materials with correct _VertexOffset
     /// uniforms. Call after changing posTex / sidecarJson at runtime.
     /// </summary>
     public bool RebuildMaterials() {
         if (posTex == null || sidecarJson == null) return false;
         if (_mf == null || _mf.sharedMesh == null) return false;
 
-        _sidecar = JsonUtility.FromJson<VATSidecar>(sidecarJson.text);
-        if (_sidecar == null || _sidecar.frameCount <= 0 || _sidecar.vertexCount <= 0) {
-            Debug.LogError($"[VATPlayer] {name}: malformed sidecar JSON");
+        if (!ParseOpenVATSidecar(sidecarJson.text)) {
             return false;
         }
 
         // Apply texture import settings programmatically too — belt
         // and braces in case the .meta wasn't picked up.
         ApplyDataTextureSettings(posTex);
-        if (nrmTex != null) ApplyDataTextureSettings(nrmTex);
 
         var shader = vatShader != null ? vatShader : Shader.Find("Hidden/QTM/VAT");
         if (shader == null) {
@@ -137,47 +136,119 @@ public class VATPlayer : MonoBehaviour {
         var renderer = GetComponent<MeshRenderer>();
 
         int runningOffset = 0;
-        Vector3 boundsMin = new Vector3(_sidecar.bounds.min[0], _sidecar.bounds.min[1], _sidecar.bounds.min[2]);
-        Vector3 boundsMax = new Vector3(_sidecar.bounds.max[0], _sidecar.bounds.max[1], _sidecar.bounds.max[2]);
-
         for (int i = 0; i < subCount; i++) {
             var mat = new Material(shader) { name = $"{name}_VAT_sub{i}" };
             mat.SetTexture("_PosTex", posTex);
-            if (nrmTex != null) {
-                mat.SetTexture("_NrmTex", nrmTex);
-                mat.SetFloat("_HasNrmTex", 1f);
-            } else {
-                mat.SetFloat("_HasNrmTex", 0f);
-            }
-            mat.SetInt("_FrameCount",  _sidecar.frameCount);
-            mat.SetInt("_VertexCount", _sidecar.vertexCount);
+            mat.SetInt("_FrameCount",  _frameCount);
+            mat.SetInt("_VertexCount", _vertexCount);
             mat.SetInt(_shaderPropVertexOffset, runningOffset);
-            mat.SetVector("_BoundsMin", new Vector4(boundsMin.x, boundsMin.y, boundsMin.z, 0));
-            mat.SetVector("_BoundsMax", new Vector4(boundsMax.x, boundsMax.y, boundsMax.z, 0));
+            mat.SetVector("_BoundsMin", new Vector4(_boundsMin.x, _boundsMin.y, _boundsMin.z, 0));
+            mat.SetVector("_BoundsMax", new Vector4(_boundsMax.x, _boundsMax.y, _boundsMax.z, 0));
             mat.SetFloat(_shaderPropCurrentFrame, 0f);
             _materials[i] = mat;
-
-            // Advance offset by this submesh's vertex count for the next.
             runningOffset += mesh.GetSubMesh(i).vertexCount;
         }
         renderer.sharedMaterials = _materials;
 
         // Expand the MeshRenderer's bounds to the bake bounds so
         // Unity's culling doesn't skip the mesh whenever VAT pushes
-        // vertices outside the bind-pose AABB (same issue we hit in
-        // Godot).
-        var pad = (boundsMax - boundsMin) * 0.1f;
-        var center = (boundsMin + boundsMax) * 0.5f;
-        var size = (boundsMax - boundsMin) + pad * 2f;
+        // vertices outside the bind-pose AABB.
+        var pad = (_boundsMax - _boundsMin) * 0.1f;
+        var center = (_boundsMin + _boundsMax) * 0.5f;
+        var size = (_boundsMax - _boundsMin) + pad * 2f;
         mesh.bounds = new Bounds(center, size);
 
-        if (runningOffset != _sidecar.vertexCount) {
+        if (runningOffset != _vertexCount) {
             Debug.LogWarning($"[VATPlayer] {name}: submesh vertex sum ({runningOffset}) " +
-                             $"!= bake vertexCount ({_sidecar.vertexCount}) — VAT replay will be wrong");
+                             $"!= texture width ({_vertexCount}) — VAT replay will be wrong");
         }
 
-        Debug.Log($"[VATPlayer] {name}: loaded {_sidecar.frameCount} frames × {_sidecar.vertexCount} verts " +
-                  $"(across {subCount} submeshes) @ {_sidecar.fps} fps");
+        Debug.Log($"[VATPlayer] {name}: loaded {_frameCount} frames × {_vertexCount} verts " +
+                  $"(across {subCount} submeshes) @ {fpsOverride} fps");
+        return true;
+    }
+
+    /// <summary>
+    /// Parses the OpenVAT sidecar's `os-remap` block. JsonUtility can't
+    /// handle the hyphen in the key name, so we do a small manual walk
+    /// instead of dragging in Newtonsoft.Json.
+    /// </summary>
+    private bool ParseOpenVATSidecar(string json) {
+        if (string.IsNullOrEmpty(json)) {
+            Debug.LogError($"[VATPlayer] {name}: empty sidecar JSON");
+            return false;
+        }
+        int blockStart = json.IndexOf("\"os-remap\"");
+        if (blockStart < 0) {
+            Debug.LogError($"[VATPlayer] {name}: sidecar lacks 'os-remap' key — not an OpenVAT bake");
+            return false;
+        }
+        // Find the opening brace of the value object and its matching
+        // close. Simple brace matching — sidecar is small, shape is
+        // fixed, no need for a real parser.
+        int objStart = json.IndexOf('{', blockStart);
+        if (objStart < 0) return false;
+        int depth = 0;
+        int objEnd = -1;
+        for (int i = objStart; i < json.Length; i++) {
+            if (json[i] == '{') depth++;
+            else if (json[i] == '}') {
+                depth--;
+                if (depth == 0) { objEnd = i; break; }
+            }
+        }
+        if (objEnd < 0) {
+            Debug.LogError($"[VATPlayer] {name}: malformed os-remap block");
+            return false;
+        }
+        var block = json.Substring(objStart, objEnd - objStart + 1);
+        var parsed = JsonUtility.FromJson<OpenVATBlock>(block);
+        if (parsed == null) {
+            Debug.LogError($"[VATPlayer] {name}: failed to parse os-remap block");
+            return false;
+        }
+        if (parsed.Min == null || parsed.Min.Count < 3 ||
+            parsed.Max == null || parsed.Max.Count < 3 ||
+            parsed.Frames <= 0) {
+            Debug.LogError($"[VATPlayer] {name}: os-remap block has malformed Min/Max/Frames");
+            return false;
+        }
+        _frameCount = parsed.Frames;
+        _vertexCount = posTex.width;
+        // TryParse rather than Parse so a malformed sidecar string
+        // (truncated file, locale-prefixed number, etc.) returns false
+        // with a clear log instead of throwing FormatException through
+        // the bake setup and leaving Unity in a half-configured state.
+        if (!TryParseBoundsVec(parsed.Min, out _boundsMin)) {
+            Debug.LogError($"[VATPlayer] {name}: failed to parse os-remap Min — got {string.Join(',', parsed.Min)}");
+            return false;
+        }
+        if (!TryParseBoundsVec(parsed.Max, out _boundsMax)) {
+            Debug.LogError($"[VATPlayer] {name}: failed to parse os-remap Max — got {string.Join(',', parsed.Max)}");
+            return false;
+        }
+        // Sanity: texture height should be 2 × frames.
+        if (posTex.height != _frameCount * 2) {
+            Debug.LogWarning($"[VATPlayer] {name}: texture height {posTex.height} != " +
+                             $"2 × Frames ({_frameCount * 2}) — is this an OpenVAT bake?");
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Parse a 3-element string list of invariant-culture floats into a
+    /// Vector3. Returns false on any malformed element.
+    /// </summary>
+    private static bool TryParseBoundsVec(List<string> arr, out Vector3 result) {
+        result = Vector3.zero;
+        if (arr == null || arr.Count < 3) return false;
+        const System.Globalization.NumberStyles style =
+            System.Globalization.NumberStyles.Float;
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        if (!float.TryParse(arr[0], style, culture, out var x)) return false;
+        if (!float.TryParse(arr[1], style, culture, out var y)) return false;
+        if (!float.TryParse(arr[2], style, culture, out var z)) return false;
+        result = new Vector3(x, y, z);
         return true;
     }
 

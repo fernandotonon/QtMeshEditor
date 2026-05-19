@@ -18,16 +18,16 @@ set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
     cat <<EOF
-Usage: $0 <mesh-file> <animation-name> [--encoding rgba8|rgba16] [--fps N]
+Usage: $0 <mesh-file> <animation-name> [--fps N]
 
   mesh-file        Path to the source mesh (.fbx, .gltf, .dae, .mesh, etc.)
   animation-name   Animation clip inside the mesh (use 'qtmesh anim <file> --list' to enumerate)
 
-Optional flags forwarded to qtmesh vat (defaults: rgba16, 30 fps, --normals).
+Output is always OpenVAT (single packed 16-bit RGB PNG + os-remap JSON).
 
 Example:
   $0 "media/models/Rumba Dancing.fbx" "mixamo.com"
-  $0 "media/models/Hip Hop Dancing.fbx" "mixamo.com" --encoding rgba8 --fps 24
+  $0 "media/models/Hip Hop Dancing.fbx" "mixamo.com" --fps 24
 EOF
     exit 2
 fi
@@ -35,14 +35,16 @@ fi
 MESH="$1"; shift
 ANIM="$1"; shift
 
-ENCODING="rgba16"
 FPS=30
 
-# Forward any extra flags (--encoding, --fps) the caller passed.
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --encoding) ENCODING="$2"; shift 2 ;;
-        --fps) FPS="$2"; shift 2 ;;
+        --fps)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "Error: --fps requires a value" >&2
+                exit 2
+            fi
+            FPS="$2"; shift 2 ;;
         *) echo "Unknown arg: $1"; exit 2 ;;
     esac
 done
@@ -76,11 +78,8 @@ echo ">> Staging into $STAGE_DIR"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
 
-echo ">> Baking VAT ($ENCODING @ ${FPS}fps, target=godot)"
-"$QTM" vat "$MESH" \
-    --anim "$ANIM" --fps "$FPS" --encoding "$ENCODING" \
-    --target godot --normals \
-    -o "$STAGE_DIR"
+echo ">> Baking OpenVAT (${FPS}fps)"
+"$QTM" vat "$MESH" --anim "$ANIM" --fps "$FPS" -o "$STAGE_DIR"
 
 echo ">> Converting source mesh to glTF (preserves vertex order Godot will see)"
 "$QTM" convert "$MESH" -o "$STAGE_DIR/source.gltf"
