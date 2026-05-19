@@ -21,26 +21,27 @@ The MIT License
 namespace Ogre { class Entity; }
 
 /**
- * @brief Vertex Animation Texture (VAT) baker.
+ * @brief Vertex Animation Texture (VAT) baker — OpenVAT format.
  *
- * Bakes a skinned animation into a 2D texture where each row encodes one
- * animation frame and each column is one vertex's post-skinning position.
- * The companion JSON sidecar carries the metadata a runtime shader needs
- * to decode the texture (frame count, vertex count, bounds, fps).
+ * Bakes a skinned animation into the sharpen3d/openvat texture layout so
+ * the off-the-shelf openvat shaders (Godot reference, Unity, Unreal,
+ * Blender add-on) consume our output unmodified.
  *
- * This is the soft-body / per-vertex VAT variant — works for any skinned
- * animation regardless of how the deformation is parametrised. The
- * runtime shader is one texture sample per vertex per frame: cheap on
- * mobile / VR / instanced crowds where a full skeletal palette would
- * dominate the GPU budget.
+ * Output per bake (two files):
+ *   - `<basename>_pos.png` — 16-bit RGB PNG. Width = vertexCount.
+ *     Height = 2 × frameCount. Top half = positions normalized to
+ *     `[minBound..maxBound]`. Bottom half = unit normals encoded as
+ *     `(n+1)/2`. No alpha channel.
+ *   - `<basename>-remap_info.json` — the canonical `os-remap` sidecar:
+ *     `{ "os-remap": { "Min": ["…"], "Max": ["…"], "Frames": <int> } }`
+ *     with 8-decimal-place stringified floats, bounds rounded outward
+ *     to the nearest 0.1.
  *
- * Slice 1 ships:
- *   - Engine-agnostic target (no axis swizzle, no per-engine sidecar)
- *   - RGBA8 normalised encoding (~3 mm error on a 1 m model)
- *   - Positions only (no normals yet)
- *
- * Future slices add: RGBA16 / EXR encodings, normal texture, Unity /
- * Unreal / Godot variants, and the Inspector + MCP wiring.
+ * Source space is Ogre Y-up right-handed. Consumer shaders typically
+ * apply a swizzle on read (the Godot reference shader does `vec3(x, z,
+ * -y)` to land in Godot's convention). We document our origin via the
+ * non-conflicting `_origin: "ogre-y-up-rh"` key — openvat shaders ignore
+ * unknown top-level fields.
  *
  * Pure-data API on purpose — no QObject, no Ogre::Root assumption beyond
  * the entity being live; easier to unit-test.
@@ -48,39 +49,20 @@ namespace Ogre { class Entity; }
 class VATBaker
 {
 public:
-    enum class Encoding {
-        RGBA8  = 0,  ///< 8-bit per channel, normalised against bounds.   ~3 mm error on 1 m model.
-        RGBA16 = 1,  ///< 16-bit per channel, normalised against bounds. ~50× more precise than RGBA8.
-        // Reserved for follow-up: RGBAF (EXR via TinyEXR), pending vendor approval.
-    };
-
-    enum class Target {
-        Agnostic = 0,  ///< No axis swizzle, no per-engine sidecar.
-        Unity    = 1,  ///< Y-up (same as Ogre); UV-V flipped (Unity convention). Emits `.png.meta`.
-        Unreal   = 2,  ///< Z-up axis remap (x, z, y); Niagara-style U=vertex / V=frame.
-        Godot    = 3,  ///< Y-up + right-handed (same as Ogre). Emits a `.gdshader` snippet.
-    };
-
     struct Options {
         QString  animationName;           ///< Required — no default to avoid silently baking the wrong clip.
         double   fps          = 30.0;     ///< Frames per second to sample at.
         double   startTime    = -1.0;     ///< < 0 → animation start (0).
         double   endTime      = -1.0;     ///< < 0 → animation length.
-        Encoding encoding     = Encoding::RGBA8;
-        Target   target       = Target::Agnostic;
-        bool     bakeNormals  = false;    ///< Also emit `<basename>_nrm.png`.
         QString  outputDir;               ///< Required.
         QString  basename;                ///< Without extension. Defaults to animationName when empty.
     };
 
     struct BakeResult {
         bool      ok = false;
-        QString   error;            ///< Populated when !ok.
-        QString   posTexPath;       ///< On-disk path to the position texture.
-        QString   nrmTexPath;       ///< On-disk path to the normal texture (empty when not requested).
-        QString   jsonPath;         ///< On-disk path to the sidecar JSON.
-        QString   unityMetaPath;    ///< `.meta` sidecar, only when target=Unity.
-        QString   godotShaderPath;  ///< `.gdshader` snippet, only when target=Godot.
+        QString   error;          ///< Populated when !ok.
+        QString   posTexPath;     ///< On-disk path to the packed position+normal texture.
+        QString   jsonPath;       ///< On-disk path to the `<basename>-remap_info.json` sidecar.
         int       frameCount = 0;
         int       vertexCount = 0;
         Ogre::Vector3 minBound = Ogre::Vector3::ZERO;
@@ -90,21 +72,11 @@ public:
     /**
      * @brief Bake `entity`'s animation `opts.animationName` into a VAT.
      *
-     * Steps the entity's animation state at 1/fps intervals from
-     * `startTime` to `endTime`, reads post-skinning vertex positions
-     * via `_getSkelAnimVertexData()`, and writes:
-     *
-     *   - `<outputDir>/<basename>_pos.png` — position texture
-     *     (one row per frame, one column per vertex).
-     *   - `<outputDir>/<basename>.json` — sidecar describing layout.
-     *
-     * Pure function — no signals, no Sentry hookups here; the caller
-     * decides how to report progress (the CLI subcommand prints to
-     * stdout, the future Inspector controller will emit Qt signals).
-     *
      * Required preconditions:
      *   - `entity` is non-null and has a skeleton.
      *   - The animation `opts.animationName` exists on the entity.
+     *   - The source mesh exposes vertex normals (VES_NORMAL) on every
+     *     submesh — the packed-normal texture needs them.
      *   - `opts.outputDir` exists (or is creatable) and is writable.
      *   - `opts.fps > 0`.
      *
@@ -112,73 +84,8 @@ public:
      */
     static BakeResult bake(Ogre::Entity* entity, const Options& opts);
 
-    /// Encode a flat vector of positions into 8-bit RGBA pixels,
-    /// normalised against `[minBound, maxBound]`. Public for tests.
-    ///
-    /// Layout: `pixels[(frame * vertexCount + vertex) * 4 + {0..3}]`.
-    /// Channel mapping: R=x, G=y, B=z, A=255 (reserved).
-    static std::vector<unsigned char> encodeRGBA8(
-        const std::vector<Ogre::Vector3>& flatPositions,
-        int frameCount,
-        int vertexCount,
-        const Ogre::Vector3& minBound,
-        const Ogre::Vector3& maxBound);
-
-    /// Inverse of `encodeRGBA8`. Public for round-trip tests.
-    static std::vector<Ogre::Vector3> decodeRGBA8(
-        const std::vector<unsigned char>& pixels,
-        int frameCount,
-        int vertexCount,
-        const Ogre::Vector3& minBound,
-        const Ogre::Vector3& maxBound);
-
-    /// 16-bit-per-channel variant. ~50× more precise than RGBA8 on
-    /// the same bounds (one ULP ≈ span/65535 vs span/255). Channel
-    /// order is the same; alpha is reserved at 65535.
-    static std::vector<uint16_t> encodeRGBA16(
-        const std::vector<Ogre::Vector3>& flatPositions,
-        int frameCount,
-        int vertexCount,
-        const Ogre::Vector3& minBound,
-        const Ogre::Vector3& maxBound);
-
-    /// Inverse of `encodeRGBA16`.
-    static std::vector<Ogre::Vector3> decodeRGBA16(
-        const std::vector<uint16_t>& pixels,
-        int frameCount,
-        int vertexCount,
-        const Ogre::Vector3& minBound,
-        const Ogre::Vector3& maxBound);
-
-    /// Encode unit normals (each component in [-1, 1]) into 8-bit
-    /// RGBA. Mapping: `(component + 1) * 0.5 → byte`. Alpha 255.
-    /// Same layout convention as positions.
-    static std::vector<unsigned char> encodeNormalsRGBA8(
-        const std::vector<Ogre::Vector3>& flatNormals,
-        int frameCount,
-        int vertexCount);
-
-    /// Decode normals back to unit vectors. Not re-normalised — the
-    /// caller can choose whether to renormalise.
-    static std::vector<Ogre::Vector3> decodeNormalsRGBA8(
-        const std::vector<unsigned char>& pixels,
-        int frameCount,
-        int vertexCount);
-
-    /// 16-bit-per-channel variant of `encodeNormalsRGBA8`.
-    static std::vector<uint16_t> encodeNormalsRGBA16(
-        const std::vector<Ogre::Vector3>& flatNormals,
-        int frameCount,
-        int vertexCount);
-
-    /// Inverse of `encodeNormalsRGBA16`.
-    static std::vector<Ogre::Vector3> decodeNormalsRGBA16(
-        const std::vector<uint16_t>& pixels,
-        int frameCount,
-        int vertexCount);
-
-    /// Build the JSON sidecar string. Public so tests can snapshot it
-    /// without writing to disk.
+    /// Build the OpenVAT sidecar JSON string. Public so tests can
+    /// snapshot it without writing to disk.
     static QString buildSidecarJson(const BakeResult& result, const Options& opts);
 };
 

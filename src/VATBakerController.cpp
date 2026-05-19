@@ -86,9 +86,6 @@ void VATBakerController::setIsBaking(bool b)
 
 bool VATBakerController::bake(const QString& animationName,
                               double fps,
-                              const QString& encoding,
-                              const QString& target,
-                              bool bakeNormals,
                               const QString& outputDir,
                               const QString& basename)
 {
@@ -134,24 +131,13 @@ bool VATBakerController::bake(const QString& animationName,
 
     VATBaker::Options opts;
     opts.animationName = animationName;
-    opts.fps = fps;
-    opts.outputDir = outputDir;
-    opts.basename = basename.isEmpty() ? animationName : basename;
-    opts.bakeNormals = bakeNormals;
-
-    const QString enc = encoding.toLower();
-    if      (enc == "rgba16") opts.encoding = VATBaker::Encoding::RGBA16;
-    else                       opts.encoding = VATBaker::Encoding::RGBA8;
-
-    const QString tgt = target.toLower();
-    if      (tgt == "unity")  opts.target = VATBaker::Target::Unity;
-    else if (tgt == "unreal") opts.target = VATBaker::Target::Unreal;
-    else if (tgt == "godot")  opts.target = VATBaker::Target::Godot;
-    else                       opts.target = VATBaker::Target::Agnostic;
+    opts.fps           = fps;
+    opts.outputDir     = outputDir;
+    opts.basename      = basename.isEmpty() ? animationName : basename;
 
     SentryReporter::addBreadcrumb("ui.action",
-        QStringLiteral("VAT bake start: anim=%1 fps=%2 encoding=%3 target=%4 normals=%5")
-            .arg(animationName).arg(fps).arg(enc, tgt).arg(bakeNormals ? "yes" : "no"));
+        QStringLiteral("OpenVAT bake start: anim=%1 fps=%2")
+            .arg(animationName).arg(fps));
 
     // The Ogre animation state lives on the main thread; sampling
     // from a worker would race with Manager's per-frame updates.

@@ -71,22 +71,16 @@ public:
     /// QML calls this on mount and after selection changes.
     Q_INVOKABLE void refreshAnimations();
 
-    /// Run a bake. Returns true if validation passed and `VATBaker::bake`
-    /// was invoked; `bakeFinished(ok, posTexture, error)` is then
-    /// emitted before this returns with the bake outcome. Returns
-    /// false on a refused-to-start condition; in that case
+    /// Run an OpenVAT bake. Returns true if validation passed and
+    /// `VATBaker::bake` was invoked; `bakeFinished(ok, posTexture, error)`
+    /// is then emitted before this returns with the bake outcome.
+    /// Returns false on a refused-to-start condition; in that case
     /// `bakeFinished(false, ..., reason)` is also emitted (so QML
     /// callers can rely on a single observable channel), except for
     /// the "already baking" guard where the in-flight bake will emit
     /// its own `bakeFinished` separately.
-    ///
-    /// `encoding` and `target` accept the same string values as the
-    /// `qtmesh vat` CLI subcommand.
     Q_INVOKABLE bool bake(const QString& animationName,
                           double fps,
-                          const QString& encoding,
-                          const QString& target,
-                          bool bakeNormals,
                           const QString& outputDir,
                           const QString& basename = QString());
 

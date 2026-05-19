@@ -38,8 +38,7 @@ TEST(VATBakerControllerStandalone, BakeRefusedWhenNothingSelected) {
     QSignalSpy spy(ctrl, &VATBakerController::bakeFinished);
     const bool kicked = ctrl->bake(
         QStringLiteral("Idle"), 30.0,
-        QStringLiteral("rgba8"), QStringLiteral("agnostic"),
-        false, QStringLiteral("/tmp/vat-ctrl-test"));
+        QStringLiteral("/tmp/vat-ctrl-test"));
     EXPECT_FALSE(kicked);
     ASSERT_GE(spy.count(), 1);
     // First emission carries the failure.
@@ -52,9 +51,7 @@ TEST(VATBakerControllerStandalone, BakeRefusesEmptyAnimName) {
     clearSelection();
     auto* ctrl = VATBakerController::instance();
     QSignalSpy spy(ctrl, &VATBakerController::bakeFinished);
-    EXPECT_FALSE(ctrl->bake(
-        QString(), 30.0, QStringLiteral("rgba8"),
-        QStringLiteral("agnostic"), false, QStringLiteral("/tmp")));
+    EXPECT_FALSE(ctrl->bake(QString(), 30.0, QStringLiteral("/tmp")));
     ASSERT_GE(spy.count(), 1);
     EXPECT_FALSE(spy.first().at(0).toBool());
     EXPECT_TRUE(spy.first().at(2).toString().contains("animationName"));
@@ -64,9 +61,7 @@ TEST(VATBakerControllerStandalone, BakeRefusesEmptyOutputDir) {
     clearSelection();
     auto* ctrl = VATBakerController::instance();
     QSignalSpy spy(ctrl, &VATBakerController::bakeFinished);
-    EXPECT_FALSE(ctrl->bake(
-        QStringLiteral("Idle"), 30.0, QStringLiteral("rgba8"),
-        QStringLiteral("agnostic"), false, QString()));
+    EXPECT_FALSE(ctrl->bake(QStringLiteral("Idle"), 30.0, QString()));
     ASSERT_GE(spy.count(), 1);
     EXPECT_FALSE(spy.first().at(0).toBool());
     EXPECT_TRUE(spy.first().at(2).toString().contains("outputDir"));
@@ -129,8 +124,7 @@ TEST_F(VATBakerControllerSceneTest, BakeKicksOffAndEmitsFinished) {
 
     const bool kicked = ctrl->bake(
         QStringLiteral("TestAnim"), 10.0,
-        QStringLiteral("rgba8"), QStringLiteral("agnostic"),
-        false, tmp.path(), QStringLiteral("CT"));
+        tmp.path(), QStringLiteral("CT"));
     EXPECT_TRUE(kicked);
     ASSERT_EQ(finishedSpy.count(), 1);
     EXPECT_TRUE(finishedSpy.first().at(0).toBool())
@@ -154,39 +148,11 @@ TEST_F(VATBakerControllerSceneTest, BakeReportsErrorForMissingAnim) {
     ASSERT_TRUE(tmp.isValid());
 
     const bool kicked = ctrl->bake(
-        QStringLiteral("NoSuchAnim"), 10.0,
-        QStringLiteral("rgba8"), QStringLiteral("agnostic"),
-        false, tmp.path());
+        QStringLiteral("NoSuchAnim"), 10.0, tmp.path());
     EXPECT_TRUE(kicked);  // arg validation passed, bake itself failed
     ASSERT_EQ(finishedSpy.count(), 1);
     EXPECT_FALSE(finishedSpy.first().at(0).toBool());
     EXPECT_TRUE(finishedSpy.first().at(2).toString().contains("not found"));
-}
-
-TEST_F(VATBakerControllerSceneTest, EncodingAndTargetStringsRoutedThrough) {
-    auto* entity = createAnimatedTestEntity("VAT_Ctrl_Routing");
-    ASSERT_NE(entity, nullptr);
-    SelectionSet::getSingleton()->append(entity);
-
-    QTemporaryDir tmp;
-    ASSERT_TRUE(tmp.isValid());
-
-    auto* ctrl = VATBakerController::instance();
-    QSignalSpy finishedSpy(ctrl, &VATBakerController::bakeFinished);
-
-    // rgba16 + godot — exercises both string→enum mappings.
-    EXPECT_TRUE(ctrl->bake(
-        QStringLiteral("TestAnim"), 10.0,
-        QStringLiteral("rgba16"), QStringLiteral("godot"),
-        false, tmp.path(), QStringLiteral("R")));
-    ASSERT_EQ(finishedSpy.count(), 1);
-    EXPECT_TRUE(finishedSpy.first().at(0).toBool());
-    const QString posTex = finishedSpy.first().at(1).toString();
-    EXPECT_TRUE(posTex.endsWith("_pos.png"));
-    // godot target writes a .gdshader alongside the png.
-    const QString gd = posTex.left(posTex.size() - 8) + ".gdshader";
-    EXPECT_TRUE(QFile::exists(gd))
-        << "godot shader should be at " << gd.toStdString();
 }
 
 TEST_F(VATBakerControllerSceneTest, AvailableAnimationsRefreshesOnSelectionChange) {

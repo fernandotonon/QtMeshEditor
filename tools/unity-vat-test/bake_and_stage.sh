@@ -14,9 +14,9 @@ set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
     cat <<EOF
-Usage: $0 <mesh-file> <animation-name> [--encoding rgba8|rgba16] [--fps N]
+Usage: $0 <mesh-file> <animation-name> [--fps N]
 
-  Bakes target=unity (pre-flipped rows, .meta sidecar).
+  Bakes OpenVAT (single packed 16-bit RGB PNG + os-remap JSON).
   Stages into Assets/VAT/Bakes/<basename>_<anim>/.
 
 Example:
@@ -27,11 +27,9 @@ fi
 
 MESH="$1"; shift
 ANIM="$1"; shift
-ENCODING="rgba16"
 FPS=30
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --encoding) ENCODING="$2"; shift 2 ;;
         --fps) FPS="$2"; shift 2 ;;
         *) echo "Unknown arg: $1"; exit 2 ;;
     esac
@@ -62,17 +60,12 @@ echo ">> Staging into $STAGE_DIR"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
 
-echo ">> Baking VAT ($ENCODING @ ${FPS}fps, target=unity)"
-"$QTM" vat "$MESH" \
-    --anim "$ANIM" --fps "$FPS" --encoding "$ENCODING" \
-    --target unity --normals \
-    -o "$STAGE_DIR"
+echo ">> Baking OpenVAT (${FPS}fps)"
+"$QTM" vat "$MESH" --anim "$ANIM" --fps "$FPS" -o "$STAGE_DIR"
 
 echo ">> Converting source mesh to glTF (preserves vertex order Unity will see)"
 "$QTM" convert "$MESH" -o "$STAGE_DIR/source.gltf"
 
-# Rename .gdshader if any sneaks in (shouldn't with --target unity).
-rm -f "$STAGE_DIR/"*.gdshader
 
 echo
 echo "Done. In Unity:"

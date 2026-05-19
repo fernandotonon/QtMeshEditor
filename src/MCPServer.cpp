@@ -4224,34 +4224,8 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     if (fps <= 0.0)
         return makeErrorResult("Error: fps must be > 0");
 
-    const QString encStr = args.value("encoding").toString().toLower();
-    VATBaker::Encoding encoding = VATBaker::Encoding::RGBA8;
-    if (encStr == "rgba16") encoding = VATBaker::Encoding::RGBA16;
-    else if (!encStr.isEmpty() && encStr != "rgba8")
-        return makeErrorResult("Error: encoding must be one of: rgba8, rgba16");
-
-    const QString tgtStr = args.value("target").toString().toLower();
-    VATBaker::Target target = VATBaker::Target::Agnostic;
-    if      (tgtStr == "unity")  target = VATBaker::Target::Unity;
-    else if (tgtStr == "unreal") target = VATBaker::Target::Unreal;
-    else if (tgtStr == "godot")  target = VATBaker::Target::Godot;
-    else if (!tgtStr.isEmpty() && tgtStr != "agnostic")
-        return makeErrorResult(
-            "Error: target must be one of: agnostic, unity, unreal, godot");
-
-    const bool bakeNormals = args.value("normals").toBool(false);
     const QString basename = args.value("basename").toString();
 
-    // Load via MeshImporterExporter (same path the CLI subcommand uses).
-    // Snapshot pre-existing entities so we only operate on (and clean
-    // up) the entities this call imported — without this, MCP tools
-    // sharing the live editor's scene would bake whichever mesh
-    // happened to be first in `getEntities()` and would accumulate
-    // scene state across calls.
-    //
-    // Transient import: load the file, bake the VAT, tear it down on
-    // scope exit (with the user's prior selection restored). See
-    // TransientImportSession at the top of this file for the contract.
     auto* mgr = Manager::getSingleton();
     SentryReporter::addBreadcrumb("file.import",
         QString("Importing %1 for VAT bake").arg(filePath));
@@ -4264,9 +4238,7 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
 
     // Pick the bake target by skeleton presence rather than list
     // order. Some mesh formats produce auxiliary unskinned entities
-    // alongside the skinned mesh (e.g. helper geometry), and bailing
-    // out on the first imported entity would falsely report "no
-    // skeleton" when a valid one exists elsewhere in the import.
+    // alongside the skinned mesh (e.g. helper geometry).
     Ogre::Entity* entity = nullptr;
     for (Ogre::Entity* e : imported) {
         if (e && e->hasSkeleton()) { entity = e; break; }
@@ -4276,15 +4248,12 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
 
     VATBaker::Options opts;
     opts.animationName = animName;
-    opts.fps = fps;
-    opts.outputDir = outputDir;
-    opts.basename = basename.isEmpty() ? animName : basename;
-    opts.encoding = encoding;
-    opts.target = target;
-    opts.bakeNormals = bakeNormals;
+    opts.fps           = fps;
+    opts.outputDir     = outputDir;
+    opts.basename      = basename.isEmpty() ? animName : basename;
 
     SentryReporter::addBreadcrumb("file.export",
-        QString("Writing VAT outputs to %1 (anim=%2)").arg(outputDir, animName));
+        QString("Writing OpenVAT bake to %1 (anim=%2)").arg(outputDir, animName));
 
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
     if (!result.ok)
@@ -4292,23 +4261,12 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
 
     QJsonObject content;
     content["ok"]          = true;
-    content["posTexture"]  = result.posTexPath;
-    if (!result.nrmTexPath.isEmpty())
-        content["nrmTexture"] = result.nrmTexPath;
+    content["texture"]     = result.posTexPath;
     content["sidecar"]     = result.jsonPath;
-    if (!result.unityMetaPath.isEmpty())
-        content["unityMeta"] = result.unityMetaPath;
-    if (!result.godotShaderPath.isEmpty())
-        content["godotShader"] = result.godotShaderPath;
     content["frameCount"]  = result.frameCount;
     content["vertexCount"] = result.vertexCount;
     content["animation"]   = animName;
     content["fps"]         = fps;
-    content["encoding"]    = (encoding == VATBaker::Encoding::RGBA16) ? "rgba16" : "rgba8";
-    content["target"]      =
-        (target == VATBaker::Target::Unity)  ? "unity"  :
-        (target == VATBaker::Target::Unreal) ? "unreal" :
-        (target == VATBaker::Target::Godot)  ? "godot"  : "agnostic";
     QJsonObject bounds, lo, hi;
     lo["x"] = result.minBound.x; lo["y"] = result.minBound.y; lo["z"] = result.minBound.z;
     hi["x"] = result.maxBound.x; hi["y"] = result.maxBound.y; hi["z"] = result.maxBound.z;
@@ -6071,13 +6029,10 @@ QJsonArray MCPServer::buildToolsList()
     // bake_vat
     {
         QJsonObject props;
-        props["file"]       = QJsonObject{{"type", "string"}, {"description", "Path to the source mesh (any format the importer accepts: .mesh, .fbx, .gltf, etc.)."}};
+        props["file"]       = QJsonObject{{"type", "string"}, {"description", "Path to the source mesh (any format the importer accepts: .mesh, .fbx, .gltf, etc.). Mesh must expose per-vertex normals."}};
         props["anim"]       = QJsonObject{{"type", "string"}, {"description", "Animation clip name to bake (use list_skeletal_animations to enumerate)."}};
         props["fps"]        = QJsonObject{{"type", "number"}, {"description", "Sample rate in frames per second. Default 30."}};
-        props["encoding"]   = QJsonObject{{"type", "string"}, {"description", "Texture encoding: 'rgba8' (~3 mm error on a 1 m model) or 'rgba16' (~50× more precise). Default 'rgba8'."}};
-        props["target"]     = QJsonObject{{"type", "string"}, {"description", "Engine target: 'agnostic' (default), 'unity' (writes .meta + flips rows), 'unreal' (Y/Z axis swizzle), 'godot' (writes .gdshader template)."}};
-        props["normals"]    = QJsonObject{{"type", "boolean"}, {"description", "Also bake a normal texture (<basename>_nrm.png). Default false."}};
-        props["output_dir"] = QJsonObject{{"type", "string"}, {"description", "Directory to write the position/normal textures + sidecar into. Created if missing."}};
+        props["output_dir"] = QJsonObject{{"type", "string"}, {"description", "Directory to write the OpenVAT texture + sidecar into. Created if missing."}};
         props["basename"]   = QJsonObject{{"type", "string"}, {"description", "Base filename (no extension) for the outputs. Defaults to `anim` when empty."}};
         QJsonArray required;
         required.append("file");
@@ -6085,11 +6040,11 @@ QJsonArray MCPServer::buildToolsList()
         required.append("output_dir");
         appendTool(
             "bake_vat",
-            "Bake a skeletal animation into a Vertex Animation Texture (VAT). The output is a position "
-            "texture (one row per frame, one column per vertex) + a JSON sidecar describing the layout, "
-            "ready for a runtime shader to replay the animation without skinning. Supports four engine "
-            "targets (agnostic / unity / unreal / godot) with appropriate axis swizzles + per-engine "
-            "sidecars. Optionally bakes a normal texture for lit shaders.",
+            "Bake a skeletal animation into a Vertex Animation Texture in OpenVAT format "
+            "(sharpen3d/openvat). Output: a single 16-bit RGB PNG (height = 2 × frames; top half "
+            "positions, bottom half normals) plus `<basename>-remap_info.json` with the canonical "
+            "`os-remap` sidecar shape. Off-the-shelf openvat reference shaders for Godot / Unity / "
+            "Unreal / Blender consume the output unmodified.",
             props,
             required
         );
