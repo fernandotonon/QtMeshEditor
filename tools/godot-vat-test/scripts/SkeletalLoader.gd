@@ -29,10 +29,10 @@ func _ready() -> void:
 	# user knows to run bake_and_stage.sh (the typical cause is calling
 	# `qtmesh vat -o <stage_dir>` directly without the glTF conversion).
 	if not FileAccess.file_exists(gltf_path):
-		push_error("SkeletalLoader: source glTF not found at %s. "
-			"Run tools/godot-vat-test/bake_and_stage.sh to re-stage. "
-			"Direct `qtmesh vat -o ...` writes textures but not the "
-			"source mesh." % gltf_path)
+		var msg := "SkeletalLoader: source glTF not found at %s. " % gltf_path
+		msg += "Run tools/godot-vat-test/bake_and_stage.sh to re-stage. "
+		msg += "Direct `qtmesh vat -o ...` writes textures but not the source mesh."
+		push_error(msg)
 		return
 	_load_runtime()
 
@@ -75,8 +75,16 @@ func _load_runtime() -> void:
 			push_warning("SkeletalLoader: AnimationPlayer has no clips")
 			return
 		clip = clips[0]
+	# Force the clip to loop so the live-skinned side keeps pace
+	# with the VAT side (which loops indefinitely via fposmod in
+	# VATPlayer._process). Without this the glTF importer's default
+	# loop mode is "none" — animation plays once and freezes on the
+	# last frame, leaving the VAT side dancing alone.
+	var anim_lib := anim_player.get_animation(clip)
+	if anim_lib != null:
+		anim_lib.loop_mode = Animation.LOOP_LINEAR
 	anim_player.play(clip)
-	print("SkeletalLoader: loaded %s, playing '%s'" % [gltf_path, clip])
+	print("SkeletalLoader: loaded %s, playing '%s' (loop=LINEAR)" % [gltf_path, clip])
 
 
 func _find_animation_player(root: Node) -> AnimationPlayer:

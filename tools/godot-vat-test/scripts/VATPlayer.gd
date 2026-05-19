@@ -185,6 +185,11 @@ func _load_bake() -> bool:
 	# for each surface. We have to tell every surface its starting
 	# column in the global bake texture via a per-material
 	# `vertex_offset` uniform so the shader can compute the right `u`.
+	#
+	# We also pick up the source mesh's per-surface diffuse texture
+	# from the glTF's StandardMaterial3D (if any) and forward it as
+	# `albedo_tex` so the VAT replay looks like the original — not
+	# a flat untextured silhouette.
 	_shader_material = null  # No longer using a single shared material.
 	_surface_materials.clear()
 	var running_offset := 0
@@ -203,6 +208,27 @@ func _load_bake() -> bool:
 		mat.set_shader_parameter("bounds_min", _bounds_min)
 		mat.set_shader_parameter("bounds_max", _bounds_max)
 		mat.set_shader_parameter("current_frame", 0.0)
+
+		# Look up the diffuse texture on the source mesh's per-surface
+		# material so the VAT mesh inherits the original look. The
+		# glTF importer sets surface materials directly on the
+		# ArrayMesh as StandardMaterial3D; we hand the texture +
+		# albedo color off to the VAT shader so it can multiply in
+		# the fragment stage.
+		var src_mat: Material = mesh.surface_get_material(i)
+		if src_mat is StandardMaterial3D:
+			var sm := src_mat as StandardMaterial3D
+			var albedo := sm.albedo_texture
+			if albedo != null:
+				mat.set_shader_parameter("albedo_tex", albedo)
+				mat.set_shader_parameter("has_albedo_tex", true)
+			else:
+				mat.set_shader_parameter("has_albedo_tex", false)
+			mat.set_shader_parameter("base_color", Vector3(sm.albedo_color.r, sm.albedo_color.g, sm.albedo_color.b))
+		else:
+			mat.set_shader_parameter("has_albedo_tex", false)
+			mat.set_shader_parameter("base_color", Vector3(0.85, 0.78, 0.65))
+
 		set_surface_override_material(i, mat)
 		_surface_materials.append(mat)
 		# Advance offset by this surface's vertex count for the next.
@@ -277,54 +303,76 @@ render_mode cull_disabled, depth_draw_opaque, depth_test_default;
 
 uniform sampler2D pos_tex : filter_nearest, repeat_disable, hint_default_white;
 uniform sampler2D nrm_tex : filter_nearest, repeat_disable, hint_default_white;
+uniform sampler2D albedo_tex : filter_linear_mipmap, repeat_enable, source_color;
 uniform bool has_nrm_tex = false;
+uniform bool has_albedo_tex = false;
 
 uniform float current_frame = 0.0;
 uniform int frame_count = 1;
 uniform int vertex_count = 1;
 // Per-surface offset into the bake's monolithic position texture.
-// Multi-submesh meshes draw each surface separately, and Godot's
-// VERTEX_ID restarts at 0 for each surface. To find this vertex's
-// column in the bake we add the surface's starting column.
 uniform int vertex_offset = 0;
 uniform vec3 bounds_min = vec3(0.0);
 uniform vec3 bounds_max = vec3(1.0);
 uniform vec3 base_color : source_color = vec3(0.85, 0.78, 0.65);
 
+// Helper — sample a vertex's animated position at row `v`.
+vec3 sample_pos(int vid, float v) {
+	float u = (float(vid) + 0.5) / float(vertex_count);
+	vec3 t = texture(pos_tex, vec2(u, v)).rgb;
+	return bounds_min + t * (bounds_max - bounds_min);
+}
+
+// Pass the mesh's static UV0 through to fragment for albedo sampling.
+// UVs don't animate — only positions/normals do.
+varying vec2 uv0_pass;
+
 void vertex() {
 	int global_vid = vertex_offset + VERTEX_ID;
-	float u = (float(global_vid) + 0.5) / float(vertex_count);
 	float v = (current_frame + 0.5) / float(frame_count);
-	vec2 uv = vec2(u, v);
-	vec3 t = texture(pos_tex, uv).rgb;
-	VERTEX = bounds_min + t * (bounds_max - bounds_min);
+	VERTEX = sample_pos(global_vid, v);
+	uv0_pass = UV;
 
 	if (has_nrm_tex) {
-		// Normals are also unsigned-normalized in [0..1]; remap to
-		// [-1..1] direction vectors and renormalize.
-		vec3 n = texture(nrm_tex, uv).rgb * 2.0 - 1.0;
-		NORMAL = normalize(n);
+		// Normals are unsigned-normalized in [0..1]; remap to
+		// [-1..1] direction vectors and renormalize. We also
+		// negate the result — Godot's spatial shader `NORMAL`
+		// builtin expects the OUTWARD model-space normal that
+		// the lighting pipeline can dot with the light direction.
+		// The baker captures post-skin normals from Ogre's
+		// `_getSkelAnimVertexData()` which in Mixamo / glTF
+		// imports often comes out as the FACING-AWAY direction
+		// because the FBX → Ogre → glTF round-trip flips one
+		// winding pass. The "dark where there should be light"
+		// symptom in the test harness traces to this.
+		float u = (float(global_vid) + 0.5) / float(vertex_count);
+		vec3 n = texture(nrm_tex, vec2(u, v)).rgb * 2.0 - 1.0;
+		NORMAL = -normalize(n);
 	} else {
-		// No baked normal map — derive a flat-ish normal from
-		// the gradient of position over the vertex axis so the
-		// mesh isn't lit with all-zero normals (which would make
-		// it appear self-illuminated regardless of light dir).
-		// Cheap approximation: sample neighbouring vertex.
-		int neighbor_vid = clamp(global_vid + 1, 0, vertex_count - 1);
-		float nu = (float(neighbor_vid) + 0.5) / float(vertex_count);
-		vec3 neighbor_t = texture(pos_tex, vec2(nu, v)).rgb;
-		vec3 neighbor_pos = bounds_min + neighbor_t * (bounds_max - bounds_min);
-		vec3 tangent = neighbor_pos - VERTEX;
-		// Cross with world up to get a usable normal direction.
-		vec3 derived = normalize(cross(tangent, vec3(0.0, 1.0, 0.0)));
-		// Guard against degenerate (tangent parallel to up).
-		if (length(derived) < 0.001) derived = vec3(0.0, 0.0, 1.0);
-		NORMAL = derived;
+		// No baked normal map — derive a stable per-vertex normal
+		// by sampling neighbours along the vertex-id axis and
+		// cross-producting two tangent estimates. Not a true
+		// surface normal (it's vertex-id-axis tangent), but at
+		// least the normal rotates WITH the animation so lighting
+		// has direction. For fidelity, re-bake with --normals.
+		int prev_vid = max(global_vid - 1, 0);
+		int next_vid = min(global_vid + 1, vertex_count - 1);
+		vec3 p_prev = sample_pos(prev_vid, v);
+		vec3 p_next = sample_pos(next_vid, v);
+		vec3 tang = p_next - p_prev;
+		if (length(tang) < 1e-6) tang = vec3(1.0, 0.0, 0.0);
+		vec3 ref = abs(tang.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+		vec3 bitang = normalize(cross(tang, ref));
+		NORMAL = normalize(cross(bitang, tang));
 	}
 }
 
 void fragment() {
-	ALBEDO = base_color;
+	vec3 albedo = base_color;
+	if (has_albedo_tex) {
+		albedo *= texture(albedo_tex, uv0_pass).rgb;
+	}
+	ALBEDO = albedo;
 	ROUGHNESS = 0.6;
 	METALLIC = 0.0;
 }

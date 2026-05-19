@@ -42,13 +42,20 @@ script = ExtResource("1_main")
 environment = SubResource("Environment_default")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+; Restored the original above-and-slightly-front rig. The "light
+; from below" symptom on the right side turned out to be inverted
+; baked normals, not a light placement issue (fixed in the VAT
+; shader by negating NORMAL).
 transform = Transform3D(0.866, -0.354, 0.354, 0, 0.707, 0.707, -0.5, -0.612, 0.612, 2, 4, 2)
 light_energy = 1.2
 shadow_enabled = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.9239, 0.3827, 0, -0.3827, 0.9239, 0, 1.4, 3.5)
-fov = 50.0
+; Camera at y=2.4, pulled back to z=4.5, looking slightly down at the
+; character's chest. Lower elevation pre-fix had the head clipping
+; through the top edge of the viewport on a 2m-tall Mixamo rig.
+transform = Transform3D(1, 0, 0, 0, 0.9239, 0.3827, 0, -0.3827, 0.9239, 0, 2.4, 4.5)
+fov = 45.0
 
 [node name="Ground" type="Node3D" parent="."]
 
