@@ -98,7 +98,10 @@ public class VATPlayer : MonoBehaviour {
 
     void Update() {
         if (_materials == null || _materials.Length == 0 || _frameCount <= 0) return;
-        int loop = (loopFrames > 0) ? loopFrames : _frameCount;
+        // Clamp `loopFrames` to `_frameCount`. A larger value would push
+        // `_currentFrame` past the position half of the packed texture
+        // and into the normal half, rendering garbage rows as positions.
+        int loop = (loopFrames > 0) ? Mathf.Min(loopFrames, _frameCount) : _frameCount;
         _currentFrame = (_currentFrame + Time.deltaTime * fpsOverride) % loop;
         for (int i = 0; i < _materials.Length; i++) {
             _materials[i].SetFloat(_shaderPropCurrentFrame, _currentFrame);
@@ -212,19 +215,40 @@ public class VATPlayer : MonoBehaviour {
         }
         _frameCount = parsed.Frames;
         _vertexCount = posTex.width;
-        _boundsMin = new Vector3(
-            float.Parse(parsed.Min[0], System.Globalization.CultureInfo.InvariantCulture),
-            float.Parse(parsed.Min[1], System.Globalization.CultureInfo.InvariantCulture),
-            float.Parse(parsed.Min[2], System.Globalization.CultureInfo.InvariantCulture));
-        _boundsMax = new Vector3(
-            float.Parse(parsed.Max[0], System.Globalization.CultureInfo.InvariantCulture),
-            float.Parse(parsed.Max[1], System.Globalization.CultureInfo.InvariantCulture),
-            float.Parse(parsed.Max[2], System.Globalization.CultureInfo.InvariantCulture));
+        // TryParse rather than Parse so a malformed sidecar string
+        // (truncated file, locale-prefixed number, etc.) returns false
+        // with a clear log instead of throwing FormatException through
+        // the bake setup and leaving Unity in a half-configured state.
+        if (!TryParseBoundsVec(parsed.Min, out _boundsMin)) {
+            Debug.LogError($"[VATPlayer] {name}: failed to parse os-remap Min — got {string.Join(',', parsed.Min)}");
+            return false;
+        }
+        if (!TryParseBoundsVec(parsed.Max, out _boundsMax)) {
+            Debug.LogError($"[VATPlayer] {name}: failed to parse os-remap Max — got {string.Join(',', parsed.Max)}");
+            return false;
+        }
         // Sanity: texture height should be 2 × frames.
         if (posTex.height != _frameCount * 2) {
             Debug.LogWarning($"[VATPlayer] {name}: texture height {posTex.height} != " +
                              $"2 × Frames ({_frameCount * 2}) — is this an OpenVAT bake?");
         }
+        return true;
+    }
+
+    /// <summary>
+    /// Parse a 3-element string list of invariant-culture floats into a
+    /// Vector3. Returns false on any malformed element.
+    /// </summary>
+    private static bool TryParseBoundsVec(List<string> arr, out Vector3 result) {
+        result = Vector3.zero;
+        if (arr == null || arr.Count < 3) return false;
+        const System.Globalization.NumberStyles style =
+            System.Globalization.NumberStyles.Float;
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        if (!float.TryParse(arr[0], style, culture, out var x)) return false;
+        if (!float.TryParse(arr[1], style, culture, out var y)) return false;
+        if (!float.TryParse(arr[2], style, culture, out var z)) return false;
+        result = new Vector3(x, y, z);
         return true;
     }
 

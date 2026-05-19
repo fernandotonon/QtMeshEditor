@@ -697,14 +697,24 @@ Rectangle {
                     enabled: !VATBakerController.isBaking
                 }
                 Rectangle {
+                    id: animBrowseBtn
                     width: 60; height: 24; radius: 3
                     anchors.verticalCenter: parent.verticalCenter
                     color: animBrowseMa.pressed
                             ? Qt.darker(PropertiesPanelController.headerColor, 1.2)
-                         : animBrowseMa.containsMouse
+                         : (animBrowseMa.containsMouse || animBrowseBtn.activeFocus)
                             ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
                          : PropertiesPanelController.headerColor
-                    border.color: PropertiesPanelController.borderColor
+                    border.color: animBrowseBtn.activeFocus
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.borderColor
+                    border.width: animBrowseBtn.activeFocus ? 2 : 1
+                    activeFocusOnTab: !VATBakerController.isBaking
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "Browse for VAT output folder"
+                    Keys.onSpacePressed: animBrowseMa.clicked(null)
+                    Keys.onReturnPressed: animBrowseMa.clicked(null)
+                    Keys.onEnterPressed: animBrowseMa.clicked(null)
                     Text {
                         anchors.centerIn: parent
                         text: "Browse"
@@ -717,6 +727,7 @@ Rectangle {
                         enabled: !VATBakerController.isBaking
                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
                         onClicked: {
+                            if (!animBrowseMa.enabled) return
                             const picked = VATBakerController.chooseOutputDir(animToolsCol.outputDir)
                             if (picked && picked.length > 0)
                                 animToolsCol.outputDir = picked
@@ -728,14 +739,24 @@ Rectangle {
             // Bake button — same look as Animation Control's play button
             // (lighten/darken on the header color; no highlight ramp).
             Rectangle {
+                id: animBakeBtn
                 width: parent.width - 16; height: 26; radius: 3
                 color: animBakeMa.pressed
                         ? Qt.darker(PropertiesPanelController.headerColor, 1.2)
-                     : animBakeMa.containsMouse && animBakeMa.enabled
+                     : (animBakeMa.containsMouse || animBakeBtn.activeFocus) && animBakeMa.enabled
                         ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
                      : PropertiesPanelController.headerColor
                 opacity: animBakeMa.enabled ? 1.0 : 0.45
-                border.color: PropertiesPanelController.borderColor
+                border.color: animBakeBtn.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                border.width: animBakeBtn.activeFocus ? 2 : 1
+                activeFocusOnTab: animBakeMa.enabled
+                Accessible.role: Accessible.Button
+                Accessible.name: VATBakerController.isBaking ? "Baking VAT" : "Bake VAT"
+                Keys.onSpacePressed: animBakeMa.clicked(null)
+                Keys.onReturnPressed: animBakeMa.clicked(null)
+                Keys.onEnterPressed: animBakeMa.clicked(null)
 
                 Text {
                     anchors.centerIn: parent
@@ -751,6 +772,7 @@ Rectangle {
                               && animToolsCol.outputDir !== ""
                     cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
                     onClicked: {
+                        if (!animBakeMa.enabled) return
                         VATBakerController.bake(
                             animToolsCol.animName,
                             animToolsCol.fps,

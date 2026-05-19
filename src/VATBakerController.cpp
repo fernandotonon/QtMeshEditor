@@ -142,9 +142,12 @@ bool VATBakerController::bake(const QString& animationName,
     opts.outputDir     = outputDir;
     opts.basename      = basename.isEmpty() ? animationName : basename;
 
-    SentryReporter::addBreadcrumb("ui.action",
-        QStringLiteral("OpenVAT bake start: anim=%1 fps=%2")
-            .arg(animationName).arg(fps));
+    // file.export — this is an output-writing operation, not a UI
+    // click. Sentry split-by-category keeps file telemetry isolated
+    // from generic UI noise.
+    SentryReporter::addBreadcrumb("file.export",
+        QStringLiteral("OpenVAT bake start: anim=%1 fps=%2 → %3")
+            .arg(animationName).arg(fps).arg(outputDir));
 
     // The Ogre animation state lives on the main thread; sampling
     // from a worker would race with Manager's per-frame updates.
@@ -167,7 +170,7 @@ bool VATBakerController::bake(const QString& animationName,
     emit bakeProgress(m_progressDone, m_progressTotal);
     setIsBaking(false);
 
-    SentryReporter::addBreadcrumb("ui.action",
+    SentryReporter::addBreadcrumb("file.export",
         result.ok
             ? QStringLiteral("VAT bake ok: %1 frames × %2 vertices → %3")
                   .arg(result.frameCount).arg(result.vertexCount).arg(result.posTexPath)
@@ -179,6 +182,9 @@ bool VATBakerController::bake(const QString& animationName,
 
 QString VATBakerController::chooseOutputDir(const QString& startDir)
 {
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("OpenVAT output folder picker opened (seed=%1)").arg(startDir));
+
     QString seed = startDir;
     if (seed.isEmpty() || !QFileInfo(seed).isDir())
         seed = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
@@ -205,5 +211,10 @@ QString VATBakerController::chooseOutputDir(const QString& startDir)
         QFileDialog::ShowDirsOnly
             | QFileDialog::DontUseNativeDialog
             | QFileDialog::DontUseCustomDirectoryIcons);
+
+    SentryReporter::addBreadcrumb("ui.action",
+        chosen.isEmpty()
+            ? QStringLiteral("OpenVAT output folder picker cancelled")
+            : QStringLiteral("OpenVAT output folder picker accepted: %1").arg(chosen));
     return chosen;
 }

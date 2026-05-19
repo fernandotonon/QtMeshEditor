@@ -101,25 +101,38 @@ func _first_mesh_in(root: Node) -> ArrayMesh:
 
 
 ## Walks `bake_dir` looking for an OpenVAT pair: `*-remap_info.json` and
-## a matching packed PNG (`<basename>_pos.png`, height = 2 × Frames).
+## the matching packed PNG (`<basename>_pos.png`, height = 2 × Frames).
+##
+## When `bake_dir` holds multiple staged bakes (e.g. someone staged
+## a second animation without clearing the folder), we have to pair
+## the texture to the SAME basename as the sidecar — otherwise the
+## metadata from one bake will be applied to the texture of another,
+## producing visually plausible-but-wrong frames.
 func _load_bake() -> bool:
 	var dir := DirAccess.open(bake_dir)
 	if dir == null:
 		push_error("VATPlayer: cannot open %s" % bake_dir)
 		return false
 	var json_path := ""
-	var pos_path := ""
 	for f in dir.get_files():
 		if f.ends_with("-remap_info.json") and json_path.is_empty():
 			json_path = bake_dir.path_join(f)
-		elif f.ends_with("_pos.png") and pos_path.is_empty():
-			pos_path = bake_dir.path_join(f)
+			break
 	if json_path.is_empty():
 		push_error("VATPlayer: no *-remap_info.json sidecar in %s — " % bake_dir +
 			"is this an OpenVAT bake? Try rerunning bake_and_stage.sh.")
 		return false
-	if pos_path.is_empty():
-		push_error("VATPlayer: no *_pos.png in %s" % bake_dir)
+
+	# Derive the basename from the picked sidecar so the PNG we load is
+	# guaranteed to come from the same bake. `<basename>-remap_info.json`
+	# → strip the suffix to get `<basename>`, then look for the matching
+	# `<basename>_pos.png`.
+	var json_file := json_path.get_file()
+	var basename := json_file.substr(0, json_file.length() - "-remap_info.json".length())
+	var pos_path := bake_dir.path_join(basename + "_pos.png")
+	if not FileAccess.file_exists(pos_path):
+		push_error("VATPlayer: sidecar %s points at basename '%s' but %s is missing" %
+			[json_file, basename, pos_path])
 		return false
 
 	var sidecar_text: String = FileAccess.get_file_as_string(json_path)
@@ -238,7 +251,12 @@ func _load_data_texture(path: String) -> Texture2D:
 func _process(delta: float) -> void:
 	if _surface_materials.is_empty() or _frame_count <= 0:
 		return
-	var loop_count: int = (loop_frames if loop_frames > 0 else _frame_count)
+	# Clamp `loop_frames` to `_frame_count`. A user-set value greater
+	# than the bake's frame count would push `_current_frame` past the
+	# position half of the packed texture and into the normal half,
+	# rendering garbage rows as positions.
+	var loop_count: int = (
+		mini(loop_frames, _frame_count) if loop_frames > 0 else _frame_count)
 	_current_frame = fposmod(_current_frame + delta * fps_override, float(loop_count))
 	for mat in _surface_materials:
 		mat.set_shader_parameter("current_frame", _current_frame)

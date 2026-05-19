@@ -554,8 +554,19 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
                            .arg(result.jsonPath);
         return result;
     }
-    jf.write(sidecar.toUtf8());
+    const QByteArray sidecarBytes = sidecar.toUtf8();
+    const qint64 written = jf.write(sidecarBytes);
     jf.close();
+    if (written != sidecarBytes.size()) {
+        // Short write — disk full, network volume hiccup, etc. Surface
+        // it instead of leaving a truncated sidecar behind that the
+        // consumer would read partially and misdecode against.
+        QFile::remove(result.jsonPath);
+        result.error = QStringLiteral(
+            "short write to OpenVAT sidecar %1 (wrote %2 of %3 bytes)")
+                .arg(result.jsonPath).arg(written).arg(sidecarBytes.size());
+        return result;
+    }
 
     result.ok = true;
     return result;
