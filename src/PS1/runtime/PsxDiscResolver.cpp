@@ -126,15 +126,24 @@ PsxDiscResolveResult PsxDiscResolver::resolve(const QString &userPath)
             if (!cueFile.open(QIODevice::ReadOnly)) {
                 return fail(QStringLiteral("Could not read CUE sheet: %1").arg(absolute));
             }
-            const QByteArray firstLine = cueFile.readLine().trimmed();
-            if (!firstLine.startsWith("FILE \"")) {
+            QByteArray fileLine;
+            while (!cueFile.atEnd()) {
+                const QByteArray line = cueFile.readLine().trimmed();
+                if (line.isEmpty() || line.startsWith("REM"))
+                    continue;
+                if (line.startsWith("FILE \"")) {
+                    fileLine = line;
+                    break;
+                }
+            }
+            if (fileLine.isEmpty()) {
                 return fail(QStringLiteral("Invalid CUE sheet (missing FILE line): %1").arg(absolute));
             }
-            const int closeQuote = firstLine.indexOf('"', 6);
+            const int closeQuote = fileLine.indexOf('"', 6);
             if (closeQuote <= 6) {
                 return fail(QStringLiteral("Invalid CUE sheet (malformed FILE line): %1").arg(absolute));
             }
-            QString binName = QString::fromUtf8(firstLine.mid(6, closeQuote - 6));
+            QString binName = QString::fromUtf8(fileLine.mid(6, closeQuote - 6));
             binName.replace(QStringLiteral("\\\""), QStringLiteral("\""));
             const QString binPath = QFileInfo(absolute).dir().filePath(binName);
             if (!QFileInfo::exists(binPath)) {

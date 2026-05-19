@@ -20,7 +20,18 @@ std::vector<std::unique_ptr<QPluginLoader>> &hostPluginLoaders()
 
 QString bundleOrAppDir()
 {
+#if defined(Q_OS_MACOS)
+    const QString appDir = QCoreApplication::applicationDirPath();
+    QDir dir(appDir);
+    if (dir.dirName() == QLatin1String("MacOS")) {
+        dir.cdUp();
+        if (dir.dirName() == QLatin1String("Contents"))
+            dir.cdUp();
+    }
+    return dir.absolutePath();
+#else
     return QCoreApplication::applicationDirPath();
+#endif
 }
 
 QStringList hostPluginBaseNames()
@@ -44,8 +55,7 @@ QStringList fileNamesForHost(const QString &baseName)
 QStringList EmuCoreLoader::coreSearchPaths()
 {
     QStringList paths;
-    const QString base = bundleOrAppDir();
-    paths << QDir(base).filePath(QStringLiteral("PS1Cores"));
+    paths << QDir(bundleOrAppDir()).filePath(QStringLiteral("PS1Cores"));
     paths << QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("PS1Cores"));
     paths.removeDuplicates();
     return paths;

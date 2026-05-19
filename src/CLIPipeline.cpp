@@ -24,6 +24,7 @@
 #include "VATBaker.h"
 #include "MorphAnimationManager.h"
 #include "NodeAnimationManager.h"
+#include "PoseLibrary.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -554,6 +555,12 @@ void CLIPipeline::printUsage()
         "                                    Export a single posed frame as static mesh\n"
         "  pose <file> --animation <name> --count N -o <pattern>\n"
         "                                    Export N evenly spaced frames (use %02d in pattern)\n"
+        "  pose <library.poselib> --library list [--json]\n"
+        "                                    List pose names in a `.poselib` sidecar JSON file.\n"
+        "                                    No mesh load needed; reads the file directly.\n"
+        "  pose <mesh> --library apply --lib <lib.poselib> --apply <name> -o <out>\n"
+        "                                    Load mesh, apply named pose from sidecar to the\n"
+        "                                    skeleton, export the posed mesh. Requires a skinned mesh.\n"
         "  scan [path] [options]           Scan directory for 3D asset issues (default path: .)\n"
         "  material <file> --preset <name> [-o <output>]\n"
         "                                  Apply a built-in material preset to every sub-entity\n"
@@ -2399,9 +2406,22 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
 
 int CLIPipeline::cmdPose(int argc, char* argv[])
 {
-    // Parse: pose <file> --animation <name> --time <t> -o <output>
-    //        pose <file> --animation <name> --count N -o <pattern>
+    // Two modes:
+    //   pose <file> --animation <name> --time <t> -o <output>
+    //   pose <file> --animation <name> --count N -o <pattern>
+    //     (skeleton-anim frame export — pre-existing path)
+    //
+    //   pose <library.poselib> --library list [--json]
+    //     (list pose names in a `.poselib` sidecar JSON, no mesh
+    //     load needed — added with D-Project. Future modes will
+    //     extend this with --library apply <name> -o out.fbx
+    //     once the round-trip exporter lands.)
     QString filePath, outputPath, animName;
+    QString libraryOp;          // "list" or "apply"
+    QString libraryApplyName;   // pose name (apply only)
+    QString libraryPath;        // sidecar path (apply only; in list mode the positional is the lib)
+    bool libraryMode = false;
+    bool jsonOutput = false;
     float time = -1.0f;
     int count = 0;
 
@@ -2420,6 +2440,20 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             count = QString(argv[++i]).toInt();
             continue;
         }
+        if (arg == "--library" && i + 1 < argc) {
+            libraryMode = true;
+            libraryOp = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--apply" && i + 1 < argc) {
+            libraryApplyName = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--lib" && i + 1 < argc) {
+            libraryPath = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--json") { jsonOutput = true; continue; }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString(argv[++i]);
             continue;
@@ -2428,6 +2462,187 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             filePath = arg;
             continue;
         }
+    }
+
+    if (libraryMode && libraryOp == QStringLiteral("apply")) {
+        // Apply mode: positional is the MESH file, --lib is the
+        // sidecar, --apply names the pose, -o is the output mesh.
+        //   qtmesh pose <mesh> --library apply --lib <lib.poselib>
+        //                      --apply <name> -o <out>
+        if (filePath.isEmpty()) {
+            err() << "Error: No input mesh specified." << Qt::endl;
+            err() << "Usage: qtmesh pose <mesh> --library apply --lib <lib.poselib> --apply <name> -o <out>" << Qt::endl;
+            return 2;
+        }
+        if (libraryPath.isEmpty()) {
+            err() << "Error: --lib <library.poselib> is required for --library apply." << Qt::endl;
+            return 2;
+        }
+        if (libraryApplyName.isEmpty()) {
+            err() << "Error: --apply <pose-name> is required for --library apply." << Qt::endl;
+            return 2;
+        }
+        if (outputPath.isEmpty()) {
+            err() << "Error: -o <output> is required for --library apply." << Qt::endl;
+            return 2;
+        }
+        QFileInfo meshFi(filePath);
+        QFileInfo libFi(libraryPath);
+        if (!meshFi.exists()) {
+            err() << "Error: Mesh file not found: " << filePath << Qt::endl;
+            return 1;
+        }
+        if (!libFi.exists()) {
+            err() << "Error: Library file not found: " << libraryPath << Qt::endl;
+            return 1;
+        }
+
+        if (!initOgreHeadless()) return 1;
+
+        SentryReporter::addBreadcrumb("cli.pose",
+            QString("Library apply '%1' on .%2").arg(libraryApplyName).arg(meshFi.suffix()));
+        SentryReporter::addBreadcrumb("file.import",
+            QString("Importing %1 for pose apply").arg(meshFi.absoluteFilePath()));
+
+        MeshImporterExporter::importer({meshFi.absoluteFilePath()});
+        auto& movables = Manager::getSingleton()->getEntities();
+        Ogre::Entity* entity = nullptr;
+        Ogre::Entity* firstAnyEntity = nullptr;
+        // CodeRabbit Major on PR #606: prefer the first SKINNED
+        // entity. Multi-entity imports often include an unskinned
+        // helper (collision proxy, prop) first; if we picked it,
+        // apply would fail with "no skeleton" even though a valid
+        // rigged mesh loaded later in the scene. Track both so we
+        // can give a precise error: "no entity at all" vs "found
+        // entities but none skinned".
+        for (auto* obj : movables) {
+            if (!obj || obj->getMovableType() != "Entity") continue;
+            auto* e = static_cast<Ogre::Entity*>(obj);
+            if (!firstAnyEntity) firstAnyEntity = e;
+            if (e->hasSkeleton()) {
+                entity = e;
+                break;
+            }
+        }
+        if (!firstAnyEntity) {
+            err() << "Error: Failed to load mesh: " << filePath << Qt::endl;
+            return 1;
+        }
+        if (!entity) {
+            err() << "Error: Loaded mesh has no skinned entity — cannot apply a pose." << Qt::endl;
+            return 1;
+        }
+
+        auto* lib = PoseLibrary::instance();
+        if (!lib->loadPoseLibrary(entity, libFi.absoluteFilePath())) {
+            err() << "Error: Failed to load pose library: " << libraryPath << Qt::endl;
+            return 1;
+        }
+        if (!lib->hasPose(entity, libraryApplyName)) {
+            err() << "Error: Pose '" << libraryApplyName
+                  << "' not found in library." << Qt::endl;
+            err() << "Available poses:" << Qt::endl;
+            for (const QString& n : lib->listPoses(entity))
+                err() << "  " << n << Qt::endl;
+            return 1;
+        }
+        if (!lib->applyPose(entity, libraryApplyName)) {
+            err() << "Error: Failed to apply pose '" << libraryApplyName << "'." << Qt::endl;
+            return 1;
+        }
+
+        // Export with skeleton in posed state. exportCurrentPose
+        // is the same path the --animation/--time mode uses; for
+        // FBX/glTF it preserves the skeleton, for STL/OBJ it
+        // bakes the posed mesh down to triangles.
+        QFileInfo outFi(outputPath);
+        SentryReporter::addBreadcrumb("file.export",
+            QString("Exporting posed mesh to %1").arg(outFi.absoluteFilePath()));
+        const int result = MeshImporterExporter::exportCurrentPose(entity, outFi.absoluteFilePath());
+        if (result != 0) {
+            err() << "Error: Export failed: " << outputPath << Qt::endl;
+            return 1;
+        }
+        cliWrite(QStringLiteral("Wrote %1\n").arg(outFi.absoluteFilePath()));
+        return 0;
+    }
+
+    if (libraryMode) {
+        // Library mode: filePath is the .poselib sidecar, not a
+        // mesh. The PoseLibrary singleton needs an entity to key
+        // poses against; we use a temporary "CLI pose-list anchor"
+        // entity for this — no skeleton, just an anchor.
+        if (libraryOp != QStringLiteral("list")) {
+            err() << "Error: --library supports 'list' or 'apply'." << Qt::endl;
+            return 2;
+        }
+        if (filePath.isEmpty()) {
+            err() << "Error: No input file specified." << Qt::endl;
+            err() << "Usage: qtmesh pose <library.poselib> --library list [--json]" << Qt::endl;
+            return 2;
+        }
+        QFileInfo libFi(filePath);
+        if (!libFi.exists()) {
+            err() << "Error: File not found: " << filePath << Qt::endl;
+            return 1;
+        }
+        // Read JSON directly — we don't need an Ogre scene at all.
+        QFile f(filePath);
+        if (!f.open(QIODevice::ReadOnly)) {
+            err() << "Error: Cannot open " << filePath << Qt::endl;
+            return 1;
+        }
+        const QByteArray bytes = f.readAll();
+        f.close();
+        QJsonParseError pe{};
+        const QJsonDocument doc = QJsonDocument::fromJson(bytes, &pe);
+        if (pe.error != QJsonParseError::NoError || !doc.isObject()) {
+            err() << "Error: malformed JSON in " << filePath << Qt::endl;
+            return 1;
+        }
+        const QJsonObject root = doc.object();
+        if (root.value("schema").toString() != QStringLiteral("qtmesheditor.poselib.v1")) {
+            err() << "Error: schema mismatch in " << filePath << Qt::endl;
+            return 1;
+        }
+        // Validate `poses` is actually an array — a schema-matching
+        // file with `poses` missing or non-array would otherwise
+        // silently report "No poses in library" with exit 0,
+        // masking corruption (Codex P2 on PR #604, same bug class
+        // as the loadPoseLibrary fix in #603).
+        const QJsonValue posesV = root.value("poses");
+        if (!posesV.isArray()) {
+            err() << "Error: malformed 'poses' field in " << filePath << Qt::endl;
+            return 1;
+        }
+        const QJsonArray poses = posesV.toArray();
+        QStringList names;
+        for (const QJsonValue& v : poses) {
+            const QString n = v.toObject().value("name").toString();
+            if (!n.isEmpty()) names << n;
+        }
+
+        SentryReporter::addBreadcrumb("cli.pose",
+            QString("Library list .%1 (%2 poses)").arg(libFi.suffix()).arg(names.size()));
+
+        if (jsonOutput) {
+            QJsonArray arr;
+            for (const QString& n : names) arr.append(n);
+            QJsonObject out;
+            out["file"]  = filePath;
+            out["count"] = static_cast<int>(names.size());
+            out["poses"] = arr;
+            cliWrite(QString::fromUtf8(QJsonDocument(out).toJson(QJsonDocument::Indented)));
+        } else {
+            if (names.isEmpty()) {
+                cliWrite(QStringLiteral("No poses in library.\n"));
+            } else {
+                cliWrite(QStringLiteral("Poses (%1):\n").arg(names.size()));
+                for (const QString& n : names)
+                    cliWrite(QStringLiteral("  %1\n").arg(n));
+            }
+        }
+        return 0;
     }
 
     if (filePath.isEmpty()) {

@@ -79,6 +79,15 @@ See epic #412 for phased issues (#413–#431).
 - Stub core fills CLUT + 4/8/15 bpp test regions each frame via `stubFillVramPattern`.
 - Libretro path mirrors **live VRAM** from the core memory map and scans **main RAM** for GP0 packets (`PsxGpuRamScanner`) when capture is armed.
 
+## Phase 4 status (#422)
+
+- `CaptureSnapshot` copies worker `CaptureBuffer` to the main thread for reconstruction.
+- `GteInverse` approximates GTE screen→model un-projection; PS1 Y-down → editor Y-up.
+- `MeshReconstructor` groups primitives by `matrixId` + texture key, triangulates quads, emits vertex color + UV.
+- `PS1RipMeshBuilder` creates Ogre mesh/submeshes and attaches `PS1Capture_<id>` to the live scene via `Manager`.
+- `captureFrame` builds mesh automatically; session toolbar adds **Arm Capture** / **Capture Frame**.
+- Sentry breadcrumb `ps1.rip.mesh.built` with vertex/triangle counts.
+
 ## Open questions
 
 - libretro core packaging for Windows/macOS CI (Linux: apt `libretro-beetle-psx` + install script).

@@ -247,6 +247,26 @@ private:
     /// Pose-lib D-MCP: drop a saved pose by name. Args: `name`.
     QJsonObject toolDeletePose(const QJsonObject &args);
 
+    /// Pose-lib D-MCP: mirror a saved pose across the YZ plane
+    /// using the _l/_r/.L/.R/Left/Right bone-name heuristic.
+    /// Args: `src` (existing pose), `dst` (output pose name).
+    QJsonObject toolMirrorPose(const QJsonObject &args);
+
+    /// Pose-lib D-Project: write the first-selected entity's pose
+    /// library to a `.poselib` sidecar JSON file. Args: `path`.
+    QJsonObject toolSavePoseLibrary(const QJsonObject &args);
+
+    /// Pose-lib D-Project: load a `.poselib` sidecar into the
+    /// first-selected entity's library, replacing whatever was
+    /// in memory. Args: `path`.
+    QJsonObject toolLoadPoseLibrary(const QJsonObject &args);
+
+    /// Pose-lib D5: apply a saved pose only to a subset of bones.
+    /// Args: `name` (pose), `bones` (JSON array of bone-name
+    /// strings). Use case: facial expression without disturbing
+    /// the body pose.
+    QJsonObject toolApplyPoseMasked(const QJsonObject &args);
+
     // Animation
     struct NodeAnimation {
         Ogre::SceneNode* node;

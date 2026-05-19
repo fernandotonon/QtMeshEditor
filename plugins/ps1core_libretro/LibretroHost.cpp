@@ -1,5 +1,7 @@
 #include "LibretroHost.h"
 
+#include "libretro/libretro_api.h"
+
 #include <QObject>
 
 template<typename T>
@@ -60,6 +62,19 @@ bool LibretroHost::load(const QString &corePath, QString *errorOut)
         !resolve(m_library, symbols[15], retro_get_memory_size, errorOut)) {
         unload();
         return false;
+    }
+
+    if (retro_api_version) {
+        const unsigned apiVersion = retro_api_version();
+        if (apiVersion != RETRO_API_VERSION) {
+            if (errorOut) {
+                *errorOut = QObject::tr("Libretro core API version %1 does not match host (%2)")
+                                .arg(apiVersion)
+                                .arg(RETRO_API_VERSION);
+            }
+            unload();
+            return false;
+        }
     }
 
     return true;

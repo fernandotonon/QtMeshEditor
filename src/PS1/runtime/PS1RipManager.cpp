@@ -1,6 +1,8 @@
 #include "PS1RipManager.h"
+#include "CaptureSnapshot.h"
+#include "MeshReconstructor.h"
+#include "PS1RipMeshBuilder.h"
 #include "PS1RipWorker.h"
-#include "PsxBiosValidator.h"
 #include "PsxDiscResolver.h"
 #include "SentryReporter.h"
 
@@ -42,6 +44,7 @@ PS1RipManager::~PS1RipManager()
 void PS1RipManager::initializeWorkerThread()
 {
     qRegisterMetaType<QVector<uint16_t>>("QVector<uint16_t>");
+    qRegisterMetaType<CaptureSnapshot>("CaptureSnapshot");
 
     m_workerThread = new QThread(this);
     m_worker = new PS1RipWorker();
@@ -59,19 +62,42 @@ void PS1RipManager::initializeWorkerThread()
         m_sessionActive = false;
         m_paused = false;
         m_captureArmed = false;
+        m_activeCoreId.clear();
         syncWorkerCaptureArmed();
         emit sessionStopped();
     });
     connect(m_worker, &PS1RipWorker::emulationError, this, [this](const QString &msg) {
         m_startPending = false;
+        m_sessionActive = false;
+        m_activeCoreId.clear();
         reportError(msg);
     });
     connect(m_worker, &PS1RipWorker::framePresented, this, &PS1RipManager::framePresented);
-    connect(m_worker, &PS1RipWorker::frameCaptureReady, this, [this](const QString &captureId, int) {
-        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-                                      QStringLiteral("ps1_rip_frame:%1").arg(captureId));
-        emit frameCaptured(captureId);
-    });
+    connect(m_worker, &PS1RipWorker::frameCaptureReady, this,
+            [this](const QString &captureId, const CaptureSnapshot &snapshot, int) {
+                SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                              QStringLiteral("ps1_rip_frame:%1").arg(captureId));
+
+                emit frameCaptured(captureId);
+
+                const ReconstructedMesh mesh = MeshReconstructor::reconstruct(snapshot);
+                if (mesh.isEmpty()) {
+                    reportError(tr("Capture produced no reconstructable geometry"));
+                    return;
+                }
+
+                PS1RipMeshBuilder::BuildResult built;
+                QString buildErr;
+                if (!PS1RipMeshBuilder::attachToScene(mesh, captureId, &built, &buildErr)) {
+                    reportError(buildErr);
+                    return;
+                }
+
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("ps1.rip.mesh.built"),
+                    QStringLiteral("%1 verts %2 tris").arg(built.vertexCount).arg(built.triangleCount));
+                emit meshBuilt(captureId, built.vertexCount, built.triangleCount);
+            });
     connect(m_worker, &PS1RipWorker::vramFrameUpdated, this,
             [this](const QVector<uint16_t> &cells, const QImage &preview) {
                 emit vramFrameUpdated(cells, preview);
@@ -151,12 +177,6 @@ bool PS1RipManager::loadBios(const QString &path)
     if (m_sessionActive)
         stop();
 
-    const PsxBiosValidator::Result biosCheck = PsxBiosValidator::validateFile(info.absoluteFilePath());
-    if (!biosCheck.ok) {
-        reportError(biosCheck.detail);
-        return false;
-    }
-
     m_biosPath = info.absoluteFilePath();
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.bios.load"), m_biosPath);
     syncWorkerSession();
@@ -181,7 +201,7 @@ bool PS1RipManager::loadIso(const QString &path)
         return false;
     }
 
-    m_isoPath = absolute;
+    m_isoPath = disc.loadPath;
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.iso.load"), m_isoPath);
     syncWorkerSession();
     return true;

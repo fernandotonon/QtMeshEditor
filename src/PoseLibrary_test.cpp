@@ -8,6 +8,8 @@
 #include "TestHelpers.h"
 #include "commands/PoseLibraryCommands.h"
 
+#include <QTemporaryDir>
+
 #include <OgreBone.h>
 #include <OgreEntity.h>
 #include <OgreSkeleton.h>
@@ -210,6 +212,240 @@ TEST_F(PoseLibrarySceneTest, ForgetEntityDropsEverythingForThatEntity) {
     EXPECT_TRUE(lib->listPoses(entity).isEmpty());
     // Idempotent — forgetting again is a no-op false.
     EXPECT_FALSE(lib->forgetEntity(entity));
+}
+
+// ─── Slice D-Project — .poselib sidecar persistence ─────────────────
+
+TEST_F(PoseLibrarySceneTest, SaveAndLoadLibraryRoundTripsViaSidecar) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString path = tmp.path() + "/test.poselib";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_Sidecar");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(3, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Pose1")));
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 5, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Pose2")));
+
+    EXPECT_TRUE(lib->savePoseLibrary(entity, path));
+
+    // Wipe the in-memory library and reload from disk.
+    lib->forgetEntity(entity);
+    EXPECT_TRUE(lib->listPoses(entity).isEmpty());
+
+    EXPECT_TRUE(lib->loadPoseLibrary(entity, path));
+    QStringList names = lib->listPoses(entity);
+    ASSERT_EQ(names.size(), 2);
+    EXPECT_EQ(names[0], QStringLiteral("Pose1"));
+    EXPECT_EQ(names[1], QStringLiteral("Pose2"));
+
+    // Apply the first pose to confirm TRS round-tripped.
+    skel->getBone(0)->setPosition(Ogre::Vector3::ZERO);
+    lib->applyPose(entity, QStringLiteral("Pose1"));
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().x, 3.0f);
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().y, 0.0f);
+}
+
+TEST_F(PoseLibrarySceneTest, SaveLibraryRejectsEmptyLibraryOrInvalidPath) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_SidecarReject");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    QTemporaryDir tmp;
+    const QString validPath = tmp.path() + "/empty.poselib";
+
+    // No poses saved yet → false (don't write an empty library file).
+    EXPECT_FALSE(lib->savePoseLibrary(entity, validPath));
+
+    // Empty path → false.
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("X")));
+    EXPECT_FALSE(lib->savePoseLibrary(entity, QString()));
+
+    // Null entity → false.
+    EXPECT_FALSE(lib->savePoseLibrary(nullptr, validPath));
+}
+
+TEST_F(PoseLibrarySceneTest, LoadLibraryRejectsMissingFileAndBadSchema) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_SidecarLoadReject");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    QTemporaryDir tmp;
+    // Missing file
+    EXPECT_FALSE(lib->loadPoseLibrary(entity, tmp.path() + "/nope.poselib"));
+
+    // Bad JSON
+    {
+        const QString p = tmp.path() + "/bad.poselib";
+        QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("{ this is not JSON");
+        f.close();
+        EXPECT_FALSE(lib->loadPoseLibrary(entity, p));
+    }
+
+    // Valid JSON, wrong schema string
+    {
+        const QString p = tmp.path() + "/wrongschema.poselib";
+        QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("{\"schema\": \"wrong\", \"poses\": []}");
+        f.close();
+        EXPECT_FALSE(lib->loadPoseLibrary(entity, p));
+    }
+}
+
+// Codex P1 on PR #602: a schema-matching file with `poses` missing
+// or non-array must NOT wipe the in-memory library. Earlier draft
+// did the wipe before validating the array, silently dropping the
+// user's data on a malformed file.
+TEST_F(PoseLibrarySceneTest, LoadLibraryWithMissingPosesArrayPreservesInMemoryLibrary) {
+    QTemporaryDir tmp;
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_PreserveOnBad");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Keep")));
+    EXPECT_EQ(lib->listPoses(entity).size(), 1);
+
+    // Schema matches, but `poses` is a string, not an array.
+    const QString p = tmp.path() + "/badposes.poselib";
+    QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write("{\"schema\": \"qtmesheditor.poselib.v1\", \"poses\": \"oops\"}");
+    f.close();
+
+    EXPECT_FALSE(lib->loadPoseLibrary(entity, p));
+    // In-memory library must still contain "Keep".
+    EXPECT_EQ(lib->listPoses(entity).size(), 1);
+    EXPECT_TRUE(lib->hasPose(entity, QStringLiteral("Keep")));
+}
+
+// Codex P2 on PR #602: duplicate pose names in the sidecar must not
+// leave `order` with phantom entries that survive a `deletePose`
+// (causing listPoses to show a name that hasPose disagrees about).
+TEST_F(PoseLibrarySceneTest, LoadLibraryDeduplicatesDuplicateNamesInFile) {
+    QTemporaryDir tmp;
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_DupNames");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    // Hand-write a file with two entries under the same name.
+    const QString p = tmp.path() + "/dup.poselib";
+    QFile f(p); ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write(R"({
+      "schema": "qtmesheditor.poselib.v1",
+      "poses": [
+        {"name": "A", "bones": {}},
+        {"name": "A", "bones": {}},
+        {"name": "B", "bones": {}}
+      ]
+    })");
+    f.close();
+
+    EXPECT_TRUE(lib->loadPoseLibrary(entity, p));
+    const QStringList names = lib->listPoses(entity);
+    // Should be ["A", "B"] not ["A", "A", "B"].
+    ASSERT_EQ(names.size(), 2);
+    EXPECT_EQ(names[0], QStringLiteral("A"));
+    EXPECT_EQ(names[1], QStringLiteral("B"));
+
+    // After deleting "A", listPoses must not contain a phantom "A".
+    EXPECT_TRUE(lib->deletePose(entity, QStringLiteral("A")));
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("A")));
+    const QStringList afterDelete = lib->listPoses(entity);
+    ASSERT_EQ(afterDelete.size(), 1);
+    EXPECT_EQ(afterDelete[0], QStringLiteral("B"));
+}
+
+TEST_F(PoseLibrarySceneTest, LoadLibraryWipesExistingPosesFirst) {
+    QTemporaryDir tmp;
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_SidecarWipe");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    // Build a sidecar with one pose "FromFile".
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("FromFile")));
+    const QString path = tmp.path() + "/one.poselib";
+    ASSERT_TRUE(lib->savePoseLibrary(entity, path));
+
+    // Add a different in-memory pose that's NOT in the file.
+    lib->forgetEntity(entity);
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("InMemoryOnly")));
+    EXPECT_EQ(lib->listPoses(entity).size(), 1);
+
+    // Load wipes "InMemoryOnly" and replaces with file's "FromFile".
+    EXPECT_TRUE(lib->loadPoseLibrary(entity, path));
+    QStringList names = lib->listPoses(entity);
+    ASSERT_EQ(names.size(), 1);
+    EXPECT_EQ(names[0], QStringLiteral("FromFile"));
+    EXPECT_FALSE(lib->hasPose(entity, QStringLiteral("InMemoryOnly")));
+}
+
+// ─── Slice D5 — apply-with-mask ──────────────────────────────────────
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseMaskedTouchesOnlyListedBones) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_Masked");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    // Need at least 2 bones to verify the mask actually filters.
+    ASSERT_GE(skel->getNumBones(), 2);
+
+    // Save a pose where every bone is at +X=7.
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+        skel->getBone(i)->setPosition(Ogre::Vector3(7, 0, 0));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("AllSeven")));
+
+    // Move every bone back to origin so apply has something to do.
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+        skel->getBone(i)->setPosition(Ogre::Vector3::ZERO);
+
+    // Mask: only bone[0]. Apply should touch bone[0] only.
+    QSet<QString> mask;
+    mask.insert(QString::fromStdString(skel->getBone(0)->getName()));
+    EXPECT_TRUE(lib->applyPoseMasked(entity, QStringLiteral("AllSeven"), mask));
+
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().x, 7.0f);
+    // Bone 1 wasn't in the mask — must still be at origin.
+    EXPECT_FLOAT_EQ(skel->getBone(1)->getPosition().x, 0.0f);
+}
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseMaskedRejectsUnknownPoseAndMissingEntity) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_MaskedReject");
+    ASSERT_NE(entity, nullptr);
+    auto* lib = PoseLibrary::instance();
+
+    QSet<QString> empty;
+    // Unknown pose → false (even with empty mask).
+    EXPECT_FALSE(lib->applyPoseMasked(entity, QStringLiteral("NoSuch"), empty));
+    // Null entity → false.
+    EXPECT_FALSE(lib->applyPoseMasked(nullptr, QStringLiteral("Any"), empty));
+    // Empty pose name → false.
+    EXPECT_FALSE(lib->applyPoseMasked(entity, QString(), empty));
+}
+
+TEST_F(PoseLibrarySceneTest, ApplyPoseMaskedWithEmptyMaskAppliesNothing) {
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_MaskedEmpty");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    // Save a pose with bone[0] at +Z=4.
+    skel->getBone(0)->setPosition(Ogre::Vector3(0, 0, 4));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("Reference")));
+
+    // Move bone back to origin.
+    skel->getBone(0)->setPosition(Ogre::Vector3::ZERO);
+
+    // Empty mask = nothing to apply. Returns true (pose found
+    // successfully) but bone stays at origin — empty mask is the
+    // documented "no bones" interpretation, not "all bones".
+    QSet<QString> empty;
+    EXPECT_TRUE(lib->applyPoseMasked(entity, QStringLiteral("Reference"), empty));
+    EXPECT_FLOAT_EQ(skel->getBone(0)->getPosition().z, 0.0f);
 }
 
 // ─── Slice D4 — bone name flip + mirror pose ─────────────────────────

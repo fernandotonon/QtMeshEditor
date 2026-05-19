@@ -1,10 +1,13 @@
 #include "PS1RipWorker.h"
 #include "CaptureBuffer.h"
+#include "CaptureSnapshot.h"
+#include "CaptureSnapshot.h"
 #include "EmuCore.h"
 #include "EmuCoreLoader.h"
 #include "EmuFramebuffer.h"
 #include "GpuCommandParser.h"
 #include "RipperHooks.h"
+#include "SentryReporter.h"
 #include "VramSnapshot.h"
 
 #include <QDateTime>
@@ -99,7 +102,7 @@ void PS1RipWorker::startEmulation()
     QString bootErr;
     if (!m_core->boot(&bootErr)) {
         m_core.reset();
-        emit emulationError(bootErr);
+        emit emulationError(bootErr.isEmpty() ? tr("Failed to boot emulator core") : bootErr);
         return;
     }
 
@@ -213,7 +216,9 @@ void PS1RipWorker::finalizeFrameCapture()
     }
     file.close();
 
-    emit frameCaptureReady(captureId, prims.size());
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture"),
+                                QStringLiteral("%1 prims:%2").arg(captureId).arg(prims.size()));
+    emit frameCaptureReady(captureId, CaptureSnapshot::fromBuffer(*m_captureBuffer), prims.size());
 }
 
 void PS1RipWorker::dumpVram()

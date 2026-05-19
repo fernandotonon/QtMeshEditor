@@ -44,13 +44,32 @@ QString envCorePath()
 void prependCoreDirToLibraryPath(const QString &corePath)
 {
     const QString coreDir = QFileInfo(corePath).absolutePath();
+    const QByteArray dirBytes = QFile::encodeName(coreDir);
+#if defined(Q_OS_LINUX)
     const QByteArray existing = qgetenv("LD_LIBRARY_PATH");
-    QByteArray merged = QFile::encodeName(coreDir);
+    QByteArray merged = dirBytes;
     if (!existing.isEmpty()) {
         merged += ':';
         merged += existing;
     }
     qputenv("LD_LIBRARY_PATH", merged);
+#elif defined(Q_OS_MACOS)
+    const QByteArray existing = qgetenv("DYLD_LIBRARY_PATH");
+    QByteArray merged = dirBytes;
+    if (!existing.isEmpty()) {
+        merged += ':';
+        merged += existing;
+    }
+    qputenv("DYLD_LIBRARY_PATH", merged);
+#elif defined(Q_OS_WIN)
+    const QByteArray existing = qgetenv("PATH");
+    QByteArray merged = dirBytes;
+    if (!existing.isEmpty()) {
+        merged += ';';
+        merged += existing;
+    }
+    qputenv("PATH", merged);
+#endif
 }
 
 size_t retroAudioSampleBatch(const int16_t *data, size_t frames)
@@ -178,8 +197,10 @@ bool LibretroEmuCore::loadBios(const QString &biosPath)
         return false;
 
     const PsxBiosValidator::Result check = PsxBiosValidator::validateFile(info.absoluteFilePath());
-    if (!check.ok)
+    if (!check.ok) {
+        m_lastError = check.detail;
         return false;
+    }
 
     m_biosPath = info.absoluteFilePath();
     m_biosLabel = check.label;
@@ -396,6 +417,11 @@ void LibretroEmuCore::presentVideo(const void *data, unsigned width, unsigned he
     if (!data || width == 0 || height == 0)
         return;
 
+    const size_t bytesPerPixel =
+        (m_pixelFormat == RETRO_PIXEL_FORMAT_XRGB8888) ? 4u : 2u;
+    if (pitch < static_cast<size_t>(width) * bytesPerPixel)
+        return;
+
     EmuFramebuffer &buf = m_buffers[static_cast<size_t>(m_writeIndex)];
     buf.width = static_cast<int>(width);
     buf.height = static_cast<int>(height);
@@ -501,7 +527,7 @@ bool LibretroEmuCore::environmentCallback(unsigned cmd, void *data)
     }
     case RETRO_ENVIRONMENT_GET_MEMORY_MAPS: {
         auto *map = static_cast<retro_memory_map *>(data);
-        if (!map)
+        if (!map || !map->descriptors)
             return false;
         for (unsigned i = 0; i < map->num_descriptors; ++i) {
             const retro_memory_descriptor &d = map->descriptors[i];

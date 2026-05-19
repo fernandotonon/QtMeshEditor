@@ -608,7 +608,11 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("list_poses"), &MCPServer::toolListPoses},
         {QStringLiteral("save_pose"), &MCPServer::toolSavePose},
         {QStringLiteral("apply_pose"), &MCPServer::toolApplyPose},
-        {QStringLiteral("delete_pose"), &MCPServer::toolDeletePose}
+        {QStringLiteral("delete_pose"), &MCPServer::toolDeletePose},
+        {QStringLiteral("mirror_pose"), &MCPServer::toolMirrorPose},
+        {QStringLiteral("save_pose_library"), &MCPServer::toolSavePoseLibrary},
+        {QStringLiteral("load_pose_library"), &MCPServer::toolLoadPoseLibrary},
+        {QStringLiteral("apply_pose_masked"), &MCPServer::toolApplyPoseMasked}
     };
     return handlers;
 }
@@ -4630,6 +4634,113 @@ QJsonObject MCPServer::toolDeletePose(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+QJsonObject MCPServer::toolMirrorPose(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "mirror_pose");
+    const QString src = args.value("src").toString();
+    const QString dst = args.value("dst").toString();
+    if (src.isEmpty())
+        return makeErrorResult("Error: missing required 'src' argument");
+    if (dst.isEmpty())
+        return makeErrorResult("Error: missing required 'dst' argument");
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->mirrorPoseForSelection(src, dst))
+        return makeErrorResult(
+            QString("Error: failed to mirror pose '%1' → '%2' "
+                    "(no selection, no skeleton, or src not found)")
+                .arg(src, dst));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["src"] = src;
+    content["dst"] = dst;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSavePoseLibrary(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "save_pose_library");
+    const QString path = args.value("path").toString();
+    if (path.isEmpty())
+        return makeErrorResult("Error: missing required 'path' argument");
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->savePoseLibraryForSelection(path))
+        return makeErrorResult(
+            QString("Error: failed to save library to '%1' "
+                    "(no selection, empty library, or unwritable path)")
+                .arg(path));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["path"] = path;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolLoadPoseLibrary(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "load_pose_library");
+    const QString path = args.value("path").toString();
+    if (path.isEmpty())
+        return makeErrorResult("Error: missing required 'path' argument");
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->loadPoseLibraryForSelection(path))
+        return makeErrorResult(
+            QString("Error: failed to load library from '%1' "
+                    "(no selection, file missing, or malformed JSON/schema)")
+                .arg(path));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["path"] = path;
+    content["count"] = static_cast<int>(lib->listPosesForSelection().size());
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolApplyPoseMasked(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "apply_pose_masked");
+    const QString name = args.value("name").toString();
+    if (name.isEmpty())
+        return makeErrorResult("Error: missing required 'name' argument");
+    if (!args.contains("bones"))
+        return makeErrorResult("Error: missing required 'bones' argument");
+    const QJsonValue bonesV = args.value("bones");
+    if (!bonesV.isArray())
+        return makeErrorResult("Error: 'bones' must be an array of bone-name strings");
+
+    // Strict-parse: every entry must be a string. A non-string slot
+    // would silently degrade to empty (toString returns "") and the
+    // mask would match unintended bones.
+    QStringList boneNames;
+    const QJsonArray arr = bonesV.toArray();
+    for (int i = 0; i < arr.size(); ++i) {
+        if (!arr[i].isString())
+            return makeErrorResult(
+                QString("Error: 'bones'[%1] must be a string").arg(i));
+        boneNames << arr[i].toString();
+    }
+
+    auto* lib = PoseLibrary::instance();
+    if (!lib->applyPoseMaskedForSelection(name, boneNames))
+        return makeErrorResult(
+            QString("Error: failed to apply pose '%1' masked "
+                    "(no selection, no skeleton, or pose not found)")
+                .arg(name));
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["name"] = name;
+    content["bone_count"] = boneNames.size();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -5877,6 +5988,81 @@ QJsonArray MCPServer::buildToolsList()
             "delete_pose",
             "Drop a saved pose from the first selected entity's library. "
             "Returns error when the pose name isn't found.",
+            props,
+            required
+        );
+    }
+
+    // mirror_pose
+    {
+        QJsonObject props;
+        props["src"] = QJsonObject{{"type", "string"}, {"description", "Existing pose name to mirror (use list_poses to enumerate)."}};
+        props["dst"] = QJsonObject{{"type", "string"}, {"description", "Output pose name. **Overwrites any existing pose at this name**, including poses unrelated to `src` — pick a unique name (or list_poses first) to avoid silent clobber."}};
+        QJsonArray required;
+        required.append("src");
+        required.append("dst");
+        appendTool(
+            "mirror_pose",
+            "Mirror a saved pose across the YZ plane using the bone-name "
+            "heuristic. Recognises `_l`/`_r`, `.L`/`.R`, and `Left*`/`Right*` "
+            "naming. TRS flip: pos.x → -pos.x, rotation (w,x,y,z) → (w,x,-y,-z), "
+            "scale.x → -scale.x. Centre-line bones (Spine, Hips, Head) get "
+            "the X-flipped TRS in place. Writes the result under `dst`.",
+            props,
+            required
+        );
+    }
+
+    // save_pose_library
+    {
+        QJsonObject props;
+        props["path"] = QJsonObject{{"type", "string"}, {"description", "Destination `.poselib` file path. Written atomically via QSaveFile. Side-by-side with the asset is the recommended location."}};
+        QJsonArray required;
+        required.append("path");
+        appendTool(
+            "save_pose_library",
+            "Persist the first selected entity's pose library to a "
+            "`.poselib` sidecar JSON (schema `qtmesheditor.poselib.v1`). "
+            "Returns error when there's no selection, the library is "
+            "empty, or the path is unwritable.",
+            props,
+            required
+        );
+    }
+
+    // load_pose_library
+    {
+        QJsonObject props;
+        props["path"] = QJsonObject{{"type", "string"}, {"description", "Source `.poselib` file path. Schema-validated; malformed files don't disturb in-memory library."}};
+        QJsonArray required;
+        required.append("path");
+        appendTool(
+            "load_pose_library",
+            "Load a `.poselib` sidecar JSON into the first selected "
+            "entity's library, **replacing** the in-memory contents. "
+            "Returns error when there's no selection, the file is "
+            "missing, or the JSON / schema is malformed (in-memory "
+            "library is preserved on parse failure).",
+            props,
+            required
+        );
+    }
+
+    // apply_pose_masked
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Pose name (use list_poses to enumerate)."}};
+        props["bones"] = QJsonObject{{"type", "array"},  {"description", "Bone names to apply. Bones NOT in this list keep their current TRS. Empty list = no-op (returns success but touches no bones)."}};
+        QJsonArray required;
+        required.append("name");
+        required.append("bones");
+        appendTool(
+            "apply_pose_masked",
+            "Apply a saved pose to ONLY the listed bones. Use case: "
+            "snap to a facial expression without disturbing the "
+            "current body pose, or apply an arm gesture without "
+            "re-posing legs. Bones in the list but missing from the "
+            "skeleton (LOD change) are skipped silently.",
             props,
             required
         );

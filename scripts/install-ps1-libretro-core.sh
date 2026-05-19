@@ -42,9 +42,12 @@ fetch_arch_beetle() {
   mkdir -p /tmp/beetle-extract
   if command -v bsdtar >/dev/null 2>&1; then
     bsdtar --zstd -xf "$pkg" -C /tmp/beetle-extract
-  else
+  elif command -v zstd >/dev/null 2>&1; then
     zstd -d "$pkg" -o /tmp/beetle.pkg.tar -f
     tar -xf /tmp/beetle.pkg.tar -C /tmp/beetle-extract
+  else
+    echo "Neither bsdtar nor zstd is available to extract $pkg" >&2
+    return 1
   fi
   install_file /tmp/beetle-extract/usr/lib/libretro/mednafen_psx_libretro.so
   # beetle may need libtrio at runtime on some distros
