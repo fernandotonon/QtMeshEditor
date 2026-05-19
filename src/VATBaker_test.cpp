@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
@@ -249,6 +250,135 @@ TEST_F(VATBakerEndToEndTest, BakesInMemoryAnimatedTriangle) {
     EXPECT_EQ(doc.object()["vertexCount"].toInt(), r.vertexCount);
     EXPECT_EQ(doc.object()["animation"].toString(), QStringLiteral("TestAnim"));
     EXPECT_DOUBLE_EQ(doc.object()["fps"].toDouble(), 10.0);
+}
+
+// Regression — VATBaker used to write bind-pose data into every row
+// of the position texture (every frame identical) because the bake
+// loop didn't bump Ogre's per-frame counters between samples and so
+// `Entity::cacheBoneMatrices` short-circuited after the first call.
+// This test caught it would have caught it: it bakes a real animated
+// entity, opens the PNG, and asserts that adjacent rows are NOT byte-
+// identical. Without the fix `pixelsDiffer` evaluates to false and
+// the test fails loudly.
+TEST_F(VATBakerEndToEndTest, ProducesDistinctRowsAcrossFrames) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_FramesDiffer");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 10.0;       // 1.0 s × 10 fps → 10 frames
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("FramesDiffer");
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << "bake error: " << r.error.toStdString();
+    ASSERT_GE(r.frameCount, 2) << "need at least 2 frames to compare rows";
+
+    QImage png(r.posTexPath);
+    ASSERT_FALSE(png.isNull());
+    ASSERT_EQ(png.height(), r.frameCount);
+    ASSERT_GT(png.width(), 0);
+
+    // Walk every column for every (frame, frame+1) pair. If ANY pair
+    // of adjacent rows differs at ANY column, the animation is being
+    // sampled correctly. If all pairs are byte-identical, the bake
+    // is static and the bug is back.
+    bool foundDifference = false;
+    for (int row = 0; row + 1 < png.height() && !foundDifference; ++row) {
+        for (int col = 0; col < png.width(); ++col) {
+            if (png.pixel(col, row) != png.pixel(col, row + 1)) {
+                foundDifference = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(foundDifference)
+        << "VAT position texture is byte-identical across all frames — "
+        << "bake captured a single pose instead of stepping through "
+        << "the animation. Check that the bake loop bumps the Ogre "
+        << "per-frame counter (Root::_fireFrameRenderingQueued) "
+        << "between setTimePosition + collectPostSkinPositions calls.";
+}
+
+// OpenVAT compatibility — the sidecar must publish a superset of
+// the JustNiko/OpenVAT field names so off-the-shelf shaders for
+// Blender/UE/Unity can consume our bakes without modification.
+//
+// We don't replace our own keys; we add OpenVAT's as aliases.
+TEST_F(VATBakerEndToEndTest, SidecarPublishesOpenVATAliases) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_OpenVAT");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 30.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("OV");
+    opts.encoding = VATBaker::Encoding::RGBA16;  // → Animated.Vat.UnsignedShort
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+
+    QFile jf(r.jsonPath);
+    ASSERT_TRUE(jf.open(QIODevice::ReadOnly));
+    const auto doc = QJsonDocument::fromJson(jf.readAll());
+    ASSERT_TRUE(doc.isObject());
+    const auto root = doc.object();
+
+    // Our canonical keys still present (no regression).
+    EXPECT_EQ(root["frameCount"].toInt(),  r.frameCount);
+    EXPECT_EQ(root["vertexCount"].toInt(), r.vertexCount);
+    EXPECT_DOUBLE_EQ(root["fps"].toDouble(), 30.0);
+    EXPECT_EQ(root["animation"].toString(), QStringLiteral("TestAnim"));
+    ASSERT_TRUE(root["bounds"].isObject());
+    ASSERT_TRUE(root["bounds"].toObject()["min"].isObject());
+
+    // OpenVAT aliases present + carry the same values.
+    EXPECT_EQ(root["numFrames"].toInt(),     r.frameCount);
+    EXPECT_EQ(root["numVertices"].toInt(),   r.vertexCount);
+    EXPECT_DOUBLE_EQ(root["framerate"].toDouble(), 30.0);
+    EXPECT_EQ(root["name"].toString(),       QStringLiteral("TestAnim"));
+    EXPECT_EQ(root["format"].toString(),     QStringLiteral("Animated.Vat.UnsignedShort"));
+    EXPECT_EQ(root["texture"].toString(),    root["posTexture"].toString());
+
+    // OpenVAT-style flat-array bounds.
+    ASSERT_TRUE(root["approximateBounds"].isObject());
+    const auto ab = root["approximateBounds"].toObject();
+    ASSERT_TRUE(ab["min"].isArray());
+    ASSERT_TRUE(ab["max"].isArray());
+    EXPECT_EQ(ab["min"].toArray().size(), 3);
+    EXPECT_EQ(ab["max"].toArray().size(), 3);
+    // And they match our object-style bounds.
+    EXPECT_DOUBLE_EQ(ab["min"].toArray()[0].toDouble(),
+                     root["bounds"].toObject()["min"].toObject()["x"].toDouble());
+    EXPECT_DOUBLE_EQ(ab["max"].toArray()[2].toDouble(),
+                     root["bounds"].toObject()["max"].toObject()["z"].toDouble());
+}
+
+TEST_F(VATBakerEndToEndTest, OpenVATFormatStringMatchesEncoding) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_OpenVATFmt");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 30.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("OVFmt8");
+    opts.encoding = VATBaker::Encoding::RGBA8;
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok);
+    QFile jf(r.jsonPath); ASSERT_TRUE(jf.open(QIODevice::ReadOnly));
+    auto root = QJsonDocument::fromJson(jf.readAll()).object();
+    EXPECT_EQ(root["format"].toString(), QStringLiteral("Animated.Vat.Byte"));
 }
 
 TEST_F(VATBakerEndToEndTest, RejectsMissingAnimationOnLiveEntity) {
