@@ -1,6 +1,7 @@
 #include "EmuViewport.h"
 #include "PsxJoypadState.h"
 
+#include <QApplication>
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -180,6 +181,8 @@ void EmuViewport::mousePressEvent(QMouseEvent *event)
 void EmuViewport::mouseReleaseEvent(QMouseEvent *event)
 {
     applyMouseButton(event->button(), false);
+    if (QApplication::keyboardGrabber() == this)
+        releaseKeyboard();
     event->accept();
 }
 
@@ -192,7 +195,7 @@ void EmuViewport::focusInEvent(QFocusEvent *event)
 void EmuViewport::focusOutEvent(QFocusEvent *event)
 {
     PsxJoypadState::resetAll();
-    if (hasKeyboardGrab())
+    if (QApplication::keyboardGrabber() == this)
         releaseKeyboard();
     QWidget::focusOutEvent(event);
     update();
