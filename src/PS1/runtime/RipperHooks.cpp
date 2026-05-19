@@ -1,4 +1,5 @@
 #include "RipperHooks.h"
+#include "PsxGpuRamScanner.h"
 #include "VramSnapshot.h"
 
 bool RipperHooks::isCaptureEnabled() const
@@ -54,4 +55,9 @@ void RipperHooks::onDrawMode(const DrawModeRecord &mode)
     if (!isCaptureEnabled() || !m_buffer)
         return;
     m_buffer->addDrawMode(mode);
+}
+
+void RipperHooks::ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize)
+{
+    PsxGpuRamScanner::captureFromSystemRam(ram, byteSize, this);
 }

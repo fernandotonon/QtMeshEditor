@@ -198,7 +198,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### PS1 formats (static) and runtime extraction (experimental)
 
 - **Static parsers** (`src/PS1/`): `PS1TMD`, `PS1TIM`, `PS1RSD`, `PS1PLY`, `PS1MAT` for known PlayStation mesh/texture formats.
-- **Runtime extraction** (`src/PS1/runtime/`, epic #412): `ENABLE_PS1_RIP` (OFF by default). When ON, `PS1RipManager` runs an `EmuCore` plugin from `<app>/PS1Cores/` on a worker thread; stub core `qtmesh_ps1core_stub` ships for CI/dev. Session UI: **Tools → Experimental → PS1 Runtime Ripper…** (`PS1RipSessionWindow`, `EmuViewport`). Design doc: `src/PS1/PS1_RIP_DESIGN.md`. CI enables the flag on Linux test builds only. Sentry breadcrumbs use category `ps1.rip`.
+- **Runtime extraction** (`src/PS1/runtime/`, epic #412): `ENABLE_PS1_RIP` (OFF by default). When ON, `PS1RipManager` runs an `EmuCore` host from `<app>/PS1Cores/` on a worker thread: prefer `qtmesh_ps1core_libretro` (loads `mednafen_psx_libretro` / beetle from `PS1Cores/`, system libretro paths, or `QTMESH_PS1_LIBRETRO_CORE`) for real ISO playback; fall back to `qtmesh_ps1core_stub` for CI. Live VRAM + RAM GP0 scan feed phases 2–3 when using libretro. Install helper: `scripts/install-ps1-libretro-core.sh`. Session UI: **Tools → Experimental → PS1 Runtime Ripper…** (`PS1RipSessionWindow`, `EmuViewport`). Design doc: `src/PS1/PS1_RIP_DESIGN.md`. CI enables the flag on Linux test builds only. Sentry breadcrumbs use category `ps1.rip`.
 
 ### Mesh Import/Export
 

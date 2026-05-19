@@ -6,23 +6,51 @@
 #include <QFileInfo>
 #include <QPluginLoader>
 
+#include <memory>
+#include <vector>
+
 namespace {
+
+std::vector<std::unique_ptr<QPluginLoader>> &hostPluginLoaders()
+{
+    static std::vector<std::unique_ptr<QPluginLoader>> loaders;
+    return loaders;
+}
+
 
 QString bundleOrAppDir()
 {
+#if defined(Q_OS_MACOS)
+    const QString appDir = QCoreApplication::applicationDirPath();
+    QDir dir(appDir);
+    if (dir.dirName() == QLatin1String("MacOS")) {
+        dir.cdUp();
+        if (dir.dirName() == QLatin1String("Contents"))
+            dir.cdUp();
+    }
+    return dir.absolutePath();
+#else
     return QCoreApplication::applicationDirPath();
+#endif
 }
 
-QStringList pluginFileNames()
+QStringList hostPluginBaseNames()
+{
+    const QByteArray forceStub = qgetenv("QTMESH_PS1_FORCE_STUB");
+    if (forceStub == "1" || forceStub == "true") {
+        return {QStringLiteral("qtmesh_ps1core_stub")};
+    }
+    return {QStringLiteral("qtmesh_ps1core_libretro"), QStringLiteral("qtmesh_ps1core_stub")};
+}
+
+QStringList fileNamesForHost(const QString &baseName)
 {
 #if defined(Q_OS_WIN)
-    return {QStringLiteral("qtmesh_ps1core_stub.dll")};
+    return {baseName + QStringLiteral(".dll")};
 #elif defined(Q_OS_MACOS)
-    return {QStringLiteral("libqtmesh_ps1core_stub.dylib"),
-            QStringLiteral("qtmesh_ps1core_stub.dylib")};
+    return {QStringLiteral("lib") + baseName + QStringLiteral(".dylib"), baseName + QStringLiteral(".dylib")};
 #else
-    return {QStringLiteral("libqtmesh_ps1core_stub.so"),
-            QStringLiteral("qtmesh_ps1core_stub.so")};
+    return {QStringLiteral("lib") + baseName + QStringLiteral(".so"), baseName + QStringLiteral(".so")};
 #endif
 }
 
@@ -31,8 +59,7 @@ QStringList pluginFileNames()
 QStringList EmuCoreLoader::coreSearchPaths()
 {
     QStringList paths;
-    const QString base = bundleOrAppDir();
-    paths << QDir(base).filePath(QStringLiteral("PS1Cores"));
+    paths << QDir(bundleOrAppDir()).filePath(QStringLiteral("PS1Cores"));
     paths << QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("PS1Cores"));
     paths.removeDuplicates();
     return paths;
@@ -40,40 +67,53 @@ QStringList EmuCoreLoader::coreSearchPaths()
 
 std::unique_ptr<EmuCore> EmuCoreLoader::loadCore(QString *errorOut)
 {
-    const QStringList names = pluginFileNames();
-    for (const QString &dirPath : coreSearchPaths()) {
-        const QDir dir(dirPath);
-        if (!dir.exists())
-            continue;
+    QString lastError;
 
-        for (const QString &fileName : names) {
-            const QString pluginPath = dir.filePath(fileName);
-            if (!QFileInfo::exists(pluginPath))
+    for (const QString &baseName : hostPluginBaseNames()) {
+        for (const QString &dirPath : coreSearchPaths()) {
+            const QDir dir(dirPath);
+            if (!dir.exists())
                 continue;
 
-            QPluginLoader loader(pluginPath);
-            QObject *instance = loader.instance();
-            if (!instance) {
-                if (errorOut)
-                    *errorOut = loader.errorString();
-                continue;
+            for (const QString &fileName : fileNamesForHost(baseName)) {
+                const QString pluginPath = dir.filePath(fileName);
+                if (!QFileInfo::exists(pluginPath))
+                    continue;
+
+                auto loader = std::make_unique<QPluginLoader>(pluginPath);
+                QObject *instance = loader->instance();
+                if (!instance) {
+                    lastError = loader->errorString();
+                    continue;
+                }
+
+                auto *plugin = qobject_cast<IEmuCorePlugin *>(instance);
+                if (!plugin) {
+                    lastError = QObject::tr("Plugin does not implement IEmuCorePlugin: %1").arg(pluginPath);
+                    continue;
+                }
+
+                std::unique_ptr<EmuCore> core = plugin->createCore();
+                if (core) {
+                    hostPluginLoaders().push_back(std::move(loader));
+                    return core;
+                }
+
+                lastError = QObject::tr("Host plugin %1 declined to create a core (missing libretro core?)")
+                                .arg(fileName);
             }
-
-            auto *plugin = qobject_cast<IEmuCorePlugin *>(instance);
-            if (!plugin) {
-                if (errorOut)
-                    *errorOut = QObject::tr("Plugin does not implement IEmuCorePlugin: %1").arg(pluginPath);
-                continue;
-            }
-
-            return plugin->createCore();
         }
     }
 
     if (errorOut) {
-        *errorOut = QObject::tr(
-            "No PS1 emulator core found in PS1Cores/. "
-            "Build with ENABLE_PS1_RIP=ON to install the stub core.");
+        if (!lastError.isEmpty())
+            *errorOut = lastError;
+        else {
+            *errorOut = QObject::tr(
+                "No PS1 emulator host found in PS1Cores/. "
+                "Build with ENABLE_PS1_RIP=ON and install a libretro PSX core "
+                "(mednafen_psx_libretro) or use the stub for development.");
+        }
     }
     return nullptr;
 }

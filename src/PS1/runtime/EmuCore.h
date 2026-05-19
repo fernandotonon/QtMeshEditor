@@ -19,10 +19,24 @@ public:
     virtual QString coreId() const = 0;
     virtual bool loadBios(const QString &biosPath) = 0;
     virtual bool loadIso(const QString &isoPath) = 0;
+    /** Load disc into the core and verify a video frame can be produced. */
+    virtual bool boot(QString *errorOut = nullptr) { (void)errorOut; return true; }
     virtual void runFrame() = 0;
     virtual void reset() = 0;
     virtual const EmuFramebuffer &framebuffer() const = 0;
     virtual void setHooks(EmuHooks *hooks) = 0;
+    virtual QString lastError() const { return QString(); }
+
+    virtual void setJoypadButton(unsigned port, unsigned buttonId, bool pressed)
+    {
+        (void)port;
+        (void)buttonId;
+        (void)pressed;
+    }
+    virtual void resetJoypad(unsigned port = 0)
+    {
+        (void)port;
+    }
 };
 
 #endif // EMUCORE_H

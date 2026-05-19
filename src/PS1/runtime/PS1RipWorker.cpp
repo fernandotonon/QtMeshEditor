@@ -89,12 +89,22 @@ void PS1RipWorker::startEmulation()
         return;
     }
     if (!m_core->loadIso(m_isoPath)) {
-        emit emulationError(tr("Failed to load ISO: %1").arg(m_isoPath));
+        const QString detail = m_core->lastError();
+        emit emulationError(detail.isEmpty()
+                                ? tr("Failed to load ISO: %1").arg(m_isoPath)
+                                : detail);
         return;
     }
 
     m_core->setHooks(m_ripperHooks.get());
     m_core->reset();
+
+    QString bootErr;
+    if (!m_core->boot(&bootErr)) {
+        m_core.reset();
+        emit emulationError(bootErr.isEmpty() ? tr("Failed to boot emulator core") : bootErr);
+        return;
+    }
 
     if (m_startSuperseded.load(std::memory_order_acquire)) {
         m_startSuperseded.store(false, std::memory_order_release);
@@ -104,7 +114,7 @@ void PS1RipWorker::startEmulation()
     m_running = true;
     m_paused = false;
     m_frameTimer->start();
-    emit emulationStarted();
+    emit emulationStarted(m_core ? m_core->coreId() : QString());
 }
 
 void PS1RipWorker::stopEmulation()
@@ -117,6 +127,7 @@ void PS1RipWorker::stopEmulation()
     m_frameTimer->stop();
     m_running = false;
     m_paused = false;
+    m_core.reset();
     emit emulationStopped();
 }
 
@@ -147,11 +158,28 @@ void PS1RipWorker::runFrameTick()
     m_core->runFrame();
     const EmuFramebuffer &fb = m_core->framebuffer();
     emit framePresented(framebufferToImage(fb), fb.frameIndex);
+
+    if ((fb.frameIndex % 30) == 0 && m_vram && !m_vram->isEmpty()) {
+        const QVector<uint16_t> cells = m_vram->mutablePixels();
+        emit vramFrameUpdated(cells, m_vram->toImage(VramSnapshot::ViewMode::Native16));
+    }
 }
 
 void PS1RipWorker::setCaptureArmed(bool armed)
 {
     m_captureArmed.store(armed, std::memory_order_release);
+}
+
+void PS1RipWorker::setJoypadButton(unsigned port, unsigned buttonId, bool pressed)
+{
+    if (m_core)
+        m_core->setJoypadButton(port, buttonId, pressed);
+}
+
+void PS1RipWorker::resetJoypad(unsigned port)
+{
+    if (m_core)
+        m_core->resetJoypad(port);
 }
 
 void PS1RipWorker::finalizeFrameCapture()

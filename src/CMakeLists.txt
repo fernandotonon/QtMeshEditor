@@ -561,6 +561,9 @@ if(BUILD_TESTS)
 
     if(ENABLE_PS1_RIP)
         add_dependencies(UnitTests qtmesh_ps1core_stub)
+        if(TARGET qtmesh_ps1core_libretro)
+            add_dependencies(UnitTests qtmesh_ps1core_libretro)
+        endif()
     endif()
 
     # On macOS, create symlinks from Ogre plugin .framework bundles into the

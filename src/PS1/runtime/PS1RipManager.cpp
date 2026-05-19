@@ -3,6 +3,7 @@
 #include "MeshReconstructor.h"
 #include "PS1RipMeshBuilder.h"
 #include "PS1RipWorker.h"
+#include "PsxDiscResolver.h"
 #include "SentryReporter.h"
 
 #include <QFileInfo>
@@ -49,23 +50,31 @@ void PS1RipManager::initializeWorkerThread()
     m_worker = new PS1RipWorker();
     m_worker->moveToThread(m_workerThread);
 
-    connect(m_worker, &PS1RipWorker::emulationStarted, this, [this]() {
+    connect(m_worker, &PS1RipWorker::emulationStarted, this, [this](const QString &coreId) {
         m_startPending = false;
         m_sessionActive = true;
         m_paused = false;
-        emit sessionStarted();
+        m_activeCoreId = coreId;
+        emit sessionStarted(coreId);
     });
     connect(m_worker, &PS1RipWorker::emulationStopped, this, [this]() {
         m_startPending = false;
         m_sessionActive = false;
         m_paused = false;
         m_captureArmed = false;
+        m_activeCoreId.clear();
         syncWorkerCaptureArmed();
         emit sessionStopped();
     });
     connect(m_worker, &PS1RipWorker::emulationError, this, [this](const QString &msg) {
         m_startPending = false;
+        m_sessionActive = false;
+        m_paused = false;
+        m_captureArmed = false;
+        m_activeCoreId.clear();
+        syncWorkerCaptureArmed();
         reportError(msg);
+        emit sessionStopped();
     });
     connect(m_worker, &PS1RipWorker::framePresented, this, &PS1RipManager::framePresented);
     connect(m_worker, &PS1RipWorker::frameCaptureReady, this,
@@ -92,6 +101,10 @@ void PS1RipManager::initializeWorkerThread()
                     QStringLiteral("ps1.rip.mesh.built"),
                     QStringLiteral("%1 verts %2 tris").arg(built.vertexCount).arg(built.triangleCount));
                 emit meshBuilt(captureId, built.vertexCount, built.triangleCount);
+            });
+    connect(m_worker, &PS1RipWorker::vramFrameUpdated, this,
+            [this](const QVector<uint16_t> &cells, const QImage &preview) {
+                emit vramFrameUpdated(cells, preview);
             });
     connect(m_worker, &PS1RipWorker::vramDumpReady, this,
             [this](const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
@@ -132,6 +145,21 @@ void PS1RipManager::syncWorkerSession()
                               Q_ARG(QString, m_biosPath), Q_ARG(QString, m_isoPath));
 }
 
+void PS1RipManager::setJoypadPressed(unsigned port, unsigned buttonId, bool pressed)
+{
+    if (!m_worker || (!m_sessionActive && !m_startPending))
+        return;
+    QMetaObject::invokeMethod(m_worker, "setJoypadButton", Qt::QueuedConnection,
+                              Q_ARG(unsigned, port), Q_ARG(unsigned, buttonId), Q_ARG(bool, pressed));
+}
+
+void PS1RipManager::resetJoypad(unsigned port)
+{
+    if (!m_worker)
+        return;
+    QMetaObject::invokeMethod(m_worker, "resetJoypad", Qt::QueuedConnection, Q_ARG(unsigned, port));
+}
+
 void PS1RipManager::syncWorkerCaptureArmed()
 {
     if (!m_worker)
@@ -154,7 +182,8 @@ bool PS1RipManager::loadBios(const QString &path)
         stop();
 
     m_biosPath = info.absoluteFilePath();
-    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.bios.load"), m_biosPath);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("ps1_bios:%1").arg(info.fileName()));
     syncWorkerSession();
     return true;
 }
@@ -170,8 +199,16 @@ bool PS1RipManager::loadIso(const QString &path)
     if (m_sessionActive)
         stop();
 
-    m_isoPath = info.absoluteFilePath();
-    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.iso.load"), m_isoPath);
+    const QString absolute = info.absoluteFilePath();
+    const PsxDiscResolveResult disc = PsxDiscResolver::resolve(absolute);
+    if (!disc.ok) {
+        reportError(disc.errorMessage);
+        return false;
+    }
+
+    m_isoPath = disc.loadPath;
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("ps1_disc:%1").arg(QFileInfo(m_isoPath).fileName()));
     syncWorkerSession();
     return true;
 }

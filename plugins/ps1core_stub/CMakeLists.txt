@@ -31,3 +31,7 @@ endif()
 if(BUILD_QT_MESH_EDITOR AND TARGET ${CMAKE_PROJECT_NAME})
     add_dependencies(${CMAKE_PROJECT_NAME} qtmesh_ps1core_stub)
 endif()
+
+if(TARGET qtmesh_ps1core_libretro AND BUILD_QT_MESH_EDITOR AND TARGET ${CMAKE_PROJECT_NAME})
+    add_dependencies(${CMAKE_PROJECT_NAME} qtmesh_ps1core_libretro)
+endif()

@@ -35,6 +35,10 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipSessionWindow.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipWorker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxBiosValidator.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxDiscResolver.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxJoypadState.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGpuRamScanner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/RipperHooks.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/TextureDecoder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/VramSnapshot.cpp
@@ -56,6 +60,10 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipLegalityDialog.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipSessionWindow.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxBiosValidator.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxDiscResolver.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxJoypadState.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGpuRamScanner.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipWorker.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxVramColor.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/TextureDecoder.h

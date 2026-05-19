@@ -36,6 +36,16 @@ bool StubEmuCore::loadIso(const QString &isoPath)
     return true;
 }
 
+bool StubEmuCore::boot(QString *errorOut)
+{
+    if (m_biosPath.isEmpty() || m_isoPath.isEmpty()) {
+        if (errorOut)
+            *errorOut = QStringLiteral("BIOS and ISO paths are required");
+        return false;
+    }
+    return true;
+}
+
 void StubEmuCore::runFrame()
 {
     if (m_biosPath.isEmpty() || m_isoPath.isEmpty())

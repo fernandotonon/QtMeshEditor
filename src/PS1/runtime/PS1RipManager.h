@@ -29,6 +29,7 @@ public:
     bool isCaptureArmed() const { return m_captureArmed; }
     QString isoPath() const { return m_isoPath; }
     QString biosPath() const { return m_biosPath; }
+    QString activeCoreId() const { return m_activeCoreId; }
 
     bool loadBios(const QString &path);
     bool loadIso(const QString &path);
@@ -41,10 +42,14 @@ public:
     bool captureScene(int seconds);
     bool dumpVRAM();
 
+    void setJoypadPressed(unsigned port, unsigned buttonId, bool pressed);
+    void resetJoypad(unsigned port = 0);
+
     PS1RipWorker *worker() const { return m_worker; }
 
 signals:
-    void sessionStarted();
+    void sessionStarted(const QString &coreId);
+    void vramFrameUpdated(const QVector<uint16_t> &cells, const QImage &nativePreview);
     void sessionStopped();
     void framePresented(const QImage &frame, quint64 frameIndex);
     void frameCaptured(const QString &captureId);
@@ -69,6 +74,7 @@ private:
 
     QString m_biosPath;
     QString m_isoPath;
+    QString m_activeCoreId;
     bool m_sessionActive = false;
     bool m_startPending = false;
     bool m_paused = false;

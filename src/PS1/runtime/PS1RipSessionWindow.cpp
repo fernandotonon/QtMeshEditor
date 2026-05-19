@@ -3,6 +3,7 @@
 #include "PS1RipLegalityDialog.h"
 #include "PS1RipManager.h"
 #include "SentryReporter.h"
+#include "PsxJoypadState.h"
 #include "VramViewerWidget.h"
 
 #include <QAction>
@@ -76,11 +77,30 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     statusBar()->addPermanentWidget(m_statusLabel);
 
     connect(m_manager, &PS1RipManager::framePresented, this, &PS1RipSessionWindow::onFrame);
-    connect(m_manager, &PS1RipManager::sessionStarted, this, [this]() {
-        m_statusLabel->setText(tr("Running (stub core — test pattern only)"));
+    connect(m_manager, &PS1RipManager::sessionStarted, this, [this](const QString &coreId) {
+        if (m_viewport) {
+            m_viewport->setFocus(Qt::OtherFocusReason);
+            m_viewport->grabKeyboard();
+        }
+        if (coreId == QStringLiteral("libretro")) {
+            m_statusLabel->setText(
+                tr("Running — click viewport: arrows, X/Enter=✕, Z/○=back, P=Start, Tab=Select"));
+        } else if (coreId == QStringLiteral("stub"))
+            m_statusLabel->setText(tr("Running (stub — test pattern only)"));
+        else
+            m_statusLabel->setText(tr("Running (core: %1)").arg(coreId));
     });
-    connect(m_manager, &PS1RipManager::sessionStopped, this,
-            [this]() { m_statusLabel->setText(tr("Stopped")); });
+    connect(m_manager, &PS1RipManager::vramFrameUpdated, this,
+            [this](const QVector<uint16_t> &cells, const QImage &preview) {
+                if (m_vramViewer)
+                    m_vramViewer->setVramData(cells, preview);
+            });
+    connect(m_manager, &PS1RipManager::sessionStopped, this, [this]() {
+        PsxJoypadState::resetAll();
+        if (m_viewport)
+            m_viewport->releaseKeyboard();
+        m_statusLabel->setText(tr("Stopped"));
+    });
     connect(m_manager, &PS1RipManager::error, this, &PS1RipSessionWindow::onError);
     connect(m_manager, &PS1RipManager::vramDumped, this, &PS1RipSessionWindow::onVramDumped);
     connect(m_manager, &PS1RipManager::meshBuilt, this, &PS1RipSessionWindow::onMeshBuilt);
@@ -122,6 +142,8 @@ void PS1RipSessionWindow::showSession(QWidget *parent)
 
 void PS1RipSessionWindow::closeEvent(QCloseEvent *event)
 {
+    if (m_viewport)
+        m_viewport->releaseKeyboard();
     if (m_manager)
         m_manager->stop();
     QMainWindow::closeEvent(event);
@@ -149,7 +171,7 @@ void PS1RipSessionWindow::pickIso()
     QWidget *dialogParent = isVisible() ? this : QApplication::activeWindow();
     const QString path = QFileDialog::getOpenFileName(
         dialogParent, tr("Select PS1 disc image"), QString(),
-        tr("Disc images (*.bin *.cue *.iso *.img);;All files (*)"),
+        tr("Disc images (*.cue *.chd *.pbp *.iso *.img *.bin *.exe);;All files (*)"),
         nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty())
         return;
