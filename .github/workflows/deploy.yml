@@ -1009,6 +1009,7 @@ jobs:
          DISPLAY: :99
          LIBGL_ALWAYS_SOFTWARE: 1
          MESA_GL_VERSION_OVERRIDE: "3.3"
+         QTMESH_PS1_FORCE_STUB: "1"
       run: |
             # Disable errexit so test crashes (SIGSEGV=139) don't abort the step.
             # We track failures/crashes manually and check at the end.
@@ -1019,6 +1020,7 @@ jobs:
             export MESA_GL_VERSION_OVERRIDE=3.3
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/ /lib/x86_64-linux-gnu/
             export DISPLAY=:99
+            export QTMESH_PS1_FORCE_STUB=1
             
             # Function to find test executable path
             find_test() {

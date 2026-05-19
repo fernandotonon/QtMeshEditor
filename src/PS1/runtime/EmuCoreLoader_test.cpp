@@ -15,6 +15,12 @@ protected:
     void SetUp() override
     {
         ASSERT_NE(QCoreApplication::instance(), nullptr);
+        qputenv("QTMESH_PS1_FORCE_STUB", "1");
+    }
+
+    void TearDown() override
+    {
+        qunsetenv("QTMESH_PS1_FORCE_STUB");
     }
 };
 

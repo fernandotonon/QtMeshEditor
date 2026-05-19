@@ -36,6 +36,10 @@ QString bundleOrAppDir()
 
 QStringList hostPluginBaseNames()
 {
+    const QByteArray forceStub = qgetenv("QTMESH_PS1_FORCE_STUB");
+    if (forceStub == "1" || forceStub == "true") {
+        return {QStringLiteral("qtmesh_ps1core_stub")};
+    }
     return {QStringLiteral("qtmesh_ps1core_libretro"), QStringLiteral("qtmesh_ps1core_stub")};
 }
 

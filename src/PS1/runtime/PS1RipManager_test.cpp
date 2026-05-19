@@ -18,6 +18,7 @@ protected:
     {
         app = qobject_cast<QApplication *>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
+        qputenv("QTMESH_PS1_FORCE_STUB", "1");
         PS1RipManager::kill();
         manager = PS1RipManager::getSingleton();
         ASSERT_NE(manager, nullptr);
@@ -28,6 +29,27 @@ protected:
         if (manager && manager->isSessionActive())
             manager->stop();
         PS1RipManager::kill();
+        qunsetenv("QTMESH_PS1_FORCE_STUB");
+    }
+
+    static QString writeMinimalTestIso(QTemporaryFile &file)
+    {
+        file.setFileTemplate(QDir::tempPath() + QStringLiteral("/qtmesh_iso_XXXXXX.iso"));
+        if (!file.open())
+            return {};
+        QByteArray sector(2048, '\0');
+        sector[0] = '\x01';
+        sector[1] = 'C';
+        sector[2] = 'D';
+        sector[3] = '0';
+        sector[4] = '0';
+        sector[5] = '1';
+        for (int i = 0; i < 17; ++i) {
+            if (file.write(sector) != sector.size())
+                return {};
+        }
+        file.close();
+        return file.fileName();
     }
 
     bool stubPluginAvailable() const
@@ -72,11 +94,10 @@ TEST_F(PS1RipManagerTest, StartWithoutIsoReturnsFalse)
 
 TEST_F(PS1RipManagerTest, StartWithoutBiosReturnsFalse)
 {
-    QTemporaryFile iso(QDir::tempPath() + "/qtmesh_ps1rip_XXXXXX.bin");
-    ASSERT_TRUE(iso.open());
-    iso.write("stub");
-    iso.close();
-    ASSERT_TRUE(manager->loadIso(iso.fileName()));
+    QTemporaryFile iso;
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
+    ASSERT_TRUE(manager->loadIso(isoPath));
 
     QSignalSpy errorSpy(manager, &PS1RipManager::error);
     EXPECT_FALSE(manager->start());
@@ -87,17 +108,16 @@ TEST_F(PS1RipManagerTest, SessionStartsWhenPluginPresent)
     if (!stubPluginAvailable())
         GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
 
-    QTemporaryFile bios(QDir::tempPath() + "/qtmesh_bios_XXXXXX.bin");
-    QTemporaryFile iso(QDir::tempPath() + "/qtmesh_iso_XXXXXX.bin");
+    QTemporaryFile bios(QDir::tempPath() + QStringLiteral("/qtmesh_bios_XXXXXX.bin"));
+    QTemporaryFile iso;
     ASSERT_TRUE(bios.open());
-    ASSERT_TRUE(iso.open());
     bios.write("bios");
-    iso.write("iso");
     bios.close();
-    iso.close();
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
 
     ASSERT_TRUE(manager->loadBios(bios.fileName()));
-    ASSERT_TRUE(manager->loadIso(iso.fileName()));
+    ASSERT_TRUE(manager->loadIso(isoPath));
 
     QSignalSpy startedSpy(manager, &PS1RipManager::sessionStarted);
     QSignalSpy errorSpy(manager, &PS1RipManager::error);
@@ -124,17 +144,16 @@ TEST_F(PS1RipManagerTest, StopCancelsPendingStart)
     if (!stubPluginAvailable())
         GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
 
-    QTemporaryFile bios(QDir::tempPath() + "/qtmesh_bios2_XXXXXX.bin");
-    QTemporaryFile iso(QDir::tempPath() + "/qtmesh_iso2_XXXXXX.bin");
+    QTemporaryFile bios(QDir::tempPath() + QStringLiteral("/qtmesh_bios2_XXXXXX.bin"));
+    QTemporaryFile iso;
     ASSERT_TRUE(bios.open());
-    ASSERT_TRUE(iso.open());
     bios.write("bios");
-    iso.write("iso");
     bios.close();
-    iso.close();
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
 
     ASSERT_TRUE(manager->loadBios(bios.fileName()));
-    ASSERT_TRUE(manager->loadIso(iso.fileName()));
+    ASSERT_TRUE(manager->loadIso(isoPath));
 
     QSignalSpy startedSpy(manager, &PS1RipManager::sessionStarted);
     ASSERT_TRUE(manager->start());
@@ -153,17 +172,16 @@ TEST_F(PS1RipManagerTest, ArmedCaptureAccumulatesPrimitives)
     if (!stubPluginAvailable())
         GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
 
-    QTemporaryFile bios(QDir::tempPath() + "/qtmesh_bios_cap_XXXXXX.bin");
-    QTemporaryFile iso(QDir::tempPath() + "/qtmesh_iso_cap_XXXXXX.bin");
+    QTemporaryFile bios(QDir::tempPath() + QStringLiteral("/qtmesh_bios_cap_XXXXXX.bin"));
+    QTemporaryFile iso;
     ASSERT_TRUE(bios.open());
-    ASSERT_TRUE(iso.open());
     bios.write("bios");
-    iso.write("iso");
     bios.close();
-    iso.close();
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
 
     ASSERT_TRUE(manager->loadBios(bios.fileName()));
-    ASSERT_TRUE(manager->loadIso(iso.fileName()));
+    ASSERT_TRUE(manager->loadIso(isoPath));
     ASSERT_TRUE(manager->armCapture(true));
 
     QSignalSpy startedSpy(manager, &PS1RipManager::sessionStarted);

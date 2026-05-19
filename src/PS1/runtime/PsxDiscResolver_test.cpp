@@ -101,6 +101,13 @@ TEST(PsxDiscResolver, PassesThroughCue)
     QTemporaryDir temp;
     ASSERT_TRUE(temp.isValid());
 
+    const QString binPath = temp.filePath(QStringLiteral("disc.bin"));
+    {
+        QFile bin(binPath);
+        ASSERT_TRUE(bin.open(QIODevice::WriteOnly));
+        bin.write(QByteArray(2048, '\0'));
+    }
+
     const QString cuePath = temp.filePath(QStringLiteral("disc.cue"));
     QFile cue(cuePath);
     ASSERT_TRUE(cue.open(QIODevice::WriteOnly));
