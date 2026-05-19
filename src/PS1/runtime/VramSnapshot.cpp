@@ -17,11 +17,22 @@ void VramSnapshot::clear(uint16_t fill)
 
 bool VramSnapshot::isEmpty() const
 {
+    return !hasVisibleContent(1);
+}
+
+bool VramSnapshot::hasVisibleContent(int minNonZero) const
+{
+    if (minNonZero <= 0)
+        return true;
+
+    int count = 0;
     for (uint16_t v : m_pixels) {
-        if (v != 0)
-            return false;
+        if (v == 0)
+            continue;
+        if (++count >= minNonZero)
+            return true;
     }
-    return true;
+    return false;
 }
 
 void VramSnapshot::writeRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels)

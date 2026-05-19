@@ -1,6 +1,8 @@
 #include "LibretroEmuCore.h"
+#include "EmuFramebuffer.h"
 #include "PsxBiosValidator.h"
 #include "PsxDiscResolver.h"
+#include "PsxVramColor.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -10,6 +12,8 @@
 
 #include <cstdarg>
 #include <cstring>
+
+#include <QString>
 
 namespace {
 
@@ -112,6 +116,81 @@ QString canonicalBiosFileName(const QString &biosLabel)
     if (biosLabel.contains(QStringLiteral("1000")))
         return QStringLiteral("scph1000.bin");
     return QStringLiteral("scph1001.bin");
+}
+
+const uint16_t *pickVramPointer(const retro_memory_map *map, size_t *bytesOut)
+{
+    if (!map || !map->descriptors)
+        return nullptr;
+
+    const retro_memory_descriptor *byAddrSpace = nullptr;
+    const retro_memory_descriptor *byExactSize = nullptr;
+    const retro_memory_descriptor *byNarrowSize = nullptr;
+
+    for (unsigned i = 0; i < map->num_descriptors; ++i) {
+        const retro_memory_descriptor &d = map->descriptors[i];
+        if (!d.ptr || d.len < 512 * 1024)
+            continue;
+
+        if (d.addrspace) {
+            const QString space = QString::fromUtf8(d.addrspace);
+            if (space.contains(QStringLiteral("vram"), Qt::CaseInsensitive))
+                byAddrSpace = &d;
+        }
+
+        if (d.len == kPsxVramBytes)
+            byExactSize = &d;
+
+        if (d.len >= kPsxVramBytes && d.len < kPsxVramBytes + (512 * 1024))
+            byNarrowSize = &d;
+    }
+
+    const retro_memory_descriptor *pick = byAddrSpace ? byAddrSpace
+                                                      : (byExactSize ? byExactSize : byNarrowSize);
+    if (!pick)
+        return nullptr;
+
+    if (bytesOut)
+        *bytesOut = pick->len;
+    return reinterpret_cast<const uint16_t *>(pick->ptr);
+}
+
+int sampleNonZeroVramCells(const uint16_t *cells, size_t cellCount, int stride)
+{
+    if (!cells || cellCount == 0 || stride <= 0)
+        return 0;
+
+    int count = 0;
+    for (size_t i = 0; i < cellCount; i += static_cast<size_t>(stride)) {
+        if (cells[i] == 0)
+            continue;
+        if (++count >= 64)
+            break;
+    }
+    return count;
+}
+
+const uint16_t *findVramInSystemRam(const uint8_t *ram, size_t ramSize)
+{
+    if (!ram || ramSize < kPsxVramBytes)
+        return nullptr;
+
+    const size_t cellCount = kPsxVramWidth * kPsxVramHeight;
+    const size_t maxOffset = ramSize - kPsxVramBytes;
+    const uint16_t *best = nullptr;
+    int bestScore = 8;
+
+    for (size_t offset = 0; offset <= maxOffset; offset += 4096) {
+        const uint16_t *candidate = reinterpret_cast<const uint16_t *>(ram + offset);
+        const int score = sampleNonZeroVramCells(candidate, cellCount, 97);
+        if (score > bestScore) {
+            bestScore = score;
+            best = candidate;
+            if (bestScore >= 64)
+                break;
+        }
+    }
+    return best;
 }
 
 bool installBiosAliases(const QString &biosPath, const QString &biosLabel)
@@ -310,6 +389,7 @@ bool LibretroEmuCore::loadGame(QString *errorOut)
 
     m_gameLoaded = true;
     m_hasVideoFrame = false;
+    refreshVramPointer();
     return true;
 }
 
@@ -323,6 +403,7 @@ void LibretroEmuCore::unloadGame()
     m_hasVideoFrame = false;
     m_vramPtr = nullptr;
     m_vramBytes = 0;
+    m_memoryRegions.clear();
 }
 
 bool LibretroEmuCore::boot(QString *errorOut)
@@ -384,16 +465,120 @@ void LibretroEmuCore::setHooks(EmuHooks *hooks)
     m_hooks = hooks;
 }
 
+void LibretroEmuCore::applyMemoryMap(const retro_memory_map *map)
+{
+    m_memoryRegions.clear();
+    if (!map || !map->descriptors)
+        return;
+
+    for (unsigned i = 0; i < map->num_descriptors; ++i) {
+        const retro_memory_descriptor &d = map->descriptors[i];
+        if (!d.ptr || d.len == 0)
+            continue;
+        MemoryRegion region{};
+        region.ptr = d.ptr;
+        region.len = d.len;
+        if (d.addrspace)
+            region.addrspaceUtf8 = QByteArray(d.addrspace);
+        m_memoryRegions.append(region);
+    }
+}
+
+void LibretroEmuCore::refreshVramPointer()
+{
+    m_vramPtr = nullptr;
+    m_vramBytes = 0;
+
+    if (m_host.retro_get_memory_data && m_host.retro_get_memory_size) {
+        void *vram = m_host.retro_get_memory_data(RETRO_MEMORY_VIDEO_RAM);
+        const size_t vramSize = m_host.retro_get_memory_size(RETRO_MEMORY_VIDEO_RAM);
+        if (vram && vramSize >= kPsxVramBytes) {
+            m_vramPtr = reinterpret_cast<const uint16_t *>(vram);
+            m_vramBytes = vramSize;
+            return;
+        }
+
+        void *ram = m_host.retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
+        const size_t ramSize = m_host.retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM);
+        if (ram) {
+            const uint16_t *embedded = findVramInSystemRam(static_cast<const uint8_t *>(ram), ramSize);
+            if (embedded) {
+                m_vramPtr = embedded;
+                m_vramBytes = kPsxVramBytes;
+                return;
+            }
+        }
+    }
+
+    if (m_memoryRegions.isEmpty())
+        return;
+
+    QVector<retro_memory_descriptor> descriptors;
+    descriptors.resize(m_memoryRegions.size());
+    for (int i = 0; i < m_memoryRegions.size(); ++i) {
+        const MemoryRegion &region = m_memoryRegions.at(i);
+        retro_memory_descriptor &d = descriptors[i];
+        d.ptr = const_cast<uint8_t *>(static_cast<const uint8_t *>(region.ptr));
+        d.len = region.len;
+        d.addrspace = region.addrspaceUtf8.isEmpty() ? nullptr : region.addrspaceUtf8.constData();
+    }
+
+    retro_memory_map map{};
+    map.descriptors = descriptors.data();
+    map.num_descriptors = static_cast<unsigned>(descriptors.size());
+
+    size_t bytes = 0;
+    m_vramPtr = pickVramPointer(&map, &bytes);
+    m_vramBytes = bytes;
+}
+
+void LibretroEmuCore::syncCaptureMirrors()
+{
+    refreshVramPointer();
+    syncVramFromCore();
+}
+
+void LibretroEmuCore::ingestCaptureFrame()
+{
+    captureGpuFromRam();
+}
+
+void LibretroEmuCore::mirrorFramebufferToVram()
+{
+    if (!m_hooks)
+        return;
+
+    const EmuFramebuffer &fb = framebuffer();
+    if (!fb.isValid() || fb.rgb24.isEmpty())
+        return;
+
+    QVector<uint16_t> row(static_cast<int>(fb.width));
+    for (int y = 0; y < fb.height; ++y) {
+        for (int x = 0; x < fb.width; ++x) {
+            const int i = (y * fb.width + x) * 3;
+            row[x] = PsxVramColor::rgbaToBgr555(fb.rgb24[i + 0], fb.rgb24[i + 1], fb.rgb24[i + 2], 255);
+        }
+        m_hooks->onVramWrite(0, static_cast<uint16_t>(y), static_cast<uint16_t>(fb.width), 1,
+                              row.constData());
+    }
+}
+
 void LibretroEmuCore::syncVramFromCore()
 {
     if (!m_hooks)
         return;
 
-    const uint16_t *src = m_vramPtr;
-    if (!src || m_vramBytes < kPsxVramBytes)
-        return;
+    refreshVramPointer();
 
-    m_hooks->onVramWrite(0, 0, kPsxVramWidth, kPsxVramHeight, src);
+    const uint16_t *src = m_vramPtr;
+    m_vramUsesFramebufferFallback = false;
+    if (src && m_vramBytes >= kPsxVramBytes) {
+        m_hooks->onVramWrite(0, 0, kPsxVramWidth, kPsxVramHeight, src);
+        return;
+    }
+
+    m_vramUsesFramebufferFallback = true;
+    mirrorFramebufferToVram();
 }
 
 void LibretroEmuCore::captureGpuFromRam()
@@ -523,20 +708,22 @@ bool LibretroEmuCore::environmentCallback(unsigned cmd, void *data)
             var->value = self->m_envVarUtf8.constData();
             return true;
         }
+        // Hardware/Vulkan renderers keep VRAM on the GPU and do not expose it via
+        // RETRO_MEMORY_VIDEO_RAM or SET_MEMORY_MAPS. Software renderer is required for
+        // VRAM dump / texture decode in the rip pipeline.
+        if (strcmp(var->key, "beetle_psx_renderer") == 0) {
+            self->m_envVarUtf8 = "software";
+            var->value = self->m_envVarUtf8.constData();
+            return true;
+        }
         return false;
     }
-    case RETRO_ENVIRONMENT_GET_MEMORY_MAPS: {
+    case RETRO_ENVIRONMENT_SET_MEMORY_MAPS: {
         auto *map = static_cast<retro_memory_map *>(data);
         if (!map || !map->descriptors)
             return false;
-        for (unsigned i = 0; i < map->num_descriptors; ++i) {
-            const retro_memory_descriptor &d = map->descriptors[i];
-            if (d.len >= kPsxVramBytes && d.ptr) {
-                self->m_vramPtr = reinterpret_cast<const uint16_t *>(d.ptr);
-                self->m_vramBytes = d.len;
-                break;
-            }
-        }
+        self->applyMemoryMap(map);
+        self->refreshVramPointer();
         return true;
     }
     default:

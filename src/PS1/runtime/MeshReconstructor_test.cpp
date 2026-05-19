@@ -1,5 +1,6 @@
 #include "CaptureSnapshot.h"
 #include "MeshReconstructor.h"
+#include "PsxCaptureFilters.h"
 
 #include <gtest/gtest.h>
 
@@ -72,4 +73,41 @@ TEST(MeshReconstructorTest, EmptySnapshotReturnsEmpty)
 {
     const ReconstructedMesh mesh = MeshReconstructor::reconstruct(CaptureSnapshot{});
     EXPECT_TRUE(mesh.isEmpty());
+}
+
+TEST(MeshReconstructorTest, IgnoresOffscreenPrimitives)
+{
+    CaptureSnapshot snap;
+    snap.matrices.append(identityMatrix());
+
+    PrimRecord offscreen = coloredTri(16, 16, 0);
+    for (int v = 0; v < 3; ++v) {
+        offscreen.verts[v].x = 50000;
+        offscreen.verts[v].y = 50000;
+    }
+    snap.prims.append(offscreen);
+    snap.prims.append(coloredTri(32, 32, 0));
+
+    const ReconstructedMesh mesh = MeshReconstructor::reconstruct(snap);
+    ASSERT_FALSE(mesh.isEmpty());
+    EXPECT_EQ(mesh.triangleCount, 1);
+}
+
+TEST(MeshReconstructorTest, KeepsPartiallyOnScreenPrimitives)
+{
+    PrimRecord clip{};
+    clip.kind = PrimKind::MonoTri;
+    clip.vertexCount = 3;
+    clip.verts[0] = {0, 120, 0, 255, 255, 255, 0, 0};
+    clip.verts[1] = {400, 120, 0, 255, 255, 255, 0, 0};
+    clip.verts[2] = {160, 200, 0, 255, 255, 255, 0, 0};
+    EXPECT_TRUE(PsxCaptureFilters::isOnScreenPrim(clip));
+
+    CaptureSnapshot snap;
+    snap.matrices.append(identityMatrix());
+    snap.prims.append(clip);
+
+    const ReconstructedMesh mesh = MeshReconstructor::reconstruct(snap);
+    EXPECT_FALSE(mesh.isEmpty());
+    EXPECT_EQ(mesh.triangleCount, 1);
 }

@@ -23,6 +23,17 @@ public:
 
     static ParseResult parseGp0(const uint32_t *words, size_t wordCount);
 
+    /** Decodes the next GP0 packet at @p words[0]; returns @c wordsConsumed (0 if none). */
+    struct Gp0Step {
+        size_t wordsConsumed = 0;
+        bool hasPrim = false;
+        PrimRecord prim{};
+        bool hasDrawMode = false;
+        DrawModeRecord drawMode{};
+        QString error;
+    };
+    static Gp0Step stepGp0(const uint32_t *words, size_t wordCount);
+
     /** Serialize primitives to CSV for regression dumps (tests / debug). */
     static QString primsToCsv(const QVector<PrimRecord> &prims);
 };

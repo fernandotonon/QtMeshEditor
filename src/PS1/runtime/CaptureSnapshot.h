@@ -14,8 +14,16 @@ struct CaptureSnapshot
     QVector<PrimRecord> prims;
     QVector<MatrixRecord> matrices;
     uint32_t cameraMatrixId = UINT32_MAX;
+    /** Live VRAM cells (1024×512) copied at capture time for texture decode. */
+    QVector<uint16_t> vramCells;
 
-    static CaptureSnapshot fromBuffer(const CaptureBuffer &buffer);
+    bool hasVram() const
+    {
+        return vramCells.size() == 1024 * 512;
+    }
+
+    static CaptureSnapshot fromBuffer(const CaptureBuffer &buffer,
+                                      const QVector<uint16_t> &vramCells = {});
 };
 
 Q_DECLARE_METATYPE(CaptureSnapshot)

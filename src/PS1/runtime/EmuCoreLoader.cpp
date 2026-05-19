@@ -68,6 +68,11 @@ QStringList EmuCoreLoader::coreSearchPaths()
 std::unique_ptr<EmuCore> EmuCoreLoader::loadCore(QString *errorOut)
 {
     QString lastError;
+    bool libretroHostFound = false;
+    QString libretroHostDeclineError;
+
+    const QByteArray forceStub = qgetenv("QTMESH_PS1_FORCE_STUB");
+    const bool allowStubFallback = (forceStub == "1" || forceStub == "true");
 
     for (const QString &baseName : hostPluginBaseNames()) {
         for (const QString &dirPath : coreSearchPaths()) {
@@ -93,20 +98,39 @@ std::unique_ptr<EmuCore> EmuCoreLoader::loadCore(QString *errorOut)
                     continue;
                 }
 
+                const bool isLibretroHost =
+                    baseName == QStringLiteral("qtmesh_ps1core_libretro");
+                if (isLibretroHost)
+                    libretroHostFound = true;
+
                 std::unique_ptr<EmuCore> core = plugin->createCore();
                 if (core) {
                     hostPluginLoaders().push_back(std::move(loader));
                     return core;
                 }
 
-                lastError = QObject::tr("Host plugin %1 declined to create a core (missing libretro core?)")
-                                .arg(fileName);
+                if (isLibretroHost) {
+                    libretroHostDeclineError =
+                        QObject::tr("Libretro host loaded but no PSX core was found in %1. "
+                                      "Run scripts/install-ps1-libretro-core.sh or set "
+                                      "QTMESH_PS1_LIBRETRO_CORE to mednafen_psx_libretro.so.")
+                            .arg(dirPath);
+                    if (!allowStubFallback) {
+                        if (errorOut)
+                            *errorOut = libretroHostDeclineError;
+                        return nullptr;
+                    }
+                } else {
+                    lastError = QObject::tr("Host plugin %1 declined to create a core").arg(fileName);
+                }
             }
         }
     }
 
     if (errorOut) {
-        if (!lastError.isEmpty())
+        if (!libretroHostDeclineError.isEmpty() && libretroHostFound)
+            *errorOut = libretroHostDeclineError;
+        else if (!lastError.isEmpty())
             *errorOut = lastError;
         else {
             *errorOut = QObject::tr(

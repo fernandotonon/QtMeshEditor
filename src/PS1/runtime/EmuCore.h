@@ -25,6 +25,10 @@ public:
     virtual void reset() = 0;
     virtual const EmuFramebuffer &framebuffer() const = 0;
     virtual void setHooks(EmuHooks *hooks) = 0;
+    /** Refresh hook-visible mirrors (VRAM, etc.) immediately before capture/dump. */
+    virtual void syncCaptureMirrors() {}
+    /** Re-scan emulated RAM for GPU packets into the capture buffer (libretro path). */
+    virtual void ingestCaptureFrame() {}
     virtual QString lastError() const { return QString(); }
 
     virtual void setJoypadButton(unsigned port, unsigned buttonId, bool pressed)

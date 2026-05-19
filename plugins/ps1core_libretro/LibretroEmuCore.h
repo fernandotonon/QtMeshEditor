@@ -6,6 +6,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QVector>
 
 #include <array>
 #include <atomic>
@@ -26,6 +27,8 @@ public:
     void reset() override;
     const EmuFramebuffer &framebuffer() const override;
     void setHooks(EmuHooks *hooks) override;
+    void syncCaptureMirrors() override;
+    void ingestCaptureFrame() override;
     QString lastError() const override { return m_lastError; }
     void setJoypadButton(unsigned port, unsigned buttonId, bool pressed) override;
     void resetJoypad(unsigned port = 0) override;
@@ -36,6 +39,9 @@ private:
     bool ensureInitialized(QString *errorOut);
     bool loadGame(QString *errorOut);
     void unloadGame();
+    void applyMemoryMap(const retro_memory_map *map);
+    void refreshVramPointer();
+    void mirrorFramebufferToVram();
     void syncVramFromCore();
     void captureGpuFromRam();
     void presentVideo(const void *data, unsigned width, unsigned height, size_t pitch);
@@ -64,6 +70,14 @@ private:
     QByteArray m_envSystemDirUtf8;
     const uint16_t *m_vramPtr = nullptr;
     size_t m_vramBytes = 0;
+    bool m_vramUsesFramebufferFallback = false;
+
+    struct MemoryRegion {
+        const void *ptr = nullptr;
+        size_t len = 0;
+        QByteArray addrspaceUtf8;
+    };
+    QVector<MemoryRegion> m_memoryRegions;
 
     EmuFramebuffer m_buffers[3];
     int m_writeIndex = 0;

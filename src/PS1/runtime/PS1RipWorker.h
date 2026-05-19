@@ -52,6 +52,8 @@ signals:
     void emulationStopped();
     void framePresented(const QImage &frame, quint64 frameIndex);
     void emulationError(const QString &message);
+    /** Non-fatal operational warning (does not stop the session). */
+    void sessionWarning(const QString &message);
     void frameCaptureReady(const QString &captureId, const CaptureSnapshot &snapshot, int primCount);
     void vramDumpReady(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                        const QImage &nativePreview);
