@@ -118,6 +118,17 @@ The **stub** core is active (`coreId=stub`). It draws a test pattern and synthet
 
 Capture is **not** a true GPU hook — it heuristically scans main RAM for GP0 command packets. Expect coarse triangle soup, not level geometry. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass to reduce noise. Quality improvements need ordering-table / DMA hooks (future work).
 
+### Libretro integration tests (local only)
+
+`EmuCoreLoaderTest` libretro disc/VRAM cases compile only when `QTMESH_PS1_LIBRETRO_INTEGRATION_TESTS` is defined (not set in CI). CI runs `StubMirrorsVramAfterSync` instead. For local runs with BIOS + `.cue`:
+
+```bash
+cmake ... -DCMAKE_CXX_FLAGS="-DQTMESH_PS1_LIBRETRO_INTEGRATION_TESTS"
+export QTMESH_PS1_TEST_BIOS=/path/scph1001.bin
+export QTMESH_PS1_TEST_ISO=/path/game.cue
+./build/bin/UnitTests --gtest_filter='EmuCoreLoaderTest.Libretro*'
+```
+
 ## Open questions
 
 - libretro core packaging for Windows/macOS CI (Linux: apt `libretro-beetle-psx` + install script).

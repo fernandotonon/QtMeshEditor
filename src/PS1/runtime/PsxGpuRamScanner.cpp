@@ -29,12 +29,20 @@ bool looksLikeGp0Opcode(uint32_t word)
 
 void applyDrawMode(PrimRecord &prim, const DrawModeRecord &mode)
 {
-    if (prim.tpage == 0 && mode.tpage != 0)
-        prim.tpage = mode.tpage;
-    if (prim.clut == 0 && mode.clut != 0)
-        prim.clut = mode.clut;
     if (prim.drawModeBits == 0 && mode.drawModeBits != 0)
         prim.drawModeBits = mode.drawModeBits;
+
+    switch (prim.kind) {
+    case PrimKind::TexturedTri:
+    case PrimKind::TexturedQuad:
+    case PrimKind::Sprite:
+        // Textured packets embed tpage/clut in the UV word; zero is a valid page/CLUT id.
+        break;
+    default:
+        prim.tpage = mode.tpage;
+        prim.clut = mode.clut;
+        break;
+    }
 }
 
 QString primDedupeKey(const PrimRecord &prim)

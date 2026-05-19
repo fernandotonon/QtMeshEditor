@@ -4,6 +4,7 @@
 
 #include "PS1/runtime/CaptureBuffer.h"
 #include "PS1/runtime/GpuCommandParser.h"
+#include "PS1/runtime/PsxCaptureFilters.h"
 #include "PS1/runtime/PsxGpuRamScanner.h"
 #include "PS1/runtime/RipperHooks.h"
 
@@ -47,6 +48,26 @@ TEST(PsxGpuRamScannerTest, FindsMonochromeTriangleInRam)
 
     EXPECT_GE(buffer.prims().size(), 1);
     EXPECT_EQ(buffer.prims().first().kind, PrimKind::MonoTri);
+}
+
+TEST(PsxCaptureFiltersTest, KeepsPrimWithOneVertexOnScreen)
+{
+    PrimRecord prim{};
+    prim.vertexCount = 3;
+    prim.verts[0] = {0, 120, 0, 0, 0, 0, 0, 0};
+    prim.verts[1] = {500, 120, 0, 0, 0, 0, 0, 0};
+    prim.verts[2] = {500, 200, 0, 0, 0, 0, 0, 0};
+    EXPECT_TRUE(PsxCaptureFilters::isOnScreenPrim(prim));
+}
+
+TEST(PsxCaptureFiltersTest, RejectsPrimFullyOffScreen)
+{
+    PrimRecord prim{};
+    prim.vertexCount = 3;
+    prim.verts[0] = {50000, 50000, 0, 0, 0, 0, 0, 0};
+    prim.verts[1] = {50001, 50000, 0, 0, 0, 0, 0, 0};
+    prim.verts[2] = {50000, 50001, 0, 0, 0, 0, 0, 0};
+    EXPECT_FALSE(PsxCaptureFilters::isOnScreenPrim(prim));
 }
 
 TEST(GpuCommandParserTest, StepGp0ConsumesSinglePacket)

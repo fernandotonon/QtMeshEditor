@@ -104,20 +104,64 @@ TEST_F(EmuCoreLoaderTest, LoadsLibretroWhenMednafenCorePresent)
     qputenv("QTMESH_PS1_FORCE_STUB", "1");
 }
 
+TEST_F(EmuCoreLoaderTest, StubMirrorsVramAfterSync)
+{
+    const QDir coresDir(QCoreApplication::applicationDirPath() + QStringLiteral("/PS1Cores"));
+#if defined(Q_OS_WIN)
+    const QString stubPath = coresDir.filePath(QStringLiteral("qtmesh_ps1core_stub.dll"));
+#else
+    const QString stubPath = coresDir.filePath(QStringLiteral("libqtmesh_ps1core_stub.so"));
+#endif
+    if (!QFileInfo::exists(stubPath))
+        GTEST_SKIP() << "PS1 stub core plugin not built beside test binary";
+
+    QString err;
+    std::unique_ptr<EmuCore> core = EmuCoreLoader::loadCore(&err);
+    ASSERT_TRUE(core) << err.toStdString();
+    ASSERT_EQ(core->coreId(), QStringLiteral("stub"));
+
+    VramSnapshot vram;
+    RipperHooks hooks;
+    hooks.setVram(&vram);
+    core->setHooks(&hooks);
+
+    QTemporaryFile bios(QDir::tempPath() + "/qtmesh_bios_XXXXXX.bin");
+    QTemporaryFile iso(QDir::tempPath() + "/qtmesh_iso_XXXXXX.bin");
+    ASSERT_TRUE(bios.open());
+    ASSERT_TRUE(iso.open());
+    bios.write("bios");
+    iso.write("iso");
+    bios.close();
+    iso.close();
+
+    ASSERT_TRUE(core->loadBios(bios.fileName()));
+    ASSERT_TRUE(core->loadIso(iso.fileName()));
+
+    QString bootErr;
+    ASSERT_TRUE(core->boot(&bootErr)) << bootErr.toStdString();
+
+    for (int i = 0; i < 5; ++i) {
+        core->runFrame();
+        core->syncCaptureMirrors();
+    }
+
+    EXPECT_TRUE(vram.hasVisibleContent(8)) << "Stub VRAM pattern should mirror after syncCaptureMirrors";
+}
+
+#if defined(QTMESH_PS1_LIBRETRO_INTEGRATION_TESTS)
 TEST_F(EmuCoreLoaderTest, LibretroBootsDiscWhenTestPathsSet)
 {
     const QString biosPath = qEnvironmentVariable("QTMESH_PS1_TEST_BIOS");
     const QString isoPath = qEnvironmentVariable("QTMESH_PS1_TEST_ISO");
-    if (biosPath.isEmpty() || isoPath.isEmpty())
-        GTEST_SKIP() << "Set QTMESH_PS1_TEST_BIOS and QTMESH_PS1_TEST_ISO for integration boot test";
+    ASSERT_FALSE(biosPath.isEmpty()) << "Set QTMESH_PS1_TEST_BIOS";
+    ASSERT_FALSE(isoPath.isEmpty()) << "Set QTMESH_PS1_TEST_ISO";
 
     const QDir coresDir(QCoreApplication::applicationDirPath() + QStringLiteral("/PS1Cores"));
 #if defined(Q_OS_WIN)
-    if (!QFileInfo::exists(coresDir.filePath(QStringLiteral("mednafen_psx_libretro.dll"))))
+    ASSERT_TRUE(QFileInfo::exists(coresDir.filePath(QStringLiteral("mednafen_psx_libretro.dll"))));
 #else
-    if (!QFileInfo::exists(coresDir.filePath(QStringLiteral("mednafen_psx_libretro.so"))))
+    ASSERT_TRUE(QFileInfo::exists(coresDir.filePath(QStringLiteral("mednafen_psx_libretro.so"))));
 #endif
-        GTEST_SKIP() << "mednafen_psx_libretro not installed in PS1Cores";
 
     qunsetenv("QTMESH_PS1_FORCE_STUB");
 
@@ -140,7 +184,6 @@ TEST_F(EmuCoreLoaderTest, LibretroBootsDiscWhenTestPathsSet)
     EXPECT_GE(fb.frameIndex, 1u);
     EXPECT_GT(fb.rgb24.size(), 0);
 
-    // Stub test pattern is a deterministic RGB gradient; a real frame should differ.
     const uchar r0 = fb.rgb24[0];
     const uchar g0 = fb.rgb24[1];
     const uchar b0 = fb.rgb24[2];
@@ -155,16 +198,8 @@ TEST_F(EmuCoreLoaderTest, LibretroMirrorsVramAfterGameplay)
 {
     const QString biosPath = qEnvironmentVariable("QTMESH_PS1_TEST_BIOS");
     const QString isoPath = qEnvironmentVariable("QTMESH_PS1_TEST_ISO");
-    if (biosPath.isEmpty() || isoPath.isEmpty())
-        GTEST_SKIP() << "Set QTMESH_PS1_TEST_BIOS and QTMESH_PS1_TEST_ISO for VRAM mirror test";
-
-    const QDir coresDir(QCoreApplication::applicationDirPath() + QStringLiteral("/PS1Cores"));
-#if defined(Q_OS_WIN)
-    if (!QFileInfo::exists(coresDir.filePath(QStringLiteral("mednafen_psx_libretro.dll"))))
-#else
-    if (!QFileInfo::exists(coresDir.filePath(QStringLiteral("mednafen_psx_libretro.so"))))
-#endif
-        GTEST_SKIP() << "mednafen_psx_libretro not installed in PS1Cores";
+    ASSERT_FALSE(biosPath.isEmpty()) << "Set QTMESH_PS1_TEST_BIOS";
+    ASSERT_FALSE(isoPath.isEmpty()) << "Set QTMESH_PS1_TEST_ISO";
 
     qunsetenv("QTMESH_PS1_FORCE_STUB");
 
@@ -200,5 +235,6 @@ TEST_F(EmuCoreLoaderTest, LibretroMirrorsVramAfterGameplay)
 
     qputenv("QTMESH_PS1_FORCE_STUB", "1");
 }
+#endif // QTMESH_PS1_LIBRETRO_INTEGRATION_TESTS
 
 #endif // ENABLE_PS1_RIP

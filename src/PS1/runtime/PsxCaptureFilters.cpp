@@ -26,15 +26,17 @@ bool isOnScreenPrim(const PrimRecord &prim)
     if (!isPlausiblePrim(prim))
         return false;
 
+    // Keep primitives that touch the visible area (at least one vertex on-screen).
+    // Reject only when every vertex is outside the margin bounds.
     for (int v = 0; v < 4; ++v) {
         if (v >= prim.vertexCount)
             break;
         const PsxVertex &vert = prim.verts[v];
-        if (vert.x < kVisibleMinX || vert.x > kVisibleMaxX || vert.y < kVisibleMinY
-            || vert.y > kVisibleMaxY)
-            return false;
+        if (vert.x >= kVisibleMinX && vert.x <= kVisibleMaxX && vert.y >= kVisibleMinY
+            && vert.y <= kVisibleMaxY)
+            return true;
     }
-    return true;
+    return false;
 }
 
 } // namespace PsxCaptureFilters
