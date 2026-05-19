@@ -26,14 +26,7 @@ protected:
     }
 };
 
-TEST_F(EmuCoreLoaderTest, SearchPathsIncludePs1CoresNextToBinary)
-{
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QStringList paths = EmuCoreLoader::coreSearchPaths();
-    EXPECT_TRUE(paths.contains(QDir(appDir).filePath(QStringLiteral("PS1Cores"))));
-}
-
-TEST_F(EmuCoreLoaderTest, LoadStubCoreWhenPluginPresent)
+static bool stubCorePluginBesideBinary(QString *foundPath = nullptr)
 {
     const QDir coresDir(QCoreApplication::applicationDirPath() + QStringLiteral("/PS1Cores"));
     const QStringList candidates = {
@@ -47,16 +40,27 @@ TEST_F(EmuCoreLoaderTest, LoadStubCoreWhenPluginPresent)
         coresDir.filePath(QStringLiteral("qtmesh_ps1core_stub.so")),
 #endif
     };
-    bool found = false;
-    for (const QString &p : candidates) {
-        if (QFileInfo::exists(p)) {
-            found = true;
-            break;
+    for (const QString &path : candidates) {
+        if (QFileInfo::exists(path)) {
+            if (foundPath)
+                *foundPath = path;
+            return true;
         }
     }
-    if (!found) {
-        GTEST_SKIP() << "PS1 stub core plugin not built beside test binary";
-    }
+    return false;
+}
+
+TEST_F(EmuCoreLoaderTest, SearchPathsIncludePs1CoresNextToBinary)
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList paths = EmuCoreLoader::coreSearchPaths();
+    EXPECT_TRUE(paths.contains(QDir(appDir).filePath(QStringLiteral("PS1Cores"))));
+}
+
+TEST_F(EmuCoreLoaderTest, LoadStubCoreWhenPluginPresent)
+{
+    ASSERT_TRUE(stubCorePluginBesideBinary())
+        << "PS1 stub core plugin not built beside test binary";
 
     QString err;
     std::unique_ptr<EmuCore> core = EmuCoreLoader::loadCore(&err);
@@ -106,14 +110,8 @@ TEST_F(EmuCoreLoaderTest, LoadsLibretroWhenMednafenCorePresent)
 
 TEST_F(EmuCoreLoaderTest, StubMirrorsVramAfterSync)
 {
-    const QDir coresDir(QCoreApplication::applicationDirPath() + QStringLiteral("/PS1Cores"));
-#if defined(Q_OS_WIN)
-    const QString stubPath = coresDir.filePath(QStringLiteral("qtmesh_ps1core_stub.dll"));
-#else
-    const QString stubPath = coresDir.filePath(QStringLiteral("libqtmesh_ps1core_stub.so"));
-#endif
-    if (!QFileInfo::exists(stubPath))
-        GTEST_SKIP() << "PS1 stub core plugin not built beside test binary";
+    ASSERT_TRUE(stubCorePluginBesideBinary())
+        << "PS1 stub core plugin not built beside test binary";
 
     QString err;
     std::unique_ptr<EmuCore> core = EmuCoreLoader::loadCore(&err);
