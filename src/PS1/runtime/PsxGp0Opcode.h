@@ -26,4 +26,10 @@ inline uint8_t psxGp0OpcodeByte(uint32_t word)
     return low;
 }
 
+/** libgpu getaddr(): byte address of the next DR tag from bits 2–23 (addr >> 2). */
+inline uint32_t psxGp0TagNextByteAddr(uint32_t tag)
+{
+    return ((tag >> 2) & 0x3FFFFFu) << 2;
+}
+
 #endif // PSXGP0OPCODE_H

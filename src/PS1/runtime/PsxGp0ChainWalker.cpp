@@ -89,9 +89,8 @@ PsxGp0ChainWalker::WalkResult PsxGp0ChainWalker::walkChain(const uint8_t *ram, s
         if ((header & 1u) == 0)
             break;
 
-        const uint32_t offsetWords = (header >> 2) & 0x3FFFFFu;
-        const uint32_t nextAddr = chainBaseByte + offsetWords * 4u;
-        if (nextAddr == addr || nextAddr + 4 > byteSize)
+        const uint32_t nextAddr = psxGp0TagNextByteAddr(header);
+        if (nextAddr == addr || nextAddr + 4 > byteSize || (nextAddr % 4) != 0)
             break;
         addr = nextAddr;
     }

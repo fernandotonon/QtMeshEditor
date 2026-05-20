@@ -9,6 +9,7 @@
 #include <QVector>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 
 namespace {
@@ -37,6 +38,35 @@ struct OtCandidate {
     int score = 0;
 };
 
+/** DrawOTag entries are 24-bit RAM pointers; tests may use offsets from the OT base. */
+uint32_t resolveOtEntryChainAddr(const uint8_t *ram, size_t byteSize, uint32_t otBase,
+                                 uint32_t entry, int entryCount)
+{
+    if (entry == 0)
+        return UINT32_MAX;
+
+    const uint32_t absAddr = psxGp0TagNextByteAddr(entry);
+    if (absAddr >= 4 && absAddr + 4 <= byteSize && (absAddr % 4) == 0) {
+        uint32_t header = 0;
+        std::memcpy(&header, ram + absAddr, sizeof(header));
+        if (looksLikeGp0Opcode(header))
+            return absAddr;
+    }
+
+    const uint32_t rel = entry & 0x3FFFFCu;
+    if (rel >= 4 && rel < static_cast<uint32_t>(entryCount) * 4 && (rel % 4) == 0) {
+        const uint32_t relAddr = otBase + rel;
+        if (relAddr + 4 <= byteSize) {
+            uint32_t header = 0;
+            std::memcpy(&header, ram + relAddr, sizeof(header));
+            if (looksLikeGp0Opcode(header))
+                return relAddr;
+        }
+    }
+
+    return UINT32_MAX;
+}
+
 int scoreOrderingTable(const uint8_t *ram, size_t byteSize, uint32_t baseByte, int entryCount)
 {
     if (baseByte + static_cast<size_t>(entryCount) * 4 > byteSize)
@@ -45,19 +75,12 @@ int scoreOrderingTable(const uint8_t *ram, size_t byteSize, uint32_t baseByte, i
     int nonZero = 0;
     int validChains = 0;
     for (int i = 0; i < entryCount; ++i) {
-        uint32_t offset = 0;
-        std::memcpy(&offset, ram + baseByte + static_cast<size_t>(i) * 4, sizeof(offset));
-        if (offset == 0)
+        uint32_t entry = 0;
+        std::memcpy(&entry, ram + baseByte + static_cast<size_t>(i) * 4, sizeof(entry));
+        if (entry == 0)
             continue;
         ++nonZero;
-        if (offset < 4 || offset >= static_cast<uint32_t>(entryCount) * 4 || (offset % 4) != 0)
-            continue;
-        const uint32_t chainAddr = baseByte + offset;
-        if (chainAddr + 4 > byteSize)
-            continue;
-        uint32_t header = 0;
-        std::memcpy(&header, ram + chainAddr, sizeof(header));
-        if (looksLikeGp0Opcode(header))
+        if (resolveOtEntryChainAddr(ram, byteSize, baseByte, entry, entryCount) != UINT32_MAX)
             ++validChains;
     }
 
@@ -133,13 +156,12 @@ int PsxOrderingTableScanner::captureFromOrderingTables(const uint8_t *ram, size_
             if (primCount >= kMaxPrimsPerFrame || chainsWalked >= kMaxChainsPerTable)
                 break;
 
-            uint32_t offset = 0;
-            std::memcpy(&offset, ram + table.baseByte + static_cast<size_t>(i) * 4, sizeof(offset));
-            if (offset < 4 || offset >= static_cast<uint32_t>(table.entryCount) * 4
-                || (offset % 4) != 0)
+            uint32_t entry = 0;
+            std::memcpy(&entry, ram + table.baseByte + static_cast<size_t>(i) * 4, sizeof(entry));
+            const uint32_t chainAddr =
+                resolveOtEntryChainAddr(ram, byteSize, table.baseByte, entry, table.entryCount);
+            if (chainAddr == UINT32_MAX)
                 continue;
-
-            const uint32_t chainAddr = table.baseByte + offset;
             const PsxGp0ChainWalker::WalkResult walked =
                 PsxGp0ChainWalker::walkChain(ram, byteSize, chainAddr, hooks, currentMode,
                                              primCount, seenPrimKeys);

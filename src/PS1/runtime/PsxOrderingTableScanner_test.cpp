@@ -4,6 +4,7 @@
 
 #include "PS1/runtime/CaptureBuffer.h"
 #include "PS1/runtime/Gp0HookDispatch.h"
+#include "PS1/runtime/PsxGp0Opcode.h"
 #include "PS1/runtime/PsxOrderingTableScanner.h"
 #include "PS1/runtime/RipperHooks.h"
 
@@ -91,17 +92,15 @@ TEST(PsxOrderingTableScannerTest, LinkedChainCapture)
     constexpr uint32_t kOtBase = 0x400;
     constexpr uint32_t kChain = 0x800;
 
-    const uint32_t linkOffsetWords = 4; // tri packet is 4 words; second packet follows immediately
+    constexpr uint32_t kSecond = kChain + 16; // 4-word tri packet
     const uint32_t linkedHeader =
-        (static_cast<uint32_t>(0x20) << 24) | (linkOffsetWords << 2) | 1u;
+        (static_cast<uint32_t>(0x20) << 24) | psxGp0TagNextByteAddr(kSecond) | 1u;
     const uint32_t firstPacket[] = {
         linkedHeader,
         pos(0, 0),
         pos(10, 0),
         pos(5, 10),
     };
-    constexpr uint32_t kSecond = kChain + static_cast<uint32_t>(sizeof(firstPacket));
-
     writeU32(ram, kOtBase, kChain - kOtBase);
     std::memcpy(ram + kChain, firstPacket, sizeof(firstPacket));
 
@@ -122,6 +121,36 @@ TEST(PsxOrderingTableScannerTest, LinkedChainCapture)
 
     const int prims = PsxOrderingTableScanner::captureFromOrderingTables(ram, sizeof(ram), &hooks);
     EXPECT_GE(prims, 2);
+}
+
+TEST(PsxOrderingTableScannerTest, AbsoluteOtEntryPointers)
+{
+    alignas(4) uint8_t ram[16 * 1024];
+    std::memset(ram, 0, sizeof(ram));
+
+    constexpr uint32_t kOtBase = 0x200;
+    constexpr uint32_t kChain = 0x1800;
+
+    writeU32(ram, kOtBase, kChain | 1u); // DrawOTag-style absolute pointer (priority in bit0)
+
+    const uint32_t packet[] = {
+        colorCmd(0x20, 1, 2, 3),
+        pos(4, 8),
+        pos(16, 8),
+        pos(10, 20),
+    };
+    std::memcpy(ram + kChain, packet, sizeof(packet));
+
+    std::atomic<bool> armed{true};
+    CaptureBuffer buffer;
+    RipperHooks hooks;
+    hooks.setArmedFlag(&armed);
+    hooks.setBuffer(&buffer);
+
+    const int prims = PsxOrderingTableScanner::captureFromOrderingTables(ram, sizeof(ram), &hooks);
+    EXPECT_GE(prims, 1);
+    ASSERT_GE(buffer.prims().size(), 1);
+    EXPECT_EQ(buffer.prims()[0].kind, PrimKind::MonoTri);
 }
 
 #endif // ENABLE_PS1_RIP
