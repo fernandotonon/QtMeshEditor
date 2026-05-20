@@ -64,3 +64,84 @@ TEST_F(ModelTurntableRendererTest, ComposeSpriteSheet)
     EXPECT_EQ(sheet.width(), 8);
     EXPECT_EQ(sheet.height(), 4);
 }
+
+TEST(ModelTurntableParseAxisStatic, NullOutReturnsFalse)
+{
+    EXPECT_FALSE(ModelTurntableRenderer::parseAxis("y", nullptr));
+}
+
+TEST(ModelTurntableParseAxisStatic, TrimsWhitespace)
+{
+    TurntableAxis axis = TurntableAxis::Y;
+    ASSERT_TRUE(ModelTurntableRenderer::parseAxis("  Z ", &axis));
+    EXPECT_EQ(axis, TurntableAxis::Z);
+}
+
+TEST_F(ModelTurntableRendererTest, RejectsNullOutputFrameList)
+{
+    QString err;
+    QList<Ogre::Entity *> entities;
+    EXPECT_FALSE(ModelTurntableRenderer::renderToImages(entities, TurntableOptions{}, nullptr, &err));
+    EXPECT_FALSE(err.isEmpty());
+}
+
+TEST_F(ModelTurntableRendererTest, RendersFramesAxisXAndZ)
+{
+    PrimitiveObject::createCube(QStringLiteral("TurntableAxisCube"));
+
+    QList<Ogre::Entity *> entities;
+    for (auto *obj : Manager::getSingleton()->getEntities()) {
+        if (obj && obj->getMovableType() == "Entity")
+            entities.append(static_cast<Ogre::Entity *>(obj));
+    }
+    ASSERT_FALSE(entities.isEmpty());
+
+    TurntableOptions opt;
+    opt.width = 64;
+    opt.height = 64;
+    opt.frameCount = 3;
+    opt.axis = TurntableAxis::X;
+
+    QList<QImage> frames;
+    QString err;
+    ASSERT_TRUE(ModelTurntableRenderer::renderToImages(entities, opt, &frames, &err)) << err.toStdString();
+    ASSERT_EQ(static_cast<int>(frames.size()), 3);
+
+    opt.axis = TurntableAxis::Z;
+    frames.clear();
+    ASSERT_TRUE(ModelTurntableRenderer::renderToImages(entities, opt, &frames, &err)) << err.toStdString();
+    EXPECT_EQ(static_cast<int>(frames.size()), 3);
+}
+
+TEST(ModelTurntableComposeSheetStatic, EmptyReturnsNullImage)
+{
+    EXPECT_TRUE(ModelTurntableRenderer::composeSpriteSheet({}, 4).isNull());
+}
+
+TEST(ModelTurntableComposeSheetStatic, ColumnsLayoutTwoByTwo)
+{
+    QList<QImage> frames;
+    for (int i = 0; i < 4; ++i)
+        frames << QImage(10, 10, QImage::Format_RGBA8888);
+    const QImage sheet = ModelTurntableRenderer::composeSpriteSheet(frames, 2);
+    EXPECT_FALSE(sheet.isNull());
+    EXPECT_EQ(sheet.width(), 20);
+    EXPECT_EQ(sheet.height(), 20);
+}
+
+TEST(ModelTurntableComposeSheetStatic, SkipsMismatchedFrameSizes)
+{
+    QList<QImage> frames;
+    frames << QImage(8, 8, QImage::Format_RGBA8888);
+    frames << QImage(16, 16, QImage::Format_RGBA8888); // skipped in painter loop
+    const QImage sheet = ModelTurntableRenderer::composeSpriteSheet(frames, 0);
+    ASSERT_FALSE(sheet.isNull());
+    EXPECT_EQ(sheet.width(), 16); // only first frame drawn (second skipped → transparent hole)
+    EXPECT_EQ(sheet.height(), 8);
+}
+
+TEST_F(ModelTurntableRendererTest, ShutdownIsIdempotent)
+{
+    ModelTurntableRenderer::shutdown();
+    ModelTurntableRenderer::shutdown();
+}
