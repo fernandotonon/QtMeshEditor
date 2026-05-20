@@ -42,6 +42,7 @@ THE SOFTWARE.
 #include <set>
 #include <limits>
 #include <cmath>
+#include <cctype>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -304,8 +305,16 @@ static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
             } else if (tusName == "emissive") {
                 aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_EMISSIVE, emissiveIdx));
                 ++emissiveIdx;
-            } else if (tusName == "diffuse_map" || tusName.empty()) {
-                // Legacy Phong diffuse, or unnamed TUS — route as DIFFUSE.
+            } else if (tusName == "diffuse_map"
+                       || tusName.empty()
+                       || std::all_of(tusName.begin(), tusName.end(),
+                                      [](unsigned char c) { return std::isdigit(c); })) {
+                // Legacy Phong diffuse, anonymous TUS, or a TUS auto-named
+                // by Ogre's .material script parser (texture_unit blocks
+                // without an explicit name get assigned "0", "1", ... at
+                // parse time). All three signal "this is a plain diffuse
+                // texture with no canonical PBR slot" — route as DIFFUSE
+                // so glTF / Phong consumers find a baseColorTexture.
                 aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
                 ++diffuseIdx;
             } else {

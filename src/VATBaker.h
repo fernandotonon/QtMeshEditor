@@ -56,6 +56,22 @@ public:
         double   endTime      = -1.0;     ///< < 0 → animation length.
         QString  outputDir;               ///< Required.
         QString  basename;                ///< Without extension. Defaults to animationName when empty.
+
+        /// Per-vertex column permutation. `vertexPermutation[c]` is the
+        /// texture column to write Ogre vertex `c` into. Empty = identity.
+        ///
+        /// Why this exists: Assimp's gltf2 exporter hardcodes
+        /// `aiProcess_JoinIdenticalVertices` (assimp/code/Common/Exporter.cpp),
+        /// which permutes per-primitive vertex order even when no
+        /// duplicates actually get merged. The bake reads positions in
+        /// Ogre's vertex-buffer order, but the consumer reads its UV2
+        /// (= vertex index) from the post-Assimp glTF buffer. Without
+        /// a remap the two are off and the model renders as shattered
+        /// triangles. `cmdVat` builds this permutation by reading the
+        /// post-export glTF and matching positions back to Ogre's
+        /// vertex-buffer order, then passes it here so the bake's PNG
+        /// columns land in the glTF's vertex order.
+        std::vector<uint32_t> vertexPermutation;
     };
 
     struct BakeResult {

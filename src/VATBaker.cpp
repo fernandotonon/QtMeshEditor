@@ -302,13 +302,20 @@ QString buildOpenVATSidecar(int frameCount,
 // width  = vertexCount, height = 2 * frameCount.
 // Positions are normalized into [lo..hi]; normals into [0..1] via
 // (n+1)/2. Output buffer is row-major, 3 uint16 per pixel.
+//
+// `permutation` (optional): the column to write each Ogre vertex into.
+// Empty = identity. Used to align the bake's column order with what
+// downstream consumers see in their imported mesh — Assimp's gltf2
+// exporter permutes vertices via JoinIdenticalVertices and the
+// consumer's vertex-index UV2 references the permuted buffer.
 std::vector<uint16_t> packOpenVAT16(
     const std::vector<Ogre::Vector3>& flat,
     const std::vector<Ogre::Vector3>& normals,
     int frameCount,
     int vertexCount,
     const Ogre::Vector3& lo,
-    const Ogre::Vector3& hi)
+    const Ogre::Vector3& hi,
+    const std::vector<uint32_t>& permutation = {})
 {
     const size_t framesCount = static_cast<size_t>(frameCount);
     const size_t vcount      = static_cast<size_t>(vertexCount);
@@ -319,27 +326,40 @@ std::vector<uint16_t> packOpenVAT16(
     if (frameCount <= 0 || vertexCount <= 0) return out;
     if (flat.size()    != framesCount * vcount) return out;
     if (normals.size() != framesCount * vcount) return out;
+    if (!permutation.empty() && permutation.size() != vcount) return out;
 
     out.resize(pixels * 3u, 0);
+    const bool hasPerm = !permutation.empty();
+
+    auto dstCol = [&](size_t srcCol) -> size_t {
+        return hasPerm ? static_cast<size_t>(permutation[srcCol]) : srcCol;
+    };
 
     // Top half: positions normalized to [lo..hi].
-    for (size_t i = 0; i < framesCount * vcount; ++i) {
-        const auto& p = flat[i];
-        out[i * 3 + 0] = toShortNormalised(p.x, lo.x, hi.x);
-        out[i * 3 + 1] = toShortNormalised(p.y, lo.y, hi.y);
-        out[i * 3 + 2] = toShortNormalised(p.z, lo.z, hi.z);
+    for (size_t f = 0; f < framesCount; ++f) {
+        const size_t rowBase = f * vcount;
+        for (size_t c = 0; c < vcount; ++c) {
+            const auto& p = flat[rowBase + c];
+            const size_t pix = rowBase + dstCol(c);
+            out[pix * 3 + 0] = toShortNormalised(p.x, lo.x, hi.x);
+            out[pix * 3 + 1] = toShortNormalised(p.y, lo.y, hi.y);
+            out[pix * 3 + 2] = toShortNormalised(p.z, lo.z, hi.z);
+        }
     }
     // Bottom half: normals (n+1)/2 → [0..65535].
     const size_t offset = framesCount * vcount;
-    for (size_t i = 0; i < framesCount * vcount; ++i) {
-        const auto& n = normals[i];
-        const float nx = std::clamp((n.x + 1.0f) * 0.5f, 0.0f, 1.0f);
-        const float ny = std::clamp((n.y + 1.0f) * 0.5f, 0.0f, 1.0f);
-        const float nz = std::clamp((n.z + 1.0f) * 0.5f, 0.0f, 1.0f);
-        const size_t off = (offset + i) * 3u;
-        out[off + 0] = static_cast<uint16_t>(std::lround(nx * 65535.0f));
-        out[off + 1] = static_cast<uint16_t>(std::lround(ny * 65535.0f));
-        out[off + 2] = static_cast<uint16_t>(std::lround(nz * 65535.0f));
+    for (size_t f = 0; f < framesCount; ++f) {
+        const size_t rowBase = f * vcount;
+        for (size_t c = 0; c < vcount; ++c) {
+            const auto& n = normals[rowBase + c];
+            const float nx = std::clamp((n.x + 1.0f) * 0.5f, 0.0f, 1.0f);
+            const float ny = std::clamp((n.y + 1.0f) * 0.5f, 0.0f, 1.0f);
+            const float nz = std::clamp((n.z + 1.0f) * 0.5f, 0.0f, 1.0f);
+            const size_t off = (offset + rowBase + dstCol(c)) * 3u;
+            out[off + 0] = static_cast<uint16_t>(std::lround(nx * 65535.0f));
+            out[off + 1] = static_cast<uint16_t>(std::lround(ny * 65535.0f));
+            out[off + 2] = static_cast<uint16_t>(std::lround(nz * 65535.0f));
+        }
     }
     return out;
 }
@@ -515,8 +535,16 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     result.posTexPath = QDir(opts.outputDir).filePath(base + "_pos.png");
     result.jsonPath   = QDir(opts.outputDir).filePath(base + "-remap_info.json");
 
+    if (!opts.vertexPermutation.empty()
+        && opts.vertexPermutation.size() != static_cast<size_t>(vertexCount)) {
+        result.error = QStringLiteral(
+            "vertexPermutation size (%1) does not match vertex count (%2)")
+                .arg(opts.vertexPermutation.size()).arg(vertexCount);
+        return result;
+    }
     auto packed = packOpenVAT16(flat, normals, frameCount, vertexCount,
-                                roundedLo, roundedHi);
+                                roundedLo, roundedHi,
+                                opts.vertexPermutation);
     if (packed.empty()) {
         result.error = QStringLiteral("OpenVAT pack produced empty buffer");
         return result;

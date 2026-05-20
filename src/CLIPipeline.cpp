@@ -4988,6 +4988,185 @@ int CLIPipeline::cmdBakeVertexColors(int argc, char* argv[])
     return 0;
 }
 
+namespace {
+
+// Read Ogre bind-pose positions from `entity` in vertex-buffer order,
+// matching the order `VATBaker::collectPostSkinPositions` walks
+// (submesh-index, skip-shared-after-first). Returned vector has length
+// equal to the bake's `vertexCount`.
+std::vector<Ogre::Vector3> readOgreBindPositions(Ogre::Entity* entity)
+{
+    std::vector<Ogre::Vector3> out;
+    if (!entity) return out;
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return out;
+
+    bool sharedAppended = false;
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (!sub) continue;
+        if (sub->useSharedVertices && sharedAppended) continue;
+
+        const Ogre::VertexData* vData = sub->useSharedVertices
+            ? mesh->sharedVertexData
+            : sub->vertexData;
+        if (!vData) continue;
+
+        const auto* posElem = vData->vertexDeclaration->findElementBySemantic(
+            Ogre::VES_POSITION);
+        if (!posElem) continue;
+
+        auto vbuf = vData->vertexBufferBinding->getBuffer(posElem->getSource());
+        if (!vbuf) continue;
+
+        auto* bytes = static_cast<unsigned char*>(
+            vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        const size_t vstride = vbuf->getVertexSize();
+        for (size_t j = 0; j < vData->vertexCount; ++j) {
+            Ogre::Real* pPos = nullptr;
+            posElem->baseVertexPointerToElement(bytes + j * vstride, &pPos);
+            out.emplace_back(pPos[0], pPos[1], pPos[2]);
+        }
+        vbuf->unlock();
+        if (sub->useSharedVertices) sharedAppended = true;
+    }
+    return out;
+}
+
+// Read positions per primitive from a glTF file written by Assimp.
+// `out` is a flat list parallel to `readOgreBindPositions` — i.e.
+// concatenated in primitive-index order. Returns true on success.
+bool readGltfPositions(const QString& gltfPath,
+                       std::vector<Ogre::Vector3>& out)
+{
+    out.clear();
+    QFile f(gltfPath);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    const QByteArray jsonBytes = f.readAll();
+    f.close();
+    QJsonParseError perr;
+    QJsonDocument doc = QJsonDocument::fromJson(jsonBytes, &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject())
+        return false;
+    QJsonObject root = doc.object();
+
+    // Buffer URI(s) — embedded base64 not handled (Assimp emits separate .bin).
+    QJsonArray buffers = root.value(QStringLiteral("buffers")).toArray();
+    QFileInfo gi(gltfPath);
+    QVector<QByteArray> bufData(buffers.size());
+    for (int i = 0; i < buffers.size(); ++i) {
+        QJsonObject b = buffers.at(i).toObject();
+        QString uri = b.value(QStringLiteral("uri")).toString();
+        if (uri.isEmpty()) return false;
+        QFile bf(gi.absoluteDir().filePath(uri));
+        if (!bf.open(QIODevice::ReadOnly)) return false;
+        bufData[i] = bf.readAll();
+    }
+
+    QJsonArray accessors    = root.value(QStringLiteral("accessors")).toArray();
+    QJsonArray bufferViews  = root.value(QStringLiteral("bufferViews")).toArray();
+    QJsonArray meshes       = root.value(QStringLiteral("meshes")).toArray();
+    if (meshes.isEmpty()) return false;
+
+    // We assume a single mesh containing all primitives (matches what
+    // MeshImporterExporter::exporter writes for a single entity).
+    QJsonObject mesh0 = meshes.first().toObject();
+    QJsonArray prims = mesh0.value(QStringLiteral("primitives")).toArray();
+    for (const auto& pv : prims) {
+        QJsonObject prim = pv.toObject();
+        QJsonObject attrs = prim.value(QStringLiteral("attributes")).toObject();
+        int posIdx = attrs.value(QStringLiteral("POSITION")).toInt(-1);
+        if (posIdx < 0 || posIdx >= accessors.size()) return false;
+        QJsonObject acc = accessors.at(posIdx).toObject();
+        int bvIdx = acc.value(QStringLiteral("bufferView")).toInt(-1);
+        if (bvIdx < 0 || bvIdx >= bufferViews.size()) return false;
+        int count = acc.value(QStringLiteral("count")).toInt(0);
+        int byteOffsetAcc = acc.value(QStringLiteral("byteOffset")).toInt(0);
+        QJsonObject bv = bufferViews.at(bvIdx).toObject();
+        int bufferIdx = bv.value(QStringLiteral("buffer")).toInt(-1);
+        int byteOffsetBv = bv.value(QStringLiteral("byteOffset")).toInt(0);
+        int byteStride = bv.value(QStringLiteral("byteStride")).toInt(12);
+        if (bufferIdx < 0 || bufferIdx >= bufData.size()) return false;
+        const QByteArray& bd = bufData[bufferIdx];
+        const int start = byteOffsetBv + byteOffsetAcc;
+        if (start + count * byteStride > bd.size()) return false;
+        const auto* base = reinterpret_cast<const unsigned char*>(bd.constData() + start);
+        for (int i = 0; i < count; ++i) {
+            const float* p = reinterpret_cast<const float*>(base + i * byteStride);
+            out.emplace_back(p[0], p[1], p[2]);
+        }
+    }
+    return true;
+}
+
+// Build a permutation `perm` such that Ogre vertex index `i` should
+// be written to texture column `perm[i]`. Done by quantized-position
+// match per-submesh (Assimp's `JoinIdenticalVertices` permutes within
+// a primitive but never across primitives — submesh boundaries match
+// glTF primitive boundaries 1:1).
+//
+// Returns empty vector if matching fails for any vertex (caller must
+// then either skip the permutation or fail the bake).
+std::vector<uint32_t> buildVertexPermutation(
+    const std::vector<Ogre::Vector3>& ogre,
+    const std::vector<Ogre::Vector3>& gltf,
+    const std::vector<size_t>& submeshStarts)
+{
+    std::vector<uint32_t> perm;
+    if (ogre.size() != gltf.size() || ogre.empty()) return perm;
+    perm.resize(ogre.size(), UINT32_MAX);
+
+    // 1e-4 unit tolerance — float->float32 round-trip through glTF is
+    // exact, but Assimp's JoinIdenticalVertices uses an internal epsilon
+    // that's loose enough we shouldn't bet on byte-equality.
+    auto quantize = [](float v) -> int64_t {
+        return static_cast<int64_t>(std::lround(static_cast<double>(v) * 1e5));
+    };
+    struct Key {
+        int64_t x, y, z;
+        bool operator==(const Key& o) const { return x == o.x && y == o.y && z == o.z; }
+    };
+    struct KeyHash {
+        size_t operator()(const Key& k) const noexcept {
+            size_t h = std::hash<int64_t>{}(k.x);
+            h ^= std::hash<int64_t>{}(k.y) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<int64_t>{}(k.z) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+
+    // Walk each submesh in lockstep. submeshStarts[k]..submeshStarts[k+1]
+    // bounds the k-th submesh in both arrays.
+    for (size_t si = 0; si + 1 < submeshStarts.size(); ++si) {
+        const size_t a = submeshStarts[si];
+        const size_t b = submeshStarts[si + 1];
+        // Index glTF positions in this primitive.
+        std::unordered_map<Key, std::vector<size_t>, KeyHash> bucket;
+        for (size_t j = a; j < b; ++j) {
+            Key k{ quantize(gltf[j].x), quantize(gltf[j].y), quantize(gltf[j].z) };
+            bucket[k].push_back(j);
+        }
+        // For each Ogre vertex in this primitive, find the matching glTF
+        // index. If multiple share a quantized key, claim them in order
+        // (vertices that hash equal but have different normals/uvs/
+        // skinning are still distinct glTF entries — we just pop them
+        // off in sequence).
+        for (size_t i = a; i < b; ++i) {
+            Key k{ quantize(ogre[i].x), quantize(ogre[i].y), quantize(ogre[i].z) };
+            auto it = bucket.find(k);
+            if (it == bucket.end() || it->second.empty()) {
+                perm.clear();
+                return perm;
+            }
+            perm[i] = static_cast<uint32_t>(it->second.front());
+            it->second.erase(it->second.begin());
+        }
+    }
+    return perm;
+}
+
+} // namespace
+
 int CLIPipeline::cmdVat(int argc, char* argv[])
 {
     // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--json]
@@ -5092,11 +5271,57 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     int exportResult = MeshImporterExporter::exporter(
         entity->getParentSceneNode(), gltfPath, formatForExtension(gltfPath));
 
+    // Assimp's gltf2 exporter hardcodes `aiProcess_JoinIdenticalVertices`
+    // (assimp/code/Common/Exporter.cpp), which permutes per-primitive
+    // vertex order even when no duplicates actually get merged. Without
+    // a remap the bake's column-index → vertex-index relationship is
+    // broken and the consumer renders shattered triangles.
+    //
+    // Strategy: after the glTF is on disk, read Ogre's bind-pose
+    // positions (the same data Assimp wrote, pre-permutation) and the
+    // post-export glTF positions; build a `perm[ogre_i] = gltf_j`
+    // mapping by quantized-position match per submesh; pass it to the
+    // bake so each row's columns land in the glTF's vertex order.
+    std::vector<uint32_t> vertexPerm;
+    if (exportResult == 0) {
+        std::vector<Ogre::Vector3> ogrePos = readOgreBindPositions(entity);
+        std::vector<Ogre::Vector3> gltfPos;
+        if (readGltfPositions(gltfPath, gltfPos) && ogrePos.size() == gltfPos.size()) {
+            // Build per-submesh start offsets — both Ogre walk and glTF
+            // primitive walk iterate submeshes in the same order, with
+            // identical per-submesh counts (Assimp can permute within
+            // a primitive but cannot move vertices across submeshes).
+            std::vector<size_t> submeshStarts;
+            submeshStarts.push_back(0);
+            Ogre::MeshPtr mesh = entity->getMesh();
+            bool sharedAppended = false;
+            for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+                Ogre::SubMesh* sub = mesh->getSubMesh(si);
+                if (!sub) continue;
+                if (sub->useSharedVertices && sharedAppended) continue;
+                const Ogre::VertexData* vData = sub->useSharedVertices
+                    ? mesh->sharedVertexData
+                    : sub->vertexData;
+                if (!vData) continue;
+                submeshStarts.push_back(submeshStarts.back() + vData->vertexCount);
+                if (sub->useSharedVertices) sharedAppended = true;
+            }
+            vertexPerm = buildVertexPermutation(ogrePos, gltfPos, submeshStarts);
+            if (vertexPerm.empty()) {
+                err() << "Warning: failed to align bake columns with glTF "
+                         "vertex order — consumer may render shattered "
+                         "triangles. Submitting bake in Ogre vertex-buffer "
+                         "order as a fallback." << Qt::endl;
+            }
+        }
+    }
+
     VATBaker::Options opts;
-    opts.animationName = animName;
-    opts.fps           = fps;
-    opts.outputDir     = outDir;
-    opts.basename      = animName;
+    opts.animationName     = animName;
+    opts.fps               = fps;
+    opts.outputDir         = outDir;
+    opts.basename          = animName;
+    opts.vertexPermutation = std::move(vertexPerm);
 
     SentryReporter::addBreadcrumb("file.export",
         QString("Writing OpenVAT bake to %1 (anim=%2)")
