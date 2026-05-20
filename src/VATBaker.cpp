@@ -535,12 +535,29 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     result.posTexPath = QDir(opts.outputDir).filePath(base + "_pos.png");
     result.jsonPath   = QDir(opts.outputDir).filePath(base + "-remap_info.json");
 
-    if (!opts.vertexPermutation.empty()
-        && opts.vertexPermutation.size() != static_cast<size_t>(vertexCount)) {
-        result.error = QStringLiteral(
-            "vertexPermutation size (%1) does not match vertex count (%2)")
-                .arg(opts.vertexPermutation.size()).arg(vertexCount);
-        return result;
+    if (!opts.vertexPermutation.empty()) {
+        if (opts.vertexPermutation.size() != static_cast<size_t>(vertexCount)) {
+            result.error = QStringLiteral(
+                "vertexPermutation size (%1) does not match vertex count (%2)")
+                    .arg(opts.vertexPermutation.size()).arg(vertexCount);
+            return result;
+        }
+        // A non-bijective permutation would silently corrupt the bake:
+        // an out-of-range entry walks past the PNG's row stride into the
+        // normal half, and a duplicate entry overwrites one column while
+        // leaving another zero — both produce a packed texture that
+        // decodes to garbage at runtime. Reject upfront with a clear
+        // error so the caller can fall back to identity packing.
+        std::vector<bool> seen(static_cast<size_t>(vertexCount), false);
+        for (uint32_t dst : opts.vertexPermutation) {
+            if (dst >= static_cast<uint32_t>(vertexCount) || seen[dst]) {
+                result.error = QStringLiteral(
+                    "vertexPermutation must be a unique mapping over [0, %1)")
+                        .arg(vertexCount);
+                return result;
+            }
+            seen[dst] = true;
+        }
     }
     auto packed = packOpenVAT16(flat, normals, frameCount, vertexCount,
                                 roundedLo, roundedHi,
