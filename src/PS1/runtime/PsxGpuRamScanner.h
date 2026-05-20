@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-class RipperHooks;
+class EmuHooks;
 
 /**
  * Best-effort scan of PSX main RAM for GP0 polygon packets (#418).
@@ -13,7 +13,7 @@ class RipperHooks;
 class PsxGpuRamScanner
 {
 public:
-    static void captureFromSystemRam(const uint8_t *ram, size_t byteSize, RipperHooks *hooks);
+    static void captureFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks);
 };
 
 #endif // PSXGPURAMSCANNER_H

@@ -1,5 +1,6 @@
 #include "LibretroEmuCore.h"
 #include "EmuFramebuffer.h"
+#include "Gp0HookDispatch.h"
 #include "PsxBiosValidator.h"
 #include "PsxDiscResolver.h"
 #include "PsxVramColor.h"
@@ -596,7 +597,7 @@ void LibretroEmuCore::captureGpuFromRam()
     if (!ram || ramSize < 4096)
         return;
 
-    m_hooks->ingestSystemRamForGpuCapture(static_cast<const uint8_t *>(ram), ramSize);
+    Gp0HookDispatch::captureFrameFromSystemRam(static_cast<const uint8_t *>(ram), ramSize, m_hooks);
 }
 
 void LibretroEmuCore::presentVideo(const void *data, unsigned width, unsigned height, size_t pitch)

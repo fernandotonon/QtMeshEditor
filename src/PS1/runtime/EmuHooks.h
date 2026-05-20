@@ -16,6 +16,7 @@ public:
     virtual ~EmuHooks() = default;
 
     virtual bool isCaptureEnabled() const { return false; }
+    virtual uint32_t latestMatrixId() const { return UINT32_MAX; }
 
     virtual void onFrameBegin() {}
     virtual void onFrameEnd() {}

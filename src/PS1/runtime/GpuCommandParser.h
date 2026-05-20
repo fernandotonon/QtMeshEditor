@@ -30,6 +30,17 @@ public:
         PrimRecord prim{};
         bool hasDrawMode = false;
         DrawModeRecord drawMode{};
+        bool hasVramWrite = false;
+        uint16_t vramX = 0;
+        uint16_t vramY = 0;
+        uint16_t vramW = 0;
+        uint16_t vramH = 0;
+        const uint16_t *vramPixels = nullptr;
+        bool hasVramRead = false;
+        uint16_t vramReadX = 0;
+        uint16_t vramReadY = 0;
+        uint16_t vramReadW = 0;
+        uint16_t vramReadH = 0;
         QString error;
     };
     static Gp0Step stepGp0(const uint32_t *words, size_t wordCount);
