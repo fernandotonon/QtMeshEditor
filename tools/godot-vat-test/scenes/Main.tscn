@@ -67,7 +67,7 @@ surface_material_override/0 = SubResource("Material_floor")
 [node name="Skeletal" type="Node3D" parent="Ground"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.9, 0, 0)
 script = ExtResource("3_skeletal")
-gltf_path = "res://assets/Rumba Dancing_mixamo.com_/source.gltf"
+gltf_path = "res://assets/Barril_01/source.gltf"
 
 [node name="Placeholder" type="MeshInstance3D" parent="Ground/Skeletal"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
@@ -94,9 +94,8 @@ transform = Transform3D(-1, 0, -1.62921e-07, 0, 1, 0, 1.62921e-07, 0, -1, 0.9, 0
 mesh = SubResource("BoxMesh_placeholder")
 surface_material_override/0 = SubResource("Material_placeholder_right")
 script = ExtResource("2_vatplayer")
-bake_dir = "res://assets/Rumba Dancing_mixamo.com_"
-source_gltf = "res://assets/Rumba Dancing_mixamo.com_/source.gltf"
-frame_interp = true
+bake_dir = "res://assets/Barril_01"
+source_gltf = "res://assets/Barril_01/source.gltf"
 
 [node name="LabelRight" type="Label3D" parent="Ground/VAT"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.1, 0)

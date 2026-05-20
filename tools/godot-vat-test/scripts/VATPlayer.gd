@@ -20,11 +20,12 @@ extends MeshInstance3D
 
 @export_dir var bake_dir: String = ""
 
-## Path to the glTF whose mesh geometry should drive the VAT replay.
+## Path to the source mesh whose geometry should drive the VAT replay.
 ## MUST match the vertex order the baker saw, otherwise the position
 ## texture's column indexing will be wrong and the result will explode.
-## The staging script always sets this to `<bake_dir>/source.gltf`.
-@export_file("*.gltf", "*.glb") var source_gltf: String = ""
+## The staging script normally sets this to `<bake_dir>/source.gltf`,
+## but native Blender bakes ship as `.fbx` (Godot 4 imports FBX too).
+@export_file("*.gltf", "*.glb", "*.fbx") var source_gltf: String = ""
 
 ## Playback frames per second. OpenVAT's `os-remap` block does not
 ## include a framerate (positions are time-resampled at bake time), so
@@ -63,16 +64,45 @@ func _load_source_mesh() -> bool:
 	if source_gltf.is_empty():
 		push_error("VATPlayer: source_gltf is empty")
 		return false
-	var doc := GLTFDocument.new()
-	var state := GLTFState.new()
-	var abs_path: String = ProjectSettings.globalize_path(source_gltf)
-	var err: int = doc.append_from_file(abs_path, state)
-	if err != OK:
-		push_error("VATPlayer: GLTFDocument.append_from_file('%s') failed: %d" %
-			[abs_path, err])
-		return false
-	var scene: Node = doc.generate_scene(state)
+
+	var lower := source_gltf.to_lower()
+	var scene: Node = null
+
+	if lower.ends_with(".gltf") or lower.ends_with(".glb"):
+		# Runtime glTF load — works for any path on disk, no editor
+		# import needed.
+		var doc := GLTFDocument.new()
+		var state := GLTFState.new()
+		var abs_path: String = ProjectSettings.globalize_path(source_gltf)
+		var err: int = doc.append_from_file(abs_path, state)
+		if err != OK:
+			push_error("VATPlayer: GLTFDocument.append_from_file('%s') failed: %d" %
+				[abs_path, err])
+			return false
+		scene = doc.generate_scene(state)
+	else:
+		# FBX (and anything else) goes through the editor's import
+		# pipeline. Godot 4 auto-imports FBX under res://, so we just
+		# `load()` the PackedScene and instantiate it. No runtime FBX
+		# parser ships with Godot itself.
+		var pack: Resource = load(source_gltf)
+		if pack == null:
+			push_error("VATPlayer: load('%s') returned null — make sure Godot's editor has finished importing the FBX" % source_gltf)
+			return false
+		if pack is PackedScene:
+			scene = (pack as PackedScene).instantiate()
+		elif pack is Mesh:
+			# Some imports surface as a bare Mesh resource.
+			mesh = pack as Mesh
+			skeleton = NodePath("")
+			return true
+		else:
+			push_error("VATPlayer: source '%s' loaded as %s, expected PackedScene or Mesh" %
+				[source_gltf, pack.get_class()])
+			return false
+
 	if scene == null:
+		push_error("VATPlayer: failed to instantiate source scene from %s" % source_gltf)
 		return false
 	var found_mesh: ArrayMesh = _first_mesh_in(scene)
 	scene.queue_free()  # We only wanted the mesh resource.
@@ -93,6 +123,14 @@ func _first_mesh_in(root: Node) -> ArrayMesh:
 		var m: Mesh = (root as MeshInstance3D).mesh
 		if m is ArrayMesh:
 			return m as ArrayMesh
+		# FBX/Collada imports often surface as ImporterMesh; bake to
+		# an ArrayMesh so we get the vertex-buffer accessors the bake
+		# loop relies on (surface_get_arrays / surface_get_material).
+		# `ImporterMesh` lives in `editor/` so it's not a parse-time
+		# type at runtime — we go through `is_class` to keep the
+		# `Mesh`-typed branch happy.
+		if m != null and m.is_class("ImporterMesh"):
+			return m.call("get_mesh") as ArrayMesh
 	for c in root.get_children():
 		var found := _first_mesh_in(c)
 		if found:
@@ -100,8 +138,18 @@ func _first_mesh_in(root: Node) -> ArrayMesh:
 	return null
 
 
-## Walks `bake_dir` looking for an OpenVAT pair: `*-remap_info.json` and
-## the matching packed PNG (`<basename>_pos.png`, height = 2 × Frames).
+## Walks `bake_dir` looking for an OpenVAT bake. Supports two layouts:
+##
+## - Packed Normals  (what QtMeshEditor writes):
+##     <basename>_pos.png         16-bit RGB, height = 2 × Frames
+##     <basename>-remap_info.json os-remap sidecar
+##
+## - Separate Normals (Blender add-on's "Vertex Normals = Separate" mode):
+##     <basename>_vat.png  or .exr   positions only, height = Frames
+##     <basename>_vnrm.png or .exr   normals only,   height = Frames
+##     [<basename>-remap_info.json   optional in practice — Blender
+##                                   writes it but the file may go
+##                                   missing in the user's hand-off]
 ##
 ## When `bake_dir` holds multiple staged bakes (e.g. someone staged
 ## a second animation without clearing the folder), we have to pair
@@ -113,69 +161,118 @@ func _load_bake() -> bool:
 	if dir == null:
 		push_error("VATPlayer: cannot open %s" % bake_dir)
 		return false
+
+	# First sweep: look for a position texture and figure out which
+	# layout we're in. Order matters — packed mode is the default
+	# QtMeshEditor output, so prefer it when both files coexist.
 	var json_path := ""
+	var pos_path := ""
+	var nrm_path := ""
+	var packed := true
+	var basename := ""
 	for f in dir.get_files():
 		if f.ends_with("-remap_info.json") and json_path.is_empty():
 			json_path = bake_dir.path_join(f)
-			break
-	if json_path.is_empty():
-		push_error("VATPlayer: no *-remap_info.json sidecar in %s — " % bake_dir +
-			"is this an OpenVAT bake? Try rerunning bake_and_stage.sh.")
+		elif pos_path.is_empty() and (f.ends_with("_pos.png") or f.ends_with("_pos.exr")):
+			pos_path = bake_dir.path_join(f)
+			packed = true
+			var idx := f.rfind("_pos.")
+			basename = f.substr(0, idx)
+		elif pos_path.is_empty() and (f.ends_with("_vat.png") or f.ends_with("_vat.exr")):
+			pos_path = bake_dir.path_join(f)
+			packed = false
+			var idx := f.rfind("_vat.")
+			basename = f.substr(0, idx)
+		elif (f.ends_with("_vnrm.png") or f.ends_with("_vnrm.exr")) and nrm_path.is_empty():
+			nrm_path = bake_dir.path_join(f)
+
+	if pos_path.is_empty():
+		push_error("VATPlayer: no *_pos.{png,exr} or *_vat.{png,exr} in %s" % bake_dir)
 		return false
 
-	# Derive the basename from the picked sidecar so the PNG we load is
-	# guaranteed to come from the same bake. `<basename>-remap_info.json`
-	# → strip the suffix to get `<basename>`, then look for the matching
-	# `<basename>_pos.png`.
-	var json_file := json_path.get_file()
-	var basename := json_file.substr(0, json_file.length() - "-remap_info.json".length())
-	var pos_path := bake_dir.path_join(basename + "_pos.png")
-	if not FileAccess.file_exists(pos_path):
-		push_error("VATPlayer: sidecar %s points at basename '%s' but %s is missing" %
-			[json_file, basename, pos_path])
-		return false
-
-	var sidecar_text: String = FileAccess.get_file_as_string(json_path)
-	var sidecar: Variant = JSON.parse_string(sidecar_text)
-	if typeof(sidecar) != TYPE_DICTIONARY:
-		push_error("VATPlayer: malformed sidecar at %s" % json_path)
-		return false
-	if not sidecar.has("os-remap"):
-		push_error("VATPlayer: sidecar at %s lacks 'os-remap' key (not OpenVAT)" % json_path)
-		return false
-
-	var os_remap: Dictionary = sidecar["os-remap"]
-	for required_key in ["Min", "Max", "Frames"]:
-		if not os_remap.has(required_key):
-			push_error("VATPlayer: os-remap missing '%s' key" % required_key)
+	# Separate-normals mode requires the matching _vnrm.* file beside it.
+	if not packed and nrm_path.is_empty():
+		# Try the basename pairing in case file enumeration order missed it.
+		for ext in [".png", ".exr"]:
+			var probe := bake_dir.path_join(basename + "_vnrm" + ext)
+			if FileAccess.file_exists(probe):
+				nrm_path = probe
+				break
+		if nrm_path.is_empty():
+			push_error("VATPlayer: separate-normals bake %s but no matching *_vnrm.{png,exr}" % pos_path)
 			return false
 
-	_frame_count = int(os_remap["Frames"])
-
-	# OpenVAT's Min/Max are arrays of stringified 8-decimal-place floats
-	# (e.g. ["-0.70000000", "0.00000000", "-0.60000000"]). Cast each
-	# element through float() — Godot is lenient about whether the
-	# array entry is a string or a number, but we don't depend on that.
-	var min_arr: Array = os_remap["Min"]
-	var max_arr: Array = os_remap["Max"]
-	if min_arr.size() < 3 or max_arr.size() < 3:
-		push_error("VATPlayer: Min/Max arrays must have at least 3 elements")
-		return false
-	_bounds_min = Vector3(float(min_arr[0]), float(min_arr[1]), float(min_arr[2]))
-	_bounds_max = Vector3(float(max_arr[0]), float(max_arr[1]), float(max_arr[2]))
+	# Read OpenVAT sidecar if present. If not, fall back to a
+	# unit-cube bounds so geometry at least connects — the result
+	# will be visually wrong scale, but better than refusing to
+	# render at all. Blender exports normally include the sidecar;
+	# this fallback is a hand-off-friendliness measure only.
+	var fallback_bounds := false
+	if not json_path.is_empty():
+		var sidecar_text: String = FileAccess.get_file_as_string(json_path)
+		var sidecar: Variant = JSON.parse_string(sidecar_text)
+		if typeof(sidecar) != TYPE_DICTIONARY:
+			push_error("VATPlayer: malformed sidecar at %s" % json_path)
+			return false
+		if not sidecar.has("os-remap"):
+			push_error("VATPlayer: sidecar at %s lacks 'os-remap' key (not OpenVAT)" % json_path)
+			return false
+		var os_remap: Dictionary = sidecar["os-remap"]
+		for required_key in ["Min", "Max", "Frames"]:
+			if not os_remap.has(required_key):
+				push_error("VATPlayer: os-remap missing '%s' key" % required_key)
+				return false
+		_frame_count = int(os_remap["Frames"])
+		# OpenVAT's Min/Max are arrays of stringified 8-decimal floats.
+		var min_arr: Array = os_remap["Min"]
+		var max_arr: Array = os_remap["Max"]
+		if min_arr.size() < 3 or max_arr.size() < 3:
+			push_error("VATPlayer: Min/Max arrays must have at least 3 elements")
+			return false
+		_bounds_min = Vector3(float(min_arr[0]), float(min_arr[1]), float(min_arr[2]))
+		_bounds_max = Vector3(float(max_arr[0]), float(max_arr[1]), float(max_arr[2]))
+	else:
+		fallback_bounds = true
+		_bounds_min = Vector3(-1, -1, -1)
+		_bounds_max = Vector3( 1,  1,  1)
+		# frame_count is filled in below from the image height.
 
 	var pos_tex: Texture2D = _load_data_texture(pos_path)
 	if pos_tex == null:
 		push_error("VATPlayer: failed to load %s" % pos_path)
 		return false
+	var nrm_tex: Texture2D = null
+	if not nrm_path.is_empty():
+		nrm_tex = _load_data_texture(nrm_path)
+		if nrm_tex == null:
+			push_error("VATPlayer: failed to load %s" % nrm_path)
+			return false
 
-	# Sanity: image height should be 2 × frames.
+	# Layout sanity. Packed mode: image height = 2 × frames. Separate
+	# mode: image height = frames (the _vnrm file is the SAME height).
 	var img_h: int = pos_tex.get_height()
-	if img_h != _frame_count * 2:
-		push_warning("VATPlayer: texture height %d != 2 × frames (%d) — " %
-			[img_h, _frame_count * 2] +
-			"is this really an OpenVAT bake?")
+	if packed:
+		if _frame_count <= 0:
+			_frame_count = int(img_h / 2)  # fallback when no sidecar but packed
+		if img_h != _frame_count * 2:
+			push_warning("VATPlayer: packed-mode texture height %d != 2 × frames (%d)" %
+				[img_h, _frame_count * 2])
+	else:
+		if _frame_count <= 0:
+			_frame_count = img_h
+		if img_h != _frame_count:
+			push_warning("VATPlayer: separate-mode texture height %d != frames (%d)" %
+				[img_h, _frame_count])
+		if nrm_tex.get_height() != img_h or nrm_tex.get_width() != pos_tex.get_width():
+			push_warning("VATPlayer: separate-mode nrm tex %dx%d != pos tex %dx%d" %
+				[nrm_tex.get_width(), nrm_tex.get_height(),
+				 pos_tex.get_width(), pos_tex.get_height()])
 	_vertex_count = pos_tex.get_width()
+
+	if fallback_bounds:
+		push_warning(("VATPlayer: no sidecar in %s — using fallback bounds [-1, 1]. " +
+			"Re-export from Blender with the JSON sidecar (remap_info) for correct scale.")
+			% bake_dir)
 
 	var shader := Shader.new()
 	shader.code = _builtin_shader_code()
@@ -191,6 +288,14 @@ func _load_bake() -> bool:
 		var mat := ShaderMaterial.new()
 		mat.shader = shader
 		mat.set_shader_parameter("pos_tex", pos_tex)
+		if nrm_tex != null:
+			mat.set_shader_parameter("nrm_tex", nrm_tex)
+		else:
+			# Bind pos_tex as nrm_tex so the sampler slot is filled —
+			# we'll never sample through it in packed mode, but Godot
+			# still requires the uniform to point at a real texture.
+			mat.set_shader_parameter("nrm_tex", pos_tex)
+		mat.set_shader_parameter("separate_normals", not packed)
 		mat.set_shader_parameter("frame_count", _frame_count)
 		mat.set_shader_parameter("vertex_count", _vertex_count)
 		mat.set_shader_parameter("vertex_offset", running_offset)
@@ -293,9 +398,17 @@ func _builtin_shader_code() -> String:
 shader_type spatial;
 render_mode cull_disabled, depth_draw_opaque, depth_test_default;
 
+// Position texture. Packed mode: height = 2 × frame_count, normals
+// live in the lower half. Separate mode: height = frame_count, this
+// holds positions only and `nrm_tex` holds the normals.
 uniform sampler2D pos_tex : filter_nearest, repeat_disable, hint_default_white;
+// Normal texture for separate-normals mode. Bound to pos_tex in
+// packed mode (the uniform must point at a real texture) but
+// never sampled when `separate_normals == false`.
+uniform sampler2D nrm_tex : filter_nearest, repeat_disable, hint_default_white;
 uniform sampler2D albedo_tex : filter_linear_mipmap, repeat_enable, source_color;
 uniform bool has_albedo_tex = false;
+uniform bool separate_normals = false;
 
 uniform float current_frame = 0.0;
 uniform int frame_count = 1;
@@ -314,27 +427,40 @@ void vertex() {
 	// texture is row-addressed. We split into integer current/next rows
 	// and a fractional blend, then sample both rows directly via
 	// `texelFetch`. Avoids sampler nearest-rounding ambiguity at the
-	// half-texture boundary (rows N-1 and N are physically adjacent
-	// but live in different semantic halves — position vs. normal —
-	// and a sampler that rounds the wrong way produces the one-frame
-	// blob/glitch).
+	// half-texture boundary in packed mode (rows N-1 and N are
+	// physically adjacent but live in different semantic halves —
+	// position vs. normal — and a sampler that rounds the wrong way
+	// produces the one-frame blob/glitch).
 	int safe_frame_count = max(frame_count, 1);
 	int curr_row = int(floor(current_frame)) % safe_frame_count;
 	if (curr_row < 0) curr_row += safe_frame_count;
 	int next_row = (curr_row + 1) % safe_frame_count;
 	float blend = fract(current_frame);
 
-	// Position: sample rows in the top half [0..N-1].
+	// Position: rows 0..N-1 in pos_tex regardless of mode.
 	vec3 p_curr = texelFetch(pos_tex, ivec2(global_vid, curr_row), 0).rgb;
 	vec3 p_next = texelFetch(pos_tex, ivec2(global_vid, next_row), 0).rgb;
 	vec3 p = mix(p_curr, p_next, blend);
 	VERTEX = bounds_min + p * (bounds_max - bounds_min);
 
-	// Normal: sample rows in the bottom half [N..2N-1].
-	vec3 n_curr = texelFetch(pos_tex, ivec2(global_vid, curr_row + safe_frame_count), 0).rgb;
-	vec3 n_next = texelFetch(pos_tex, ivec2(global_vid, next_row + safe_frame_count), 0).rgb;
+	// Normal sampling diverges by mode:
+	//   - Packed:   pos_tex rows [N..2N-1]
+	//   - Separate: nrm_tex rows [0..N-1]
+	vec3 n_curr, n_next;
+	if (separate_normals) {
+		n_curr = texelFetch(nrm_tex, ivec2(global_vid, curr_row), 0).rgb;
+		n_next = texelFetch(nrm_tex, ivec2(global_vid, next_row), 0).rgb;
+	} else {
+		n_curr = texelFetch(pos_tex, ivec2(global_vid, curr_row + safe_frame_count), 0).rgb;
+		n_next = texelFetch(pos_tex, ivec2(global_vid, next_row + safe_frame_count), 0).rgb;
+	}
 	vec3 n = mix(n_curr, n_next, blend) * 2.0 - 1.0;
-	// See block comment above for why we negate.
+	// Negate to compensate for QtMeshEditor's FBX→Ogre import path,
+	// which flips winding without flipping the captured normal vector
+	// (aiProcess_ConvertToLeftHanded). Blender-sourced OpenVAT bakes
+	// don't need this — the negation is harmless in either case since
+	// (-n) just makes the surface back-lit instead of front-lit, but
+	// for Blender-native bakes consider flipping back.
 	NORMAL = -normalize(n);
 
 	uv0_pass = UV;
