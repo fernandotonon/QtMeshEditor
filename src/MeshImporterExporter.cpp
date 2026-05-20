@@ -2798,10 +2798,21 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             }
 
             Assimp::Exporter exporter;
-            // DirectX .x is natively left-handed — Assimp's exporter
-            // handles the RH→LH conversion internally, so we must NOT
-            // apply ConvertToLeftHanded or the geometry gets double-flipped.
-            unsigned int exportFlags = (formatId == "x")
+            // glTF/GLB and DirectX (.x) are right-handed like Ogre — skip
+            // handedness conversion. For .x specifically, Assimp's exporter
+            // handles the RH→LH conversion internally, so applying
+            // ConvertToLeftHanded would double-flip the geometry. For glTF
+            // (also RH), ConvertToLeftHanded would flip the X axis AND
+            // reverse triangle winding, which silently breaks any consumer
+            // that pairs the export with a separately-computed vertex
+            // stream — e.g. the OpenVAT bake, whose texture columns are
+            // indexed by Ogre's original RH vertex order. Only apply LH
+            // conversion for formats that genuinely expect left-handed
+            // coords (the Assimp pose exporter has the same skip list).
+            bool rightHanded = (formatId == "x"
+                                || formatId == "gltf2"
+                                || formatId == "glb2");
+            unsigned int exportFlags = rightHanded
                 ? 0 : aiProcess_ConvertToLeftHanded;
             aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
                                              file.filePath().toStdString().c_str(),
