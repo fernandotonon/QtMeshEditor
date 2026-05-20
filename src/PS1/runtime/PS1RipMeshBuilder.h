@@ -25,6 +25,12 @@ public:
     static bool attachToScene(const ReconstructedMesh &mesh, const QString &captureId,
                               const CaptureSnapshot *textureSource, BuildResult *resultOut,
                               QString *errorOut = nullptr);
+
+    /** Places deduplicated meshes with one SceneNode per instance (#423). */
+    static bool attachCaptureSetToScene(const ReconstructedCaptureSet &captureSet,
+                                        const QString &captureId,
+                                        const CaptureSnapshot *textureSource, BuildResult *resultOut,
+                                        QString *errorOut = nullptr);
 };
 
 #endif // PS1RIPMESHBUILDER_H

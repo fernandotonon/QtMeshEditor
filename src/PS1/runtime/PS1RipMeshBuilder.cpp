@@ -339,3 +339,132 @@ bool PS1RipMeshBuilder::attachToScene(const ReconstructedMesh &mesh, const QStri
     }
     return true;
 }
+
+bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &captureSet,
+                                                const QString &captureId,
+                                                const CaptureSnapshot *textureSource,
+                                                BuildResult *resultOut, QString *errorOut)
+{
+    if (captureSet.isEmpty()) {
+        if (errorOut)
+            *errorOut = QStringLiteral("Reconstructed capture set is empty");
+        return false;
+    }
+
+    Manager *mgr = Manager::getSingletonPtr();
+    if (!mgr) {
+        if (errorOut)
+            *errorOut = QStringLiteral("Editor scene is not available");
+        return false;
+    }
+
+    removePriorCaptureNodes(mgr);
+
+    QVector<Ogre::AxisAlignedBox> localBoundsByMesh(captureSet.uniqueMeshes.size());
+    for (int i = 0; i < captureSet.uniqueMeshes.size(); ++i)
+        localBoundsByMesh[i] = meshBounds(captureSet.uniqueMeshes[i]);
+
+    Ogre::AxisAlignedBox combinedBounds;
+    combinedBounds.setNull();
+    for (const ReconstructedInstance &inst : captureSet.instances) {
+        if (inst.uniqueMeshIndex < 0 || inst.uniqueMeshIndex >= localBoundsByMesh.size())
+            continue;
+        const Ogre::AxisAlignedBox &local = localBoundsByMesh[inst.uniqueMeshIndex];
+        if (local.isNull())
+            continue;
+        const Ogre::Vector3 t(inst.px, inst.py, inst.pz);
+        combinedBounds.merge(local.getMinimum() + t);
+        combinedBounds.merge(local.getMaximum() + t);
+    }
+    if (combinedBounds.isNull()) {
+        for (const Ogre::AxisAlignedBox &local : localBoundsByMesh) {
+            if (!local.isNull())
+                combinedBounds.merge(local);
+        }
+    }
+    if (combinedBounds.isNull())
+        combinedBounds = Ogre::AxisAlignedBox(-0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f);
+
+    const Ogre::Vector3 size = combinedBounds.getSize();
+    const float maxExtent = std::max(size.x, std::max(size.y, size.z));
+    float placementScale = 1.0f;
+    if (maxExtent > 1e-6f) {
+        placementScale = kTargetMaxExtent / maxExtent;
+        if (maxExtent < 0.01f)
+            placementScale = 3.0f / maxExtent;
+    }
+
+    TextureDecoder textureDecoder;
+    int totalVerts = 0;
+    int totalTris = 0;
+    Ogre::SceneNode *firstNode = nullptr;
+    Ogre::Entity *firstEntity = nullptr;
+
+    QStringList createdNodeNames;
+    int instanceOrdinal = 0;
+    for (int meshIndex = 0; meshIndex < captureSet.uniqueMeshes.size(); ++meshIndex) {
+        const ReconstructedMesh &mesh = captureSet.uniqueMeshes[meshIndex];
+        const QString meshName = QStringLiteral("ps1_capture_%1_u%2").arg(captureId).arg(meshIndex);
+        const std::string ogreMeshName = meshName.toStdString();
+
+        if (Ogre::MeshManager::getSingleton().resourceExists(ogreMeshName))
+            Ogre::MeshManager::getSingleton().remove(ogreMeshName);
+
+        const Ogre::AxisAlignedBox localBounds = meshBounds(mesh);
+        Ogre::AxisAlignedBox bounds = localBounds;
+        if (bounds.isNull())
+            bounds = Ogre::AxisAlignedBox(-0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f);
+
+        Ogre::MeshPtr ogreMesh = Ogre::MeshManager::getSingleton().createManual(
+            ogreMeshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+        for (const ReconstructedSubMesh &sub : mesh.subMeshes) {
+            Ogre::SubMesh *ogreSub = ogreMesh->createSubMesh();
+            ogreSub->setMaterialName(
+                ensureMaterial(sub.materialName, textureSource, captureId, &textureDecoder)
+                    ->getName());
+            writeSubMesh(sub, ogreSub);
+        }
+
+        ogreMesh->_setBounds(bounds);
+        ogreMesh->_setBoundingSphereRadius(bounds.getHalfSize().length());
+        ogreMesh->load();
+
+        totalVerts += mesh.vertexCount;
+        totalTris += mesh.triangleCount;
+
+        for (const ReconstructedInstance &inst : captureSet.instances) {
+            if (inst.uniqueMeshIndex != meshIndex)
+                continue;
+
+            const QString nodeName =
+                QStringLiteral("PS1Capture_%1_inst%2").arg(captureId).arg(instanceOrdinal++);
+            Ogre::SceneNode *node = mgr->addSceneNode(nodeName);
+            createdNodeNames.append(nodeName);
+            node->setPosition(inst.px * placementScale, inst.py * placementScale,
+                              inst.pz * placementScale);
+            node->setScale(placementScale, placementScale, placementScale);
+
+            Ogre::Entity *entity = mgr->createEntity(node, ogreMesh);
+            if (!entity) {
+                for (const QString &createdName : createdNodeNames)
+                    mgr->destroySceneNode(createdName);
+                if (errorOut)
+                    *errorOut = QStringLiteral("Failed to create Ogre entity for instance");
+                return false;
+            }
+            if (!firstNode) {
+                firstNode = node;
+                firstEntity = entity;
+            }
+        }
+    }
+
+    if (resultOut) {
+        resultOut->sceneNode = firstNode;
+        resultOut->entity = firstEntity;
+        resultOut->vertexCount = totalVerts;
+        resultOut->triangleCount = totalTris;
+    }
+    return true;
+}

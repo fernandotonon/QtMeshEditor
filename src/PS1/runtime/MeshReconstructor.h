@@ -6,6 +6,8 @@
 #include <QString>
 #include <QVector>
 
+enum class MeshDedupeMode;
+
 /** One vertex in reconstructed editor space (#422). */
 struct ReconstructedVertex {
     float px = 0.0f;
@@ -34,11 +36,32 @@ struct ReconstructedMesh {
     bool isEmpty() const { return subMeshes.isEmpty(); }
 };
 
-/** Builds editor-space meshes from a captured primitive stream (#422). */
+/** One placed copy of a deduplicated mesh (#423). */
+struct ReconstructedInstance {
+    int uniqueMeshIndex = 0;
+    float px = 0.0f;
+    float py = 0.0f;
+    float pz = 0.0f;
+};
+
+/** Deduplicated capture output: unique meshes + instance transforms (#423). */
+struct ReconstructedCaptureSet {
+    QVector<ReconstructedMesh> uniqueMeshes;
+    QVector<ReconstructedInstance> instances;
+    int capturedPartCount = 0;
+
+    bool isEmpty() const { return uniqueMeshes.isEmpty(); }
+    int uniqueCount() const { return uniqueMeshes.size(); }
+    int instanceCount() const { return instances.size(); }
+};
+
+/** Builds editor-space meshes from a captured primitive stream (#422, #423). */
 class MeshReconstructor
 {
 public:
     static ReconstructedMesh reconstruct(const CaptureSnapshot &snapshot);
+    static ReconstructedCaptureSet reconstructDeduped(const CaptureSnapshot &snapshot,
+                                                      MeshDedupeMode dedupeMode);
 };
 
 #endif // MESHRECONSTRUCTOR_H
