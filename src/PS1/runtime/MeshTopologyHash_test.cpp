@@ -78,6 +78,39 @@ TEST(MeshTopologyHashTest, SubmeshOrderIsInvariant)
               MeshTopologyHash::hashMesh(centeredPermuted, MeshDedupeMode::Loose));
 }
 
+TEST(MeshTopologyHashTest, SameMaterialSubmeshOrderIsInvariant)
+{
+    const QString sharedMat = QStringLiteral("PS1Rip/tpage_0001_clut_0000");
+
+    ReconstructedSubMesh triA;
+    triA.materialName = sharedMat;
+    triA.vertices = {{0, 0, 0, 0, 0, 1, 0, 0, 0xFFFFFFFFu},
+                     {1, 0, 0, 0, 0, 1, 0, 0, 0xFFFFFFFFu},
+                     {0, 1, 0, 0, 0, 1, 0, 0, 0xFFFFFFFFu}};
+    triA.indices = {0, 1, 2};
+
+    ReconstructedSubMesh triB;
+    triB.materialName = sharedMat;
+    triB.vertices = {{2, 0, 0, 0, 0, 1, 0, 0, 0xFFFFFFFFu},
+                     {3, 0, 0, 0, 0, 1, 0, 0, 0xFFFFFFFFu},
+                     {2, 1, 0, 0, 0, 1, 0, 0, 0xFFFFFFFFu}};
+    triB.indices = {0, 1, 2};
+
+    ReconstructedMesh ordered;
+    ordered.subMeshes = {triA, triB};
+    ReconstructedMesh permuted;
+    permuted.subMeshes = {triB, triA};
+
+    float cx = 0.0f;
+    float cy = 0.0f;
+    float cz = 0.0f;
+    const ReconstructedMesh centeredOrdered = MeshTopologyHash::centered(ordered, cx, cy, cz);
+    const ReconstructedMesh centeredPermuted = MeshTopologyHash::centered(permuted, cx, cy, cz);
+
+    EXPECT_EQ(MeshTopologyHash::hashMesh(centeredOrdered, MeshDedupeMode::Loose),
+              MeshTopologyHash::hashMesh(centeredPermuted, MeshDedupeMode::Loose));
+}
+
 TEST(MeshTopologyHashTest, StrictModeSeparatesSmallTranslation)
 {
     const ReconstructedMesh a = unitTriangleAt(0.0f, 0.0f, 0.0f);

@@ -33,6 +33,27 @@ void mixFloat(quint64 &h, float v, MeshDedupeMode mode)
     }
 }
 
+quint64 submeshContentKey(const ReconstructedSubMesh &sub, MeshDedupeMode mode)
+{
+    quint64 h = 0xcbf29ce484222325ULL;
+    mixHash(h, static_cast<quint64>(sub.vertices.size()));
+    mixHash(h, static_cast<quint64>(sub.indices.size()));
+
+    for (uint32_t idx : sub.indices) {
+        mixHash(h, idx);
+        if (idx >= static_cast<uint32_t>(sub.vertices.size()))
+            continue;
+        const ReconstructedVertex &v = sub.vertices[static_cast<int>(idx)];
+        mixFloat(h, quantize(v.px, mode), mode);
+        mixFloat(h, quantize(v.py, mode), mode);
+        mixFloat(h, quantize(v.pz, mode), mode);
+        mixFloat(h, quantize(v.u, mode), mode);
+        mixFloat(h, quantize(v.v, mode), mode);
+        mixHash(h, v.diffuseArgb);
+    }
+    return h;
+}
+
 } // namespace
 
 quint64 MeshTopologyHash::hashMesh(const ReconstructedMesh &mesh, MeshDedupeMode mode)
@@ -45,8 +66,14 @@ quint64 MeshTopologyHash::hashMesh(const ReconstructedMesh &mesh, MeshDedupeMode
     for (const ReconstructedSubMesh &sub : mesh.subMeshes)
         ordered.append(&sub);
     std::sort(ordered.begin(), ordered.end(),
-              [](const ReconstructedSubMesh *a, const ReconstructedSubMesh *b) {
-                  return a->materialName < b->materialName;
+              [mode](const ReconstructedSubMesh *a, const ReconstructedSubMesh *b) {
+                  if (a->materialName != b->materialName)
+                      return a->materialName < b->materialName;
+                  const quint64 keyA = submeshContentKey(*a, mode);
+                  const quint64 keyB = submeshContentKey(*b, mode);
+                  if (keyA != keyB)
+                      return keyA < keyB;
+                  return a < b;
               });
 
     for (const ReconstructedSubMesh *subPtr : ordered) {
