@@ -689,7 +689,8 @@ void CLIPipeline::printUsage()
         "                                    normals) plus `<basename>-remap_info.json` with the\n"
         "                                    canonical `os-remap` sidecar shape. Off-the-shelf openvat\n"
         "                                    reference shaders for Godot / Unity / Unreal / Blender\n"
-        "                                    consume the output unmodified.\n"
+        "                                    consume the output unmodified. Drop-in shader templates\n"
+        "                                    for Godot/Unity/Unreal live at `tools/vat-shaders/`.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -5072,6 +5073,25 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         return 1;
     }
 
+    // Export the source mesh as glTF BEFORE running the bake. Both
+    // the bake's vertex walk and the glTF exporter iterate Ogre
+    // submeshes in submesh-index order, so writing them from the same
+    // entity guarantees the bake's column index `i` corresponds to
+    // glTF vertex `i`. Doing this AFTER the bake produced a malformed
+    // glTF (the bake's software-skinning request leaves Ogre's
+    // animation state in a half-state that the exporter mishandles —
+    // we get a meshes dict instead of an array). Doing it BEFORE
+    // sidesteps the issue entirely and gives consumers a mesh that
+    // matches the bake bit-for-bit on vertex order.
+    // VATBaker::bake creates `outDir` itself; we need it now too.
+    QDir().mkpath(outDir);
+    QString gltfPath = QFileInfo(QDir(outDir).filePath("source.gltf")).absoluteFilePath();
+    // Use the display-name format string (matches `cmdConvert`).
+    // Short forms like "gltf2" route to a different exporter path
+    // that produces a malformed meshes-as-dict glTF.
+    int exportResult = MeshImporterExporter::exporter(
+        entity->getParentSceneNode(), gltfPath, formatForExtension(gltfPath));
+
     VATBaker::Options opts;
     opts.animationName = animName;
     opts.fps           = fps;
@@ -5089,11 +5109,26 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         return 1;
     }
 
+    if (exportResult != 0) {
+        // Non-fatal — a consumer can still drive the bake against a
+        // separately-converted mesh if they accept the risk. We do
+        // log a warning so users notice when it failed.
+        SentryReporter::captureMessage(
+            QStringLiteral("CLI vat: source.gltf export failed (rc=%1)").arg(exportResult),
+            "warning");
+        err() << "Warning: source.gltf export failed (rc=" << exportResult
+              << "). Bake is still valid; you'll need to provide a "
+                 "vertex-order-matching mesh separately." << Qt::endl;
+        gltfPath.clear();  // Mark as missing so the post-run report skips it.
+    }
+
     if (jsonOutput) {
         QJsonObject obj;
         obj["ok"]          = true;
         obj["texture"]     = result.posTexPath;
         obj["sidecar"]     = result.jsonPath;
+        if (!gltfPath.isEmpty())
+            obj["sourceMesh"] = gltfPath;
         obj["frameCount"]  = result.frameCount;
         obj["vertexCount"] = result.vertexCount;
         obj["animation"]   = animName;
@@ -5110,6 +5145,8 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                      .arg(animName).arg(result.frameCount).arg(result.vertexCount));
         cliWrite(QStringLiteral("  texture:  %1\n").arg(result.posTexPath));
         cliWrite(QStringLiteral("  sidecar:  %1\n").arg(result.jsonPath));
+        if (!gltfPath.isEmpty())
+            cliWrite(QStringLiteral("  mesh:     %1 (vertex order matches the bake)\n").arg(gltfPath));
         cliWrite(QStringLiteral("  bounds:   min=(%1, %2, %3) max=(%4, %5, %6)\n")
                      .arg(result.minBound.x, 0, 'f', 3)
                      .arg(result.minBound.y, 0, 'f', 3)
@@ -5117,6 +5154,8 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                      .arg(result.maxBound.x, 0, 'f', 3)
                      .arg(result.maxBound.y, 0, 'f', 3)
                      .arg(result.maxBound.z, 0, 'f', 3));
+        cliWrite(QStringLiteral(
+            "  shaders:  drop-in Godot/Unity/Unreal templates at tools/vat-shaders/\n"));
     }
     return 0;
 }

@@ -496,6 +496,33 @@ function App() {
           </Section>
 
           <Section
+            id="vat-demo"
+            eyebrow="Live demo"
+            title="VAT export, running in your browser"
+            subtitle="A skeletal animation baked to a vertex animation texture and played back in Godot via a shader — no skeleton at runtime. Drag to orbit, scroll to zoom."
+          >
+            <div className={styles.vatDemoWrapper}>
+              <iframe
+                src="demo/index.html"
+                title="QtMeshEditor VAT demo"
+                className={styles.vatDemoFrame}
+                loading="lazy"
+                allow="autoplay; fullscreen; cross-origin-isolated"
+              />
+            </div>
+            <div className={styles.vatDemoCaption}>
+              <p>
+                Same mesh, same animation, ~25 KB texture instead of a per-frame skeleton update. Bake with{' '}
+                <code>qtmesh vat &lt;file&gt; --anim &lt;name&gt; -o &lt;dir&gt;</code> — drop-in
+                shader templates for Godot, Unity, and Unreal ship at{' '}
+                <a href="https://github.com/fernandotonon/QtMeshEditor/tree/master/tools/vat-shaders" target="_blank" rel="noreferrer">
+                  tools/vat-shaders/
+                </a>.
+              </p>
+            </div>
+          </Section>
+
+          <Section
             id="pipeline"
             eyebrow="Pipeline Overview"
             title="CI/CD pipeline flow for 3D assets"

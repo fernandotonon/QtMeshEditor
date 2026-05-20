@@ -96,7 +96,6 @@ surface_material_override/0 = SubResource("Material_placeholder_right")
 script = ExtResource("2_vatplayer")
 bake_dir = "res://assets/Rumba Dancing_mixamo.com_"
 source_gltf = "res://assets/Rumba Dancing_mixamo.com_/source.gltf"
-frame_interp = true
 
 [node name="LabelRight" type="Label3D" parent="Ground/VAT"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.1, 0)

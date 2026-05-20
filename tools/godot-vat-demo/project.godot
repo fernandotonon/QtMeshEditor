@@ -1,0 +1,54 @@
+; Godot 4 project — VAT showcase demos.
+;
+; Three scenes:
+;   scenes/demo_web.tscn        Single dancer + orbit camera. For the
+;                               website embed.
+;   scenes/demo_perf_skeleton.tscn  1000 SkinnedMeshRenderer dancers +
+;                                   FPS readout. Compare against the VAT
+;                                   demo to see the cost of GPU skinning.
+;   scenes/demo_perf_vat.tscn   1000 VAT dancers + FPS readout. Same
+;                               visual, different render path. Should
+;                               run dramatically faster.
+
+config_version=5
+
+[application]
+
+config/name="VAT Demo"
+config/description="QtMeshEditor OpenVAT showcase + perf comparison."
+run/main_scene="res://scenes/demo_web.tscn"
+config/features=PackedStringArray("4.2", "Forward Plus")
+
+[debug]
+
+gdscript/warnings/untyped_declaration=1
+gdscript/warnings/unsafe_property_access=0
+
+[input]
+
+ui_zoom_in={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":61,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
+ui_zoom_out={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":45,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
+
+[display]
+
+; Vsync OFF at project level. Without this, perf scenes are pinned to
+; the display refresh (120 Hz on ProMotion Macs / 60 Hz on most
+; others) and the FPS overlay flatlines at the cap even when there's
+; significant GPU headroom. The runtime `window_set_vsync_mode(DISABLED)`
+; call in the perf spawners is also there, but on macOS Metal the
+; project setting is the authoritative one — Metal binds vsync at
+; window creation, before any GDScript runs.
+window/vsync/vsync_mode=0
+
+[rendering]
+
+textures/default_filters/use_nearest_mipmap_filter=true
+anti_aliasing/quality/msaa_3d=2

@@ -978,3 +978,49 @@
     font-size: 0.78rem;
   }
 }
+
+/* ─── VAT live demo (iframe-embedded Godot Web build) ───── */
+
+.vatDemoWrapper {
+  position: relative;
+  margin-top: 1rem;
+  border-radius: 0.9rem;
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  background: var(--surface-1);
+  /* 16:9 aspect ratio, but with a max-height so it doesn't dominate
+     huge viewports. The Godot canvas resizes itself to fit via
+     canvas_resize_policy=2 (resize to project size). */
+  aspect-ratio: 16 / 9;
+  max-height: 540px;
+}
+
+.vatDemoFrame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #16181d;
+}
+
+.vatDemoCaption {
+  margin-top: 0.85rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface-1);
+  border: 1px solid var(--stroke);
+  border-radius: 0.7rem;
+  color: var(--text-2);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.vatDemoCaption p {
+  margin: 0;
+}
+
+.vatDemoCaption code {
+  font-size: 0.86rem;
+  background: var(--surface-2);
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.35rem;
+}

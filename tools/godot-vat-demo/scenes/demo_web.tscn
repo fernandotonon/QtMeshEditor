@@ -1,0 +1,118 @@
+[gd_scene load_steps=9 format=3 uid="uid://b0vk1vatdemoweb"]
+
+[ext_resource type="Script" path="res://scripts/VATInstance.gd" id="1_vat"]
+[ext_resource type="Script" path="res://scripts/OrbitCamera.gd" id="2_orbit"]
+[ext_resource type="Script" path="res://scripts/WebDemoMain.gd" id="3_webmain"]
+
+[sub_resource type="Environment" id="Environment_default"]
+background_mode = 1
+background_color = Color(0.08, 0.09, 0.12, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.55, 0.6, 0.7, 1)
+ambient_light_energy = 0.5
+ssao_enabled = false
+glow_enabled = true
+glow_intensity = 0.4
+adjustment_enabled = true
+adjustment_contrast = 1.05
+adjustment_saturation = 1.1
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_floor"]
+size = Vector2(12, 12)
+subdivide_width = 4
+subdivide_depth = 4
+
+[sub_resource type="StandardMaterial3D" id="Material_floor"]
+albedo_color = Color(0.12, 0.13, 0.18, 1)
+roughness = 0.85
+metallic = 0.05
+
+[sub_resource type="BoxMesh" id="BoxMesh_placeholder"]
+size = Vector3(0.4, 1.7, 0.3)
+
+[sub_resource type="StandardMaterial3D" id="Material_placeholder"]
+albedo_color = Color(0.45, 0.55, 0.85, 1)
+roughness = 0.7
+
+[node name="Demo" type="Node3D"]
+script = ExtResource("3_webmain")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_default")
+
+[node name="OrbitCamera" type="Camera3D" parent="."]
+fov = 45.0
+script = ExtResource("2_orbit")
+target = Vector3(0, 1.0, 0)
+distance = 4.5
+yaw_deg = 15.0
+pitch_deg = -10.0
+
+[node name="KeyLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.8, -0.35, 0.42, 0, 0.77, 0.64, -0.58, -0.51, 0.61, 2, 4, 2)
+light_energy = 1.3
+shadow_enabled = true
+
+[node name="FillLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.6, 0, -0.8, 0, 1, 0, 0.8, 0, 0.6, -3, 2, 1)
+light_color = Color(0.8, 0.85, 1.0, 1)
+light_energy = 0.3
+
+[node name="Floor" type="MeshInstance3D" parent="."]
+mesh = SubResource("PlaneMesh_floor")
+surface_material_override/0 = SubResource("Material_floor")
+
+[node name="VAT" type="MeshInstance3D" parent="."]
+; 180° rotation around Y to face the camera. Godot's glTF importer
+; auto-flips imported scenes to match its forward = -Z convention; we
+; attach the mesh resource directly via VATInstance, so we apply that
+; rotation here.
+transform = Transform3D(-1, 0, -1.62921e-07, 0, 1, 0, 1.62921e-07, 0, -1, 0, 0, 0)
+mesh = SubResource("BoxMesh_placeholder")
+surface_material_override/0 = SubResource("Material_placeholder")
+script = ExtResource("1_vat")
+bake_dir = "res://assets/Rumba"
+source_gltf = "res://assets/Rumba/source.gltf"
+fps = 30.0
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Title" type="Label" parent="UI"]
+offset_left = 20.0
+offset_top = 14.0
+offset_right = 800.0
+offset_bottom = 42.0
+text = "VAT — Vertex Animation Texture (QtMeshEditor)"
+theme_override_font_sizes/font_size = 20
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+
+[node name="Subtitle" type="Label" parent="UI"]
+offset_left = 20.0
+offset_top = 44.0
+offset_right = 800.0
+offset_bottom = 70.0
+text = "Animation driven by a position texture in the vertex shader — no skeleton."
+theme_override_font_sizes/font_size = 13
+theme_override_colors/font_color = Color(0.85, 0.85, 0.9, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 3
+
+[node name="Help" type="Label" parent="UI"]
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -260.0
+offset_top = -80.0
+offset_right = -16.0
+offset_bottom = -16.0
+text = "Drag to orbit
+Wheel / +/- to zoom"
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.7, 0.75, 0.85, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 3
+horizontal_alignment = 2
