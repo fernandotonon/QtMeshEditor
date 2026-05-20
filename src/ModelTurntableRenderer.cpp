@@ -24,6 +24,7 @@ Ogre::SceneManager *sceneMgr()
 }
 
 struct TurntableState {
+  Ogre::SceneNode *pivotNode = nullptr;
   Ogre::Camera *camera = nullptr;
   Ogre::SceneNode *cameraNode = nullptr;
   Ogre::Light *light = nullptr;
@@ -117,7 +118,8 @@ bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QStr
       st.camera->setNearClipDistance(0.01f);
       st.camera->setFarClipDistance(100000.0f);
       st.camera->setFOVy(Ogre::Degree(45.0f));
-      st.cameraNode = sm->getRootSceneNode()->createChildSceneNode("ModelTurntableCameraNode");
+      st.pivotNode = sm->getRootSceneNode()->createChildSceneNode("ModelTurntablePivot");
+      st.cameraNode = st.pivotNode->createChildSceneNode("ModelTurntableCameraNode");
       st.cameraNode->attachObject(st.camera);
     }
 
@@ -187,11 +189,14 @@ void recenterEntitiesAtOrigin(const QList<Ogre::Entity *> &entities, Ogre::AxisA
   if (center.squaredLength() < 1e-10f)
     return;
 
+  std::unordered_set<Ogre::SceneNode *> shifted;
   for (Ogre::Entity *entity : entities) {
     if (!entity)
       continue;
-    if (Ogre::SceneNode *node = entity->getParentSceneNode())
-      node->translate(-center, Ogre::Node::TS_WORLD);
+    Ogre::SceneNode *node = entity->getParentSceneNode();
+    if (!node || !shifted.insert(node).second)
+      continue;
+    node->translate(-center, Ogre::Node::TS_WORLD);
   }
 
   bounds.setExtents(bounds.getMinimum() - center, bounds.getMaximum() - center);
@@ -211,6 +216,16 @@ Ogre::Vector3 orbitAxisVector(TurntableAxis axis)
   }
 }
 
+/// Look-at / orbit point. After recentering this is near the origin; a small upward
+/// bias keeps typical upright characters visually centered in the frame.
+Ogre::Vector3 turntablePivotPoint(const Ogre::AxisAlignedBox &bounds)
+{
+  Ogre::Vector3 point = bounds.getCenter();
+  const Ogre::Real height = bounds.getMaximum().y - bounds.getMinimum().y;
+  point.y += height * 0.12f;
+  return point;
+}
+
 /// Camera rest offset before orbit rotation (orbit applied around `axis` through center).
 Ogre::Vector3 cameraRestOffset(TurntableAxis axis, float horizDistance, float axialDistance)
 {
@@ -225,47 +240,37 @@ Ogre::Vector3 cameraRestOffset(TurntableAxis axis, float horizDistance, float ax
   }
 }
 
-/// Ogre cameras look down local -Z; keep world +Y as up so the horizon stays level.
-void orientCameraToward(Ogre::SceneNode *cameraNode, const Ogre::Vector3 &eye, const Ogre::Vector3 &target,
-                        const Ogre::Vector3 &worldUp)
+/// Build an orthonormal camera basis (GLM-style: right = forward x up).
+void cameraAxesFromViewDir(const Ogre::Vector3 &viewDir, const Ogre::Vector3 &worldUp, Ogre::Vector3 &outSide,
+                           Ogre::Vector3 &outUp)
 {
-  Ogre::Vector3 forward = target - eye;
+  Ogre::Vector3 forward = viewDir;
   if (forward.squaredLength() < 1e-8f)
-    return;
+    forward = Ogre::Vector3(0.0f, 0.0f, 1.0f);
   forward.normalise();
 
-  Ogre::Vector3 side = worldUp.crossProduct(forward);
-  if (side.squaredLength() < 1e-8f) {
-    // Looking straight up/down — pick a fallback up.
-    side = Ogre::Vector3::UNIT_X.crossProduct(forward);
-  }
+  Ogre::Vector3 side = forward.crossProduct(worldUp);
+  if (side.squaredLength() < 1e-8f)
+    side = forward.crossProduct(Ogre::Vector3::UNIT_X);
   side.normalise();
-  const Ogre::Vector3 up = forward.crossProduct(side);
-
-  Ogre::Matrix3 rot;
-  rot.FromAxes(side, up, -forward);
-  cameraNode->setOrientation(Ogre::Quaternion(rot));
+  outSide = side;
+  outUp = side.crossProduct(forward);
+  outUp.normalise();
 }
 
 /// Minimum orbit radius so every AABB corner fits in the camera frustum from `viewDir`.
-Ogre::Real fitOrbitDistance(const Ogre::AxisAlignedBox &bounds, const Ogre::Vector3 &viewDir,
-                            Ogre::Camera *camera, float paddingFactor)
+Ogre::Real fitOrbitDistance(const Ogre::AxisAlignedBox &bounds, const Ogre::Vector3 &pivotPoint,
+                            const Ogre::Vector3 &viewDir, Ogre::Camera *camera, float paddingFactor)
 {
-  const Ogre::Vector3 center = bounds.getCenter();
+  const Ogre::Vector3 center = pivotPoint;
   Ogre::Vector3 dir = viewDir;
   if (dir.squaredLength() < 1e-8f)
     dir = Ogre::Vector3(0.0f, 0.0f, 1.0f);
   dir.normalise();
 
-  Ogre::Vector3 up = Ogre::Vector3::UNIT_Y;
-  Ogre::Vector3 side = up.crossProduct(dir);
-  if (side.squaredLength() < 1e-8f) {
-    up = Ogre::Vector3::UNIT_X;
-    side = up.crossProduct(dir);
-  }
-  side.normalise();
-  up = dir.crossProduct(side);
-  up.normalise();
+  Ogre::Vector3 side;
+  Ogre::Vector3 up;
+  cameraAxesFromViewDir(dir, Ogre::Vector3::UNIT_Y, side, up);
 
   const Ogre::Radian fovY = camera->getFOVy();
   const Ogre::Real aspect = camera->getAspectRatio();
@@ -295,10 +300,10 @@ void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, T
                        float elevationRadians, float paddingFactor)
 {
   TurntableState &st = state();
-  if (!st.camera || !st.cameraNode || bounds.isNull() || bounds.isInfinite())
+  if (!st.camera || !st.cameraNode || !st.pivotNode || bounds.isNull() || bounds.isInfinite())
     return;
 
-  const Ogre::Vector3 center = bounds.getCenter();
+  const Ogre::Vector3 pivotPoint = turntablePivotPoint(bounds);
 
   const float horizUnit = std::cos(elevationRadians);
   const float axialUnit = std::sin(elevationRadians);
@@ -307,13 +312,15 @@ void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, T
     restDir = cameraRestOffset(axis, 1.0f, 0.0f);
   restDir.normalise();
 
-  const Ogre::Real distance = fitOrbitDistance(bounds, restDir, st.camera, paddingFactor);
-  const Ogre::Vector3 localOffset = cameraRestOffset(axis, distance * horizUnit, distance * axialUnit);
-  const Ogre::Quaternion orbit(Ogre::Radian(angleRadians), orbitAxisVector(axis));
-  const Ogre::Vector3 eye = center + orbit * localOffset;
+  const Ogre::Real distance = fitOrbitDistance(bounds, pivotPoint, restDir, st.camera, paddingFactor);
+  const float horiz = distance * horizUnit;
+  const float axial = distance * axialUnit;
 
-  st.cameraNode->setPosition(eye);
-  orientCameraToward(st.cameraNode, eye, center, Ogre::Vector3::UNIT_Y);
+  // Pivot at the framing point; rotate on one axis; child camera always looks at pivot origin.
+  st.pivotNode->setPosition(pivotPoint);
+  st.pivotNode->setOrientation(Ogre::Quaternion(Ogre::Radian(angleRadians), orbitAxisVector(axis)));
+  st.cameraNode->setPosition(cameraRestOffset(axis, horiz, axial));
+  st.cameraNode->lookAt(Ogre::Vector3::ZERO, Ogre::Node::TS_PARENT);
 }
 
 std::string normalMapTextureName(const Ogre::MaterialPtr &mat)
@@ -437,13 +444,18 @@ void ModelTurntableRenderer::shutdown()
       st.light = nullptr;
     }
     if (st.camera) {
-      if (st.cameraNode) {
+      if (st.cameraNode)
         st.cameraNode->detachObject(st.camera);
-        sm->destroySceneNode(st.cameraNode);
-        st.cameraNode = nullptr;
-      }
       sm->destroyCamera(st.camera);
       st.camera = nullptr;
+    }
+    if (st.cameraNode) {
+      sm->destroySceneNode(st.cameraNode);
+      st.cameraNode = nullptr;
+    }
+    if (st.pivotNode) {
+      sm->destroySceneNode(st.pivotNode);
+      st.pivotNode = nullptr;
     }
   }
 }
