@@ -162,45 +162,91 @@ func _load_bake() -> bool:
 		push_error("VATPlayer: cannot open %s" % bake_dir)
 		return false
 
-	# First sweep: look for a position texture and figure out which
-	# layout we're in. Order matters — packed mode is the default
-	# QtMeshEditor output, so prefer it when both files coexist.
+	# We pick the bake by SIDECAR basename, then look up its matching
+	# textures by that same basename. Picking each file independently
+	# would silently combine metadata from one bake with pixels from
+	# another when `bake_dir` holds multiple/partially-staged outputs.
+	#
+	# Anchor priority:
+	#   1. If a *-remap_info.json exists, its basename wins. Look for
+	#      <basename>_pos.{png,exr} (packed) or <basename>_vat.{png,exr}
+	#      (separate). One must exist; otherwise fail.
+	#   2. If NO sidecar exists, fall back to picking the first
+	#      *_pos.* or *_vat.* in the directory and derive the basename
+	#      from that. (Sidecar-less bakes use unit-bounds fallback —
+	#      already a degraded path; same-folder ambiguity is the
+	#      user's problem to clean up.)
 	var json_path := ""
 	var pos_path := ""
 	var nrm_path := ""
 	var packed := true
 	var basename := ""
-	for f in dir.get_files():
+	var files := dir.get_files()
+	for f in files:
 		if f.ends_with("-remap_info.json") and json_path.is_empty():
 			json_path = bake_dir.path_join(f)
-		elif pos_path.is_empty() and (f.ends_with("_pos.png") or f.ends_with("_pos.exr")):
-			pos_path = bake_dir.path_join(f)
-			packed = true
-			var idx := f.rfind("_pos.")
-			basename = f.substr(0, idx)
-		elif pos_path.is_empty() and (f.ends_with("_vat.png") or f.ends_with("_vat.exr")):
-			pos_path = bake_dir.path_join(f)
-			packed = false
-			var idx := f.rfind("_vat.")
-			basename = f.substr(0, idx)
-		elif (f.ends_with("_vnrm.png") or f.ends_with("_vnrm.exr")) and nrm_path.is_empty():
-			nrm_path = bake_dir.path_join(f)
+			basename = f.substr(0, f.length() - "-remap_info.json".length())
+			break  # Sidecar wins; we'll pair textures off this basename.
 
-	if pos_path.is_empty():
-		push_error("VATPlayer: no *_pos.{png,exr} or *_vat.{png,exr} in %s" % bake_dir)
-		return false
-
-	# Separate-normals mode requires the matching _vnrm.* file beside it.
-	if not packed and nrm_path.is_empty():
-		# Try the basename pairing in case file enumeration order missed it.
+	if not basename.is_empty():
+		# Sidecar-anchored: look up textures by exact basename.
 		for ext in [".png", ".exr"]:
-			var probe := bake_dir.path_join(basename + "_vnrm" + ext)
-			if FileAccess.file_exists(probe):
-				nrm_path = probe
+			var pos_probe := bake_dir.path_join(basename + "_pos" + ext)
+			if FileAccess.file_exists(pos_probe):
+				pos_path = pos_probe
+				packed = true
 				break
-		if nrm_path.is_empty():
-			push_error("VATPlayer: separate-normals bake %s but no matching *_vnrm.{png,exr}" % pos_path)
+			var vat_probe := bake_dir.path_join(basename + "_vat" + ext)
+			if FileAccess.file_exists(vat_probe):
+				pos_path = vat_probe
+				packed = false
+				break
+		if pos_path.is_empty():
+			push_error(("VATPlayer: sidecar %s points at basename '%s' but no " +
+				"matching <basename>_pos.{png,exr} or <basename>_vat.{png,exr} " +
+				"was found in %s") %
+				[json_path, basename, bake_dir])
 			return false
+		if not packed:
+			# Separate-normals: <basename>_vnrm.{png,exr} must exist.
+			for ext in [".png", ".exr"]:
+				var nrm_probe := bake_dir.path_join(basename + "_vnrm" + ext)
+				if FileAccess.file_exists(nrm_probe):
+					nrm_path = nrm_probe
+					break
+			if nrm_path.is_empty():
+				push_error("VATPlayer: separate-normals bake '%s' missing %s_vnrm.{png,exr}" %
+					[pos_path, basename])
+				return false
+	else:
+		# No sidecar — pick the first texture, derive the basename
+		# from it. Triggers the unit-bounds fallback further down.
+		for f in files:
+			if pos_path.is_empty() and (f.ends_with("_pos.png") or f.ends_with("_pos.exr")):
+				pos_path = bake_dir.path_join(f)
+				packed = true
+				basename = f.substr(0, f.rfind("_pos."))
+			elif pos_path.is_empty() and (f.ends_with("_vat.png") or f.ends_with("_vat.exr")):
+				pos_path = bake_dir.path_join(f)
+				packed = false
+				basename = f.substr(0, f.rfind("_vat."))
+			elif not basename.is_empty() and nrm_path.is_empty() and \
+					(f == basename + "_vnrm.png" or f == basename + "_vnrm.exr"):
+				nrm_path = bake_dir.path_join(f)
+		if pos_path.is_empty():
+			push_error("VATPlayer: no *_pos.{png,exr} or *_vat.{png,exr} in %s" % bake_dir)
+			return false
+		if not packed and nrm_path.is_empty():
+			# Catch a vnrm that came BEFORE the vat file in enumeration.
+			for ext in [".png", ".exr"]:
+				var nrm_probe := bake_dir.path_join(basename + "_vnrm" + ext)
+				if FileAccess.file_exists(nrm_probe):
+					nrm_path = nrm_probe
+					break
+			if nrm_path.is_empty():
+				push_error("VATPlayer: separate-normals bake %s missing %s_vnrm.{png,exr}" %
+					[pos_path, basename])
+				return false
 
 	# Read OpenVAT sidecar if present. If not, fall back to a
 	# unit-cube bounds so geometry at least connects — the result
