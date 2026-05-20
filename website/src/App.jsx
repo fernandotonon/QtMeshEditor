@@ -124,6 +124,7 @@ function App() {
       { id: 'fix', label: 'Fix', title: 'Fix and optimize', code: pipelineExamples.fix, language: 'fix' },
       { id: 'convert', label: 'Convert', title: 'Convert formats', code: pipelineExamples.convert, language: 'convert' },
       { id: 'merge', label: 'Merge', title: 'Merge animation clips', code: pipelineExamples.merge, language: 'anim' },
+      { id: 'turntable', label: 'Turntable', title: 'Render turntable PNG', code: pipelineExamples.turntable, language: 'turntable' },
       { id: 'docker', label: 'Docker', title: 'Docker workflow', code: pipelineExamples.docker, language: 'docker' },
       { id: 'gha', label: 'GitHub Actions', title: 'GitHub Actions workflow', code: githubActionExample, language: 'yaml' },
     ],
