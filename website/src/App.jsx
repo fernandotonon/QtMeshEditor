@@ -125,6 +125,7 @@ function App() {
       { id: 'convert', label: 'Convert', title: 'Convert formats', code: pipelineExamples.convert, language: 'convert' },
       { id: 'merge', label: 'Merge', title: 'Merge animation clips', code: pipelineExamples.merge, language: 'anim' },
       { id: 'turntable', label: 'Turntable', title: 'Render turntable PNG', code: pipelineExamples.turntable, language: 'turntable' },
+      { id: 'vat', label: 'VAT', title: 'Bake to vertex animation texture', code: pipelineExamples.vat, language: 'bash' },
       { id: 'docker', label: 'Docker', title: 'Docker workflow', code: pipelineExamples.docker, language: 'docker' },
       { id: 'gha', label: 'GitHub Actions', title: 'GitHub Actions workflow', code: githubActionExample, language: 'yaml' },
     ],
@@ -246,6 +247,45 @@ function App() {
     const timer = window.setTimeout(() => setCopyState('idle'), 2000);
     return () => window.clearTimeout(timer);
   }, [copyState]);
+
+  // Deep-link to a section by URL fragment, e.g. `/#vat-demo`. The
+  // browser's native fragment-scroll runs before React mounts the
+  // sections, so the initial scroll lands on an empty page. After
+  // mount, we re-resolve the hash and scroll to the matching element.
+  // Also re-fires on hashchange so in-page navigation (clicking a
+  // header anchor while staying on this page) works the same way.
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+    const scrollToHash = () => {
+      const id = window.location.hash.replace(/^#/, '');
+      if (!id) return;
+      const target = document.getElementById(id);
+      if (!target) return;
+      // `behavior: 'auto'` for the initial scroll feels right —
+      // smooth-scroll on a cold page is animated jank. Subsequent
+      // in-page hashchanges use smooth.
+      target.scrollIntoView({ behavior: 'auto', block: 'start' });
+    };
+    // requestAnimationFrame gives the DOM a tick to lay out before
+    // we measure scroll positions; otherwise on slow CPU the target
+    // may not have its final height yet.
+    const raf = window.requestAnimationFrame(scrollToHash);
+    const onHashChange = () => {
+      const id = window.location.hash.replace(/^#/, '');
+      if (!id) return;
+      const target = document.getElementById(id);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener('hashchange', onHashChange);
+    };
+  }, []);
 
   async function handleCopyInstallCommand() {
     if (!recommendedInstall) {
