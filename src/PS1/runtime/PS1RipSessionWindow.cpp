@@ -75,6 +75,10 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     m_manager->setDedupeStrict(strictDedupe->isChecked());
     connect(strictDedupe, &QCheckBox::toggled, this, [this](bool on) {
         m_manager->setDedupeStrict(on);
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("ui.action"),
+            on ? QStringLiteral("ps1_rip_strict_dedupe_on")
+               : QStringLiteral("ps1_rip_strict_dedupe_off"));
         QSettings().setValue(QString::fromLatin1(kSettingsGroup) + QLatin1Char('/')
                                  + QString::fromLatin1(kDedupeStrictKey),
                              on);

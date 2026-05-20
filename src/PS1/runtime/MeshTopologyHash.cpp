@@ -1,7 +1,10 @@
 #include "MeshTopologyHash.h"
 
-#include <cstring>
+#include <QVector>
+
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace {
 
@@ -37,7 +40,19 @@ quint64 MeshTopologyHash::hashMesh(const ReconstructedMesh &mesh, MeshDedupeMode
     quint64 h = 0xcbf29ce484222325ULL;
     mixHash(h, static_cast<quint64>(mesh.subMeshes.size()));
 
-    for (const ReconstructedSubMesh &sub : mesh.subMeshes) {
+    QVector<const ReconstructedSubMesh *> ordered;
+    ordered.reserve(mesh.subMeshes.size());
+    for (const ReconstructedSubMesh &sub : mesh.subMeshes)
+        ordered.append(&sub);
+    std::sort(ordered.begin(), ordered.end(),
+              [](const ReconstructedSubMesh *a, const ReconstructedSubMesh *b) {
+                  return a->materialName < b->materialName;
+              });
+
+    for (const ReconstructedSubMesh *subPtr : ordered) {
+        const ReconstructedSubMesh &sub = *subPtr;
+        for (QChar ch : sub.materialName)
+            mixHash(h, static_cast<quint64>(ch.unicode()));
         mixHash(h, static_cast<quint64>(sub.vertices.size()));
         mixHash(h, static_cast<quint64>(sub.indices.size()));
 

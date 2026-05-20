@@ -360,12 +360,27 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
 
     removePriorCaptureNodes(mgr);
 
+    QVector<Ogre::AxisAlignedBox> localBoundsByMesh(captureSet.uniqueMeshes.size());
+    for (int i = 0; i < captureSet.uniqueMeshes.size(); ++i)
+        localBoundsByMesh[i] = meshBounds(captureSet.uniqueMeshes[i]);
+
     Ogre::AxisAlignedBox combinedBounds;
     combinedBounds.setNull();
-    for (const ReconstructedMesh &mesh : captureSet.uniqueMeshes) {
-        const Ogre::AxisAlignedBox b = meshBounds(mesh);
-        if (!b.isNull())
-            combinedBounds.merge(b);
+    for (const ReconstructedInstance &inst : captureSet.instances) {
+        if (inst.uniqueMeshIndex < 0 || inst.uniqueMeshIndex >= localBoundsByMesh.size())
+            continue;
+        const Ogre::AxisAlignedBox &local = localBoundsByMesh[inst.uniqueMeshIndex];
+        if (local.isNull())
+            continue;
+        const Ogre::Vector3 t(inst.px, inst.py, inst.pz);
+        combinedBounds.merge(local.getMinimum() + t);
+        combinedBounds.merge(local.getMaximum() + t);
+    }
+    if (combinedBounds.isNull()) {
+        for (const Ogre::AxisAlignedBox &local : localBoundsByMesh) {
+            if (!local.isNull())
+                combinedBounds.merge(local);
+        }
     }
     if (combinedBounds.isNull())
         combinedBounds = Ogre::AxisAlignedBox(-0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f);
@@ -385,6 +400,7 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
     Ogre::SceneNode *firstNode = nullptr;
     Ogre::Entity *firstEntity = nullptr;
 
+    QStringList createdNodeNames;
     int instanceOrdinal = 0;
     for (int meshIndex = 0; meshIndex < captureSet.uniqueMeshes.size(); ++meshIndex) {
         const ReconstructedMesh &mesh = captureSet.uniqueMeshes[meshIndex];
@@ -424,12 +440,15 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
             const QString nodeName =
                 QStringLiteral("PS1Capture_%1_inst%2").arg(captureId).arg(instanceOrdinal++);
             Ogre::SceneNode *node = mgr->addSceneNode(nodeName);
+            createdNodeNames.append(nodeName);
             node->setPosition(inst.px * placementScale, inst.py * placementScale,
                               inst.pz * placementScale);
             node->setScale(placementScale, placementScale, placementScale);
 
             Ogre::Entity *entity = mgr->createEntity(node, ogreMesh);
             if (!entity) {
+                for (const QString &createdName : createdNodeNames)
+                    mgr->destroySceneNode(createdName);
                 if (errorOut)
                     *errorOut = QStringLiteral("Failed to create Ogre entity for instance");
                 return false;
