@@ -17,6 +17,7 @@
 #include "MeshLodController.h"
 #include "SelectionSet.h"
 #include <OgreMaterialManager.h>
+#include <OgreRTShaderSystem.h>
 #include "CLIPipeline.h"
 #include "ModelTurntableRenderer.h"
 #include "MeshImporterExporter.h"
@@ -752,6 +753,7 @@ TEST_F(CLIPipelineInitTest, InitOgreHeadless_Idempotent)
 {
     // Should return true even though tryInitOgre() already created a render window
     EXPECT_TRUE(CLIPipeline::initOgreHeadless());
+    EXPECT_NE(Ogre::RTShader::ShaderGenerator::getSingletonPtr(), nullptr);
 }
 
 TEST_F(CLIPipelineInitTest, InitOgreHeadless_CalledTwice)
@@ -1046,16 +1048,15 @@ TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSpriteSheetColumnsAndCameraHei
     EXPECT_EQ(img.height(), 80); // 2 rows × 40
 }
 
-TEST_F(CLIPipelineCmdTest, CmdTurntable_JumpFbxRendersWithoutError)
+TEST_F(CLIPipelineCmdTest, CmdTurntable_FbxFromTestDataRendersWithoutError)
 {
-    const QString jumpPath = QStringLiteral("/home/fernando/Downloads/Jump.fbx");
-    if (!QFile::exists(jumpPath))
-        GTEST_SKIP() << "Jump.fbx not present at " << jumpPath.toStdString();
+    const QString fbxPath = testDataDir() + QStringLiteral("/Twist Dance.fbx");
+    ASSERT_TRUE(QFile::exists(fbxPath)) << "Fixture missing: " << fbxPath.toStdString();
 
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
-    const QByteArray outArg = tmp.filePath("jump_turntable.png").toUtf8();
-    TestArgv args({"qtmesh", "turntable", jumpPath.toUtf8().constData(),
+    const QByteArray outArg = tmp.filePath("twist_turntable.png").toUtf8();
+    TestArgv args({"qtmesh", "turntable", fbxPath.toUtf8().constData(),
                    "-o", outArg.constData(),
                    "--frames", "2",
                    "--size", "128"});
@@ -1065,6 +1066,28 @@ TEST_F(CLIPipelineCmdTest, CmdTurntable_JumpFbxRendersWithoutError)
     ASSERT_FALSE(img.isNull());
     EXPECT_EQ(img.width(), 256);
     EXPECT_EQ(img.height(), 128);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_RejectsInvalidFramesFlag)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_bad_frames.obj").toUtf8();
+    TestArgv args({"qtmesh", "turntable", meshArg.constData(),
+                   "-o", tmp.filePath("out.png").toUtf8().constData(),
+                   "--frames", "not-a-number"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_RejectsInvalidSequencePattern)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_bad_seq.obj").toUtf8();
+    TestArgv args({"qtmesh", "turntable", meshArg.constData(),
+                   "-o", tmp.filePath("frame_%s.png").toUtf8().constData(),
+                   "--frames", "2"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
 }
 
 TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSingleFrameWritesOnePng)

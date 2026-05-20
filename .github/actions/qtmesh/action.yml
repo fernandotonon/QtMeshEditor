@@ -3,7 +3,7 @@ description: 'Run qtmesh CLI for 3D mesh operations (info, convert, fix, anim, s
 
 inputs:
   command:
-    description: 'Subcommand: info, fix, convert, anim, validate, lod, pose, scan'
+    description: 'Subcommand: info, fix, convert, anim, validate, lod, pose, turntable, scan, material, optimize, …'
     required: true
   input-file:
     description: 'Directory or file to scan (relative to workspace). Defaults to .'

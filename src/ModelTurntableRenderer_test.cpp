@@ -206,4 +206,6 @@ TEST_F(ModelTurntableRendererTest, ExcludeNormalMapFromFfpChainRemovesDuplicateU
             ++normalUnits;
     }
     EXPECT_EQ(normalUnits, 1u);
+
+    RTShaderHelper::shutdown(sceneMgr);
 }

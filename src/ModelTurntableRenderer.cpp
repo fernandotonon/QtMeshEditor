@@ -5,6 +5,7 @@
 #include "MeshImporterExporter.h"
 #include "RTShaderHelper.h"
 #include "SelectionSet.h"
+#include "SentryReporter.h"
 
 #include <QPainter>
 
@@ -96,6 +97,7 @@ bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QStr
   if (st.renderTarget && st.rttWidth == width && st.rttHeight == height) {
     if (st.renderTarget->getNumViewports() > 0) {
       Ogre::Viewport *vp = st.renderTarget->getViewport(0);
+      vp->setBackgroundColour(bg);
       vp->setMaterialScheme(Ogre::MSN_SHADERGEN);
       vp->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
     }
@@ -307,12 +309,16 @@ void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, T
 
   const float horizUnit = std::cos(elevationRadians);
   const float axialUnit = std::sin(elevationRadians);
-  Ogre::Vector3 restDir = cameraRestOffset(axis, horizUnit, axialUnit);
-  if (restDir.squaredLength() < 1e-8f)
-    restDir = cameraRestOffset(axis, 1.0f, 0.0f);
-  restDir.normalise();
+  Ogre::Vector3 restOffset = cameraRestOffset(axis, horizUnit, axialUnit);
+  if (restOffset.squaredLength() < 1e-8f)
+    restOffset = cameraRestOffset(axis, 1.0f, 0.0f);
 
-  const Ogre::Real distance = fitOrbitDistance(bounds, pivotPoint, restDir, st.camera, paddingFactor);
+  Ogre::Vector3 localViewDir = -restOffset;
+  localViewDir.normalise();
+  const Ogre::Quaternion orbitRot(Ogre::Radian(angleRadians), orbitAxisVector(axis));
+  Ogre::Vector3 viewDir = orbitRot * localViewDir;
+
+  const Ogre::Real distance = fitOrbitDistance(bounds, pivotPoint, viewDir, st.camera, paddingFactor);
   const float horiz = distance * horizUnit;
   const float axial = distance * axialUnit;
 
@@ -325,7 +331,7 @@ void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, T
 
 void prepareMaterialsForTurntable(const QList<Ogre::Entity *> &entities)
 {
-  std::unordered_set<std::string> processed;
+  std::unordered_set<const Ogre::Material *> processed;
   for (Ogre::Entity *entity : entities) {
     if (!entity)
       continue;
@@ -334,8 +340,7 @@ void prepareMaterialsForTurntable(const QList<Ogre::Entity *> &entities)
       Ogre::MaterialPtr mat = entity->getSubEntity(sub)->getMaterial();
       if (!mat)
         continue;
-      const std::string key = mat->getName();
-      if (!processed.insert(key).second)
+      if (!processed.insert(mat.get()).second)
         continue;
       RTShaderHelper::finalizeShaderGenMaterial(mat);
     }
@@ -403,26 +408,24 @@ void ModelTurntableRenderer::shutdown()
       if (st.lightNode) {
         st.lightNode->detachObject(st.light);
         sm->destroySceneNode(st.lightNode);
-        st.lightNode = nullptr;
       }
       sm->destroyLight(st.light);
-      st.light = nullptr;
     }
     if (st.camera) {
       if (st.cameraNode)
         st.cameraNode->detachObject(st.camera);
       sm->destroyCamera(st.camera);
-      st.camera = nullptr;
     }
-    if (st.cameraNode) {
+    if (st.cameraNode)
       sm->destroySceneNode(st.cameraNode);
-      st.cameraNode = nullptr;
-    }
-    if (st.pivotNode) {
+    if (st.pivotNode)
       sm->destroySceneNode(st.pivotNode);
-      st.pivotNode = nullptr;
-    }
   }
+  st.lightNode = nullptr;
+  st.light = nullptr;
+  st.camera = nullptr;
+  st.cameraNode = nullptr;
+  st.pivotNode = nullptr;
 }
 
 bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entities,
@@ -476,6 +479,9 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
   prepareMaterialsForTurntable(entities);
   applyTurntableLighting(sm);
 
+  SentryReporter::addBreadcrumb("cli.turntable",
+                                QStringLiteral("render start frames=%1").arg(frameCount));
+
   outFrames->reserve(frameCount);
   try {
     for (int i = 0; i < frameCount; ++i) {
@@ -485,18 +491,22 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
       outFrames->append(readRenderTarget(width, height));
     }
     restoreTurntableLighting(sm);
+    SentryReporter::addBreadcrumb("cli.turntable",
+                                  QStringLiteral("render ok frames=%1").arg(outFrames->size()));
     return true;
   } catch (const Ogre::Exception &e) {
     outFrames->clear();
     restoreTurntableLighting(sm);
     if (errorOut)
       *errorOut = QString::fromStdString(e.getFullDescription());
+    SentryReporter::addBreadcrumb("cli.turntable", QStringLiteral("render failed: Ogre exception"));
     return false;
   } catch (...) {
     outFrames->clear();
     restoreTurntableLighting(sm);
     if (errorOut)
       *errorOut = QStringLiteral("Turntable render failed");
+    SentryReporter::addBreadcrumb("cli.turntable", QStringLiteral("render failed"));
     return false;
   }
 }

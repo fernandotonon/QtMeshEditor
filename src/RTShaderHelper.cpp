@@ -140,6 +140,12 @@ static void addRTSSResources()
 
 void RTShaderHelper::initialize(Ogre::SceneManager* sceneMgr)
 {
+    if (auto* existing = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+        if (sceneMgr)
+            existing->addSceneManager(sceneMgr);
+        return;
+    }
+
     if (!Ogre::RTShader::ShaderGenerator::initialize())
     {
         Ogre::LogManager::getSingleton().logMessage("RTSS: ShaderGenerator failed to initialize");
