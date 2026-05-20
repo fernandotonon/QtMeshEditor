@@ -34,6 +34,12 @@ var _start_time: float = 0.0
 
 
 func _ready() -> void:
+	# Uncap FPS for honest perf measurement. The default vsync caps
+	# us at the display refresh (often 120 Hz on ProMotion Macs); the
+	# FPS overlay flatlines at the cap and we can't see the headroom.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	Engine.max_fps = 0
+
 	_start_time = Time.get_ticks_msec()
 
 	# Load the source mesh ONCE.

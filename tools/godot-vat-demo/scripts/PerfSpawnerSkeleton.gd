@@ -1,14 +1,29 @@
 ## Spawns `instance_count` SKELETAL dancers in a grid for perf comparison.
 ##
-## Each instance is a runtime-loaded glTF scene (Skeleton3D + SkinReference
-## + SkinnedMeshRenderer + AnimationPlayer). The skeletal path Godot
-## takes here is the same one a real game would use for skinned NPCs —
-## per-instance bone-matrix upload to the GPU + per-instance animation
-## tick on the CPU. With 1000 instances this gets expensive fast;
-## comparing against the VAT scene shows the win.
+## This is the "best practice" skinned-mesh setup a real Godot game
+## would ship with for an NPC crowd. There's no built-in MultiMesh
+## equivalent for SkinnedMeshRenderer in Godot 4 — skinning is always
+## per-instance (per-instance bone-matrix upload + per-instance vertex
+## skin transform). What we CAN share across instances:
 ##
-## Each instance gets a random animation phase via AnimationPlayer's
-## `seek()` so the crowd doesn't move in lockstep.
+##   - PackedScene cache: load the glTF once, instantiate cheaply
+##     (otherwise GLTFDocument.append_from_file would run 1000 times).
+##   - Mesh resource: every instance points at the SAME ArrayMesh
+##     resource (Godot does this automatically — instantiating a
+##     PackedScene reuses Mesh resources).
+##   - Material resource: same — surface materials are shared by
+##     reference across instances.
+##   - Animation resource: a single Animation drives every clone's
+##     AnimationPlayer (also automatic).
+##
+## What we CAN'T share:
+##   - Skeleton3D's bone transforms: each instance has its own pose.
+##   - SkinReference: tied to the per-instance Skeleton.
+##   - AnimationPlayer state: each instance ticks its own time.
+##
+## Comparing this to the MultiMesh-VAT spawner is the fair real-world
+## comparison: both use the best Godot-native path for their respective
+## approach.
 
 extends Node3D
 
@@ -19,6 +34,12 @@ extends Node3D
 
 
 func _ready() -> void:
+	# Uncap FPS for honest perf measurement (matches the VAT spawner).
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	Engine.max_fps = 0
+
+	var start_ms := Time.get_ticks_msec()
+
 	# Load the glTF scene ONCE and instantiate from a cached PackedScene.
 	# GLTFDocument.append_from_file at runtime is too slow to call 1000
 	# times.
@@ -35,7 +56,8 @@ func _ready() -> void:
 
 	# Cache the loaded scene as a PackedScene so we can instantiate
 	# cheap copies. Without this, every instance would re-parse the
-	# entire glTF on add_child.
+	# entire glTF on add_child. Godot shares Mesh + Material + Animation
+	# resources across PackedScene clones automatically.
 	var pack := PackedScene.new()
 	pack.pack(prototype)
 	prototype.queue_free()
@@ -58,6 +80,13 @@ func _ready() -> void:
 			# Match VAT spawner's facing for fair comparison.
 			inst.rotate_y(PI + deg_to_rad(rng.randf_range(-20, 20)))
 			add_child(inst)
+			# Strip per-instance MeshInstance3D shadow casting if not
+			# needed — 1000 shadow-casting skinned meshes would tank
+			# fps in a way that's orthogonal to the skin-vs-VAT
+			# comparison. Both perf scenes already run with shadows
+			# off via the scene-level light, but instances inherit
+			# `cast_shadow = SHADOW_CASTING_SETTING_ON` from the
+			# imported glTF; leaving it on is the realistic default.
 			var ap := _find_animation_player(inst)
 			if ap != null:
 				var clip := animation_name
@@ -74,7 +103,10 @@ func _ready() -> void:
 					ap.seek(rng.randf_range(0.0, ap.current_animation_length), true)
 			built += 1
 		if built >= instance_count: break
-	print("PerfSpawnerSkeleton: spawned %d skeletal instances" % built)
+
+	var elapsed_ms := Time.get_ticks_msec() - start_ms
+	print("PerfSpawnerSkeleton: spawned %d skeletal instances in %d ms" %
+		[built, elapsed_ms])
 
 
 func _find_animation_player(root: Node) -> AnimationPlayer:
