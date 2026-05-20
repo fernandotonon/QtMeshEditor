@@ -44,7 +44,14 @@ public:
     /// "all" expands to all three. Unknown tokens are dropped (the
     /// caller may decide whether to warn). Order in the output is
     /// stable: godot, unity, unreal.
-    static QStringList parseEngineList(const QString& csv);
+    ///
+    /// `rejectedOut` (optional, when non-null) is filled with the
+    /// original-cased tokens that did not match any known engine
+    /// (so the CLI can surface them in a warning — partial-invalid
+    /// lists like "godot,blender" otherwise drop "blender" silently
+    /// while still succeeding overall).
+    static QStringList parseEngineList(const QString& csv,
+                                       QStringList* rejectedOut = nullptr);
 
     /// Write the engine templates for every entry in `engines` into
     /// `outputDir`. Returns the list of absolute paths actually written

@@ -63,32 +63,41 @@ bool copyResource(const QString& resourcePath, const QString& dstPath)
 
 } // namespace
 
-QStringList VATShaderEmitter::parseEngineList(const QString& csv)
+QStringList VATShaderEmitter::parseEngineList(const QString& csv,
+                                               QStringList* rejectedOut)
 {
     QStringList out;
+    if (rejectedOut) rejectedOut->clear();
     if (csv.trimmed().isEmpty())
         return out;
-    QSet<QString> seen;
+    // Collect valid tokens into a set, then walk the canonical engine
+    // spec order to fill `out`. This keeps the output order stable
+    // (godot, unity, unreal) regardless of input order — the API
+    // contract callers rely on for displaying / reporting the engine
+    // list, and what the docstring promises.
+    QSet<QString> requested;
     const auto tokens = csv.split(QLatin1Char(','), Qt::SkipEmptyParts);
-    auto pushIfFresh = [&](const QString& engine) {
-        if (!seen.contains(engine)) {
-            seen.insert(engine);
-            out.append(engine);
-        }
-    };
     for (const QString& raw : tokens) {
-        const QString t = raw.trimmed().toLower();
-        if (t.isEmpty()) continue;
+        const QString trimmed = raw.trimmed();
+        if (trimmed.isEmpty()) continue;
+        const QString t = trimmed.toLower();
         if (t == QLatin1String("all")) {
-            // Emit in canonical order; downstream code may print them.
             for (const auto& s : kSpecs)
-                pushIfFresh(QString::fromLatin1(s.engine));
+                requested.insert(QString::fromLatin1(s.engine));
             continue;
         }
-        if (findSpec(t))
-            pushIfFresh(t);
-        // Unknown tokens silently dropped — caller can compare
-        // out.size() against the input count if they want to warn.
+        if (findSpec(t)) {
+            requested.insert(t);
+        } else if (rejectedOut) {
+            // Preserve original casing so the warning shows the user
+            // exactly what they typed (helps diagnose typos).
+            rejectedOut->append(trimmed);
+        }
+    }
+    for (const auto& s : kSpecs) {
+        const QString name = QString::fromLatin1(s.engine);
+        if (requested.contains(name))
+            out.append(name);
     }
     return out;
 }

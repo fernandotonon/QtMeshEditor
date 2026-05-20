@@ -179,7 +179,18 @@ bool VATBakerController::bake(const QString& animationName,
     if (result.ok && !includeShadersFor.isEmpty()) {
         const QStringList shadersWritten =
             VATShaderEmitter::writeShaders(outputDir, includeShadersFor);
-        if (!shadersWritten.isEmpty()) {
+        if (shadersWritten.isEmpty()) {
+            // Requested shaders but nothing landed — bad outputDir,
+            // missing resource, or QStringList of unknown engines.
+            // Breadcrumb it so a user reporting "I asked for Godot and
+            // didn't get a shader file" lands telemetry the same as
+            // any other file-export miss.
+            SentryReporter::addBreadcrumb("file.export",
+                QStringLiteral("VAT shaders requested but none written "
+                               "(engines=%1, out=%2)")
+                    .arg(includeShadersFor.join(QStringLiteral(",")),
+                         outputDir));
+        } else {
             SentryReporter::addBreadcrumb("file.export",
                 QStringLiteral("VAT shaders written: %1")
                     .arg(shadersWritten.join(QStringLiteral(", "))));

@@ -5705,8 +5705,15 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         // {godot, unity, unreal} (or "all") — copies the matching
         // drop-in shader templates into the bake's output directory
         // so the consumer has the bake AND the engine glue together.
-        if (arg == "--include-shaders" && i + 1 < argc) {
-            includeShadersArg = QString(argv[++i]); continue;
+        if (arg == "--include-shaders") {
+            if (i + 1 >= argc) {
+                err() << "Error: --include-shaders requires a value "
+                         "(godot, unity, unreal, all — comma-separated)."
+                      << Qt::endl;
+                return 2;
+            }
+            includeShadersArg = QString(argv[++i]);
+            continue;
         }
         if (!arg.startsWith("-") && filePath.isEmpty()) {
             filePath = arg; continue;
@@ -5944,17 +5951,38 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // the bake so a consumer has everything in one folder.
     QStringList shadersWritten;
     if (!includeShadersArg.isEmpty()) {
-        const QStringList engines = VATShaderEmitter::parseEngineList(includeShadersArg);
+        QStringList rejectedTokens;
+        const QStringList engines = VATShaderEmitter::parseEngineList(
+            includeShadersArg, &rejectedTokens);
+        // Surface invalid tokens even when SOME of the list was
+        // recognised — otherwise `--include-shaders godot,blender`
+        // silently drops "blender" and the user discovers the
+        // missing template only during engine integration.
+        if (!rejectedTokens.isEmpty()) {
+            err() << "Warning: --include-shaders ignored unknown engine"
+                  << (rejectedTokens.size() == 1 ? " " : "s ")
+                  << "\"" << rejectedTokens.join("\", \"")
+                  << "\" (accepted: godot, unity, unreal, all)." << Qt::endl;
+            SentryReporter::addBreadcrumb("file.export",
+                QStringLiteral("VAT shaders: rejected unknown engine(s): %1")
+                    .arg(rejectedTokens.join(QStringLiteral(", "))));
+        }
         if (engines.isEmpty()) {
             err() << "Warning: --include-shaders=\"" << includeShadersArg
                   << "\" did not match any known engine "
                      "(accepted: godot, unity, unreal, all)." << Qt::endl;
+            SentryReporter::addBreadcrumb("file.export",
+                QStringLiteral("VAT shaders: no valid engines parsed from '%1'")
+                    .arg(includeShadersArg));
         } else {
             shadersWritten = VATShaderEmitter::writeShaders(outDir, engines);
             if (shadersWritten.isEmpty()) {
                 err() << "Warning: --include-shaders requested "
                       << engines.join(",") << " but no files could be written."
                       << Qt::endl;
+                SentryReporter::addBreadcrumb("file.export",
+                    QStringLiteral("VAT shaders: write failed for engines: %1")
+                        .arg(engines.join(QStringLiteral(", "))));
             } else {
                 SentryReporter::addBreadcrumb("file.export",
                     QStringLiteral("VAT shaders written: %1")
