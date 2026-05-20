@@ -51,11 +51,34 @@ func set_current_frame(f: float) -> void:
 
 func _load_source_mesh() -> bool:
 	if source_gltf.is_empty(): return false
-	var doc := GLTFDocument.new()
-	var state := GLTFState.new()
-	if doc.append_from_file(ProjectSettings.globalize_path(source_gltf), state) != OK:
+
+	# Web builds: the glTF was imported by Godot's editor and lives in
+	# the pck as a compiled .scn PackedScene resource (no raw .gltf
+	# bytes for GLTFDocument to parse at runtime). Native desktop
+	# builds: the same load() path works because Godot resolves
+	# `res://` through the resource pipeline uniformly.
+	#
+	# We INTENTIONALLY don't use GLTFDocument.append_from_file here —
+	# `globalize_path()` returns an absolute filesystem path that has
+	# no meaning in a web sandbox, and `append_from_file` on a
+	# `res://` path fails in web builds because the .gltf isn't
+	# exported as a file (it's the .scn that ships).
+	var pack: Resource = load(source_gltf)
+	if pack == null:
+		push_error("VATInstance: load('%s') returned null" % source_gltf)
 		return false
-	var scene := doc.generate_scene(state)
+	var scene: Node = null
+	if pack is PackedScene:
+		scene = (pack as PackedScene).instantiate()
+	elif pack is Mesh:
+		# Some imports surface as a bare Mesh resource.
+		mesh = pack as Mesh
+		skeleton = NodePath("")
+		return true
+	else:
+		push_error("VATInstance: source '%s' loaded as %s, expected PackedScene or Mesh" %
+			[source_gltf, pack.get_class()])
+		return false
 	if scene == null: return false
 	var found: ArrayMesh = _first_array_mesh(scene)
 	scene.queue_free()
@@ -88,7 +111,6 @@ func _load_bake() -> bool:
 	if json_path.is_empty(): return false
 
 	var pos_path := bake_dir.path_join(basename + "_pos.png")
-	if not FileAccess.file_exists(pos_path): return false
 
 	var sidecar: Variant = JSON.parse_string(FileAccess.get_file_as_string(json_path))
 	if typeof(sidecar) != TYPE_DICTIONARY or not sidecar.has("os-remap"):
@@ -99,9 +121,23 @@ func _load_bake() -> bool:
 	_bounds_min = Vector3(float(mn[0]), float(mn[1]), float(mn[2]))
 	_bounds_max = Vector3(float(mx[0]), float(mx[1]), float(mx[2]))
 
-	var img := Image.load_from_file(pos_path)
-	if img == null or img.is_empty(): return false
-	var pos_tex: ImageTexture = ImageTexture.create_from_image(img)
+	# Load the bake texture via the resource pipeline. Native desktop
+	# AND web builds both work — Godot's editor imports PNG as a
+	# CompressedTexture2D resource that lives at `<path>.ctex` in the
+	# pck. `load("res://....png")` resolves through the import map.
+	# We can't use `Image.load_from_file(pos_path)` in web builds:
+	# the raw PNG bytes aren't shipped in the pck (only the imported
+	# .ctex is), so FileAccess.file_exists() returns false.
+	#
+	# IMPORTANT: the bake PNG MUST have its editor import settings
+	# tweaked (sRGB OFF, Filter Nearest, Compression Lossless, Mipmaps
+	# OFF). Without this, Godot compresses the texture and corrupts
+	# the per-vertex position data. The demo project's import
+	# overrides handle this; see assets/Rumba/mixamo.com_pos.png.import.
+	var pos_tex: Texture2D = load(pos_path) as Texture2D
+	if pos_tex == null:
+		push_error("VATInstance: load bake texture failed: %s" % pos_path)
+		return false
 
 	# Synthesize UV2 if absent — QtMeshEditor bakes don't carry it.
 	_ensure_uv2_on_mesh(pos_tex.get_height(), pos_tex.get_width())
