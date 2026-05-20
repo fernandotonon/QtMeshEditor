@@ -5460,6 +5460,70 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // would render shattered triangles when they trust that label.
     bool sourceMeshMatchesBake = false;
     std::vector<uint32_t> vertexPerm;
+
+    // Emit a per-vertex bind-pose sidecar so consumers can re-bind the
+    // bake's column order to whatever vertex order their engine loads
+    // the mesh in (Godot reorders on import via the resource pipeline;
+    // Unity's import does the same; Unreal likewise). Layout: a flat
+    // float32 array of `vertexCount * 3` values, in Ogre's vertex-
+    // buffer walk order — i.e. matching the bake's column index 1:1.
+    // Consumers iterate their imported mesh's vertices and match each
+    // bind position back to a column index here. Tiny (5828 × 12 B ≈
+    // 70 KB on the Rumba dancer), and worth its weight by being the
+    // *only* path that survives every engine importer's reordering.
+    // Sidecar layout (little-endian, packed):
+    //   uint32  magic         = 0x42565442 ("BTVB" — Bake-To-Vertex Bind)
+    //   uint32  version       = 1
+    //   uint32  vertexCount
+    //   uint32  flags         (bit 0 = positions, bit 1 = normals, bit 2 = uv)
+    //   then per-vertex: 3 floats position, 3 floats normal (if flag set),
+    //                    2 floats uv0 (if flag set)
+    //
+    // The consumer matches each loaded mesh vertex against this stream's
+    // full signature (pos+normal+uv) to find its bake column index.
+    // Position-only matching is ambiguous on UV seams / hard edges /
+    // weight splits, which Mixamo characters carry by the hundreds —
+    // 17% of verts on Rumba Dancing share a quantized bind position
+    // with at least one other vert.
+    auto writeOgreBindSidecar = [&](Ogre::Entity* e, const QString& path) {
+        std::vector<BakeVertex> verts = readOgreBindVertices(e);
+        if (verts.empty()) return false;
+        QFile f(path);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+        const uint32_t magic   = 0x42565442;
+        const uint32_t version = 1;
+        const uint32_t count   = static_cast<uint32_t>(verts.size());
+        uint32_t flags = 0x1;
+        bool hasN = !verts.empty() && verts[0].hasNormal;
+        bool hasU = !verts.empty() && verts[0].hasUV;
+        if (hasN) flags |= 0x2;
+        if (hasU) flags |= 0x4;
+        f.write(reinterpret_cast<const char*>(&magic),   sizeof(magic));
+        f.write(reinterpret_cast<const char*>(&version), sizeof(version));
+        f.write(reinterpret_cast<const char*>(&count),   sizeof(count));
+        f.write(reinterpret_cast<const char*>(&flags),   sizeof(flags));
+        for (const auto& v : verts) {
+            float xyz[3] = { v.position.x, v.position.y, v.position.z };
+            f.write(reinterpret_cast<const char*>(xyz), sizeof(xyz));
+            if (hasN) {
+                float n[3] = { v.normal.x, v.normal.y, v.normal.z };
+                f.write(reinterpret_cast<const char*>(n), sizeof(n));
+            }
+            if (hasU) {
+                float uv[2] = { v.uv0u, v.uv0v };
+                f.write(reinterpret_cast<const char*>(uv), sizeof(uv));
+            }
+        }
+        f.close();
+        return true;
+    };
+    const QString bindPath = QDir(outDir).filePath(animName + "_ogre_bind.bin");
+    bool bindWritten = writeOgreBindSidecar(entity, bindPath);
+    if (!bindWritten) {
+        err() << "Warning: failed to write Ogre bind-pose sidecar to "
+              << bindPath << " — consumers may not be able to align the "
+                             "bake with their imported mesh." << Qt::endl;
+    }
     if (exportResult == 0) {
         std::vector<BakeVertex> ogreVerts = readOgreBindVertices(entity);
         std::vector<BakeVertex> gltfVerts;
@@ -5544,6 +5608,8 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         obj["sidecar"]     = result.jsonPath;
         if (sourceMeshMatchesBake)
             obj["sourceMesh"] = gltfPath;
+        if (bindWritten)
+            obj["bindSidecar"] = bindPath;
         obj["frameCount"]  = result.frameCount;
         obj["vertexCount"] = result.vertexCount;
         obj["animation"]   = animName;
@@ -5560,6 +5626,11 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                      .arg(animName).arg(result.frameCount).arg(result.vertexCount));
         cliWrite(QStringLiteral("  texture:  %1\n").arg(result.posTexPath));
         cliWrite(QStringLiteral("  sidecar:  %1\n").arg(result.jsonPath));
+        if (bindWritten)
+            cliWrite(QStringLiteral("  bind:     %1 (per-vertex bind-pose signature; "
+                                    "consumers use this to align UV2 to the bake's "
+                                    "column order regardless of importer reordering)\n")
+                .arg(bindPath));
         if (sourceMeshMatchesBake)
             cliWrite(QStringLiteral("  mesh:     %1 (vertex order matches the bake)\n").arg(gltfPath));
         cliWrite(QStringLiteral("  bounds:   min=(%1, %2, %3) max=(%4, %5, %6)\n")
