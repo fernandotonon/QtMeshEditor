@@ -11,10 +11,6 @@
 		{
 			"Name": "EditorScriptingUtilities",
 			"Enabled": true
-		},
-		{
-			"Name": "GLTFImporter",
-			"Enabled": true
 		}
 	]
 }

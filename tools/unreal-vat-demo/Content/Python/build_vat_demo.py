@@ -26,57 +26,83 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 
 
 # ────────────────────────────────────────────────────────────────────
-# 1. Import the bake: position PNG, glTF mesh, diffuse texture.
+# 1. Import the bake: position PNG, diffuse PNG, glTF mesh.
 # ────────────────────────────────────────────────────────────────────
 
-def _factory_for_path(path):
-    """Pick the right Unreal asset factory based on extension."""
-    ext = path.rsplit(".", 1)[-1].lower()
-    if ext == "png":
-        return unreal.TextureFactory()
-    if ext in ("gltf", "glb"):
-        return unreal.GLTFImportFactory()
-    return None
+def _import_texture(src_filename, dst_name):
+    """Import a PNG via Unreal's stock TextureFactory.
+
+    Returns the resulting Texture2D asset, or None if the import failed.
+    """
+    src_path = os.path.abspath(os.path.join(RUMBA_FS_DIR, src_filename))
+    if not os.path.exists(src_path):
+        unreal.log_warning("Skipping missing texture: " + src_path)
+        return None
+    task = unreal.AssetImportTask()
+    task.set_editor_property("automated", True)
+    task.set_editor_property("destination_path", BAKE_DIR)
+    task.set_editor_property("destination_name", dst_name)
+    task.set_editor_property("replace_existing", True)
+    task.set_editor_property("save", True)
+    task.set_editor_property("filename", src_path)
+    task.set_editor_property("factory", unreal.TextureFactory())
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    return unreal.load_asset(BAKE_DIR + "/" + dst_name + "." + dst_name)
+
+
+def _import_gltf_via_interchange(src_filename, dst_name):
+    """Import a glTF via Unreal's Interchange framework (built into
+    UE 5.0+; no separate plugin required).
+
+    Returns the imported skeletal mesh, or None on failure. The
+    Interchange API moved between 5.0 and 5.3 — we use the high-level
+    `unreal.InterchangeManager` entry point and fall back to logging
+    actionable instructions if the user is on an older engine.
+    """
+    src_path = os.path.abspath(os.path.join(RUMBA_FS_DIR, src_filename))
+    if not os.path.exists(src_path):
+        unreal.log_warning("Skipping missing mesh: " + src_path)
+        return None
+
+    if not hasattr(unreal, "InterchangeManager"):
+        unreal.log_warning(
+            "InterchangeManager not available — please drag "
+            + src_path + " into the Content Browser at " + BAKE_DIR
+            + " manually (and rename the result to " + dst_name + ").")
+        return None
+
+    # Source data — the .gltf file.
+    src_data = unreal.InterchangeManager.create_source_data(src_path)
+    # Where to put it.
+    params = unreal.ImportAssetParameters()
+    params.is_automated = True
+    params.destination_name = dst_name
+
+    mgr = unreal.InterchangeManager.get_interchange_manager_scripted()
+    try:
+        mgr.import_asset(BAKE_DIR, src_data, params)
+    except Exception as e:
+        unreal.log_warning("Interchange import failed: " + str(e)
+            + " — please drag the .gltf in manually.")
+        return None
+
+    return unreal.load_asset(BAKE_DIR + "/" + dst_name + "." + dst_name)
 
 
 def import_bake_assets():
-    """Bring the texture + diffuse + glTF in under /Game/Rumba.
+    """Bring textures + glTF in under /Game/Rumba.
 
     The bake's POSITION texture needs very specific import settings —
     Unreal's default Texture2D import gamma-corrects + DXT-compresses
     the data, which corrupts the per-vertex floats. We re-open after
     import and override.
     """
-    sources_to_import = [
-        ("mixamo.com_pos.png", "T_OpenVAT_Pos"),
-        ("Boss_diffuse.png",   "T_Boss_Diffuse"),
-        ("source.gltf",        "SK_Rumba"),
-    ]
-
-    tasks = []
-    for src_name, dst_name in sources_to_import:
-        src_path = os.path.abspath(os.path.join(RUMBA_FS_DIR, src_name))
-        if not os.path.exists(src_path):
-            unreal.log_warning("Skipping missing source: " + src_path)
-            continue
-
-        task = unreal.AssetImportTask()
-        task.set_editor_property("automated", True)
-        task.set_editor_property("destination_path", BAKE_DIR)
-        task.set_editor_property("destination_name", dst_name)
-        task.set_editor_property("replace_existing", True)
-        task.set_editor_property("save", True)
-        task.set_editor_property("filename", src_path)
-        fac = _factory_for_path(src_name)
-        if fac:
-            task.set_editor_property("factory", fac)
-        tasks.append(task)
-
-    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks(tasks)
+    _import_texture("mixamo.com_pos.png", "T_OpenVAT_Pos")
+    _import_texture("Boss_diffuse.png",   "T_Boss_Diffuse")
+    _import_gltf_via_interchange("source.gltf", "SK_Rumba")
 
     # Position texture override: lossless, no sRGB, no mips, nearest.
-    pos_tex_path = BAKE_DIR + "/T_OpenVAT_Pos.T_OpenVAT_Pos"
-    pos_tex = unreal.load_asset(pos_tex_path)
+    pos_tex = unreal.load_asset(BAKE_DIR + "/T_OpenVAT_Pos.T_OpenVAT_Pos")
     if pos_tex:
         pos_tex.set_editor_property("srgb", False)
         pos_tex.set_editor_property("compression_settings",
@@ -85,7 +111,6 @@ def import_bake_assets():
             unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
         pos_tex.set_editor_property("filter",
             unreal.TextureFilter.TF_NEAREST)
-        # Force a rebuild so the new settings take effect, then save.
         unreal.EditorAssetLibrary.save_loaded_asset(pos_tex)
         unreal.log("Position texture configured: non-sRGB, lossless, no mips, nearest")
     else:

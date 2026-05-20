@@ -32,14 +32,16 @@ Material, demo Blueprint) on first open.
 
 ## One-time setup
 
-1. **Install UE 5.3 or newer** (5.4 and 5.5 tested locally).
+1. **Install UE 5.3 or newer** (5.4 and 5.5 tested locally). The
+   project enables the `PythonScriptPlugin` and
+   `EditorScriptingUtilities` plugins, both shipped with stock UE;
+   no marketplace plugins required.
 
-2. **Open `QtMeshVAT.uproject`.** Unreal will prompt to compile
-   the editor target (it's a content-only project, so this is a
-   no-op after the engine first-launch).
+2. **Open `QtMeshVAT.uproject`.** Unreal will scan/import the content
+   folder. The project is content-only — no C++ compile.
 
 3. **Run the bootstrap script.** In the editor: **Window → Output
-   Log → Cmd line tab → switch to Python →**
+   Log → switch the Cmd dropdown to `Python` →**
    ```python
    py Content/Python/build_vat_demo.py
    ```
@@ -49,11 +51,18 @@ Material, demo Blueprint) on first open.
    - `/Game/Rumba/T_OpenVAT_Pos` (position texture, **non-sRGB,
      no DXT, no mips, Nearest filter** — required, the script sets all four)
    - `/Game/Rumba/T_Boss_Diffuse` (diffuse texture)
-   - `/Game/Rumba/SK_Rumba` (skeletal mesh from `source.gltf`)
+   - `/Game/Rumba/SK_Rumba` (skeletal mesh from `source.gltf`, imported
+     via Unreal's built-in **Interchange** framework)
    - `/Game/VATDemo/M_OpenVAT` (the Custom-node material — does
      World Position Offset against the position texture)
    - `/Game/VATDemo/BP_VATDancer` (an actor skeleton — needs 4-node
-     tick wiring per step 4 below)
+     tick wiring per step 5 below)
+
+   **If the script logs `InterchangeManager not available` or the
+   .gltf import fails:** drag `Content/Rumba/source.gltf` into the
+   Content Browser manually, rename the resulting Skeletal Mesh to
+   `SK_Rumba`, then re-run the script — the texture/material steps
+   will pick up the already-imported mesh.
 
 4. **Bake UV2 per vertex.** The position texture is column-addressed
    by Ogre vertex index, but Unreal's mesh importer reorders the
