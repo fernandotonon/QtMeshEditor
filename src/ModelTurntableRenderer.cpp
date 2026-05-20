@@ -2,14 +2,12 @@
 
 #include "GlobalDefinitions.h"
 #include "Manager.h"
-#include "RTShaderHelper.h"
 #include "SelectionSet.h"
 
 #include <QPainter>
 
 #include <OgreHardwarePixelBuffer.h>
 #include <OgreRoot.h>
-#include <OgreRTShaderSystem.h>
 #include <OgreTextureManager.h>
 
 #include <algorithm>
@@ -323,60 +321,6 @@ void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, T
   st.cameraNode->lookAt(Ogre::Vector3::ZERO, Ogre::Node::TS_PARENT);
 }
 
-std::string normalMapTextureName(const Ogre::MaterialPtr &mat)
-{
-  if (!mat || mat->getNumTechniques() == 0)
-    return {};
-  Ogre::Pass *pass = mat->getTechnique(0)->getPass(0);
-  if (!pass)
-    return {};
-  for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
-    Ogre::TextureUnitState *tus = pass->getTextureUnitState(i);
-    const Ogre::String &slot = tus->getName();
-    if ((slot == "normal_map" || slot == "NormalMap") && !tus->getTextureName().empty())
-      return tus->getTextureName();
-  }
-  return {};
-}
-
-void prepareRtssMaterials(const QList<Ogre::Entity *> &entities)
-{
-  auto *shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
-  if (!shaderGen)
-    return;
-
-  std::unordered_set<std::string> processed;
-  for (Ogre::Entity *entity : entities) {
-    if (!entity)
-      continue;
-    for (unsigned int sub = 0; sub < entity->getNumSubEntities(); ++sub) {
-      Ogre::MaterialPtr mat = entity->getSubEntity(sub)->getMaterial();
-      if (!mat)
-        continue;
-      const std::string key = mat->getName();
-      if (!processed.insert(key).second)
-        continue;
-
-      RTShaderHelper::wirePbrSlotsForFFP(mat.get());
-      if (RTShaderHelper::applyPbrIfTagged(mat)) {
-        mat->compile();
-        continue;
-      }
-
-      const std::string normalTex = normalMapTextureName(mat);
-      if (!normalTex.empty()) {
-        RTShaderHelper::applyNormalMap(mat, normalTex);
-      } else {
-        shaderGen->createShaderBasedTechnique(
-            *mat, Ogre::MaterialManager::DEFAULT_SCHEME_NAME,
-            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
-        shaderGen->validateMaterial(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat);
-      }
-      mat->compile();
-    }
-  }
-}
-
 QImage readRenderTarget(int width, int height)
 {
   QImage image(width, height, QImage::Format_RGBA8888);
@@ -506,7 +450,10 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
       Ogre::Degree(std::clamp(options.elevationDegrees, -80.0f, 80.0f)).valueRadians();
 
   prepareSceneForCapture(entities);
-  prepareRtssMaterials(entities);
+  // Materials match the in-editor path: MeshImporterExporter / MaterialProcessor
+  // already wire RTSS (applyRTSSNormalMap, wirePbrSlotsForFFP). Do not mutate
+  // materials here — re-applying RTSS can leave the normal map in the FFP
+  // multi-texture chain while also using SRS_NORMALMAP (double layer look).
   applyTurntableLighting(sm);
 
   outFrames->reserve(frameCount);
