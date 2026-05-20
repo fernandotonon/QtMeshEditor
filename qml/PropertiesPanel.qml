@@ -692,6 +692,22 @@ Rectangle {
                     border.width: 1
                     radius: 2
                     opacity: VATBakerController.isBaking ? 0.5 : 1.0
+
+                    // Step from the LIVE textbox value, not the
+                    // committed `animToolsCol.fps`. If the user typed
+                    // "60" and then hit ↑ before pressing Enter, the
+                    // arrow used to read the stale model value and
+                    // could jump back to "41". Now we parse the
+                    // current text first; if it doesn't parse, fall
+                    // back to the committed value.
+                    function stepFps(delta) {
+                        var typed = parseInt(animFpsInput.text)
+                        var base = isNaN(typed) ? animToolsCol.fps : typed
+                        var next = Math.max(1, Math.min(120, base + delta))
+                        animToolsCol.fps = next
+                        animFpsInput.text = String(next)
+                    }
+
                     TextInput {
                         id: animFpsInput
                         anchors.left: parent.left
@@ -717,8 +733,8 @@ Rectangle {
                                 text = String(animToolsCol.fps)
                             }
                         }
-                        Keys.onUpPressed:   { animToolsCol.fps = Math.min(120, animToolsCol.fps + 1); text = String(animToolsCol.fps) }
-                        Keys.onDownPressed: { animToolsCol.fps = Math.max(1,   animToolsCol.fps - 1); text = String(animToolsCol.fps) }
+                        Keys.onUpPressed:   animFpsBg.stepFps(1)
+                        Keys.onDownPressed: animFpsBg.stepFps(-1)
                     }
                     Column {
                         id: animFpsArrows
@@ -740,10 +756,7 @@ Rectangle {
                                 id: fpsUpMa
                                 anchors.fill: parent; hoverEnabled: true
                                 enabled: !VATBakerController.isBaking
-                                onClicked: {
-                                    animToolsCol.fps = Math.min(120, animToolsCol.fps + 1)
-                                    animFpsInput.text = String(animToolsCol.fps)
-                                }
+                                onClicked: animFpsBg.stepFps(1)
                             }
                         }
                         Rectangle {
@@ -760,10 +773,7 @@ Rectangle {
                                 id: fpsDownMa
                                 anchors.fill: parent; hoverEnabled: true
                                 enabled: !VATBakerController.isBaking
-                                onClicked: {
-                                    animToolsCol.fps = Math.max(1, animToolsCol.fps - 1)
-                                    animFpsInput.text = String(animToolsCol.fps)
-                                }
+                                onClicked: animFpsBg.stepFps(-1)
                             }
                         }
                     }
@@ -879,11 +889,30 @@ Rectangle {
                     id: includeShaderChk
                     width: 14; height: 14
                     anchors.verticalCenter: parent.verticalCenter
-                    border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                    // Show a thicker / accent border on keyboard focus
+                    // so it's obvious the toggle is reachable via Tab.
+                    border.color: includeShaderChk.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    border.width: includeShaderChk.activeFocus ? 2 : 1
+                    radius: 2
                     color: animToolsCol.includeShaders
                         ? PropertiesPanelController.highlightColor
                         : PropertiesPanelController.controlBgColor
                     opacity: VATBakerController.isBaking ? 0.4 : 1.0
+                    // Keyboard-reachable + assistive-tech-readable: stock
+                    // Controls.CheckBox handles all of this for free, but
+                    // we replaced it with a themed Rectangle for size +
+                    // visual consistency with the Animations panel. Add
+                    // back the affordances by hand.
+                    activeFocusOnTab: !VATBakerController.isBaking
+                    Accessible.role: Accessible.CheckBox
+                    Accessible.name: "Include shader"
+                    Accessible.checkable: true
+                    Accessible.checked: animToolsCol.includeShaders
+                    Keys.onSpacePressed:  if (!VATBakerController.isBaking) animToolsCol.includeShaders = !animToolsCol.includeShaders
+                    Keys.onReturnPressed: if (!VATBakerController.isBaking) animToolsCol.includeShaders = !animToolsCol.includeShaders
+                    Keys.onEnterPressed:  if (!VATBakerController.isBaking) animToolsCol.includeShaders = !animToolsCol.includeShaders
                     Text {
                         anchors.centerIn: parent
                         text: animToolsCol.includeShaders ? "✓" : ""
@@ -893,7 +922,10 @@ Rectangle {
                         anchors.fill: parent
                         enabled: !VATBakerController.isBaking
                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-                        onClicked: animToolsCol.includeShaders = !animToolsCol.includeShaders
+                        onClicked: {
+                            animToolsCol.includeShaders = !animToolsCol.includeShaders
+                            includeShaderChk.forceActiveFocus()
+                        }
                     }
                 }
                 Text {
@@ -906,7 +938,13 @@ Rectangle {
                         anchors.fill: parent
                         enabled: !VATBakerController.isBaking
                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-                        onClicked: animToolsCol.includeShaders = !animToolsCol.includeShaders
+                        // Clicking the label toggles AND focuses the
+                        // checkbox, matching the behaviour of a native
+                        // labelled CheckBox.
+                        onClicked: {
+                            animToolsCol.includeShaders = !animToolsCol.includeShaders
+                            includeShaderChk.forceActiveFocus()
+                        }
                     }
                 }
             }
@@ -929,13 +967,26 @@ Rectangle {
                     delegate: Row {
                         spacing: 4
                         Rectangle {
+                            id: engineChk
                             width: 14; height: 14
                             anchors.verticalCenter: parent.verticalCenter
-                            border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                            border.color: engineChk.activeFocus
+                                ? PropertiesPanelController.highlightColor
+                                : PropertiesPanelController.borderColor
+                            border.width: engineChk.activeFocus ? 2 : 1
+                            radius: 2
                             color: animToolsCol[modelData.prop]
                                 ? PropertiesPanelController.highlightColor
                                 : PropertiesPanelController.controlBgColor
                             opacity: VATBakerController.isBaking ? 0.4 : 1.0
+                            activeFocusOnTab: !VATBakerController.isBaking
+                            Accessible.role: Accessible.CheckBox
+                            Accessible.name: modelData.label + " shader"
+                            Accessible.checkable: true
+                            Accessible.checked: animToolsCol[modelData.prop]
+                            Keys.onSpacePressed:  if (!VATBakerController.isBaking) animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                            Keys.onReturnPressed: if (!VATBakerController.isBaking) animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                            Keys.onEnterPressed:  if (!VATBakerController.isBaking) animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
                             Text {
                                 anchors.centerIn: parent
                                 text: animToolsCol[modelData.prop] ? "✓" : ""
@@ -945,7 +996,10 @@ Rectangle {
                                 anchors.fill: parent
                                 enabled: !VATBakerController.isBaking
                                 cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-                                onClicked: animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                                onClicked: {
+                                    animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                                    engineChk.forceActiveFocus()
+                                }
                             }
                         }
                         Text {
@@ -958,7 +1012,10 @@ Rectangle {
                                 anchors.fill: parent
                                 enabled: !VATBakerController.isBaking
                                 cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-                                onClicked: animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                                onClicked: {
+                                    animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                                    engineChk.forceActiveFocus()
+                                }
                             }
                         }
                     }
