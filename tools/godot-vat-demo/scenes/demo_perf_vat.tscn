@@ -1,0 +1,63 @@
+[gd_scene load_steps=6 format=3 uid="uid://b0vk1vatperfvat"]
+
+[ext_resource type="Script" path="res://scripts/PerfSpawnerVAT.gd" id="1_spawn"]
+[ext_resource type="Script" path="res://scripts/FPSOverlay.gd" id="2_fps"]
+[ext_resource type="Script" path="res://scripts/OrbitCamera.gd" id="3_orbit"]
+
+[sub_resource type="Environment" id="Environment_default"]
+background_mode = 1
+background_color = Color(0.08, 0.09, 0.12, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.55, 0.6, 0.7, 1)
+ambient_light_energy = 0.45
+ssao_enabled = false
+glow_enabled = false
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_floor"]
+size = Vector2(60, 60)
+subdivide_width = 8
+subdivide_depth = 8
+
+[sub_resource type="StandardMaterial3D" id="Material_floor"]
+albedo_color = Color(0.12, 0.13, 0.18, 1)
+roughness = 0.85
+metallic = 0.05
+
+[node name="DemoPerfVAT" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_default")
+
+[node name="OrbitCamera" type="Camera3D" parent="."]
+fov = 55.0
+script = ExtResource("3_orbit")
+target = Vector3(0, 1.0, 0)
+distance = 35.0
+min_distance = 3.0
+max_distance = 80.0
+yaw_deg = 0.0
+pitch_deg = -25.0
+
+[node name="KeyLight" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.8, -0.35, 0.42, 0, 0.77, 0.64, -0.58, -0.51, 0.61, 2, 4, 2)
+light_energy = 1.2
+shadow_enabled = false
+
+[node name="Floor" type="MeshInstance3D" parent="."]
+mesh = SubResource("PlaneMesh_floor")
+surface_material_override/0 = SubResource("Material_floor")
+
+[node name="Crowd" type="Node3D" parent="."]
+script = ExtResource("1_spawn")
+instance_count = 1000
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="FPS" type="Label" parent="UI"]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 800.0
+offset_bottom = 120.0
+script = ExtResource("2_fps")
+caption = "VAT path — 1000 instances"
+instance_count = 1000
