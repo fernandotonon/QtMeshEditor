@@ -110,6 +110,7 @@ ScanEngine.cpp
 QtMeshCloudClient.cpp
 AssetBrowserController.cpp
 MaterialPreviewRenderer.cpp
+ModelTurntableRenderer.cpp
 EditableMesh.cpp
 EditModeController.cpp
 EditorModeController.cpp
@@ -210,6 +211,7 @@ ScanEngine.h
 QtMeshCloudClient.h
 AssetBrowserController.h
 MaterialPreviewRenderer.h
+ModelTurntableRenderer.h
 EditableMesh.h
 EditModeController.h
 EditorModeController.h

@@ -25,6 +25,7 @@
 #include "MorphAnimationManager.h"
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
+#include "ModelTurntableRenderer.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -561,6 +562,11 @@ void CLIPipeline::printUsage()
         "  pose <mesh> --library apply --lib <lib.poselib> --apply <name> -o <out>\n"
         "                                    Load mesh, apply named pose from sidecar to the\n"
         "                                    skeleton, export the posed mesh. Requires a skinned mesh.\n"
+        "  turntable <file> -o <output> [--frames N] [--size WxH] [--columns C]\n"
+        "                                    Render a PNG turntable (default: horizontal sprite sheet)\n"
+        "  turntable <file> -o <pattern>     Use %02d in -o to write separate frame PNGs\n"
+        "                                    Options: --axis y|x|z, --elevation/--camera-height <deg>,\n"
+        "                                    --width/--height, --json\n"
         "  scan [path] [options]           Scan directory for 3D asset issues (default path: .)\n"
         "  material <file> --preset <name> [-o <output>]\n"
         "                                  Apply a built-in material preset to every sub-entity\n"
@@ -740,6 +746,93 @@ QString CLIPipeline::formatForExtension(const QString& path)
     return "Ogre Mesh (*.mesh)";
 }
 
+namespace {
+
+bool parseCliInt(const QString& text, int* out)
+{
+    bool ok = false;
+    const int v = text.toInt(&ok);
+    if (ok && out)
+        *out = v;
+    return ok;
+}
+
+bool parseCliFloat(const QString& text, float* out)
+{
+    bool ok = false;
+    const float v = text.toFloat(&ok);
+    if (ok && out)
+        *out = v;
+    return ok;
+}
+
+bool turntableUsesFrameSequencePattern(const QString& path)
+{
+    for (int i = 0; i < path.size(); ++i) {
+        if (path[i] != QLatin1Char('%'))
+            continue;
+        if (i + 1 < path.size() && path[i + 1] == QLatin1Char('%')) {
+            ++i;
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool validateTurntableSequencePattern(const QString& pattern, QString* errorOut)
+{
+    int conversions = 0;
+    for (int i = 0; i < pattern.size(); ++i) {
+        if (pattern[i] != QLatin1Char('%'))
+            continue;
+        if (i + 1 < pattern.size() && pattern[i + 1] == QLatin1Char('%')) {
+            ++i;
+            continue;
+        }
+        ++conversions;
+        if (conversions > 1) {
+            if (errorOut)
+                *errorOut = QStringLiteral(
+                    "Output pattern must contain exactly one frame index (use %% for a literal %)");
+            return false;
+        }
+        ++i;
+        while (i < pattern.size()
+               && (pattern[i].isDigit() || pattern[i] == QLatin1Char('.') || pattern[i] == QLatin1Char('*')
+                   || pattern[i] == QLatin1Char('-')))
+            ++i;
+        if (i >= pattern.size()) {
+            if (errorOut)
+                *errorOut = QStringLiteral("Output pattern ends with an incomplete conversion");
+            return false;
+        }
+        const QChar spec = pattern[i];
+        if (spec != QLatin1Char('d') && spec != QLatin1Char('i') && spec != QLatin1Char('u')) {
+            if (errorOut)
+                *errorOut = QStringLiteral(
+                    "Output pattern frame index must use %%d (for example frame_%%02d.png)");
+            return false;
+        }
+    }
+    if (conversions != 1) {
+        if (errorOut)
+            *errorOut = QStringLiteral(
+                "Sequence output requires exactly one frame index (for example frame_%%02d.png)");
+        return false;
+    }
+    return true;
+}
+
+QString formatTurntableFramePath(const QString& pattern, int frameIndex)
+{
+    char buf[2048];
+    snprintf(buf, sizeof(buf), pattern.toUtf8().constData(), frameIndex);
+    return QString::fromUtf8(buf);
+}
+
+} // namespace
+
 bool CLIPipeline::initOgreHeadless()
 {
     // Suppress Ogre log output unless --verbose was given.
@@ -761,40 +854,51 @@ bool CLIPipeline::initOgreHeadless()
         return false;
     }
 
-    // Already have a render window (e.g. from tryInitOgre() in tests) — nothing to do.
     auto* root = Manager::getSingleton()->getRoot();
+    bool hasRenderWindow = false;
     if (root) {
         try {
             if (root->getRenderTarget("TestHidden") || root->getRenderTarget("CLIHidden"))
-                return true;
+                hasRenderWindow = true;
         } catch (...) {
             // getRenderTarget may throw if not found in some Ogre versions
         }
     }
 
-    static QWidget* hiddenWidget = nullptr;
-    if (!hiddenWidget) {
-        hiddenWidget = new QWidget();
-        hiddenWidget->setAttribute(Qt::WA_DontShowOnScreen);
-        hiddenWidget->resize(1, 1);
-        hiddenWidget->show();
+    if (!hasRenderWindow) {
+        static QWidget* hiddenWidget = nullptr;
+        if (!hiddenWidget) {
+            hiddenWidget = new QWidget();
+            hiddenWidget->setAttribute(Qt::WA_DontShowOnScreen);
+            hiddenWidget->resize(1, 1);
+            hiddenWidget->show();
+        }
+
+        try {
+            Ogre::NameValuePairList params;
+            params["externalWindowHandle"] = Ogre::StringConverter::toString(
+                static_cast<unsigned long>(hiddenWidget->winId()));
+#ifdef Q_OS_MACOS
+            params["macAPI"] = "cocoa";
+            params["macAPICocoaUseNSView"] = "true";
+#endif
+            Manager::getSingleton()->getRoot()->createRenderWindow(
+                "CLIHidden", 1, 1, false, &params);
+        } catch (...) {
+            err() << "Error: Failed to create render window." << Qt::endl;
+            return false;
+        }
     }
 
-    try {
-        Ogre::NameValuePairList params;
-        params["externalWindowHandle"] = Ogre::StringConverter::toString(
-            static_cast<unsigned long>(hiddenWidget->winId()));
-#ifdef Q_OS_MACOS
-        params["macAPI"] = "cocoa";
-        params["macAPICocoaUseNSView"] = "true";
-#endif
-        Manager::getSingleton()->getRoot()->createRenderWindow(
-            "CLIHidden", 1, 1, false, &params);
-        return true;
-    } catch (...) {
-        err() << "Error: Failed to create render window." << Qt::endl;
-        return false;
+    // Match GUI startup: RTSS and media need a GL context (MainWindow calls
+    // loadResources() after createRenderWindow). Without this, CLI turntable
+    // renders MSN_SHADERGEN with normal maps still in the FFP multitexture chain.
+    static bool cliResourcesLoaded = false;
+    if (!cliResourcesLoaded) {
+        Manager::getSingleton()->loadResources();
+        cliResourcesLoaded = true;
     }
+    return true;
 }
 
 MeshInfo CLIPipeline::extractMeshInfo(const Ogre::Entity* entity, const QString& fileName)
@@ -1077,6 +1181,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "validate") rc = cmdValidate(argc, argv);
     else if (cmd == "lod") rc = cmdLod(argc, argv);
     else if (cmd == "pose") rc = cmdPose(argc, argv);
+    else if (cmd == "turntable") rc = cmdTurntable(argc, argv);
     else if (cmd == "scan") rc = cmdScan(argc, argv);
     else if (cmd == "material") rc = cmdMaterial(argc, argv);
     else if (cmd == "pack-textures") rc = cmdPackTextures(argc, argv);
@@ -2780,6 +2885,231 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             .arg(QFileInfo(outputPath).fileName()));
         return 0;
     }
+}
+
+int CLIPipeline::cmdTurntable(int argc, char* argv[])
+{
+    // turntable <file> -o <output> [--frames N] [--size WxH] [--width W] [--height H]
+    //                     [--columns C] [--axis y|x|z] [--elevation deg] [--camera-height deg] [--json]
+    QString inputPath, outputPath;
+    int frameCount = 12;
+    int width = 512;
+    int height = 512;
+    int columns = 0;
+    float elevation = 20.0f;
+    bool jsonOutput = false;
+    TurntableAxis axis = TurntableAxis::Y;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "turntable" || arg == "--cli")
+            continue;
+        if (arg == "--json") {
+            jsonOutput = true;
+            continue;
+        }
+        if (arg == "-o" && i + 1 < argc) {
+            outputPath = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--frames" && i + 1 < argc) {
+            if (!parseCliInt(QString(argv[++i]), &frameCount)) {
+                err() << "Error: Invalid value for --frames." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--columns" && i + 1 < argc) {
+            if (!parseCliInt(QString(argv[++i]), &columns)) {
+                err() << "Error: Invalid value for --columns." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--width" && i + 1 < argc) {
+            if (!parseCliInt(QString(argv[++i]), &width)) {
+                err() << "Error: Invalid value for --width." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--height" && i + 1 < argc) {
+            if (!parseCliInt(QString(argv[++i]), &height)) {
+                err() << "Error: Invalid value for --height." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--size" && i + 1 < argc) {
+            const QString sizeArg = QString(argv[++i]);
+            const int xPos = sizeArg.indexOf(QLatin1Char('x'));
+            if (xPos > 0) {
+                if (!parseCliInt(sizeArg.left(xPos), &width) || !parseCliInt(sizeArg.mid(xPos + 1), &height)) {
+                    err() << "Error: Invalid value for --size (expected WxH)." << Qt::endl;
+                    return 2;
+                }
+            } else if (!parseCliInt(sizeArg, &width)) {
+                err() << "Error: Invalid value for --size." << Qt::endl;
+                return 2;
+            } else {
+                height = width;
+            }
+            continue;
+        }
+        if (arg == "--elevation" && i + 1 < argc) {
+            if (!parseCliFloat(QString(argv[++i]), &elevation)) {
+                err() << "Error: Invalid value for --elevation." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if ((arg == "--camera-height" || arg == "--camera_height") && i + 1 < argc) {
+            if (!parseCliFloat(QString(argv[++i]), &elevation)) {
+                err() << "Error: Invalid value for --camera-height." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--axis" && i + 1 < argc) {
+            TurntableAxis parsed = TurntableAxis::Y;
+            if (!ModelTurntableRenderer::parseAxis(QString(argv[++i]), &parsed)) {
+                err() << "Error: --axis must be y, x, or z." << Qt::endl;
+                return 2;
+            }
+            axis = parsed;
+            continue;
+        }
+        if (!arg.startsWith(QLatin1Char('-')) && inputPath.isEmpty()) {
+            inputPath = arg;
+            continue;
+        }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh turntable <file> -o <output> [--frames N] [--size WxH]" << Qt::endl;
+        return 2;
+    }
+    if (outputPath.isEmpty()) {
+        err() << "Error: Output path required (-o)." << Qt::endl;
+        err() << "Usage: qtmesh turntable <file> -o <output.png> [--frames N]" << Qt::endl;
+        return 2;
+    }
+
+    const bool sequenceOutput = turntableUsesFrameSequencePattern(outputPath);
+    if (sequenceOutput) {
+        QString patternError;
+        if (!validateTurntableSequencePattern(outputPath, &patternError)) {
+            err() << "Error: " << patternError << Qt::endl;
+            return 2;
+        }
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless())
+        return 1;
+
+    SentryReporter::addBreadcrumb("cli.turntable",
+                                  QString("Turntable .%1 frames=%2").arg(fi.suffix()).arg(frameCount));
+    SentryReporter::addBreadcrumb("file.import", fi.absoluteFilePath());
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    QList<Ogre::Entity *> entityList;
+    for (auto *obj : Manager::getSingleton()->getEntities()) {
+        if (obj && obj->getMovableType() == "Entity")
+            entityList.append(static_cast<Ogre::Entity *>(obj));
+    }
+    if (entityList.isEmpty()) {
+        SentryReporter::captureMessage(QString("CLI turntable: import failed (.%1)").arg(fi.suffix()),
+                                       "error");
+        err() << "Error: Failed to load file: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    TurntableOptions options;
+    options.width = width;
+    options.height = height;
+    options.frameCount = qBound(1, frameCount, 360);
+    options.axis = axis;
+    options.elevationDegrees = elevation;
+
+    QList<QImage> frames;
+    QString renderError;
+    if (!ModelTurntableRenderer::renderToImages(entityList, options, &frames, &renderError)) {
+        ModelTurntableRenderer::shutdown();
+        err() << "Error: " << renderError << Qt::endl;
+        return 1;
+    }
+
+    QStringList writtenPaths;
+
+    if (sequenceOutput) {
+        for (int f = 0; f < frames.size(); ++f) {
+            const QString framePath = formatTurntableFramePath(outputPath, f);
+            if (!frames.at(f).save(framePath)) {
+                ModelTurntableRenderer::shutdown();
+                err() << "Error: Failed to write " << framePath << Qt::endl;
+                return 1;
+            }
+            writtenPaths << framePath;
+        }
+    } else if (frames.size() == 1) {
+        if (!frames.first().save(outputPath)) {
+            ModelTurntableRenderer::shutdown();
+            err() << "Error: Failed to write " << outputPath << Qt::endl;
+            return 1;
+        }
+        writtenPaths << outputPath;
+    } else {
+        const QImage sheet = ModelTurntableRenderer::composeSpriteSheet(frames, columns);
+        if (sheet.isNull() || !sheet.save(outputPath)) {
+            ModelTurntableRenderer::shutdown();
+            err() << "Error: Failed to write sprite sheet " << outputPath << Qt::endl;
+            return 1;
+        }
+        writtenPaths << outputPath;
+    }
+
+    ModelTurntableRenderer::shutdown();
+
+    for (const QString& written : writtenPaths)
+        SentryReporter::addBreadcrumb("file.export", written);
+
+    if (jsonOutput) {
+        QJsonObject root;
+        root["input"] = fi.absoluteFilePath();
+        root["frames"] = frames.size();
+        root["width"] = width;
+        root["height"] = height;
+        root["elevation"] = elevation;
+        root["axis"] = axis == TurntableAxis::X ? "x" : axis == TurntableAxis::Z ? "z" : "y";
+        root["sequence"] = sequenceOutput;
+        QJsonArray paths;
+        for (const QString &p : writtenPaths)
+            paths.append(p);
+        root["outputs"] = paths;
+        cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        if (sequenceOutput) {
+            cliWrite(QString("Wrote %1 turntable frame(s) to %2\n")
+                         .arg(writtenPaths.size())
+                         .arg(QFileInfo(outputPath).absolutePath()));
+        } else if (frames.size() == 1) {
+            cliWrite(QString("Wrote turntable PNG: %1\n").arg(QFileInfo(outputPath).fileName()));
+        } else {
+            cliWrite(QString("Wrote turntable sprite sheet (%1 frames): %2\n")
+                         .arg(frames.size())
+                         .arg(QFileInfo(outputPath).fileName()));
+        }
+    }
+
+    return 0;
 }
 
 int CLIPipeline::cmdMaterial(int argc, char* argv[])

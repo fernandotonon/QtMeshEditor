@@ -38,4 +38,17 @@ namespace RTShaderHelper {
     /// editor produces, so a freshly-imported PBR FBX doesn't render
     /// darker than the same material after a no-op Apply.
     void wirePbrSlotsForFFP(Ogre::Material* mat);
+
+    /// FBX imports may leave a normal-map texture in the FFP multitexture chain
+    /// (e.g. duplicate NormalMap units from a .material script) while RTSS also
+    /// samples it via SRS_NORMALMAP — the "second layer" look in turntable/CLI.
+    /// Marks every normal-related TUS non-FFP, removes duplicate units that
+    /// reuse the same texture, and refreshes SRS_NORMALMAP texture_index.
+    void excludeNormalMapFromFfpChain(Ogre::MaterialPtr& mat);
+
+    /// Call after all texture units are in place (end of import / turntable).
+    /// Strips normal/bump from the FFP chain, dedupes diffuse+albedo, removes
+    /// stale RTSS programs, and rebuilds ShaderGenerator shading once.
+    void finalizeShaderGenMaterial(Ogre::MaterialPtr& mat,
+                                   const Ogre::String& normalMapTexName = {});
 }

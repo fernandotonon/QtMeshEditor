@@ -57,26 +57,33 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         Ogre::Pass* xPass = ensureFirstPass(existingMaterial);
         if (!xPass) return existingMaterial;
 
-        // Normal map (legacy DIFFUSE/HEIGHT/NORMAL_CAMERA path → RTSS).
-        aiString existingNormalPath;
-        if(AI_SUCCESS == material->GetTexture(aiTextureType_NORMALS,       0, &existingNormalPath)
-           || AI_SUCCESS == material->GetTexture(aiTextureType_HEIGHT,        0, &existingNormalPath)
-           || AI_SUCCESS == material->GetTexture(aiTextureType_NORMAL_CAMERA, 0, &existingNormalPath)) {
-            std::string normalTexPath = existingNormalPath.C_Str();
-            std::string normalFilename = normalTexPath.substr(normalTexPath.find_last_of("/\\") + 1);
-            Ogre::TexturePtr normalTexPtr = Ogre::TextureManager::getSingleton().getByName(normalFilename);
-            if(!normalTexPtr) {
+        Ogre::String stagedNormalTex;
+        auto stageNormalFromAssimp = [&](aiTextureType type) -> bool {
+            aiString path;
+            if (material->GetTexture(type, 0, &path) != AI_SUCCESS)
+                return false;
+            const std::string texPath = path.C_Str();
+            const std::string filename =
+                texPath.substr(texPath.find_last_of("/\\") + 1);
+            if (filename.empty())
+                return false;
+            Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().getByName(filename);
+            if (!tex) {
                 try {
-                    normalTexPtr = loadTexture(normalFilename, existingNormalPath, scene);
+                    tex = loadTexture(filename, path, scene);
                 } catch (...) {
-                    Ogre::LogManager::getSingleton().logMessage("MaterialProcessor: Failed to load normal map '" + normalFilename + "' for existing material '" + materialName + "'");
+                    return false;
                 }
             }
-            if(normalTexPtr) {
-                Ogre::LogManager::getSingleton().logMessage("MaterialProcessor: Applying RTSS normal map '" + normalFilename + "' to existing material '" + materialName + "'");
-                applyRTSSNormalMap(existingMaterial, normalTexPtr->getName());
-            }
-        }
+            if (!tex)
+                return false;
+            stagedNormalTex = tex->getName();
+            return true;
+        };
+        if (!stageNormalFromAssimp(aiTextureType_NORMALS))
+            stageNormalFromAssimp(aiTextureType_NORMAL_CAMERA);
+        if (stagedNormalTex.empty())
+            stageNormalFromAssimp(aiTextureType_HEIGHT);
 
         // PBR slots: add any that are missing on the existing material.
         // Without this, reimporting an FBX whose material already exists
@@ -115,13 +122,8 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
             addMissingSlot(aiTextureType_EMISSION_COLOR, "emissive");
         addMissingSlot(aiTextureType_BASE_COLOR,         "albedo");
 
-        // Wire FFP slot operations on the augmented material so the
-        // newly-added PBR TUS render the same as they would after a
-        // no-op Apply in the Material Editor. Guarded behind the render-
-        // system check (lightweight test fixture has Ogre::Root only).
         if (Ogre::Root::getSingletonPtr() && Ogre::Root::getSingletonPtr()->getRenderSystem()) {
-            RTShaderHelper::wirePbrSlotsForFFP(existingMaterial.get());
-            existingMaterial->compile();
+            RTShaderHelper::finalizeShaderGenMaterial(existingMaterial, stagedNormalTex);
         }
 
         return existingMaterial;
@@ -178,24 +180,32 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     //                     reimport, so this lets a Maya-Stingray-styled
     //                     FBX round-trip its normal map back into our
     //                     RTSS pipeline.
-    aiString normalPath;
-    bool hasNormalMap = (AI_SUCCESS == material->GetTexture(aiTextureType_NORMALS,       0, &normalPath))
-                     || (AI_SUCCESS == material->GetTexture(aiTextureType_HEIGHT,        0, &normalPath))
-                     || (AI_SUCCESS == material->GetTexture(aiTextureType_NORMAL_CAMERA, 0, &normalPath));
-    if(hasNormalMap) {
-        std::string normalTexPath = normalPath.C_Str();
-        std::string normalFilename = normalTexPath.substr(normalTexPath.find_last_of("/\\") + 1);
-        Ogre::TexturePtr normalTexPtr = Ogre::TextureManager::getSingleton().getByName(normalFilename);
-        if(!normalTexPtr) {
+    Ogre::String stagedNormalTex;
+    auto stageNormalFromAssimp = [&](aiTextureType type) -> bool {
+        aiString path;
+        if (material->GetTexture(type, 0, &path) != AI_SUCCESS)
+            return false;
+        const std::string texPath = path.C_Str();
+        const std::string filename = texPath.substr(texPath.find_last_of("/\\") + 1);
+        if (filename.empty())
+            return false;
+        Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().getByName(filename);
+        if (!tex) {
             try {
-                normalTexPtr = loadTexture(normalFilename, normalPath, scene);
+                tex = loadTexture(filename, path, scene);
             } catch (...) {
-                Ogre::LogManager::getSingleton().logMessage("MaterialProcessor: Failed to load normal map '" + normalFilename + "'");
+                return false;
             }
         }
-        if(normalTexPtr)
-            applyRTSSNormalMap(ogreMaterial, normalTexPtr->getName());
-    }
+        if (!tex)
+            return false;
+        stagedNormalTex = tex->getName();
+        return true;
+    };
+    if (!stageNormalFromAssimp(aiTextureType_NORMALS))
+        stageNormalFromAssimp(aiTextureType_NORMAL_CAMERA);
+    if (stagedNormalTex.empty())
+        stageNormalFromAssimp(aiTextureType_HEIGHT);
 
     // Slice F3: read PBR-specific texture types from Assimp and bind
     // them to the slice E canonical slot names so the user can see
@@ -349,8 +359,7 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     // subsequent compile both walk paths that segfault on that fixture.
     // In real app use the render system is always up by import time.
     if (Ogre::Root::getSingletonPtr() && Ogre::Root::getSingletonPtr()->getRenderSystem()) {
-        RTShaderHelper::wirePbrSlotsForFFP(ogreMaterial.get());
-        ogreMaterial->compile();
+        RTShaderHelper::finalizeShaderGenMaterial(ogreMaterial, stagedNormalTex);
     }
 
     return ogreMaterial;
@@ -410,21 +419,12 @@ Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, co
 
 void MaterialProcessor::applyRTSSNormalMap(Ogre::MaterialPtr mat, const Ogre::String& normalMapName)
 {
-    RTShaderHelper::applyNormalMap(mat, normalMapName);
-
-    // Stash the normal-map texture name on the material's first pass user-
-    // object bindings so the FBX exporter can find it on round-trip. Without
-    // this, when MaterialProcessor and the export pipeline reach the
-    // material through different resource-group instances of the same name
-    // (common when a .material script and an FBX both define the material),
-    // the export-side `sub->getMaterial()` returns the script-loaded
-    // instance — which never had the RTSS normal-map TUS added — and the
-    // normal map is silently dropped on export. The UOB hint survives the
-    // resource-group disagreement because it's keyed on the *material* name
-    // and re-applied by the importer on every load. Issue #508.
+    // Legacy entry point — full RTSS wiring happens in finalizeShaderGenMaterial
+    // after all PBR slots exist. Keep UOB for export round-trip (#508).
     if (mat && mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
         Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
         pass->getUserObjectBindings().setUserAny(
             "qtme.normal_map", Ogre::Any(normalMapName));
     }
+    RTShaderHelper::finalizeShaderGenMaterial(mat, normalMapName);
 }

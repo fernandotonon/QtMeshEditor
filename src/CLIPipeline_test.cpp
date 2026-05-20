@@ -17,7 +17,9 @@
 #include "MeshLodController.h"
 #include "SelectionSet.h"
 #include <OgreMaterialManager.h>
+#include <OgreRTShaderSystem.h>
 #include "CLIPipeline.h"
+#include "ModelTurntableRenderer.h"
 #include "MeshImporterExporter.h"
 #include "SentryReporter.h"
 #include "TestHelpers.h"
@@ -751,6 +753,7 @@ TEST_F(CLIPipelineInitTest, InitOgreHeadless_Idempotent)
 {
     // Should return true even though tryInitOgre() already created a render window
     EXPECT_TRUE(CLIPipeline::initOgreHeadless());
+    EXPECT_NE(Ogre::RTShader::ShaderGenerator::getSingletonPtr(), nullptr);
 }
 
 TEST_F(CLIPipelineInitTest, InitOgreHeadless_CalledTwice)
@@ -900,6 +903,210 @@ TEST(CLIPipelineCmdInfoError, NoFile)
 {
     TestArgv args({"qtmesh", "info"});
     EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdTurntableError, NoOutput)
+{
+    TestArgv args({"qtmesh", "turntable", "model.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdTurntableError, NoFile)
+{
+    TestArgv args({"qtmesh", "turntable", "-o", "out.png"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdTurntableError, InvalidAxis)
+{
+    TestArgv args({"qtmesh", "turntable", "model.fbx", "-o", "out.png", "--axis", "diagonal"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
+}
+
+TEST(ModelTurntableAxisParse, ValidAxes)
+{
+    TurntableAxis axis = TurntableAxis::Y;
+    EXPECT_TRUE(ModelTurntableRenderer::parseAxis("y", &axis));
+    EXPECT_EQ(axis, TurntableAxis::Y);
+    EXPECT_TRUE(ModelTurntableRenderer::parseAxis("X", &axis));
+    EXPECT_EQ(axis, TurntableAxis::X);
+    EXPECT_TRUE(ModelTurntableRenderer::parseAxis("z", &axis));
+    EXPECT_EQ(axis, TurntableAxis::Z);
+    EXPECT_FALSE(ModelTurntableRenderer::parseAxis("invalid", &axis));
+}
+
+TEST(CLIPipelineCmdTurntableError, NonexistentInputFile)
+{
+    TestArgv args({"qtmesh", "turntable", "/nonexistent/path/model_xyz.obj", "-o", "out.png"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 1);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSpriteSheet)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_mesh.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("sheet.png").toUtf8();
+
+    TestArgv args({"qtmesh", "turntable", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--frames", "2",
+                   "--size", "48"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
+    ASSERT_TRUE(QFile::exists(QString::fromUtf8(outArg)));
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 96);  // 2 × 48
+    EXPECT_EQ(img.height(), 48);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSizeWxHParses)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_sizex.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("sizex.png").toUtf8();
+
+    TestArgv args({"qtmesh", "turntable", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--frames", "2",
+                   "--size", "32x16"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 64);  // 2 cols × 32
+    EXPECT_EQ(img.height(), 16);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSequenceAndAxis)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_seq.obj").toUtf8();
+    const QByteArray patternArg = tmp.filePath("frm_%02d.png").toUtf8();
+
+    TestArgv seq({"qtmesh", "turntable", meshArg.constData(),
+                  "-o", patternArg.constData(),
+                  "--frames", "3",
+                  "--width", "32",
+                  "--height", "32",
+                  "--axis", "z",
+                  "--json"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(seq.argc(), seq.argv()), 0);
+
+    EXPECT_TRUE(QFile::exists(tmp.filePath("frm_00.png")));
+    EXPECT_TRUE(QFile::exists(tmp.filePath("frm_01.png")));
+    EXPECT_TRUE(QFile::exists(tmp.filePath("frm_02.png")));
+
+    QImage f0(tmp.filePath("frm_00.png"));
+    ASSERT_FALSE(f0.isNull());
+    EXPECT_EQ(f0.width(), 32);
+    EXPECT_EQ(f0.height(), 32);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_SkipsCliFlagAndCameraHeightAlias)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_cli_flag.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("cli_flag.png").toUtf8();
+
+    TestArgv args({"qtmesh", "--cli", "turntable", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--frames", "2",
+                   "--size", "24",
+                   "--camera_height", "10"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 48);
+    EXPECT_EQ(img.height(), 24);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSpriteSheetColumnsAndCameraHeight)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_cols.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("cols.png").toUtf8();
+
+    TestArgv args({"qtmesh", "turntable", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--frames", "4",
+                   "--size", "40",
+                   "--columns", "2",
+                   "--axis", "x",
+                   "--camera-height", "15"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 80);   // 2 cols × 40
+    EXPECT_EQ(img.height(), 80); // 2 rows × 40
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_FbxFromTestDataRendersWithoutError)
+{
+    const QString fbxPath = testDataDir() + QStringLiteral("/Twist Dance.fbx");
+    ASSERT_TRUE(QFile::exists(fbxPath)) << "Fixture missing: " << fbxPath.toStdString();
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray outArg = tmp.filePath("twist_turntable.png").toUtf8();
+    TestArgv args({"qtmesh", "turntable", fbxPath.toUtf8().constData(),
+                   "-o", outArg.constData(),
+                   "--frames", "2",
+                   "--size", "128"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 256);
+    EXPECT_EQ(img.height(), 128);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_RejectsInvalidFramesFlag)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_bad_frames.obj").toUtf8();
+    TestArgv args({"qtmesh", "turntable", meshArg.constData(),
+                   "-o", tmp.filePath("out.png").toUtf8().constData(),
+                   "--frames", "not-a-number"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_RejectsInvalidSequencePattern)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_bad_seq.obj").toUtf8();
+    TestArgv args({"qtmesh", "turntable", meshArg.constData(),
+                   "-o", tmp.filePath("frame_%s.png").toUtf8().constData(),
+                   "--frames", "2"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSingleFrameWritesOnePng)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_one.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("single.png").toUtf8();
+
+    TestArgv args({"qtmesh", "turntable", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--frames", "1",
+                   "--size", "24"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 24);
+    EXPECT_EQ(img.height(), 24);
 }
 
 TEST(CLIPipelineCmdInfoError, NonexistentFile)

@@ -16,6 +16,7 @@ const NAV = [
     { id: 'cmd-validate', label: 'validate' },
     { id: 'cmd-lod', label: 'lod' },
     { id: 'cmd-pose', label: 'pose' },
+    { id: 'cmd-turntable', label: 'turntable' },
     { id: 'cmd-scan', label: 'scan' },
   ]},
   { section: 'Performance', items: [
@@ -216,7 +217,10 @@ qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
 qtmesh validate character.fbx
 
 # Scan a directory for asset issues
-qtmesh scan ./assets --fail-on error`}</CodeBlock>
+qtmesh scan ./assets --fail-on error
+
+# Render a product-shot turntable PNG
+qtmesh turntable character.fbx -o preview.png --frames 12 --size 512`}</CodeBlock>
 
             <h3 className={s.subsection}>Exit Codes</h3>
             <table className={s.table}>
@@ -396,6 +400,42 @@ qtmesh pose <file> --animation <name> --count N -o <pattern>`}
               'qtmesh pose character.fbx --animation "Dance" --count 8 -o frame_%02d.stl',
             ]}
           />
+
+          <CmdSection id="cmd-turntable" name="turntable" description={<>Headless render-to-texture turntable for mesh previews. Orbits a camera around the model&apos;s bounding box and writes PNG frames — either a single horizontal <strong>sprite sheet</strong> (default for multiple frames) or separate files when <Code>-o</Code> contains a frame index pattern such as <Code>frame_%02d.png</Code>. Uses the same Ogre RTSS material path as the editor viewport (normal maps via <Code>SRS_NORMALMAP</Code>, not as a flat FFP overlay). Supports FBX, glTF, OBJ, and other formats the editor imports.</>}
+            synopsis={`qtmesh turntable <file> -o <output> [--frames N] [--size WxH] [--columns C]
+qtmesh turntable <file> -o frame_%02d.png [--frames N] [--axis y|x|z]`}
+            options={[
+              ['-o <output>', 'Output PNG path. One file for a single frame or sprite sheet; use exactly one %d-style index (e.g. frame_%02d.png) for a numbered sequence.'],
+              ['--frames N', 'Number of views around the orbit (1–360, default 12)'],
+              ['--size WxH', 'Frame width and height (default 512×512). A single number sets a square size.'],
+              ['--width N / --height N', 'Override width or height independently'],
+              ['--columns C', 'Sprite-sheet columns (0 = one row, default for multi-frame)'],
+              ['--axis y|x|z', 'Orbit axis: Y = XZ turntable (default), X = YZ, Z = XY'],
+              ['--elevation <deg>', 'Camera angle above the orbit plane in degrees (default 20)'],
+              ['--camera-height <deg>', 'Alias for --elevation'],
+              ['--json', 'Emit paths and settings as JSON'],
+            ]}
+            examples={[
+              'qtmesh turntable character.fbx -o preview.png --frames 12 --size 512',
+              'qtmesh turntable prop.glb -o sheet.png --frames 8 --columns 4 --size 256',
+              'qtmesh turntable character.fbx -o frames/frame_%02d.png --frames 24 --axis y --elevation 15',
+              'qtmesh turntable character.fbx -o thumb.png --frames 1 --size 128 --json',
+            ]}
+          >
+            <h3 className={s.subsection}>Output modes</h3>
+            <table className={s.table}>
+              <thead><tr><th>Frames</th><th><Code>-o</Code> pattern</th><th>Result</th></tr></thead>
+              <tbody>
+                <tr><td><Code>1</Code></td><td><Code>preview.png</Code></td><td>Single PNG</td></tr>
+                <tr><td><Code>N &gt; 1</Code></td><td><Code>sheet.png</Code> (no <Code>%d</Code>)</td><td>One horizontal sprite sheet (<Code>N</Code> tiles in a row unless <Code>--columns</Code> is set)</td></tr>
+                <tr><td><Code>N &gt; 1</Code></td><td><Code>frame_%02d.png</Code></td><td><Code>N</Code> separate PNGs (<Code>frame_00.png</Code> …)</td></tr>
+              </tbody>
+            </table>
+            <p className={s.para}>
+              Sequence patterns must contain <strong>exactly one</strong> integer conversion (<Code>%d</Code>, <Code>%02d</Code>, etc.).
+              Use <Code>%%</Code> in the path for a literal percent sign. Invalid numeric flags (e.g. <Code>--frames abc</Code>) return exit code <Code>2</Code>.
+            </p>
+          </CmdSection>
 
           <CmdSection id="cmd-scan" name="scan" description={<>Recursively scan a directory for 3D asset issues. Think of it as <strong>ESLint for 3D assets</strong>. Checks format restrictions, complexity limits, naming conventions, skeleton/animation content, and more. Supports YAML configuration, scoped rules per folder, JSON output, and auto-fix. Also available as a <a href="https://github.com/marketplace/actions/qtmesheditor" className={s.link}>GitHub Action</a>: <Code>{qtmeshActionRef}</Code>.</>}
             synopsis={`qtmesh scan [path] [options]`}
@@ -1303,7 +1343,11 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
 
 # Validate geometry
 docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
-  validate model.fbx`}</CodeBlock>
+  validate model.fbx
+
+# Turntable preview PNG
+docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
+  turntable model.fbx -o preview.png --frames 12 --size 512`}</CodeBlock>
           </section>
 
           <section className={s.section} id="github-actions">

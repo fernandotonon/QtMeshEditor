@@ -75,6 +75,8 @@ public:
     static int cmdValidate(int argc, char* argv[]);
     static int cmdLod(int argc, char* argv[]);
     static int cmdPose(int argc, char* argv[]);
+    /// Render a mesh turntable as PNG frame(s) or a horizontal sprite sheet (#294).
+    static int cmdTurntable(int argc, char* argv[]);
     static int cmdScan(int argc, char* argv[]);
     static int cmdMaterial(int argc, char* argv[]);
     /// Slice G: pack 1-4 grayscale source images into a single RGBA
