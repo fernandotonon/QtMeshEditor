@@ -54,7 +54,7 @@ qtmesh anim model.fbx --bake-fps 60 --animation "Run" -o out.fbx  # bake one ani
 qtmesh pose model.fbx --animation "Walk" --time 0.5 -o posed.stl  # export single frame
 qtmesh pose model.fbx --animation "Dance" --count 4 -o pose_%02d.stl  # export N evenly spaced frames
 qtmesh turntable model.fbx -o turntable.png  # PNG sprite sheet (12 frames default)
-qtmesh turntable model.fbx -o frame_%02d.png --frames 24  # separate PNG sequence
+qtmesh turntable model.fbx -o frame_%02d.png --frames 24 --axis y --camera-height 25
 qtmesh validate model.fbx                      # validate mesh (exit 1 if errors found)
 qtmesh validate model.fbx --json               # validation results as JSON
 qtmesh lod model.fbx --info                    # show LOD levels
@@ -87,7 +87,7 @@ qtmesh optimize character.fbx --target-tris 5000 --simplify-rotation-deg-tol 1.0
 qtmesh optimize character.fbx --simplify-preset aggressive -o lo.fbx  # 1e-2/1°/1e-2 — ~20× key reduction, visible drift
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`, `material`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `scan`, `material`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 
@@ -190,7 +190,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### CLI Pipeline
 
 - **CLIPipeline** (`src/CLIPipeline.h/cpp`): Headless command-line interface for mesh operations. All static methods — entry point is `CLIPipeline::run(argc, argv)`.
-- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`, `scan`, `material`, `pack-textures`, `normal-from-height`, `memory`, `analyze`, `vertex-cache`, `decimate`, `atlas`, `atlas-apply`, `optimize`.
+- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`, `turntable`, `scan`, `material`, `pack-textures`, `normal-from-height`, `memory`, `analyze`, `vertex-cache`, `decimate`, `atlas`, `atlas-apply`, `optimize`.
 - Activated via `qtmesh` symlink (created at build time), `--cli` flag, or recognized subcommand as first arg.
 - Redirects stdout to stderr (Ogre/Qt noise) and writes CLI output to the original stdout fd. Uses `_exit()` to avoid Ogre static destructor crashes on macOS.
 - **AnimationMerger** (`src/AnimationMerger.h/cpp`): Public `renameAnimation()` static method used by both CLI and GUI for animation renaming.

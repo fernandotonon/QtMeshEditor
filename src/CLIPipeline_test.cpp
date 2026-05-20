@@ -18,6 +18,7 @@
 #include "SelectionSet.h"
 #include <OgreMaterialManager.h>
 #include "CLIPipeline.h"
+#include "ModelTurntableRenderer.h"
 #include "MeshImporterExporter.h"
 #include "SentryReporter.h"
 #include "TestHelpers.h"
@@ -912,6 +913,24 @@ TEST(CLIPipelineCmdTurntableError, NoFile)
 {
     TestArgv args({"qtmesh", "turntable", "-o", "out.png"});
     EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdTurntableError, InvalidAxis)
+{
+    TestArgv args({"qtmesh", "turntable", "model.fbx", "-o", "out.png", "--axis", "diagonal"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
+}
+
+TEST(ModelTurntableAxisParse, ValidAxes)
+{
+    TurntableAxis axis = TurntableAxis::Y;
+    EXPECT_TRUE(ModelTurntableRenderer::parseAxis("y", &axis));
+    EXPECT_EQ(axis, TurntableAxis::Y);
+    EXPECT_TRUE(ModelTurntableRenderer::parseAxis("X", &axis));
+    EXPECT_EQ(axis, TurntableAxis::X);
+    EXPECT_TRUE(ModelTurntableRenderer::parseAxis("z", &axis));
+    EXPECT_EQ(axis, TurntableAxis::Z);
+    EXPECT_FALSE(ModelTurntableRenderer::parseAxis("invalid", &axis));
 }
 
 TEST(CLIPipelineCmdInfoError, NonexistentFile)

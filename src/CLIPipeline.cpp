@@ -565,7 +565,8 @@ void CLIPipeline::printUsage()
         "  turntable <file> -o <output> [--frames N] [--size WxH] [--columns C]\n"
         "                                    Render a PNG turntable (default: horizontal sprite sheet)\n"
         "  turntable <file> -o <pattern>     Use %02d in -o to write separate frame PNGs\n"
-        "                                    Options: --width/--height, --elevation <deg>, --json\n"
+        "                                    Options: --axis y|x|z, --elevation/--camera-height <deg>,\n"
+        "                                    --width/--height, --json\n"
         "  scan [path] [options]           Scan directory for 3D asset issues (default path: .)\n"
         "  material <file> --preset <name> [-o <output>]\n"
         "                                  Apply a built-in material preset to every sub-entity\n"
@@ -2790,7 +2791,7 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
 int CLIPipeline::cmdTurntable(int argc, char* argv[])
 {
     // turntable <file> -o <output> [--frames N] [--size WxH] [--width W] [--height H]
-    //                     [--columns C] [--elevation deg] [--json]
+    //                     [--columns C] [--axis y|x|z] [--elevation deg] [--camera-height deg] [--json]
     QString inputPath, outputPath;
     int frameCount = 12;
     int width = 512;
@@ -2798,6 +2799,7 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
     int columns = 0;
     float elevation = 20.0f;
     bool jsonOutput = false;
+    TurntableAxis axis = TurntableAxis::Y;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -2840,6 +2842,19 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
         }
         if (arg == "--elevation" && i + 1 < argc) {
             elevation = QString(argv[++i]).toFloat();
+            continue;
+        }
+        if ((arg == "--camera-height" || arg == "--camera_height") && i + 1 < argc) {
+            elevation = QString(argv[++i]).toFloat();
+            continue;
+        }
+        if (arg == "--axis" && i + 1 < argc) {
+            TurntableAxis parsed = TurntableAxis::Y;
+            if (!ModelTurntableRenderer::parseAxis(QString(argv[++i]), &parsed)) {
+                err() << "Error: --axis must be y, x, or z." << Qt::endl;
+                return 2;
+            }
+            axis = parsed;
             continue;
         }
         if (!arg.startsWith(QLatin1Char('-')) && inputPath.isEmpty()) {
@@ -2888,7 +2903,8 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
     TurntableOptions options;
     options.width = width;
     options.height = height;
-    options.frameCount = std::clamp(frameCount, 1, 360);
+    options.frameCount = qBound(1, frameCount, 360);
+    options.axis = axis;
     options.elevationDegrees = elevation;
 
     QList<QImage> frames;
@@ -2940,6 +2956,7 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
         root["width"] = width;
         root["height"] = height;
         root["elevation"] = elevation;
+        root["axis"] = axis == TurntableAxis::X ? "x" : axis == TurntableAxis::Z ? "z" : "y";
         root["sequence"] = sequenceOutput;
         QJsonArray paths;
         for (const QString &p : writtenPaths)
