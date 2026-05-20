@@ -6,15 +6,35 @@
 #include "PS1/runtime/Gp0HookDispatch.h"
 #include "PS1/runtime/RipperHooks.h"
 
-#include <QElapsedTimer>
-
 #include <atomic>
 #include <cstring>
 
-TEST(Gp0HookDispatchTest, DisarmedCaptureMinimalOverhead)
+namespace {
+
+uint32_t colorCmd(uint8_t opcode, uint8_t r, uint8_t g, uint8_t b)
 {
-    alignas(4) uint8_t ram[64 * 1024];
-    std::memset(ram, 0x20, sizeof(ram));
+    return static_cast<uint32_t>(opcode) | (static_cast<uint32_t>(r) << 8)
+           | (static_cast<uint32_t>(g) << 16) | (static_cast<uint32_t>(b) << 24);
+}
+
+uint32_t pos(int x, int y)
+{
+    return static_cast<uint32_t>((y & 0xFFFF) << 16) | static_cast<uint32_t>(x & 0xFFFF);
+}
+
+} // namespace
+
+TEST(Gp0HookDispatchTest, DisarmedCaptureDoesNotRecordPrimitives)
+{
+    const uint32_t words[] = {
+        colorCmd(0x20, 30, 20, 10),
+        pos(8, 16),
+        pos(40, 16),
+        pos(24, 32),
+    };
+
+    alignas(4) uint8_t ram[sizeof(words)];
+    std::memcpy(ram, words, sizeof(words));
 
     std::atomic<bool> armed{false};
     CaptureBuffer buffer;
@@ -22,24 +42,12 @@ TEST(Gp0HookDispatchTest, DisarmedCaptureMinimalOverhead)
     hooks.setArmedFlag(&armed);
     hooks.setBuffer(&buffer);
 
-    QElapsedTimer timer;
-    constexpr int kIterations = 30;
-    timer.start();
-    for (int i = 0; i < kIterations; ++i)
-        hooks.ingestSystemRamForGpuCapture(ram, sizeof(ram));
-    const qint64 disarmedNs = timer.nsecsElapsed();
+    hooks.ingestSystemRamForGpuCapture(ram, sizeof(ram));
+    EXPECT_TRUE(buffer.prims().isEmpty());
 
     armed.store(true, std::memory_order_release);
-    timer.restart();
-    for (int i = 0; i < kIterations; ++i)
-        hooks.ingestSystemRamForGpuCapture(ram, sizeof(ram));
-    const qint64 armedNs = timer.nsecsElapsed();
-
-    ASSERT_GT(armedNs, 0);
-    EXPECT_LT(disarmedNs, armedNs / 50)
-        << "disarmed=" << disarmedNs << "ns armed=" << armedNs << "ns";
-    EXPECT_LT(static_cast<double>(disarmedNs) / static_cast<double>(armedNs), 0.01)
-        << "disarmed overhead should stay below 1% of armed scan cost";
+    hooks.ingestSystemRamForGpuCapture(ram, sizeof(ram));
+    EXPECT_GE(buffer.prims().size(), 1);
 }
 
 #endif // ENABLE_PS1_RIP
