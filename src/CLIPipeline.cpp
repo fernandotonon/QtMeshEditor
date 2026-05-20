@@ -689,7 +689,8 @@ void CLIPipeline::printUsage()
         "                                    normals) plus `<basename>-remap_info.json` with the\n"
         "                                    canonical `os-remap` sidecar shape. Off-the-shelf openvat\n"
         "                                    reference shaders for Godot / Unity / Unreal / Blender\n"
-        "                                    consume the output unmodified.\n"
+        "                                    consume the output unmodified. Drop-in shader templates\n"
+        "                                    for Godot/Unity/Unreal live at `tools/vat-shaders/`.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -5117,6 +5118,8 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                      .arg(result.maxBound.x, 0, 'f', 3)
                      .arg(result.maxBound.y, 0, 'f', 3)
                      .arg(result.maxBound.z, 0, 'f', 3));
+        cliWrite(QStringLiteral(
+            "  shaders:  drop-in Godot/Unity/Unreal templates at tools/vat-shaders/\n"));
     }
     return 0;
 }
