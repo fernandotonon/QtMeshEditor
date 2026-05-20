@@ -37,6 +37,17 @@ ui_zoom_out={
 ]
 }
 
+[display]
+
+; Vsync OFF at project level. Without this, perf scenes are pinned to
+; the display refresh (120 Hz on ProMotion Macs / 60 Hz on most
+; others) and the FPS overlay flatlines at the cap even when there's
+; significant GPU headroom. The runtime `window_set_vsync_mode(DISABLED)`
+; call in the perf spawners is also there, but on macOS Metal the
+; project setting is the authoritative one — Metal binds vsync at
+; window creation, before any GDScript runs.
+window/vsync/vsync_mode=0
+
 [rendering]
 
 textures/default_filters/use_nearest_mipmap_filter=true
