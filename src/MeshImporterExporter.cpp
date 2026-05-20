@@ -2823,6 +2823,22 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                                 || formatId == "glb2");
             unsigned int exportFlags = rightHanded
                 ? 0 : aiProcess_ConvertToLeftHanded;
+
+            // glTF spec mandates V=0 at the top-left of the texture
+            // (DirectX-style), while Ogre stores UVs as authored —
+            // typically with V=0 at the bottom (OpenGL-style). The
+            // import-time `aiProcess_ConvertToLeftHanded` was historically
+            // responsible for flipping V via its bundled FlipUVs step;
+            // dropping LH conversion above also drops that flip, leaving
+            // the exported glTF with Ogre's V values. Every glTF consumer
+            // (Godot, three.js, Blender) then V-flips on import, landing
+            // the texture upside-down relative to the bind pose. Restore
+            // the V flip explicitly for glTF/GLB so the round-trip
+            // remains correct — this is unrelated to handedness and the
+            // OpenVAT bake doesn't care about UV0 (the bake encodes
+            // positions + normals by column, not by UV lookup).
+            if (formatId == "gltf2" || formatId == "glb2")
+                exportFlags |= aiProcess_FlipUVs;
             aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
                                              file.filePath().toStdString().c_str(),
                                              exportFlags);

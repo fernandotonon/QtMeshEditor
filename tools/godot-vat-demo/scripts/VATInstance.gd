@@ -341,14 +341,15 @@ func _ensure_uv2_on_mesh(tex_height: int, tex_width: int,
 					var p: Vector3 = positions[j]
 					var n: Vector3 = normals[j] if j < normals.size() else Vector3.ZERO
 					var has_n := j < normals.size()
-					# Godot stores V as 1 - V_ogre on glTF import to match
-					# the glTF spec convention (V=0 at bottom) — Ogre keeps
-					# the source asset's UV convention as-authored. Undo
-					# the flip before matching against the sidecar, which
-					# is in Ogre's native UV space.
-					var u_raw: Vector2 = uvs[j] if j < uvs.size() else Vector2.ZERO
+					# qtmesh vat's glTF export applies aiProcess_FlipUVs
+					# so the glTF UV V matches Ogre's source. Godot's
+					# import then re-flips back to glTF V-up convention,
+					# but the V values on both sides of this matcher
+					# (sidecar = Ogre native, Godot mesh = Godot post-
+					# import) end up equal because Assimp's FlipUVs and
+					# Godot's import flip cancel. No V flip here.
+					var u: Vector2 = uvs[j] if j < uvs.size() else Vector2.ZERO
 					var has_u := j < uvs.size()
-					var u: Vector2 = Vector2(u_raw.x, 1.0 - u_raw.y) if has_u else u_raw
 					var key := _pos_key(p)
 					if bind_lookup.has(key):
 						var candidates: Array = bind_lookup[key]
