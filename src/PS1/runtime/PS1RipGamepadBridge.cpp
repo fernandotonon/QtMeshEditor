@@ -15,7 +15,7 @@ constexpr double kAxisDeadzone = 0.45;
 
 void setBtn(unsigned id, bool pressed)
 {
-    PsxJoypadState::setPressed(kPort, id, pressed);
+    PsxJoypadState::setPressed(kPort, id, pressed, PsxJoypadState::Source::Gamepad);
 }
 
 } // namespace
@@ -43,7 +43,7 @@ PS1RipGamepadBridge::PS1RipGamepadBridge(QObject *parent)
         delete m_pad;
         m_pad = nullptr;
         m_deviceId = -1;
-        PsxJoypadState::reset(kPort);
+        PsxJoypadState::resetSource(kPort, PsxJoypadState::Source::Gamepad);
     });
 
     const QList<int> connected = manager->connectedGamepads();
@@ -60,7 +60,7 @@ PS1RipGamepadBridge::PS1RipGamepadBridge(QObject *parent)
 PS1RipGamepadBridge::~PS1RipGamepadBridge()
 {
     m_timer->stop();
-    PsxJoypadState::reset(kPort);
+    PsxJoypadState::resetSource(kPort, PsxJoypadState::Source::Gamepad);
 }
 
 bool PS1RipGamepadBridge::isActive() const

@@ -45,7 +45,6 @@ PsxBiosValidator::Fingerprint PsxBiosValidator::fingerprintFile(const QString &b
     if (!info.exists() || !info.isFile())
         return out;
 
-    out.readable = true;
     out.sizeOk = info.size() == 512 * 1024;
     if (!out.sizeOk)
         return out;
@@ -57,6 +56,8 @@ PsxBiosValidator::Fingerprint PsxBiosValidator::fingerprintFile(const QString &b
     const QByteArray data = file.readAll();
     if (data.size() != 512 * 1024)
         return out;
+
+    out.readable = true;
 
     QCryptographicHash sha256(QCryptographicHash::Sha256);
     sha256.addData(data);
@@ -81,6 +82,10 @@ PsxBiosValidator::Result PsxBiosValidator::validateFile(const QString &biosPath)
     if (!fp.sizeOk) {
         out.detail = QObject::tr(
             "BIOS must be exactly 512 KiB (524288 bytes). Use a verified SCPH-1001 / SCPH-5501 dump.");
+        return out;
+    }
+    if (!fp.readable) {
+        out.detail = QObject::tr("Cannot read BIOS file: %1").arg(biosPath);
         return out;
     }
 

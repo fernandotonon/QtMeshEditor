@@ -257,9 +257,18 @@ bool PS1RipManager::reloadIso()
 
     const bool resume = m_sessionActive || m_startPending;
     const QString path = m_isoPath;
-    if (!loadIso(path))
-        return false;
-    return resume ? start() : true;
+
+    if (resume) {
+        connect(this, &PS1RipManager::sessionStopped, this,
+                [this, path]() {
+                    if (loadIso(path))
+                        start();
+                },
+                Qt::SingleShotConnection);
+        return stop();
+    }
+
+    return loadIso(path);
 }
 
 bool PS1RipManager::start()
