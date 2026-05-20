@@ -155,6 +155,16 @@ bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QStr
   }
 }
 
+void refreshEntityBounds(const QList<Ogre::Entity *> &entities)
+{
+  for (Ogre::Entity *entity : entities) {
+    if (!entity)
+      continue;
+    if (Ogre::SceneNode *node = entity->getParentSceneNode())
+      node->_update(true, true);
+  }
+}
+
 Ogre::AxisAlignedBox combinedWorldBounds(const QList<Ogre::Entity *> &entities)
 {
   Ogre::AxisAlignedBox box;
@@ -165,6 +175,27 @@ Ogre::AxisAlignedBox combinedWorldBounds(const QList<Ogre::Entity *> &entities)
     box.merge(entity->getWorldBoundingBox(true));
   }
   return box;
+}
+
+/// Move loaded entities so the combined bounds center sits at the world origin.
+void recenterEntitiesAtOrigin(const QList<Ogre::Entity *> &entities, Ogre::AxisAlignedBox &bounds)
+{
+  if (bounds.isNull() || bounds.isInfinite())
+    return;
+
+  const Ogre::Vector3 center = bounds.getCenter();
+  if (center.squaredLength() < 1e-10f)
+    return;
+
+  for (Ogre::Entity *entity : entities) {
+    if (!entity)
+      continue;
+    if (Ogre::SceneNode *node = entity->getParentSceneNode())
+      node->translate(-center, Ogre::Node::TS_WORLD);
+  }
+
+  bounds.setExtents(bounds.getMinimum() - center, bounds.getMaximum() - center);
+  refreshEntityBounds(entities);
 }
 
 Ogre::Vector3 orbitAxisVector(TurntableAxis axis)
@@ -216,6 +247,50 @@ void orientCameraToward(Ogre::SceneNode *cameraNode, const Ogre::Vector3 &eye, c
   cameraNode->setOrientation(Ogre::Quaternion(rot));
 }
 
+/// Minimum orbit radius so every AABB corner fits in the camera frustum from `viewDir`.
+Ogre::Real fitOrbitDistance(const Ogre::AxisAlignedBox &bounds, const Ogre::Vector3 &viewDir,
+                            Ogre::Camera *camera, float paddingFactor)
+{
+  const Ogre::Vector3 center = bounds.getCenter();
+  Ogre::Vector3 dir = viewDir;
+  if (dir.squaredLength() < 1e-8f)
+    dir = Ogre::Vector3(0.0f, 0.0f, 1.0f);
+  dir.normalise();
+
+  Ogre::Vector3 up = Ogre::Vector3::UNIT_Y;
+  Ogre::Vector3 side = up.crossProduct(dir);
+  if (side.squaredLength() < 1e-8f) {
+    up = Ogre::Vector3::UNIT_X;
+    side = up.crossProduct(dir);
+  }
+  side.normalise();
+  up = dir.crossProduct(side);
+  up.normalise();
+
+  const Ogre::Radian fovY = camera->getFOVy();
+  const Ogre::Real aspect = camera->getAspectRatio();
+  const float tanHalfY = std::tan(fovY.valueRadians() * 0.5f);
+  const float tanHalfX = tanHalfY * aspect;
+
+  const Ogre::Vector3 &bmin = bounds.getMinimum();
+  const Ogre::Vector3 &bmax = bounds.getMaximum();
+  Ogre::Real required = 0.1f;
+  for (int xi = 0; xi < 2; ++xi) {
+    for (int yi = 0; yi < 2; ++yi) {
+      for (int zi = 0; zi < 2; ++zi) {
+        const Ogre::Vector3 corner(xi ? bmax.x : bmin.x, yi ? bmax.y : bmin.y, zi ? bmax.z : bmin.z);
+        const Ogre::Vector3 rel = corner - center;
+        const float depthAlongView = rel.dotProduct(dir);
+        const float x = std::abs(rel.dotProduct(side));
+        const float y = std::abs(rel.dotProduct(up));
+        const float need = depthAlongView + std::max(x / tanHalfX, y / tanHalfY);
+        required = std::max(required, need);
+      }
+    }
+  }
+  return required * paddingFactor;
+}
+
 void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, TurntableAxis axis,
                        float elevationRadians, float paddingFactor)
 {
@@ -224,20 +299,16 @@ void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, T
     return;
 
   const Ogre::Vector3 center = bounds.getCenter();
-  Ogre::Real radius = (bounds.getMaximum() - bounds.getMinimum()).length() * 0.5f;
-  if (radius < 0.1f)
-    radius = 1.0f;
 
-  const Ogre::Radian fovY = st.camera->getFOVy();
-  const Ogre::Real aspect = st.camera->getAspectRatio();
-  const Ogre::Radian fovX = Ogre::Radian(2.0f * std::atan(std::tan(fovY.valueRadians() * 0.5f) * aspect));
-  const Ogre::Radian fov = std::min(fovX, fovY);
-  Ogre::Real distance = radius / std::sin(fov.valueRadians() * 0.5f);
-  distance *= paddingFactor;
+  const float horizUnit = std::cos(elevationRadians);
+  const float axialUnit = std::sin(elevationRadians);
+  Ogre::Vector3 restDir = cameraRestOffset(axis, horizUnit, axialUnit);
+  if (restDir.squaredLength() < 1e-8f)
+    restDir = cameraRestOffset(axis, 1.0f, 0.0f);
+  restDir.normalise();
 
-  const float horiz = distance * std::cos(elevationRadians);
-  const float axial = distance * std::sin(elevationRadians);
-  const Ogre::Vector3 localOffset = cameraRestOffset(axis, horiz, axial);
+  const Ogre::Real distance = fitOrbitDistance(bounds, restDir, st.camera, paddingFactor);
+  const Ogre::Vector3 localOffset = cameraRestOffset(axis, distance * horizUnit, distance * axialUnit);
   const Ogre::Quaternion orbit(Ogre::Radian(angleRadians), orbitAxisVector(axis));
   const Ogre::Vector3 eye = center + orbit * localOffset;
 
@@ -408,12 +479,16 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
   if (!ensureRenderTarget(width, height, options.background, errorOut))
     return false;
 
-  const Ogre::AxisAlignedBox bounds = combinedWorldBounds(entities);
+  refreshEntityBounds(entities);
+  Ogre::AxisAlignedBox bounds = combinedWorldBounds(entities);
   if (bounds.isNull() || bounds.isInfinite()) {
     if (errorOut)
       *errorOut = QStringLiteral("Could not compute model bounds");
     return false;
   }
+
+  recenterEntitiesAtOrigin(entities, bounds);
+  bounds = combinedWorldBounds(entities);
 
   const float elevationRad =
       Ogre::Degree(std::clamp(options.elevationDegrees, -80.0f, 80.0f)).valueRadians();
