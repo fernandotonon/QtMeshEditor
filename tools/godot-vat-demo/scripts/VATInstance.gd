@@ -104,7 +104,7 @@ func _load_bake() -> bool:
 	var pos_tex: ImageTexture = ImageTexture.create_from_image(img)
 
 	# Synthesize UV2 if absent — QtMeshEditor bakes don't carry it.
-	_ensure_uv2_on_mesh(pos_tex.get_height())
+	_ensure_uv2_on_mesh(pos_tex.get_height(), pos_tex.get_width())
 
 	var shader := Shader.new()
 	shader.code = _shader_code()
@@ -132,11 +132,20 @@ func _load_bake() -> bool:
 	return true
 
 
-func _ensure_uv2_on_mesh(tex_height: int) -> void:
-	if mesh == null or _frame_count <= 0: return
-	var width: int = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size()
+func _ensure_uv2_on_mesh(tex_height: int, tex_width: int) -> void:
+	# `tex_width` is the bake texture's width — i.e., the number of
+	# columns the baker laid out per row. For single-row bakes this
+	# equals the total vertex count across ALL submeshes; the
+	# per-vertex column comes from the GLOBAL vertex index (sum of
+	# preceding submesh sizes + position-in-submesh), NOT the
+	# per-submesh index. Treating each submesh as starting at column
+	# 0 would re-decode the first N columns of the texture as every
+	# submesh's verts → "egg of triangles" silhouette where every
+	# submesh occupies the same column range.
+	if mesh == null or _frame_count <= 0 or tex_width <= 0: return
 	var rebuilt := ArrayMesh.new()
 	var any_synth := false
+	var running_offset := 0
 	for i in range(mesh.get_surface_count()):
 		var arrays: Array = mesh.surface_get_arrays(i)
 		var src_mat: Material = mesh.surface_get_material(i)
@@ -149,20 +158,23 @@ func _ensure_uv2_on_mesh(tex_height: int) -> void:
 			any_synth = true
 			var uv2 := PackedVector2Array()
 			uv2.resize(positions.size())
-			var hpx := 0.5 / float(width)
+			var hpx := 0.5 / float(tex_width)
 			var hpy := 0.5 / float(tex_height)
 			for j in range(positions.size()):
-				# Single-row layout: row_block always 0. UV2 points at
-				# the last position row so `+frame*step` walks up.
-				var col := j % width
+				# Single-row layout: row_block always 0 because
+				# tex_width == total vertex count. UV2 points at the
+				# last position row so `+frame*step` walks up.
+				var global_vid := running_offset + j
+				var col := global_vid % tex_width
 				var last_row := _frame_count - 1
 				uv2[j] = Vector2(
-					float(col) / float(width) + hpx,
+					float(col) / float(tex_width) + hpx,
 					1.0 - float(last_row) / float(tex_height) - hpy)
 			arrays[Mesh.ARRAY_TEX_UV2] = uv2
 		rebuilt.add_surface_from_arrays(prim, arrays)
 		if src_mat != null:
 			rebuilt.surface_set_material(i, src_mat)
+		running_offset += positions.size()
 	if any_synth:
 		mesh = rebuilt
 
