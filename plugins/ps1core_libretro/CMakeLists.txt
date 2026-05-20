@@ -14,6 +14,9 @@ add_library(qtmesh_ps1core_libretro MODULE
     LibretroEmuCore.cpp
     LibretroEmuCorePlugin.cpp
     LibretroHost.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/Gp0HookDispatch.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/GpuCommandParser.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxCaptureFilters.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxBiosValidator.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxDiscResolver.cpp
 )

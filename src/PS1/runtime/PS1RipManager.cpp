@@ -339,11 +339,11 @@ bool PS1RipManager::armCapture(bool armed)
 {
     m_captureArmed = armed;
     if (armed) {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("ps1_rip_arm_capture"));
+        SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture.frame_armed"),
+                                    QStringLiteral("armed"));
     } else {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("ps1_rip_disarm_capture"));
+        SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture.frame_armed"),
+                                    QStringLiteral("disarmed"));
     }
 
     syncWorkerCaptureArmed();

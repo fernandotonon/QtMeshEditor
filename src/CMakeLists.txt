@@ -454,11 +454,6 @@ else()
     message(STATUS "OGRE Codec_Assimp not found, using built-in Assimp integration")
 endif()
 
-if(UNIX)
-    IF(NOT Qt6_FOUND)
-        target_link_libraries(${CMAKE_PROJECT_NAME} Qt5::X11Extras)
-    ENDIF()
-endif()
 target_link_libraries(${CMAKE_PROJECT_NAME}
 ${CODEC_ASSIMP_LINK_LIB}
 ${OGRE_LIBRARIES}

@@ -328,13 +328,48 @@ GpuCommandParser::Gp0Step GpuCommandParser::stepGp0(const uint32_t *words, size_
         return step;
     }
 
-    if (cmd == 0xA0 || cmd == 0xC0) {
-        const size_t skip = packetWordCount(cmd);
-        if (skip == 0 || index + skip > wordCount) {
-            step.error = QStringLiteral("VRAM copy packet truncated");
+    if (cmd == 0xA0) {
+        if (index + 3 > wordCount) {
+            step.error = QStringLiteral("VRAM upload packet truncated");
             return step;
         }
-        index += skip;
+        ++index;
+        const uint32_t xy = words[index++];
+        const uint32_t wh = words[index++];
+        step.vramX = static_cast<uint16_t>(xy & 0xFFFF);
+        step.vramY = static_cast<uint16_t>((xy >> 16) & 0xFFFF);
+        step.vramW = static_cast<uint16_t>(wh & 0xFFFF);
+        step.vramH = static_cast<uint16_t>((wh >> 16) & 0xFFFF);
+        if (step.vramW == 0 || step.vramH == 0) {
+            step.error = QStringLiteral("VRAM upload has zero size");
+            return step;
+        }
+        const size_t pixelWords =
+            (static_cast<size_t>(step.vramW) * step.vramH + 1) / 2;
+        if (index + pixelWords > wordCount) {
+            step.error = QStringLiteral("VRAM upload pixel data truncated");
+            return step;
+        }
+        step.vramPixels = reinterpret_cast<const uint16_t *>(words + index);
+        index += pixelWords;
+        step.hasVramWrite = true;
+        step.wordsConsumed = index - startIndex;
+        return step;
+    }
+
+    if (cmd == 0xC0) {
+        if (index + 3 > wordCount) {
+            step.error = QStringLiteral("VRAM read-back packet truncated");
+            return step;
+        }
+        ++index;
+        const uint32_t xy = words[index++];
+        const uint32_t wh = words[index++];
+        step.vramReadX = static_cast<uint16_t>(xy & 0xFFFF);
+        step.vramReadY = static_cast<uint16_t>((xy >> 16) & 0xFFFF);
+        step.vramReadW = static_cast<uint16_t>(wh & 0xFFFF);
+        step.vramReadH = static_cast<uint16_t>((wh >> 16) & 0xFFFF);
+        step.hasVramRead = true;
         step.wordsConsumed = index - startIndex;
         return step;
     }

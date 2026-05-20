@@ -27,6 +27,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuCoreLoader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GteInverse.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuViewport.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/Gp0HookDispatch.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GpuCommandParser.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GteCapture.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.cpp
@@ -62,6 +63,8 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuCoreLoader.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuFramebuffer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuHooks.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/Gp0HookDispatch.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GpuCommandParser.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuViewport.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/IEmuCorePlugin.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipGamepadBridge.h

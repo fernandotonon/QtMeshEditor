@@ -11,8 +11,6 @@
 #include <array>
 #include <atomic>
 
-class RipperHooks;
-
 class LibretroEmuCore final : public EmuCore
 {
 public:

@@ -19,10 +19,8 @@ public:
     void setVram(VramSnapshot *vram) { m_vram = vram; }
 
     bool isCaptureEnabled() const override;
+    uint32_t latestMatrixId() const override;
     void ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize) override;
-
-    /** Most recently registered GTE matrix id, or @c UINT32_MAX when none. */
-    uint32_t latestMatrixId() const;
 
     void onFrameBegin() override;
     void onFrameEnd() override;
