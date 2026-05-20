@@ -82,7 +82,7 @@ See epic #412 for phased issues (#413–#431).
 - `TextureDecoder` — CLUT-aware 4/8/15 bpp tile decode with `TileKey` cache and STP/alpha via `PsxVramColor`.
 - `dumpVRAM()` saves `<AppData>/ps1_rip/captures/<id>_vram.png` and feeds `VramViewerWidget` in the session window.
 - **Libretro:** `syncVramFromCore()` mirrors live core VRAM every frame; capture snapshots include a VRAM cell copy for textured mesh export.
-- Stub core fills CLUT + 4/8/15 bpp test regions each frame via `stubFillVramPattern` (CI only).
+- Stub core fills CLUT + 4/8/15 bpp test regions via `stubFillVramPattern` when capture is armed or on `syncCaptureMirrors` (CI only).
 
 ## Phase 4 status (#422 / #423)
 
