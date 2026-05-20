@@ -25,6 +25,22 @@ body,
   min-height: 100%;
 }
 
+html {
+  /* Smooth-scroll anchor links and `scrollIntoView({ behavior: 'smooth' })`.
+     The deep-link effect in App.jsx forces `behavior: 'auto'` for the
+     initial cold-load scroll (animating a 0→target scroll on first paint
+     looks like jank); in-page hashchanges keep the smooth animation. */
+  scroll-behavior: smooth;
+}
+
+/* Give every section a small top breathing-room when scrolled into view
+   by anchor. Without this the deep-link / in-page anchor lands the
+   section's first line flush with the viewport's top edge, which reads
+   as "cut off." */
+section[id] {
+  scroll-margin-top: 1.5rem;
+}
+
 body {
   font-family: var(--font-ui);
   background: var(--surface-0);

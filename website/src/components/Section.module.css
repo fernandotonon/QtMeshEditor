@@ -24,6 +24,23 @@
   color: var(--text-0);
 }
 
+.anchorLink {
+  margin-left: 0.45rem;
+  color: var(--text-muted);
+  opacity: 0;
+  text-decoration: none;
+  font-weight: 400;
+  font-size: 0.6em;
+  transition: opacity 140ms ease, color 140ms ease;
+}
+
+.section:hover .anchorLink,
+.title:focus-within .anchorLink,
+.anchorLink:focus {
+  opacity: 1;
+  color: var(--accent-1);
+}
+
 .subtitle {
   margin: 0.8rem 0 0;
   max-width: 68ch;

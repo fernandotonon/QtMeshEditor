@@ -17,6 +17,7 @@ const NAV = [
     { id: 'cmd-lod', label: 'lod' },
     { id: 'cmd-pose', label: 'pose' },
     { id: 'cmd-turntable', label: 'turntable' },
+    { id: 'cmd-vat', label: 'vat' },
     { id: 'cmd-scan', label: 'scan' },
   ]},
   { section: 'Performance', items: [
@@ -436,6 +437,21 @@ qtmesh turntable <file> -o frame_%02d.png [--frames N] [--axis y|x|z]`}
               Use <Code>%%</Code> in the path for a literal percent sign. Invalid numeric flags (e.g. <Code>--frames abc</Code>) return exit code <Code>2</Code>.
             </p>
           </CmdSection>
+
+          <CmdSection id="cmd-vat" name="vat" description={<>Bake a skeletal animation to a <strong>Vertex Animation Texture</strong> (OpenVAT format). The output is a 16-bit PNG storing per-vertex position+normal samples in time, a JSON sidecar with the playback bounds, a vertex-order-aligned glTF, and an Ogre bind sidecar (<Code>{`<basename>_ogre_bind.bin`}</Code>) so engine importers can realign UV2 to the bake's column order on import. Drop-in shader templates for Godot/Unity/Unreal ship at <a href="https://github.com/fernandotonon/QtMeshEditor/tree/master/tools/vat-shaders" className={s.link}>tools/vat-shaders/</a>. See the <a href="/#vat-demo" className={s.link}>live VAT demo</a> for a 1000-instance perf comparison against per-instance skeletal skinning.</>}
+            synopsis={`qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--json]`}
+            options={[
+              ['--anim <name>', 'Animation clip name to bake (required)'],
+              ['--fps N', 'Frames per second to sample at (default: 30)'],
+              ['-o <dir>', 'Output directory (default: <input>_vat alongside the source)'],
+              ['--json', 'Emit a machine-readable summary instead of human text'],
+            ]}
+            examples={[
+              'qtmesh vat character.fbx --anim "Run" -o bakes/run/',
+              'qtmesh vat character.fbx --anim "Idle" --fps 24 -o bakes/idle/',
+              'qtmesh vat character.fbx --anim "Dance" --json',
+            ]}
+          />
 
           <CmdSection id="cmd-scan" name="scan" description={<>Recursively scan a directory for 3D asset issues. Think of it as <strong>ESLint for 3D assets</strong>. Checks format restrictions, complexity limits, naming conventions, skeleton/animation content, and more. Supports YAML configuration, scoped rules per folder, JSON output, and auto-fix. Also available as a <a href="https://github.com/marketplace/actions/qtmesheditor" className={s.link}>GitHub Action</a>: <Code>{qtmeshActionRef}</Code>.</>}
             synopsis={`qtmesh scan [path] [options]`}
