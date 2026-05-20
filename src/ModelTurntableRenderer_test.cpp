@@ -28,6 +28,43 @@ TEST_F(ModelTurntableRendererTest, RejectsEmptyEntityList)
     EXPECT_TRUE(frames.isEmpty());
 }
 
+TEST_F(ModelTurntableRendererTest, RejectsNullBoundsWhenEntitiesAreNull)
+{
+    QList<QImage> frames;
+    QString err;
+
+    QList<Ogre::Entity*> entities;
+    entities.append(nullptr);
+
+    EXPECT_FALSE(ModelTurntableRenderer::renderToImages(entities, TurntableOptions{}, &frames, &err));
+    EXPECT_FALSE(err.isEmpty());
+    EXPECT_TRUE(frames.isEmpty());
+}
+
+TEST_F(ModelTurntableRendererTest, ClampsMinimumSizeAndFrameCount)
+{
+    PrimitiveObject::createCube(QStringLiteral("TurntableMinClampCube"));
+
+    QList<Ogre::Entity*> entities;
+    for (auto* obj : Manager::getSingleton()->getEntities()) {
+        if (obj && obj->getMovableType() == "Entity")
+            entities.append(static_cast<Ogre::Entity*>(obj));
+    }
+    ASSERT_FALSE(entities.isEmpty());
+
+    TurntableOptions options;
+    options.width = 1;
+    options.height = 1;
+    options.frameCount = 0;
+
+    QList<QImage> frames;
+    QString err;
+    ASSERT_TRUE(ModelTurntableRenderer::renderToImages(entities, options, &frames, &err)) << err.toStdString();
+    ASSERT_EQ(frames.size(), 1);
+    EXPECT_EQ(frames.first().width(), 16);
+    EXPECT_EQ(frames.first().height(), 16);
+}
+
 TEST_F(ModelTurntableRendererTest, RendersFramesForPrimitive)
 {
     PrimitiveObject::createSphere(QStringLiteral("TurntableTestSphere"));

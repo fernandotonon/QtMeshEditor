@@ -959,6 +959,25 @@ TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSpriteSheet)
     EXPECT_EQ(img.height(), 48);
 }
 
+TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSizeWxHParses)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_sizex.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("sizex.png").toUtf8();
+
+    TestArgv args({"qtmesh", "turntable", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--frames", "2",
+                   "--size", "32x16"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 64);  // 2 cols × 32
+    EXPECT_EQ(img.height(), 16);
+}
+
 TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSequenceAndAxis)
 {
     QTemporaryDir tmp;
@@ -983,6 +1002,26 @@ TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSequenceAndAxis)
     ASSERT_FALSE(f0.isNull());
     EXPECT_EQ(f0.width(), 32);
     EXPECT_EQ(f0.height(), 32);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdTurntable_SkipsCliFlagAndCameraHeightAlias)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "turntable_cli_flag.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("cli_flag.png").toUtf8();
+
+    TestArgv args({"qtmesh", "--cli", "turntable", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--frames", "2",
+                   "--size", "24",
+                   "--camera_height", "10"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 48);
+    EXPECT_EQ(img.height(), 24);
 }
 
 TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSpriteSheetColumnsAndCameraHeight)
