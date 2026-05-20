@@ -45,4 +45,10 @@ namespace RTShaderHelper {
     /// Marks every normal-related TUS non-FFP, removes duplicate units that
     /// reuse the same texture, and refreshes SRS_NORMALMAP texture_index.
     void excludeNormalMapFromFfpChain(Ogre::MaterialPtr& mat);
+
+    /// Call after all texture units are in place (end of import / turntable).
+    /// Strips normal/bump from the FFP chain, dedupes diffuse+albedo, removes
+    /// stale RTSS programs, and rebuilds ShaderGenerator shading once.
+    void finalizeShaderGenMaterial(Ogre::MaterialPtr& mat,
+                                   const Ogre::String& normalMapTexName = {});
 }

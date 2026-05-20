@@ -197,8 +197,7 @@ TEST_F(ModelTurntableRendererTest, ExcludeNormalMapFromFfpChainRemovesDuplicateU
     pass->createTextureUnitState("body_normal.png")->setName("NormalMap");
     pass->createTextureUnitState("body_normal.png")->setName("NormalMap");
 
-    RTShaderHelper::applyNormalMap(mat, "body_normal.png");
-    RTShaderHelper::excludeNormalMapFromFfpChain(mat);
+    RTShaderHelper::finalizeShaderGenMaterial(mat, "body_normal.png");
 
     unsigned short normalUnits = 0;
     for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {

@@ -337,9 +337,7 @@ void prepareMaterialsForTurntable(const QList<Ogre::Entity *> &entities)
       const std::string key = mat->getName();
       if (!processed.insert(key).second)
         continue;
-      RTShaderHelper::excludeNormalMapFromFfpChain(mat);
-      RTShaderHelper::wirePbrSlotsForFFP(mat.get());
-      mat->compile();
+      RTShaderHelper::finalizeShaderGenMaterial(mat);
     }
   }
 }

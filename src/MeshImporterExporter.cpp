@@ -1323,8 +1323,7 @@ void MeshImporterExporter::applyNormalMapsToEntity(const Ogre::Entity* en)
                 } catch (...) {}
             }
         }
-        RTShaderHelper::applyNormalMap(mat, texName);
-        RTShaderHelper::excludeNormalMapFromFfpChain(mat);
+        RTShaderHelper::finalizeShaderGenMaterial(mat, texName);
     }
 }
 

@@ -267,6 +267,62 @@ void markNormalUnitNonFfp(Ogre::TextureUnitState* tus)
     tus->setColourOperationEx(Ogre::LBX_SOURCE1, Ogre::LBS_CURRENT, Ogre::LBS_CURRENT);
 }
 
+Ogre::String resolveNormalMapTextureName(Ogre::Pass* pass)
+{
+    if (!pass)
+        return {};
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        auto* tus = pass->getTextureUnitState(i);
+        if (isNormalSlotName(tus->getName()) && !tus->getTextureName().empty())
+            return tus->getTextureName();
+    }
+    const auto& bindings = pass->getUserObjectBindings();
+    auto any = bindings.getUserAny("qtme.normal_map");
+    if (any.has_value()) {
+        try {
+            return Ogre::any_cast<Ogre::String>(any);
+        } catch (...) {
+        }
+    }
+    return {};
+}
+
+void dedupeAlbedoDiffuseFfp(Ogre::Pass* pass)
+{
+    if (!pass)
+        return;
+    Ogre::TextureUnitState* diffuseTus = nullptr;
+    Ogre::TextureUnitState* albedoTus = nullptr;
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        auto* tus = pass->getTextureUnitState(i);
+        if (tus->getName() == "diffuse_map")
+            diffuseTus = tus;
+        else if (tus->getName() == "albedo")
+            albedoTus = tus;
+    }
+    if (!diffuseTus || !albedoTus)
+        return;
+    if (diffuseTus->getTextureName().empty() || albedoTus->getTextureName().empty())
+        return;
+    if (diffuseTus->getTextureName() != albedoTus->getTextureName())
+        return;
+    markNormalUnitNonFfp(diffuseTus);
+}
+
+void removeShaderGenTechnique(Ogre::MaterialPtr& mat)
+{
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (!shaderGen || !mat)
+        return;
+    for (auto* tech : mat->getTechniques()) {
+        if (tech->getSchemeName() == Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME) {
+            shaderGen->removeShaderBasedTechnique(
+                tech, Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
+            break;
+        }
+    }
+}
+
 } // namespace
 
 void RTShaderHelper::excludeNormalMapFromFfpChain(Ogre::MaterialPtr& mat)
@@ -338,8 +394,12 @@ void RTShaderHelper::excludeNormalMapFromFfpChain(Ogre::MaterialPtr& mat)
         auto* tus = pass->getTextureUnitState(static_cast<unsigned short>(i));
         if (isAlbedoSlotName(tus->getName()))
             continue;
-        if (tus->getTextureName() == canonicalTex)
-            pass->removeTextureUnitState(static_cast<unsigned short>(i));
+        const bool extraNormalSlot = isNormalSlotName(tus->getName())
+            || tus->getTextureName() == canonicalTex
+            || textureNameLooksLikeNormalMap(tus->getTextureName());
+        if (!extraNormalSlot)
+            continue;
+        pass->removeTextureUnitState(static_cast<unsigned short>(i));
         if (i < canonicalIdx)
             --canonicalIdx;
     }
@@ -361,6 +421,53 @@ void RTShaderHelper::excludeNormalMapFromFfpChain(Ogre::MaterialPtr& mat)
     }
 }
 
+void RTShaderHelper::finalizeShaderGenMaterial(Ogre::MaterialPtr& mat,
+                                               const Ogre::String& normalMapTexName)
+{
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (!shaderGen || !mat)
+        return;
+
+    if (!mat->isLoaded()) {
+        try {
+            mat->load();
+        } catch (...) {
+            return;
+        }
+    }
+    if (mat->getNumTechniques() == 0)
+        return;
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    if (!pass)
+        return;
+
+    Ogre::String normalTex = normalMapTexName;
+    if (normalTex.empty())
+        normalTex = resolveNormalMapTextureName(pass);
+    if (!normalTex.empty()) {
+        pass->getUserObjectBindings().setUserAny("qtme.normal_map", Ogre::Any(normalTex));
+    }
+
+    excludeNormalMapFromFfpChain(mat);
+    dedupeAlbedoDiffuseFfp(pass);
+    removeShaderGenTechnique(mat);
+
+    if (!normalTex.empty()) {
+        applyNormalMap(mat, normalTex);
+    } else {
+        bool created = shaderGen->createShaderBasedTechnique(
+            *mat, Ogre::MaterialManager::DEFAULT_SCHEME_NAME,
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
+        if (created) {
+            shaderGen->validateMaterial(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME,
+                                        *mat);
+        }
+    }
+
+    wirePbrSlotsForFFP(mat.get());
+    mat->compile();
+}
+
 void RTShaderHelper::wirePbrSlotsForFFP(Ogre::Material* mat)
 {
     if (!mat) return;
@@ -370,9 +477,8 @@ void RTShaderHelper::wirePbrSlotsForFFP(Ogre::Material* mat)
             for (unsigned short i = 0; i < p->getNumTextureUnitStates(); ++i) {
                 auto* tus = p->getTextureUnitState(i);
                 const std::string& n = tus->getName();
-                if (n == "normal_map" || n == "NormalMap") {
-                    if (Ogre::RTShader::ShaderGenerator::getSingletonPtr())
-                        Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
+                if (isNormalSlotName(n)) {
+                    markNormalUnitNonFfp(tus);
                 } else if (n == "albedo") {
                     tus->setColourOperationEx(
                         Ogre::LBX_MODULATE,
