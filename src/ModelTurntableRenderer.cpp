@@ -47,7 +47,7 @@ bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QStr
     if (st.renderTarget && st.rttWidth == width && st.rttHeight == height)
         return true;
 
-    shutdown();
+    ModelTurntableRenderer::shutdown();
 
     try {
         st.rttTexture = Ogre::TextureManager::getSingleton().createManual(
@@ -82,12 +82,12 @@ bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QStr
         st.camera->setAspectRatio(aspect);
         return true;
     } catch (const Ogre::Exception &e) {
-        shutdown();
+        ModelTurntableRenderer::shutdown();
         if (errorOut)
             *errorOut = QString::fromStdString(e.getFullDescription());
         return false;
     } catch (...) {
-        shutdown();
+        ModelTurntableRenderer::shutdown();
         if (errorOut)
             *errorOut = QStringLiteral("Failed to create turntable render target");
         return false;
