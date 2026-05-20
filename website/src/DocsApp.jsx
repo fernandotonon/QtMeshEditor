@@ -438,18 +438,20 @@ qtmesh turntable <file> -o frame_%02d.png [--frames N] [--axis y|x|z]`}
             </p>
           </CmdSection>
 
-          <CmdSection id="cmd-vat" name="vat" description={<>Bake a skeletal animation to a <strong>Vertex Animation Texture</strong> (OpenVAT format). The output is a 16-bit PNG storing per-vertex position+normal samples in time, a JSON sidecar with the playback bounds, a vertex-order-aligned glTF, and an Ogre bind sidecar (<Code>{`<basename>_ogre_bind.bin`}</Code>) so engine importers can realign UV2 to the bake's column order on import. Drop-in shader templates for Godot/Unity/Unreal ship at <a href="https://github.com/fernandotonon/QtMeshEditor/tree/master/tools/vat-shaders" className={s.link}>tools/vat-shaders/</a>. See the <a href="/#vat-demo" className={s.link}>live VAT demo</a> for a 1000-instance perf comparison against per-instance skeletal skinning.</>}
-            synopsis={`qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--json]`}
+          <CmdSection id="cmd-vat" name="vat" description={<>Bake a skeletal animation to a <strong>Vertex Animation Texture</strong> (OpenVAT format). The output is a 16-bit PNG storing per-vertex position+normal samples in time, a JSON sidecar with the playback bounds, a vertex-order-aligned glTF, and an Ogre bind sidecar (<Code>{`<basename>_ogre_bind.bin`}</Code>) so engine importers can realign UV2 to the bake's column order on import. Drop-in shader templates for Godot/Unity/Unreal ship at <a href="https://github.com/fernandotonon/QtMeshEditor/tree/master/tools/vat-shaders" className={s.link}>tools/vat-shaders/</a> and can be copied next to the bake with <Code>--include-shaders</Code>. See the <a href="/#vat-demo" className={s.link}>live VAT demo</a> for a 1000-instance perf comparison against per-instance skeletal skinning.</>}
+            synopsis={`qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders <list>] [--json]`}
             options={[
               ['--anim <name>', 'Animation clip name to bake (required)'],
               ['--fps N', 'Frames per second to sample at (default: 30)'],
               ['-o <dir>', 'Output directory (default: <input>_vat alongside the source)'],
+              ['--include-shaders <list>', 'Copy drop-in shader templates next to the bake. Comma-separated subset of godot, unity, unreal, or "all"'],
               ['--json', 'Emit a machine-readable summary instead of human text'],
             ]}
             examples={[
               'qtmesh vat character.fbx --anim "Run" -o bakes/run/',
               'qtmesh vat character.fbx --anim "Idle" --fps 24 -o bakes/idle/',
-              'qtmesh vat character.fbx --anim "Dance" --json',
+              'qtmesh vat character.fbx --anim "Dance" --include-shaders godot,unity',
+              'qtmesh vat character.fbx --anim "Walk" --include-shaders all --json',
             ]}
           />
 
