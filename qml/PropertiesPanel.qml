@@ -291,7 +291,11 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.AnimationMode,
                     PropertiesPanelController.hasAnimations)
-                expanded: true
+                // Collapsed by default — VAT is a power-user export
+                // step, not part of the routine animation review flow,
+                // so the panel doesn't auto-occupy real estate. The
+                // user expands when they want to bake.
+                expanded: false
 
                 Component.onCompleted: content = animationModeToolsComponent
             }
@@ -641,7 +645,9 @@ Rectangle {
                 }
             }
 
-            // Animation picker
+            // Animation picker — use ThemedComboBox so the dropdown
+            // matches the Animations panel's per-clip simplify-preset
+            // picker rather than Qt's default-styled ComboBox.
             Row {
                 spacing: 6; width: parent.width - 16
 
@@ -651,9 +657,9 @@ Rectangle {
                     width: animToolsCol.labelWidth
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                ComboBox {
+                ThemedComboBox {
                     width: parent.width - animToolsCol.labelWidth - 6
-                    height: 24
+                    height: 22
                     font.pixelSize: 11
                     model: animToolsCol.animList
                     currentIndex: model.indexOf(animToolsCol.animName)
@@ -662,7 +668,9 @@ Rectangle {
                 }
             }
 
-            // FPS
+            // FPS — themed input with up/down step arrows, but plain
+            // "FPS:" label on the left (no coloured box) so it matches
+            // the Anim / Out row labels.
             Row {
                 spacing: 6; width: parent.width - 16
 
@@ -672,18 +680,108 @@ Rectangle {
                     width: animToolsCol.labelWidth
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                SpinBox {
+                Rectangle {
+                    id: animFpsBg
                     width: parent.width - animToolsCol.labelWidth - 6
-                    height: 24
-                    font.pixelSize: 11
-                    from: 1; to: 120
-                    value: animToolsCol.fps
-                    onValueModified: animToolsCol.fps = value
-                    enabled: !VATBakerController.isBaking
+                    height: 22
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: PropertiesPanelController.inputColor
+                    border.color: animFpsInput.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    border.width: 1
+                    radius: 2
+                    opacity: VATBakerController.isBaking ? 0.5 : 1.0
+
+                    // Step from the LIVE textbox value, not the
+                    // committed `animToolsCol.fps`. If the user typed
+                    // "60" and then hit ↑ before pressing Enter, the
+                    // arrow used to read the stale model value and
+                    // could jump back to "41". Now we parse the
+                    // current text first; if it doesn't parse, fall
+                    // back to the committed value.
+                    function stepFps(delta) {
+                        var typed = parseInt(animFpsInput.text)
+                        var base = isNaN(typed) ? animToolsCol.fps : typed
+                        var next = Math.max(1, Math.min(120, base + delta))
+                        animToolsCol.fps = next
+                        animFpsInput.text = String(next)
+                    }
+
+                    TextInput {
+                        id: animFpsInput
+                        anchors.left: parent.left
+                        anchors.right: animFpsArrows.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 4
+                        text: String(animToolsCol.fps)
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        verticalAlignment: TextInput.AlignVCenter
+                        selectByMouse: true
+                        clip: true
+                        enabled: !VATBakerController.isBaking
+                        validator: IntValidator { bottom: 1; top: 120 }
+                        onEditingFinished: {
+                            var v = parseInt(text)
+                            if (!isNaN(v)) {
+                                v = Math.max(1, Math.min(120, v))
+                                animToolsCol.fps = v
+                                text = String(v)
+                            } else {
+                                text = String(animToolsCol.fps)
+                            }
+                        }
+                        Keys.onUpPressed:   animFpsBg.stepFps(1)
+                        Keys.onDownPressed: animFpsBg.stepFps(-1)
+                    }
+                    Column {
+                        id: animFpsArrows
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: 14
+                        Rectangle {
+                            width: parent.width; height: parent.height / 2
+                            color: fpsUpMa.pressed ? Qt.darker(PropertiesPanelController.panelColor, 1.2)
+                                 : fpsUpMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.2)
+                                 : PropertiesPanelController.panelColor
+                            border.color: PropertiesPanelController.borderColor; border.width: 1
+                            Text {
+                                anchors.centerIn: parent; text: "▲"
+                                font.pixelSize: 6; color: PropertiesPanelController.textColor
+                            }
+                            MouseArea {
+                                id: fpsUpMa
+                                anchors.fill: parent; hoverEnabled: true
+                                enabled: !VATBakerController.isBaking
+                                onClicked: animFpsBg.stepFps(1)
+                            }
+                        }
+                        Rectangle {
+                            width: parent.width; height: parent.height / 2
+                            color: fpsDownMa.pressed ? Qt.darker(PropertiesPanelController.panelColor, 1.2)
+                                 : fpsDownMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.2)
+                                 : PropertiesPanelController.panelColor
+                            border.color: PropertiesPanelController.borderColor; border.width: 1
+                            Text {
+                                anchors.centerIn: parent; text: "▼"
+                                font.pixelSize: 6; color: PropertiesPanelController.textColor
+                            }
+                            MouseArea {
+                                id: fpsDownMa
+                                anchors.fill: parent; hoverEnabled: true
+                                enabled: !VATBakerController.isBaking
+                                onClicked: animFpsBg.stepFps(-1)
+                            }
+                        }
+                    }
                 }
             }
 
-            // Output dir + Browse
+            // Output dir + Browse — themed input panel (matches the
+            // FPS input above) with the plain "Out:" label.
             Row {
                 spacing: 6; width: parent.width - 16
 
@@ -693,19 +791,46 @@ Rectangle {
                     width: animToolsCol.labelWidth
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                TextField {
-                    id: animOutField
+                Rectangle {
+                    id: animOutBg
                     width: parent.width - animToolsCol.labelWidth - 6 - 60 - 6
-                    height: 24
-                    font.pixelSize: 11
-                    text: animToolsCol.outputDir
-                    onTextChanged: animToolsCol.outputDir = text
-                    placeholderText: "/path/to/output"
-                    enabled: !VATBakerController.isBaking
+                    height: 22
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: PropertiesPanelController.inputColor
+                    border.color: animOutField.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    border.width: 1
+                    radius: 2
+                    opacity: VATBakerController.isBaking ? 0.5 : 1.0
+                    TextInput {
+                        id: animOutField
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        text: animToolsCol.outputDir
+                        onTextChanged: animToolsCol.outputDir = text
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        verticalAlignment: TextInput.AlignVCenter
+                        selectByMouse: true
+                        clip: true
+                        enabled: !VATBakerController.isBaking
+                        // Placeholder via a sibling Text that hides
+                        // when the input has content — Qt's TextInput
+                        // doesn't carry placeholderText natively.
+                        Text {
+                            anchors.fill: parent
+                            verticalAlignment: Text.AlignVCenter
+                            text: "/path/to/output"
+                            color: PropertiesPanelController.borderColor
+                            font.pixelSize: 11
+                            visible: animOutField.text.length === 0 && !animOutField.activeFocus
+                        }
+                    }
                 }
                 Rectangle {
                     id: animBrowseBtn
-                    width: 60; height: 24; radius: 3
+                    width: 60; height: 22; radius: 2
                     anchors.verticalCenter: parent.verticalCenter
                     color: animBrowseMa.pressed
                             ? Qt.darker(PropertiesPanelController.headerColor, 1.2)
@@ -749,51 +874,151 @@ Rectangle {
             // openvat.gdshader / openvat.shader / openvat.usf next to
             // the bake so the user can drop the whole folder into a
             // project without chasing tools/vat-shaders/ in the repo.
+            // Master "Include shader" checkbox — same 14×14 themed
+            // square-with-checkmark style the Animations panel uses
+            // for its per-clip Enable / Loop toggles. Stock
+            // `Controls.CheckBox` carries Qt's full theming and is
+            // ~20-22 px tall — overlarge inside the tight inspector
+            // rows. The themed rectangle keeps the row at row-height
+            // and the visual language consistent with the rest of
+            // the panel.
             Row {
                 spacing: 6
                 width: parent.width - 16
-                CheckBox {
+                Rectangle {
                     id: includeShaderChk
+                    width: 14; height: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    // Show a thicker / accent border on keyboard focus
+                    // so it's obvious the toggle is reachable via Tab.
+                    border.color: includeShaderChk.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    border.width: includeShaderChk.activeFocus ? 2 : 1
+                    radius: 2
+                    color: animToolsCol.includeShaders
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    opacity: VATBakerController.isBaking ? 0.4 : 1.0
+                    // Keyboard-reachable + assistive-tech-readable: stock
+                    // Controls.CheckBox handles all of this for free, but
+                    // we replaced it with a themed Rectangle for size +
+                    // visual consistency with the Animations panel. Add
+                    // back the affordances by hand.
+                    activeFocusOnTab: !VATBakerController.isBaking
+                    Accessible.role: Accessible.CheckBox
+                    Accessible.name: "Include shader"
+                    Accessible.checkable: true
+                    Accessible.checked: animToolsCol.includeShaders
+                    Keys.onSpacePressed:  if (!VATBakerController.isBaking) animToolsCol.includeShaders = !animToolsCol.includeShaders
+                    Keys.onReturnPressed: if (!VATBakerController.isBaking) animToolsCol.includeShaders = !animToolsCol.includeShaders
+                    Keys.onEnterPressed:  if (!VATBakerController.isBaking) animToolsCol.includeShaders = !animToolsCol.includeShaders
+                    Text {
+                        anchors.centerIn: parent
+                        text: animToolsCol.includeShaders ? "✓" : ""
+                        color: "white"; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: !VATBakerController.isBaking
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: {
+                            animToolsCol.includeShaders = !animToolsCol.includeShaders
+                            includeShaderChk.forceActiveFocus()
+                        }
+                    }
+                }
+                Text {
                     text: "Include shader"
-                    checked: animToolsCol.includeShaders
-                    onCheckedChanged: animToolsCol.includeShaders = checked
-                    enabled: !VATBakerController.isBaking
+                    color: PropertiesPanelController.textColor
                     font.pixelSize: 11
-                    palette.windowText: PropertiesPanelController.textColor
+                    anchors.verticalCenter: parent.verticalCenter
+                    opacity: VATBakerController.isBaking ? 0.45 : 1.0
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: !VATBakerController.isBaking
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        // Clicking the label toggles AND focuses the
+                        // checkbox, matching the behaviour of a native
+                        // labelled CheckBox.
+                        onClicked: {
+                            animToolsCol.includeShaders = !animToolsCol.includeShaders
+                            includeShaderChk.forceActiveFocus()
+                        }
+                    }
                 }
             }
 
             // Per-engine checkboxes — only shown when the master
             // toggle is on. Defaults to Godot only since that's the
             // engine the website demo + most early users target.
+            // Same 14×14 themed-rectangle style as the master.
             Row {
                 visible: animToolsCol.includeShaders
-                spacing: 12
+                spacing: 10
                 width: parent.width - 16
-                leftPadding: 16
-                CheckBox {
-                    text: "Godot"
-                    checked: animToolsCol.shaderGodot
-                    onCheckedChanged: animToolsCol.shaderGodot = checked
-                    enabled: !VATBakerController.isBaking
-                    font.pixelSize: 11
-                    palette.windowText: PropertiesPanelController.textColor
-                }
-                CheckBox {
-                    text: "Unity"
-                    checked: animToolsCol.shaderUnity
-                    onCheckedChanged: animToolsCol.shaderUnity = checked
-                    enabled: !VATBakerController.isBaking
-                    font.pixelSize: 11
-                    palette.windowText: PropertiesPanelController.textColor
-                }
-                CheckBox {
-                    text: "Unreal"
-                    checked: animToolsCol.shaderUnreal
-                    onCheckedChanged: animToolsCol.shaderUnreal = checked
-                    enabled: !VATBakerController.isBaking
-                    font.pixelSize: 11
-                    palette.windowText: PropertiesPanelController.textColor
+                leftPadding: 18
+                Repeater {
+                    model: [
+                        { label: "Godot",  prop: "shaderGodot"  },
+                        { label: "Unity",  prop: "shaderUnity"  },
+                        { label: "Unreal", prop: "shaderUnreal" },
+                    ]
+                    delegate: Row {
+                        spacing: 4
+                        Rectangle {
+                            id: engineChk
+                            width: 14; height: 14
+                            anchors.verticalCenter: parent.verticalCenter
+                            border.color: engineChk.activeFocus
+                                ? PropertiesPanelController.highlightColor
+                                : PropertiesPanelController.borderColor
+                            border.width: engineChk.activeFocus ? 2 : 1
+                            radius: 2
+                            color: animToolsCol[modelData.prop]
+                                ? PropertiesPanelController.highlightColor
+                                : PropertiesPanelController.controlBgColor
+                            opacity: VATBakerController.isBaking ? 0.4 : 1.0
+                            activeFocusOnTab: !VATBakerController.isBaking
+                            Accessible.role: Accessible.CheckBox
+                            Accessible.name: modelData.label + " shader"
+                            Accessible.checkable: true
+                            Accessible.checked: animToolsCol[modelData.prop]
+                            Keys.onSpacePressed:  if (!VATBakerController.isBaking) animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                            Keys.onReturnPressed: if (!VATBakerController.isBaking) animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                            Keys.onEnterPressed:  if (!VATBakerController.isBaking) animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                            Text {
+                                anchors.centerIn: parent
+                                text: animToolsCol[modelData.prop] ? "✓" : ""
+                                color: "white"; font.pixelSize: 10
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: !VATBakerController.isBaking
+                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                                onClicked: {
+                                    animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                                    engineChk.forceActiveFocus()
+                                }
+                            }
+                        }
+                        Text {
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                            opacity: VATBakerController.isBaking ? 0.45 : 1.0
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: !VATBakerController.isBaking
+                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                                onClicked: {
+                                    animToolsCol[modelData.prop] = !animToolsCol[modelData.prop]
+                                    engineChk.forceActiveFocus()
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
