@@ -60,7 +60,8 @@ See epic #412 for phased issues (#413–#431).
 - `EmuCore` + `IEmuCorePlugin` + `EmuCoreLoader` landed (#415).
 - **Libretro host** `plugins/ps1core_libretro/` loads `mednafen_psx_libretro` / `beetle_psx_*` from `PS1Cores/`, system paths, or `QTMESH_PS1_LIBRETRO_CORE`. Runs a real ISO when BIOS + disc image are set.
 - Stub plugin `plugins/ps1core_stub/` remains for CI (test pattern + synthetic capture).
-- `PS1RipSessionWindow` + `EmuViewport` + legality dialog (#416–#417) — keyboard/gamepad input still TODO.
+- `PS1RipSessionWindow` + `EmuViewport` (#416): software framebuffer via `QPainter`, integer-scale and bilinear toggles (View menu), 4:3 NTSC/PAL letterbox mode, FPS overlay, frame pacing tied to `runFrame()` completion (~16 ms target). Hosted in a temporary session window from *Tools → Experimental → PS1 Runtime Ripper…* until #425 dock lands.
+- Legality dialog + BIOS/ISO + keyboard/gamepad (#417) — controller mapping beyond keyboard/mouse still TODO.
 - Install helper: `scripts/install-ps1-libretro-core.sh` copies a distro libretro core into `build/bin/PS1Cores/`.
 
 ## Phase 2 status

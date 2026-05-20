@@ -64,6 +64,7 @@ private slots:
 
 private:
     bool ensureCore(QString *errorOut);
+    void scheduleNextFrame(int delayMs);
     static QImage framebufferToImage(const class EmuFramebuffer &fb);
 
     QString m_biosPath;

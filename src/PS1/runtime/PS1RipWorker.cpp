@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFile>
 #include <QStandardPaths>
+#include <QElapsedTimer>
 #include <QTimer>
 
 #include <cstring>
@@ -28,8 +29,8 @@ PS1RipWorker::PS1RipWorker(QObject *parent)
     m_ripperHooks->setVram(m_vram.get());
 
     m_frameTimer = new QTimer(this);
+    m_frameTimer->setSingleShot(true);
     m_frameTimer->setTimerType(Qt::PreciseTimer);
-    m_frameTimer->setInterval(16);
     connect(m_frameTimer, &QTimer::timeout, this, &PS1RipWorker::runFrameTick);
 }
 
@@ -112,7 +113,7 @@ void PS1RipWorker::startEmulation()
 
     m_running = true;
     m_paused = false;
-    m_frameTimer->start();
+    scheduleNextFrame(0);
     emit emulationStarted(m_core ? m_core->coreId() : QString());
 }
 
@@ -135,10 +136,11 @@ void PS1RipWorker::pauseEmulation()
     if (!m_running)
         return;
     m_paused = !m_paused;
-    if (m_paused)
+    if (m_paused) {
         m_frameTimer->stop();
-    else
-        m_frameTimer->start();
+    } else {
+        scheduleNextFrame(0);
+    }
 }
 
 void PS1RipWorker::stepFrame()
@@ -149,10 +151,20 @@ void PS1RipWorker::stepFrame()
     emit framePresented(framebufferToImage(m_core->framebuffer()), m_core->framebuffer().frameIndex);
 }
 
+void PS1RipWorker::scheduleNextFrame(int delayMs)
+{
+    if (!m_running || m_paused || !m_core || !m_frameTimer)
+        return;
+    m_frameTimer->start(qMax(0, delayMs));
+}
+
 void PS1RipWorker::runFrameTick()
 {
     if (!m_running || m_paused || !m_core)
         return;
+
+    QElapsedTimer frameClock;
+    frameClock.start();
 
     m_core->runFrame();
     const EmuFramebuffer &fb = m_core->framebuffer();
@@ -162,6 +174,13 @@ void PS1RipWorker::runFrameTick()
         const QVector<uint16_t> cells = m_vram->mutablePixels();
         emit vramFrameUpdated(cells, m_vram->toImage(VramSnapshot::ViewMode::Native16));
     }
+
+    if (!m_running || m_paused || !m_core)
+        return;
+
+    constexpr int kTargetFrameMs = 16;
+    const int delayMs = qMax(0, kTargetFrameMs - static_cast<int>(frameClock.elapsed()));
+    scheduleNextFrame(delayMs);
 }
 
 void PS1RipWorker::setCaptureArmed(bool armed)

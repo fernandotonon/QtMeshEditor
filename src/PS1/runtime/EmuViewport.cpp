@@ -12,6 +12,28 @@ namespace {
 
 constexpr unsigned kPort = 0;
 
+QRect aspectContentArea(const QSize &widgetSize, EmuViewport::AspectMode aspect)
+{
+    if (widgetSize.width() < 1 || widgetSize.height() < 1)
+        return {};
+
+    QRect area(0, 0, widgetSize.width(), widgetSize.height());
+    if (aspect != EmuViewport::AspectMode::Display43)
+        return area;
+
+    constexpr qreal kDisplayAspect = 4.0 / 3.0;
+    const qreal widgetAspect =
+        static_cast<qreal>(widgetSize.width()) / static_cast<qreal>(widgetSize.height());
+    if (widgetAspect > kDisplayAspect) {
+        const int w = static_cast<int>(widgetSize.height() * kDisplayAspect);
+        area = QRect((widgetSize.width() - w) / 2, 0, w, widgetSize.height());
+    } else if (widgetAspect < kDisplayAspect) {
+        const int h = static_cast<int>(widgetSize.width() / kDisplayAspect);
+        area = QRect(0, (widgetSize.height() - h) / 2, widgetSize.width(), h);
+    }
+    return area;
+}
+
 void setButton(unsigned id, bool pressed)
 {
     PsxJoypadState::setPressed(kPort, id, pressed);
@@ -100,6 +122,37 @@ bool mapMouse(Qt::MouseButton button, unsigned *buttonOut)
 
 } // namespace
 
+EmuViewport::FrameLayout EmuViewport::computeFrameLayout(const QSize &widgetSize,
+                                                       const QSize &frameSize, bool integerScale,
+                                                       bool smoothFiltering, AspectMode aspect)
+{
+    FrameLayout layout;
+    if (widgetSize.width() < 1 || widgetSize.height() < 1 || frameSize.width() < 1
+        || frameSize.height() < 1)
+        return layout;
+
+    const QRect content = aspectContentArea(widgetSize, aspect);
+    if (content.isEmpty())
+        return layout;
+
+    QSize dst = frameSize;
+    if (integerScale) {
+        const int scaleX = qMax(1, content.width() / frameSize.width());
+        const int scaleY = qMax(1, content.height() / frameSize.height());
+        const int scale = qMin(scaleX, scaleY);
+        dst = QSize(frameSize.width() * scale, frameSize.height() * scale);
+        layout.smoothFiltering = false;
+    } else {
+        dst = frameSize.scaled(content.size(), Qt::KeepAspectRatio);
+        layout.smoothFiltering = smoothFiltering;
+    }
+
+    const int x = content.x() + (content.width() - dst.width()) / 2;
+    const int y = content.y() + (content.height() - dst.height()) / 2;
+    layout.target = QRect(x, y, dst.width(), dst.height());
+    return layout;
+}
+
 EmuViewport::EmuViewport(QWidget *parent)
     : QWidget(parent)
 {
@@ -120,6 +173,18 @@ void EmuViewport::setFrame(const QImage &frame)
 void EmuViewport::setIntegerScale(bool enabled)
 {
     m_integerScale = enabled;
+    update();
+}
+
+void EmuViewport::setSmoothFiltering(bool enabled)
+{
+    m_smoothFiltering = enabled;
+    update();
+}
+
+void EmuViewport::setAspectMode(AspectMode mode)
+{
+    m_aspectMode = mode;
     update();
 }
 
@@ -203,6 +268,12 @@ void EmuViewport::paintEvent(QPaintEvent *event)
     QPainter painter(this);
     painter.fillRect(rect(), QColor(16, 16, 16));
 
+    if (m_aspectMode == AspectMode::Display43) {
+        const QRect content = aspectContentArea(size(), m_aspectMode);
+        if (!content.isEmpty())
+            painter.fillRect(content, QColor(8, 8, 8));
+    }
+
     if (m_frame.isNull()) {
         painter.setPen(QColor(160, 160, 160));
         painter.drawText(rect(), Qt::AlignCenter,
@@ -210,23 +281,13 @@ void EmuViewport::paintEvent(QPaintEvent *event)
         return;
     }
 
-    const QSize src = m_frame.size();
-    QSize dst = src;
-    if (m_integerScale && src.width() > 0 && src.height() > 0) {
-        const int scaleX = qMax(1, width() / src.width());
-        const int scaleY = qMax(1, height() / src.height());
-        const int scale = qMin(scaleX, scaleY);
-        dst = QSize(src.width() * scale, src.height() * scale);
-    } else {
-        dst = src.scaled(size(), Qt::KeepAspectRatio);
-    }
+    const FrameLayout layout =
+        computeFrameLayout(size(), m_frame.size(), m_integerScale, m_smoothFiltering, m_aspectMode);
+    if (layout.target.isEmpty())
+        return;
 
-    const int x = (width() - dst.width()) / 2;
-    const int y = (height() - dst.height()) / 2;
-    const QRect target(x, y, dst.width(), dst.height());
-
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, !m_integerScale);
-    painter.drawImage(target, m_frame);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, layout.smoothFiltering);
+    painter.drawImage(layout.target, m_frame);
 
     painter.setPen(QColor(220, 220, 220));
     painter.drawText(8, 20, tr("FPS: %1").arg(m_fps, 0, 'f', 1));

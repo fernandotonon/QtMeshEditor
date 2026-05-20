@@ -19,6 +19,7 @@
 #include <QSettings>
 #include <QStatusBar>
 #include <QCheckBox>
+#include <QMenuBar>
 #include <QToolBar>
 
 namespace {
@@ -26,6 +27,14 @@ constexpr auto kSettingsGroup = "ps1Rip";
 constexpr auto kBiosKey = "biosPath";
 constexpr auto kRecentIsoKey = "recentIsos";
 constexpr auto kDedupeStrictKey = "dedupeStrict";
+constexpr auto kViewportIntegerScaleKey = "viewportIntegerScale";
+constexpr auto kViewportSmoothFilterKey = "viewportSmoothFilter";
+constexpr auto kViewportAspect43Key = "viewportAspect43";
+
+QString ps1SettingsKey(const char *name)
+{
+    return QString::fromLatin1(kSettingsGroup) + QLatin1Char('/') + QString::fromLatin1(name);
+}
 } // namespace
 
 PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
@@ -37,6 +46,53 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
 
     m_viewport = new EmuViewport(this);
     setCentralWidget(m_viewport);
+
+    QSettings settings;
+    m_viewport->setIntegerScale(
+        settings.value(ps1SettingsKey(kViewportIntegerScaleKey), true).toBool());
+    m_viewport->setSmoothFiltering(
+        settings.value(ps1SettingsKey(kViewportSmoothFilterKey), false).toBool());
+    m_viewport->setAspectMode(
+        settings.value(ps1SettingsKey(kViewportAspect43Key), true).toBool()
+            ? EmuViewport::AspectMode::Display43
+            : EmuViewport::AspectMode::Native);
+
+    auto *viewMenu = menuBar()->addMenu(tr("View"));
+    auto *integerScaleAct = viewMenu->addAction(tr("Integer scale"));
+    integerScaleAct->setCheckable(true);
+    integerScaleAct->setChecked(m_viewport->integerScale());
+    integerScaleAct->setToolTip(tr("Nearest-neighbor upscale in whole-pixel steps"));
+    connect(integerScaleAct, &QAction::toggled, this, [this](bool on) {
+        m_viewport->setIntegerScale(on);
+        QSettings().setValue(ps1SettingsKey(kViewportIntegerScaleKey), on);
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                    on ? QStringLiteral("ps1_rip_viewport_integer_scale_on")
+                                       : QStringLiteral("ps1_rip_viewport_integer_scale_off"));
+    });
+
+    auto *smoothFilterAct = viewMenu->addAction(tr("Bilinear filtering"));
+    smoothFilterAct->setCheckable(true);
+    smoothFilterAct->setChecked(m_viewport->smoothFiltering());
+    smoothFilterAct->setToolTip(tr("Smooth scaling when integer scale is off"));
+    connect(smoothFilterAct, &QAction::toggled, this, [this](bool on) {
+        m_viewport->setSmoothFiltering(on);
+        QSettings().setValue(ps1SettingsKey(kViewportSmoothFilterKey), on);
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                    on ? QStringLiteral("ps1_rip_viewport_bilinear_on")
+                                       : QStringLiteral("ps1_rip_viewport_bilinear_off"));
+    });
+
+    auto *aspect43Act = viewMenu->addAction(tr("4:3 display aspect (NTSC/PAL)"));
+    aspect43Act->setCheckable(true);
+    aspect43Act->setChecked(m_viewport->aspectMode() == EmuViewport::AspectMode::Display43);
+    connect(aspect43Act, &QAction::toggled, this, [this](bool on) {
+        m_viewport->setAspectMode(on ? EmuViewport::AspectMode::Display43
+                                     : EmuViewport::AspectMode::Native);
+        QSettings().setValue(ps1SettingsKey(kViewportAspect43Key), on);
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                    on ? QStringLiteral("ps1_rip_viewport_aspect_43_on")
+                                       : QStringLiteral("ps1_rip_viewport_aspect_43_off"));
+    });
 
     auto *toolbar = addToolBar(tr("Transport"));
     toolbar->setMovable(false);
@@ -68,10 +124,7 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     connect(captureAct, &QAction::triggered, this, &PS1RipSessionWindow::onCaptureFrame);
     auto *strictDedupe = new QCheckBox(tr("Strict dedupe"), this);
     strictDedupe->setToolTip(tr("Bit-exact topology hash (off = 0.01 position snap)"));
-    strictDedupe->setChecked(
-        QSettings().value(QString::fromLatin1(kSettingsGroup) + QLatin1Char('/')
-                              + QString::fromLatin1(kDedupeStrictKey), false)
-            .toBool());
+    strictDedupe->setChecked(settings.value(ps1SettingsKey(kDedupeStrictKey), false).toBool());
     m_manager->setDedupeStrict(strictDedupe->isChecked());
     connect(strictDedupe, &QCheckBox::toggled, this, [this](bool on) {
         m_manager->setDedupeStrict(on);
@@ -79,9 +132,7 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
             QStringLiteral("ui.action"),
             on ? QStringLiteral("ps1_rip_strict_dedupe_on")
                : QStringLiteral("ps1_rip_strict_dedupe_off"));
-        QSettings().setValue(QString::fromLatin1(kSettingsGroup) + QLatin1Char('/')
-                                 + QString::fromLatin1(kDedupeStrictKey),
-                             on);
+        QSettings().setValue(ps1SettingsKey(kDedupeStrictKey), on);
     });
     toolbar->addWidget(strictDedupe);
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
