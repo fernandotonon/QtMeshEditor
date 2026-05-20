@@ -82,7 +82,8 @@ public:
     Q_INVOKABLE bool bake(const QString& animationName,
                           double fps,
                           const QString& outputDir,
-                          const QString& basename = QString());
+                          const QString& basename = QString(),
+                          const QStringList& includeShadersFor = QStringList());
 
     /// Open a native folder picker. Returns the selected absolute path
     /// or an empty string if the user cancelled. Used by the Inspector

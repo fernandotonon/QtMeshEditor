@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/vat-shaders">
+        <file>openvat.gdshader</file>
+        <file>openvat.shader</file>
+        <file>openvat.usf</file>
+        <file>README.md</file>
+    </qresource>
+</RCC>

@@ -90,6 +90,7 @@ TexturePaintController.cpp
 VertexColorBaker.cpp
 VATBaker.cpp
 VATBakerController.cpp
+VATShaderEmitter.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp
@@ -327,6 +328,7 @@ ${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPrismGenerator.h
 #  Adding resources  
 ##############################################################
 qt_add_resources(RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../resources/resource.qrc")
+qt_add_resources(VAT_SHADER_RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../tools/vat-shaders/vat_shaders.qrc")
 
 ##############################################################
 #  Adding QML Resources  
@@ -376,6 +378,7 @@ if(WIN32)
 	${SRC_FILES}
         ${RESOURCE_SRCS}
         ${QML_RESOURCE_SRCS}
+        ${VAT_SHADER_RESOURCE_SRCS}
         MaterialEditorQML.h
         MaterialEditorQML.cpp
         )
@@ -385,6 +388,7 @@ elseif(APPLE)
 	${SRC_FILES}
         ${RESOURCE_SRCS}
         ${QML_RESOURCE_SRCS}
+        ${VAT_SHADER_RESOURCE_SRCS}
         MaterialEditorQML.h
         MaterialEditorQML.cpp
         )
@@ -395,6 +399,7 @@ else()
         ${SRC_FILES}
         ${RESOURCE_SRCS}
         ${QML_RESOURCE_SRCS}
+        ${VAT_SHADER_RESOURCE_SRCS}
         MaterialEditorQML.h
         MaterialEditorQML.cpp
         )

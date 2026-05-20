@@ -22,6 +22,7 @@
 #include "TexturePaintBuffer.h"
 #include "VertexColorBaker.h"
 #include "VATBaker.h"
+#include "VATShaderEmitter.h"
 #include "MorphAnimationManager.h"
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
@@ -688,7 +689,7 @@ void CLIPipeline::printUsage()
         "                                    triangle, rasterizes barycentric-interpolated vertex colors,\n"
         "                                    then dilates outward by N pixels to mask seam bleed at MIP time.\n"
         "                                    Default resolution=1024, dilation=4. Output PNG is RGBA.\n"
-        "  vat <file> --anim <name> [--fps N] [-o <dir>] [--json]\n"
+        "  vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--json]\n"
         "                                    Bake a skeletal animation into a Vertex Animation Texture\n"
         "                                    in OpenVAT (sharpen3d/openvat) format: a single 16-bit RGB\n"
         "                                    PNG (height = 2 × frames; top half positions, bottom half\n"
@@ -5669,7 +5670,7 @@ std::vector<uint32_t> buildVertexPermutation(
 
 int CLIPipeline::cmdVat(int argc, char* argv[])
 {
-    // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--json]
+    // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--json]
     //
     // Output is always OpenVAT (sharpen3d/openvat) — a single packed
     // 16-bit RGB PNG (`<basename>_pos.png`, height = 2*frames, top half
@@ -5679,6 +5680,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     QString filePath, animName, outDir;
     double fps = 30.0;
     bool jsonOutput = false;
+    QString includeShadersArg;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -5699,6 +5701,13 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outDir = QString(argv[++i]); continue;
         }
+        // --include-shaders <list>: comma-separated subset of
+        // {godot, unity, unreal} (or "all") — copies the matching
+        // drop-in shader templates into the bake's output directory
+        // so the consumer has the bake AND the engine glue together.
+        if (arg == "--include-shaders" && i + 1 < argc) {
+            includeShadersArg = QString(argv[++i]); continue;
+        }
         if (!arg.startsWith("-") && filePath.isEmpty()) {
             filePath = arg; continue;
         }
@@ -5706,7 +5715,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
 
     if (filePath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--json]" << Qt::endl;
+        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--json]" << Qt::endl;
         return 2;
     }
     if (animName.isEmpty()) {
@@ -5931,6 +5940,29 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         gltfPath.clear();  // Mark as missing so the post-run report skips it.
     }
 
+    // --include-shaders: drop the requested engine templates next to
+    // the bake so a consumer has everything in one folder.
+    QStringList shadersWritten;
+    if (!includeShadersArg.isEmpty()) {
+        const QStringList engines = VATShaderEmitter::parseEngineList(includeShadersArg);
+        if (engines.isEmpty()) {
+            err() << "Warning: --include-shaders=\"" << includeShadersArg
+                  << "\" did not match any known engine "
+                     "(accepted: godot, unity, unreal, all)." << Qt::endl;
+        } else {
+            shadersWritten = VATShaderEmitter::writeShaders(outDir, engines);
+            if (shadersWritten.isEmpty()) {
+                err() << "Warning: --include-shaders requested "
+                      << engines.join(",") << " but no files could be written."
+                      << Qt::endl;
+            } else {
+                SentryReporter::addBreadcrumb("file.export",
+                    QStringLiteral("VAT shaders written: %1")
+                        .arg(shadersWritten.join(QStringLiteral(", "))));
+            }
+        }
+    }
+
     if (jsonOutput) {
         QJsonObject obj;
         obj["ok"]          = true;
@@ -5940,6 +5972,11 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
             obj["sourceMesh"] = gltfPath;
         if (bindWritten)
             obj["bindSidecar"] = bindPath;
+        if (!shadersWritten.isEmpty()) {
+            QJsonArray sarr;
+            for (const auto& p : shadersWritten) sarr.append(p);
+            obj["shaders"] = sarr;
+        }
         obj["frameCount"]  = result.frameCount;
         obj["vertexCount"] = result.vertexCount;
         obj["animation"]   = animName;
@@ -5970,8 +6007,14 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                      .arg(result.maxBound.x, 0, 'f', 3)
                      .arg(result.maxBound.y, 0, 'f', 3)
                      .arg(result.maxBound.z, 0, 'f', 3));
-        cliWrite(QStringLiteral(
-            "  shaders:  drop-in Godot/Unity/Unreal templates at tools/vat-shaders/\n"));
+        if (!shadersWritten.isEmpty()) {
+            for (const QString& path : shadersWritten)
+                cliWrite(QStringLiteral("  shader:   %1\n").arg(path));
+        } else {
+            cliWrite(QStringLiteral(
+                "  shaders:  drop-in Godot/Unity/Unreal templates at tools/vat-shaders/\n"
+                "            (re-run with `--include-shaders all` to copy them next to the bake)\n"));
+        }
     }
     return 0;
 }

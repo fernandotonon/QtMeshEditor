@@ -613,6 +613,13 @@ Rectangle {
             property string outputDir: ""
             property string lastResultText: ""
             property bool lastOk: false
+            // "Include shader" toggle + per-engine checkboxes. Carry
+            // the QML state directly so the row is collapsed by default
+            // and the user opts in.
+            property bool includeShaders: false
+            property bool shaderGodot: true
+            property bool shaderUnity: false
+            property bool shaderUnreal: false
 
             // Same label-column width Edit Mode Tools uses, so the
             // Anim / FPS / Out rows align with each other.
@@ -736,6 +743,60 @@ Rectangle {
                 }
             }
 
+            // Include-shader master toggle. Off by default — the bake
+            // produces all of the data files unconditionally, and the
+            // shader templates are an opt-in convenience: copy
+            // openvat.gdshader / openvat.shader / openvat.usf next to
+            // the bake so the user can drop the whole folder into a
+            // project without chasing tools/vat-shaders/ in the repo.
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                CheckBox {
+                    id: includeShaderChk
+                    text: "Include shader"
+                    checked: animToolsCol.includeShaders
+                    onCheckedChanged: animToolsCol.includeShaders = checked
+                    enabled: !VATBakerController.isBaking
+                    font.pixelSize: 11
+                    palette.windowText: PropertiesPanelController.textColor
+                }
+            }
+
+            // Per-engine checkboxes — only shown when the master
+            // toggle is on. Defaults to Godot only since that's the
+            // engine the website demo + most early users target.
+            Row {
+                visible: animToolsCol.includeShaders
+                spacing: 12
+                width: parent.width - 16
+                leftPadding: 16
+                CheckBox {
+                    text: "Godot"
+                    checked: animToolsCol.shaderGodot
+                    onCheckedChanged: animToolsCol.shaderGodot = checked
+                    enabled: !VATBakerController.isBaking
+                    font.pixelSize: 11
+                    palette.windowText: PropertiesPanelController.textColor
+                }
+                CheckBox {
+                    text: "Unity"
+                    checked: animToolsCol.shaderUnity
+                    onCheckedChanged: animToolsCol.shaderUnity = checked
+                    enabled: !VATBakerController.isBaking
+                    font.pixelSize: 11
+                    palette.windowText: PropertiesPanelController.textColor
+                }
+                CheckBox {
+                    text: "Unreal"
+                    checked: animToolsCol.shaderUnreal
+                    onCheckedChanged: animToolsCol.shaderUnreal = checked
+                    enabled: !VATBakerController.isBaking
+                    font.pixelSize: 11
+                    palette.windowText: PropertiesPanelController.textColor
+                }
+            }
+
             // Bake button — same look as Animation Control's play button
             // (lighten/darken on the header color; no highlight ramp).
             Rectangle {
@@ -773,11 +834,22 @@ Rectangle {
                     cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
                     onClicked: {
                         if (!animBakeMa.enabled) return
+                        // Collect the per-engine selection only when
+                        // the master "Include shader" toggle is on,
+                        // otherwise pass an empty list (the controller
+                        // then skips VATShaderEmitter entirely).
+                        let engines = []
+                        if (animToolsCol.includeShaders) {
+                            if (animToolsCol.shaderGodot)  engines.push("godot")
+                            if (animToolsCol.shaderUnity)  engines.push("unity")
+                            if (animToolsCol.shaderUnreal) engines.push("unreal")
+                        }
                         VATBakerController.bake(
                             animToolsCol.animName,
                             animToolsCol.fps,
                             animToolsCol.outputDir,
-                            "")
+                            "",
+                            engines)
                     }
                 }
             }

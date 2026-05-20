@@ -13,6 +13,7 @@ The MIT License
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "VATBaker.h"
+#include "VATShaderEmitter.h"
 
 #include <QApplication>
 #include <QDir>
@@ -94,7 +95,8 @@ void VATBakerController::setIsBaking(bool b)
 bool VATBakerController::bake(const QString& animationName,
                               double fps,
                               const QString& outputDir,
-                              const QString& basename)
+                              const QString& basename,
+                              const QStringList& includeShadersFor)
 {
     if (m_isBaking) {
         SentryReporter::addBreadcrumb("ui.action",
@@ -169,6 +171,20 @@ bool VATBakerController::bake(const QString& animationName,
     m_progressTotal = result.frameCount;
     emit bakeProgress(m_progressDone, m_progressTotal);
     setIsBaking(false);
+
+    // Drop the requested drop-in shader templates next to the bake. The
+    // controller takes the engine list from the QML inspector's
+    // checkboxes (or the CLI parses `--include-shaders` into the same
+    // list before calling the static path in CLIPipeline).
+    if (result.ok && !includeShadersFor.isEmpty()) {
+        const QStringList shadersWritten =
+            VATShaderEmitter::writeShaders(outputDir, includeShadersFor);
+        if (!shadersWritten.isEmpty()) {
+            SentryReporter::addBreadcrumb("file.export",
+                QStringLiteral("VAT shaders written: %1")
+                    .arg(shadersWritten.join(QStringLiteral(", "))));
+        }
+    }
 
     SentryReporter::addBreadcrumb("file.export",
         result.ok
