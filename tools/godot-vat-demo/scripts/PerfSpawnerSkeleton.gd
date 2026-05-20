@@ -40,27 +40,15 @@ func _ready() -> void:
 
 	var start_ms := Time.get_ticks_msec()
 
-	# Load the glTF scene ONCE and instantiate from a cached PackedScene.
-	# GLTFDocument.append_from_file at runtime is too slow to call 1000
-	# times.
-	var doc := GLTFDocument.new()
-	var state := GLTFState.new()
-	var abs_path: String = ProjectSettings.globalize_path(source_gltf)
-	if doc.append_from_file(abs_path, state) != OK:
-		push_error("PerfSpawnerSkeleton: GLTFDocument failed for %s" % source_gltf)
+	# Load through the resource pipeline — Godot's editor imported
+	# the .gltf as a .scn PackedScene which lives in the pck.
+	# Native desktop builds + web builds both resolve uniformly via
+	# `load()`. The runtime GLTFDocument.append_from_file path would
+	# fail in web because the raw .gltf bytes aren't shipped.
+	var pack: PackedScene = load(source_gltf) as PackedScene
+	if pack == null:
+		push_error("PerfSpawnerSkeleton: load('%s') returned null" % source_gltf)
 		return
-	var prototype: Node = doc.generate_scene(state)
-	if prototype == null:
-		push_error("PerfSpawnerSkeleton: generate_scene returned null")
-		return
-
-	# Cache the loaded scene as a PackedScene so we can instantiate
-	# cheap copies. Without this, every instance would re-parse the
-	# entire glTF on add_child. Godot shares Mesh + Material + Animation
-	# resources across PackedScene clones automatically.
-	var pack := PackedScene.new()
-	pack.pack(prototype)
-	prototype.queue_free()
 
 	var side := int(ceil(sqrt(instance_count)))
 	var half := side / 2

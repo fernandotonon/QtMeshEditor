@@ -16,7 +16,7 @@ config_version=5
 
 config/name="VAT Demo"
 config/description="QtMeshEditor OpenVAT showcase + perf comparison."
-run/main_scene="res://scenes/demo_web.tscn"
+run/main_scene="res://scenes/bootstrap.tscn"
 config/features=PackedStringArray("4.2", "Forward Plus")
 
 [debug]
