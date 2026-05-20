@@ -21,17 +21,22 @@
 //
 //   3. Drop in a Custom node and paste the HLSL below.
 //
-//   4. Wire these inputs to the Custom node:
-//      - PosTex      → Texture2D (TextureSampleParameter2D, sRGB OFF)
-//      - UV2         → TextureCoordinate (Coordinate Index = 1)
-//      - CurrentFrame → ScalarParameter "CurrentFrame"
-//      - FrameCount   → ScalarParameter "FrameCount"
-//      - BoundsMin    → VectorParameter "BoundsMin" (xyz from os-remap.Min)
-//      - BoundsMax    → VectorParameter "BoundsMax" (xyz from os-remap.Max)
+//   4. Wire these inputs to the Custom node (the names must match
+//      exactly — the HLSL references them by identifier):
+//      - PosTex        → Texture2D (TextureSampleParameter2D, sRGB OFF)
+//      - UV2           → TextureCoordinate (Coordinate Index = 1)
+//      - LocalPosition → LocalPosition node (no offset — the bind-pose
+//                        object-space vertex coord)
+//      - CurrentFrame  → ScalarParameter "CurrentFrame"
+//      - FrameCount    → ScalarParameter "FrameCount"
+//      - BoundsMin     → VectorParameter "BoundsMin" (xyz from os-remap.Min)
+//      - BoundsMax     → VectorParameter "BoundsMax" (xyz from os-remap.Max)
 //
-//   5. Wire the Custom node's outputs:
-//      - WorldPositionOffset.xyz  → Material "World Position Offset"
-//      - Normal.xyz               → Material "Normal"
+//   5. Wire the Custom node's outputs straight into the Material's
+//      output pins — no extra subtraction needed; the Custom node
+//      already returns the delta:
+//      - WorldPositionOffset → Material "World Position Offset"
+//      - Normal              → Material "Normal"
 //
 //   6. Texture import settings on the position PNG:
 //      - Compression Settings  = TC_HDR (UserInterface2D also works)
@@ -58,12 +63,20 @@
 // MIT. Use freely.
 
 // === Custom node body ============================================
-// Returns a struct with WorldPositionOffset (in object space — the
-// material editor converts to world space) and Normal (world space).
+// Returns a struct with:
+//   - WorldPositionOffset: DELTA from the bind-pose vertex (object
+//                          space). UE's "World Position Offset" input
+//                          expects a displacement, not an absolute
+//                          position — we subtract `LocalPosition`
+//                          inside this node so the user can wire the
+//                          output directly to the material graph
+//                          without extra arithmetic.
+//   - Normal:              world-space normal vector.
 //
-// Inputs (Custom node "Inputs" entries):
+// Inputs (Custom node "Inputs" entries — names must match exactly):
 //   Texture2D     PosTex
 //   float2        UV2
+//   float3        LocalPosition   ← LocalPosition material node
 //   float         CurrentFrame
 //   float         FrameCount
 //   float3        BoundsMin
@@ -73,7 +86,7 @@
 // default. We need a struct return — declare it here, return at the
 // bottom.
 struct VATResult {
-    float3 ObjectPos;
+    float3 WorldPositionOffset;
     float3 Normal;
 };
 
@@ -91,25 +104,18 @@ float frame_step = 1.0 / (float)texH;
 float2 uv_c = UV2 + float2(0.0, (float)curr * frame_step);
 float2 uv_n = UV2 + float2(0.0, (float)next * frame_step);
 
-// Position: top half, normalized [0,1] → [BoundsMin..BoundsMax].
+// Position: top half, normalized [0,1] → [BoundsMin..BoundsMax]. This
+// is the ABSOLUTE object-space position of the vertex at the current
+// frame.
 float3 p_c = PosTex.SampleLevel(PosTexSampler, uv_c, 0).rgb;
 float3 p_n = PosTex.SampleLevel(PosTexSampler, uv_n, 0).rgb;
 float3 p = lerp(p_c, p_n, blend);
 float3 absolutePos = BoundsMin + p * (BoundsMax - BoundsMin);
 
-// WorldPositionOffset in UE is the DELTA from the bind pose, but our
-// VAT encodes absolute positions. Subtract the bind-pose (which UE
-// gives us as `GetWorldPosition()` minus the local transform, but
-// inside a Custom node we use the LocalPosition input wired to
-// VertexNormalWS would be wrong — easiest is to pass the bind-pose
-// vertex through another Custom node input. The simple convention:
-//   - In the Material, add `LocalPosition` (in the "Vector" inputs)
-//     to the Custom node alongside the others.
-//   - WorldPositionOffset = absolutePos - LocalPosition
-// (We can't do that here without LocalPosition wired; see the
-// material wiring section above. For now we just RETURN absolutePos
-// and you subtract LocalPosition in the material graph.)
-result.ObjectPos = absolutePos;
+// WorldPositionOffset expects a DELTA from the bind pose. Subtract
+// `LocalPosition` (the bind-pose object-space coord, wired in by the
+// Material's `LocalPosition` node) to convert absolute → delta.
+result.WorldPositionOffset = absolutePos - LocalPosition;
 
 // Normal: lower half, shifted down by 0.5 in UV V.
 float2 uv_cn = uv_c + float2(0.0, -0.5);

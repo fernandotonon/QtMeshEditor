@@ -20,7 +20,7 @@ see the comments at the top of `openvat.shader`.
 
 `qtmesh vat` writes two files per bake:
 
-```
+```text
 <basename>_pos.png             16-bit RGB PNG, height = 2 × Frames
                                Top half:    vertex positions, normalized to [Min..Max]
                                Bottom half: per-vertex normals, encoded as (n+1)/2
@@ -104,7 +104,7 @@ read to compensate. **If your bake came from a different source** (e.g.
 Blender via the OpenVAT add-on) and you see inverted lighting, remove
 the negation:
 
-```
+```cpp
 // Godot:    NORMAL = normalize(n);   // not -normalize
 // Unity:    OUT.worldNrm = normalize(mul((float3x3)unity_ObjectToWorld, n));   // drop the -
 // Unreal:   result.Normal = normalize(n);                                      // drop the -
