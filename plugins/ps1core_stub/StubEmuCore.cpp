@@ -54,7 +54,7 @@ void StubEmuCore::runFrame()
     EmuFramebuffer &buf = m_buffers[static_cast<size_t>(m_writeIndex)];
     buf.frameIndex = ++m_frameIndex;
     fillTestPattern(buf);
-    stubFillVramPattern(m_hooks, buf.frameIndex);
+    stubFillVramPattern(m_hooks, buf.frameIndex, false);
     stubEmitCaptureSample(m_hooks);
 
     m_readIndex = m_writeIndex;
@@ -81,7 +81,7 @@ void StubEmuCore::setHooks(EmuHooks *hooks)
 void StubEmuCore::syncCaptureMirrors()
 {
     if (m_hooks)
-        stubFillVramPattern(m_hooks, m_frameIndex);
+        stubFillVramPattern(m_hooks, m_frameIndex, true);
 }
 
 void StubEmuCore::fillTestPattern(EmuFramebuffer &buf)

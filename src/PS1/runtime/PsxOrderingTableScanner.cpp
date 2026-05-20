@@ -18,20 +18,6 @@ constexpr int kMaxPrimsPerFrame = 2048;
 constexpr int kMaxOtCandidates = 12;
 constexpr int kMaxChainsPerTable = 384;
 
-bool looksLikeGp0Opcode(uint32_t word)
-{
-    const uint8_t cmd = psxGp0OpcodeByte(word);
-    if (cmd >= 0x20 && cmd <= 0x3F)
-        return true;
-    if (cmd >= 0x60 && cmd <= 0x7F)
-        return true;
-    if (cmd >= 0xE1 && cmd <= 0xE6)
-        return true;
-    if (cmd == 0xA0 || cmd == 0xC0)
-        return true;
-    return false;
-}
-
 struct OtCandidate {
     uint32_t baseByte = 0;
     int entryCount = 0;
@@ -49,7 +35,7 @@ uint32_t resolveOtEntryChainAddr(const uint8_t *ram, size_t byteSize, uint32_t o
     if (absAddr >= 4 && absAddr + 4 <= byteSize && (absAddr % 4) == 0) {
         uint32_t header = 0;
         std::memcpy(&header, ram + absAddr, sizeof(header));
-        if (looksLikeGp0Opcode(header))
+        if (psxLooksLikeGp0Opcode(header))
             return absAddr;
     }
 
@@ -59,7 +45,7 @@ uint32_t resolveOtEntryChainAddr(const uint8_t *ram, size_t byteSize, uint32_t o
         if (relAddr + 4 <= byteSize) {
             uint32_t header = 0;
             std::memcpy(&header, ram + relAddr, sizeof(header));
-            if (looksLikeGp0Opcode(header))
+            if (psxLooksLikeGp0Opcode(header))
                 return relAddr;
         }
     }

@@ -11,20 +11,6 @@ namespace {
 
 constexpr int kMaxChainPackets = 512;
 
-bool looksLikeGp0Opcode(uint32_t word)
-{
-    const uint8_t cmd = psxGp0OpcodeByte(word);
-    if (cmd >= 0x20 && cmd <= 0x3F)
-        return true;
-    if (cmd >= 0x60 && cmd <= 0x7F)
-        return true;
-    if (cmd >= 0xE1 && cmd <= 0xE6)
-        return true;
-    if (cmd == 0xA0 || cmd == 0xC0)
-        return true;
-    return false;
-}
-
 QString primDedupeKey(const PrimRecord &prim)
 {
     QString key = QStringLiteral("%1|%2").arg(static_cast<int>(prim.kind)).arg(prim.vertexCount);
@@ -59,7 +45,7 @@ PsxGp0ChainWalker::WalkResult PsxGp0ChainWalker::walkChain(const uint8_t *ram, s
         if (remainingWords == 0)
             break;
 
-        if (!looksLikeGp0Opcode(words[0]))
+        if (!psxLooksLikeGp0Opcode(words[0]))
             break;
 
         const GpuCommandParser::Gp0Step step = GpuCommandParser::stepGp0(words, remainingWords);

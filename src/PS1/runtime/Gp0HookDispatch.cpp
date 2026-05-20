@@ -27,20 +27,6 @@ void ensureCaptureProjectionMatrix(EmuHooks *hooks)
     hooks->onGteMatrix(matrix);
 }
 
-bool looksLikeGp0Opcode(uint32_t word)
-{
-    const uint8_t cmd = psxGp0OpcodeByte(word);
-    if (cmd >= 0x20 && cmd <= 0x3F)
-        return true;
-    if (cmd >= 0x60 && cmd <= 0x7F)
-        return true;
-    if (cmd >= 0xE1 && cmd <= 0xE6)
-        return true;
-    if (cmd == 0xA0 || cmd == 0xC0)
-        return true;
-    return false;
-}
-
 void applyDrawMode(PrimRecord &prim, const DrawModeRecord &mode)
 {
     if (prim.drawModeBits == 0 && mode.drawModeBits != 0)
@@ -120,7 +106,7 @@ void Gp0HookDispatch::captureLinearScan(const uint8_t *ram, size_t byteSize, Emu
 
         uint32_t word = 0;
         std::memcpy(&word, ram + offset * 4, sizeof(word));
-        if (!looksLikeGp0Opcode(word)) {
+        if (!psxLooksLikeGp0Opcode(word)) {
             ++offset;
             continue;
         }

@@ -32,4 +32,18 @@ inline uint32_t psxGp0TagNextByteAddr(uint32_t tag)
     return ((tag >> 2) & 0x3FFFFFu) << 2;
 }
 
+inline bool psxLooksLikeGp0Opcode(uint32_t word)
+{
+    const uint8_t cmd = psxGp0OpcodeByte(word);
+    if (cmd >= 0x20 && cmd <= 0x3F)
+        return true;
+    if (cmd >= 0x60 && cmd <= 0x7F)
+        return true;
+    if (cmd >= 0xE1 && cmd <= 0xE6)
+        return true;
+    if (cmd == 0xA0 || cmd == 0xC0)
+        return true;
+    return false;
+}
+
 #endif // PSXGP0OPCODE_H

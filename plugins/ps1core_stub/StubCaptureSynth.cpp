@@ -66,9 +66,9 @@ void stubEmitCaptureSample(EmuHooks *hooks)
     hooks->onFrameEnd();
 }
 
-void stubFillVramPattern(EmuHooks *hooks, std::uint64_t frameIndex)
+void stubFillVramPattern(EmuHooks *hooks, std::uint64_t frameIndex, bool forceMirror)
 {
-    if (!hooks)
+    if (!hooks || (!forceMirror && !hooks->isCaptureEnabled()))
         return;
 
     QVector<uint16_t> clutRow(16);

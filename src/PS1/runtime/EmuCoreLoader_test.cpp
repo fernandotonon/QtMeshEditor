@@ -194,10 +194,49 @@ TEST_F(EmuCoreLoaderTest, StubDisarmedHooksAddLessThanOnePercentOverhead)
     const qint64 withHooksNs = timer.nsecsElapsed();
 
     ASSERT_GT(baselineNs, 1000000);
-    if (withHooksNs > baselineNs + baselineNs / 100 + 3000000) {
-        GTEST_SKIP() << "Timing variance on this runner (baseline=" << baselineNs
-                     << "ns disarmed-hooks=" << withHooksNs << "ns)";
-    }
+    EXPECT_LE(withHooksNs, baselineNs + baselineNs / 100 + 5000000)
+        << "baseline=" << baselineNs << "ns disarmed-hooks=" << withHooksNs << "ns";
+}
+
+TEST_F(EmuCoreLoaderTest, StubDisarmedHooksDoNotCaptureOrMirrorVramPerFrame)
+{
+    ASSERT_TRUE(stubCorePluginBesideBinary());
+
+    QString err;
+    std::unique_ptr<EmuCore> core = EmuCoreLoader::loadCore(&err);
+    ASSERT_TRUE(core) << err.toStdString();
+
+    std::atomic<bool> armed{false};
+    CaptureBuffer buffer;
+    RipperHooks hooks;
+    hooks.setArmedFlag(&armed);
+    hooks.setBuffer(&buffer);
+    VramSnapshot vram;
+    hooks.setVram(&vram);
+    core->setHooks(&hooks);
+
+    QTemporaryFile bios(QDir::tempPath() + "/qtmesh_bios_XXXXXX.bin");
+    QTemporaryFile iso(QDir::tempPath() + "/qtmesh_iso_XXXXXX.bin");
+    ASSERT_TRUE(bios.open());
+    ASSERT_TRUE(iso.open());
+    bios.write(QByteArray(512 * 1024, '\0'));
+    iso.write("iso");
+    bios.close();
+    iso.close();
+    ASSERT_TRUE(core->loadBios(bios.fileName()));
+    ASSERT_TRUE(core->loadIso(iso.fileName()));
+    QString bootErr;
+    ASSERT_TRUE(core->boot(&bootErr)) << bootErr.toStdString();
+
+    for (int i = 0; i < 5; ++i)
+        core->runFrame();
+
+    EXPECT_TRUE(buffer.prims().isEmpty());
+    EXPECT_FALSE(vram.hasVisibleContent(8))
+        << "Disarmed runFrame must not mirror VRAM; use syncCaptureMirrors explicitly";
+
+    core->syncCaptureMirrors();
+    EXPECT_TRUE(vram.hasVisibleContent(8));
 }
 
 TEST_F(EmuCoreLoaderTest, StubArmedCaptureProducesPrimitives)
