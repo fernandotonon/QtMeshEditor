@@ -27,11 +27,18 @@ constexpr unsigned R3 = 15;
 class PsxJoypadState
 {
 public:
+    enum class Source {
+        Keyboard,
+        Gamepad,
+    };
+
     static constexpr unsigned kPortCount = 2;
     static constexpr unsigned kButtonCount = 16;
 
-    static void setPressed(unsigned port, unsigned buttonId, bool pressed);
+    static void setPressed(unsigned port, unsigned buttonId, bool pressed,
+                         Source source = Source::Keyboard);
     static void reset(unsigned port = 0);
+    static void resetSource(unsigned port, Source source);
     static void resetAll();
 };
 

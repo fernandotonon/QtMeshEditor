@@ -1,0 +1,180 @@
+// QtMeshEditor OpenVAT — Unreal Engine 5 Custom HLSL snippet
+// =================================================
+// HLSL for a Material's Custom node that plays back a Vertex Animation
+// Texture baked by `qtmesh vat` (or any sharpen3d/openvat-compatible
+// exporter).
+//
+// USAGE — Material setup
+// ----------------------
+// Unreal materials don't load `.usf` files directly the way Godot
+// loads `.gdshader`. Instead, build a Material in the Material Editor:
+//
+//   1. Open Content Browser → right-click → Materials & Textures →
+//      Material. Name it M_OpenVAT.
+//   2. In the Material editor, set:
+//      - Material Domain  = Surface
+//      - Blend Mode       = Opaque
+//      - Shading Model    = Default Lit
+//      - Tangent Space Normal = OFF (we provide world-space normals)
+//      - Used with Skeletal Mesh = OFF (VAT is for static meshes)
+//      - Used with Instanced Static Meshes = ON (typical use case)
+//
+//   3. Drop in a Custom node and paste the HLSL below.
+//
+//   4. Wire these inputs to the Custom node (the names must match
+//      exactly — the HLSL references them by identifier):
+//      - PosTex        → Texture2D (TextureSampleParameter2D, sRGB OFF)
+//      - UV2           → TextureCoordinate (Coordinate Index = 1)
+//      - LocalPosition → LocalPosition node (no offset — the bind-pose
+//                        object-space vertex coord)
+//      - CurrentFrame  → ScalarParameter "CurrentFrame"
+//      - FrameCount    → ScalarParameter "FrameCount"
+//      - BoundsMin     → VectorParameter "BoundsMin" (xyz from os-remap.Min)
+//      - BoundsMax     → VectorParameter "BoundsMax" (xyz from os-remap.Max)
+//
+//   5. Wire the Custom node's outputs straight into the Material's
+//      output pins — no extra subtraction needed; the Custom node
+//      already returns the delta:
+//      - WorldPositionOffset → Material "World Position Offset"
+//      - Normal              → Material "Normal"
+//
+//   6. Texture import settings on the position PNG:
+//      - Compression Settings  = TC_HDR (UserInterface2D also works)
+//      - sRGB                  = OFF
+//      - Mip Gen Settings      = NoMipmaps
+//      - Texture Group         = ColorLookupTable (no compression)
+//      - Filter                = Nearest
+//
+//   7. Drive CurrentFrame from a Blueprint with `Set Scalar Parameter
+//      Value on Material Instance Dynamic` every Tick:
+//        CurrentFrame = fmod(GameTime * fps, FrameCount)
+//
+// UV2 REQUIRED
+// ------------
+// The source mesh must have a second UV channel (UV1, the engine
+// counts from 0) carrying the per-vertex (col, base-row) into the
+// texture. QtMeshEditor's own bakes don't include UV2 by default;
+// either re-export from a tool that preserves it, or write a
+// Blueprint helper to build UV1 from VertexID using the math at the
+// bottom of this file.
+//
+// LICENSE
+// -------
+// MIT. Use freely.
+
+// === Custom node body ============================================
+// Returns a struct with:
+//   - WorldPositionOffset: DELTA from the bind-pose vertex (object
+//                          space). UE's "World Position Offset" input
+//                          expects a displacement, not an absolute
+//                          position — we subtract `LocalPosition`
+//                          inside this node so the user can wire the
+//                          output directly to the material graph
+//                          without extra arithmetic.
+//   - Normal:              world-space normal vector.
+//
+// Inputs (Custom node "Inputs" entries — names must match exactly):
+//   Texture2D     PosTex
+//   float2        UV2             ← see note below on the two flavors
+//   float3        LocalPosition   ← LocalPosition material node
+//   float         CurrentFrame
+//   float         FrameCount
+//   float3        BoundsMin
+//   float3        BoundsMax
+//   float         SynthesizedUV2  ← 1.0 = texelFetch path (integer UV2),
+//                                   0.0 = textureLod path (float UV2)
+//
+// SYNTHESIZED vs. AUTHORED UV2
+// ----------------------------
+// When QtMeshEditor's source.gltf goes through Unreal's static mesh
+// importer, UV2 is preserved as the proper [0,1] float UV — set
+// SynthesizedUV2 = 0.
+//
+// If your asset pipeline lost UV2 (or you imported via a path that
+// strips it), you can rebuild UV2 as packed integer pixel coords
+// via a Python editor script — see the snippet at the bottom of
+// this file. In that case set SynthesizedUV2 = 1 so the shader
+// uses texelFetch and avoids sampler-rounding glitches at the
+// half-texture boundary.
+
+// Required because UE's Custom node compiles a single expression by
+// default. We need a struct return — declare it here, return at the
+// bottom.
+struct VATResult {
+    float3 WorldPositionOffset;
+    float3 Normal;
+};
+
+VATResult result;
+
+int safeFrames = max((int)FrameCount, 1);
+int curr = ((int)floor(CurrentFrame)) % safeFrames;
+if (curr < 0) curr += safeFrames;
+int next = (curr + 1) % safeFrames;
+float blend = frac(CurrentFrame);
+
+float3 p_c, p_n, n_c, n_n;
+
+if (SynthesizedUV2 > 0.5) {
+    // texelFetch path — integer UV2 = (col, row_block).
+    int col = (int)UV2.x;
+    int row_block = (int)UV2.y;
+    int baseRow = row_block * safeFrames;
+    p_c = PosTex.Load(int3(col, baseRow + curr, 0)).rgb;
+    p_n = PosTex.Load(int3(col, baseRow + next, 0)).rgb;
+    n_c = PosTex.Load(int3(col, baseRow + safeFrames + curr, 0)).rgb;
+    n_n = PosTex.Load(int3(col, baseRow + safeFrames + next, 0)).rgb;
+} else {
+    // textureLod path — canonical openvat float UV.
+    uint texW, texH;
+    PosTex.GetDimensions(texW, texH);
+    float frame_step = 1.0 / (float)texH;
+    float2 uv_c = UV2 + float2(0.0, (float)curr * frame_step);
+    float2 uv_n = UV2 + float2(0.0, (float)next * frame_step);
+    p_c = PosTex.SampleLevel(PosTexSampler, uv_c, 0).rgb;
+    p_n = PosTex.SampleLevel(PosTexSampler, uv_n, 0).rgb;
+    n_c = PosTex.SampleLevel(PosTexSampler, uv_c + float2(0.0, -0.5), 0).rgb;
+    n_n = PosTex.SampleLevel(PosTexSampler, uv_n + float2(0.0, -0.5), 0).rgb;
+}
+
+float3 p = lerp(p_c, p_n, blend);
+float3 absolutePos = BoundsMin + p * (BoundsMax - BoundsMin);
+
+// WorldPositionOffset expects a DELTA from the bind pose. Subtract
+// `LocalPosition` (the bind-pose object-space coord, wired in by the
+// Material's `LocalPosition` node) to convert absolute → delta.
+result.WorldPositionOffset = absolutePos - LocalPosition;
+
+float3 n = lerp(n_c, n_n, blend) * 2.0 - 1.0;
+// Negate to compensate for QtMeshEditor's FBX → Ogre import path's
+// left-handed conversion. Remove the minus if your bake's normals
+// already render correctly.
+result.Normal = normalize(-n);
+
+return result;
+// === End custom node body ========================================
+
+
+// =============================================================
+// Blueprint helper — build UV1 on a Static Mesh at import time.
+// =============================================================
+//
+// UE5 doesn't expose a "set per-vertex UV channel" Blueprint node
+// for runtime static meshes — the supported path is to do this in
+// the Mesh Editor or via a Python editor script. If you're scripting
+// asset processing, a Python snippet using the unreal module:
+//
+//   import unreal
+//   mesh = unreal.load_asset('/Game/VAT/MyBakeMesh')
+//   # Iterate vertices; assign UV1 per the OpenVAT layout:
+//   #   col       = vid % width
+//   # row_block   = vid // width
+//   # last_row   = row_block * frame_count + frame_count - 1
+//   # tex_height = frame_count * 2  (packed)
+//   # u = (col + 0.5) / width
+//   # v = 1.0 - (last_row + 0.5) / tex_height
+//   # … then commit via mesh.set_editor_property and EditorAssetLibrary.
+//
+// In practice, the cleanest path is to author UV2 in the DCC tool
+// before export, OR to re-bake from Blender with the OpenVAT add-on
+// which writes the VAT_UV channel automatically.

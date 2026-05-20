@@ -42,6 +42,7 @@ THE SOFTWARE.
 #include <set>
 #include <limits>
 #include <cmath>
+#include <cctype>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -304,8 +305,16 @@ static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
             } else if (tusName == "emissive") {
                 aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_EMISSIVE, emissiveIdx));
                 ++emissiveIdx;
-            } else if (tusName == "diffuse_map" || tusName.empty()) {
-                // Legacy Phong diffuse, or unnamed TUS — route as DIFFUSE.
+            } else if (tusName == "diffuse_map"
+                       || tusName.empty()
+                       || std::all_of(tusName.begin(), tusName.end(),
+                                      [](unsigned char c) { return std::isdigit(c); })) {
+                // Legacy Phong diffuse, anonymous TUS, or a TUS auto-named
+                // by Ogre's .material script parser (texture_unit blocks
+                // without an explicit name get assigned "0", "1", ... at
+                // parse time). All three signal "this is a plain diffuse
+                // texture with no canonical PBR slot" — route as DIFFUSE
+                // so glTF / Phong consumers find a baseColorTexture.
                 aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
                 ++diffuseIdx;
             } else {
@@ -2812,11 +2821,38 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             }
 
             Assimp::Exporter exporter;
-            // DirectX .x is natively left-handed — Assimp's exporter
-            // handles the RH→LH conversion internally, so we must NOT
-            // apply ConvertToLeftHanded or the geometry gets double-flipped.
-            unsigned int exportFlags = (formatId == "x")
+            // glTF/GLB and DirectX (.x) are right-handed like Ogre — skip
+            // handedness conversion. For .x specifically, Assimp's exporter
+            // handles the RH→LH conversion internally, so applying
+            // ConvertToLeftHanded would double-flip the geometry. For glTF
+            // (also RH), ConvertToLeftHanded would flip the X axis AND
+            // reverse triangle winding, which silently breaks any consumer
+            // that pairs the export with a separately-computed vertex
+            // stream — e.g. the OpenVAT bake, whose texture columns are
+            // indexed by Ogre's original RH vertex order. Only apply LH
+            // conversion for formats that genuinely expect left-handed
+            // coords (the Assimp pose exporter has the same skip list).
+            bool rightHanded = (formatId == "x"
+                                || formatId == "gltf2"
+                                || formatId == "glb2");
+            unsigned int exportFlags = rightHanded
                 ? 0 : aiProcess_ConvertToLeftHanded;
+
+            // glTF spec mandates V=0 at the top-left of the texture
+            // (DirectX-style), while Ogre stores UVs as authored —
+            // typically with V=0 at the bottom (OpenGL-style). The
+            // import-time `aiProcess_ConvertToLeftHanded` was historically
+            // responsible for flipping V via its bundled FlipUVs step;
+            // dropping LH conversion above also drops that flip, leaving
+            // the exported glTF with Ogre's V values. Every glTF consumer
+            // (Godot, three.js, Blender) then V-flips on import, landing
+            // the texture upside-down relative to the bind pose. Restore
+            // the V flip explicitly for glTF/GLB so the round-trip
+            // remains correct — this is unrelated to handedness and the
+            // OpenVAT bake doesn't care about UV0 (the bake encodes
+            // positions + normals by column, not by UV lookup).
+            if (formatId == "gltf2" || formatId == "glb2")
+                exportFlags |= aiProcess_FlipUVs;
             aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
                                              file.filePath().toStdString().c_str(),
                                              exportFlags);

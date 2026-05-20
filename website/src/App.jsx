@@ -5,6 +5,7 @@ import ButtonLink from './components/ButtonLink';
 import CodePanel from './components/CodePanel';
 import FeatureCard from './components/FeatureCard';
 import Section from './components/Section';
+import VATDemo from './components/VATDemo';
 import useQtmeshActionRef from './hooks/useQtmeshActionRef';
 import {
   audienceCards,
@@ -493,6 +494,15 @@ function App() {
                 See animation workflow
               </ButtonLink>
             </div>
+          </Section>
+
+          <Section
+            id="vat-demo"
+            eyebrow="Live demo"
+            title="VAT export, running in your browser"
+            subtitle="A skeletal animation baked to a vertex animation texture and played back in Godot via a shader — no skeleton at runtime. Drag to orbit, scroll to zoom. Switch tabs to compare perf against per-instance skeletal skinning."
+          >
+            <VATDemo />
           </Section>
 
           <Section

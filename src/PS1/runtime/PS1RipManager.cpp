@@ -4,6 +4,7 @@
 #include "MeshTopologyHash.h"
 #include "PS1RipMeshBuilder.h"
 #include "PS1RipWorker.h"
+#include "PsxBiosValidator.h"
 #include "PsxDiscResolver.h"
 #include "SentryReporter.h"
 
@@ -198,12 +199,26 @@ bool PS1RipManager::loadBios(const QString &path)
         return false;
     }
 
+    const PsxBiosValidator::Fingerprint fp = PsxBiosValidator::fingerprintFile(info.absoluteFilePath());
+    if (!fp.readable) {
+        reportError(tr("BIOS file not found: %1").arg(path));
+        return false;
+    }
+    if (!fp.sizeOk) {
+        reportError(tr("BIOS must be exactly 512 KiB (524288 bytes)."));
+        return false;
+    }
+
     if (m_sessionActive)
         stop();
 
     m_biosPath = info.absoluteFilePath();
-    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-                                  QStringLiteral("ps1_bios:%1").arg(info.fileName()));
+    QString biosMsg = QStringLiteral("file=%1 sha256=%2").arg(info.fileName(), fp.sha256Hex);
+    if (!fp.knownLabel.isEmpty())
+        biosMsg += QStringLiteral(" known=%1").arg(fp.knownLabel);
+    else if (fp.sizeOk)
+        biosMsg += QStringLiteral(" known=unknown");
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.bios.load"), biosMsg);
     syncWorkerSession();
     return true;
 }
@@ -227,10 +242,33 @@ bool PS1RipManager::loadIso(const QString &path)
     }
 
     m_isoPath = disc.loadPath;
-    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
-                                  QStringLiteral("ps1_disc:%1").arg(QFileInfo(m_isoPath).fileName()));
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.iso.load"),
+                                  QStringLiteral("file=%1").arg(QFileInfo(absolute).fileName()));
     syncWorkerSession();
     return true;
+}
+
+bool PS1RipManager::reloadIso()
+{
+    if (m_isoPath.isEmpty()) {
+        reportError(tr("No disc image loaded"));
+        return false;
+    }
+
+    const bool resume = m_sessionActive || m_startPending;
+    const QString path = m_isoPath;
+
+    if (resume) {
+        connect(this, &PS1RipManager::sessionStopped, this,
+                [this, path]() {
+                    if (loadIso(path))
+                        start();
+                },
+                Qt::SingleShotConnection);
+        return stop();
+    }
+
+    return loadIso(path);
 }
 
 bool PS1RipManager::start()

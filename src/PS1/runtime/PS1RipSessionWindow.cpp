@@ -1,7 +1,10 @@
 #include "PS1RipSessionWindow.h"
 #include "EmuViewport.h"
+#include "PS1RipGamepadBridge.h"
+#include "PS1RipInputSettingsDialog.h"
 #include "PS1RipLegalityDialog.h"
 #include "PS1RipManager.h"
+#include "PsxJoypadBindings.h"
 #include "SentryReporter.h"
 #include "PsxJoypadState.h"
 #include "VramViewerWidget.h"
@@ -13,6 +16,8 @@
 #include <QDateTime>
 #include <QDockWidget>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QMenu>
 #include <QTimer>
 #include <QLabel>
 #include <QMessageBox>
@@ -21,6 +26,7 @@
 #include <QCheckBox>
 #include <QMenuBar>
 #include <QToolBar>
+#include <QToolButton>
 
 namespace {
 constexpr auto kSettingsGroup = "ps1Rip";
@@ -41,8 +47,12 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     : QMainWindow(parent)
     , m_manager(PS1RipManager::getSingleton())
 {
+    PsxJoypadBindings::load();
+
     setWindowTitle(tr("PS1 Runtime Ripper"));
     resize(960, 720);
+
+    m_gamepadBridge = new PS1RipGamepadBridge(this);
 
     m_viewport = new EmuViewport(this);
     setCentralWidget(m_viewport);
@@ -82,6 +92,9 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
                                        : QStringLiteral("ps1_rip_viewport_bilinear_off"));
     });
 
+    auto *inputMenu = menuBar()->addMenu(tr("Input"));
+    inputMenu->addAction(tr("Keyboard mapping…"), this, &PS1RipSessionWindow::onOpenInputSettings);
+
     auto *aspect43Act = viewMenu->addAction(tr("4:3 display aspect (NTSC/PAL)"));
     aspect43Act->setCheckable(true);
     aspect43Act->setChecked(m_viewport->aspectMode() == EmuViewport::AspectMode::Display43);
@@ -99,8 +112,21 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
 
     auto *biosAct = toolbar->addAction(tr("Load BIOS…"));
     connect(biosAct, &QAction::triggered, this, &PS1RipSessionWindow::pickBios);
-    auto *isoAct = toolbar->addAction(tr("Load ISO…"));
-    connect(isoAct, &QAction::triggered, this, &PS1RipSessionWindow::pickIso);
+
+    auto *isoMenuBtn = new QToolButton(this);
+    isoMenuBtn->setText(tr("Load ISO…"));
+    isoMenuBtn->setPopupMode(QToolButton::MenuButtonPopup);
+    auto *isoMenu = new QMenu(isoMenuBtn);
+    auto *browseAct = isoMenu->addAction(tr("Browse…"), this, &PS1RipSessionWindow::pickIso);
+    isoMenuBtn->setDefaultAction(browseAct);
+    m_recentIsoMenu = isoMenu->addMenu(tr("Recent"));
+    rebuildRecentIsoMenu();
+    isoMenuBtn->setMenu(isoMenu);
+    toolbar->addWidget(isoMenuBtn);
+
+    auto *reloadIsoAct = toolbar->addAction(tr("Reload ISO"));
+    reloadIsoAct->setToolTip(tr("Reload the current disc image"));
+    connect(reloadIsoAct, &QAction::triggered, this, &PS1RipSessionWindow::onReloadIso);
     toolbar->addSeparator();
     auto *startAct = toolbar->addAction(tr("Start"));
     connect(startAct, &QAction::triggered, this, &PS1RipSessionWindow::onStart);
@@ -148,14 +174,18 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     statusBar()->addPermanentWidget(m_statusLabel);
 
     connect(m_manager, &PS1RipManager::framePresented, this, &PS1RipSessionWindow::onFrame);
+    connect(m_manager, &PS1RipManager::pausedChanged, this, &PS1RipSessionWindow::onPausedChanged);
     connect(m_manager, &PS1RipManager::sessionStarted, this, [this](const QString &coreId) {
         if (m_viewport) {
             m_viewport->setFocus(Qt::OtherFocusReason);
             m_viewport->grabKeyboard();
         }
         if (coreId == QStringLiteral("libretro")) {
+            const QString padHint = m_gamepadBridge && m_gamepadBridge->isActive()
+                                        ? tr(" · gamepad connected")
+                                        : QString();
             m_statusLabel->setText(
-                tr("Running — click viewport: arrows, X/Enter=✕, Z/○=back, P=Start, Tab=Select"));
+                tr("Running — Z/X=○/✕, arrows=D-pad, Enter/Shift=Start/Select%1").arg(padHint));
         } else if (coreId == QStringLiteral("stub"))
             m_statusLabel->setText(tr("Running (stub — test pattern only)"));
         else
@@ -244,13 +274,46 @@ void PS1RipSessionWindow::pickIso()
         dialogParent, tr("Select PS1 disc image"), QString(),
         tr("Disc images (*.cue *.chd *.pbp *.iso *.img *.bin *.exe);;All files (*)"),
         nullptr, QFileDialog::DontUseNativeDialog);
-    if (path.isEmpty())
-        return;
+    if (!path.isEmpty())
+        applyIsoPath(path);
+}
 
+void PS1RipSessionWindow::openRecentIso()
+{
+    const auto *action = qobject_cast<const QAction *>(sender());
+    if (!action)
+        return;
+    const QString path = action->data().toString();
+    if (!path.isEmpty())
+        applyIsoPath(path);
+}
+
+void PS1RipSessionWindow::applyIsoPath(const QString &path)
+{
     if (m_manager->loadIso(path)) {
         addRecentIso(path);
+        rebuildRecentIsoMenu();
         m_statusLabel->setText(tr("ISO: %1").arg(path));
     }
+}
+
+void PS1RipSessionWindow::onReloadIso()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("ps1_rip_reload_iso"));
+    if (m_manager->reloadIso())
+        m_statusLabel->setText(tr("ISO reloaded: %1").arg(m_manager->isoPath()));
+}
+
+void PS1RipSessionWindow::onOpenInputSettings()
+{
+    PS1RipInputSettingsDialog dialog(this);
+    dialog.exec();
+}
+
+void PS1RipSessionWindow::onPausedChanged(bool paused)
+{
+    if (paused)
+        m_statusLabel->setText(tr("Paused — FPS frozen"));
 }
 
 void PS1RipSessionWindow::onStart()
@@ -353,4 +416,27 @@ void PS1RipSessionWindow::addRecentIso(const QString &path)
     while (recent.size() > 5)
         recent.removeLast();
     QSettings().setValue(key, recent);
+}
+
+void PS1RipSessionWindow::rebuildRecentIsoMenu()
+{
+    if (!m_recentIsoMenu)
+        return;
+
+    m_recentIsoMenu->clear();
+    const QString key = QString::fromLatin1(kSettingsGroup) + QLatin1Char('/') + QString::fromLatin1(kRecentIsoKey);
+    const QStringList recent = QSettings().value(key).toStringList();
+    if (recent.isEmpty()) {
+        auto *empty = m_recentIsoMenu->addAction(tr("(none)"));
+        empty->setEnabled(false);
+        return;
+    }
+
+    for (const QString &path : recent) {
+        const QFileInfo info(path);
+        auto *act = m_recentIsoMenu->addAction(info.fileName());
+        act->setToolTip(path);
+        act->setData(path);
+        connect(act, &QAction::triggered, this, &PS1RipSessionWindow::openRecentIso);
+    }
 }

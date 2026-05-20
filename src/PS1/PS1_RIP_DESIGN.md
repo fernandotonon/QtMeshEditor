@@ -61,7 +61,7 @@ See epic #412 for phased issues (#413–#431).
 - **Libretro host** `plugins/ps1core_libretro/` loads `mednafen_psx_libretro` / `beetle_psx_*` from `PS1Cores/`, system paths, or `QTMESH_PS1_LIBRETRO_CORE`. Runs a real ISO when BIOS + disc image are set.
 - Stub plugin `plugins/ps1core_stub/` remains for CI (test pattern + synthetic capture).
 - `PS1RipSessionWindow` + `EmuViewport` (#416): software framebuffer via `QPainter`, integer-scale and bilinear toggles (View menu), 4:3 NTSC/PAL letterbox mode, FPS overlay, frame pacing tied to `runFrame()` completion (~16 ms target). Hosted in a temporary session window from *Tools → Experimental → PS1 Runtime Ripper…* until #425 dock lands.
-- Legality dialog + BIOS/ISO + keyboard/gamepad (#417) — controller mapping beyond keyboard/mouse still TODO.
+- Legality dialog + BIOS/ISO + keyboard/gamepad (#417): first-run acknowledgement (`ps1Rip/acknowledged`), BIOS SHA-256 fingerprint logged (not enforced), ISO picker with recent list (last 5), **Reload ISO** transport, configurable keyboard mapping (`Input → Keyboard mapping…`), Qt Gamepad for controller 1 when `Qt6::Gamepad` is available.
 - Install helper: `scripts/install-ps1-libretro-core.sh` copies a distro libretro core into `build/bin/PS1Cores/`.
 
 ## Phase 2 status
@@ -134,4 +134,3 @@ export QTMESH_PS1_TEST_ISO=/path/game.cue
 ## Open questions
 
 - libretro core packaging for Windows/macOS CI (Linux: apt `libretro-beetle-psx` + install script).
-- BIOS / ISO first-run legality dialog copy (#417) — requires legal review before release.
