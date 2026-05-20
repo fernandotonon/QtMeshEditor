@@ -133,15 +133,23 @@ func _load_bake() -> bool:
 
 
 func _ensure_uv2_on_mesh(tex_height: int, tex_width: int) -> void:
-	# `tex_width` is the bake texture's width — i.e., the number of
-	# columns the baker laid out per row. For single-row bakes this
-	# equals the total vertex count across ALL submeshes; the
-	# per-vertex column comes from the GLOBAL vertex index (sum of
-	# preceding submesh sizes + position-in-submesh), NOT the
-	# per-submesh index. Treating each submesh as starting at column
-	# 0 would re-decode the first N columns of the texture as every
-	# submesh's verts → "egg of triangles" silhouette where every
-	# submesh occupies the same column range.
+	# UV2 encodes integer (column, row_block) per vertex, NOT a true UV.
+	# The shader uses `texelFetch` with explicit pixel coordinates, so
+	# there's no floating-point boundary on which row a given frame
+	# samples — every frame lands inside a single texel by construction.
+	#
+	#   UV2.x = global_vid % tex_width      (texture column)
+	#   UV2.y = global_vid / tex_width      (row-block index; always 0
+	#                                        for single-row bakes)
+	#
+	# This is different from the canonical OpenVAT shader, which uses
+	# proper [0,1] UVs + textureLod. That sampler-based path glitches
+	# at half-pixel boundaries when frame_count exactly bisects the
+	# texture height (our 71-frame × 142-row layout puts frame 0 on
+	# the V=0.5035 boundary, where filter_nearest rounding is hardware-
+	# dependent — half-up on Apple Silicon Metal lands a position
+	# sample in the normal half = "egg of triangles" silhouette).
+	# texelFetch sidesteps the issue entirely.
 	if mesh == null or _frame_count <= 0 or tex_width <= 0: return
 	var rebuilt := ArrayMesh.new()
 	var any_synth := false
@@ -158,18 +166,11 @@ func _ensure_uv2_on_mesh(tex_height: int, tex_width: int) -> void:
 			any_synth = true
 			var uv2 := PackedVector2Array()
 			uv2.resize(positions.size())
-			var hpx := 0.5 / float(tex_width)
-			var hpy := 0.5 / float(tex_height)
 			for j in range(positions.size()):
-				# Single-row layout: row_block always 0 because
-				# tex_width == total vertex count. UV2 points at the
-				# last position row so `+frame*step` walks up.
 				var global_vid := running_offset + j
 				var col := global_vid % tex_width
-				var last_row := _frame_count - 1
-				uv2[j] = Vector2(
-					float(col) / float(tex_width) + hpx,
-					1.0 - float(last_row) / float(tex_height) - hpy)
+				var row_block := global_vid / tex_width
+				uv2[j] = Vector2(float(col), float(row_block))
 			arrays[Mesh.ARRAY_TEX_UV2] = uv2
 		rebuilt.add_surface_from_arrays(prim, arrays)
 		if src_mat != null:
@@ -204,25 +205,36 @@ uniform vec3 base_color : source_color = vec3(0.85, 0.78, 0.65);
 varying vec2 uv0_pass;
 
 void vertex() {
-	int safe_frames = max(frame_count, 1);
-	int curr = int(floor(current_frame)) % safe_frames;
-	if (curr < 0) curr += safe_frames;
-	int next = (curr + 1) % safe_frames;
+	// UV2 holds INTEGER (column, row_block) per vertex — not a true UV.
+	// VATInstance._ensure_uv2_on_mesh packs them as floats but treats
+	// them as integers in here. The shader uses `texelFetch` with
+	// explicit pixel coordinates, sidestepping the half-pixel boundary
+	// glitches that broke the UV-based sampler path.
+	int col = int(UV2.x);
+	int row_block = int(UV2.y);
+	int N = max(frame_count, 1);
+
+	int curr = int(floor(current_frame));
+	curr = ((curr % N) + N) % N;
+	int next = (curr + 1) % N;
 	float blend = fract(current_frame);
 
-	vec2 tex_size = vec2(textureSize(pos_tex, 0));
-	float frame_step = 1.0 / tex_size.y;
-	vec2 uv_c = UV2 + vec2(0.0, float(curr) * frame_step);
-	vec2 uv_n = UV2 + vec2(0.0, float(next) * frame_step);
-
-	vec3 p_c = textureLod(pos_tex, uv_c, 0.0).rgb;
-	vec3 p_n = textureLod(pos_tex, uv_n, 0.0).rgb;
-	vec3 p = mix(p_c, p_n, blend);
+	// Position rows live at pixel rows [row_block*N .. row_block*N+N-1]
+	// in the top half of the texture. Pixel row 0 = top in image
+	// space = bottom in OpenGL/Godot bottom-up V space → texelFetch
+	// reads rows top-down from row 0, so frame `f` of a vertex in
+	// row_block `b` is at pixel row `b*N + f`.
+	int base_row = row_block * N;
+	vec3 p_curr = texelFetch(pos_tex, ivec2(col, base_row + curr), 0).rgb;
+	vec3 p_next = texelFetch(pos_tex, ivec2(col, base_row + next), 0).rgb;
+	vec3 p = mix(p_curr, p_next, blend);
 	VERTEX = bounds_min + p * (bounds_max - bounds_min);
 
-	vec3 n_c = textureLod(pos_tex, uv_c + vec2(0.0, -0.5), 0.0).rgb;
-	vec3 n_n = textureLod(pos_tex, uv_n + vec2(0.0, -0.5), 0.0).rgb;
-	vec3 n = mix(n_c, n_n, blend) * 2.0 - 1.0;
+	// Normals live in the BOTTOM half of the texture, rows [N..2N-1]
+	// (or row_block*N + N + frame for tile layouts).
+	vec3 n_curr = texelFetch(pos_tex, ivec2(col, base_row + N + curr), 0).rgb;
+	vec3 n_next = texelFetch(pos_tex, ivec2(col, base_row + N + next), 0).rgb;
+	vec3 n = mix(n_curr, n_next, blend) * 2.0 - 1.0;
 	NORMAL = -normalize(n);
 
 	uv0_pass = UV;

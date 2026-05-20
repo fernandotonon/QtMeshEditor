@@ -38,12 +38,19 @@
 
 Shader "Hidden/QTM/VAT" {
     Properties {
-        _PosTex       ("Packed Position+Normal Texture", 2D) = "white" {}
-        _CurrentFrame ("Current Frame",  Float) = 0
-        _FrameCount   ("Frame Count",    Int)   = 1
-        _BoundsMin    ("Bounds Min",     Vector) = (0,0,0,0)
-        _BoundsMax    ("Bounds Max",     Vector) = (1,1,1,0)
-        _BaseColor    ("Base Color",     Color)  = (0.85, 0.78, 0.65, 1)
+        _PosTex         ("Packed Position+Normal Texture", 2D) = "white" {}
+        _CurrentFrame   ("Current Frame",  Float) = 0
+        _FrameCount     ("Frame Count",    Int)   = 1
+        _BoundsMin      ("Bounds Min",     Vector) = (0,0,0,0)
+        _BoundsMax      ("Bounds Max",     Vector) = (1,1,1,0)
+        _BaseColor      ("Base Color",     Color)  = (0.85, 0.78, 0.65, 1)
+        // 1 → UV2 is packed integer (col, row_block) pixel coords →
+        //     texelFetch path. Use this when GDScript/C# synthesizes
+        //     UV2 because the imported mesh lacked it.
+        // 0 → UV2 is [0,1] float UV → textureLod path (canonical
+        //     openvat reference shader behavior).
+        // See header comment for the math.
+        [Toggle] _SynthesizedUV2 ("Synthesized integer UV2", Float) = 0
     }
 
     SubShader {
@@ -73,6 +80,7 @@ Shader "Hidden/QTM/VAT" {
             float4 _BoundsMin;
             float4 _BoundsMax;
             float4 _BaseColor;
+            float  _SynthesizedUV2;
 
             struct appdata {
                 float4 vertex   : POSITION;
@@ -89,37 +97,46 @@ Shader "Hidden/QTM/VAT" {
             };
 
             v2f vert(appdata IN) {
-                // UV2 holds per-vertex (col, base-row) into the texture
-                // — see `tools/vat-shaders/openvat.gdshader` header for
-                // the layout reference.
                 int safeFrames = max(_FrameCount, 1);
                 int curr = ((int)floor(_CurrentFrame)) % safeFrames;
                 if (curr < 0) curr += safeFrames;
                 int next = (curr + 1) % safeFrames;
                 float blend = frac(_CurrentFrame);
 
-                uint w, h;
-                _PosTex.GetDimensions(w, h);
-                float frame_step = 1.0 / (float)h;
-                float2 uv_c = IN.uv2 + float2(0.0, (float)curr * frame_step);
-                float2 uv_n = IN.uv2 + float2(0.0, (float)next * frame_step);
+                float3 p_curr, p_next, n_curr, n_next;
 
-                // Position: top half. Decode normalized [0,1] back to
-                // world coords via Min/Max.
-                float3 p_c = _PosTex.SampleLevel(sampler_PosTex, uv_c, 0).rgb;
-                float3 p_n = _PosTex.SampleLevel(sampler_PosTex, uv_n, 0).rgb;
-                float3 p = lerp(p_c, p_n, blend);
+                if (_SynthesizedUV2 > 0.5) {
+                    // texelFetch path: UV2 = (col, row_block) integers.
+                    // Bypasses sampler-rounding glitches at the half-
+                    // texture boundary when frame_count exactly bisects
+                    // tex_height (e.g. our 71-frame × 142-row bake).
+                    int col = (int)IN.uv2.x;
+                    int row_block = (int)IN.uv2.y;
+                    int baseRow = row_block * safeFrames;
+                    p_curr = _PosTex.Load(int3(col, baseRow + curr, 0)).rgb;
+                    p_next = _PosTex.Load(int3(col, baseRow + next, 0)).rgb;
+                    n_curr = _PosTex.Load(int3(col, baseRow + safeFrames + curr, 0)).rgb;
+                    n_next = _PosTex.Load(int3(col, baseRow + safeFrames + next, 0)).rgb;
+                } else {
+                    // textureLod path: canonical openvat float UV.
+                    uint w, h;
+                    _PosTex.GetDimensions(w, h);
+                    float frame_step = 1.0 / (float)h;
+                    float2 uv_c = IN.uv2 + float2(0.0, (float)curr * frame_step);
+                    float2 uv_n = IN.uv2 + float2(0.0, (float)next * frame_step);
+                    p_curr = _PosTex.SampleLevel(sampler_PosTex, uv_c, 0).rgb;
+                    p_next = _PosTex.SampleLevel(sampler_PosTex, uv_n, 0).rgb;
+                    n_curr = _PosTex.SampleLevel(sampler_PosTex, uv_c + float2(0.0, -0.5), 0).rgb;
+                    n_next = _PosTex.SampleLevel(sampler_PosTex, uv_n + float2(0.0, -0.5), 0).rgb;
+                }
+
+                float3 p = lerp(p_curr, p_next, blend);
                 float3 modelVertex = _BoundsMin.xyz + p * (_BoundsMax.xyz - _BoundsMin.xyz);
 
                 v2f OUT;
                 OUT.pos = UnityObjectToClipPos(float4(modelVertex, 1.0));
 
-                // Normal: lower half, shifted down 0.5 in UV V space.
-                float2 uv_cn = uv_c + float2(0.0, -0.5);
-                float2 uv_nn = uv_n + float2(0.0, -0.5);
-                float3 n_c = _PosTex.SampleLevel(sampler_PosTex, uv_cn, 0).rgb;
-                float3 n_n = _PosTex.SampleLevel(sampler_PosTex, uv_nn, 0).rgb;
-                float3 n = lerp(n_c, n_n, blend) * 2.0 - 1.0;
+                float3 n = lerp(n_curr, n_next, blend) * 2.0 - 1.0;
                 // Negate to compensate for QtMeshEditor's FBX → Ogre
                 // import path; remove if your bake's normals look
                 // correct without it.
@@ -149,27 +166,20 @@ Shader "Hidden/QTM/VAT" {
 // =============================================================
 //
 // Drop this into a MonoBehaviour or editor script that runs after
-// the mesh is imported. The math matches Blender OpenVAT's
-// core.py:create_uv_map exactly.
+// the mesh is imported. UV2 is packed as INTEGER (col, row_block)
+// pixel coords — set the material's `_SynthesizedUV2` toggle ON so
+// the shader uses the texelFetch path.
 //
 // using UnityEngine;
 //
 // public static class VATMeshHelper {
-//     public static void EnsureUV2(Mesh mesh, int width, int frameCount) {
+//     public static void EnsureUV2(Mesh mesh, int width) {
 //         if (mesh.uv2 != null && mesh.uv2.Length == mesh.vertexCount) return;
-//         int tex_height = frameCount * 2;  // packed
-//         float hpx = 0.5f / width;
-//         float hpy = 0.5f / tex_height;
 //         Vector2[] uv2 = new Vector2[mesh.vertexCount];
 //         for (int j = 0; j < mesh.vertexCount; j++) {
 //             int col = j % width;
 //             int row_block = j / width;
-//             // Point at the LAST pixel row of the position block, so
-//             // `+ frame * frame_step` walks UP through the strip.
-//             int last = row_block * frameCount + frameCount - 1;
-//             uv2[j] = new Vector2(
-//                 (float)col / width + hpx,
-//                 1.0f - (float)last / tex_height - hpy);
+//             uv2[j] = new Vector2(col, row_block);
 //         }
 //         mesh.uv2 = uv2;
 //         mesh.UploadMeshData(false);

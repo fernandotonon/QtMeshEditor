@@ -320,18 +320,22 @@ func _load_bake() -> bool:
 			"Re-export from Blender with the JSON sidecar (remap_info) for correct scale.")
 			% bake_dir)
 
+	# Synthesize UV2 BEFORE building materials so we know whether the
+	# shader should run the integer-texelFetch path (UV2 holds packed
+	# pixel coords) or the textureLod path (UV2 is a proper [0,1] UV
+	# authored by Blender's openvat add-on). The two paths are
+	# fundamentally different and need different shader code.
+	var synthesized_uv2: bool = _ensure_uv2_on_mesh(pos_tex.get_height())
+
 	var shader := Shader.new()
 	shader.code = _builtin_shader_code()
 
-	# UV-V shift for the normal sample, in UV units:
-	#   - Separate mode: nrm_tex is its own texture, no shift needed.
+	# UV-V shift for the normal sample (textureLod path only — the
+	# texelFetch path computes pixel-row offsets directly):
+	#   - Separate mode: nrm_tex is its own texture, no shift.
 	#   - Packed mode:   UV2 points at the last row of the position
-	#                    half (pixel row N-1). The normal half lives
-	#                    at pixel rows [N..2N-1], so we shift V DOWN
-	#                    by 0.5 (one full half of the texture) to land
-	#                    in the normal half. Canonical OpenVAT puts
-	#                    normals in the upper UV half (+0.5); ours
-	#                    puts them in the lower UV half (-0.5).
+	#                    half (pixel row N-1). Normal half is at
+	#                    pixel rows [N..2N-1], so shift V by -0.5.
 	var nrm_uv_shift: float = 0.0
 	if packed:
 		nrm_uv_shift = -0.5
@@ -340,8 +344,7 @@ func _load_bake() -> bool:
 	# typically 5–15 submeshes — body / hair / clothing parts) draw
 	# each surface separately. Each surface gets its own material
 	# with the same texture binding — vertex addressing comes from
-	# UV2 (synthesized in `_ensure_uv2_on_mesh` when not present),
-	# not VERTEX_ID, so no per-surface vertex_offset is needed.
+	# UV2, not VERTEX_ID, so no per-surface vertex_offset is needed.
 	_surface_materials.clear()
 	var running_offset := 0
 	for i in range(mesh.get_surface_count()):
@@ -357,6 +360,7 @@ func _load_bake() -> bool:
 			mat.set_shader_parameter("nrm_tex", pos_tex)
 		mat.set_shader_parameter("separate_normals", not packed)
 		mat.set_shader_parameter("nrm_uv_shift", nrm_uv_shift)
+		mat.set_shader_parameter("synthesized_uv2", synthesized_uv2)
 		mat.set_shader_parameter("frame_count", _frame_count)
 		mat.set_shader_parameter("bounds_min", _bounds_min)
 		mat.set_shader_parameter("bounds_max", _bounds_max)
@@ -382,15 +386,6 @@ func _load_bake() -> bool:
 		var surface_verts: int = (mesh.surface_get_arrays(i)[Mesh.ARRAY_VERTEX]
 			as PackedVector3Array).size()
 		running_offset += surface_verts
-
-	# OpenVAT's "Use Single Row OFF" / tile layout requires UV2 — each
-	# vertex's UV2 carries its (col, base_row) into the texture, which
-	# the shader then offsets by current_frame. For QtMeshEditor's
-	# single-row bakes the mesh typically doesn't carry UV2, so we
-	# synthesize one from VERTEX_ID (col = vertex_id mod width, row =
-	# (vertex_id / width) * frames) to keep the shader path uniform.
-	# Bakes that already have UV2 (Blender-sourced OpenVAT) keep theirs.
-	_ensure_uv2_on_mesh(pos_tex.get_height())
 
 	# Override the MeshInstance3D's culling AABB to the bake bounds.
 	# By default Godot culls based on the mesh's static bind-pose AABB;
@@ -442,15 +437,18 @@ func _load_data_texture(path: String) -> Texture2D:
 ## glTF doesn't carry UV2. We synthesize one from the bake's known
 ## dimensions and the per-surface vertex offset so the shader path
 ## stays uniform across both bake sources.
-func _ensure_uv2_on_mesh(tex_height: int) -> void:
+func _ensure_uv2_on_mesh(tex_height: int) -> bool:
+	# Returns true if we synthesized UV2 (caller should use the
+	# texelFetch shader path), false if the mesh already had authored
+	# UV2 (caller should use the textureLod shader path).
 	if mesh == null:
-		return
+		return false
 	# Bake textures vary in height: separate mode = `frame_count`,
 	# packed mode = `frame_count * 2`. Either way the per-vertex UV2
 	# math uses the full pixel height of the position texture.
 	var width: int = _vertex_count
 	if width <= 0 or tex_height <= 0 or _frame_count <= 0:
-		return
+		return false
 
 	var rebuilt := ArrayMesh.new()
 	var running_offset := 0
@@ -468,31 +466,26 @@ func _ensure_uv2_on_mesh(tex_height: int) -> void:
 			any_synthesized = true
 			var uv2 := PackedVector2Array()
 			uv2.resize(positions.size())
-			var half_px_x: float = 0.5 / float(width)
-			var half_px_y: float = 0.5 / float(tex_height)
+			# For synthesized UV2 we pack INTEGER (column, row_block)
+			# pixel coords — not a proper [0,1] UV. The shader paired
+			# with this branch (set via `synthesized_uv2 = true` below)
+			# uses `texelFetch` with explicit pixel coordinates, which
+			# sidesteps the half-pixel boundary glitch that bit our
+			# single-row 71-frame × 142-row Rumba bake (V=0.5035 lands
+			# exactly between the last position row and the first
+			# normal row; filter_nearest rounding picks whichever way
+			# the hardware feels like, producing the "egg of triangles"
+			# silhouette on Apple Silicon Metal).
+			#
+			# Authored UV2 (Blender openvat add-on) is in proper
+			# [0,1] UV space — that path uses textureLod sampling and
+			# works because Blender's tile layout doesn't put frame 0
+			# on a bisecting boundary.
 			for j in range(positions.size()):
 				var global_vid: int = running_offset + j
 				var col: int = global_vid % width
 				var row_block: int = global_vid / width
-				# Match OpenVAT's `core.py:create_uv_map` layout: frame 0
-				# lives at the LAST pixel row of each vertex's row-block,
-				# advancing frames walks UPWARD in pixel space (and so
-				# UPWARD in UV V too, since Godot's V is bottom-up).
-				# QtMeshEditor's packed bake actually writes positions
-				# to rows [0..N-1] and normals to [N..2N-1] (top-half /
-				# bottom-half in pixel space), so we point UV2 at the
-				# LAST row of the position half and let `+frame*step`
-				# walk up through it.
-				#   uv_y = 1.0 - (base_row + N - 1 + 0.5) / tex_height
-				#        = 1.0 - (base_row + N - 0.5) / tex_height
-				# row_block is always 0 for single-row bakes, so for
-				# our packed output this lands UV2 at the V of the
-				# last position row (immediately above the normal half).
-				var base_row: int = row_block * _frame_count
-				var last_frame_row: int = base_row + _frame_count - 1
-				var uv_x: float = float(col) / float(width) + half_px_x
-				var uv_y: float = 1.0 - float(last_frame_row) / float(tex_height) - half_px_y
-				uv2[j] = Vector2(uv_x, uv_y)
+				uv2[j] = Vector2(float(col), float(row_block))
 			arrays[Mesh.ARRAY_TEX_UV2] = uv2
 
 		rebuilt.add_surface_from_arrays(prim, arrays)
@@ -503,13 +496,7 @@ func _ensure_uv2_on_mesh(tex_height: int) -> void:
 	if any_synthesized:
 		print("VATPlayer: synthesized UV2 for VAT addressing (no UV2 on imported mesh)")
 		mesh = rebuilt
-		# Re-apply the per-surface materials we just created since the
-		# mesh resource was replaced. set_surface_override_material
-		# keys off surface index so the prior bindings would still be
-		# valid, but the new mesh's surface count is identical so this
-		# is defensive only.
-		for k in range(_surface_materials.size()):
-			set_surface_override_material(k, _surface_materials[k])
+	return any_synthesized
 
 
 func _process(delta: float) -> void:
@@ -568,14 +555,22 @@ uniform sampler2D nrm_tex : filter_nearest, repeat_disable, hint_default_white;
 uniform sampler2D albedo_tex : filter_linear_mipmap, repeat_enable, source_color;
 uniform bool has_albedo_tex = false;
 uniform bool separate_normals = false;
+// True when GDScript synthesized UV2 as packed INTEGER pixel coords
+// (column, row_block) — see VATPlayer._ensure_uv2_on_mesh. The shader
+// then uses `texelFetch` with explicit pixel addressing, avoiding the
+// half-pixel sampler-rounding glitch that bisecting frame counts
+// (e.g. 71 frames in a 142-tall texture) trip on Apple Silicon Metal.
+// False = UV2 is a proper [0,1] UV authored by Blender's openvat
+// add-on; the textureLod path applies.
+uniform bool synthesized_uv2 = false;
 
 uniform float current_frame = 0.0;
 uniform int frame_count = 1;
-// Vertical UV shift (in UV units) to land the normal sample in the
-// right half of a packed-normals texture. -0.5 for QtMeshEditor's
-// packed bake (normals BELOW positions in pixel space ⇒ -0.5 in
-// bottom-up UV); 0.0 for separate-normals mode (nrm_tex is its own
-// texture). Set by the GDScript at material creation.
+// Vertical UV shift (in UV units) for the textureLod path's normal
+// sample. -0.5 for QtMeshEditor's packed bake (normals BELOW positions
+// in pixel space ⇒ -0.5 in bottom-up UV); 0.0 for separate-normals
+// mode (nrm_tex is its own texture). Ignored on the texelFetch path
+// which computes pixel-row offsets directly.
 uniform float nrm_uv_shift = 0.0;
 uniform vec3 bounds_min = vec3(0.0);
 uniform vec3 bounds_max = vec3(1.0);
@@ -584,66 +579,61 @@ uniform vec3 base_color : source_color = vec3(0.85, 0.78, 0.65);
 varying vec2 uv0_pass;
 
 void vertex() {
-	// UV2 is the OpenVAT-baked addressing UV: each vertex's UV2 points
-	// at the column and base-row of its row strip in the position
-	// texture (Blender add-on `core.py:create_uv_map`). Bakes that
-	// don't carry UV2 (e.g. QtMeshEditor's own single-row bakes) get
-	// it synthesized at load time in VATPlayer._ensure_uv2_on_mesh.
-	//
-	// Manual integer-row arithmetic — we split current_frame into
-	// integer (curr/next) and fractional (blend) parts and sample
-	// both rows directly, mixing in the shader. Avoids sampler
-	// nearest-rounding ambiguity at the half-texture boundary in
-	// packed mode (boundary frame slipping into the normal half →
-	// one-frame blob/glitch).
 	int safe_frame_count = max(frame_count, 1);
 	int curr_frame = int(floor(current_frame)) % safe_frame_count;
 	if (curr_frame < 0) curr_frame += safe_frame_count;
 	int next_frame = (curr_frame + 1) % safe_frame_count;
 	float blend = fract(current_frame);
 
-	// `frame_step` = one row in UV space. We ADD it scaled by frame
-	// index to walk through the bake's row strip — matches the
-	// sharpen3d/openvat reference shader (`current_offset_uv = UV2 +
-	// vec2(0, frame * frame_step)`). The Blender add-on writes UV2
-	// in a layout where frame 0 lives at the LAST pixel row of each
-	// vertex's row-block (uv_y formula in `core.py:create_uv_map`),
-	// and animation advances UPWARD in pixel space → INCREASES in
-	// UV V (bottom-up). Counter-intuitive but matches every existing
-	// OpenVAT consumer shader.
-	vec2 tex_size = vec2(textureSize(pos_tex, 0));
-	float frame_step = 1.0 / tex_size.y;
-	vec2 uv_curr = UV2 + vec2(0.0, float(curr_frame) * frame_step);
-	vec2 uv_next = UV2 + vec2(0.0, float(next_frame) * frame_step);
+	vec3 p_curr, p_next, n_curr, n_next;
 
-	// Position sample.
-	vec3 p_curr = textureLod(pos_tex, uv_curr, 0.0).rgb;
-	vec3 p_next = textureLod(pos_tex, uv_next, 0.0).rgb;
+	if (synthesized_uv2) {
+		// UV2 holds packed integer (column, row_block) pixel coords.
+		// `texelFetch` reads texels by integer index — no half-pixel
+		// boundary glitch even when the frame count exactly bisects
+		// the texture height.
+		int col = int(UV2.x);
+		int row_block = int(UV2.y);
+		int base_row = row_block * safe_frame_count;
+		p_curr = texelFetch(pos_tex, ivec2(col, base_row + curr_frame), 0).rgb;
+		p_next = texelFetch(pos_tex, ivec2(col, base_row + next_frame), 0).rgb;
+
+		// Normals: bottom half of pos_tex (packed) or nrm_tex (separate).
+		if (separate_normals) {
+			n_curr = texelFetch(nrm_tex, ivec2(col, base_row + curr_frame), 0).rgb;
+			n_next = texelFetch(nrm_tex, ivec2(col, base_row + next_frame), 0).rgb;
+		} else {
+			n_curr = texelFetch(pos_tex, ivec2(col, base_row + safe_frame_count + curr_frame), 0).rgb;
+			n_next = texelFetch(pos_tex, ivec2(col, base_row + safe_frame_count + next_frame), 0).rgb;
+		}
+	} else {
+		// UV2 is a proper [0,1] UV — Blender openvat add-on. Use the
+		// canonical reference-shader path with textureLod. Frame 0
+		// lives at the LAST pixel row of each vertex's row-block;
+		// advancing frames walks UPWARD in pixel space → INCREASES
+		// V (bottom-up).
+		vec2 tex_size = vec2(textureSize(pos_tex, 0));
+		float frame_step = 1.0 / tex_size.y;
+		vec2 uv_curr = UV2 + vec2(0.0, float(curr_frame) * frame_step);
+		vec2 uv_next = UV2 + vec2(0.0, float(next_frame) * frame_step);
+		p_curr = textureLod(pos_tex, uv_curr, 0.0).rgb;
+		p_next = textureLod(pos_tex, uv_next, 0.0).rgb;
+		vec2 uv_curr_n = uv_curr + vec2(0.0, nrm_uv_shift);
+		vec2 uv_next_n = uv_next + vec2(0.0, nrm_uv_shift);
+		if (separate_normals) {
+			n_curr = textureLod(nrm_tex, uv_curr_n, 0.0).rgb;
+			n_next = textureLod(nrm_tex, uv_next_n, 0.0).rgb;
+		} else {
+			n_curr = textureLod(pos_tex, uv_curr_n, 0.0).rgb;
+			n_next = textureLod(pos_tex, uv_next_n, 0.0).rgb;
+		}
+	}
+
 	vec3 p = mix(p_curr, p_next, blend);
 	VERTEX = bounds_min + p * (bounds_max - bounds_min);
-
-	// Normal sample diverges by layout mode:
-	//   - Packed:   pos_tex, UV V shifted by `nrm_uv_shift` (typically
-	//               -0.5 for QtMeshEditor's lower-half normals layout).
-	//   - Separate: nrm_tex with the same UV as positions (no shift).
-	vec2 uv_curr_n = uv_curr + vec2(0.0, nrm_uv_shift);
-	vec2 uv_next_n = uv_next + vec2(0.0, nrm_uv_shift);
-	vec3 n_curr, n_next;
-	if (separate_normals) {
-		n_curr = textureLod(nrm_tex, uv_curr_n, 0.0).rgb;
-		n_next = textureLod(nrm_tex, uv_next_n, 0.0).rgb;
-	} else {
-		n_curr = textureLod(pos_tex, uv_curr_n, 0.0).rgb;
-		n_next = textureLod(pos_tex, uv_next_n, 0.0).rgb;
-	}
 	vec3 n = mix(n_curr, n_next, blend) * 2.0 - 1.0;
 	// Negate to compensate for QtMeshEditor's FBX→Ogre import path,
-	// which flips winding without flipping the captured normal vector
-	// (aiProcess_ConvertToLeftHanded). Blender-sourced OpenVAT bakes
-	// don't need this; the negation is harmless because Godot's PBR
-	// lighting is symmetric — (-n) makes the surface back-lit
-	// instead of front-lit. For pure-Blender bakes consider flipping
-	// back (will follow-up).
+	// which flips winding without flipping the captured normal vector.
 	NORMAL = -normalize(n);
 
 	uv0_pass = UV;
