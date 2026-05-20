@@ -7,7 +7,9 @@
 
 class EmuViewport;
 class QLabel;
+class PS1RipGamepadBridge;
 class PS1RipManager;
+class QMenu;
 class VramViewerWidget;
 
 /** Temporary host for emulator viewport + transport (#416 / #417). */
@@ -27,11 +29,14 @@ protected:
 private slots:
     void pickBios();
     void pickIso();
+    void openRecentIso();
+    void onReloadIso();
     void onStart();
     void onStop();
     void onPause();
     void onStep();
     void onReset();
+    void onOpenInputSettings();
     void onFrame(const QImage &frame, quint64 frameIndex);
     void onError(const QString &message);
     void onDumpVram();
@@ -40,14 +45,19 @@ private slots:
                       const QImage &nativePreview);
     void onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
                      int vertexCount, int triangleCount);
+    void onPausedChanged(bool paused);
 
 private:
     void updateFps(quint64 frameIndex);
     void addRecentIso(const QString &path);
+    void applyIsoPath(const QString &path);
+    void rebuildRecentIsoMenu();
 
     EmuViewport *m_viewport = nullptr;
     VramViewerWidget *m_vramViewer = nullptr;
     QLabel *m_statusLabel = nullptr;
+    QMenu *m_recentIsoMenu = nullptr;
+    PS1RipGamepadBridge *m_gamepadBridge = nullptr;
     PS1RipManager *m_manager = nullptr;
     qint64 m_lastFrameMs = 0;
     quint64 m_lastFrameIndex = 0;

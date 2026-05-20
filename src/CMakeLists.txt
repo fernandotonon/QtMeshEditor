@@ -495,6 +495,11 @@ endif()
 if(ENABLE_SENTRY)
     target_link_libraries(${CMAKE_PROJECT_NAME} sentry)
 endif()
+
+if(ENABLE_PS1_RIP AND TARGET Qt6::Gamepad)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE HAVE_QT_GAMEPAD)
+    target_link_libraries(${CMAKE_PROJECT_NAME} Qt6::Gamepad)
+endif()
 ENDIF()
 
 ##############################################################
@@ -563,6 +568,10 @@ if(BUILD_TESTS)
         add_dependencies(UnitTests qtmesh_ps1core_stub)
         if(TARGET qtmesh_ps1core_libretro)
             add_dependencies(UnitTests qtmesh_ps1core_libretro)
+        endif()
+        if(TARGET Qt6::Gamepad)
+            target_compile_definitions(UnitTests PRIVATE HAVE_QT_GAMEPAD)
+            target_link_libraries(UnitTests Qt6::Gamepad)
         endif()
     endif()
 

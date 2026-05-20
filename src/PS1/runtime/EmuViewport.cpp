@@ -1,4 +1,5 @@
 #include "EmuViewport.h"
+#include "PsxJoypadBindings.h"
 #include "PsxJoypadState.h"
 
 #include <QFocusEvent>
@@ -37,87 +38,6 @@ QRect aspectContentArea(const QSize &widgetSize, EmuViewport::AspectMode aspect)
 void setButton(unsigned id, bool pressed)
 {
     PsxJoypadState::setPressed(kPort, id, pressed);
-}
-
-bool mapKey(Qt::Key key, unsigned *buttonOut)
-{
-    switch (key) {
-    case Qt::Key_Up:
-        *buttonOut = PsxJoypadButton::Up;
-        return true;
-    case Qt::Key_Down:
-        *buttonOut = PsxJoypadButton::Down;
-        return true;
-    case Qt::Key_Left:
-        *buttonOut = PsxJoypadButton::Left;
-        return true;
-    case Qt::Key_Right:
-        *buttonOut = PsxJoypadButton::Right;
-        return true;
-    case Qt::Key_Return:
-    case Qt::Key_Enter:
-    case Qt::Key_Space:
-    case Qt::Key_X:
-        *buttonOut = PsxJoypadButton::B;
-        return true;
-    case Qt::Key_Z:
-    case Qt::Key_Escape:
-    case Qt::Key_Backspace:
-    case Qt::Key_C:
-        *buttonOut = PsxJoypadButton::A;
-        return true;
-    case Qt::Key_S:
-        *buttonOut = PsxJoypadButton::X;
-        return true;
-    case Qt::Key_D:
-    case Qt::Key_A:
-        *buttonOut = PsxJoypadButton::Y;
-        return true;
-    case Qt::Key_Q:
-        *buttonOut = PsxJoypadButton::L;
-        return true;
-    case Qt::Key_W:
-        *buttonOut = PsxJoypadButton::R;
-        return true;
-    case Qt::Key_E:
-        *buttonOut = PsxJoypadButton::L2;
-        return true;
-    case Qt::Key_R:
-        *buttonOut = PsxJoypadButton::R2;
-        return true;
-    case Qt::Key_1:
-        *buttonOut = PsxJoypadButton::L3;
-        return true;
-    case Qt::Key_2:
-        *buttonOut = PsxJoypadButton::R3;
-        return true;
-    case Qt::Key_Tab:
-    case Qt::Key_Shift:
-        *buttonOut = PsxJoypadButton::Select;
-        return true;
-    case Qt::Key_P:
-        *buttonOut = PsxJoypadButton::Start;
-        return true;
-    default:
-        return false;
-    }
-}
-
-bool mapMouse(Qt::MouseButton button, unsigned *buttonOut)
-{
-    switch (button) {
-    case Qt::LeftButton:
-        *buttonOut = PsxJoypadButton::B;
-        return true;
-    case Qt::RightButton:
-        *buttonOut = PsxJoypadButton::A;
-        return true;
-    case Qt::MiddleButton:
-        *buttonOut = PsxJoypadButton::Start;
-        return true;
-    default:
-        return false;
-    }
 }
 
 } // namespace
@@ -203,14 +123,14 @@ void EmuViewport::setShowInputHelp(bool show)
 void EmuViewport::applyKey(Qt::Key key, bool pressed)
 {
     unsigned button = 0;
-    if (mapKey(key, &button))
+    if (PsxJoypadBindings::mapKey(key, &button))
         setButton(button, pressed);
 }
 
 void EmuViewport::applyMouseButton(Qt::MouseButton button, bool pressed)
 {
     unsigned mapped = 0;
-    if (mapMouse(button, &mapped))
+    if (PsxJoypadBindings::mapMouse(button, &mapped))
         setButton(mapped, pressed);
 }
 
@@ -296,7 +216,7 @@ void EmuViewport::paintEvent(QPaintEvent *event)
         const bool focused = hasFocus();
         painter.setPen(focused ? QColor(180, 255, 180) : QColor(255, 220, 120));
         const QString help = focused
-                                 ? tr("Arrows · X/Enter/Space/LMB=✕ · Z/RMB=○ · P=Start · Tab=Select")
+                                 ? tr("Keyboard/gamepad — Input → Keyboard mapping… to customize")
                                  : tr("Click viewport for input");
         const QRect helpRect(8, height() - 28, width() - 16, 20);
         painter.drawText(helpRect, Qt::AlignLeft | Qt::AlignVCenter, help);
