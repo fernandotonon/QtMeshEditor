@@ -147,9 +147,12 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructor.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshTopologyHash.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipMeshBuilder.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipGamepadBridge.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipInputSettingsDialog.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipLegalityDialog.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipManager.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipSessionWindow.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxJoypadBindings.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipWorker.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxBiosValidator.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxDiscResolver.cpp

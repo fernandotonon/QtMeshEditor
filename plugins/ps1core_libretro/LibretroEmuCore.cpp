@@ -275,14 +275,16 @@ bool LibretroEmuCore::loadBios(const QString &biosPath)
     if (!info.exists() || !info.isFile())
         return false;
 
-    const PsxBiosValidator::Result check = PsxBiosValidator::validateFile(info.absoluteFilePath());
-    if (!check.ok) {
-        m_lastError = check.detail;
+    const PsxBiosValidator::Fingerprint fp = PsxBiosValidator::fingerprintFile(info.absoluteFilePath());
+    if (!fp.readable || !fp.sizeOk) {
+        m_lastError = fp.readable
+                          ? QObject::tr("BIOS must be exactly 512 KiB (524288 bytes).")
+                          : QObject::tr("BIOS file not found: %1").arg(biosPath);
         return false;
     }
 
     m_biosPath = info.absoluteFilePath();
-    m_biosLabel = check.label;
+    m_biosLabel = fp.knownLabel;
     installBiosAliases(m_biosPath, m_biosLabel);
     return true;
 }

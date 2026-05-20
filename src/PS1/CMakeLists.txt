@@ -32,9 +32,12 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipMeshBuilder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipGamepadBridge.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipInputSettingsDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipLegalityDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipSessionWindow.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxJoypadBindings.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxBiosValidator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxDiscResolver.cpp
@@ -61,9 +64,12 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuHooks.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuViewport.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/IEmuCorePlugin.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipGamepadBridge.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipInputSettingsDialog.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipLegalityDialog.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipSessionWindow.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxJoypadBindings.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxBiosValidator.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxDiscResolver.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxJoypadState.h

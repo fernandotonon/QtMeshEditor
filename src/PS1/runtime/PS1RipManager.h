@@ -33,6 +33,7 @@ public:
 
     bool loadBios(const QString &path);
     bool loadIso(const QString &path);
+    bool reloadIso();
     bool start();
     bool stop();
     bool pause();
