@@ -82,24 +82,63 @@ func _ready() -> void:
 	if pos_tex == null:
 		push_error("PerfSpawnerVAT: load bake texture failed: %s" % pos_path); return
 
+	# Load the Ogre bind-pose sidecar so we can remap each Godot vertex
+	# back to its baker-side column. Without this, Godot's importer
+	# reorders vertices on import and the bake's column indexing no
+	# longer matches Godot's vertex array — the crowd renders as
+	# scattered triangles. Same flow as VATInstance.gd.
+	var ogre_bind: Array = _load_ogre_bind_sidecar(basename)
+	var bind_lookup: Dictionary = {}
+	if ogre_bind.size() > 0:
+		for i in range(ogre_bind.size()):
+			var v: Dictionary = ogre_bind[i]
+			var key := _pos_key(v.pos)
+			if bind_lookup.has(key):
+				(bind_lookup[key] as Array).append(i)
+			else:
+				bind_lookup[key] = [i]
+
 	# Synthesize UV2 on the shared mesh (once).
 	var rebuilt := ArrayMesh.new()
 	var running_offset := 0
 	var tex_w: int = pos_tex.get_width()
+	var unmatched: int = 0
 	for i in range(found_mesh.get_surface_count()):
 		var arrays: Array = found_mesh.surface_get_arrays(i)
 		var positions: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL] \
+			if arrays.size() > Mesh.ARRAY_NORMAL \
+			and arrays[Mesh.ARRAY_NORMAL] is PackedVector3Array \
+			else PackedVector3Array()
+		var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV] \
+			if arrays.size() > Mesh.ARRAY_TEX_UV \
+			and arrays[Mesh.ARRAY_TEX_UV] is PackedVector2Array \
+			else PackedVector2Array()
 		var src_mat: Material = found_mesh.surface_get_material(i)
 		var uv2 := PackedVector2Array()
 		uv2.resize(positions.size())
 		for j in range(positions.size()):
-			var gvid := running_offset + j
-			uv2[j] = Vector2(float(gvid % tex_w), float(gvid / tex_w))
+			var ogre_col := running_offset + j
+			if bind_lookup.size() > 0:
+				var key := _pos_key(positions[j])
+				if bind_lookup.has(key):
+					var candidates: Array = bind_lookup[key]
+					ogre_col = _best_candidate(candidates, ogre_bind,
+						normals[j] if j < normals.size() else Vector3.ZERO,
+						j < normals.size(),
+						uvs[j] if j < uvs.size() else Vector2.ZERO,
+						j < uvs.size())
+				else:
+					unmatched += 1
+			uv2[j] = Vector2(float(ogre_col % tex_w), float(ogre_col / tex_w))
 		arrays[Mesh.ARRAY_TEX_UV2] = uv2
 		rebuilt.add_surface_from_arrays(found_mesh.surface_get_primitive_type(i), arrays)
 		if src_mat != null:
 			rebuilt.surface_set_material(i, src_mat)
 		running_offset += positions.size()
+	if bind_lookup.size() > 0 and unmatched > 0:
+		push_warning("PerfSpawnerVAT: %d / %d verts had no bind-sidecar match (fell back to identity)" %
+			[unmatched, running_offset])
 
 	# Shared ShaderMaterial. Per-instance phase comes from INSTANCE_CUSTOM.
 	var shader := Shader.new()
@@ -198,6 +237,84 @@ func _first_mesh_in(root: Node) -> ArrayMesh:
 	return null
 
 
+## Read the per-vertex Ogre bind-pose sidecar `<basename>_ogre_bind.bin`
+## emitted by `qtmesh vat`. Returns an Array of {pos, nrm, uv} dictionaries
+## in Ogre's vertex-buffer order (matching the bake's PNG columns 1:1),
+## or an empty array on missing/malformed file.
+##
+## File layout (little-endian, packed):
+##   uint32 magic=0x42565442 ("BTVB"), uint32 version=1,
+##   uint32 count, uint32 flags (bit 0=pos, 1=normal, 2=uv),
+##   per-vertex: 3 floats position, 3 floats normal (if flag),
+##               2 floats uv (if flag).
+##
+## See VATInstance.gd for the canonical implementation; this is a
+## duplicate kept inline to avoid a class_name cross-dep between the
+## single-instance player and the MultiMesh spawner.
+func _load_ogre_bind_sidecar(basename: String) -> Array:
+	var path := bake_dir.path_join(basename + "_ogre_bind.bin")
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return []
+	const MAGIC: int = 0x42565442
+	var magic := f.get_32()
+	var version := f.get_32()
+	var count := f.get_32()
+	var flags := f.get_32()
+	if magic != MAGIC or version != 1 or count <= 0:
+		f.close()
+		return []
+	var has_normal := (flags & 0x2) != 0
+	var has_uv := (flags & 0x4) != 0
+	var out: Array = []
+	out.resize(count)
+	for i in range(count):
+		var rec := {
+			pos = Vector3(f.get_float(), f.get_float(), f.get_float()),
+			nrm = Vector3.ZERO,
+			uv  = Vector2.ZERO,
+			has_normal = false,
+			has_uv = false,
+		}
+		if has_normal:
+			rec.nrm = Vector3(f.get_float(), f.get_float(), f.get_float())
+			rec.has_normal = true
+		if has_uv:
+			rec.uv = Vector2(f.get_float(), f.get_float())
+			rec.has_uv = true
+		out[i] = rec
+	f.close()
+	return out
+
+
+func _pos_key(p: Vector3) -> Vector3i:
+	## Position quantized to a 1e-5 grid (≈10 µm on a 1-unit model).
+	return Vector3i(roundi(p.x * 1e5), roundi(p.y * 1e5), roundi(p.z * 1e5))
+
+
+func _best_candidate(candidates: Array, ogre_bind: Array,
+	target_normal: Vector3, has_n: bool,
+	target_uv: Vector2, has_u: bool) -> int:
+	## Among Ogre verts at the same quantized position, pick the one
+	## whose normal+UV is closest to the Godot vertex's (continuous
+	## squared distance, no further quantization).
+	if candidates.size() == 1:
+		return candidates[0]
+	var best: int = candidates[0]
+	var best_score: float = INF
+	for idx in candidates:
+		var ov: Dictionary = ogre_bind[idx]
+		var score: float = 0.0
+		if has_n and ov.has_normal:
+			score += (ov.nrm - target_normal).length_squared()
+		if has_u and ov.has_uv:
+			score += (ov.uv - target_uv).length_squared()
+		if score < best_score:
+			best_score = score
+			best = idx
+	return best
+
+
 ## Inline shader — same texelFetch path as VATInstance.gd's
 ## `_shader_code`, plus `INSTANCE_CUSTOM.r` is added to `current_frame`
 ## for per-instance phase. INSTANCE_CUSTOM is Godot's built-in 4-float
@@ -245,7 +362,7 @@ void vertex() {
 	vec3 n_curr = texelFetch(pos_tex, ivec2(col, base_row + N + curr), 0).rgb;
 	vec3 n_next = texelFetch(pos_tex, ivec2(col, base_row + N + next), 0).rgb;
 	vec3 n = mix(n_curr, n_next, blend) * 2.0 - 1.0;
-	NORMAL = -normalize(n);
+	NORMAL = normalize(n);
 
 	uv0_pass = UV;
 }
