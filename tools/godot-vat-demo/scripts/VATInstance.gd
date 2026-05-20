@@ -436,7 +436,15 @@ void vertex() {
 	vec3 n_curr = texelFetch(pos_tex, ivec2(col, base_row + N + curr), 0).rgb;
 	vec3 n_next = texelFetch(pos_tex, ivec2(col, base_row + N + next), 0).rgb;
 	vec3 n = mix(n_curr, n_next, blend) * 2.0 - 1.0;
-	NORMAL = -normalize(n);
+	// No negation here. Historically this shader negated the decoded
+	// normal to compensate for `aiProcess_ConvertToLeftHanded` being
+	// applied on import (Ogre side) but skipped on the glTF export
+	// (so the exported mesh + bake disagreed on the Z sign). Now that
+	// the exporter does not LH-flip glTF, both Ogre's vertex buffer
+	// AND the exported glTF carry normals in the same convention,
+	// and the texture's normals are already in Godot's expected
+	// frame — no fix-up needed.
+	NORMAL = normalize(n);
 
 	uv0_pass = UV;
 }
