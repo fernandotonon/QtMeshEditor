@@ -229,63 +229,59 @@ func _load_ogre_bind_sidecar(basename: String) -> Array:
 
 
 func _build_ogre_to_godot_index_map(ogre_bind: Array) -> Dictionary:
-	## Build a (position, normal, uv) → ogre-index lookup so each Godot
-	## vertex can find its corresponding bake column in O(1).
-	##
-	## Two-tier quantization: positions at 1e-5 (sub-mm, exact through
-	## float32 round-trips), normals + UVs at 1e-3 (Godot's importer
-	## re-normalises normals after vertex reordering, drifting by up
-	## to ~1e-5 per component which a 1e-5 quantizer would split into
-	## separate buckets).
-	##
-	## Ambiguous keys (two distinct Ogre verts with identical quantized
-	## signature) store -1; the matcher then falls back to identity for
-	## those verts. Empirically this happens on degenerate splits where
-	## the only differentiator is bone-weight data — those verts will
-	## visually overlap regardless of which side we pick.
+	## Build a quantized-position → [candidate Ogre indices] lookup.
+	## When a Godot vertex hits a position bucket with multiple Ogre
+	## candidates, the matcher uses normals + UVs as a continuous-
+	## valued tiebreaker (no further quantization) to pick the best
+	## one. Quantizing those attributes too is fragile across the
+	## Godot importer's re-normalisation step — values close to a
+	## quantization boundary split across adjacent buckets even though
+	## they represent the same underlying attribute, and lookup misses
+	## fall back to identity (visible as stray vertices).
 	var out: Dictionary = {}
 	for i in range(ogre_bind.size()):
 		var v: OgreBindVertex = ogre_bind[i]
-		var key := _sig_key(v.position,
-			v.normal if v.has_normal else Vector3.ZERO, v.has_normal,
-			v.uv if v.has_uv else Vector2.ZERO, v.has_uv)
+		var key := _pos_key(v.position)
 		if out.has(key):
-			out[key] = -1
+			(out[key] as Array).append(i)
 		else:
-			out[key] = i
+			out[key] = [i]
 	return out
 
 
-func _sig_key(position: Vector3,
-	normal: Vector3, has_normal: bool,
-	uv: Vector2, has_uv: bool) -> Array:
-	## Quantized 8-tuple key. Returned as `Array[int]` rather than
-	## `Vector3i` because Vector3i can't carry the normal + UV fields,
-	## and Godot's Dictionary supports Array keys with deep equality.
-	##
-	## Tolerances (per-attribute, picked from observed Godot import
-	## drift on a clean glTF round-trip):
-	##   - position: 1e-5 (~10 µm on a 1-unit model — exact through
-	##     float32 round-trip)
-	##   - normal:   1e-2 (Godot re-normalizes after vertex reorder,
-	##     and on glTF-compressed normals can drift up to ~5e-3 per
-	##     component; 1e-2 keeps genuine seams in separate buckets
-	##     while absorbing the noise)
-	##   - uv:       1e-3 (UVs round-trip well, but Godot may
-	##     re-encode through a half-float compressor with ~1e-4 drift;
-	##     1e-3 gives a safe margin)
-	var flags := 0
-	var nx := 0; var ny := 0; var nz := 0
-	if has_normal:
-		nx = roundi(normal.x * 1e2); ny = roundi(normal.y * 1e2); nz = roundi(normal.z * 1e2)
-		flags |= 1
-	var u := 0; var v := 0
-	if has_uv:
-		u = roundi(uv.x * 1e3); v = roundi(uv.y * 1e3)
-		flags |= 2
-	return [
-		roundi(position.x * 1e5), roundi(position.y * 1e5), roundi(position.z * 1e5),
-		nx, ny, nz, u, v, flags]
+func _pos_key(position: Vector3) -> Vector3i:
+	## Position quantized to a 1e-5 grid (≈ 10 µm on a 1-unit model).
+	## Positions round-trip exactly through float32, so this is the
+	## tightest tolerance that still allows for any sub-bit jitter
+	## the renderer might introduce.
+	return Vector3i(
+		roundi(position.x * 1e5),
+		roundi(position.y * 1e5),
+		roundi(position.z * 1e5))
+
+
+func _best_candidate(candidates: Array, ogre_bind: Array,
+	target_normal: Vector3, has_n: bool,
+	target_uv: Vector2, has_u: bool) -> int:
+	## Pick the Ogre vertex whose (normal, UV) is closest to the
+	## Godot vertex's by squared distance. Single candidate → return
+	## directly. Tie-breaks deterministically toward the smallest
+	## Ogre index.
+	if candidates.size() == 1:
+		return candidates[0]
+	var best: int = candidates[0]
+	var best_score: float = INF
+	for idx in candidates:
+		var ov: OgreBindVertex = ogre_bind[idx]
+		var score: float = 0.0
+		if has_n and ov.has_normal:
+			score += (ov.normal - target_normal).length_squared()
+		if has_u and ov.has_uv:
+			score += (ov.uv - target_uv).length_squared()
+		if score < best_score:
+			best_score = score
+			best = idx
+	return best
 
 
 func _ensure_uv2_on_mesh(tex_height: int, tex_width: int,
@@ -353,13 +349,11 @@ func _ensure_uv2_on_mesh(tex_height: int, tex_width: int,
 					var u_raw: Vector2 = uvs[j] if j < uvs.size() else Vector2.ZERO
 					var has_u := j < uvs.size()
 					var u: Vector2 = Vector2(u_raw.x, 1.0 - u_raw.y) if has_u else u_raw
-					var key := _sig_key(p, n, has_n, u, has_u)
+					var key := _pos_key(p)
 					if bind_lookup.has(key):
-						var mapped: int = bind_lookup[key]
-						if mapped >= 0:
-							ogre_col = mapped
-						else:
-							unmatched_total += 1
+						var candidates: Array = bind_lookup[key]
+						ogre_col = _best_candidate(candidates, ogre_bind,
+							n, has_n, u, has_u)
 					else:
 						unmatched_total += 1
 				var col := ogre_col % tex_width
