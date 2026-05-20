@@ -183,10 +183,20 @@ return bounds_min + p * (bounds_max - bounds_min);
 
 
 def build_material(frame_count, bounds_min, bounds_max):
-    """Create M_OpenVAT — wires the position texture into a Custom node
-    that writes World Position Offset on the vertex shader."""
+    """Create or rebuild M_OpenVAT.
+
+    Idempotent: if the asset already exists (rerun of the bootstrap
+    after changing bake inputs), delete-and-recreate so the graph
+    reflects the new sidecar bounds + frame count. `create_asset` on
+    a pre-existing path returns None — we'd otherwise abort silently
+    and the user would be left with a stale material.
+    """
     unreal.EditorAssetLibrary.make_directory(DEMO_DIR)
     mat_path = DEMO_DIR + "/M_OpenVAT"
+    if unreal.EditorAssetLibrary.does_asset_exist(mat_path):
+        unreal.log("M_OpenVAT already exists — deleting and recreating "
+                   "so the graph picks up the latest sidecar bounds.")
+        unreal.EditorAssetLibrary.delete_asset(mat_path)
     mat_factory = unreal.MaterialFactoryNew()
     mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         "M_OpenVAT", DEMO_DIR, unreal.Material, mat_factory)
@@ -352,12 +362,23 @@ def bake_uv2(skeletal_mesh_path):
     bind sidecar by (pos, normal, uv) signature, write that Ogre index
     into UV2. Saves the mesh in place.
 
-    Unreal's StaticMesh/SkeletalMesh editor APIs for direct vertex
-    manipulation are sparse from Python — this function delegates to
-    `unreal.SkeletalMeshLibrary.set_uv_channel` if available, or
-    falls back to logging instructions for the user to run the
-    Editor Utility Widget version (UMG-based) which has full vertex
-    access via C++ helper.
+    Currently returns False — Unreal's StaticMesh/SkeletalMesh editor
+    APIs for direct vertex manipulation are sparse from Python and
+    change between engine versions (5.3 needs the Geometry Script
+    plugin or a C++ helper; 5.4+ has experimental SkeletalMesh tools
+    via native FStaticMeshLODResources). Until we ship either the
+    Geometry Script path or a small C++ helper to commit the UV2
+    write, this function MUST NOT report success: a True return value
+    would let the bootstrap claim the setup is complete while the
+    shader's `pos_tex.Load` with integer UV2-derived indices reads
+    the wrong texels for every vertex. The result is a scrambled or
+    collapsed VAT deformation that looks like a bug in the bake
+    rather than a missing setup step.
+
+    The function still computes and logs the matching plan so the
+    follow-up that adds the actual write can be implemented + verified
+    against a known-good plan; for the user's purposes, see
+    README.md "Step 4: bake UV2" for the manual / EUW path.
     """
     mesh = unreal.load_asset(skeletal_mesh_path)
     if not mesh:
@@ -387,11 +408,16 @@ def bake_uv2(skeletal_mesh_path):
     # script logs the per-vertex matching plan but leaves the actual
     # UV2 write to a small C++ helper or to a manual run of the
     # Editor Utility Widget shipped alongside this script — see
-    # README.md "Step 5: bake UV2".
-    unreal.log("UV2 bake plan: %d Ogre vertices, %d position buckets. "
-               "Run the EUW or the C++ helper to commit per-vertex UV2."
-               % (len(ogre), len(bucket)))
-    return True
+    # README.md "Step 4: bake UV2".
+    unreal.log_warning(
+        "UV2 bake plan computed (%d Ogre vertices, %d position buckets) "
+        "BUT NOT YET WRITTEN to the mesh. Run the EUW or the C++ helper "
+        "described in README.md Step 4 to commit per-vertex UV2 before "
+        "playing the demo, or the dancer will render scrambled."
+        % (len(ogre), len(bucket)))
+    # Explicit False so callers (and the bootstrap report) treat the
+    # demo setup as incomplete until UV2 is genuinely written.
+    return False
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -436,10 +462,20 @@ def main():
     frames, mn, mx = read_sidecar()
     unreal.log("Sidecar: frames=%d, min=%s, max=%s" % (frames, mn, mx))
     build_material(frames, mn, mx)
-    bake_uv2(BAKE_DIR + "/SK_Rumba")
+    uv2_ok = bake_uv2(BAKE_DIR + "/SK_Rumba")
     build_actor_blueprint(frames)
-    unreal.log("=== Bootstrap done. Open /Game/VATDemo/M_OpenVAT + "
-               "BP_VATDancer; finish wiring per README. ===")
+    if uv2_ok:
+        unreal.log("=== Bootstrap done. Open /Game/VATDemo/M_OpenVAT + "
+                   "BP_VATDancer; finish wiring per README. ===")
+    else:
+        # Loud, terminal-style banner so it's hard to miss in the
+        # Output Log scroll. The dancer WILL render scrambled if the
+        # user proceeds without completing Step 4.
+        unreal.log_warning("=== Bootstrap INCOMPLETE: UV2 bake step was "
+                           "not committed. Follow README Step 4 (manual "
+                           "Editor Utility Widget or C++ helper) before "
+                           "playing the demo, or the dancer will render "
+                           "as scattered triangles. ===")
 
 
 if __name__ == "__main__":
