@@ -1,5 +1,7 @@
 #include "GpuCommandParser.h"
 
+#include "PsxGp0Opcode.h"
+
 #include <QTextStream>
 
 namespace {
@@ -318,7 +320,7 @@ GpuCommandParser::Gp0Step GpuCommandParser::stepGp0(const uint32_t *words, size_
 
     size_t index = 0;
     const size_t startIndex = 0;
-    const uint8_t cmd = static_cast<uint8_t>(words[index] & 0xFF);
+    const uint8_t cmd = psxGp0OpcodeByte(words[index]);
 
     if (cmd >= 0xE1 && cmd <= 0xE6) {
         if (!parseDrawingEnv(words, wordCount, index, step.drawMode, step.error))

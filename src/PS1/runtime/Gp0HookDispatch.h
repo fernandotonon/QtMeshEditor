@@ -3,6 +3,8 @@
 
 #include "GpuCommandParser.h"
 
+#include <QSet>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -20,10 +22,14 @@ public:
                              DrawModeRecord &currentMode, int &primCount);
 
     /**
-     * Linear scan of emulated main RAM for GP0 packets while capture is armed.
-     * Used by the libretro plugin when true in-core GPU hooks are unavailable.
+     * OT-first capture from main RAM, then linear GP0 opcode scan as fallback (#418).
      */
     static void captureFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks);
+
+    /** Fallback linear scan when no ordering table is found. */
+    static void captureLinearScan(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
+                                  QSet<QString> &seenPrimKeys, DrawModeRecord &currentMode,
+                                  int &primCount);
 
     /** Begin/end frame + stable projection matrix for libretro heuristic capture. */
     static void captureFrameFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks);

@@ -9,6 +9,6 @@ class EmuHooks;
 void stubEmitCaptureSample(EmuHooks *hooks);
 
 /** Fills VRAM with CLUT + 4/8/15 bpp test regions via onVramWrite (#420). */
-void stubFillVramPattern(EmuHooks *hooks, std::uint64_t frameIndex);
+void stubFillVramPattern(EmuHooks *hooks, std::uint64_t frameIndex, bool forceMirror = false);
 
 #endif // STUBCAPTURESYNTH_H

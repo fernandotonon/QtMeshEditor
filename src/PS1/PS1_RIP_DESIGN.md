@@ -66,11 +66,14 @@ See epic #412 for phased issues (#413–#431).
 
 ## Phase 2 status
 
-- `CaptureTypes`, `GpuCommandParser`, `CaptureBuffer`, `RipperHooks` (#418).
+- `CaptureTypes`, `GpuCommandParser`, `CaptureBuffer`, `RipperHooks`, `Gp0HookDispatch` (#418).
+- `EmuHooks` included from `EmuCore.h` (issue #418 API surface).
 - GTE matrix hash dedupe + `cameraMatrixId` heuristic (#419).
-- **Libretro capture path:** `RipperHooks::ingestSystemRamForGpuCapture` runs `PsxGteRamScanner` (heuristic matrix find) + `PsxGpuRamScanner` (linear GP0 decode with correct low-byte opcodes) each frame while armed.
-- **Stub core** still emits synthetic primitives/VRAM for CI when `QTMESH_PS1_FORCE_STUB=1` or no libretro core is present.
+- **Libretro capture path:** `Gp0HookDispatch` in the plugin walks **ordering-table linked GP0 chains** first (`PsxOrderingTableScanner` + `PsxGp0ChainWalker`), then falls back to linear RAM opcode scan when no OT is found. OT entries are resolved as **24-bit absolute RAM pointers** (libgpu `getaddr` layout), with a relative-to-OT-base fallback for synthetic tests. Linked DR tags carry the opcode in bits 24–31 and the next packet address in bits 2–23 (`PsxGp0Opcode.h`); drawing-environment commands (0xE1–0xE6) stay in the low byte.
+- **Stub core** emits all seven GP0 primitive flavors for CI when `QTMESH_PS1_FORCE_STUB=1` or no libretro core is present.
 - `armCapture` / `captureFrame` wire capture to the worker thread; CSV dump to temp for verification.
+- Sentry breadcrumb `ps1.rip.capture.frame_armed` via `ui.action`.
+- Tests: synthetic OT/homebrew RAM layout, seven-flavor CSV round-trip, disarmed capture &lt;1% `runFrame` overhead (stub + optional libretro integration).
 
 ## Phase 3 status (#420 / #421)
 
@@ -79,7 +82,7 @@ See epic #412 for phased issues (#413–#431).
 - `TextureDecoder` — CLUT-aware 4/8/15 bpp tile decode with `TileKey` cache and STP/alpha via `PsxVramColor`.
 - `dumpVRAM()` saves `<AppData>/ps1_rip/captures/<id>_vram.png` and feeds `VramViewerWidget` in the session window.
 - **Libretro:** `syncVramFromCore()` mirrors live core VRAM every frame; capture snapshots include a VRAM cell copy for textured mesh export.
-- Stub core fills CLUT + 4/8/15 bpp test regions each frame via `stubFillVramPattern` (CI only).
+- Stub core fills CLUT + 4/8/15 bpp test regions via `stubFillVramPattern` when capture is armed or on `syncCaptureMirrors` (CI only).
 
 ## Phase 4 status (#422 / #423)
 
@@ -118,7 +121,7 @@ The **stub** core is active (`coreId=stub`). It draws a test pattern and synthet
 
 ### Capture mesh is a triangle “blob” (normal size, wrong shape)
 
-Capture is **not** a true GPU hook — it heuristically scans main RAM for GP0 command packets. Expect coarse triangle soup, not level geometry. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass to reduce noise. Quality improvements need ordering-table / DMA hooks (future work).
+Capture reads GP0 packets from **ordering-table chains** when present (typical homebrew/commercial frame setup), otherwise falls back to a linear RAM opcode scan. Expect coarse geometry on titles that stream primitives outside OT/DMA-visible RAM. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass. True in-core mednafen FIFO hooks remain future work.
 
 ### Libretro integration tests (local only)
 
