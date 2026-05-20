@@ -39,8 +39,11 @@ func _update_status() -> void:
 	var cf := 0.0
 	if not vat_player._surface_materials.is_empty():
 		cf = float(vat_player._surface_materials[0].get_shader_parameter("current_frame"))
+	# OpenVAT collapse renamed the internal `_fps` field; the player
+	# now exposes `fps_override` (OpenVAT's sidecar carries no fps,
+	# so the player is the source of truth).
 	status_label.text = "Frame %.1f / %d   FPS %.1f" % [
-		cf, vat_player._frame_count, vat_player._fps]
+		cf, vat_player._frame_count, vat_player.fps_override]
 
 
 func _on_pause_pressed() -> void:
