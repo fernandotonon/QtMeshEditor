@@ -4,6 +4,7 @@
 #include <OgreRTShaderSystem.h>
 #include <QCoreApplication>
 #include <QDir>
+#include <QString>
 #include <QSet>
 
 // Scheme resolver listener — generates RTSS shader techniques on demand
@@ -236,7 +237,129 @@ bool isMetallicRoughnessMaterial(const Ogre::MaterialPtr& mat)
         || (tag.empty() && detectMetallicRoughnessByLayout(pass));
 }
 
+bool isAlbedoSlotName(const Ogre::String& name)
+{
+    return name == "diffuse_map" || name == "albedo" || name == "Diffuse" || name == "BaseColor";
+}
+
+bool isNormalSlotName(const Ogre::String& name)
+{
+    return name == "normal_map" || name == "NormalMap" || name == "Bump" || name == "bump"
+        || name == "BumpMap" || name == "height_map";
+}
+
+bool textureNameLooksLikeNormalMap(const Ogre::String& texName)
+{
+    if (texName.empty())
+        return false;
+    const QString q = QString::fromStdString(texName).toLower();
+    return q.contains(QStringLiteral("normal")) || q.contains(QStringLiteral("bump"))
+        || q.contains(QStringLiteral("nrm"));
+}
+
+void markNormalUnitNonFfp(Ogre::TextureUnitState* tus)
+{
+    if (!tus)
+        return;
+    if (auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr())
+        Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
+    // Prevent FFP multitexture from modulating diffuse with the normal RGB.
+    tus->setColourOperationEx(Ogre::LBX_SOURCE1, Ogre::LBS_CURRENT, Ogre::LBS_CURRENT);
+}
+
 } // namespace
+
+void RTShaderHelper::excludeNormalMapFromFfpChain(Ogre::MaterialPtr& mat)
+{
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (!shaderGen || !mat)
+        return;
+
+    if (!mat->isLoaded()) {
+        try {
+            mat->load();
+        } catch (...) {
+            return;
+        }
+    }
+    if (mat->getNumTechniques() == 0)
+        return;
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    if (!pass)
+        return;
+
+    Ogre::String canonicalTex;
+    int16_t canonicalIdx = -1;
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        auto* tus = pass->getTextureUnitState(i);
+        if (!isNormalSlotName(tus->getName()) || tus->getTextureName().empty())
+            continue;
+        canonicalIdx = static_cast<int16_t>(i);
+        canonicalTex = tus->getTextureName();
+        break;
+    }
+    if (canonicalTex.empty()) {
+        const auto& bindings = pass->getUserObjectBindings();
+        auto any = bindings.getUserAny("qtme.normal_map");
+        if (any.has_value()) {
+            try {
+                canonicalTex = Ogre::any_cast<Ogre::String>(any);
+            } catch (...) {
+            }
+        }
+    }
+    if (canonicalIdx < 0 && !canonicalTex.empty()) {
+        for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+            auto* tus = pass->getTextureUnitState(i);
+            if (isAlbedoSlotName(tus->getName()))
+                continue;
+            if (tus->getTextureName() == canonicalTex) {
+                canonicalIdx = static_cast<int16_t>(i);
+                break;
+            }
+        }
+    }
+    if (canonicalTex.empty())
+        return;
+
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        auto* tus = pass->getTextureUnitState(i);
+        const auto& slot = tus->getName();
+        const bool normalRole = isNormalSlotName(slot)
+            || tus->getTextureName() == canonicalTex
+            || textureNameLooksLikeNormalMap(tus->getTextureName());
+        if (normalRole && !isAlbedoSlotName(slot))
+            markNormalUnitNonFfp(tus);
+    }
+
+    for (int i = static_cast<int>(pass->getNumTextureUnitStates()) - 1; i >= 0; --i) {
+        if (i == canonicalIdx)
+            continue;
+        auto* tus = pass->getTextureUnitState(static_cast<unsigned short>(i));
+        if (isAlbedoSlotName(tus->getName()))
+            continue;
+        if (tus->getTextureName() == canonicalTex)
+            pass->removeTextureUnitState(static_cast<unsigned short>(i));
+        if (i < canonicalIdx)
+            --canonicalIdx;
+    }
+
+    if (canonicalIdx < 0)
+        return;
+
+    auto* canonicalTus = pass->getTextureUnitState(static_cast<unsigned short>(canonicalIdx));
+    canonicalTus->setName("normal_map");
+    markNormalUnitNonFfp(canonicalTus);
+
+    const Ogre::String scheme = Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME;
+    auto* renderState = shaderGen->getRenderState(scheme, *mat, 0);
+    if (renderState) {
+        if (auto* normalSrs = renderState->getSubRenderState(Ogre::RTShader::SRS_NORMALMAP))
+            normalSrs->setParameter("texture_index", std::to_string(canonicalIdx));
+        shaderGen->invalidateMaterial(scheme, mat->getName());
+        shaderGen->validateMaterial(scheme, *mat);
+    }
+}
 
 void RTShaderHelper::wirePbrSlotsForFFP(Ogre::Material* mat)
 {
@@ -469,6 +592,8 @@ void RTShaderHelper::applyNormalMap(Ogre::MaterialPtr& mat, const std::string& n
         shaderGen->validateMaterial(
             Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME,
             *mat);
+
+        excludeNormalMapFromFfpChain(mat);
 
         Ogre::LogManager::getSingleton().logMessage(
             "RTShaderHelper: Normal map '" + normalMapTexName + "' applied to '" + mat->getName() + "'");

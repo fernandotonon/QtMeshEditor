@@ -427,4 +427,5 @@ void MaterialProcessor::applyRTSSNormalMap(Ogre::MaterialPtr mat, const Ogre::St
         pass->getUserObjectBindings().setUserAny(
             "qtme.normal_map", Ogre::Any(normalMapName));
     }
+    RTShaderHelper::excludeNormalMapFromFfpChain(mat);
 }

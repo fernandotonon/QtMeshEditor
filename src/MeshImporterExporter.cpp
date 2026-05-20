@@ -1285,31 +1285,46 @@ void MeshImporterExporter::applyNormalMapsToEntity(const Ogre::Entity* en)
         if (mat->getNumTechniques() == 0) continue;
         auto* pass = mat->getTechnique(0)->getPass(0);
         if (!pass) continue;
+
+        std::string texName;
         for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
             auto* tus = pass->getTextureUnitState(i);
             const auto& tusName = tus->getName();
             if (tusName == "normal_map" || tusName == "NormalMap") {
-                std::string texName = tus->getTextureName();
-                log.logMessage("applyNormalMapsToEntity: found normal map TUS '" +
-                               tusName + "' tex='" + texName + "' on mat='" + mat->getName() + "'",
-                               Ogre::LML_TRIVIAL);
-                if (texName.empty()) break;
-                // Ensure the texture is loaded before RTSS inspects it.
-                auto tex = Ogre::TextureManager::getSingleton().getByName(texName);
-                if (!tex || !tex->isLoaded()) {
-                    try {
-                        Ogre::TextureManager::getSingleton().load(texName, mat->getGroup());
-                    } catch (...) {
-                        try {
-                            Ogre::TextureManager::getSingleton().load(
-                                texName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-                        } catch (...) {}
-                    }
-                }
-                RTShaderHelper::applyNormalMap(mat, texName);
+                texName = tus->getTextureName();
                 break;
             }
         }
+        if (texName.empty()) {
+            const auto& bindings = pass->getUserObjectBindings();
+            auto any = bindings.getUserAny("qtme.normal_map");
+            if (any.has_value()) {
+                try {
+                    texName = Ogre::any_cast<Ogre::String>(any);
+                } catch (...) {
+                }
+            }
+        }
+
+        if (texName.empty())
+            continue;
+
+        log.logMessage("applyNormalMapsToEntity: normal map tex='" + texName + "' on mat='"
+                           + mat->getName() + "'",
+                       Ogre::LML_TRIVIAL);
+        auto tex = Ogre::TextureManager::getSingleton().getByName(texName);
+        if (!tex || !tex->isLoaded()) {
+            try {
+                Ogre::TextureManager::getSingleton().load(texName, mat->getGroup());
+            } catch (...) {
+                try {
+                    Ogre::TextureManager::getSingleton().load(
+                        texName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                } catch (...) {}
+            }
+        }
+        RTShaderHelper::applyNormalMap(mat, texName);
+        RTShaderHelper::excludeNormalMapFromFfpChain(mat);
     }
 }
 

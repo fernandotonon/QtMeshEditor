@@ -2,6 +2,8 @@
 
 #include "GlobalDefinitions.h"
 #include "Manager.h"
+#include "MeshImporterExporter.h"
+#include "RTShaderHelper.h"
 #include "SelectionSet.h"
 
 #include <QPainter>
@@ -321,6 +323,27 @@ void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, T
   st.cameraNode->lookAt(Ogre::Vector3::ZERO, Ogre::Node::TS_PARENT);
 }
 
+void prepareMaterialsForTurntable(const QList<Ogre::Entity *> &entities)
+{
+  std::unordered_set<std::string> processed;
+  for (Ogre::Entity *entity : entities) {
+    if (!entity)
+      continue;
+    MeshImporterExporter::applyNormalMapsToEntity(entity);
+    for (unsigned int sub = 0; sub < entity->getNumSubEntities(); ++sub) {
+      Ogre::MaterialPtr mat = entity->getSubEntity(sub)->getMaterial();
+      if (!mat)
+        continue;
+      const std::string key = mat->getName();
+      if (!processed.insert(key).second)
+        continue;
+      RTShaderHelper::excludeNormalMapFromFfpChain(mat);
+      RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+      mat->compile();
+    }
+  }
+}
+
 QImage readRenderTarget(int width, int height)
 {
   QImage image(width, height, QImage::Format_RGBA8888);
@@ -450,10 +473,9 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
       Ogre::Degree(std::clamp(options.elevationDegrees, -80.0f, 80.0f)).valueRadians();
 
   prepareSceneForCapture(entities);
-  // Materials match the in-editor path: MeshImporterExporter / MaterialProcessor
-  // already wire RTSS (applyRTSSNormalMap, wirePbrSlotsForFFP). Do not mutate
-  // materials here — re-applying RTSS can leave the normal map in the FFP
-  // multi-texture chain while also using SRS_NORMALMAP (double layer look).
+  // Tangents + RTSS normal wiring, then strip any duplicate normal-map TUS that
+  // would still modulate in the FFP chain (common on FBX like Jump.fbx).
+  prepareMaterialsForTurntable(entities);
   applyTurntableLighting(sm);
 
   outFrames->reserve(frameCount);

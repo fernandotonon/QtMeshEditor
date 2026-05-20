@@ -3,6 +3,7 @@
 #include "Manager.h"
 #include "ModelTurntableRenderer.h"
 #include "PrimitiveObject.h"
+#include "RTShaderHelper.h"
 #include "TestHelpers.h"
 
 #include <QApplication>
@@ -181,4 +182,29 @@ TEST_F(ModelTurntableRendererTest, ShutdownIsIdempotent)
 {
     ModelTurntableRenderer::shutdown();
     ModelTurntableRenderer::shutdown();
+}
+
+TEST_F(ModelTurntableRendererTest, ExcludeNormalMapFromFfpChainRemovesDuplicateUnits)
+{
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+    RTShaderHelper::initialize(sceneMgr);
+
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
+        "TurntableDupNormalMat", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    pass->createTextureUnitState("diffuse.png")->setName("diffuse_map");
+    pass->createTextureUnitState("body_normal.png")->setName("NormalMap");
+    pass->createTextureUnitState("body_normal.png")->setName("NormalMap");
+
+    RTShaderHelper::applyNormalMap(mat, "body_normal.png");
+    RTShaderHelper::excludeNormalMapFromFfpChain(mat);
+
+    unsigned short normalUnits = 0;
+    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+        const auto& n = pass->getTextureUnitState(i)->getName();
+        if (n == "normal_map" || n == "NormalMap")
+            ++normalUnits;
+    }
+    EXPECT_EQ(normalUnits, 1u);
 }

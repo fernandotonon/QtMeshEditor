@@ -1046,6 +1046,27 @@ TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSpriteSheetColumnsAndCameraHei
     EXPECT_EQ(img.height(), 80); // 2 rows × 40
 }
 
+TEST_F(CLIPipelineCmdTest, CmdTurntable_JumpFbxRendersWithoutError)
+{
+    const QString jumpPath = QStringLiteral("/home/fernando/Downloads/Jump.fbx");
+    if (!QFile::exists(jumpPath))
+        GTEST_SKIP() << "Jump.fbx not present at " << jumpPath.toStdString();
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray outArg = tmp.filePath("jump_turntable.png").toUtf8();
+    TestArgv args({"qtmesh", "turntable", jumpPath.toUtf8().constData(),
+                   "-o", outArg.constData(),
+                   "--frames", "2",
+                   "--size", "128"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 256);
+    EXPECT_EQ(img.height(), 128);
+}
+
 TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSingleFrameWritesOnePng)
 {
     QTemporaryDir tmp;
