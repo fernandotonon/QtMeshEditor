@@ -143,6 +143,8 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/GteInverse.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/EmuViewport.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/Gp0HookDispatch.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxGp0ChainWalker.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxOrderingTableScanner.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/GpuCommandParser.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/GteCapture.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructor.cpp

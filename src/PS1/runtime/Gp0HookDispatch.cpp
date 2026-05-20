@@ -2,6 +2,8 @@
 
 #include "EmuHooks.h"
 #include "PsxCaptureFilters.h"
+#include "PsxGp0Opcode.h"
+#include "PsxOrderingTableScanner.h"
 
 #include <QSet>
 #include <QString>
@@ -27,7 +29,7 @@ void ensureCaptureProjectionMatrix(EmuHooks *hooks)
 
 bool looksLikeGp0Opcode(uint32_t word)
 {
-    const uint8_t cmd = static_cast<uint8_t>(word & 0xFF);
+    const uint8_t cmd = psxGp0OpcodeByte(word);
     if (cmd >= 0x20 && cmd <= 0x3F)
         return true;
     if (cmd >= 0x60 && cmd <= 0x7F)
@@ -104,15 +106,13 @@ void Gp0HookDispatch::dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHoo
     ++primCount;
 }
 
-void Gp0HookDispatch::captureFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks)
+void Gp0HookDispatch::captureLinearScan(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
+                                      QSet<QString> &seen, DrawModeRecord &currentMode, int &primCount)
 {
-    if (!ram || byteSize < 16 || !hooks || !hooks->isCaptureEnabled())
+    if (!ram || byteSize < 16 || !hooks)
         return;
 
     const size_t wordCount = byteSize / 4;
-    QSet<QString> seen;
-    DrawModeRecord currentMode{};
-    int primCount = 0;
 
     for (size_t offset = 0; offset < wordCount;) {
         if (primCount >= kMaxPrimsPerFrame)
@@ -161,6 +161,22 @@ void Gp0HookDispatch::captureFromSystemRam(const uint8_t *ram, size_t byteSize, 
         dispatchStep(step, hooks, currentMode, primCount);
         offset += step.wordsConsumed;
     }
+}
+
+void Gp0HookDispatch::captureFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks)
+{
+    if (!ram || byteSize < 16 || !hooks || !hooks->isCaptureEnabled())
+        return;
+
+    QSet<QString> seen;
+    DrawModeRecord currentMode{};
+    int primCount = 0;
+
+    const int otPrims = PsxOrderingTableScanner::captureFromOrderingTables(ram, byteSize, hooks);
+    if (otPrims > 0)
+        return;
+
+    captureLinearScan(ram, byteSize, hooks, seen, currentMode, primCount);
 }
 
 void Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, size_t byteSize,
