@@ -42,12 +42,17 @@ func _ready() -> void:
 
 	_start_time = Time.get_ticks_msec()
 
-	# Load the source mesh ONCE.
-	var doc := GLTFDocument.new()
-	var state := GLTFState.new()
-	if doc.append_from_file(ProjectSettings.globalize_path(source_gltf), state) != OK:
-		push_error("PerfSpawnerVAT: glTF load failed"); return
-	var scene: Node = doc.generate_scene(state)
+	# Load the source mesh ONCE through the resource pipeline (works
+	# in both desktop and web builds; see VATInstance._load_source_mesh
+	# for the rationale).
+	var pack: Resource = load(source_gltf)
+	if pack == null:
+		push_error("PerfSpawnerVAT: load('%s') returned null" % source_gltf); return
+	var scene: Node = null
+	if pack is PackedScene:
+		scene = (pack as PackedScene).instantiate()
+	if scene == null:
+		push_error("PerfSpawnerVAT: failed to instantiate source"); return
 	var found_mesh: ArrayMesh = _first_mesh_in(scene)
 	scene.queue_free()
 	if found_mesh == null:
@@ -73,8 +78,9 @@ func _ready() -> void:
 	_bounds_min = Vector3(float(mn[0]), float(mn[1]), float(mn[2]))
 	_bounds_max = Vector3(float(mx[0]), float(mx[1]), float(mx[2]))
 
-	var img := Image.load_from_file(pos_path)
-	var pos_tex: ImageTexture = ImageTexture.create_from_image(img)
+	var pos_tex: Texture2D = load(pos_path) as Texture2D
+	if pos_tex == null:
+		push_error("PerfSpawnerVAT: load bake texture failed: %s" % pos_path); return
 
 	# Synthesize UV2 on the shared mesh (once).
 	var rebuilt := ArrayMesh.new()
