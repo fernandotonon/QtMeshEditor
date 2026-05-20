@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import styles from './VATDemo.module.css';
 
 const TABS = [
@@ -45,6 +45,27 @@ const QTMESH_REPO_URL =
 
 export default function VATDemo() {
   const [tab, setTab] = useState(TABS[0]);
+  const tabRefs = useRef([]);
+
+  // Roving-focus arrow-key navigation per WAI-ARIA tab pattern:
+  // Left/Right (and Home/End) move focus and activate the new tab.
+  const onTabKeyDown = (event, index) => {
+    let nextIndex = null;
+    if (event.key === 'ArrowRight') {
+      nextIndex = (index + 1) % TABS.length;
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = (index - 1 + TABS.length) % TABS.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = TABS.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    setTab(TABS[nextIndex]);
+    tabRefs.current[nextIndex]?.focus();
+  };
 
   // The Godot Web export ships a single 38 MB bundle with a Bootstrap
   // scene that reads `?scene=` from the URL and routes to the right
@@ -55,21 +76,34 @@ export default function VATDemo() {
   return (
     <div className={styles.demo}>
       <div className={styles.tabs} role="tablist" aria-label="VAT demo selector">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab.id === t.id}
-            className={`${styles.tab} ${tab.id === t.id ? styles.tabActive : ''}`}
-            onClick={() => setTab(t)}
-          >
-            {t.label}
-          </button>
-        ))}
+        {TABS.map((t, i) => {
+          const selected = tab.id === t.id;
+          return (
+            <button
+              key={t.id}
+              ref={(el) => { tabRefs.current[i] = el; }}
+              type="button"
+              role="tab"
+              id={`vat-tab-${t.id}`}
+              aria-selected={selected}
+              aria-controls={`vat-panel-${t.id}`}
+              tabIndex={selected ? 0 : -1}
+              className={`${styles.tab} ${selected ? styles.tabActive : ''}`}
+              onClick={() => setTab(t)}
+              onKeyDown={(e) => onTabKeyDown(e, i)}
+            >
+              {t.label}
+            </button>
+          );
+        })}
       </div>
 
-      <div className={styles.wrapper}>
+      <div
+        role="tabpanel"
+        id={`vat-panel-${tab.id}`}
+        aria-labelledby={`vat-tab-${tab.id}`}
+        className={styles.wrapper}
+      >
         <iframe
           key={tab.id}
           src={`demo/index.html?scene=${tab.id}`}
