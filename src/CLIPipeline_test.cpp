@@ -902,6 +902,18 @@ TEST(CLIPipelineCmdInfoError, NoFile)
     EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 2);
 }
 
+TEST(CLIPipelineCmdTurntableError, NoOutput)
+{
+    TestArgv args({"qtmesh", "turntable", "model.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdTurntableError, NoFile)
+{
+    TestArgv args({"qtmesh", "turntable", "-o", "out.png"});
+    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 2);
+}
+
 TEST(CLIPipelineCmdInfoError, NonexistentFile)
 {
     TestArgv args({"qtmesh", "info", "/tmp/nonexistent_cli_test_file_12345.fbx"});

@@ -25,6 +25,7 @@
 #include "MorphAnimationManager.h"
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
+#include "ModelTurntableRenderer.h"
 #include "QtMeshCloudClient.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
@@ -561,6 +562,10 @@ void CLIPipeline::printUsage()
         "  pose <mesh> --library apply --lib <lib.poselib> --apply <name> -o <out>\n"
         "                                    Load mesh, apply named pose from sidecar to the\n"
         "                                    skeleton, export the posed mesh. Requires a skinned mesh.\n"
+        "  turntable <file> -o <output> [--frames N] [--size WxH] [--columns C]\n"
+        "                                    Render a PNG turntable (default: horizontal sprite sheet)\n"
+        "  turntable <file> -o <pattern>     Use %02d in -o to write separate frame PNGs\n"
+        "                                    Options: --width/--height, --elevation <deg>, --json\n"
         "  scan [path] [options]           Scan directory for 3D asset issues (default path: .)\n"
         "  material <file> --preset <name> [-o <output>]\n"
         "                                  Apply a built-in material preset to every sub-entity\n"
@@ -1076,6 +1081,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "validate") rc = cmdValidate(argc, argv);
     else if (cmd == "lod") rc = cmdLod(argc, argv);
     else if (cmd == "pose") rc = cmdPose(argc, argv);
+    else if (cmd == "turntable") rc = cmdTurntable(argc, argv);
     else if (cmd == "scan") rc = cmdScan(argc, argv);
     else if (cmd == "material") rc = cmdMaterial(argc, argv);
     else if (cmd == "pack-textures") rc = cmdPackTextures(argc, argv);
@@ -2779,6 +2785,182 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             .arg(QFileInfo(outputPath).fileName()));
         return 0;
     }
+}
+
+int CLIPipeline::cmdTurntable(int argc, char* argv[])
+{
+    // turntable <file> -o <output> [--frames N] [--size WxH] [--width W] [--height H]
+    //                     [--columns C] [--elevation deg] [--json]
+    QString inputPath, outputPath;
+    int frameCount = 12;
+    int width = 512;
+    int height = 512;
+    int columns = 0;
+    float elevation = 20.0f;
+    bool jsonOutput = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "turntable" || arg == "--cli")
+            continue;
+        if (arg == "--json") {
+            jsonOutput = true;
+            continue;
+        }
+        if (arg == "-o" && i + 1 < argc) {
+            outputPath = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--frames" && i + 1 < argc) {
+            frameCount = QString(argv[++i]).toInt();
+            continue;
+        }
+        if (arg == "--columns" && i + 1 < argc) {
+            columns = QString(argv[++i]).toInt();
+            continue;
+        }
+        if (arg == "--width" && i + 1 < argc) {
+            width = QString(argv[++i]).toInt();
+            continue;
+        }
+        if (arg == "--height" && i + 1 < argc) {
+            height = QString(argv[++i]).toInt();
+            continue;
+        }
+        if (arg == "--size" && i + 1 < argc) {
+            const QString sizeArg = QString(argv[++i]);
+            const int xPos = sizeArg.indexOf(QLatin1Char('x'));
+            if (xPos > 0) {
+                width = sizeArg.left(xPos).toInt();
+                height = sizeArg.mid(xPos + 1).toInt();
+            } else {
+                width = height = sizeArg.toInt();
+            }
+            continue;
+        }
+        if (arg == "--elevation" && i + 1 < argc) {
+            elevation = QString(argv[++i]).toFloat();
+            continue;
+        }
+        if (!arg.startsWith(QLatin1Char('-')) && inputPath.isEmpty()) {
+            inputPath = arg;
+            continue;
+        }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh turntable <file> -o <output> [--frames N] [--size WxH]" << Qt::endl;
+        return 2;
+    }
+    if (outputPath.isEmpty()) {
+        err() << "Error: Output path required (-o)." << Qt::endl;
+        err() << "Usage: qtmesh turntable <file> -o <output.png> [--frames N]" << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless())
+        return 1;
+
+    SentryReporter::addBreadcrumb("cli.turntable",
+                                  QString("Turntable .%1 frames=%2").arg(fi.suffix()).arg(frameCount));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    QList<Ogre::Entity *> entityList;
+    for (auto *obj : Manager::getSingleton()->getEntities()) {
+        if (obj && obj->getMovableType() == "Entity")
+            entityList.append(static_cast<Ogre::Entity *>(obj));
+    }
+    if (entityList.isEmpty()) {
+        SentryReporter::captureMessage(QString("CLI turntable: import failed (.%1)").arg(fi.suffix()),
+                                       "error");
+        err() << "Error: Failed to load file: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    TurntableOptions options;
+    options.width = width;
+    options.height = height;
+    options.frameCount = std::clamp(frameCount, 1, 360);
+    options.elevationDegrees = elevation;
+
+    QList<QImage> frames;
+    QString renderError;
+    if (!ModelTurntableRenderer::renderToImages(entityList, options, &frames, &renderError)) {
+        ModelTurntableRenderer::shutdown();
+        err() << "Error: " << renderError << Qt::endl;
+        return 1;
+    }
+
+    const bool sequenceOutput = outputPath.contains(QLatin1Char('%'));
+    QStringList writtenPaths;
+
+    if (sequenceOutput) {
+        for (int f = 0; f < frames.size(); ++f) {
+            char buf[2048];
+            snprintf(buf, sizeof(buf), outputPath.toUtf8().constData(), f);
+            const QString framePath = QString::fromUtf8(buf);
+            if (!frames.at(f).save(framePath)) {
+                ModelTurntableRenderer::shutdown();
+                err() << "Error: Failed to write " << framePath << Qt::endl;
+                return 1;
+            }
+            writtenPaths << framePath;
+        }
+    } else if (frames.size() == 1) {
+        if (!frames.first().save(outputPath)) {
+            ModelTurntableRenderer::shutdown();
+            err() << "Error: Failed to write " << outputPath << Qt::endl;
+            return 1;
+        }
+        writtenPaths << outputPath;
+    } else {
+        const QImage sheet = ModelTurntableRenderer::composeSpriteSheet(frames, columns);
+        if (sheet.isNull() || !sheet.save(outputPath)) {
+            ModelTurntableRenderer::shutdown();
+            err() << "Error: Failed to write sprite sheet " << outputPath << Qt::endl;
+            return 1;
+        }
+        writtenPaths << outputPath;
+    }
+
+    ModelTurntableRenderer::shutdown();
+
+    if (jsonOutput) {
+        QJsonObject root;
+        root["input"] = fi.absoluteFilePath();
+        root["frames"] = frames.size();
+        root["width"] = width;
+        root["height"] = height;
+        root["elevation"] = elevation;
+        root["sequence"] = sequenceOutput;
+        QJsonArray paths;
+        for (const QString &p : writtenPaths)
+            paths.append(p);
+        root["outputs"] = paths;
+        cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        if (sequenceOutput) {
+            cliWrite(QString("Wrote %1 turntable frame(s) to %2\n")
+                         .arg(writtenPaths.size())
+                         .arg(QFileInfo(outputPath).absolutePath()));
+        } else if (frames.size() == 1) {
+            cliWrite(QString("Wrote turntable PNG: %1\n").arg(QFileInfo(outputPath).fileName()));
+        } else {
+            cliWrite(QString("Wrote turntable sprite sheet (%1 frames): %2\n")
+                         .arg(frames.size())
+                         .arg(QFileInfo(outputPath).fileName()));
+        }
+    }
+
+    return 0;
 }
 
 int CLIPipeline::cmdMaterial(int argc, char* argv[])

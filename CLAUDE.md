@@ -53,6 +53,8 @@ qtmesh anim model.fbx --bake-fps 30 -o uniform.fbx     # re-grid every track to 
 qtmesh anim model.fbx --bake-fps 60 --animation "Run" -o out.fbx  # bake one animation at 60 FPS
 qtmesh pose model.fbx --animation "Walk" --time 0.5 -o posed.stl  # export single frame
 qtmesh pose model.fbx --animation "Dance" --count 4 -o pose_%02d.stl  # export N evenly spaced frames
+qtmesh turntable model.fbx -o turntable.png  # PNG sprite sheet (12 frames default)
+qtmesh turntable model.fbx -o frame_%02d.png --frames 24  # separate PNG sequence
 qtmesh validate model.fbx                      # validate mesh (exit 1 if errors found)
 qtmesh validate model.fbx --json               # validation results as JSON
 qtmesh lod model.fbx --info                    # show LOD levels

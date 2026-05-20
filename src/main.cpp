@@ -86,7 +86,7 @@ int main(int argc, char *argv[])
                 if (arg.startsWith("-"))
                     continue;  // skip flags like --verbose
                 if (arg == "info" || arg == "fix" || arg == "convert" || arg == "anim"
-                        || arg == "validate" || arg == "lod" || arg == "pose"
+                        || arg == "validate" || arg == "lod" || arg == "pose" || arg == "turntable"
                         || arg == "scan" || arg == "material" || arg == "pack-textures"
                         || arg == "normal-from-height" || arg == "memory"
                         || arg == "analyze" || arg == "vertex-cache"
