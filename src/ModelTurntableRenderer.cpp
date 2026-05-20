@@ -2,16 +2,19 @@
 
 #include "GlobalDefinitions.h"
 #include "Manager.h"
+#include "RTShaderHelper.h"
 #include "SelectionSet.h"
 
 #include <QPainter>
 
 #include <OgreHardwarePixelBuffer.h>
 #include <OgreRoot.h>
+#include <OgreRTShaderSystem.h>
 #include <OgreTextureManager.h>
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 
 namespace {
 
@@ -89,8 +92,14 @@ bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QStr
   }
 
   TurntableState &st = state();
-  if (st.renderTarget && st.rttWidth == width && st.rttHeight == height)
+  if (st.renderTarget && st.rttWidth == width && st.rttHeight == height) {
+    if (st.renderTarget->getNumViewports() > 0) {
+      Ogre::Viewport *vp = st.renderTarget->getViewport(0);
+      vp->setMaterialScheme(Ogre::MSN_SHADERGEN);
+      vp->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
+    }
     return true;
+  }
 
   ModelTurntableRenderer::shutdown();
 
@@ -119,10 +128,14 @@ bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QStr
       vp->setOverlaysEnabled(false);
       vp->setShadowsEnabled(true);
       vp->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
+      // Match the main editor viewport so RTSS normal maps / PBR are used
+      // instead of FFP multi-texture blending (normal map as a flat layer).
+      vp->setMaterialScheme(Ogre::MSN_SHADERGEN);
     } else {
       Ogre::Viewport *vp = st.renderTarget->getViewport(0);
       vp->setBackgroundColour(bg);
       vp->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
+      vp->setMaterialScheme(Ogre::MSN_SHADERGEN);
     }
 
     const Ogre::Real aspect =
@@ -154,6 +167,55 @@ Ogre::AxisAlignedBox combinedWorldBounds(const QList<Ogre::Entity *> &entities)
   return box;
 }
 
+Ogre::Vector3 orbitAxisVector(TurntableAxis axis)
+{
+  switch (axis) {
+  case TurntableAxis::X:
+    return Ogre::Vector3::UNIT_X;
+  case TurntableAxis::Z:
+    return Ogre::Vector3::UNIT_Z;
+  case TurntableAxis::Y:
+  default:
+    return Ogre::Vector3::UNIT_Y;
+  }
+}
+
+/// Camera rest offset before orbit rotation (orbit applied around `axis` through center).
+Ogre::Vector3 cameraRestOffset(TurntableAxis axis, float horizDistance, float axialDistance)
+{
+  switch (axis) {
+  case TurntableAxis::X:
+    return Ogre::Vector3(axialDistance, 0.0f, horizDistance);
+  case TurntableAxis::Z:
+    return Ogre::Vector3(horizDistance, 0.0f, axialDistance);
+  case TurntableAxis::Y:
+  default:
+    return Ogre::Vector3(0.0f, axialDistance, horizDistance);
+  }
+}
+
+/// Ogre cameras look down local -Z; keep world +Y as up so the horizon stays level.
+void orientCameraToward(Ogre::SceneNode *cameraNode, const Ogre::Vector3 &eye, const Ogre::Vector3 &target,
+                        const Ogre::Vector3 &worldUp)
+{
+  Ogre::Vector3 forward = target - eye;
+  if (forward.squaredLength() < 1e-8f)
+    return;
+  forward.normalise();
+
+  Ogre::Vector3 side = worldUp.crossProduct(forward);
+  if (side.squaredLength() < 1e-8f) {
+    // Looking straight up/down — pick a fallback up.
+    side = Ogre::Vector3::UNIT_X.crossProduct(forward);
+  }
+  side.normalise();
+  const Ogre::Vector3 up = forward.crossProduct(side);
+
+  Ogre::Matrix3 rot;
+  rot.FromAxes(side, up, -forward);
+  cameraNode->setOrientation(Ogre::Quaternion(rot));
+}
+
 void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, TurntableAxis axis,
                        float elevationRadians, float paddingFactor)
 {
@@ -175,24 +237,66 @@ void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, T
 
   const float horiz = distance * std::cos(elevationRadians);
   const float axial = distance * std::sin(elevationRadians);
-  const float s = std::sin(angleRadians);
-  const float c = std::cos(angleRadians);
+  const Ogre::Vector3 localOffset = cameraRestOffset(axis, horiz, axial);
+  const Ogre::Quaternion orbit(Ogre::Radian(angleRadians), orbitAxisVector(axis));
+  const Ogre::Vector3 eye = center + orbit * localOffset;
 
-  Ogre::Vector3 offset = Ogre::Vector3::ZERO;
-  switch (axis) {
-  case TurntableAxis::Y:
-    offset = Ogre::Vector3(horiz * s, axial, horiz * c);
-    break;
-  case TurntableAxis::X:
-    offset = Ogre::Vector3(axial, horiz * s, horiz * c);
-    break;
-  case TurntableAxis::Z:
-    offset = Ogre::Vector3(horiz * s, horiz * c, axial);
-    break;
+  st.cameraNode->setPosition(eye);
+  orientCameraToward(st.cameraNode, eye, center, Ogre::Vector3::UNIT_Y);
+}
+
+std::string normalMapTextureName(const Ogre::MaterialPtr &mat)
+{
+  if (!mat || mat->getNumTechniques() == 0)
+    return {};
+  Ogre::Pass *pass = mat->getTechnique(0)->getPass(0);
+  if (!pass)
+    return {};
+  for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+    Ogre::TextureUnitState *tus = pass->getTextureUnitState(i);
+    const Ogre::String &slot = tus->getName();
+    if ((slot == "normal_map" || slot == "NormalMap") && !tus->getTextureName().empty())
+      return tus->getTextureName();
   }
+  return {};
+}
 
-  st.cameraNode->setPosition(center + offset);
-  st.cameraNode->lookAt(center, Ogre::Node::TS_WORLD);
+void prepareRtssMaterials(const QList<Ogre::Entity *> &entities)
+{
+  auto *shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+  if (!shaderGen)
+    return;
+
+  std::unordered_set<std::string> processed;
+  for (Ogre::Entity *entity : entities) {
+    if (!entity)
+      continue;
+    for (unsigned int sub = 0; sub < entity->getNumSubEntities(); ++sub) {
+      Ogre::MaterialPtr mat = entity->getSubEntity(sub)->getMaterial();
+      if (!mat)
+        continue;
+      const std::string key = mat->getName();
+      if (!processed.insert(key).second)
+        continue;
+
+      RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+      if (RTShaderHelper::applyPbrIfTagged(mat)) {
+        mat->compile();
+        continue;
+      }
+
+      const std::string normalTex = normalMapTextureName(mat);
+      if (!normalTex.empty()) {
+        RTShaderHelper::applyNormalMap(mat, normalTex);
+      } else {
+        shaderGen->createShaderBasedTechnique(
+            *mat, Ogre::MaterialManager::DEFAULT_SCHEME_NAME,
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME);
+        shaderGen->validateMaterial(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat);
+      }
+      mat->compile();
+    }
+  }
 }
 
 QImage readRenderTarget(int width, int height)
@@ -315,6 +419,7 @@ bool ModelTurntableRenderer::renderToImages(const QList<Ogre::Entity *> &entitie
       Ogre::Degree(std::clamp(options.elevationDegrees, -80.0f, 80.0f)).valueRadians();
 
   prepareSceneForCapture(entities);
+  prepareRtssMaterials(entities);
   applyTurntableLighting(sm);
 
   outFrames->reserve(frameCount);
