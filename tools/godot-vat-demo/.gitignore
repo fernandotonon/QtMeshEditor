@@ -1,0 +1,5 @@
+# Godot editor cache + imported-asset metadata. Regenerated on first
+# open of the project; shouldn't be in git.
+.godot/
+*.uid
+*.import

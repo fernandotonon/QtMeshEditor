@@ -1,7 +1,8 @@
-[gd_scene load_steps=8 format=3 uid="uid://b0vk1vatdemoweb"]
+[gd_scene load_steps=9 format=3 uid="uid://b0vk1vatdemoweb"]
 
 [ext_resource type="Script" path="res://scripts/VATInstance.gd" id="1_vat"]
 [ext_resource type="Script" path="res://scripts/OrbitCamera.gd" id="2_orbit"]
+[ext_resource type="Script" path="res://scripts/WebDemoMain.gd" id="3_webmain"]
 
 [sub_resource type="Environment" id="Environment_default"]
 background_mode = 1
@@ -34,6 +35,7 @@ albedo_color = Color(0.45, 0.55, 0.85, 1)
 roughness = 0.7
 
 [node name="Demo" type="Node3D"]
+script = ExtResource("3_webmain")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_default")
