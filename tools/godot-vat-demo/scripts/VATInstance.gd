@@ -139,8 +139,16 @@ func _load_bake() -> bool:
 		push_error("VATInstance: load bake texture failed: %s" % pos_path)
 		return false
 
-	# Synthesize UV2 if absent — QtMeshEditor bakes don't carry it.
-	_ensure_uv2_on_mesh(pos_tex.get_height(), pos_tex.get_width())
+	# Try to read the Ogre bind-pose sidecar so we can remap each
+	# Godot vertex back to its baker-side column index. Without
+	# this, Godot's importer reorders vertices on import and the
+	# bake's column indexing no longer matches Godot's vertex
+	# array — the mesh renders as scattered triangles. The sidecar
+	# is a flat float32 array of N×3 bind positions in Ogre's
+	# original vertex-buffer order (matching the bake's PNG
+	# columns 1:1).
+	var ogre_bind := _load_ogre_bind_sidecar(basename)
+	_ensure_uv2_on_mesh(pos_tex.get_height(), pos_tex.get_width(), ogre_bind)
 
 	var shader := Shader.new()
 	shader.code = _shader_code()
@@ -168,33 +176,158 @@ func _load_bake() -> bool:
 	return true
 
 
-func _ensure_uv2_on_mesh(tex_height: int, tex_width: int) -> void:
+## Per-vertex bind-pose record. Mirrors `BakeVertex` on the C++ side.
+class OgreBindVertex:
+	var position: Vector3
+	var normal: Vector3
+	var uv: Vector2
+	var has_normal: bool
+	var has_uv: bool
+
+
+func _load_ogre_bind_sidecar(basename: String) -> Array:
+	## Read the per-vertex Ogre bind-pose sidecar (`<basename>_ogre_bind.bin`)
+	## emitted by `qtmesh vat`. Returns an Array of `OgreBindVertex`
+	## in Ogre's vertex-buffer order (matching the bake's PNG columns
+	## 1:1), or an empty array on missing/malformed file.
+	##
+	## File layout (little-endian, packed):
+	##   uint32 magic   = 0x42565442 ("BTVB")
+	##   uint32 version = 1
+	##   uint32 count
+	##   uint32 flags   (bit 0 = positions, bit 1 = normals, bit 2 = uvs)
+	##   then per-vertex: 3 floats position, 3 floats normal (if flag),
+	##                    2 floats uv (if flag)
+	var path := bake_dir.path_join(basename + "_ogre_bind.bin")
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return []
+	const MAGIC: int = 0x42565442
+	var magic := f.get_32()
+	var version := f.get_32()
+	var count := f.get_32()
+	var flags := f.get_32()
+	if magic != MAGIC or version != 1 or count <= 0:
+		f.close()
+		return []
+	var has_normal := (flags & 0x2) != 0
+	var has_uv := (flags & 0x4) != 0
+	var out: Array = []
+	out.resize(count)
+	for i in range(count):
+		var v := OgreBindVertex.new()
+		v.position = Vector3(f.get_float(), f.get_float(), f.get_float())
+		if has_normal:
+			v.normal = Vector3(f.get_float(), f.get_float(), f.get_float())
+			v.has_normal = true
+		if has_uv:
+			v.uv = Vector2(f.get_float(), f.get_float())
+			v.has_uv = true
+		out[i] = v
+	f.close()
+	return out
+
+
+func _build_ogre_to_godot_index_map(ogre_bind: Array) -> Dictionary:
+	## Build a quantized-position → [candidate Ogre indices] lookup.
+	## When a Godot vertex hits a position bucket with multiple Ogre
+	## candidates, the matcher uses normals + UVs as a continuous-
+	## valued tiebreaker (no further quantization) to pick the best
+	## one. Quantizing those attributes too is fragile across the
+	## Godot importer's re-normalisation step — values close to a
+	## quantization boundary split across adjacent buckets even though
+	## they represent the same underlying attribute, and lookup misses
+	## fall back to identity (visible as stray vertices).
+	var out: Dictionary = {}
+	for i in range(ogre_bind.size()):
+		var v: OgreBindVertex = ogre_bind[i]
+		var key := _pos_key(v.position)
+		if out.has(key):
+			(out[key] as Array).append(i)
+		else:
+			out[key] = [i]
+	return out
+
+
+func _pos_key(position: Vector3) -> Vector3i:
+	## Position quantized to a 1e-5 grid (≈ 10 µm on a 1-unit model).
+	## Positions round-trip exactly through float32, so this is the
+	## tightest tolerance that still allows for any sub-bit jitter
+	## the renderer might introduce.
+	return Vector3i(
+		roundi(position.x * 1e5),
+		roundi(position.y * 1e5),
+		roundi(position.z * 1e5))
+
+
+func _best_candidate(candidates: Array, ogre_bind: Array,
+	target_normal: Vector3, has_n: bool,
+	target_uv: Vector2, has_u: bool) -> int:
+	## Pick the Ogre vertex whose (normal, UV) is closest to the
+	## Godot vertex's by squared distance. Single candidate → return
+	## directly. Tie-breaks deterministically toward the smallest
+	## Ogre index.
+	if candidates.size() == 1:
+		return candidates[0]
+	var best: int = candidates[0]
+	var best_score: float = INF
+	for idx in candidates:
+		var ov: OgreBindVertex = ogre_bind[idx]
+		var score: float = 0.0
+		if has_n and ov.has_normal:
+			score += (ov.normal - target_normal).length_squared()
+		if has_u and ov.has_uv:
+			score += (ov.uv - target_uv).length_squared()
+		if score < best_score:
+			best_score = score
+			best = idx
+	return best
+
+
+func _ensure_uv2_on_mesh(tex_height: int, tex_width: int,
+	ogre_bind: Array = []) -> void:
 	# UV2 encodes integer (column, row_block) per vertex, NOT a true UV.
 	# The shader uses `texelFetch` with explicit pixel coordinates, so
 	# there's no floating-point boundary on which row a given frame
 	# samples — every frame lands inside a single texel by construction.
 	#
-	#   UV2.x = global_vid % tex_width      (texture column)
-	#   UV2.y = global_vid / tex_width      (row-block index; always 0
-	#                                        for single-row bakes)
+	#   UV2.x = ogre_column % tex_width      (texture column)
+	#   UV2.y = ogre_column / tex_width      (row-block index; always 0
+	#                                         for single-row bakes)
 	#
-	# This is different from the canonical OpenVAT shader, which uses
-	# proper [0,1] UVs + textureLod. That sampler-based path glitches
-	# at half-pixel boundaries when frame_count exactly bisects the
-	# texture height (our 71-frame × 142-row layout puts frame 0 on
-	# the V=0.5035 boundary, where filter_nearest rounding is hardware-
-	# dependent — half-up on Apple Silicon Metal lands a position
-	# sample in the normal half = "egg of triangles" silhouette).
-	# texelFetch sidesteps the issue entirely.
+	# When `ogre_bind` is provided (the standard `qtmesh vat` flow), we
+	# remap each Godot vertex back to its Ogre vertex index by
+	# quantized-signature (position, normal, UV0) match. This is
+	# required because Godot's resource importer reorders the imported
+	# glTF's vertex buffer for cache locality, so Godot's per-surface
+	# vertex order no longer matches the bake's column order. Without
+	# the sidecar lookup the mesh renders as scattered triangles.
+	#
+	# When `ogre_bind` is empty (legacy bakes, missing sidecar), we fall
+	# back to a flat identity mapping. That only renders correctly when
+	# the consumer's importer preserves vertex order.
 	if mesh == null or _frame_count <= 0 or tex_width <= 0: return
+	var bind_lookup: Dictionary = {}
+	var has_bind := ogre_bind.size() > 0
+	if has_bind:
+		bind_lookup = _build_ogre_to_godot_index_map(ogre_bind)
 	var rebuilt := ArrayMesh.new()
 	var any_synth := false
 	var running_offset := 0
+	var unmatched_total := 0
 	for i in range(mesh.get_surface_count()):
 		var arrays: Array = mesh.surface_get_arrays(i)
 		var src_mat: Material = mesh.surface_get_material(i)
 		var prim: int = mesh.surface_get_primitive_type(i)
 		var positions: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL] \
+			if arrays.size() > Mesh.ARRAY_NORMAL \
+			and arrays[Mesh.ARRAY_NORMAL] is PackedVector3Array \
+			else PackedVector3Array()
+		var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV] \
+			if arrays.size() > Mesh.ARRAY_TEX_UV \
+			and arrays[Mesh.ARRAY_TEX_UV] is PackedVector2Array \
+			else PackedVector2Array()
 		var have_uv2: bool = arrays.size() > Mesh.ARRAY_TEX_UV2 \
 			and arrays[Mesh.ARRAY_TEX_UV2] is PackedVector2Array \
 			and (arrays[Mesh.ARRAY_TEX_UV2] as PackedVector2Array).size() == positions.size()
@@ -203,15 +336,47 @@ func _ensure_uv2_on_mesh(tex_height: int, tex_width: int) -> void:
 			var uv2 := PackedVector2Array()
 			uv2.resize(positions.size())
 			for j in range(positions.size()):
-				var global_vid := running_offset + j
-				var col := global_vid % tex_width
-				var row_block := global_vid / tex_width
+				var ogre_col := running_offset + j
+				if has_bind:
+					var p: Vector3 = positions[j]
+					var n: Vector3 = normals[j] if j < normals.size() else Vector3.ZERO
+					var has_n := j < normals.size()
+					# qtmesh vat's glTF export applies aiProcess_FlipUVs
+					# so the glTF UV V matches Ogre's source. Godot's
+					# import then re-flips back to glTF V-up convention,
+					# but the V values on both sides of this matcher
+					# (sidecar = Ogre native, Godot mesh = Godot post-
+					# import) end up equal because Assimp's FlipUVs and
+					# Godot's import flip cancel. No V flip here.
+					var u: Vector2 = uvs[j] if j < uvs.size() else Vector2.ZERO
+					var has_u := j < uvs.size()
+					var key := _pos_key(p)
+					if bind_lookup.has(key):
+						var candidates: Array = bind_lookup[key]
+						ogre_col = _best_candidate(candidates, ogre_bind,
+							n, has_n, u, has_u)
+					else:
+						unmatched_total += 1
+				var col := ogre_col % tex_width
+				var row_block := ogre_col / tex_width
 				uv2[j] = Vector2(float(col), float(row_block))
 			arrays[Mesh.ARRAY_TEX_UV2] = uv2
 		rebuilt.add_surface_from_arrays(prim, arrays)
 		if src_mat != null:
 			rebuilt.surface_set_material(i, src_mat)
 		running_offset += positions.size()
+	if has_bind and unmatched_total > 0:
+		# Verts that couldn't be uniquely matched fall back to the
+		# identity (running-offset) UV2 — they render against the
+		# wrong bake column, producing localised scatter at those
+		# vertices. Surface the count as a warning so the user knows
+		# the bake's signature was not sufficient for this mesh.
+		push_warning(("VATInstance: %d / %d Godot vertices had no unique " +
+			"match in the Ogre bind sidecar — they fall back to identity " +
+			"UV2 and may render misaligned. The sidecar carries position " +
+			"+ normal + UV0; verts that share all three (e.g. weight-only " +
+			"splits) are inherently ambiguous from outside the engine.")
+			% [unmatched_total, running_offset])
 	if any_synth:
 		mesh = rebuilt
 
@@ -271,7 +436,15 @@ void vertex() {
 	vec3 n_curr = texelFetch(pos_tex, ivec2(col, base_row + N + curr), 0).rgb;
 	vec3 n_next = texelFetch(pos_tex, ivec2(col, base_row + N + next), 0).rgb;
 	vec3 n = mix(n_curr, n_next, blend) * 2.0 - 1.0;
-	NORMAL = -normalize(n);
+	// No negation here. Historically this shader negated the decoded
+	// normal to compensate for `aiProcess_ConvertToLeftHanded` being
+	// applied on import (Ogre side) but skipped on the glTF export
+	// (so the exported mesh + bake disagreed on the Z sign). Now that
+	// the exporter does not LH-flip glTF, both Ogre's vertex buffer
+	// AND the exported glTF carry normals in the same convention,
+	// and the texture's normals are already in Godot's expected
+	// frame — no fix-up needed.
+	NORMAL = normalize(n);
 
 	uv0_pass = UV;
 }

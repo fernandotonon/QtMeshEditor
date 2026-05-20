@@ -5,7 +5,7 @@ material Clothes_MAT
 	{
 		pass 
 		{
-			specular 0.5 0.5 0.5 1 36.9231
+			specular 0.5 0.5 0.5 1 0
 
 			texture_unit diffuse_map
 			{
@@ -30,7 +30,7 @@ material Cigar_Mat
 	{
 		pass 
 		{
-			specular 0.5 0.5 0.5 1 12.3077
+			specular 0.5 0.5 0.5 1 0
 
 			texture_unit diffuse_map
 			{
@@ -55,7 +55,7 @@ material Skin_MAT
 	{
 		pass 
 		{
-			specular 0.5 0.5 0.5 1 13.8462
+			specular 0.5 0.5 0.5 1 0
 
 			texture_unit diffuse_map
 			{
@@ -81,7 +81,7 @@ material Eyes_MAT
 		pass 
 		{
 			ambient 0.3 0.3 0.3 1
-			specular 0.5 0.5 0.5 1 93.8462
+			specular 0.5 0.5 0.5 1 0
 
 			texture_unit diffuse_map
 			{
