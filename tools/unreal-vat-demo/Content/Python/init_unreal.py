@@ -42,7 +42,26 @@ def _should_run_bootstrap():
             return False
     if not unreal.EditorAssetLibrary.does_asset_exist("/Game/VATDemo/M_OpenVAT"):
         return True
-    # Material exists — compare its build stamp to the script's.
+    # If the material exists but no mesh asset does, an earlier
+    # bootstrap clearly failed mid-flight (e.g. Interchange import
+    # never produced a .uasset). Rebuild rather than skipping —
+    # otherwise the actor in the level renders nothing on disk.
+    el = unreal.EditorAssetLibrary
+    mesh_paths = (
+        "/Game/Rumba/SM_Rumba",
+        "/Game/Rumba/SK_Rumba",
+        "/Game/Rumba/source/StaticMeshes/SM_Rumba",
+        "/Game/Rumba/source/StaticMeshes/Rumba_Dancing_mesh",
+        "/Game/Rumba/source/SkeletalMeshes/SK_Rumba",
+        "/Game/Rumba/source/SkeletalMeshes/SM_Rumba",
+        "/Game/Rumba/source/SkeletalMeshes/Rumba_Dancing_mesh",
+        "/Game/Rumba/Rumba_Dancing_mesh",
+    )
+    if not any(el.does_asset_exist(p) for p in mesh_paths):
+        unreal.log("init_unreal: no Rumba mesh on disk under /Game/Rumba/ "
+                   "— rebuilding to re-import the glTF.")
+        return True
+    # Material AND mesh present — compare the build stamp to the script's.
     try:
         # Importing here (not at module scope) keeps init_unreal robust
         # if build_vat_demo has a syntax error: we'd still log a clear

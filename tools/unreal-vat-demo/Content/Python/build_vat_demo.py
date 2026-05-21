@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 4
+OPENVAT_BUILD = 5
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -118,36 +118,67 @@ def _import_gltf_via_interchange(src_filename, dst_name):
 
     # Override the default Interchange pipeline stack so the glTF is
     # imported as a StaticMesh (skinning disabled) regardless of the
-    # source's <skin> presence. We construct an
-    # InterchangeGenericAssetsPipeline at runtime and toggle the two
-    # relevant flags. This API exists from UE 5.1+ — versions older
-    # than that fall back to the default (skeletal) pipeline with a
-    # warning, and the demo's UV-renormalisation symptom will be back.
+    # source's <skin> presence.
+    #
+    # UE 5.7 structure (verified against the engine headers):
+    #   InterchangeGenericAssetsPipeline
+    #     ├ common_meshes_properties        (UInterchangeGenericCommonMeshesProperties)
+    #     │   └ force_all_mesh_as_type      (EInterchangeForceMeshType)
+    #     └ mesh_pipeline                   (UInterchangeGenericMeshPipeline)
+    #         ├ b_import_static_meshes      (bool, default True)
+    #         └ b_import_skeletal_meshes    (bool, default True)
+    #
+    # Earlier attempts set `force_all_mesh_as_type` on `mesh_pipeline`
+    # (wrong sub-object) so the override silently no-op'd and we
+    # ended up with a SkeletalMesh named `SM_Rumba`. Set it on
+    # `common_meshes_properties` and also disable skeletal-mesh
+    # creation on `mesh_pipeline` for belt-and-braces.
+    pipeline_obj = None
     try:
-        pipeline = unreal.InterchangeGenericAssetsPipeline()
-        # Force static-mesh creation, suppress skeletal-mesh creation.
-        # The exact property names changed slightly between 5.1 and 5.4;
-        # set every plausible variant and let the others noop.
-        common_skel = pipeline.get_editor_property("common_skeletal_meshes_and_animations_properties")
-        if common_skel is not None:
-            for prop in ("import_skeletal_meshes", "bImportSkeletalMeshes"):
-                try:
-                    common_skel.set_editor_property(prop, False)
-                except Exception:
-                    pass
-        mesh_props = pipeline.get_editor_property("mesh_pipeline")
-        if mesh_props is not None:
-            for prop in ("force_all_mesh_as_type", "bForceStaticMesh"):
-                try:
-                    mesh_props.set_editor_property(prop,
-                        unreal.InterchangeForceMeshType.IFMT_STATIC_MESH)
-                    break
-                except Exception:
-                    pass
-        params.override_pipelines = [
-            unreal.SoftObjectPath(pipeline.get_path_name())
-            if hasattr(unreal, "SoftObjectPath") else pipeline
-        ]
+        pipeline_obj = unreal.InterchangeGenericAssetsPipeline()
+
+        common = pipeline_obj.get_editor_property("common_meshes_properties")
+        if common is not None:
+            try:
+                common.set_editor_property("force_all_mesh_as_type",
+                    unreal.InterchangeForceMeshType.IFMT_STATIC_MESH)
+                unreal.log("Interchange: common_meshes_properties."
+                           "force_all_mesh_as_type = IFMT_STATIC_MESH")
+            except Exception as e:
+                unreal.log_warning("Could not set force_all_mesh_as_type: "
+                                   + str(e))
+        else:
+            unreal.log_warning("Interchange pipeline has no "
+                               "`common_meshes_properties` sub-object on "
+                               "this UE version — static-mesh override "
+                               "may not take effect.")
+
+        mesh_pipe = pipeline_obj.get_editor_property("mesh_pipeline")
+        if mesh_pipe is not None:
+            try:
+                mesh_pipe.set_editor_property("b_import_skeletal_meshes",
+                                              False)
+                unreal.log("Interchange: mesh_pipeline."
+                           "b_import_skeletal_meshes = False")
+            except Exception as e:
+                unreal.log_warning("Could not disable skeletal-mesh "
+                                   "import: " + str(e))
+
+        # `override_pipelines` is a TArray<FSoftObjectPath>. The transient
+        # pipeline object we just built has no on-disk path, so the
+        # SoftObjectPath route returns an empty path that the engine
+        # ignores (silently keeping the default skeletal-import stack).
+        # The reliable path is to pass the pipeline object directly via
+        # `pipelines` (Python list of Interchange pipeline objects); UE
+        # 5.7 accepts that and uses it in place of the default stack.
+        if hasattr(params, "pipelines"):
+            params.pipelines = [pipeline_obj]
+            unreal.log("Interchange: params.pipelines = [transient "
+                       "pipeline override]")
+        else:
+            params.override_pipelines = [
+                unreal.SoftObjectPath(pipeline_obj.get_path_name())
+            ]
         unreal.log("Interchange: forcing static-mesh import to "
                    "preserve TEXCOORD_1 column index intact.")
     except Exception as e:
@@ -250,58 +281,31 @@ def find_skeletal_mesh():
 
 
 def verify_imported_uv_channels(mesh):
-    """Confirm the imported mesh actually carries 2+ UV channels.
-    Interchange occasionally drops or renormalises secondary UVs
-    when importing glTF (varies by engine version and whether the
-    asset gets routed as static vs skeletal) — when that happens,
-    our `TexCoord[1]` sampler silently falls back to UV0 (or reads
-    rescaled-to-[0,1] values) and every primitive samples its own
-    body part's column range, which renders as static head/arms +
-    chaotic mid-body triangles. Log loudly so the failure is
-    self-explanatory in the Output Log."""
+    """Log the imported mesh's class so the user can confirm the
+    static-mesh override took effect. The per-LOD UV count is not
+    exposed reliably across UE Python bindings (5.7 in particular
+    only exposes a tiny SkeletalMesh API surface), so we just log
+    the class — if it comes back as SkeletalMesh the user knows
+    the pipeline override silently no-op'd and the demo will
+    render with the wrong-vertex symptom even though TEXCOORD_1
+    is technically present."""
     if not mesh:
         return
-    try:
-        if isinstance(mesh, unreal.StaticMesh):
-            num_lods = mesh.get_num_lods() if hasattr(mesh, "get_num_lods") else 1
-            for lod in range(num_lods):
-                # StaticMesh exposes the LightMap coordinate / num-UV-channels
-                # via the LOD's BuildSettings; fall back to None if absent.
-                try:
-                    nuv = mesh.get_num_uv_channels(lod) if hasattr(
-                        mesh, "get_num_uv_channels") else -1
-                except Exception:
-                    nuv = -1
-                unreal.log("verify_uv: StaticMesh LOD " + str(lod)
-                           + " has " + str(nuv) + " UV channel(s)")
-                if nuv >= 0 and nuv < 2:
-                    unreal.log_error(
-                        "*** UV2 MISSING on StaticMesh LOD " + str(lod)
-                        + " — re-export source.gltf with `qtmesh vat "
-                        "--emit-uv2` and re-run the bootstrap.")
-        elif isinstance(mesh, unreal.SkeletalMesh):
-            num_lods = mesh.get_num_lods() if hasattr(mesh, "get_num_lods") else 1
-            for lod in range(num_lods):
-                nuv = mesh.get_num_texture_coordinates(lod) if hasattr(
-                    mesh, "get_num_texture_coordinates") else -1
-                unreal.log("verify_uv: SkeletalMesh LOD " + str(lod)
-                           + " has " + str(nuv) + " UV channel(s)")
-                if nuv >= 0 and nuv < 2:
-                    unreal.log_error(
-                        "*** UV2 MISSING on SkeletalMesh LOD "
-                        + str(lod) + " — the Custom-node material will "
-                        "read TexCoord[1] as UV0 and the dancer will "
-                        "render with wrong-vertex data (static head/arms, "
-                        "chaotic torso triangles).")
-                else:
-                    unreal.log_warning(
-                        "Imported as SkeletalMesh — even with UV2 "
-                        "present, secondary UVs get renormalised per "
-                        "render section and the bake column index is "
-                        "lost. Delete /Game/Rumba and re-run so the "
-                        "force-static-mesh import path runs.")
-    except Exception as e:
-        unreal.log_warning("verify_imported_uv_channels: " + str(e))
+    if isinstance(mesh, unreal.StaticMesh):
+        unreal.log("verify_uv: imported as StaticMesh ✓ "
+                   "(TEXCOORD_1 should be preserved verbatim).")
+    elif isinstance(mesh, unreal.SkeletalMesh):
+        unreal.log_error(
+            "*** verify_uv: imported as SkeletalMesh — the "
+            "static-mesh override failed and the secondary UVs "
+            "will be renormalised per render section, causing "
+            "static head/arms + chaotic torso triangles. Manually "
+            "delete /Game/Rumba/ in the Content Browser, then "
+            "re-run `py Content/Python/build_vat_demo.py` from "
+            "the Python console.")
+    else:
+        unreal.log_warning("verify_uv: imported mesh is "
+                           + str(type(mesh)) + " (unexpected).")
 
 
 def import_bake_assets():
