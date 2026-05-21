@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 7
+OPENVAT_BUILD = 8
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -505,6 +505,25 @@ def build_material(frame_count, bounds_min, bounds_max):
     if mat is None:
         unreal.log_error("Failed to create M_OpenVAT")
         return None
+
+    # Force the surface modes explicitly. MaterialFactoryNew's defaults
+    # vary across UE versions (5.7 has a project setting that can
+    # default new materials to Masked or Translucent, which disables
+    # depth-writes and produces the "no z-index" look — see-through
+    # body parts overlapping each other in arbitrary draw order).
+    # Hardcode Opaque/Surface/DefaultLit/single-sided so the mesh
+    # depth-tests correctly regardless of project settings.
+    try:
+        mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_OPAQUE)
+        mat.set_editor_property("material_domain",
+            unreal.MaterialDomain.MD_SURFACE)
+        mat.set_editor_property("shading_model",
+            unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
+        mat.set_editor_property("two_sided", False)
+        unreal.log("Material modes: Opaque / Surface / DefaultLit / "
+                   "single-sided.")
+    except Exception as e:
+        unreal.log_warning("Could not set material modes: " + str(e))
 
     me = unreal.MaterialEditingLibrary
 
