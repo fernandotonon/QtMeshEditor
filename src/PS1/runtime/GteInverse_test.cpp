@@ -30,6 +30,36 @@ TEST(GteInverseTest, ScreenToModelWithTranslation)
     EXPECT_NE(mx, 0.0f);
 }
 
+TEST(GteInverseTest, ModelToScreenRoundTripsThroughScreenToModel)
+{
+    MatrixRecord matrix = identityMatrix();
+    matrix.ofx = 160 << 16;
+    matrix.ofy = 120 << 16;
+    matrix.tr[0] = 2048;
+
+    constexpr int kModelX = 1000;
+    constexpr int kModelY = -2000;
+    constexpr int kModelZ = 3000;
+    int sx = 0;
+    int sy = 0;
+    int sz = 0;
+    ASSERT_TRUE(GteInverse::modelToScreen(matrix, kModelX, kModelY, kModelZ, sx, sy, sz));
+
+    float mx = 0.0f;
+    float my = 0.0f;
+    float mz = 0.0f;
+    ASSERT_TRUE(GteInverse::screenToModel(matrix, sx, sy, sz, mx, my, mz));
+
+    int sx2 = 0;
+    int sy2 = 0;
+    int sz2 = 0;
+    ASSERT_TRUE(GteInverse::modelToScreen(matrix, static_cast<int>(mx), static_cast<int>(my),
+                                          static_cast<int>(mz), sx2, sy2, sz2));
+    EXPECT_NEAR(sx, sx2, 2);
+    EXPECT_NEAR(sy, sy2, 2);
+    EXPECT_NEAR(sz, sz2, 2);
+}
+
 TEST(GteInverseTest, ScreenToWorldFlipsY)
 {
     float wx = 0.0f;

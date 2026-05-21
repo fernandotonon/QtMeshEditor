@@ -31,7 +31,7 @@ public:
                                   QSet<QString> &seenPrimKeys, DrawModeRecord &currentMode,
                                   int &primCount);
 
-    /** Begin/end frame + stable projection matrix for libretro heuristic capture. */
+    /** GTE RAM scan, GP0 capture, frame begin/end (#418, #419). */
     static void captureFrameFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks);
 };
 

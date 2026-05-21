@@ -3,6 +3,7 @@
 #include "EmuHooks.h"
 #include "PsxCaptureFilters.h"
 #include "PsxGp0Opcode.h"
+#include "PsxGteRamScanner.h"
 #include "PsxOrderingTableScanner.h"
 
 #include <QSet>
@@ -172,6 +173,7 @@ void Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, size_t byteS
         return;
 
     hooks->onFrameBegin();
+    PsxGteRamScanner::captureFromSystemRam(ram, byteSize, hooks);
     ensureCaptureProjectionMatrix(hooks);
     captureFromSystemRam(ram, byteSize, hooks);
     hooks->onFrameEnd();

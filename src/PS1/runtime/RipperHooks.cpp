@@ -11,6 +11,7 @@ void RipperHooks::onFrameBegin()
 {
     if (!isCaptureEnabled() || !m_buffer)
         return;
+    m_latestMatrixId = UINT32_MAX;
     m_buffer->beginFrame();
 }
 
@@ -24,8 +25,9 @@ void RipperHooks::onFrameEnd()
 uint32_t RipperHooks::onGteMatrix(const MatrixRecord &matrix)
 {
     if (!isCaptureEnabled() || !m_buffer)
-        return 0;
-    return m_buffer->addMatrix(matrix);
+        return UINT32_MAX;
+    m_latestMatrixId = m_buffer->addMatrix(matrix);
+    return m_latestMatrixId;
 }
 
 void RipperHooks::onGpuPrim(const PrimRecord &prim)
@@ -60,9 +62,7 @@ void RipperHooks::onDrawMode(const DrawModeRecord &mode)
 
 uint32_t RipperHooks::latestMatrixId() const
 {
-    if (!m_buffer || m_buffer->matrices().isEmpty())
-        return UINT32_MAX;
-    return static_cast<uint32_t>(m_buffer->matrices().size() - 1);
+    return m_latestMatrixId;
 }
 
 void RipperHooks::ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize)

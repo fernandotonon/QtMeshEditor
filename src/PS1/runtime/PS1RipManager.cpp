@@ -121,7 +121,9 @@ void PS1RipManager::initializeWorkerThread()
                     QStringLiteral("ps1.rip.mesh.built"),
                     QStringLiteral("%1 verts %2 tris").arg(built.vertexCount).arg(built.triangleCount));
                 emit meshBuilt(captureId, captureSet.capturedPartCount, captureSet.uniqueCount(),
-                               captureSet.instanceCount(), built.vertexCount, built.triangleCount);
+                               captureSet.instanceCount(), built.vertexCount, built.triangleCount,
+                               snapshot.matrices.size(), snapshot.cameraMatrixId,
+                               snapshot.hasCameraMatrix());
             });
     connect(m_worker, &PS1RipWorker::vramFrameUpdated, this,
             [this](const QVector<uint16_t> &cells, const QImage &preview) {

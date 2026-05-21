@@ -5,6 +5,7 @@
 #include "EmuHooks.h"
 
 #include <atomic>
+#include <cstdint>
 
 class VramSnapshot;
 
@@ -36,6 +37,7 @@ private:
     std::atomic<bool> *m_armed = nullptr;
     CaptureBuffer *m_buffer = nullptr;
     VramSnapshot *m_vram = nullptr;
+    uint32_t m_latestMatrixId = UINT32_MAX;
 };
 
 #endif // RIPPERHOOKS_H

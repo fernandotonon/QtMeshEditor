@@ -44,7 +44,8 @@ private slots:
     void onVramDumped(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                       const QImage &nativePreview);
     void onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
-                     int vertexCount, int triangleCount);
+                     int vertexCount, int triangleCount, int matrixCount, uint32_t cameraMatrixId,
+                     bool hasCameraMatrix);
     void onPausedChanged(bool paused);
 
 private:

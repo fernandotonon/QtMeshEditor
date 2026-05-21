@@ -22,6 +22,8 @@ struct CaptureSnapshot
         return vramCells.size() == 1024 * 512;
     }
 
+    bool hasCameraMatrix() const { return cameraMatrixId != UINT32_MAX; }
+
     static CaptureSnapshot fromBuffer(const CaptureBuffer &buffer,
                                       const QVector<uint16_t> &vramCells = {});
 };
