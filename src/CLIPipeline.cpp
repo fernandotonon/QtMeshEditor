@@ -689,7 +689,7 @@ void CLIPipeline::printUsage()
         "                                    triangle, rasterizes barycentric-interpolated vertex colors,\n"
         "                                    then dilates outward by N pixels to mask seam bleed at MIP time.\n"
         "                                    Default resolution=1024, dilation=4. Output PNG is RGBA.\n"
-        "  vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--json]\n"
+        "  vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--json]\n"
         "                                    Bake a skeletal animation into a Vertex Animation Texture\n"
         "                                    in OpenVAT (sharpen3d/openvat) format: a single 16-bit RGB\n"
         "                                    PNG (height = 2 × frames; top half positions, bottom half\n"
@@ -5529,14 +5529,15 @@ bool readGltfVertices(const QString& gltfPath,
             }
             if (useUV) {
                 bv.uv0u = uvBuf[i*2 + 0];
-                // Assimp's glTF exporter applies aiProcess_FlipUVs as
-                // part of the implicit aiProcess_ConvertToLeftHanded
-                // (Maya/DirectX convention: V=0 at top). glTF spec is
-                // V=0 at bottom, so Assimp's flip cancels out at runtime
-                // for typical importers — but our Ogre side reads UVs
-                // pre-flip, so the bind-pose signatures diverge unless
-                // we mirror V here.
-                bv.uv0v = 1.0f - uvBuf[i*2 + 1];
+                // V convention is exporter-dependent — Assimp's gltf2
+                // path has flipped vs not-flipped across engine builds
+                // depending on which post-process flags it applied
+                // (FlipUVs is bundled into ConvertToLeftHanded and can
+                // be re-applied/cancelled inside the exporter). Rather
+                // than guess, we keep V as-written here; the matcher
+                // (buildVertexPermutation) tries both V conventions
+                // and picks the one that resolves all vertices.
+                bv.uv0v = uvBuf[i*2 + 1];
                 bv.hasUV = true;
             }
             out.push_back(bv);
@@ -5561,10 +5562,33 @@ bool readGltfVertices(const QString& gltfPath,
 // Returns empty vector if any Ogre vertex has no unique match in the
 // glTF (zero matches, or two glTF candidates with identical
 // signatures — both safer to fall back than guess).
+// Forward declaration of the inner worker — `buildVertexPermutation`
+// calls it twice with `flipV = false` and `flipV = true` so the
+// matcher succeeds regardless of whether Assimp's gltf2 exporter
+// preserved or flipped V on this engine version.
+static std::vector<uint32_t> buildVertexPermutationImpl(
+    const std::vector<BakeVertex>& ogre,
+    const std::vector<BakeVertex>& gltf,
+    const std::vector<size_t>& submeshStarts,
+    bool flipGltfV);
+
 std::vector<uint32_t> buildVertexPermutation(
     const std::vector<BakeVertex>& ogre,
     const std::vector<BakeVertex>& gltf,
     const std::vector<size_t>& submeshStarts)
+{
+    // Try V-as-written first (matches the explicit FlipUVs export
+    // path); fall back to V-flipped if any vertex doesn't resolve.
+    auto perm = buildVertexPermutationImpl(ogre, gltf, submeshStarts, false);
+    if (!perm.empty()) return perm;
+    return buildVertexPermutationImpl(ogre, gltf, submeshStarts, true);
+}
+
+static std::vector<uint32_t> buildVertexPermutationImpl(
+    const std::vector<BakeVertex>& ogre,
+    const std::vector<BakeVertex>& gltf,
+    const std::vector<size_t>& submeshStarts,
+    bool flipGltfV)
 {
     std::vector<uint32_t> perm;
     if (ogre.size() != gltf.size() || ogre.empty()) return perm;
@@ -5631,13 +5655,22 @@ std::vector<uint32_t> buildVertexPermutation(
     };
     (void)mixHash; // silence unused-lambda warning on builds without -Wunused-lambda-capture
 
+    // Optional V flip applied only to glTF-side keys, so we can try
+    // both V conventions without copying the full BakeVertex array.
+    auto gltfKey = [&](const BakeVertex& v) -> Key {
+        if (!flipGltfV) return keyOf(v);
+        BakeVertex flipped = v;
+        if (flipped.hasUV) flipped.uv0v = 1.0f - flipped.uv0v;
+        return keyOf(flipped);
+    };
+
     // Walk each submesh in lockstep.
     for (size_t si = 0; si + 1 < submeshStarts.size(); ++si) {
         const size_t a = submeshStarts[si];
         const size_t b = submeshStarts[si + 1];
         std::unordered_map<Key, std::vector<size_t>, KeyHash> bucket;
         for (size_t j = a; j < b; ++j)
-            bucket[keyOf(gltf[j])].push_back(j);
+            bucket[gltfKey(gltf[j])].push_back(j);
 
         for (size_t i = a; i < b; ++i) {
             const Key k = keyOf(ogre[i]);
@@ -5666,11 +5699,208 @@ std::vector<uint32_t> buildVertexPermutation(
     return perm;
 }
 
+// Rewrite `gltfPath` so each primitive carries a TEXCOORD_<channel>
+// attribute whose value is `(column % texWidth, column / texWidth)`
+// for the matching bake column. `permutation` is the same mapping
+// `buildVertexPermutation` returns: `permutation[ogre_i] = gltf_j`
+// (i.e. Ogre vertex `i` lives at glTF buffer index `j` after Assimp's
+// JoinIdenticalVertices reorder). We invert it to `ogreIndexFor[j]`
+// per primitive, then write that as the UV2 attribute.
+//
+// Why a post-pass JSON rewrite instead of seeding UV2 on the Ogre
+// side before export: Assimp's gltf2 exporter ALWAYS runs
+// JoinIdenticalVertices, which permutes the vertex buffer
+// independently of any input UV channel — so the input UV2 would
+// land at the wrong vertex indices in the output. Writing UV2 AFTER
+// the export, using the permutation we built by reading the
+// post-export positions back, sidesteps the issue.
+//
+// Returns true on success. On any failure the original glTF is left
+// untouched so the user still has a valid (if UV2-less) mesh.
+bool emitGltfUv2(const QString& gltfPath,
+                 const std::vector<uint32_t>& permutation,
+                 const std::vector<size_t>& submeshStarts,
+                 int texWidth,
+                 int channel,
+                 QString& outError)
+{
+    outError.clear();
+    if (channel < 0 || channel > 7) {
+        outError = QStringLiteral("invalid UV channel %1").arg(channel);
+        return false;
+    }
+    if (permutation.empty()) {
+        outError = QStringLiteral("permutation is empty");
+        return false;
+    }
+    if (texWidth <= 0) {
+        outError = QStringLiteral("texWidth must be > 0");
+        return false;
+    }
+
+    // Read + parse the glTF.
+    QFile gf(gltfPath);
+    if (!gf.open(QIODevice::ReadOnly)) {
+        outError = QStringLiteral("cannot open glTF: %1").arg(gltfPath);
+        return false;
+    }
+    const QByteArray gltfBytes = gf.readAll();
+    gf.close();
+    QJsonParseError perr;
+    QJsonDocument doc = QJsonDocument::fromJson(gltfBytes, &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        outError = QStringLiteral("glTF JSON parse failed: %1")
+            .arg(perr.errorString());
+        return false;
+    }
+    QJsonObject root = doc.object();
+
+    // Load the binary buffer that we'll append to.
+    QJsonArray buffers = root.value(QStringLiteral("buffers")).toArray();
+    if (buffers.isEmpty()) {
+        outError = QStringLiteral("glTF has no buffers");
+        return false;
+    }
+    QJsonObject buf0 = buffers.first().toObject();
+    const QString binUri = buf0.value(QStringLiteral("uri")).toString();
+    if (binUri.isEmpty()) {
+        outError = QStringLiteral("buffer 0 has no URI (embedded base64 "
+                                  "not supported by this rewrite)");
+        return false;
+    }
+    QFileInfo gi(gltfPath);
+    const QString binPath = gi.absoluteDir().filePath(binUri);
+    QFile bf(binPath);
+    if (!bf.open(QIODevice::ReadWrite)) {
+        outError = QStringLiteral("cannot open .bin for append: %1").arg(binPath);
+        return false;
+    }
+    // Append UV2 data at the end. 2× float32 per vertex.
+    const qint64 origBinSize = bf.size();
+    bf.seek(origBinSize);
+
+    QJsonArray accessors   = root.value(QStringLiteral("accessors")).toArray();
+    QJsonArray bufferViews = root.value(QStringLiteral("bufferViews")).toArray();
+    QJsonArray meshes      = root.value(QStringLiteral("meshes")).toArray();
+    if (meshes.isEmpty()) {
+        outError = QStringLiteral("glTF has no meshes");
+        bf.close();
+        return false;
+    }
+    QJsonObject mesh0 = meshes.first().toObject();
+    QJsonArray prims  = mesh0.value(QStringLiteral("primitives")).toArray();
+    if (static_cast<size_t>(prims.size()) + 1 != submeshStarts.size()) {
+        outError = QStringLiteral("primitive count (%1) doesn't match "
+                                  "submesh starts (%2)")
+            .arg(prims.size()).arg(submeshStarts.size() - 1);
+        bf.close();
+        return false;
+    }
+
+    // Invert the permutation: gltfIndexToOgre[j] = i s.t. perm[i] == j.
+    // The perm is per-primitive (each primitive's vertices live in
+    // submeshStarts[si]..submeshStarts[si+1]); we walk each range.
+    const QString texCoordKey = QStringLiteral("TEXCOORD_%1").arg(channel);
+
+    qint64 cursorBytes = origBinSize;
+
+    for (int si = 0; si < prims.size(); ++si) {
+        const size_t a = submeshStarts[si];
+        const size_t b = submeshStarts[si + 1];
+        const size_t count = b - a;
+
+        // Build the UV2 payload for this primitive.
+        QByteArray payload;
+        payload.resize(static_cast<int>(count * 2 * sizeof(float)));
+        auto* fout = reinterpret_cast<float*>(payload.data());
+        // Min/max for the accessor (glTF spec requires them for POSITION
+        // but they're optional for other accessors — we emit them anyway
+        // so importers that validate ranges don't complain).
+        float uMin = std::numeric_limits<float>::infinity();
+        float uMax = -std::numeric_limits<float>::infinity();
+        float vMin = std::numeric_limits<float>::infinity();
+        float vMax = -std::numeric_limits<float>::infinity();
+        for (size_t i = a; i < b; ++i) {
+            const uint32_t gltfIdx = permutation[i];
+            const uint32_t col = gltfIdx % static_cast<uint32_t>(texWidth);
+            const uint32_t row = gltfIdx / static_cast<uint32_t>(texWidth);
+            // The destination is glTF index gltfIdx, which is offset
+            // (gltfIdx - a) within this primitive.
+            const size_t localDst = static_cast<size_t>(gltfIdx) - a;
+            const float u = static_cast<float>(col);
+            const float v = static_cast<float>(row);
+            fout[localDst * 2 + 0] = u;
+            fout[localDst * 2 + 1] = v;
+            if (u < uMin) uMin = u;
+            if (u > uMax) uMax = u;
+            if (v < vMin) vMin = v;
+            if (v > vMax) vMax = v;
+        }
+        // Append payload to the .bin and add a bufferView + accessor.
+        bf.write(payload);
+        const qint64 bvOffset = cursorBytes;
+        cursorBytes += payload.size();
+
+        QJsonObject bv;
+        bv["buffer"]     = 0;
+        bv["byteOffset"] = static_cast<double>(bvOffset);
+        bv["byteLength"] = static_cast<double>(payload.size());
+        bv["byteStride"] = static_cast<double>(2 * sizeof(float));
+        bv["target"]     = 34962; // ARRAY_BUFFER
+        const int bvIndex = bufferViews.size();
+        bufferViews.append(bv);
+
+        QJsonObject acc;
+        acc["bufferView"]    = bvIndex;
+        acc["byteOffset"]    = 0;
+        acc["componentType"] = 5126; // FLOAT
+        acc["count"]         = static_cast<int>(count);
+        acc["type"]          = QStringLiteral("VEC2");
+        QJsonArray jMin {uMin, vMin};
+        QJsonArray jMax {uMax, vMax};
+        acc["min"]           = jMin;
+        acc["max"]           = jMax;
+        const int accIndex = accessors.size();
+        accessors.append(acc);
+
+        // Wire the accessor into the primitive's attributes.
+        QJsonObject prim = prims.at(si).toObject();
+        QJsonObject attrs = prim.value(QStringLiteral("attributes")).toObject();
+        attrs[texCoordKey] = accIndex;
+        prim["attributes"] = attrs;
+        prims.replace(si, prim);
+    }
+
+    bf.close();
+
+    // Update buffer 0's byteLength to reflect the appended payload.
+    buf0["byteLength"] = static_cast<double>(cursorBytes);
+    buffers.replace(0, buf0);
+
+    root["buffers"]     = buffers;
+    root["bufferViews"] = bufferViews;
+    root["accessors"]   = accessors;
+
+    mesh0["primitives"] = prims;
+    meshes.replace(0, mesh0);
+    root["meshes"]      = meshes;
+
+    QJsonDocument out(root);
+    QFile gw(gltfPath);
+    if (!gw.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        outError = QStringLiteral("cannot rewrite glTF: %1").arg(gltfPath);
+        return false;
+    }
+    gw.write(out.toJson(QJsonDocument::Indented));
+    gw.close();
+    return true;
+}
+
 } // namespace
 
 int CLIPipeline::cmdVat(int argc, char* argv[])
 {
-    // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--json]
+    // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--json]
     //
     // Output is always OpenVAT (sharpen3d/openvat) — a single packed
     // 16-bit RGB PNG (`<basename>_pos.png`, height = 2*frames, top half
@@ -5681,6 +5911,13 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     double fps = 30.0;
     bool jsonOutput = false;
     QString includeShadersArg;
+    // --emit-uv2 <channel>: inject the per-vertex bake-column index
+    // as TEXCOORD_<channel> into source.gltf. -1 (default) = off.
+    // The bake itself doesn't care about UV2 — this exists so
+    // engine consumers (Godot/Unity/Unreal) can skip the runtime
+    // bind-sidecar matching and just read TEXCOORD_<channel> as
+    // (column % tex_width, column / tex_width) directly.
+    int emitUv2Channel = -1;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -5715,6 +5952,30 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
             includeShadersArg = QString(argv[++i]);
             continue;
         }
+        if (arg == "--emit-uv2") {
+            // Accept either `--emit-uv2` (defaults to channel 1, the
+            // OpenVAT convention) or `--emit-uv2 <N>` for a specific
+            // channel index. Channel 0 is normally the mesh's
+            // diffuse UV so we reject it to avoid clobbering.
+            int channel = 1;
+            if (i + 1 < argc) {
+                bool ok = false;
+                const QString peek = QString(argv[i + 1]);
+                const int n = peek.toInt(&ok);
+                if (ok && n >= 0 && n <= 7) {
+                    channel = n;
+                    ++i;
+                }
+            }
+            if (channel == 0) {
+                err() << "Error: --emit-uv2 0 would overwrite the "
+                         "diffuse UV; use channel 1 or higher."
+                      << Qt::endl;
+                return 2;
+            }
+            emitUv2Channel = channel;
+            continue;
+        }
         if (!arg.startsWith("-") && filePath.isEmpty()) {
             filePath = arg; continue;
         }
@@ -5722,7 +5983,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
 
     if (filePath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--json]" << Qt::endl;
+        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--json]" << Qt::endl;
         return 2;
     }
     if (animName.isEmpty()) {
@@ -5870,6 +6131,9 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
               << bindPath << " — consumers may not be able to align the "
                              "bake with their imported mesh." << Qt::endl;
     }
+    // Kept in scope past the bake so the `--emit-uv2` post-pass can
+    // inject TEXCOORD_<channel> into the exported glTF.
+    std::vector<size_t> submeshStarts;
     if (exportResult == 0) {
         std::vector<BakeVertex> ogreVerts = readOgreBindVertices(entity);
         std::vector<BakeVertex> gltfVerts;
@@ -5889,7 +6153,6 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
             // primitive walk iterate submeshes in the same order, with
             // identical per-submesh counts (Assimp can permute within
             // a primitive but cannot move vertices across submeshes).
-            std::vector<size_t> submeshStarts;
             submeshStarts.push_back(0);
             Ogre::MeshPtr mesh = entity->getMesh();
             bool sharedAppended = false;
@@ -5910,6 +6173,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                          "vertex order — the bake will use Ogre vertex-"
                          "buffer order, and the emitted mesh is NOT marked "
                          "as matching the bake." << Qt::endl;
+                submeshStarts.clear();
             } else {
                 sourceMeshMatchesBake = true;
             }
@@ -5921,6 +6185,9 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     opts.fps               = fps;
     opts.outputDir         = outDir;
     opts.basename          = animName;
+    // Keep a copy for the UV2 post-pass (the move below sinks the
+    // original into VATBaker::Options).
+    std::vector<uint32_t> vertexPermCopy = vertexPerm;
     opts.vertexPermutation = std::move(vertexPerm);
 
     SentryReporter::addBreadcrumb("file.export",
@@ -5945,6 +6212,38 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
               << "). Bake is still valid; you'll need to provide a "
                  "vertex-order-matching mesh separately." << Qt::endl;
         gltfPath.clear();  // Mark as missing so the post-run report skips it.
+    }
+
+    // --emit-uv2: inject the per-vertex column index as
+    // TEXCOORD_<channel> into source.gltf so engine consumers can
+    // drop the runtime bind-sidecar matcher. Only emitted when:
+    //   1. The user asked for it (channel >= 0).
+    //   2. The glTF export succeeded.
+    //   3. The permutation step actually built a valid mapping —
+    //      without it we can't tell which Ogre column each glTF
+    //      vertex corresponds to.
+    bool uv2Emitted = false;
+    if (emitUv2Channel >= 0 && exportResult == 0
+        && sourceMeshMatchesBake && !vertexPermCopy.empty()) {
+        QString uv2Err;
+        uv2Emitted = emitGltfUv2(gltfPath, vertexPermCopy, submeshStarts,
+                                 result.vertexCount, emitUv2Channel,
+                                 uv2Err);
+        if (!uv2Emitted) {
+            err() << "Warning: --emit-uv2 failed: " << uv2Err
+                  << " — consumers will need the bind-sidecar matcher path."
+                  << Qt::endl;
+            SentryReporter::addBreadcrumb("file.export",
+                QStringLiteral("VAT --emit-uv2 failed: %1").arg(uv2Err));
+        } else {
+            SentryReporter::addBreadcrumb("file.export",
+                QStringLiteral("VAT TEXCOORD_%1 injected into %2")
+                    .arg(emitUv2Channel).arg(gltfPath));
+        }
+    } else if (emitUv2Channel >= 0) {
+        err() << "Warning: --emit-uv2 skipped — needs successful glTF "
+                 "export AND alignment. Re-run without the warnings above."
+              << Qt::endl;
     }
 
     // --include-shaders: drop the requested engine templates next to
@@ -6005,6 +6304,8 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
             for (const auto& p : shadersWritten) sarr.append(p);
             obj["shaders"] = sarr;
         }
+        if (uv2Emitted)
+            obj["uv2Channel"] = emitUv2Channel;
         obj["frameCount"]  = result.frameCount;
         obj["vertexCount"] = result.vertexCount;
         obj["animation"]   = animName;
@@ -6028,6 +6329,11 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                 .arg(bindPath));
         if (sourceMeshMatchesBake)
             cliWrite(QStringLiteral("  mesh:     %1 (vertex order matches the bake)\n").arg(gltfPath));
+        if (uv2Emitted)
+            cliWrite(QStringLiteral("  uv2:      injected as TEXCOORD_%1 — consumers can "
+                                    "drop the runtime bind-sidecar matcher and read "
+                                    "(col, row) from the mesh's UV%1 directly\n")
+                .arg(emitUv2Channel));
         cliWrite(QStringLiteral("  bounds:   min=(%1, %2, %3) max=(%4, %5, %6)\n")
                      .arg(result.minBound.x, 0, 'f', 3)
                      .arg(result.minBound.y, 0, 'f', 3)
