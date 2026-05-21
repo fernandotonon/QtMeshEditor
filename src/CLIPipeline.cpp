@@ -5837,7 +5837,23 @@ bool emitGltfUv2(const QString& gltfPath,
             if (v > vMax) vMax = v;
         }
         // Append payload to the .bin and add a bufferView + accessor.
-        bf.write(payload);
+        // Check the write result: a short write (disk full, FS quota,
+        // I/O error mid-stream) would otherwise leave the .bin
+        // truncated while the JSON's bufferView still claimed full
+        // length, producing a glTF that references data that was
+        // never fully written. On failure, truncate back to the
+        // original size so the file is left exactly as we found it.
+        const qint64 written = bf.write(payload);
+        if (written != static_cast<qint64>(payload.size())) {
+            const QString errStr = bf.errorString();
+            bf.resize(origBinSize);
+            bf.close();
+            outError = QStringLiteral(
+                "short write appending UV2 payload to %1 "
+                "(wrote %2 of %3 bytes): %4")
+                .arg(binPath).arg(written).arg(payload.size()).arg(errStr);
+            return false;
+        }
         const qint64 bvOffset = cursorBytes;
         cursorBytes += payload.size();
 
@@ -5959,12 +5975,36 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
             // diffuse UV so we reject it to avoid clobbering.
             int channel = 1;
             if (i + 1 < argc) {
-                bool ok = false;
+                // Only consume the next token as a channel if it
+                // *looks* like an integer (digits-only or +/- digits).
+                // Otherwise it's likely the positional file argument
+                // and we leave it alone — the user wanted the bare
+                // form `--emit-uv2`.
                 const QString peek = QString(argv[i + 1]);
-                const int n = peek.toInt(&ok);
-                if (ok && n >= 0 && n <= 7) {
-                    channel = n;
+                bool looksNumeric = !peek.isEmpty();
+                int start = (peek[0] == '-' || peek[0] == '+') ? 1 : 0;
+                if (start >= peek.size()) looksNumeric = false;
+                for (int k = start; looksNumeric && k < peek.size(); ++k)
+                    if (!peek[k].isDigit()) looksNumeric = false;
+                if (looksNumeric) {
+                    bool ok = false;
+                    const int n = peek.toInt(&ok);
+                    if (!ok) {
+                        err() << "Error: --emit-uv2 value \"" << peek
+                              << "\" is not an integer." << Qt::endl;
+                        return 2;
+                    }
+                    // Consume the token first so we don't fall through
+                    // to the positional-arg branch on error.
                     ++i;
+                    if (n < 0 || n > 7) {
+                        err() << "Error: --emit-uv2 channel " << n
+                              << " is out of range (must be 1..7; "
+                                 "channel 0 would overwrite the diffuse UV)."
+                              << Qt::endl;
+                        return 2;
+                    }
+                    channel = n;
                 }
             }
             if (channel == 0) {
