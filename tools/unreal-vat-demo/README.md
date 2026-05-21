@@ -33,13 +33,21 @@ Blueprint) on first open.
 ## How the demo works
 
 `qtmesh vat --emit-uv2` writes the per-vertex bake-column index as a
-`TEXCOORD_1` attribute directly into `source.gltf`. Unreal's mesh
-importer reorders vertices for cache locality, but a vertex attribute
-travels with its vertex through any reorder — so the imported mesh's
-`TexCoord[1]` still points at the right column in the position
-texture. The Material's Custom HLSL node reads `TexCoord[1]`,
-fetches `pos_tex.Load(int3(col, row, 0))`, and writes the result to
-**World Position Offset**. The skeleton is unused at runtime.
+`TEXCOORD_1` attribute directly into `source.gltf`. Unreal's
+**StaticMesh** importer reorders vertices for cache locality, but a
+vertex attribute travels with its vertex through any reorder — so
+the imported mesh's `TexCoord[1]` still points at the right column
+in the position texture. The Material's Custom HLSL node reads
+`TexCoord[1]`, fetches `pos_tex.Load(int3(col, row, 0))`, and writes
+the result to **World Position Offset**.
+
+The bootstrap forces Interchange to route the glTF as a StaticMesh
+(skipping the skeleton path) — UE's SkeletalMesh importer
+renormalises every render section's secondary UVs to its own [0,1]
+range, which destroys the absolute column index. Since the VAT
+replaces skinning entirely (the position texture drives every
+vertex), the skeleton is genuinely unused at runtime and dropping
+it is the right call.
 
 This is the same trick the Godot demo uses; it took landing the
 `--emit-uv2` flag (#654) to make it work cleanly in Unreal too — no

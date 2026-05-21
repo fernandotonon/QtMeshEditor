@@ -18,13 +18,20 @@
 # How this works (and why it's simpler than it used to be):
 #   The bake's source.gltf is produced by `qtmesh vat --emit-uv2`,
 #   which writes the per-vertex bake-column index as a TEXCOORD_1
-#   attribute directly into the glTF. Unreal's mesh importer
+#   attribute directly into the glTF. Unreal's StaticMesh importer
 #   reorders vertices for cache locality, but a vertex attribute
 #   travels WITH its vertex through any reorder — so TEXCOORD_1
 #   still points at the right column in the imported mesh. No
 #   runtime UV2-baking, no bind-sidecar matcher, no engine-version-
 #   specific Geometry Script paths. The shader just reads
 #   TexCoord[1] and indexes the position texture by that.
+#
+#   We force StaticMesh import (overriding Interchange's pipeline
+#   stack) because UE's SkeletalMesh importer renormalises every
+#   render section's secondary UVs to its own [0,1] range — which
+#   destroys the absolute column index. Skipping the skeleton is
+#   fine here: the VAT material drives every vertex from the
+#   position texture, so the skeleton is unused at runtime anyway.
 
 import json
 import os
@@ -41,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 3
+OPENVAT_BUILD = 4
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -71,12 +78,26 @@ def _import_texture(src_filename, dst_name):
 
 def _import_gltf_via_interchange(src_filename, dst_name):
     """Import a glTF via Unreal's Interchange framework (built into
-    UE 5.0+; no separate plugin required).
+    UE 5.0+; no separate plugin required), forcing **static mesh**
+    import so the secondary UV channel (TEXCOORD_1, holding the
+    per-vertex VAT column index) survives intact.
 
-    Returns the imported skeletal mesh, or None on failure. The
-    Interchange API moved between 5.0 and 5.3 — we use the high-level
-    `unreal.InterchangeManager` entry point and fall back to logging
-    actionable instructions if the user is on an older engine.
+    Why static instead of skeletal:
+      * The VAT replaces skinning entirely — the material's WPO
+        drives every vertex from the position texture, the skeleton
+        is unused at runtime.
+      * UE's SkeletalMesh importer renormalises every render
+        section's secondary UV channel into its own [0,1] range, so
+        primitive #2's TEXCOORD_1 (originally columns 1024..1437)
+        comes back rescaled and reads the wrong slice of the position
+        texture. This shows up in-editor as "head and arms are
+        static; torso is animated but with chaotic triangles." The
+        StaticMesh importer preserves UV values as-is.
+      * Using a static mesh also lets us spawn a plain
+        StaticMeshActor — no AnimationMode toggle, no skeletal-mesh
+        component property-name dance.
+
+    Returns the imported StaticMesh, or None on failure.
     """
     src_path = os.path.abspath(os.path.join(RUMBA_FS_DIR, src_filename))
     if not os.path.exists(src_path):
@@ -95,6 +116,49 @@ def _import_gltf_via_interchange(src_filename, dst_name):
     params.is_automated = True
     params.destination_name = dst_name
 
+    # Override the default Interchange pipeline stack so the glTF is
+    # imported as a StaticMesh (skinning disabled) regardless of the
+    # source's <skin> presence. We construct an
+    # InterchangeGenericAssetsPipeline at runtime and toggle the two
+    # relevant flags. This API exists from UE 5.1+ — versions older
+    # than that fall back to the default (skeletal) pipeline with a
+    # warning, and the demo's UV-renormalisation symptom will be back.
+    try:
+        pipeline = unreal.InterchangeGenericAssetsPipeline()
+        # Force static-mesh creation, suppress skeletal-mesh creation.
+        # The exact property names changed slightly between 5.1 and 5.4;
+        # set every plausible variant and let the others noop.
+        common_skel = pipeline.get_editor_property("common_skeletal_meshes_and_animations_properties")
+        if common_skel is not None:
+            for prop in ("import_skeletal_meshes", "bImportSkeletalMeshes"):
+                try:
+                    common_skel.set_editor_property(prop, False)
+                except Exception:
+                    pass
+        mesh_props = pipeline.get_editor_property("mesh_pipeline")
+        if mesh_props is not None:
+            for prop in ("force_all_mesh_as_type", "bForceStaticMesh"):
+                try:
+                    mesh_props.set_editor_property(prop,
+                        unreal.InterchangeForceMeshType.IFMT_STATIC_MESH)
+                    break
+                except Exception:
+                    pass
+        params.override_pipelines = [
+            unreal.SoftObjectPath(pipeline.get_path_name())
+            if hasattr(unreal, "SoftObjectPath") else pipeline
+        ]
+        unreal.log("Interchange: forcing static-mesh import to "
+                   "preserve TEXCOORD_1 column index intact.")
+    except Exception as e:
+        unreal.log_warning("Could not override Interchange pipeline "
+                           "(" + str(e) + "); falling back to default "
+                           "import. If you see static head/arms with "
+                           "chaotic body triangles, the secondary UV "
+                           "channel got renormalised — drag source.gltf "
+                           "in manually and choose Static Mesh in the "
+                           "import dialog.")
+
     mgr = unreal.InterchangeManager.get_interchange_manager_scripted()
     try:
         mgr.import_asset(BAKE_DIR, src_data, params)
@@ -106,55 +170,138 @@ def _import_gltf_via_interchange(src_filename, dst_name):
     return unreal.load_asset(BAKE_DIR + "/" + dst_name + "." + dst_name)
 
 
-def find_skeletal_mesh():
-    """Locate the imported Rumba skeletal mesh.
+def find_imported_mesh():
+    """Locate the imported Rumba mesh (StaticMesh preferred, falling
+    back to SkeletalMesh for backward compatibility with bakes that
+    were imported by an earlier version of this script).
 
     Interchange's `destination_name` parameter is advisory — when
     importing a glTF, the framework writes a subtree under
     `/Game/Rumba/source/...` (mesh, skeleton, animation, materials)
     and does NOT honour our requested `SK_Rumba` short name. So the
-    asset can land at `/Game/Rumba/SK_Rumba` (older UE / Interchange
-    builds), `/Game/Rumba/source/SkeletalMeshes/SK_Rumba`
-    (5.5+ Interchange default), or under a `Rumba_Dancing_mesh`
-    name if Interchange used the glTF's node name.
+    asset can land at any of several paths depending on UE / Interchange
+    version and whether the import was static or skeletal.
 
     We try every known path, then fall back to an AssetRegistry
-    search under `/Game/Rumba/` for the first SkeletalMesh asset.
+    search under `/Game/Rumba/` for the first StaticMesh, and finally
+    SkeletalMesh, asset. Returns (asset, is_static) so the caller
+    knows which actor class to spawn.
     """
-    candidates = [
+    static_candidates = [
+        "/Game/Rumba/SM_Rumba",
+        "/Game/Rumba/source/StaticMeshes/SM_Rumba",
+        "/Game/Rumba/Rumba_Dancing_mesh",
+        "/Game/Rumba/source/StaticMeshes/Rumba_Dancing_mesh",
+    ]
+    skel_candidates = [
         "/Game/Rumba/SK_Rumba",
         "/Game/Rumba/source/SkeletalMeshes/SK_Rumba",
         "/Game/Rumba/Rumba_Dancing_mesh",
         "/Game/Rumba/source/SkeletalMeshes/Rumba_Dancing_mesh",
     ]
-    for path in candidates:
+    for path in static_candidates:
         if unreal.EditorAssetLibrary.does_asset_exist(path):
             asset = unreal.load_asset(path)
-            if asset is not None:
-                unreal.log("find_skeletal_mesh: located at " + path)
-                return asset
+            if asset is not None and isinstance(asset, unreal.StaticMesh):
+                unreal.log("find_imported_mesh: StaticMesh at " + path)
+                return asset, True
+    for path in skel_candidates:
+        if unreal.EditorAssetLibrary.does_asset_exist(path):
+            asset = unreal.load_asset(path)
+            if asset is not None and isinstance(asset, unreal.SkeletalMesh):
+                unreal.log("find_imported_mesh: SkeletalMesh at "
+                           + path + " (fallback — UV2 may be "
+                           "renormalised; expect rendering glitches).")
+                return asset, False
 
-    # Last resort — AssetRegistry sweep under /Game/Rumba/.
+    # Last resort — AssetRegistry sweep under /Game/Rumba/, preferring
+    # StaticMesh over SkeletalMesh.
     try:
         ar = unreal.AssetRegistryHelpers.get_asset_registry()
-        # Recursive get_assets_by_path returns every asset in the
-        # subtree (including textures); filter to SkeletalMesh.
         assets = ar.get_assets_by_path("/Game/Rumba", recursive=True)
+        static_hit, skel_hit = None, None
         for ad in assets:
             try:
                 cls = str(ad.get_class().get_name())
             except Exception:
                 cls = ""
-            if cls == "SkeletalMesh":
-                obj = ad.get_asset()
-                if obj:
-                    pkg = str(ad.package_name) if hasattr(ad, "package_name") else "?"
-                    unreal.log("find_skeletal_mesh: AssetRegistry "
-                               "fallback found " + pkg)
-                    return obj
+            if cls == "StaticMesh" and static_hit is None:
+                static_hit = ad.get_asset()
+            elif cls == "SkeletalMesh" and skel_hit is None:
+                skel_hit = ad.get_asset()
+        if static_hit:
+            unreal.log("find_imported_mesh: AssetRegistry → "
+                       "StaticMesh fallback.")
+            return static_hit, True
+        if skel_hit:
+            unreal.log("find_imported_mesh: AssetRegistry → "
+                       "SkeletalMesh fallback (UV2 renormalisation "
+                       "may apply).")
+            return skel_hit, False
     except Exception as e:
         unreal.log_warning("AssetRegistry sweep failed: " + str(e))
-    return None
+    return None, False
+
+
+# Back-compat shim for any external code that imported the old name.
+def find_skeletal_mesh():
+    mesh, _is_static = find_imported_mesh()
+    return mesh
+
+
+def verify_imported_uv_channels(mesh):
+    """Confirm the imported mesh actually carries 2+ UV channels.
+    Interchange occasionally drops or renormalises secondary UVs
+    when importing glTF (varies by engine version and whether the
+    asset gets routed as static vs skeletal) — when that happens,
+    our `TexCoord[1]` sampler silently falls back to UV0 (or reads
+    rescaled-to-[0,1] values) and every primitive samples its own
+    body part's column range, which renders as static head/arms +
+    chaotic mid-body triangles. Log loudly so the failure is
+    self-explanatory in the Output Log."""
+    if not mesh:
+        return
+    try:
+        if isinstance(mesh, unreal.StaticMesh):
+            num_lods = mesh.get_num_lods() if hasattr(mesh, "get_num_lods") else 1
+            for lod in range(num_lods):
+                # StaticMesh exposes the LightMap coordinate / num-UV-channels
+                # via the LOD's BuildSettings; fall back to None if absent.
+                try:
+                    nuv = mesh.get_num_uv_channels(lod) if hasattr(
+                        mesh, "get_num_uv_channels") else -1
+                except Exception:
+                    nuv = -1
+                unreal.log("verify_uv: StaticMesh LOD " + str(lod)
+                           + " has " + str(nuv) + " UV channel(s)")
+                if nuv >= 0 and nuv < 2:
+                    unreal.log_error(
+                        "*** UV2 MISSING on StaticMesh LOD " + str(lod)
+                        + " — re-export source.gltf with `qtmesh vat "
+                        "--emit-uv2` and re-run the bootstrap.")
+        elif isinstance(mesh, unreal.SkeletalMesh):
+            num_lods = mesh.get_num_lods() if hasattr(mesh, "get_num_lods") else 1
+            for lod in range(num_lods):
+                nuv = mesh.get_num_texture_coordinates(lod) if hasattr(
+                    mesh, "get_num_texture_coordinates") else -1
+                unreal.log("verify_uv: SkeletalMesh LOD " + str(lod)
+                           + " has " + str(nuv) + " UV channel(s)")
+                if nuv >= 0 and nuv < 2:
+                    unreal.log_error(
+                        "*** UV2 MISSING on SkeletalMesh LOD "
+                        + str(lod) + " — the Custom-node material will "
+                        "read TexCoord[1] as UV0 and the dancer will "
+                        "render with wrong-vertex data (static head/arms, "
+                        "chaotic torso triangles).")
+                else:
+                    unreal.log_warning(
+                        "Imported as SkeletalMesh — even with UV2 "
+                        "present, secondary UVs get renormalised per "
+                        "render section and the bake column index is "
+                        "lost. Delete /Game/Rumba and re-run so the "
+                        "force-static-mesh import path runs.")
+    except Exception as e:
+        unreal.log_warning("verify_imported_uv_channels: " + str(e))
 
 
 def import_bake_assets():
@@ -167,7 +314,31 @@ def import_bake_assets():
     """
     _import_texture("mixamo.com_pos.png", "T_OpenVAT_Pos")
     _import_texture("Boss_diffuse.png",   "T_Boss_Diffuse")
-    _import_gltf_via_interchange("source.gltf", "SK_Rumba")
+
+    # Wipe any prior SkeletalMesh-flavoured import under /Game/Rumba/
+    # before re-importing. Interchange will happily route to either
+    # static or skeletal depending on the pipeline-override path, and
+    # leftover SkeletalMesh assets from older bootstrap runs would
+    # otherwise win find_imported_mesh's static-preferring search by
+    # tie-breaking on the SkeletalMesh import path. Static-mesh-only
+    # cleanup keeps the bootstrap re-runnable without manual purges.
+    try:
+        ar = unreal.AssetRegistryHelpers.get_asset_registry()
+        prior = ar.get_assets_by_path("/Game/Rumba", recursive=True)
+        for ad in prior:
+            try:
+                cls = str(ad.get_class().get_name())
+            except Exception:
+                cls = ""
+            if cls in ("SkeletalMesh", "Skeleton", "PhysicsAsset"):
+                pkg = str(ad.package_name) if hasattr(ad, "package_name") else None
+                if pkg:
+                    unreal.EditorAssetLibrary.delete_asset(pkg)
+    except Exception as e:
+        unreal.log_warning("Could not pre-clean prior SkeletalMesh "
+                           "imports: " + str(e))
+
+    _import_gltf_via_interchange("source.gltf", "SM_Rumba")
 
     # Position texture override: lossless, no sRGB, no mips, nearest.
     pos_tex = unreal.load_asset(BAKE_DIR + "/T_OpenVAT_Pos.T_OpenVAT_Pos")
@@ -382,18 +553,19 @@ def build_material(frame_count, bounds_min, bounds_max):
         unreal.MaterialExpressionTextureCoordinate, -800, 300)
     p_uv2.set_editor_property("coordinate_index", 1)
 
-    # Pre-skinned local position — the vertex's bind-pose coordinate
-    # in object space, before WPO and before skeletal-mesh skinning
-    # have been applied. We subtract this inside the Custom node so
-    # WPO carries the per-frame OFFSET (target − bind) instead of an
-    # absolute target. Without this the dancer collapses to ~1 cm
-    # because the bake's positions are in meters and Unreal's WPO
-    # is interpreted in centimeters.
+    # Bind-pose object-space coordinate. We subtract this inside the
+    # Custom node so WPO carries the per-frame OFFSET (target − bind)
+    # instead of an absolute target. Without this the dancer collapses
+    # to ~1 cm because the bake's positions are in meters and Unreal's
+    # WPO is interpreted in centimeters.
     #
-    # `MaterialExpressionPreSkinnedPosition` is exactly what we need
-    # and exists on every UE 5.x.
+    # We import as StaticMesh (see _import_gltf_via_interchange) so
+    # MaterialExpressionLocalPosition is the right source — it's the
+    # vertex's bind-pose local-space coordinate, exactly what we need.
+    # PreSkinnedPosition would be wrong here: it's only defined on
+    # skeletal-mesh materials, and we deliberately bypass the skeleton.
     p_bind = me.create_material_expression(mat,
-        unreal.MaterialExpressionPreSkinnedPosition, -800, 400)
+        unreal.MaterialExpressionLocalPosition, -800, 400)
 
     # Custom node carrying the openvat math.
     custom = me.create_material_expression(mat,
@@ -493,7 +665,8 @@ def _focus_viewport_on(actor):
 
 
 def spawn_dancer_in_level():
-    """Drop a SkeletalMeshActor into the open level and apply
+    """Drop a StaticMeshActor (preferred) or SkeletalMeshActor
+    (fallback for legacy imports) into the open level and apply
     M_OpenVAT. Idempotent — deletes a previous instance first.
 
     Loud on every failure mode so a "nothing visible" result is
@@ -504,24 +677,23 @@ def spawn_dancer_in_level():
         unreal.log_warning(
             "spawn_dancer_in_level: no EditorLevelLibrary or "
             "EditorActorSubsystem available on this engine. Drag "
-            "/Game/Rumba/SK_Rumba into the level manually, set its "
-            "Material 0 to /Game/VATDemo/M_OpenVAT and "
-            "Animation Mode = None.")
+            "the imported mesh into the level manually, set its "
+            "Material 0 to /Game/VATDemo/M_OpenVAT.")
         return None
 
-    mesh = find_skeletal_mesh()
+    mesh, is_static = find_imported_mesh()
     mat  = unreal.load_asset(DEMO_DIR + "/M_OpenVAT")
     if mesh is None:
-        unreal.log_error("spawn_dancer_in_level: no SkeletalMesh found "
-                         "under /Game/Rumba/ — glTF import must have "
-                         "failed.")
+        unreal.log_error("spawn_dancer_in_level: no mesh found under "
+                         "/Game/Rumba/ — glTF import must have failed.")
         return None
     if mat is None:
         unreal.log_error("spawn_dancer_in_level: /Game/VATDemo/M_OpenVAT "
                          "not found — material build must have failed.")
         return None
-    unreal.log("spawn_dancer_in_level: loaded SK_Rumba (%s) + M_OpenVAT (%s)"
-               % (mesh, mat))
+    unreal.log("spawn_dancer_in_level: loaded "
+               + ("StaticMesh" if is_static else "SkeletalMesh")
+               + " (" + str(mesh) + ") + M_OpenVAT (" + str(mat) + ")")
 
     # Delete any pre-existing OpenVAT_Dancer so reruns don't pile up.
     removed = 0
@@ -541,14 +713,16 @@ def spawn_dancer_in_level():
         unreal.log("spawn_dancer_in_level: removed %d previous "
                    "OpenVAT_Dancer instance(s)." % removed)
 
-    # Spawn at the world origin facing +X. The material does the
-    # glTF→Unreal swizzle (Y-up→Z-up, meters→cm) inside the Custom
-    # node so the actor's transform doesn't need to compensate.
+    # Spawn at the world origin. The material does the glTF→Unreal
+    # swizzle (Y-up→Z-up, meters→cm) inside the Custom node so the
+    # actor's transform doesn't need to compensate.
     location = unreal.Vector(0, 0, 0)
     rotation = unreal.Rotator(0, 0, 0)
+    actor_class = (unreal.StaticMeshActor if is_static
+                   else unreal.SkeletalMeshActor)
     try:
         actor = actor_lib.spawn_actor_from_class(
-            unreal.SkeletalMeshActor, location, rotation)
+            actor_class, location, rotation)
     except Exception as e:
         unreal.log_error("spawn_actor_from_class raised: " + str(e))
         return None
@@ -558,50 +732,73 @@ def spawn_dancer_in_level():
         return None
     actor.set_actor_label("OpenVAT_Dancer")
 
-    skel_comp = actor.skeletal_mesh_component
-    if skel_comp is None:
-        unreal.log_error("Spawned actor has no skeletal_mesh_component.")
-        return actor
-    # Property name moved between UE versions: try all known names.
-    set_ok = False
-    for attempt in ("set_skeletal_mesh_asset", "set_skeletal_mesh"):
-        if hasattr(skel_comp, attempt):
+    if is_static:
+        sm_comp = actor.static_mesh_component
+        if sm_comp is None:
+            unreal.log_error("Spawned actor has no static_mesh_component.")
+            return actor
+        set_ok = False
+        for attempt in ("set_static_mesh",):
+            if hasattr(sm_comp, attempt):
+                try:
+                    getattr(sm_comp, attempt)(mesh)
+                    set_ok = True
+                    break
+                except Exception as e:
+                    unreal.log_warning("%s failed: %s" % (attempt, e))
+        if not set_ok:
             try:
-                getattr(skel_comp, attempt)(mesh)
+                sm_comp.set_editor_property("static_mesh", mesh)
                 set_ok = True
-                break
-            except Exception as e:
-                unreal.log_warning("%s failed: %s" % (attempt, e))
-    if not set_ok:
-        for prop in ("skeletal_mesh_asset", "skeletal_mesh"):
-            try:
-                skel_comp.set_editor_property(prop, mesh)
-                set_ok = True
-                break
             except Exception:
                 pass
-    if not set_ok:
-        unreal.log_error("Could not assign SK_Rumba to the spawned "
-                         "actor via any known property name. The actor "
-                         "will render empty.")
-
-    try:
-        skel_comp.set_material(0, mat)
-    except Exception as e:
-        unreal.log_warning("set_material(0) failed: " + str(e))
-
-    # Disable engine animation — VAT material drives all vertex motion.
-    try:
-        skel_comp.set_editor_property("animation_mode",
-            unreal.AnimationMode.ANIMATION_NONE)
-    except Exception:
-        pass
+        if not set_ok:
+            unreal.log_error("Could not assign StaticMesh to the "
+                             "spawned actor. The actor will render empty.")
+        try:
+            sm_comp.set_material(0, mat)
+        except Exception as e:
+            unreal.log_warning("set_material(0) failed: " + str(e))
+    else:
+        skel_comp = actor.skeletal_mesh_component
+        if skel_comp is None:
+            unreal.log_error("Spawned actor has no skeletal_mesh_component.")
+            return actor
+        set_ok = False
+        for attempt in ("set_skeletal_mesh_asset", "set_skeletal_mesh"):
+            if hasattr(skel_comp, attempt):
+                try:
+                    getattr(skel_comp, attempt)(mesh)
+                    set_ok = True
+                    break
+                except Exception as e:
+                    unreal.log_warning("%s failed: %s" % (attempt, e))
+        if not set_ok:
+            for prop in ("skeletal_mesh_asset", "skeletal_mesh"):
+                try:
+                    skel_comp.set_editor_property(prop, mesh)
+                    set_ok = True
+                    break
+                except Exception:
+                    pass
+        if not set_ok:
+            unreal.log_error("Could not assign SkeletalMesh to the "
+                             "spawned actor. The actor will render empty.")
+        try:
+            skel_comp.set_material(0, mat)
+        except Exception as e:
+            unreal.log_warning("set_material(0) failed: " + str(e))
+        # Disable engine animation — VAT material drives all vertex motion.
+        try:
+            skel_comp.set_editor_property("animation_mode",
+                unreal.AnimationMode.ANIMATION_NONE)
+        except Exception:
+            pass
 
     _focus_viewport_on(actor)
-    unreal.log("Spawned OpenVAT_Dancer at (200, 0, 0) facing -X. "
-               "Look in the viewport — material `Time × fps` ticks "
-               "in the editor too. If you still see an empty scene, "
-               "press F to frame the selection.")
+    unreal.log("Spawned OpenVAT_Dancer at (0, 0, 0). Material `Time × fps` "
+               "ticks in the editor — no Play required. If the viewport "
+               "looks empty, press F to frame the selection.")
     return actor
 
 
@@ -619,20 +816,22 @@ def main():
     # spawn step will produce an empty placeholder and the user sees
     # an empty viewport — exactly the failure mode we're trying to
     # avoid.
-    mesh = find_skeletal_mesh()
+    mesh, _is_static = find_imported_mesh()
     pos  = unreal.load_asset(BAKE_DIR + "/T_OpenVAT_Pos")
     diff = unreal.load_asset(BAKE_DIR + "/T_Boss_Diffuse")
-    unreal.log("  SkeletalMesh    = %s" % mesh)
+    unreal.log("  Mesh            = %s" % mesh)
     unreal.log("  T_OpenVAT_Pos   = %s" % pos)
     unreal.log("  T_Boss_Diffuse  = %s" % diff)
     if mesh is None:
         unreal.log_error(
-            "=== Bootstrap STOPPED: no SkeletalMesh found under "
+            "=== Bootstrap STOPPED: no mesh found under "
             "/Game/Rumba/. Drag Content/Rumba/source.gltf into the "
-            "Content Browser manually and re-run this script. ===")
+            "Content Browser manually (choose Static Mesh in the "
+            "import dialog) and re-run this script. ===")
         return
 
-    unreal.log("step 2/5: verifying glTF carries TEXCOORD_1")
+    unreal.log("step 2/5: verifying glTF + imported mesh carry UV2")
+    verify_imported_uv_channels(mesh)
     if not verify_gltf_has_uv2():
         unreal.log_warning(
             "=== Bootstrap STOPPED: source.gltf is missing TEXCOORD_1. "
