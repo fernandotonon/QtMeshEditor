@@ -22,6 +22,20 @@ MatrixRecord unitCubeMatrix()
     return m;
 }
 
+PrimRecord triFromScreen(const MatrixRecord &matrix, int sx0, int sy0, int sz0, int sx1, int sy1,
+                         int sz1, int sx2, int sy2, int sz2)
+{
+    PrimRecord prim{};
+    prim.kind = PrimKind::MonoTri;
+    prim.vertexCount = 3;
+    prim.matrixId = 0;
+    prim.verts[0] = {sx0, sy0, sz0, 200, 80, 80, 0, 0};
+    prim.verts[1] = {sx1, sy1, sz1, 200, 80, 80, 0, 0};
+    prim.verts[2] = {sx2, sy2, sz2, 200, 80, 80, 0, 0};
+    (void)matrix;
+    return prim;
+}
+
 void appendScreenCubeWithMatrix(CaptureSnapshot &snap)
 {
     snap.matrices.append(unitCubeMatrix());
@@ -51,20 +65,6 @@ void appendScreenCubeWithMatrix(CaptureSnapshot &snap)
     tri(l, t, zNear, r, t, zFar, r, t, zNear);
     tri(l, b, zNear, l, b, zFar, r, b, zFar);
     tri(l, b, zNear, r, b, zFar, r, b, zNear);
-}
-
-PrimRecord triFromScreen(const MatrixRecord &matrix, int sx0, int sy0, int sz0, int sx1, int sy1,
-                         int sz1, int sx2, int sy2, int sz2)
-{
-    PrimRecord prim{};
-    prim.kind = PrimKind::MonoTri;
-    prim.vertexCount = 3;
-    prim.matrixId = 0;
-    prim.verts[0] = {sx0, sy0, sz0, 200, 80, 80, 0, 0};
-    prim.verts[1] = {sx1, sy1, sz1, 200, 80, 80, 0, 0};
-    prim.verts[2] = {sx2, sy2, sz2, 200, 80, 80, 0, 0};
-    (void)matrix;
-    return prim;
 }
 
 void appendProjectedCubeFace(CaptureSnapshot &snap, const MatrixRecord &matrix, int mx0, int my0,
