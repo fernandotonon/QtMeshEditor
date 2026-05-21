@@ -85,13 +85,13 @@ void PsxGteRamScanner::captureFromSystemRam(const uint8_t *ram, size_t byteSize,
         uint32_t header = 0;
         std::memcpy(&header, ram + offset, sizeof(header));
         if (psxLooksLikeGp0Opcode(header)) {
-            offset += 8;
+            offset += 4;
             continue;
         }
 
         MatrixRecord matrix{};
         if (!readMatrixAt(ram, byteSize, offset, matrix)) {
-            offset += 8;
+            offset += 4;
             continue;
         }
 
