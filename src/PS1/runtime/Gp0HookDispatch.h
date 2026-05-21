@@ -31,8 +31,12 @@ public:
                                   QSet<QString> &seenPrimKeys, DrawModeRecord &currentMode,
                                   int &primCount);
 
-    /** GTE RAM scan, GP0 capture, frame begin/end (#418, #419). */
-    static void captureFrameFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks);
+    /**
+     * Frame capture with optional GTE RAM scan (#418, #419).
+     * @p scanGteRam When false, skips the 2 MiB matrix heuristic (use on per-frame ticks).
+     */
+    static void captureFrameFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
+                                          bool scanGteRam = true);
 };
 
 #endif // GP0HOOKDISPATCH_H

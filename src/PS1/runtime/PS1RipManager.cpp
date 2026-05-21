@@ -189,8 +189,7 @@ void PS1RipManager::syncWorkerCaptureArmed()
         return;
     PS1RipWorker *worker = m_worker;
     const bool armed = m_captureArmed;
-    QMetaObject::invokeMethod(worker, [worker, armed]() { worker->setCaptureArmed(armed); },
-                              Qt::QueuedConnection);
+    QMetaObject::invokeMethod(worker, "setCaptureArmed", Qt::QueuedConnection, Q_ARG(bool, armed));
 }
 
 bool PS1RipManager::loadBios(const QString &path)
@@ -363,8 +362,7 @@ bool PS1RipManager::captureFrame()
         return false;
     }
     PS1RipWorker *worker = m_worker;
-    QMetaObject::invokeMethod(worker, [worker]() { worker->finalizeFrameCapture(); },
-                              Qt::QueuedConnection);
+    QMetaObject::invokeMethod(worker, "finalizeFrameCapture", Qt::QueuedConnection);
     return true;
 }
 

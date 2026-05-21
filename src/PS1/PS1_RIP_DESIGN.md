@@ -68,7 +68,7 @@ See epic #412 for phased issues (#413–#431).
 
 - `CaptureTypes`, `GpuCommandParser`, `CaptureBuffer`, `RipperHooks`, `Gp0HookDispatch` (#418).
 - `EmuHooks` included from `EmuCore.h` (issue #418 API surface).
-- **GTE capture (#419):** `PsxGteRamScanner` runs before GP0 ingest; `RipperHooks` tracks the latest `onGteMatrix` as `matrixId` for subsequent primitives; hash dedupe + `cameraMatrixId` heuristic exposed in the session status bar after mesh build.
+- **GTE capture (#419):** `PsxGteRamScanner` runs before GP0 ingest on explicit **Capture Frame** (`ingestCaptureFrame`); per-frame armed ticks skip the 2 MiB GTE scan to avoid UI freezes. `RipperHooks` tracks the latest `onGteMatrix` as `matrixId` for subsequent primitives; hash dedupe + `cameraMatrixId` heuristic exposed in the session status bar after mesh build.
 - **Libretro capture path:** `Gp0HookDispatch` in the plugin walks **ordering-table linked GP0 chains** first (`PsxOrderingTableScanner` + `PsxGp0ChainWalker`), then falls back to linear RAM opcode scan when no OT is found. OT entries are resolved as **24-bit absolute RAM pointers** (libgpu `getaddr` layout), with a relative-to-OT-base fallback for synthetic tests. Linked DR tags carry the opcode in bits 24–31 and the next packet address in bits 2–23 (`PsxGp0Opcode.h`); drawing-environment commands (0xE1–0xE6) stay in the low byte.
 - **Stub core** emits all seven GP0 primitive flavors for CI when `QTMESH_PS1_FORCE_STUB=1` or no libretro core is present.
 - `armCapture` / `captureFrame` wire capture to the worker thread; CSV dump to temp for verification.

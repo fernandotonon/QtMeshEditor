@@ -6,6 +6,8 @@
 #include <QMetaType>
 #include <QVector>
 
+#include <cstdint>
+
 class CaptureBuffer;
 
 /** Thread-safe copy of a frame capture for main-thread reconstruction (#422). */
