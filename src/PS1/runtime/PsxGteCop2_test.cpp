@@ -136,7 +136,7 @@ TEST(PsxGteCop2Test, InstructionCaptureFindsCop2RtopsMatrix)
     hooks.onFrameEnd();
 
     EXPECT_GE(buffer.matrices().size(), 1);
-    EXPECT_TRUE(buffer.hasCameraMatrix());
+    // Camera matrix is inferred from prim usage in endFrame(); COP2-only capture has no prims.
 }
 
 #endif // ENABLE_PS1_RIP

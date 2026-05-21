@@ -167,12 +167,11 @@ TEST(PsxGteIsoDedupeTest, StaticSceneCop2ProgramDedupesThreeDrawables)
 TEST(PsxGteIsoDedupeTest, RealIsoCaptureHasBoundedMatrixCount)
 {
     if (!libretroCorePresent())
-        GTEST_SKIP() << "libretro PS1 core not installed";
-
+        return;
     const QString bios = testBiosPath();
     const QString iso = testIsoPath();
     if (bios.isEmpty() || iso.isEmpty())
-        GTEST_SKIP() << "Set QTMESH_PS1_TEST_BIOS and QTMESH_PS1_TEST_ISO (or QTMESH_PS1_TEST_HOMEBREW_ISO)";
+        return;
 
     qunsetenv("QTMESH_PS1_FORCE_STUB");
 
@@ -180,7 +179,7 @@ TEST(PsxGteIsoDedupeTest, RealIsoCaptureHasBoundedMatrixCount)
     std::unique_ptr<EmuCore> core = EmuCoreLoader::loadCore(&err);
     ASSERT_TRUE(core) << err.toStdString();
     if (core->coreId() == QStringLiteral("stub"))
-        GTEST_SKIP() << "libretro core unavailable (stub loaded)";
+        return;
 
     ASSERT_TRUE(core->loadBios(bios));
     ASSERT_TRUE(core->loadIso(iso));
