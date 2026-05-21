@@ -205,8 +205,8 @@ if(ENABLE_LOCAL_LLM)
 
     FetchContent_Declare(
         llama_cpp
-        GIT_REPOSITORY https://github.com/ggerganov/llama.cpp.git
-        GIT_TAG master
+        GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+        GIT_TAG b9267
         GIT_SHALLOW TRUE
     )
 
