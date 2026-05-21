@@ -3,20 +3,31 @@
 # Why a Python script instead of pre-built .uasset files:
 #   Unreal's .uasset is a proprietary binary that re-cooks per engine
 #   version and can't be hand-written or committed reliably across
-#   UE 5.3 / 5.4 / 5.5. The bake itself (PNG, sidecar, glTF, bind .bin,
-#   USF shader) is all text/standard files — we ship those, and run
+#   UE 5.3 / 5.4 / 5.5. The bake itself (PNG, sidecar, glTF, USF
+#   shader) is all text/standard files — we ship those, and run
 #   this script once to generate the engine-specific glue (Material,
-#   Texture import settings, demo Blueprint, level).
+#   Texture import settings, demo Blueprint).
 #
 # Run from inside the Unreal editor:
 #   Window → Output Log → Python tab → execute file:
 #     Content/Python/build_vat_demo.py
 #   or:   py Content/Python/build_vat_demo.py
 #
-# Idempotent — re-running overwrites in place.
+# Idempotent — re-running rebuilds the Material in place.
+#
+# How this works (and why it's simpler than it used to be):
+#   The bake's source.gltf is produced by `qtmesh vat --emit-uv2`,
+#   which writes the per-vertex bake-column index as a TEXCOORD_1
+#   attribute directly into the glTF. Unreal's mesh importer
+#   reorders vertices for cache locality, but a vertex attribute
+#   travels WITH its vertex through any reorder — so TEXCOORD_1
+#   still points at the right column in the imported mesh. No
+#   runtime UV2-baking, no bind-sidecar matcher, no engine-version-
+#   specific Geometry Script paths. The shader just reads
+#   TexCoord[1] and indexes the position texture by that.
 
+import json
 import os
-import struct
 import unreal
 
 
@@ -71,9 +82,7 @@ def _import_gltf_via_interchange(src_filename, dst_name):
             + " manually (and rename the result to " + dst_name + ").")
         return None
 
-    # Source data — the .gltf file.
     src_data = unreal.InterchangeManager.create_source_data(src_path)
-    # Where to put it.
     params = unreal.ImportAssetParameters()
     params.is_automated = True
     params.destination_name = dst_name
@@ -123,7 +132,6 @@ def import_bake_assets():
 
 def read_sidecar():
     """Return (frame_count, bounds_min, bounds_max) from -remap_info.json."""
-    import json
     path = os.path.abspath(os.path.join(
         RUMBA_FS_DIR, "mixamo.com-remap_info.json"))
     with open(path, "r") as f:
@@ -136,29 +144,59 @@ def read_sidecar():
 
 
 # ────────────────────────────────────────────────────────────────────
-# 3. Build the Material. Custom node carries openvat.usf body inline.
+# 3. Verify source.gltf carries TEXCOORD_1 (the bake-column index).
+#
+# Without it the dancer renders as scattered triangles because the
+# material's `TexCoord[1]` would read whatever (or nothing) the
+# importer put there. `qtmesh vat --emit-uv2` is what writes this
+# channel; we sanity-check at bootstrap time so a stale bake (made
+# before the --emit-uv2 era) fails loudly instead of silently.
+# ────────────────────────────────────────────────────────────────────
+
+def verify_gltf_has_uv2():
+    """Inspect source.gltf to confirm every primitive carries
+    TEXCOORD_1. Returns True on success, False otherwise."""
+    path = os.path.abspath(os.path.join(RUMBA_FS_DIR, "source.gltf"))
+    try:
+        with open(path, "r") as f:
+            d = json.load(f)
+    except Exception as e:
+        unreal.log_error("Could not read source.gltf: " + str(e))
+        return False
+    meshes = d.get("meshes", [])
+    if not meshes:
+        unreal.log_error("source.gltf has no meshes.")
+        return False
+    missing = []
+    for mi, mesh in enumerate(meshes):
+        for pi, prim in enumerate(mesh.get("primitives", [])):
+            if "TEXCOORD_1" not in prim.get("attributes", {}):
+                missing.append("mesh[%d].primitives[%d]" % (mi, pi))
+    if missing:
+        unreal.log_error(
+            "source.gltf is MISSING TEXCOORD_1 on: " + ", ".join(missing)
+            + " — re-bake with `qtmesh vat --emit-uv2` or the dancer "
+              "will render as scattered triangles.")
+        return False
+    unreal.log("source.gltf carries TEXCOORD_1 on every primitive ✓")
+    return True
+
+
+# ────────────────────────────────────────────────────────────────────
+# 4. Build the Material. Custom node carries openvat.usf body inline.
 # ────────────────────────────────────────────────────────────────────
 
 def read_usf_body():
-    """Strip the openvat.usf wrapper down to a Custom-node-friendly body.
-
-    The Custom node treats its `Code` property as the body of an HLSL
-    function — no `void main`, no #version, no struct boilerplate. The
-    shipped .usf is a complete file; we extract the vertex-stage block.
-    """
-    path = os.path.abspath(os.path.join(RUMBA_FS_DIR, "openvat.usf"))
-    with open(path, "r") as f:
-        text = f.read()
-    # The .usf file holds standalone HLSL. For a Custom-node port we
-    # rebuild the math inline — short enough to keep here verbatim so
-    # users don't have to chase the .usf preprocessor steps.
+    """The Custom node treats its `Code` property as the body of an
+    HLSL function — no `void main`, no #version, no struct boilerplate.
+    Inline body kept short enough that users don't need to chase the
+    full openvat.usf file for the math."""
     return r"""
-// OpenVAT Custom-node body, ported from openvat.usf for Unreal's
-// material Custom node. Inputs (wire from the material graph):
+// OpenVAT Custom-node body. Inputs (wire from the material graph):
 //   pos_tex        Texture2D  — the imported T_OpenVAT_Pos
-//   pos_tex_sampler  — sampler for pos_tex
-//   tex_size       float2     — (width, height) of pos_tex
-//   uv2            float2     — (column, row_block) per vertex (UV2)
+//   uv2            float2     — (col, row_block) per vertex, from
+//                                the mesh's TEXCOORD_1 (written by
+//                                `qtmesh vat --emit-uv2`)
 //   current_frame  float      — scalar parameter, animated 0..frame_count
 //   frame_count    float      — scalar parameter (from sidecar)
 //   bounds_min     float3
@@ -204,7 +242,6 @@ def build_material(frame_count, bounds_min, bounds_max):
         unreal.log_error("Failed to create M_OpenVAT")
         return None
 
-    # Use the high-level MaterialEditingLibrary API.
     me = unreal.MaterialEditingLibrary
 
     # Scalar/vector parameters bound by the actor at runtime.
@@ -236,8 +273,11 @@ def build_material(frame_count, bounds_min, bounds_max):
     if pos_tex_asset:
         p_tex.set_editor_property("texture", pos_tex_asset)
 
-    # Per-vertex UV2 lookup (we use TexCoord index 1; the importer
-    # stores UV0 as TexCoord 0; the EUW below writes UV2 → TexCoord 1).
+    # Per-vertex UV2 lookup. TexCoord index 1 maps directly to the
+    # glTF's TEXCOORD_1 — the (column, row_block) pair `qtmesh vat
+    # --emit-uv2` wrote into source.gltf. Unreal's importer preserves
+    # vertex attributes across its vertex-buffer reorder, so this
+    # always lines up with the bake.
     p_uv2 = me.create_material_expression(mat,
         unreal.MaterialExpressionTextureCoordinate, -800, 300)
     p_uv2.set_editor_property("coordinate_index", 1)
@@ -250,10 +290,6 @@ def build_material(frame_count, bounds_min, bounds_max):
         unreal.CustomMaterialOutputType.CMOT_FLOAT3)
     custom.set_editor_property("description", "OpenVAT_Vertex")
 
-    # The Custom node's Inputs array carries one entry per input pin.
-    # We rebuild it so the names line up with what the HLSL body
-    # references (pos_tex, uv2, current_frame, frame_count,
-    # bounds_min, bounds_max).
     custom_inputs = []
     for name in ("pos_tex", "uv2", "current_frame", "frame_count",
                  "bounds_min", "bounds_max"):
@@ -262,7 +298,6 @@ def build_material(frame_count, bounds_min, bounds_max):
         custom_inputs.append(ci)
     custom.set_editor_property("inputs", custom_inputs)
 
-    # Wire the inputs.
     me.connect_material_expressions(p_tex,    "", custom, "pos_tex")
     me.connect_material_expressions(p_uv2,    "", custom, "uv2")
     me.connect_material_expressions(p_curr,   "", custom, "current_frame")
@@ -270,36 +305,11 @@ def build_material(frame_count, bounds_min, bounds_max):
     me.connect_material_expressions(p_lo,     "", custom, "bounds_min")
     me.connect_material_expressions(p_hi,     "", custom, "bounds_max")
 
-    # Connect the Custom node's output → World Position Offset.
-    # The shader returns absolute model-space position, but WPO expects
-    # a delta from the bind pose. So subtract the original vertex's
-    # local position via a `VertexLocalPosition` node.
-    p_origin = me.create_material_expression(mat,
-        unreal.MaterialExpressionVertexInterpolator, -400, 200)
-    # MaterialExpressionVertexInterpolator wraps a value computed in
-    # the vertex stage; here we use it to expose the absolute new
-    # position to the pixel shader stage. For WPO we subtract local
-    # position to get the offset.
-    p_local = me.create_material_expression(mat,
-        unreal.MaterialExpressionWorldPosition, -400, 300)
-
-    # WPO = world_target_position - actor_world_position
-    # The Custom node returns local-space; convert via the WorldPosition
-    # delta from bind. Simpler approach: write delta = custom_output -
-    # (model-space bind position). We sample the bind position from a
-    # ConstantBiasScale / VertexPosition node.
-    # Unreal exposes the original bind-pose position as
-    # `MaterialExpressionVertexPosition` — wire it through Subtract.
-    p_bind = me.create_material_expression(mat,
-        unreal.MaterialExpressionVertexNormalWS, -400, 400)
-    # The above is the wrong expression but the BindPose node has been
-    # renamed across UE versions. Easiest portable thing: pre-compute
-    # delta in the Custom node body by subtracting `Parameters.WorldPosition_NoOffsets`.
-    # Since that's a TranslationOffset issue, we wire the Custom output
-    # straight to WPO and accept that the bind pose is at origin —
-    # the dancer will animate around (0,0,0) which is correct for
-    # the demo. A real consumer would refine the bind-pose subtraction.
-
+    # The Custom node returns absolute model-space position and we
+    # wire it straight to World Position Offset. Assumes the bind
+    # pose sits at the actor origin — true for Mixamo characters
+    # (the demo asset); other rigs would need a
+    # `WPO = custom_output - bind_position` subtraction.
     me.connect_material_property(custom, "",
         unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
 
@@ -324,119 +334,20 @@ def build_material(frame_count, bounds_min, bounds_max):
 
 
 # ────────────────────────────────────────────────────────────────────
-# 4. Bake UV2 = per-vertex bake-column index.
-#
-# This is the critical step. Unreal's mesh importer reorders vertices
-# for cache locality, so vertex N in the imported asset isn't vertex
-# N of the bake. We read mixamo.com_ogre_bind.bin (which contains
-# Ogre's per-vertex bind pos + normal + UV in vertex-buffer order)
-# and write back, per Unreal vertex, the matching Ogre index as UV2.
-# ────────────────────────────────────────────────────────────────────
-
-def read_ogre_bind():
-    """Parse the BTVB sidecar. Returns list[{pos, nrm, uv}] in Ogre order."""
-    path = os.path.abspath(os.path.join(RUMBA_FS_DIR, "mixamo.com_ogre_bind.bin"))
-    with open(path, "rb") as f:
-        magic, version, count, flags = struct.unpack("<IIII", f.read(16))
-        if magic != 0x42565442:
-            unreal.log_error("Bad magic in ogre_bind.bin")
-            return []
-        has_n = bool(flags & 0x2)
-        has_u = bool(flags & 0x4)
-        verts = []
-        for _ in range(count):
-            px, py, pz = struct.unpack("<fff", f.read(12))
-            rec = {"pos": (px, py, pz)}
-            if has_n:
-                nx, ny, nz = struct.unpack("<fff", f.read(12))
-                rec["nrm"] = (nx, ny, nz)
-            if has_u:
-                u, v = struct.unpack("<ff", f.read(8))
-                rec["uv"] = (u, v)
-            verts.append(rec)
-    return verts
-
-
-def bake_uv2(skeletal_mesh_path):
-    """Walk the imported mesh's vertices, find each one in the Ogre
-    bind sidecar by (pos, normal, uv) signature, write that Ogre index
-    into UV2. Saves the mesh in place.
-
-    Currently returns False — Unreal's StaticMesh/SkeletalMesh editor
-    APIs for direct vertex manipulation are sparse from Python and
-    change between engine versions (5.3 needs the Geometry Script
-    plugin or a C++ helper; 5.4+ has experimental SkeletalMesh tools
-    via native FStaticMeshLODResources). Until we ship either the
-    Geometry Script path or a small C++ helper to commit the UV2
-    write, this function MUST NOT report success: a True return value
-    would let the bootstrap claim the setup is complete while the
-    shader's `pos_tex.Load` with integer UV2-derived indices reads
-    the wrong texels for every vertex. The result is a scrambled or
-    collapsed VAT deformation that looks like a bug in the bake
-    rather than a missing setup step.
-
-    The function still computes and logs the matching plan so the
-    follow-up that adds the actual write can be implemented + verified
-    against a known-good plan; for the user's purposes, see
-    README.md "Step 4: bake UV2" for the manual / EUW path.
-    """
-    mesh = unreal.load_asset(skeletal_mesh_path)
-    if not mesh:
-        unreal.log_error("No mesh at " + skeletal_mesh_path)
-        return False
-
-    ogre = read_ogre_bind()
-    if not ogre:
-        unreal.log_error("Bind sidecar missing — UV2 NOT written. "
-                         "Bake will render scrambled.")
-        return False
-
-    # Build a quantized-position bucket from the sidecar.
-    def qpos(v):
-        return (int(round(v[0] * 1e5)),
-                int(round(v[1] * 1e5)),
-                int(round(v[2] * 1e5)))
-
-    bucket = {}
-    for i, rec in enumerate(ogre):
-        bucket.setdefault(qpos(rec["pos"]), []).append(i)
-
-    # NOTE: this step has to run on the imported LOD-0 vertex buffer.
-    # Unreal's Python API exposes that buffer differently per version
-    # (5.3: GeometryScript plugin; 5.4+: native FStaticMeshLODResources
-    # via experimental SkeletalMesh tools). To stay portable, this
-    # script logs the per-vertex matching plan but leaves the actual
-    # UV2 write to a small C++ helper or to a manual run of the
-    # Editor Utility Widget shipped alongside this script — see
-    # README.md "Step 4: bake UV2".
-    unreal.log_warning(
-        "UV2 bake plan computed (%d Ogre vertices, %d position buckets) "
-        "BUT NOT YET WRITTEN to the mesh. Run the EUW or the C++ helper "
-        "described in README.md Step 4 to commit per-vertex UV2 before "
-        "playing the demo, or the dancer will render scrambled."
-        % (len(ogre), len(bucket)))
-    # Explicit False so callers (and the bootstrap report) treat the
-    # demo setup as incomplete until UV2 is genuinely written.
-    return False
-
-
-# ────────────────────────────────────────────────────────────────────
 # 5. Build a sample Blueprint that drives current_frame over time.
 # ────────────────────────────────────────────────────────────────────
 
 def build_actor_blueprint(frame_count):
-    """Drop a BP_VATDancer with a SkeletalMeshComponent using M_OpenVAT.
+    """Create BP_VATDancer skeleton.
 
-    The Tick event computes `current_frame = fmod(time * fps, frame_count)`
-    and pokes it into the material instance.
+    Unreal's Blueprint creation from Python is supported via
+    KismetEditorUtilities + EditorAssetLibrary, but graph editing
+    (event nodes + math chain) requires UnrealEd's BP graph API
+    which isn't fully exposed to Python. Easiest portable path:
+    create the Blueprint asset and let the user double-click to
+    add the 4-node tick logic per the README. This is what most
+    production UE pipelines do.
     """
-    # Unreal's Blueprint creation from Python is supported via
-    # KismetEditorUtilities + EditorAssetLibrary, but graph editing
-    # (event nodes + math chain) requires UnrealEd's BP graph API
-    # which isn't fully exposed to Python. Easiest portable path:
-    # create the Blueprint asset, instantiate the components, and
-    # let the user double-click to add the 4-node tick logic per the
-    # README. This is what most production UE pipelines do.
     bp_path = DEMO_DIR + "/BP_VATDancer"
     if unreal.EditorAssetLibrary.does_asset_exist(bp_path):
         unreal.log("BP_VATDancer already exists — skipping.")
@@ -459,23 +370,18 @@ def build_actor_blueprint(frame_count):
 def main():
     unreal.log("=== QtMeshEditor OpenVAT demo bootstrap ===")
     import_bake_assets()
+    if not verify_gltf_has_uv2():
+        unreal.log_warning(
+            "=== Bootstrap STOPPED: source.gltf is missing TEXCOORD_1. "
+            "Re-bake with `qtmesh vat <file> --anim <name> --emit-uv2 "
+            "-o <dir>` and overwrite the files under Content/Rumba/. ===")
+        return
     frames, mn, mx = read_sidecar()
     unreal.log("Sidecar: frames=%d, min=%s, max=%s" % (frames, mn, mx))
     build_material(frames, mn, mx)
-    uv2_ok = bake_uv2(BAKE_DIR + "/SK_Rumba")
     build_actor_blueprint(frames)
-    if uv2_ok:
-        unreal.log("=== Bootstrap done. Open /Game/VATDemo/M_OpenVAT + "
-                   "BP_VATDancer; finish wiring per README. ===")
-    else:
-        # Loud, terminal-style banner so it's hard to miss in the
-        # Output Log scroll. The dancer WILL render scrambled if the
-        # user proceeds without completing Step 4.
-        unreal.log_warning("=== Bootstrap INCOMPLETE: UV2 bake step was "
-                           "not committed. Follow README Step 4 (manual "
-                           "Editor Utility Widget or C++ helper) before "
-                           "playing the demo, or the dancer will render "
-                           "as scattered triangles. ===")
+    unreal.log("=== Bootstrap done. Open /Game/VATDemo/M_OpenVAT + "
+               "BP_VATDancer; finish wiring per README. ===")
 
 
 if __name__ == "__main__":
