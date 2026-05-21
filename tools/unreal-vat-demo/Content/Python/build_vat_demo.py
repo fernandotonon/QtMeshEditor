@@ -248,16 +248,36 @@ def read_usf_body():
     poke each Tick. Means a static actor with this material renders
     the animation forever, no Blueprint logic required."""
     return r"""
-// OpenVAT Custom-node body. Inputs (wire from the material graph):
+// OpenVAT Custom-node body — emits a WPO offset for Unreal.
+//
+// Inputs (wire from the material graph):
 //   pos_tex        Texture2D  — the imported T_OpenVAT_Pos
-//   uv2            float2     — (col, row_block) per vertex, from
-//                                the mesh's TEXCOORD_1 (written by
-//                                `qtmesh vat --emit-uv2`)
+//   uv2            float2     — TEXCOORD_1 = (col, row_block), per-
+//                                vertex (written by `qtmesh vat --emit-uv2`)
 //   current_frame  float      — derived from material Time × fps
-//   frame_count    float      — scalar parameter (from sidecar)
-//   bounds_min     float3
-//   bounds_max     float3
-// Output: float3 — the displaced model-space vertex position.
+//   frame_count    float      — scalar param (from sidecar)
+//   bind_local     float3     — `PreSkinnedPosition`: bind-pose
+//                                vertex in object space, Z-up,
+//                                centimeters (Interchange-imported)
+//   bounds_min     float3     — Y-up, meters (raw bake)
+//   bounds_max     float3     — Y-up, meters (raw bake)
+//
+// Output: float3 — World-space OFFSET (delta) for WPO, in cm.
+//
+// Coordinate-system gymnastics: the bake's texels + bounds live in
+// glTF native space (Y-up RH, meters). Unreal's Interchange importer
+// has already swizzled the imported mesh to Z-up LH cm. To get a
+// usable WPO we have to take the bake's target position into the
+// same frame the bind sits in, then subtract.
+//
+//   target_yup_m  = bounds_min + p * (bounds_max - bounds_min)
+//   target_zup_cm = (target_yup_m.x, -target_yup_m.z, target_yup_m.y) * 100
+//   bind_zup_cm   = bind_local                                // already in this frame
+//   wpo           = target_zup_cm - bind_zup_cm
+//
+// The swizzle `(x, -z, y)` is the standard glTF Y-up RH → UE Z-up LH
+// conversion. Combined with ×100 for the unit change it produces a
+// delta in Unreal centimeters, which WPO expects.
 
 int col = (int)uv2.x;
 int row_block = (int)uv2.y;
@@ -272,7 +292,12 @@ int base_row = row_block * N;
 float3 p_curr = pos_tex.Load(int3(col, base_row + curr, 0)).rgb;
 float3 p_next = pos_tex.Load(int3(col, base_row + nxt,  0)).rgb;
 float3 p = lerp(p_curr, p_next, blend);
-return bounds_min + p * (bounds_max - bounds_min);
+
+float3 target_yup_m  = bounds_min + p * (bounds_max - bounds_min);
+float3 target_zup_cm = float3(target_yup_m.x,
+                              -target_yup_m.z,
+                               target_yup_m.y) * 100.0;
+return target_zup_cm - bind_local;
 """
 
 
@@ -349,6 +374,19 @@ def build_material(frame_count, bounds_min, bounds_max):
         unreal.MaterialExpressionTextureCoordinate, -800, 300)
     p_uv2.set_editor_property("coordinate_index", 1)
 
+    # Pre-skinned local position — the vertex's bind-pose coordinate
+    # in object space, before WPO and before skeletal-mesh skinning
+    # have been applied. We subtract this inside the Custom node so
+    # WPO carries the per-frame OFFSET (target − bind) instead of an
+    # absolute target. Without this the dancer collapses to ~1 cm
+    # because the bake's positions are in meters and Unreal's WPO
+    # is interpreted in centimeters.
+    #
+    # `MaterialExpressionPreSkinnedPosition` is exactly what we need
+    # and exists on every UE 5.x.
+    p_bind = me.create_material_expression(mat,
+        unreal.MaterialExpressionPreSkinnedPosition, -800, 400)
+
     # Custom node carrying the openvat math.
     custom = me.create_material_expression(mat,
         unreal.MaterialExpressionCustom, -400, 0)
@@ -359,7 +397,7 @@ def build_material(frame_count, bounds_min, bounds_max):
 
     custom_inputs = []
     for name in ("pos_tex", "uv2", "current_frame", "frame_count",
-                 "bounds_min", "bounds_max"):
+                 "bind_local", "bounds_min", "bounds_max"):
         ci = unreal.CustomInput()
         ci.set_editor_property("input_name", name)
         custom_inputs.append(ci)
@@ -369,14 +407,14 @@ def build_material(frame_count, bounds_min, bounds_max):
     me.connect_material_expressions(p_uv2,    "", custom, "uv2")
     me.connect_material_expressions(p_curr,   "", custom, "current_frame")
     me.connect_material_expressions(p_frames, "", custom, "frame_count")
+    me.connect_material_expressions(p_bind,   "", custom, "bind_local")
     me.connect_material_expressions(p_lo,     "", custom, "bounds_min")
     me.connect_material_expressions(p_hi,     "", custom, "bounds_max")
 
-    # The Custom node returns absolute model-space position and we
-    # wire it straight to World Position Offset. Assumes the bind
-    # pose sits at the actor origin — true for Mixamo characters
-    # (the demo asset); other rigs would need a
-    # `WPO = custom_output - bind_position` subtraction.
+    # The Custom node now returns a WORLD-SPACE OFFSET in centimeters,
+    # ready to be summed into WPO. The HLSL does the meter→cm scale
+    # and the Y-up→Z-up swizzle so a Mixamo bake plays correctly
+    # without a Blueprint Tick or special component setup.
     me.connect_material_property(custom, "",
         unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
 
@@ -482,13 +520,11 @@ def spawn_dancer_in_level():
         unreal.log("spawn_dancer_in_level: removed %d previous "
                    "OpenVAT_Dancer instance(s)." % removed)
 
-    # Spawn somewhere the default editor camera will see it. The
-    # default empty map's camera looks down the +X axis from ~(0,0,200)
-    # toward the origin; a Mixamo Rumba is ~1.7 m tall (Unreal units
-    # are cm, so ~170 cm), so spawn at (200, 0, 0) facing -X back
-    # toward the camera and lift it so the feet touch the floor at z=0.
-    location = unreal.Vector(200, 0, 0)
-    rotation = unreal.Rotator(0, 180, 0)
+    # Spawn at the world origin facing +X. The material does the
+    # glTF→Unreal swizzle (Y-up→Z-up, meters→cm) inside the Custom
+    # node so the actor's transform doesn't need to compensate.
+    location = unreal.Vector(0, 0, 0)
+    rotation = unreal.Rotator(0, 0, 0)
     try:
         actor = actor_lib.spawn_actor_from_class(
             unreal.SkeletalMeshActor, location, rotation)
