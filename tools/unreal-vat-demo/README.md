@@ -51,49 +51,58 @@ specific Geometry Script paths.
 1. **Install UE 5.3 or newer** (5.4 and 5.5 tested locally). The
    project enables the `PythonScriptPlugin` and
    `EditorScriptingUtilities` plugins, both shipped with stock UE;
-   no marketplace plugins required.
+   no marketplace plugins required. **No system Python install** —
+   the editor ships its own.
 
-2. **Open `QtMeshVAT.uproject`.** Unreal will scan/import the content
-   folder. The project is content-only — no C++ compile.
+2. **Double-click `QtMeshVAT.uproject` to open it in UE.** Unreal
+   will scan/import the content folder. The project is content-only —
+   no C++ compile.
 
-3. **Run the bootstrap script.** In the editor: **Window → Output
-   Log → switch the Cmd dropdown to `Python` →**
-   ```python
-   py Content/Python/build_vat_demo.py
-   ```
-   Look for `=== Bootstrap done. ===` in the log.
-
-   This creates:
-   - `/Game/Rumba/T_OpenVAT_Pos` (position texture, **non-sRGB,
-     no DXT, no mips, Nearest filter** — required, the script sets all four)
-   - `/Game/Rumba/T_Boss_Diffuse` (diffuse texture)
-   - `/Game/Rumba/SK_Rumba` (skeletal mesh from `source.gltf`, imported
-     via Unreal's built-in **Interchange** framework)
-   - `/Game/VATDemo/M_OpenVAT` (Custom-node material — drives
-     `current_frame = Time × fps` internally, so the animation
-     loops on its own without a Blueprint Tick)
-   - `OpenVAT_Dancer` — a `SkeletalMeshActor` spawned at the world
-     origin in your current level, with `SK_Rumba` + `M_OpenVAT`
-     applied and Animation Mode set to None
+3. **The bootstrap runs automatically on first open.**
+   `Content/Python/init_unreal.py` is auto-discovered by UE's
+   PythonScriptPlugin and fires the bootstrap on the editor's first
+   tick: it imports the bake's textures + glTF, sets the right
+   texture import settings (non-sRGB, lossless, no mips, Nearest),
+   builds `/Game/VATDemo/M_OpenVAT` (the Custom-node material),
+   and spawns `OpenVAT_Dancer` at `(200, 0, 0)` in your open level
+   with the material applied. The Output Log shows a
+   `step 1/5 … step 5/5` trace.
 
    **You should now see the dancer animating in the editor viewport.**
-   No Play required — Unreal's material `Time` node ticks in the editor
-   too. If you don't, scrub the editor camera around the origin.
+   No Play required — Unreal's material `Time` node ticks in the
+   editor too. If you don't see it, press `F` to frame the selected
+   `OpenVAT_Dancer` actor.
 
-   **If the script logs `InterchangeManager not available` or the
-   .gltf import fails:** drag `Content/Rumba/source.gltf` into the
-   Content Browser manually, rename the resulting Skeletal Mesh to
-   `SK_Rumba`, then re-run the script — the texture/material/spawn
-   steps will pick up the already-imported mesh.
+### Re-running the bootstrap
 
-   **If the script logs `source.gltf is MISSING TEXCOORD_1`:** the
-   bake folder predates `qtmesh vat --emit-uv2` (added in PR #654).
-   Re-bake your source FBX with:
-   ```bash
-   qtmesh vat path/to/source.fbx --anim <name> --emit-uv2 \
-              -o tools/unreal-vat-demo/Content/Rumba/
-   ```
-   then re-run the bootstrap.
+The auto-runner deliberately skips on subsequent opens (it checks
+for `/Game/VATDemo/M_OpenVAT`) so it doesn't wipe + rebuild on
+every launch. To force a rebuild, do either:
+
+- Delete `/Game/VATDemo/M_OpenVAT` from the Content Browser and
+  restart the editor.
+- Run `py Content/Python/build_vat_demo.py` from the editor's
+  Python console (Window → Output Log → change the **Cmd**
+  dropdown to **Python**).
+
+### Troubleshooting
+
+**If the script logs `InterchangeManager not available` or the
+.gltf import fails:** drag `Content/Rumba/source.gltf` into the
+Content Browser manually, rename the resulting Skeletal Mesh to
+`SK_Rumba`, then re-run `py Content/Python/build_vat_demo.py` from
+the Python console.
+
+**If the script logs `source.gltf is MISSING TEXCOORD_1`:** the
+bake folder predates `qtmesh vat --emit-uv2` (added in PR #654).
+Re-bake your source FBX with:
+
+```bash
+qtmesh vat path/to/source.fbx --anim <name> --emit-uv2 \
+           -o tools/unreal-vat-demo/Content/Rumba/
+```
+
+then re-run the bootstrap.
 
 ## Performance notes
 
