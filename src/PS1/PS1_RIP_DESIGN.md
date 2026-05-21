@@ -132,7 +132,10 @@ cmake ... -DCMAKE_CXX_FLAGS="-DQTMESH_PS1_LIBRETRO_INTEGRATION_TESTS"
 export QTMESH_PS1_TEST_BIOS=/path/scph1001.bin
 export QTMESH_PS1_TEST_ISO=/path/game.cue
 ./build/bin/UnitTests --gtest_filter='EmuCoreLoaderTest.Libretro*'
+./build/bin/UnitTests --gtest_filter='PS1RipManagerLibretroArmTest.*'
 ```
+
+`PS1RipManagerLibretroArmTest` (arm/capture while a real libretro session runs) uses the same guard and env vars.
 
 ## Open questions
 

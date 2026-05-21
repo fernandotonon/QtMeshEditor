@@ -1,36 +1,33 @@
 #ifdef ENABLE_PS1_RIP
 
-#include <gtest/gtest.h>
+#if defined(QTMESH_PS1_LIBRETRO_INTEGRATION_TESTS)
 
-#include <atomic>
+#include <gtest/gtest.h>
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QSignalSpy>
-#include <QThread>
 #include <QTest>
 
 #include "PS1/runtime/PS1RipManager.h"
 
 namespace {
 
-QString defaultBiosPath()
+QString requireTestBiosPath()
 {
-    const QString env = qEnvironmentVariable("QTMESH_PS1_TEST_BIOS");
-    if (!env.isEmpty())
-        return env;
-    return QStringLiteral("/home/fernando/Downloads/scph5501.bin");
+    const QString path = qEnvironmentVariable("QTMESH_PS1_TEST_BIOS");
+    if (path.isEmpty() || !QFileInfo::exists(path))
+        return {};
+    return path;
 }
 
-QString defaultIsoPath()
+QString requireTestIsoPath()
 {
-    const QString env = qEnvironmentVariable("QTMESH_PS1_TEST_ISO");
-    if (!env.isEmpty())
-        return env;
-    return QStringLiteral(
-        "/home/fernando/Downloads/Crash Bandicoot - Warped (USA)/Crash Bandicoot - Warped (USA)/"
-        "Crash Bandicoot - Warped (USA).cue");
+    const QString path = qEnvironmentVariable("QTMESH_PS1_TEST_ISO");
+    if (path.isEmpty() || !QFileInfo::exists(path))
+        return {};
+    return path;
 }
 
 bool libretroPluginAvailable()
@@ -38,6 +35,14 @@ bool libretroPluginAvailable()
     const QString base = QCoreApplication::applicationDirPath() + QStringLiteral("/PS1Cores/");
     return QFileInfo::exists(base + QStringLiteral("qtmesh_ps1core_libretro.so"))
            || QFileInfo::exists(base + QStringLiteral("libqtmesh_ps1core_libretro.so"));
+}
+
+void skipUnlessLibretroAssetsReady()
+{
+    if (!libretroPluginAvailable())
+        GTEST_SKIP() << "libretro PS1 plugin not beside test binary";
+    if (requireTestBiosPath().isEmpty() || requireTestIsoPath().isEmpty())
+        GTEST_SKIP() << "Set QTMESH_PS1_TEST_BIOS and QTMESH_PS1_TEST_ISO to existing files";
 }
 
 } // namespace
@@ -67,13 +72,10 @@ protected:
 
 TEST_F(PS1RipManagerLibretroArmTest, ArmCaptureWhileLibretroSessionRuns)
 {
-    if (!libretroPluginAvailable())
-        GTEST_SKIP() << "libretro PS1 plugin not beside test binary";
+    skipUnlessLibretroAssetsReady();
 
-    const QString biosPath = defaultBiosPath();
-    const QString isoPath = defaultIsoPath();
-    ASSERT_TRUE(QFileInfo::exists(biosPath)) << biosPath.toStdString();
-    ASSERT_TRUE(QFileInfo::exists(isoPath)) << isoPath.toStdString();
+    const QString biosPath = requireTestBiosPath();
+    const QString isoPath = requireTestIsoPath();
 
     ASSERT_TRUE(manager->loadBios(biosPath));
     ASSERT_TRUE(manager->loadIso(isoPath));
@@ -99,13 +101,10 @@ TEST_F(PS1RipManagerLibretroArmTest, ArmCaptureWhileLibretroSessionRuns)
 
 TEST_F(PS1RipManagerLibretroArmTest, ArmThenCaptureFrame)
 {
-    if (!libretroPluginAvailable())
-        GTEST_SKIP() << "libretro PS1 plugin not beside test binary";
+    skipUnlessLibretroAssetsReady();
 
-    const QString biosPath = defaultBiosPath();
-    const QString isoPath = defaultIsoPath();
-    ASSERT_TRUE(QFileInfo::exists(biosPath));
-    ASSERT_TRUE(QFileInfo::exists(isoPath));
+    const QString biosPath = requireTestBiosPath();
+    const QString isoPath = requireTestIsoPath();
 
     ASSERT_TRUE(manager->loadBios(biosPath));
     ASSERT_TRUE(manager->loadIso(isoPath));
@@ -125,5 +124,7 @@ TEST_F(PS1RipManagerLibretroArmTest, ArmThenCaptureFrame)
 
     manager->stop();
 }
+
+#endif // QTMESH_PS1_LIBRETRO_INTEGRATION_TESTS
 
 #endif // ENABLE_PS1_RIP
