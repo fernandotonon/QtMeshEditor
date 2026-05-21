@@ -16,10 +16,16 @@ namespace {
 
 constexpr uint32_t kInsnRtops = 0x42000001u;
 
-uint32_t insnLwc2(int cop2Reg, int baseGpr, int offset)
+uint32_t insnLw(int rt, int rs, int offset)
 {
-    return (0x26u << 26) | (static_cast<uint32_t>(baseGpr) << 21)
-           | (static_cast<uint32_t>(cop2Reg) << 16) | static_cast<uint32_t>(offset & 0xFFFF);
+    return (0x23u << 26) | (static_cast<uint32_t>(rs) << 21) | (static_cast<uint32_t>(rt) << 16)
+           | static_cast<uint32_t>(offset & 0xFFFF);
+}
+
+uint32_t insnCtc2(int gpr, int ctrlIndex)
+{
+    return (0x12u << 26) | (6u << 21) | (static_cast<uint32_t>(gpr) << 16)
+           | (static_cast<uint32_t>(ctrlIndex) << 11);
 }
 
 uint32_t insnLui(int rt, uint16_t imm)
@@ -61,11 +67,18 @@ void embedRtopsProgram(uint8_t *ram, size_t matAddr, size_t codeAddr)
     const uint16_t lo = static_cast<uint16_t>(matAddr & 0xFFFF);
     code[i++] = insnLui(8, hi);
     code[i++] = insnOri(8, 8, lo);
-    for (int reg = 32; reg <= 39; ++reg)
-        code[i++] = insnLwc2(reg, 8, (reg - 32) * 4);
-    code[i++] = insnLwc2(56, 8, static_cast<int>(offsetof(MatrixRecord, ofx)));
-    code[i++] = insnLwc2(57, 8, static_cast<int>(offsetof(MatrixRecord, ofy)));
-    code[i++] = insnLwc2(58, 8, static_cast<int>(offsetof(MatrixRecord, h)));
+    auto loadCtrl = [&](int ctrlIndex, size_t byteOff) {
+        code[i++] = insnLw(9, 8, static_cast<int>(byteOff));
+        code[i++] = insnCtc2(9, ctrlIndex);
+    };
+    for (int ctrl = 0; ctrl <= 4; ++ctrl)
+        loadCtrl(ctrl, offsetof(MatrixRecord, rt.m[0][0]) + static_cast<size_t>(ctrl) * sizeof(int32_t));
+    loadCtrl(5, offsetof(MatrixRecord, tr[0]));
+    loadCtrl(6, offsetof(MatrixRecord, tr[1]));
+    loadCtrl(7, offsetof(MatrixRecord, tr[2]));
+    loadCtrl(24, offsetof(MatrixRecord, ofx));
+    loadCtrl(25, offsetof(MatrixRecord, ofy));
+    loadCtrl(26, offsetof(MatrixRecord, h));
     code[i++] = kInsnRtops;
 }
 

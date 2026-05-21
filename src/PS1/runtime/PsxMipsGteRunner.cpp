@@ -9,11 +9,6 @@ namespace {
 
 constexpr uint32_t kCop2Opcode = 0x12u; // bits 31-26
 
-bool isCop2(uint32_t insn)
-{
-    return (insn >> 26) == kCop2Opcode;
-}
-
 uint32_t fetchInsn(const uint8_t *ram, size_t ramBytes, uint32_t pc)
 {
     if (pc + 4 > ramBytes)
@@ -65,10 +60,10 @@ PsxMipsGteRunner::Result PsxMipsGteRunner::runBlock(const uint8_t *ram, size_t r
             const uint32_t rt = (insn >> 16) & 0x1Fu;
             const uint32_t rd = (insn >> 11) & 0x1Fu;
 
-            if (rs == 0x04) { // MTC2 — rt=GPR, rd=cop2 reg
+            if (rs == 0x04) { // MTC2 — rt=GPR, rd=data cop2 reg (0..31)
                 gte.writeReg(static_cast<int>(rd), gpr[rt]);
-            } else if (rs == 0x06) { // CTC2
-                gte.writeReg(static_cast<int>(rd), gpr[rt]);
+            } else if (rs == 0x06) { // CTC2 — rt=GPR, rd=control index (0..31) → cop2 32..63
+                gte.writeReg(static_cast<int>(rd) + 32, gpr[rt]);
             } else if (rs == 0x01) { // GTE command (RTPS/RTPT/…)
                 if (gte.executeGteCommand(insn)) {
                     ++result.rtpsEvents;
@@ -80,12 +75,6 @@ PsxMipsGteRunner::Result PsxMipsGteRunner::runBlock(const uint8_t *ram, size_t r
             }
             ++result.stepsExecuted;
             continue;
-        }
-
-        if (op == 0x0F) { // SPECIAL
-            const uint32_t funct = insn & 0x3Fu;
-            if (funct == 0x08 || funct == 0x09) // JR/JALR
-                break;
         }
 
         if (op == 0x00) { // SPECIAL
