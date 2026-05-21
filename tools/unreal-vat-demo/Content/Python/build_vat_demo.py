@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 8
+OPENVAT_BUILD = 9
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -147,6 +147,23 @@ def _import_gltf_via_interchange(src_filename, dst_name):
             except Exception as e:
                 unreal.log_warning("Could not set force_all_mesh_as_type: "
                                    + str(e))
+            # Keep every primitive as its own render section. Without
+            # this, Interchange merges primitives that share a material
+            # name (Mixamo: Skin_MAT covers head + arms + feet — three
+            # primitives → one section). The merged section
+            # renumbers its TEXCOORD_1 within its own vertex buffer,
+            # so the column index points at the wrong texture column
+            # and head/arms render at body positions or vice versa.
+            # Symptom: submeshes appear to render through each other
+            # (the "no z-index" look — actually a per-vertex collapse).
+            try:
+                common.set_editor_property("b_keep_sections_separate", True)
+                unreal.log("Interchange: common_meshes_properties."
+                           "b_keep_sections_separate = True (each "
+                           "glTF primitive becomes its own section).")
+            except Exception as e:
+                unreal.log_warning("Could not set b_keep_sections_"
+                                   "separate: " + str(e))
         else:
             unreal.log_warning("Interchange pipeline has no "
                                "`common_meshes_properties` sub-object on "
