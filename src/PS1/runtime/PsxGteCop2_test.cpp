@@ -108,12 +108,13 @@ TEST(PsxGteCop2Test, MipsRunnerExecutesLwc2RtopsBlock)
 {
     alignas(4) uint8_t ram[32 * 1024];
     std::memset(ram, 0, sizeof(ram));
-    embedRtopsProgram(ram, 0x1000, 0x8000);
+    constexpr size_t kCodeAddr = 0x4000;
+    embedRtopsProgram(ram, 0x1000, kCodeAddr);
 
     PsxGteEngine gte;
     gte.reset();
     const PsxMipsGteRunner::Result run =
-        PsxMipsGteRunner::runBlock(ram, sizeof(ram), 0x8000, 64, gte, nullptr);
+        PsxMipsGteRunner::runBlock(ram, sizeof(ram), kCodeAddr, 64, gte, nullptr);
     EXPECT_GE(run.stepsExecuted, 8);
     EXPECT_GE(run.rtpsEvents, 1);
 }
@@ -122,7 +123,7 @@ TEST(PsxGteCop2Test, InstructionCaptureFindsCop2RtopsMatrix)
 {
     alignas(4) uint8_t ram[32 * 1024];
     std::memset(ram, 0, sizeof(ram));
-    embedRtopsProgram(ram, 0x1000, 0x8000);
+    embedRtopsProgram(ram, 0x1000, 0x4000);
 
     std::atomic<bool> armed{true};
     CaptureBuffer buffer;

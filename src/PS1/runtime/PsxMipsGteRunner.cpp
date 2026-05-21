@@ -1,13 +1,12 @@
 #include "PsxMipsGteRunner.h"
 
 #include "EmuHooks.h"
+#include "PsxCop2Opcode.h"
 #include "PsxGp0Opcode.h"
 
 #include <cstring>
 
 namespace {
-
-constexpr uint32_t kCop2Opcode = 0x12u; // bits 31-26
 
 uint32_t fetchInsn(const uint8_t *ram, size_t ramBytes, uint32_t pc)
 {
@@ -55,7 +54,19 @@ PsxMipsGteRunner::Result PsxMipsGteRunner::runBlock(const uint8_t *ram, size_t r
             continue;
         }
 
-        if (op == kCop2Opcode) {
+        if (psxIsGteCommand(insn)) {
+            if (gte.executeGteCommand(insn)) {
+                ++result.rtpsEvents;
+                if (hooks && hooks->isCaptureEnabled()) {
+                    MatrixRecord matrix = gte.matrixRecord();
+                    hooks->onGteMatrix(matrix);
+                }
+            }
+            ++result.stepsExecuted;
+            continue;
+        }
+
+        if (op == kPsxCop2PrimaryOpcode) {
             const uint32_t rs = (insn >> 21) & 0x1Fu;
             const uint32_t rt = (insn >> 16) & 0x1Fu;
             const uint32_t rd = (insn >> 11) & 0x1Fu;
@@ -64,14 +75,6 @@ PsxMipsGteRunner::Result PsxMipsGteRunner::runBlock(const uint8_t *ram, size_t r
                 gte.writeReg(static_cast<int>(rd), gpr[rt]);
             } else if (rs == 0x06) { // CTC2 — rt=GPR, rd=control index (0..31) → cop2 32..63
                 gte.writeReg(static_cast<int>(rd) + 32, gpr[rt]);
-            } else if (rs == 0x01) { // GTE command (RTPS/RTPT/…)
-                if (gte.executeGteCommand(insn)) {
-                    ++result.rtpsEvents;
-                    if (hooks && hooks->isCaptureEnabled()) {
-                        MatrixRecord matrix = gte.matrixRecord();
-                        hooks->onGteMatrix(matrix);
-                    }
-                }
             }
             ++result.stepsExecuted;
             continue;

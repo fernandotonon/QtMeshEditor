@@ -2,6 +2,7 @@
 
 #include "EmuHooks.h"
 #include "GteCapture.h"
+#include "PsxCop2Opcode.h"
 #include "PsxGp0Opcode.h"
 #include "PsxGteEngine.h"
 #include "PsxMipsGteRunner.h"
@@ -12,21 +13,9 @@
 
 namespace {
 
-constexpr uint32_t kCop2Opcode = 0x12u;
 constexpr int kMaxRtpsSitesPerFrame = 64;
 constexpr int kBackwardSteps = 96;
 constexpr int kForwardSteps = 8;
-
-bool isGteCommand(uint32_t insn)
-{
-    const uint32_t cmd = insn & 0x3Fu;
-    if (cmd != 0x01 && cmd != 0x30)
-        return false;
-    if ((insn >> 26) == kCop2Opcode && ((insn >> 21) & 0x1Fu) == 0x01)
-        return true;
-    // Common macro-assembler encodings (incl. mednafen/psxdev samples).
-    return insn == 0x42000001u || insn == 0x42000030u;
-}
 
 uint32_t fetchWord(const uint8_t *ram, size_t byteSize, size_t offset)
 {
@@ -50,7 +39,7 @@ void PsxGteInstructionCapture::captureFromSystemRam(const uint8_t *ram, size_t b
 
     for (size_t offset = 0; offset + 4 <= byteSize && sites < kMaxRtpsSitesPerFrame; offset += 4) {
         const uint32_t word = fetchWord(ram, byteSize, offset);
-        if (!isGteCommand(word))
+        if (!psxIsGteCommand(word))
             continue;
         if (psxLooksLikeGp0Opcode(word))
             continue;

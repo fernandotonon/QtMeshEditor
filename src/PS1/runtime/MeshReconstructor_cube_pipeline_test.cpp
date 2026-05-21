@@ -21,15 +21,15 @@ MatrixRecord unitCubeMatrix()
     return m;
 }
 
-/** Model-space cube corners (PS1 1/4096 units), axis-aligned. */
+/** Model-space cube corners (GTE 1/4096 units) — sized for unitCubeMatrix projection. */
 void modelCubeCorners(int &x0, int &y0, int &z0, int &x1, int &y1, int &z1)
 {
-    x0 = -80 * 4096;
-    y0 = -80 * 4096;
-    z0 = 4096;
-    x1 = 80 * 4096;
-    y1 = 80 * 4096;
-    z1 = 3 * 4096;
+    x0 = -800;
+    y0 = -800;
+    z0 = 2048;
+    x1 = 800;
+    y1 = 800;
+    z1 = 4096;
 }
 
 PrimRecord triFromScreen(const MatrixRecord &matrix, int sx0, int sy0, int sz0, int sx1, int sy1,
