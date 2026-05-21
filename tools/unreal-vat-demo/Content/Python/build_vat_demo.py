@@ -364,56 +364,123 @@ def _editor_actor_library():
     return None
 
 
+def _focus_viewport_on(actor):
+    """Best-effort: focus the editor camera on the new actor so the
+    user actually sees it. Both API entry points are wrapped in
+    try/except because the exact class name moved between UE
+    versions (5.0..5.3 = EditorLevelLibrary, 5.4+ = subsystems)."""
+    try:
+        if hasattr(unreal, "EditorLevelLibrary"):
+            unreal.EditorLevelLibrary.set_selected_level_actors([actor])
+            unreal.EditorLevelLibrary.editor_invalidate_viewports()
+    except Exception:
+        pass
+    try:
+        sub = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+        if sub: sub.editor_invalidate_viewports()
+    except Exception:
+        pass
+
+
 def spawn_dancer_in_level():
     """Drop a SkeletalMeshActor into the open level and apply
     M_OpenVAT. Idempotent — deletes a previous instance first.
 
-    The skeletal mesh is set with Animation Mode = None because the
-    VAT material replaces all per-vertex motion via WPO; Unreal's
-    skinning would fight it.
+    Loud on every failure mode so a "nothing visible" result is
+    diagnosable from the Output Log instead of an empty viewport.
     """
     actor_lib = _editor_actor_library()
     if actor_lib is None:
         unreal.log_warning(
-            "No EditorLevelLibrary / EditorActorSubsystem available — "
-            "drag SK_Rumba into the level manually, set its material "
-            "to M_OpenVAT and Animation Mode = None.")
+            "spawn_dancer_in_level: no EditorLevelLibrary or "
+            "EditorActorSubsystem available on this engine. Drag "
+            "/Game/Rumba/SK_Rumba into the level manually, set its "
+            "Material 0 to /Game/VATDemo/M_OpenVAT and "
+            "Animation Mode = None.")
         return None
 
     mesh = unreal.load_asset(BAKE_DIR + "/SK_Rumba")
     mat  = unreal.load_asset(DEMO_DIR + "/M_OpenVAT")
-    if mesh is None or mat is None:
-        unreal.log_error("Missing SK_Rumba or M_OpenVAT — can't spawn.")
+    if mesh is None:
+        unreal.log_error("spawn_dancer_in_level: /Game/Rumba/SK_Rumba "
+                         "not found — glTF import must have failed.")
         return None
+    if mat is None:
+        unreal.log_error("spawn_dancer_in_level: /Game/VATDemo/M_OpenVAT "
+                         "not found — material build must have failed.")
+        return None
+    unreal.log("spawn_dancer_in_level: loaded SK_Rumba (%s) + M_OpenVAT (%s)"
+               % (mesh, mat))
 
-    # Delete any pre-existing OpenVATDancer so reruns don't pile up.
-    for a in actor_lib.get_all_level_actors():
+    # Delete any pre-existing OpenVAT_Dancer so reruns don't pile up.
+    removed = 0
+    try:
+        all_actors = actor_lib.get_all_level_actors()
+    except Exception as e:
+        unreal.log_warning("get_all_level_actors raised: " + str(e))
+        all_actors = []
+    for a in all_actors:
         try:
             if a and a.get_actor_label() == "OpenVAT_Dancer":
                 actor_lib.destroy_actor(a)
+                removed += 1
         except Exception:
             pass
+    if removed:
+        unreal.log("spawn_dancer_in_level: removed %d previous "
+                   "OpenVAT_Dancer instance(s)." % removed)
 
-    # Spawn at (0, 0, 0) facing camera-friendly default rotation.
-    location = unreal.Vector(0, 0, 0)
-    rotation = unreal.Rotator(0, 0, 0)
-    actor = actor_lib.spawn_actor_from_class(
-        unreal.SkeletalMeshActor, location, rotation)
+    # Spawn somewhere the default editor camera will see it. The
+    # default empty map's camera looks down the +X axis from ~(0,0,200)
+    # toward the origin; a Mixamo Rumba is ~1.7 m tall (Unreal units
+    # are cm, so ~170 cm), so spawn at (200, 0, 0) facing -X back
+    # toward the camera and lift it so the feet touch the floor at z=0.
+    location = unreal.Vector(200, 0, 0)
+    rotation = unreal.Rotator(0, 180, 0)
+    try:
+        actor = actor_lib.spawn_actor_from_class(
+            unreal.SkeletalMeshActor, location, rotation)
+    except Exception as e:
+        unreal.log_error("spawn_actor_from_class raised: " + str(e))
+        return None
     if actor is None:
-        unreal.log_error("spawn_actor_from_class returned None")
+        unreal.log_error("spawn_actor_from_class returned None — "
+                         "level may not be loaded.")
         return None
     actor.set_actor_label("OpenVAT_Dancer")
 
     skel_comp = actor.skeletal_mesh_component
-    # Property name moved between UE versions: try both.
+    if skel_comp is None:
+        unreal.log_error("Spawned actor has no skeletal_mesh_component.")
+        return actor
+    # Property name moved between UE versions: try all known names.
+    set_ok = False
+    for attempt in ("set_skeletal_mesh_asset", "set_skeletal_mesh"):
+        if hasattr(skel_comp, attempt):
+            try:
+                getattr(skel_comp, attempt)(mesh)
+                set_ok = True
+                break
+            except Exception as e:
+                unreal.log_warning("%s failed: %s" % (attempt, e))
+    if not set_ok:
+        for prop in ("skeletal_mesh_asset", "skeletal_mesh"):
+            try:
+                skel_comp.set_editor_property(prop, mesh)
+                set_ok = True
+                break
+            except Exception:
+                pass
+    if not set_ok:
+        unreal.log_error("Could not assign SK_Rumba to the spawned "
+                         "actor via any known property name. The actor "
+                         "will render empty.")
+
     try:
-        skel_comp.set_skeletal_mesh_asset(mesh)
-    except Exception:
-        try:
-            skel_comp.set_editor_property("skeletal_mesh", mesh)
-        except Exception:
-            skel_comp.set_editor_property("skeletal_mesh_asset", mesh)
-    skel_comp.set_material(0, mat)
+        skel_comp.set_material(0, mat)
+    except Exception as e:
+        unreal.log_warning("set_material(0) failed: " + str(e))
+
     # Disable engine animation — VAT material drives all vertex motion.
     try:
         skel_comp.set_editor_property("animation_mode",
@@ -421,9 +488,11 @@ def spawn_dancer_in_level():
     except Exception:
         pass
 
-    unreal.log("Spawned OpenVAT_Dancer at origin. Hit Play (or just "
-               "scrub the editor viewport — material time runs in the "
-               "editor too).")
+    _focus_viewport_on(actor)
+    unreal.log("Spawned OpenVAT_Dancer at (200, 0, 0) facing -X. "
+               "Look in the viewport — material `Time × fps` ticks "
+               "in the editor too. If you still see an empty scene, "
+               "press F to frame the selection.")
     return actor
 
 
@@ -433,20 +502,59 @@ def spawn_dancer_in_level():
 
 def main():
     unreal.log("=== QtMeshEditor OpenVAT demo bootstrap ===")
+    unreal.log("step 1/5: importing bake assets")
     import_bake_assets()
+
+    # Cross-check: the imported skeletal mesh and both textures must
+    # exist before we go further. If any one of these is missing the
+    # spawn step will produce an empty placeholder and the user sees
+    # an empty viewport — exactly the failure mode we're trying to
+    # avoid.
+    mesh = unreal.load_asset(BAKE_DIR + "/SK_Rumba")
+    pos  = unreal.load_asset(BAKE_DIR + "/T_OpenVAT_Pos")
+    diff = unreal.load_asset(BAKE_DIR + "/T_Boss_Diffuse")
+    unreal.log("  SK_Rumba       = %s" % mesh)
+    unreal.log("  T_OpenVAT_Pos  = %s" % pos)
+    unreal.log("  T_Boss_Diffuse = %s" % diff)
+    if mesh is None:
+        unreal.log_error(
+            "=== Bootstrap STOPPED: SK_Rumba did not import. "
+            "Drag Content/Rumba/source.gltf into the Content Browser "
+            "manually under /Game/Rumba, rename the result to "
+            "'SK_Rumba', and re-run this script. ===")
+        return
+
+    unreal.log("step 2/5: verifying glTF carries TEXCOORD_1")
     if not verify_gltf_has_uv2():
         unreal.log_warning(
             "=== Bootstrap STOPPED: source.gltf is missing TEXCOORD_1. "
             "Re-bake with `qtmesh vat <file> --anim <name> --emit-uv2 "
             "-o <dir>` and overwrite the files under Content/Rumba/. ===")
         return
+
+    unreal.log("step 3/5: reading sidecar")
     frames, mn, mx = read_sidecar()
-    unreal.log("Sidecar: frames=%d, min=%s, max=%s" % (frames, mn, mx))
-    build_material(frames, mn, mx)
-    spawn_dancer_in_level()
-    unreal.log("=== Bootstrap done. Look for OpenVAT_Dancer in the "
-               "viewport — material drives the animation via Time × fps, "
-               "no Blueprint needed. ===")
+    unreal.log("  frames=%d min=%s max=%s" % (frames, mn, mx))
+
+    unreal.log("step 4/5: building material")
+    mat = build_material(frames, mn, mx)
+    if mat is None:
+        unreal.log_error("=== Bootstrap STOPPED: material build failed. ===")
+        return
+
+    unreal.log("step 5/5: spawning actor in the open level")
+    actor = spawn_dancer_in_level()
+    if actor is None:
+        unreal.log_warning(
+            "=== Bootstrap PARTIAL: SK_Rumba + M_OpenVAT exist under "
+            "/Game/, but no actor was spawned. Drag SK_Rumba into the "
+            "viewport manually and set Material 0 to M_OpenVAT. ===")
+        return
+
+    unreal.log("=== Bootstrap done. OpenVAT_Dancer is selected in the "
+               "viewport — press F to frame it if you don't see it. "
+               "Animation runs in the editor (no Play required) because "
+               "the material drives `current_frame = Time × fps`. ===")
 
 
 if __name__ == "__main__":
