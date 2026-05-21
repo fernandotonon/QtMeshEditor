@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 5
+OPENVAT_BUILD = 6
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -568,8 +568,25 @@ def build_material(frame_count, bounds_min, bounds_max):
     # vertex's bind-pose local-space coordinate, exactly what we need.
     # PreSkinnedPosition would be wrong here: it's only defined on
     # skeletal-mesh materials, and we deliberately bypass the skeleton.
+    #
+    # IMPORTANT: set IncludedOffsets = ExcludeOffsets so the position
+    # we read here is the *pre-WPO* bind vertex, not the post-WPO
+    # current vertex. The default (IncludeOffsets) creates a feedback
+    # loop — WPO = target - LocalPosition where LocalPosition already
+    # includes the previous WPO — and the dancer converges to its bind
+    # pose with only a few oscillating vertices, which is exactly the
+    # symptom we were seeing before this line went in.
     p_bind = me.create_material_expression(mat,
         unreal.MaterialExpressionLocalPosition, -800, 400)
+    try:
+        p_bind.set_editor_property("included_offsets",
+            unreal.PositionIncludedOffsets.EXCLUDE_OFFSETS)
+        unreal.log("LocalPosition.IncludedOffsets = ExcludeOffsets "
+                   "(breaks the WPO feedback loop).")
+    except Exception as e:
+        unreal.log_warning("Could not set LocalPosition.IncludedOffsets "
+                           "to ExcludeOffsets: " + str(e)
+                           + " — dancer may converge to bind pose.")
 
     # Custom node carrying the openvat math.
     custom = me.create_material_expression(mat,
