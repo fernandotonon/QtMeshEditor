@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 6
+OPENVAT_BUILD = 7
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -510,10 +510,15 @@ def build_material(frame_count, bounds_min, bounds_max):
 
     # current_frame = Time × fps (auto-loops in the material).
     # No scalar parameter / no Tick / no Blueprint needed — a static
-    # SkeletalMeshActor in the level with this material applied
-    # animates forever.
+    # actor in the level with this material applied animates forever.
+    # bIgnorePause keeps it ticking even when the editor world is
+    # paused (e.g. user is in Simulate but not Play).
     p_time = me.create_material_expression(mat,
         unreal.MaterialExpressionTime, -1000, -200)
+    try:
+        p_time.set_editor_property("b_ignore_pause", True)
+    except Exception:
+        pass
 
     p_fps = me.create_material_expression(mat,
         unreal.MaterialExpressionScalarParameter, -1000, -100)
@@ -776,10 +781,21 @@ def spawn_dancer_in_level():
         if not set_ok:
             unreal.log_error("Could not assign StaticMesh to the "
                              "spawned actor. The actor will render empty.")
-        try:
-            sm_comp.set_material(0, mat)
-        except Exception as e:
-            unreal.log_warning("set_material(0) failed: " + str(e))
+        # Apply M_OpenVAT to *every* material slot. Rumba's glTF has 11
+        # primitives → 11 slots → setting only slot 0 leaves the other
+        # 10 submeshes using the Interchange-imported PBR materials
+        # (Skin_MAT, Clothes_MAT, …) that have no WPO, so they render
+        # in bind pose while slot 0 alone animates. That's exactly the
+        # "static head + animated vest" symptom in the screenshot.
+        num_slots = mesh.get_num_sections(0) if hasattr(
+            mesh, "get_num_sections") else len(mesh.static_materials)
+        unreal.log("Applying M_OpenVAT to " + str(num_slots) + " slots.")
+        for i in range(num_slots):
+            try:
+                sm_comp.set_material(i, mat)
+            except Exception as e:
+                unreal.log_warning("set_material(" + str(i) + ") failed: "
+                                   + str(e))
     else:
         skel_comp = actor.skeletal_mesh_component
         if skel_comp is None:
@@ -805,10 +821,17 @@ def spawn_dancer_in_level():
         if not set_ok:
             unreal.log_error("Could not assign SkeletalMesh to the "
                              "spawned actor. The actor will render empty.")
+        # Apply to every slot — see static-mesh branch above.
         try:
-            skel_comp.set_material(0, mat)
-        except Exception as e:
-            unreal.log_warning("set_material(0) failed: " + str(e))
+            num_slots = len(mesh.materials) if hasattr(mesh, "materials") else 1
+        except Exception:
+            num_slots = 1
+        for i in range(num_slots):
+            try:
+                skel_comp.set_material(i, mat)
+            except Exception as e:
+                unreal.log_warning("set_material(" + str(i) + ") failed: "
+                                   + str(e))
         # Disable engine animation — VAT material drives all vertex motion.
         try:
             skel_comp.set_editor_property("animation_mode",
