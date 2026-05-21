@@ -69,16 +69,22 @@ specific Geometry Script paths.
    - `/Game/Rumba/T_Boss_Diffuse` (diffuse texture)
    - `/Game/Rumba/SK_Rumba` (skeletal mesh from `source.gltf`, imported
      via Unreal's built-in **Interchange** framework)
-   - `/Game/VATDemo/M_OpenVAT` (the Custom-node material — does
-     World Position Offset against the position texture)
-   - `/Game/VATDemo/BP_VATDancer` (an actor skeleton — needs 4-node
-     tick wiring per step 4 below)
+   - `/Game/VATDemo/M_OpenVAT` (Custom-node material — drives
+     `current_frame = Time × fps` internally, so the animation
+     loops on its own without a Blueprint Tick)
+   - `OpenVAT_Dancer` — a `SkeletalMeshActor` spawned at the world
+     origin in your current level, with `SK_Rumba` + `M_OpenVAT`
+     applied and Animation Mode set to None
+
+   **You should now see the dancer animating in the editor viewport.**
+   No Play required — Unreal's material `Time` node ticks in the editor
+   too. If you don't, scrub the editor camera around the origin.
 
    **If the script logs `InterchangeManager not available` or the
    .gltf import fails:** drag `Content/Rumba/source.gltf` into the
    Content Browser manually, rename the resulting Skeletal Mesh to
-   `SK_Rumba`, then re-run the script — the texture/material steps
-   will pick up the already-imported mesh.
+   `SK_Rumba`, then re-run the script — the texture/material/spawn
+   steps will pick up the already-imported mesh.
 
    **If the script logs `source.gltf is MISSING TEXCOORD_1`:** the
    bake folder predates `qtmesh vat --emit-uv2` (added in PR #654).
@@ -88,27 +94,6 @@ specific Geometry Script paths.
               -o tools/unreal-vat-demo/Content/Rumba/
    ```
    then re-run the bootstrap.
-
-4. **Wire `BP_VATDancer`'s tick.** Open `BP_VATDancer`, add:
-   - A `SkeletalMeshComponent` referencing `/Game/Rumba/SK_Rumba`.
-     Set **Animation Mode** = `None` — the VAT material replaces all
-     per-vertex motion via WPO; Unreal's skinning would fight it.
-   - Set the material override at element 0 to a
-     **MaterialInstanceDynamic** of `/Game/VATDemo/M_OpenVAT`
-     (create on Construction Script, store on the BP for tick use).
-   - On Event Tick:
-     ```
-     time         = Get Game Time in Seconds
-     fps          = 30          (literal, or expose as a variable)
-     frame_count  = (read from the material's frame_count param)
-     current_frame = fmod(time * fps, frame_count)
-     SkeletalMeshComponent → Set Scalar Parameter Value on Materials
-         (parameter_name = "current_frame", value = current_frame)
-     ```
-   - Save the Blueprint.
-
-5. **Drop `BP_VATDancer` into a level** and hit Play. The dancer should
-   loop the Rumba clip without any per-frame CPU animation tick.
 
 ## Performance notes
 

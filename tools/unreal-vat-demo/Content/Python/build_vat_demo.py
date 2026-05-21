@@ -190,14 +190,19 @@ def read_usf_body():
     """The Custom node treats its `Code` property as the body of an
     HLSL function — no `void main`, no #version, no struct boilerplate.
     Inline body kept short enough that users don't need to chase the
-    full openvat.usf file for the math."""
+    full openvat.usf file for the math.
+
+    `current_frame` is now driven inside the material via the built-in
+    Time node (Time × fps), not a scalar parameter the actor has to
+    poke each Tick. Means a static actor with this material renders
+    the animation forever, no Blueprint logic required."""
     return r"""
 // OpenVAT Custom-node body. Inputs (wire from the material graph):
 //   pos_tex        Texture2D  — the imported T_OpenVAT_Pos
 //   uv2            float2     — (col, row_block) per vertex, from
 //                                the mesh's TEXCOORD_1 (written by
 //                                `qtmesh vat --emit-uv2`)
-//   current_frame  float      — scalar parameter, animated 0..frame_count
+//   current_frame  float      — derived from material Time × fps
 //   frame_count    float      — scalar parameter (from sidecar)
 //   bounds_min     float3
 //   bounds_max     float3
@@ -244,11 +249,22 @@ def build_material(frame_count, bounds_min, bounds_max):
 
     me = unreal.MaterialEditingLibrary
 
-    # Scalar/vector parameters bound by the actor at runtime.
+    # current_frame = Time × fps (auto-loops in the material).
+    # No scalar parameter / no Tick / no Blueprint needed — a static
+    # SkeletalMeshActor in the level with this material applied
+    # animates forever.
+    p_time = me.create_material_expression(mat,
+        unreal.MaterialExpressionTime, -1000, -200)
+
+    p_fps = me.create_material_expression(mat,
+        unreal.MaterialExpressionScalarParameter, -1000, -100)
+    p_fps.set_editor_property("parameter_name", "fps")
+    p_fps.set_editor_property("default_value", 30.0)
+
     p_curr = me.create_material_expression(mat,
-        unreal.MaterialExpressionScalarParameter, -800, -200)
-    p_curr.set_editor_property("parameter_name", "current_frame")
-    p_curr.set_editor_property("default_value", 0.0)
+        unreal.MaterialExpressionMultiply, -800, -200)
+    me.connect_material_expressions(p_time, "", p_curr, "A")
+    me.connect_material_expressions(p_fps,  "", p_curr, "B")
 
     p_frames = me.create_material_expression(mat,
         unreal.MaterialExpressionScalarParameter, -800, -100)
@@ -334,33 +350,81 @@ def build_material(frame_count, bounds_min, bounds_max):
 
 
 # ────────────────────────────────────────────────────────────────────
-# 5. Build a sample Blueprint that drives current_frame over time.
+# 5. Spawn a SkeletalMeshActor into the current level using the
+#    material we just built. The material is fully self-driving
+#    (current_frame = Time × fps), so no Blueprint or Tick is needed.
 # ────────────────────────────────────────────────────────────────────
 
-def build_actor_blueprint(frame_count):
-    """Create BP_VATDancer skeleton.
+def _editor_actor_library():
+    """The Python class moved between UE versions — try both."""
+    if hasattr(unreal, "EditorLevelLibrary"):
+        return unreal.EditorLevelLibrary
+    if hasattr(unreal, "EditorActorSubsystem"):
+        return unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    return None
 
-    Unreal's Blueprint creation from Python is supported via
-    KismetEditorUtilities + EditorAssetLibrary, but graph editing
-    (event nodes + math chain) requires UnrealEd's BP graph API
-    which isn't fully exposed to Python. Easiest portable path:
-    create the Blueprint asset and let the user double-click to
-    add the 4-node tick logic per the README. This is what most
-    production UE pipelines do.
+
+def spawn_dancer_in_level():
+    """Drop a SkeletalMeshActor into the open level and apply
+    M_OpenVAT. Idempotent — deletes a previous instance first.
+
+    The skeletal mesh is set with Animation Mode = None because the
+    VAT material replaces all per-vertex motion via WPO; Unreal's
+    skinning would fight it.
     """
-    bp_path = DEMO_DIR + "/BP_VATDancer"
-    if unreal.EditorAssetLibrary.does_asset_exist(bp_path):
-        unreal.log("BP_VATDancer already exists — skipping.")
-        return
+    actor_lib = _editor_actor_library()
+    if actor_lib is None:
+        unreal.log_warning(
+            "No EditorLevelLibrary / EditorActorSubsystem available — "
+            "drag SK_Rumba into the level manually, set its material "
+            "to M_OpenVAT and Animation Mode = None.")
+        return None
 
-    factory = unreal.BlueprintFactory()
-    factory.set_editor_property("parent_class", unreal.Actor)
-    bp = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-        "BP_VATDancer", DEMO_DIR, None, factory)
-    if bp:
-        unreal.EditorAssetLibrary.save_loaded_asset(bp)
-        unreal.log("Created BP_VATDancer skeleton — see README for the "
-                   "4-node tick wiring.")
+    mesh = unreal.load_asset(BAKE_DIR + "/SK_Rumba")
+    mat  = unreal.load_asset(DEMO_DIR + "/M_OpenVAT")
+    if mesh is None or mat is None:
+        unreal.log_error("Missing SK_Rumba or M_OpenVAT — can't spawn.")
+        return None
+
+    # Delete any pre-existing OpenVATDancer so reruns don't pile up.
+    for a in actor_lib.get_all_level_actors():
+        try:
+            if a and a.get_actor_label() == "OpenVAT_Dancer":
+                actor_lib.destroy_actor(a)
+        except Exception:
+            pass
+
+    # Spawn at (0, 0, 0) facing camera-friendly default rotation.
+    location = unreal.Vector(0, 0, 0)
+    rotation = unreal.Rotator(0, 0, 0)
+    actor = actor_lib.spawn_actor_from_class(
+        unreal.SkeletalMeshActor, location, rotation)
+    if actor is None:
+        unreal.log_error("spawn_actor_from_class returned None")
+        return None
+    actor.set_actor_label("OpenVAT_Dancer")
+
+    skel_comp = actor.skeletal_mesh_component
+    # Property name moved between UE versions: try both.
+    try:
+        skel_comp.set_skeletal_mesh_asset(mesh)
+    except Exception:
+        try:
+            skel_comp.set_editor_property("skeletal_mesh", mesh)
+        except Exception:
+            skel_comp.set_editor_property("skeletal_mesh_asset", mesh)
+    skel_comp.set_material(0, mat)
+    # Disable engine animation — VAT material drives all vertex motion.
+    try:
+        skel_comp.set_editor_property("animation_mode",
+            unreal.AnimationMode.ANIMATION_NONE)
+    except Exception:
+        pass
+
+    unreal.log("Spawned OpenVAT_Dancer at origin. Hit Play (or just "
+               "scrub the editor viewport — material time runs in the "
+               "editor too).")
+    return actor
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -379,9 +443,10 @@ def main():
     frames, mn, mx = read_sidecar()
     unreal.log("Sidecar: frames=%d, min=%s, max=%s" % (frames, mn, mx))
     build_material(frames, mn, mx)
-    build_actor_blueprint(frames)
-    unreal.log("=== Bootstrap done. Open /Game/VATDemo/M_OpenVAT + "
-               "BP_VATDancer; finish wiring per README. ===")
+    spawn_dancer_in_level()
+    unreal.log("=== Bootstrap done. Look for OpenVAT_Dancer in the "
+               "viewport — material drives the animation via Time × fps, "
+               "no Blueprint needed. ===")
 
 
 if __name__ == "__main__":
