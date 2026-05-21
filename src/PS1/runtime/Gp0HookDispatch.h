@@ -32,7 +32,7 @@ public:
                                   int &primCount);
 
     /**
-     * Frame capture with optional GTE RAM scan (#418, #419).
+     * Frame capture with optional GTE instruction + RAM scan (#418, #419).
      * @p scanGteRam When false, skips the 2 MiB matrix heuristic (use on per-frame ticks).
      */
     static void captureFrameFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,

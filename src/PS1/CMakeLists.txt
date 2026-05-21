@@ -32,6 +32,9 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxOrderingTableScanner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GpuCommandParser.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GteCapture.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGteEngine.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGteInstructionCapture.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxMipsGteRunner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipMeshBuilder.cpp
@@ -83,6 +86,9 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxJoypadState.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxCaptureFilters.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGpuRamScanner.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGteEngine.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGteInstructionCapture.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxMipsGteRunner.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGteRamScanner.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipWorker.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxVramColor.h

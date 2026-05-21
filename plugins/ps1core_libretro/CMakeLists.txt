@@ -16,6 +16,9 @@ add_library(qtmesh_ps1core_libretro MODULE
     LibretroHost.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/Gp0HookDispatch.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/GteCapture.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxGteEngine.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxGteInstructionCapture.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxMipsGteRunner.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxGteRamScanner.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxGp0ChainWalker.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxOrderingTableScanner.cpp

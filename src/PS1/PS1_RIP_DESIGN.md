@@ -68,7 +68,7 @@ See epic #412 for phased issues (#413–#431).
 
 - `CaptureTypes`, `GpuCommandParser`, `CaptureBuffer`, `RipperHooks`, `Gp0HookDispatch` (#418).
 - `EmuHooks` included from `EmuCore.h` (issue #418 API surface).
-- **GTE capture (#419):** `PsxGteRamScanner` + GP0 ingest run only on **Capture Frame** (`ingestCaptureFrame`), not while armed during live play — avoids 2 MiB RAM scans and buffer races when toggling Arm Capture. `RipperHooks` tracks the latest `onGteMatrix` as `matrixId` for subsequent primitives; hash dedupe + `cameraMatrixId` heuristic exposed in the session status bar after mesh build.
+- **GTE capture (#419):** On **Capture Frame**, `PsxGteInstructionCapture` scans RAM for COP2 **RTPS/RTPT**, executes setup sequences via `PsxMipsGteRunner` + `PsxGteEngine`, then `PsxGteRamScanner` supplements with matrix blobs. GP0 ingest tags primitives with `latestMatrixId`. Hash dedupe + `cameraMatrixId` heuristic in the session status bar after mesh build. Not run while armed during live play (avoids 2 MiB scans and buffer races).
 - **Libretro capture path:** `Gp0HookDispatch` in the plugin walks **ordering-table linked GP0 chains** first (`PsxOrderingTableScanner` + `PsxGp0ChainWalker`), then falls back to linear RAM opcode scan when no OT is found. OT entries are resolved as **24-bit absolute RAM pointers** (libgpu `getaddr` layout), with a relative-to-OT-base fallback for synthetic tests. Linked DR tags carry the opcode in bits 24–31 and the next packet address in bits 2–23 (`PsxGp0Opcode.h`); drawing-environment commands (0xE1–0xE6) stay in the low byte.
 - **Stub core** emits all seven GP0 primitive flavors for CI when `QTMESH_PS1_FORCE_STUB=1` or no libretro core is present.
 - `armCapture` / `captureFrame` wire capture to the worker thread; CSV dump to temp for verification.
@@ -136,6 +136,8 @@ export QTMESH_PS1_TEST_ISO=/path/game.cue
 ```
 
 `PS1RipManagerLibretroArmTest` (arm/capture while a real libretro session runs) uses the same guard and env vars.
+
+**GTE / matrix tests (CI):** `PsxGteCop2Test`, `PsxGteIsoDedupeTest.StaticSceneCop2ProgramDedupesThreeDrawables`, `MeshReconstructorTest.GtePipelineCubeRoundTripsToUnitCubeMesh`. Real-ISO matrix dedupe: set `QTMESH_PS1_TEST_BIOS` + `QTMESH_PS1_TEST_ISO` (or `QTMESH_PS1_TEST_HOMEBREW_ISO`) and run `PsxGteIsoDedupeTest.RealIsoCaptureHasBoundedMatrixCount`.
 
 ## Open questions
 
