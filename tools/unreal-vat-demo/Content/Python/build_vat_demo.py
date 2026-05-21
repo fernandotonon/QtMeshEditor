@@ -35,6 +35,14 @@ BAKE_DIR = "/Game/Rumba"
 DEMO_DIR = "/Game/VATDemo"
 RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 
+# Bumped any time build_material's graph layout changes so the
+# auto-runner (init_unreal.py) knows to rebuild a stale M_OpenVAT.
+# The build number is stamped into the material's asset-tag metadata
+# under `OpenVATBuild` when the material is created; init_unreal
+# compares the tag against this constant and forces a rebuild on
+# mismatch.
+OPENVAT_BUILD = 3
+
 
 # ────────────────────────────────────────────────────────────────────
 # 1. Import the bake: position PNG, diffuse PNG, glTF mesh.
@@ -433,8 +441,21 @@ def build_material(frame_count, bounds_min, bounds_max):
         unreal.MaterialProperty.MP_BASE_COLOR)
 
     me.recompile_material(mat)
+    # Stamp the build number into the material's asset tags so the
+    # auto-runner can detect a stale graph (e.g. when this script
+    # gets updated to fix a coordinate-system bug, the user reopens
+    # the project, and the old M_OpenVAT.uasset is still on disk).
+    # `EditorAssetLibrary.set_metadata_tag` writes to the
+    # ObjectPathMetaData, persists across editor restarts, and is
+    # cheap to read back without loading the full graph.
+    try:
+        unreal.EditorAssetLibrary.set_metadata_tag(
+            mat, "OpenVATBuild", str(OPENVAT_BUILD))
+    except Exception as e:
+        unreal.log_warning("Could not stamp OpenVATBuild tag: " + str(e))
     unreal.EditorAssetLibrary.save_loaded_asset(mat)
-    unreal.log("Built M_OpenVAT (Custom-node WPO + diffuse).")
+    unreal.log("Built M_OpenVAT (Custom-node WPO + diffuse, build "
+               + str(OPENVAT_BUILD) + ").")
     return mat
 
 

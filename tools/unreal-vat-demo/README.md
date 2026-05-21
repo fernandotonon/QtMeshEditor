@@ -75,9 +75,13 @@ specific Geometry Script paths.
 
 ### Re-running the bootstrap
 
-The auto-runner deliberately skips on subsequent opens (it checks
-for `/Game/VATDemo/M_OpenVAT`) so it doesn't wipe + rebuild on
-every launch. To force a rebuild, do either:
+The auto-runner skips on subsequent opens unless the script's
+`OPENVAT_BUILD` constant has been bumped past the `OpenVATBuild`
+metadata tag on `/Game/VATDemo/M_OpenVAT`. When the script ships a
+fix that changes the material graph, the constant gets bumped and
+the next open will replace the stale material automatically.
+
+To force a rebuild manually, do either:
 
 - Delete `/Game/VATDemo/M_OpenVAT` from the Content Browser and
   restart the editor.
