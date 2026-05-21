@@ -98,6 +98,57 @@ def _import_gltf_via_interchange(src_filename, dst_name):
     return unreal.load_asset(BAKE_DIR + "/" + dst_name + "." + dst_name)
 
 
+def find_skeletal_mesh():
+    """Locate the imported Rumba skeletal mesh.
+
+    Interchange's `destination_name` parameter is advisory — when
+    importing a glTF, the framework writes a subtree under
+    `/Game/Rumba/source/...` (mesh, skeleton, animation, materials)
+    and does NOT honour our requested `SK_Rumba` short name. So the
+    asset can land at `/Game/Rumba/SK_Rumba` (older UE / Interchange
+    builds), `/Game/Rumba/source/SkeletalMeshes/SK_Rumba`
+    (5.5+ Interchange default), or under a `Rumba_Dancing_mesh`
+    name if Interchange used the glTF's node name.
+
+    We try every known path, then fall back to an AssetRegistry
+    search under `/Game/Rumba/` for the first SkeletalMesh asset.
+    """
+    candidates = [
+        "/Game/Rumba/SK_Rumba",
+        "/Game/Rumba/source/SkeletalMeshes/SK_Rumba",
+        "/Game/Rumba/Rumba_Dancing_mesh",
+        "/Game/Rumba/source/SkeletalMeshes/Rumba_Dancing_mesh",
+    ]
+    for path in candidates:
+        if unreal.EditorAssetLibrary.does_asset_exist(path):
+            asset = unreal.load_asset(path)
+            if asset is not None:
+                unreal.log("find_skeletal_mesh: located at " + path)
+                return asset
+
+    # Last resort — AssetRegistry sweep under /Game/Rumba/.
+    try:
+        ar = unreal.AssetRegistryHelpers.get_asset_registry()
+        # Recursive get_assets_by_path returns every asset in the
+        # subtree (including textures); filter to SkeletalMesh.
+        assets = ar.get_assets_by_path("/Game/Rumba", recursive=True)
+        for ad in assets:
+            try:
+                cls = str(ad.get_class().get_name())
+            except Exception:
+                cls = ""
+            if cls == "SkeletalMesh":
+                obj = ad.get_asset()
+                if obj:
+                    pkg = str(ad.package_name) if hasattr(ad, "package_name") else "?"
+                    unreal.log("find_skeletal_mesh: AssetRegistry "
+                               "fallback found " + pkg)
+                    return obj
+    except Exception as e:
+        unreal.log_warning("AssetRegistry sweep failed: " + str(e))
+    return None
+
+
 def import_bake_assets():
     """Bring textures + glTF in under /Game/Rumba.
 
@@ -399,11 +450,12 @@ def spawn_dancer_in_level():
             "Animation Mode = None.")
         return None
 
-    mesh = unreal.load_asset(BAKE_DIR + "/SK_Rumba")
+    mesh = find_skeletal_mesh()
     mat  = unreal.load_asset(DEMO_DIR + "/M_OpenVAT")
     if mesh is None:
-        unreal.log_error("spawn_dancer_in_level: /Game/Rumba/SK_Rumba "
-                         "not found — glTF import must have failed.")
+        unreal.log_error("spawn_dancer_in_level: no SkeletalMesh found "
+                         "under /Game/Rumba/ — glTF import must have "
+                         "failed.")
         return None
     if mat is None:
         unreal.log_error("spawn_dancer_in_level: /Game/VATDemo/M_OpenVAT "
@@ -510,18 +562,17 @@ def main():
     # spawn step will produce an empty placeholder and the user sees
     # an empty viewport — exactly the failure mode we're trying to
     # avoid.
-    mesh = unreal.load_asset(BAKE_DIR + "/SK_Rumba")
+    mesh = find_skeletal_mesh()
     pos  = unreal.load_asset(BAKE_DIR + "/T_OpenVAT_Pos")
     diff = unreal.load_asset(BAKE_DIR + "/T_Boss_Diffuse")
-    unreal.log("  SK_Rumba       = %s" % mesh)
-    unreal.log("  T_OpenVAT_Pos  = %s" % pos)
-    unreal.log("  T_Boss_Diffuse = %s" % diff)
+    unreal.log("  SkeletalMesh    = %s" % mesh)
+    unreal.log("  T_OpenVAT_Pos   = %s" % pos)
+    unreal.log("  T_Boss_Diffuse  = %s" % diff)
     if mesh is None:
         unreal.log_error(
-            "=== Bootstrap STOPPED: SK_Rumba did not import. "
-            "Drag Content/Rumba/source.gltf into the Content Browser "
-            "manually under /Game/Rumba, rename the result to "
-            "'SK_Rumba', and re-run this script. ===")
+            "=== Bootstrap STOPPED: no SkeletalMesh found under "
+            "/Game/Rumba/. Drag Content/Rumba/source.gltf into the "
+            "Content Browser manually and re-run this script. ===")
         return
 
     unreal.log("step 2/5: verifying glTF carries TEXCOORD_1")
