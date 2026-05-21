@@ -447,7 +447,7 @@ void LibretroEmuCore::runFrame()
 
     m_host.retro_run();
     syncVramFromCore();
-    captureGpuFromRam();
+    // GPU/GTE RAM capture runs only on explicit Capture Frame (ingestCaptureFrame).
 }
 
 void LibretroEmuCore::reset()

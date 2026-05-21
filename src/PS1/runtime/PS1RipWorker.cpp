@@ -127,6 +127,8 @@ void PS1RipWorker::stopEmulation()
     m_frameTimer->stop();
     m_running = false;
     m_paused = false;
+    m_captureArmed.store(false, std::memory_order_release);
+    m_captureBuffer->clear();
     m_core.reset();
     emit emulationStopped();
 }
@@ -186,7 +188,10 @@ void PS1RipWorker::runFrameTick()
 void PS1RipWorker::setCaptureArmed(bool armed)
 {
     m_captureArmed.store(armed, std::memory_order_release);
-    if (armed)
+    // Do not clear while emulation is running — runFrame capture may be writing the buffer.
+    if (!armed)
+        m_captureBuffer->clear();
+    else if (!m_running)
         m_captureBuffer->clear();
 }
 
@@ -214,6 +219,7 @@ void PS1RipWorker::finalizeFrameCapture()
         return;
     }
 
+    m_captureBuffer->clear();
     m_core->runFrame();
     m_core->syncCaptureMirrors();
     m_core->ingestCaptureFrame();
