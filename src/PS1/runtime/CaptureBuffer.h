@@ -6,6 +6,8 @@
 #include <QHash>
 #include <QVector>
 
+#include <cstdint>
+
 /**
  * Per-frame capture arena for GPU primitives and GTE matrices (#418, #419).
  */

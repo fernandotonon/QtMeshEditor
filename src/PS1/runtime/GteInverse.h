@@ -8,6 +8,9 @@ namespace GteInverse {
 
 bool screenToModel(const MatrixRecord &matrix, int sx, int sy, int sz, float &mx, float &my, float &mz);
 
+/** Forward projection paired with screenToModel (fixed-point model units, PS1 screen coords). */
+bool modelToScreen(const MatrixRecord &matrix, int mx, int my, int mz, int &sx, int &sy, int &sz);
+
 /** PS1 screen (Y-down) → editor world (Y-up, right-handed). */
 void psxScreenToWorld(float sx, float sy, float sz, float &wx, float &wy, float &wz);
 

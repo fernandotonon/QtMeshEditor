@@ -41,7 +41,7 @@ private:
     void refreshVramPointer();
     void mirrorFramebufferToVram();
     void syncVramFromCore();
-    void captureGpuFromRam();
+    void captureGpuFromRam(bool scanGteRam = false);
     void presentVideo(const void *data, unsigned width, unsigned height, size_t pitch);
 
     static bool environmentCallback(unsigned cmd, void *data);

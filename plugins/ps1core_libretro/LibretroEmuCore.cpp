@@ -447,7 +447,7 @@ void LibretroEmuCore::runFrame()
 
     m_host.retro_run();
     syncVramFromCore();
-    captureGpuFromRam();
+    // GPU/GTE RAM capture runs only on explicit Capture Frame (ingestCaptureFrame).
 }
 
 void LibretroEmuCore::reset()
@@ -543,7 +543,7 @@ void LibretroEmuCore::syncCaptureMirrors()
 
 void LibretroEmuCore::ingestCaptureFrame()
 {
-    captureGpuFromRam();
+    captureGpuFromRam(true);
 }
 
 void LibretroEmuCore::mirrorFramebufferToVram()
@@ -584,7 +584,7 @@ void LibretroEmuCore::syncVramFromCore()
     mirrorFramebufferToVram();
 }
 
-void LibretroEmuCore::captureGpuFromRam()
+void LibretroEmuCore::captureGpuFromRam(bool scanGteRam)
 {
     if (!m_hooks || !m_hooks->isCaptureEnabled())
         return;
@@ -597,7 +597,8 @@ void LibretroEmuCore::captureGpuFromRam()
     if (!ram || ramSize < 4096)
         return;
 
-    Gp0HookDispatch::captureFrameFromSystemRam(static_cast<const uint8_t *>(ram), ramSize, m_hooks);
+    Gp0HookDispatch::captureFrameFromSystemRam(static_cast<const uint8_t *>(ram), ramSize, m_hooks,
+                                               scanGteRam);
 }
 
 void LibretroEmuCore::presentVideo(const void *data, unsigned width, unsigned height, size_t pitch)

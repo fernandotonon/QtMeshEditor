@@ -121,7 +121,9 @@ void PS1RipManager::initializeWorkerThread()
                     QStringLiteral("ps1.rip.mesh.built"),
                     QStringLiteral("%1 verts %2 tris").arg(built.vertexCount).arg(built.triangleCount));
                 emit meshBuilt(captureId, captureSet.capturedPartCount, captureSet.uniqueCount(),
-                               captureSet.instanceCount(), built.vertexCount, built.triangleCount);
+                               captureSet.instanceCount(), built.vertexCount, built.triangleCount,
+                               snapshot.matrices.size(), snapshot.cameraMatrixId,
+                               snapshot.hasCameraMatrix());
             });
     connect(m_worker, &PS1RipWorker::vramFrameUpdated, this,
             [this](const QVector<uint16_t> &cells, const QImage &preview) {
@@ -187,8 +189,7 @@ void PS1RipManager::syncWorkerCaptureArmed()
         return;
     PS1RipWorker *worker = m_worker;
     const bool armed = m_captureArmed;
-    QMetaObject::invokeMethod(worker, [worker, armed]() { worker->setCaptureArmed(armed); },
-                              Qt::QueuedConnection);
+    QMetaObject::invokeMethod(worker, "setCaptureArmed", Qt::QueuedConnection, Q_ARG(bool, armed));
 }
 
 bool PS1RipManager::loadBios(const QString &path)
@@ -361,8 +362,7 @@ bool PS1RipManager::captureFrame()
         return false;
     }
     PS1RipWorker *worker = m_worker;
-    QMetaObject::invokeMethod(worker, [worker]() { worker->finalizeFrameCapture(); },
-                              Qt::QueuedConnection);
+    QMetaObject::invokeMethod(worker, "finalizeFrameCapture", Qt::QueuedConnection);
     return true;
 }
 

@@ -373,16 +373,22 @@ void PS1RipSessionWindow::onCaptureFrame()
 }
 
 void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes,
-                                    int instanceCount, int vertexCount, int triangleCount)
+                                    int instanceCount, int vertexCount, int triangleCount,
+                                    int matrixCount, uint32_t cameraMatrixId, bool hasCameraMatrix)
 {
+    QString cameraText = hasCameraMatrix
+                             ? tr("camera matrix #%1").arg(cameraMatrixId)
+                             : tr("camera matrix unknown");
     m_statusLabel->setText(
-        tr("Mesh %1 — captured %2 / unique %3 / instances %4 (%5 verts, %6 tris)")
+        tr("Mesh %1 — captured %2 / unique %3 / instances %4 (%5 verts, %6 tris, %7 GTE matrices, %8)")
             .arg(captureId)
             .arg(capturedParts)
             .arg(uniqueMeshes)
             .arg(instanceCount)
             .arg(vertexCount)
-            .arg(triangleCount));
+            .arg(triangleCount)
+            .arg(matrixCount)
+            .arg(cameraText));
 }
 
 void PS1RipSessionWindow::onVramDumped(const QString &captureId, const QString &pngPath,

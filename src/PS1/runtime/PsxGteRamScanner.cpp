@@ -1,7 +1,8 @@
 #include "PsxGteRamScanner.h"
 
+#include "EmuHooks.h"
 #include "GteCapture.h"
-#include "RipperHooks.h"
+#include "PsxGp0Opcode.h"
 
 #include <QSet>
 
@@ -18,6 +19,11 @@ bool looksLikeMatrixRecord(const MatrixRecord &matrix)
     if (matrix.h < 50 || matrix.h > 8192)
         return false;
     if (matrix.ofx < 0 || matrix.ofy < 0)
+        return false;
+
+    const int ofxScreen = matrix.ofx >> 16;
+    const int ofyScreen = matrix.ofy >> 16;
+    if (ofxScreen > 1024 || ofyScreen > 1024)
         return false;
 
     bool anyRotation = false;
@@ -46,6 +52,13 @@ bool readMatrixAt(const uint8_t *ram, size_t byteSize, size_t byteOffset, Matrix
     if (byteOffset + kMatrixBytes > byteSize)
         return false;
 
+    for (int word = 0; word < 3; ++word) {
+        uint32_t probe = 0;
+        std::memcpy(&probe, ram + byteOffset + static_cast<size_t>(word) * 4, sizeof(probe));
+        if (psxLooksLikeGp0Opcode(probe))
+            return false;
+    }
+
     std::memset(&out, 0, sizeof(out));
     std::memcpy(&out.rt, ram + byteOffset, sizeof(out.rt));
     std::memcpy(out.tr, ram + byteOffset + sizeof(out.rt), sizeof(out.tr));
@@ -60,7 +73,7 @@ bool readMatrixAt(const uint8_t *ram, size_t byteSize, size_t byteOffset, Matrix
 
 } // namespace
 
-void PsxGteRamScanner::captureFromSystemRam(const uint8_t *ram, size_t byteSize, RipperHooks *hooks)
+void PsxGteRamScanner::captureFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks)
 {
     if (!ram || byteSize < kMatrixBytes || !hooks || !hooks->isCaptureEnabled())
         return;
@@ -68,17 +81,29 @@ void PsxGteRamScanner::captureFromSystemRam(const uint8_t *ram, size_t byteSize,
     QSet<uint64_t> seenHashes;
     int found = 0;
 
-    for (size_t offset = 0; offset + kMatrixBytes <= byteSize && found < kMaxMatricesPerFrame; offset += 4) {
-        MatrixRecord matrix{};
-        if (!readMatrixAt(ram, byteSize, offset, matrix))
+    for (size_t offset = 0; offset + kMatrixBytes <= byteSize && found < kMaxMatricesPerFrame;) {
+        uint32_t header = 0;
+        std::memcpy(&header, ram + offset, sizeof(header));
+        if (psxLooksLikeGp0Opcode(header)) {
+            offset += 4;
             continue;
+        }
+
+        MatrixRecord matrix{};
+        if (!readMatrixAt(ram, byteSize, offset, matrix)) {
+            offset += 4;
+            continue;
+        }
 
         matrix.hash = GteCapture::hashMatrix(matrix);
-        if (seenHashes.contains(matrix.hash))
+        if (seenHashes.contains(matrix.hash)) {
+            offset += kMatrixBytes;
             continue;
+        }
         seenHashes.insert(matrix.hash);
 
         hooks->onGteMatrix(matrix);
         ++found;
+        offset += kMatrixBytes;
     }
 }
