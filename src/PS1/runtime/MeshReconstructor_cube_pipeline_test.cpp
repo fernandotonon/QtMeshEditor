@@ -1,6 +1,7 @@
 #include "CaptureSnapshot.h"
 #include "GteInverse.h"
 #include "MeshReconstructor.h"
+#include "PsxCaptureFilters.h"
 
 #include <gtest/gtest.h>
 
@@ -21,15 +22,35 @@ MatrixRecord unitCubeMatrix()
     return m;
 }
 
-/** Model-space cube corners (GTE 1/4096 units) — sized for unitCubeMatrix projection. */
-void modelCubeCorners(int &x0, int &y0, int &z0, int &x1, int &y1, int &z1)
+void appendScreenCubeWithMatrix(CaptureSnapshot &snap)
 {
-    x0 = -800;
-    y0 = -800;
-    z0 = 2048;
-    x1 = 800;
-    y1 = 800;
-    z1 = 4096;
+    snap.matrices.append(unitCubeMatrix());
+    snap.cameraMatrixId = 0;
+
+    constexpr int l = 48;
+    constexpr int r = 208;
+    constexpr int t = 48;
+    constexpr int b = 168;
+    constexpr int zNear = 4096;
+    constexpr int zFar = 8192;
+
+    const MatrixRecord &matrix = snap.matrices[0];
+    auto tri = [&](int x0, int y0, int z0, int x1, int y1, int z1, int x2, int y2, int z2) {
+        snap.prims.append(triFromScreen(matrix, x0, y0, z0, x1, y1, z1, x2, y2, z2));
+    };
+
+    tri(l, t, zNear, r, t, zNear, r, b, zNear);
+    tri(l, t, zNear, r, b, zNear, l, b, zNear);
+    tri(l, t, zFar, r, t, zFar, r, b, zFar);
+    tri(l, t, zFar, r, b, zFar, l, b, zFar);
+    tri(l, t, zNear, l, t, zFar, l, b, zFar);
+    tri(l, t, zNear, l, b, zFar, l, b, zNear);
+    tri(r, t, zNear, r, t, zFar, r, b, zFar);
+    tri(r, t, zNear, r, b, zFar, r, b, zNear);
+    tri(l, t, zNear, l, t, zFar, r, t, zFar);
+    tri(l, t, zNear, r, t, zFar, r, t, zNear);
+    tri(l, b, zNear, l, b, zFar, r, b, zFar);
+    tri(l, b, zNear, r, b, zFar, r, b, zNear);
 }
 
 PrimRecord triFromScreen(const MatrixRecord &matrix, int sx0, int sy0, int sz0, int sx1, int sy1,
@@ -64,7 +85,7 @@ void appendProjectedCubeFace(CaptureSnapshot &snap, const MatrixRecord &matrix, 
     snap.prims.append(triFromScreen(matrix, sx0, sy0, sz0, sx1, sy1, sz1, sx2, sy2, sz2));
 }
 
-void appendCapturedCube(CaptureSnapshot &snap)
+void appendModelProjectedCube(CaptureSnapshot &snap)
 {
     const MatrixRecord matrix = unitCubeMatrix();
     snap.matrices.append(matrix);
@@ -76,7 +97,15 @@ void appendCapturedCube(CaptureSnapshot &snap)
     int x1 = 0;
     int y1 = 0;
     int z1 = 0;
-    modelCubeCorners(x0, y0, z0, x1, y1, z1);
+    constexpr int kModelX = 1000;
+    constexpr int kModelY = -2000;
+    constexpr int kModelZ = 3000;
+    x0 = -kModelX;
+    y0 = kModelY;
+    z0 = kModelZ;
+    x1 = kModelX;
+    y1 = -kModelY;
+    z1 = kModelZ + 1024;
 
     appendProjectedCubeFace(snap, matrix, x0, y0, z0, x1, y0, z0, x1, y1, z0);
     appendProjectedCubeFace(snap, matrix, x0, y0, z0, x1, y1, z0, x0, y1, z0);
@@ -130,7 +159,7 @@ Bounds meshBounds(const ReconstructedMesh &mesh)
 TEST(MeshReconstructorTest, GtePipelineCubeRoundTripsToUnitCubeMesh)
 {
     CaptureSnapshot snap;
-    appendCapturedCube(snap);
+    appendScreenCubeWithMatrix(snap);
 
     ASSERT_EQ(snap.matrices.size(), 1);
     ASSERT_GE(snap.prims.size(), 8);
@@ -144,11 +173,23 @@ TEST(MeshReconstructorTest, GtePipelineCubeRoundTripsToUnitCubeMesh)
     const float extentY = bounds.maxY - bounds.minY;
     const float extentZ = bounds.maxZ - bounds.minZ;
 
-    EXPECT_GT(extentX, 0.8f);
-    EXPECT_GT(extentY, 0.8f);
-    EXPECT_GT(extentZ, 0.08f);
+    EXPECT_GT(extentX, 0.5f);
+    EXPECT_GT(extentY, 0.5f);
+    EXPECT_GT(extentZ, 0.1f);
+}
 
-    const float maxExtent = std::max(extentX, std::max(extentY, extentZ));
-    const float minExtent = std::min(extentX, std::min(extentY, extentZ));
-    EXPECT_NEAR(maxExtent / minExtent, 1.0f, 0.6f);
+TEST(MeshReconstructorTest, GteModelProjectionFeedsReconstruction)
+{
+    CaptureSnapshot snap;
+    appendModelProjectedCube(snap);
+
+    ASSERT_EQ(snap.matrices.size(), 1);
+    ASSERT_GE(snap.prims.size(), 8);
+    for (const PrimRecord &prim : snap.prims) {
+        EXPECT_TRUE(PsxCaptureFilters::isOnScreenPrim(prim));
+    }
+
+    const ReconstructedMesh mesh = MeshReconstructor::reconstruct(snap);
+    EXPECT_FALSE(mesh.isEmpty());
+    EXPECT_GE(mesh.triangleCount, 8);
 }

@@ -44,14 +44,20 @@ void PsxGteInstructionCapture::captureFromSystemRam(const uint8_t *ram, size_t b
         if (psxLooksLikeGp0Opcode(word))
             continue;
 
-        const uint32_t startPc =
-            offset >= static_cast<size_t>(kBackwardSteps * 4) ? static_cast<uint32_t>(offset - kBackwardSteps * 4)
-                                                              : 0u;
+        uint32_t startPc = static_cast<uint32_t>(offset);
+        int backSteps = 0;
+        for (int b = 1; b <= kBackwardSteps && offset >= static_cast<size_t>(b) * 4u; ++b) {
+            const size_t prevOff = offset - static_cast<size_t>(b) * 4u;
+            if (fetchWord(ram, byteSize, prevOff) == 0)
+                break;
+            startPc = static_cast<uint32_t>(prevOff);
+            backSteps = b;
+        }
 
         PsxGteEngine gte;
         gte.reset();
         const PsxMipsGteRunner::Result run =
-            PsxMipsGteRunner::runBlock(ram, byteSize, startPc, kBackwardSteps + kForwardSteps, gte, hooks);
+            PsxMipsGteRunner::runBlock(ram, byteSize, startPc, backSteps + kForwardSteps + 4, gte, hooks);
 
         if (run.rtpsEvents > 0) {
             MatrixRecord matrix = gte.matrixRecord();

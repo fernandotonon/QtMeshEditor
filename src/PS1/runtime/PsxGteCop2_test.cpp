@@ -108,7 +108,7 @@ TEST(PsxGteCop2Test, MipsRunnerExecutesLwc2RtopsBlock)
 {
     alignas(4) uint8_t ram[32 * 1024];
     std::memset(ram, 0, sizeof(ram));
-    constexpr size_t kCodeAddr = 0x4000;
+    constexpr size_t kCodeAddr = 0x100;
     embedRtopsProgram(ram, 0x1000, kCodeAddr);
 
     PsxGteEngine gte;
@@ -123,7 +123,7 @@ TEST(PsxGteCop2Test, InstructionCaptureFindsCop2RtopsMatrix)
 {
     alignas(4) uint8_t ram[32 * 1024];
     std::memset(ram, 0, sizeof(ram));
-    embedRtopsProgram(ram, 0x1000, 0x4000);
+    embedRtopsProgram(ram, 0x1000, 0x100);
 
     std::atomic<bool> armed{true};
     CaptureBuffer buffer;

@@ -69,7 +69,7 @@ void embedStaticSceneProgram(uint8_t *ram, size_t ramBytes)
     constexpr size_t kMatA = 0x00001000;
     constexpr size_t kMatB = 0x00001080;
     constexpr size_t kMatC = 0x00001100;
-    constexpr size_t kCode = 0x00004000;
+    constexpr size_t kCode = 0x00000100;
 
     writeMatrixAt(ram, kMatA, 0, 256);
     writeMatrixAt(ram, kMatB, 512, 256);
