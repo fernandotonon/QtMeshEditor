@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 10
+OPENVAT_BUILD = 11
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -319,27 +319,35 @@ def find_skeletal_mesh():
 
 def verify_imported_uv_channels(mesh):
     """Log the imported mesh's class so the user can confirm the
-    static-mesh override took effect. The per-LOD UV count is not
-    exposed reliably across UE Python bindings (5.7 in particular
-    only exposes a tiny SkeletalMesh API surface), so we just log
-    the class — if it comes back as SkeletalMesh the user knows
-    the pipeline override silently no-op'd and the demo will
-    render with the wrong-vertex symptom even though TEXCOORD_1
-    is technically present."""
+    static-mesh override took effect. Also log per-section vertex
+    counts and material slot index — useful for diagnosing whether
+    Interchange's material-merge step is corrupting the per-vertex
+    TEXCOORD_1 column index."""
     if not mesh:
         return
     if isinstance(mesh, unreal.StaticMesh):
-        unreal.log("verify_uv: imported as StaticMesh ✓ "
-                   "(TEXCOORD_1 should be preserved verbatim).")
+        unreal.log("verify_uv: imported as StaticMesh ✓.")
+        try:
+            num_lods = mesh.get_num_lods() if hasattr(mesh, "get_num_lods") else 1
+            for lod in range(num_lods):
+                if not hasattr(mesh, "get_num_sections"):
+                    continue
+                nsec = mesh.get_num_sections(lod)
+                unreal.log("verify_uv: LOD " + str(lod) + " has "
+                           + str(nsec) + " section(s).")
+                for s in range(nsec):
+                    try:
+                        info = mesh.get_section_info(lod, s)
+                        unreal.log("    section " + str(s) +
+                                   ": material_slot=" + str(info.material_index))
+                    except Exception:
+                        pass
+        except Exception as e:
+            unreal.log_warning("section dump failed: " + str(e))
     elif isinstance(mesh, unreal.SkeletalMesh):
         unreal.log_error(
             "*** verify_uv: imported as SkeletalMesh — the "
-            "static-mesh override failed and the secondary UVs "
-            "will be renormalised per render section, causing "
-            "static head/arms + chaotic torso triangles. Manually "
-            "delete /Game/Rumba/ in the Content Browser, then "
-            "re-run `py Content/Python/build_vat_demo.py` from "
-            "the Python console.")
+            "static-mesh override failed.")
     else:
         unreal.log_warning("verify_uv: imported mesh is "
                            + str(type(mesh)) + " (unexpected).")
@@ -511,15 +519,26 @@ int nxt = (curr + 1) % N;
 float blend = frac(current_frame);
 
 int base_row = row_block * N;
+
+// Sample the bake at the current/next frame AND at frame 0 (the
+// bake's first frame, which is the animation's bind/T-pose since
+// Mixamo authoring always starts there). Subtracting frame 0
+// inside the same coordinate space sidesteps every "what coord
+// system is bind_local in?" question — we never need to know how
+// Interchange chose to swizzle/scale the mesh on import. The
+// result is a delta in glTF Y-up meters space, which we then
+// swizzle + scale to Unreal Z-up cm for WPO.
 float3 p_curr = pos_tex.Load(int3(col, base_row + curr, 0)).rgb;
 float3 p_next = pos_tex.Load(int3(col, base_row + nxt,  0)).rgb;
+float3 p_bind = pos_tex.Load(int3(col, base_row + 0,    0)).rgb;
 float3 p = lerp(p_curr, p_next, blend);
 
-float3 target_yup_m  = bounds_min + p * (bounds_max - bounds_min);
-float3 target_zup_cm = float3(target_yup_m.x,
-                              -target_yup_m.z,
-                               target_yup_m.y) * 100.0;
-return target_zup_cm - bind_local;
+float3 delta_norm  = p - p_bind;
+float3 delta_yup_m = delta_norm * (bounds_max - bounds_min);
+float3 delta_zup_cm = float3(delta_yup_m.x,
+                             -delta_yup_m.z,
+                              delta_yup_m.y) * 100.0;
+return delta_zup_cm;
 """
 
 
