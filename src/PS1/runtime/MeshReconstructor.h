@@ -59,6 +59,11 @@ struct ReconstructedCaptureSet {
 class MeshReconstructor
 {
 public:
+    static QString textureMaterialName(uint16_t tpage, uint16_t clut, uint8_t semiTrans,
+                                       uint32_t drawModeBits);
+    static quint64 textureGroupKey(uint16_t tpage, uint16_t clut, uint8_t semiTrans,
+                                  uint32_t drawModeBits);
+
     static ReconstructedMesh reconstruct(const CaptureSnapshot &snapshot);
     static ReconstructedCaptureSet reconstructDeduped(const CaptureSnapshot &snapshot,
                                                       MeshDedupeMode dedupeMode);

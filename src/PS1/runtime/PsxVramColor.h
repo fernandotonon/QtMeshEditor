@@ -6,6 +6,12 @@
 /** PS1 VRAM 16-bit BGR555 (+ STP in bit 15) helpers shared by rip + TIM paths. */
 namespace PsxVramColor {
 
+/** GP0 draw-mode bit 11: when clear, texel 0x0000 is transparent; when set, opaque black. */
+inline bool drawModeMasksZeroAsTransparent(uint32_t drawModeBits)
+{
+    return (drawModeBits & (1u << 11)) == 0;
+}
+
 inline void bgr555ToRgba(uint16_t c, uint8_t &r, uint8_t &g, uint8_t &b, uint8_t &a,
                          bool treatZeroAsTransparent = true)
 {

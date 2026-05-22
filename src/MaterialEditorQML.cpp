@@ -45,6 +45,22 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
+namespace {
+
+bool isPs1RipMaterial(const QString &name)
+{
+    return name.startsWith(QLatin1String("PS1Rip_")) || name.startsWith(QLatin1String("PS1Rip/"));
+}
+
+bool isPaintPipelineMaterial(const QString &name)
+{
+    return name.startsWith(QLatin1String("QMEPaintMaskOverlay_"))
+           || name.startsWith(QLatin1String("QMEPaint_"))
+           || name.startsWith(QLatin1String("TexturePaint/"));
+}
+
+} // namespace
+
 MaterialEditorQML::MaterialEditorQML(QObject *parent)
     : QObject(parent)
 {
@@ -188,6 +204,16 @@ void MaterialEditorQML::loadMaterial(const QString &materialName)
 {
     if (materialName.isEmpty()) {
         createNewMaterial();
+        return;
+    }
+
+    if (isPs1RipMaterial(materialName)) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("ps1_rip_material_edit_blocked:%1")
+                                          .arg(materialName));
+        emit errorOccurred(tr("Material \"%1\" is a PS1 capture material (read-only). "
+                              "Recapture or use a regular mesh material to edit in this window.")
+                               .arg(materialName));
         return;
     }
 
@@ -3893,9 +3919,7 @@ QStringList MaterialEditorQML::getMaterialList() const
             // ring material) and EditModeController's session, so the
             // user never authored them and shouldn't be able to
             // accidentally select / edit / delete them.
-            if (name.startsWith(QLatin1String("QMEPaintMaskOverlay_"))
-             || name.startsWith(QLatin1String("QMEPaint_"))
-             || name.startsWith(QLatin1String("TexturePaint/"))) {
+            if (isPaintPipelineMaterial(name)) {
                 materialIterator.moveNext();
                 continue;
             }
@@ -3911,6 +3935,8 @@ QStringList MaterialEditorQML::getMaterialList() const
 
 QString MaterialEditorQML::materialPreview(const QString& materialName) const
 {
+    if (isPs1RipMaterial(materialName) || isPaintPipelineMaterial(materialName))
+        return QString();
     return MaterialPreviewRenderer::instance()->renderPreviewAsDataUri(materialName);
 }
 
@@ -3919,6 +3945,8 @@ QString MaterialEditorQML::interactiveMaterialPreview(const QString& materialNam
                                                        int shape,
                                                        double yawDegrees) const
 {
+    if (isPs1RipMaterial(materialName) || isPaintPipelineMaterial(materialName))
+        return QString();
     return MaterialPreviewRenderer::instance()
         ->renderInteractivePreview(materialName, size, shape, yawDegrees);
 }
