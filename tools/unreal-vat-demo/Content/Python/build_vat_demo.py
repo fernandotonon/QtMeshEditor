@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 11
+OPENVAT_BUILD = 12
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -535,9 +535,27 @@ float3 p = lerp(p_curr, p_next, blend);
 
 float3 delta_norm  = p - p_bind;
 float3 delta_yup_m = delta_norm * (bounds_max - bounds_min);
+
+// Interchange's glTF importer does NOT use the standard
+// (x, -z, y) Y-up→Z-up swizzle. Verified in UE 5.7
+// Engine/Plugins/Interchange/Runtime/Source/Parsers/GLTFCore/
+// Private/GLTF/ConversionUtilities.h:16-21:
+//
+//     inline FVector ConvertVec3(const FVector& Vec)
+//     {
+//         // glTF uses a right-handed coordinate system, with Y up.
+//         // Unreal uses a left-handed coordinate system, with Z up.
+//         return {Vec.X, Vec.Z, Vec.Y};  // NO negation
+//     }
+//
+// Handedness flip happens via reversed triangle winding (same
+// file, GLTFMeshFactory.cpp:632), not by negating Y. So the
+// imported mesh's vertex positions are (x_gltf, z_gltf, y_gltf)
+// × 100, and our bake-delta needs the same un-negated swizzle to
+// land in the same coord system.
 float3 delta_zup_cm = float3(delta_yup_m.x,
-                             -delta_yup_m.z,
-                              delta_yup_m.y) * 100.0;
+                             delta_yup_m.z,
+                             delta_yup_m.y) * 100.0;
 return delta_zup_cm;
 """
 
