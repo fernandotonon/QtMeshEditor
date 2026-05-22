@@ -110,7 +110,7 @@ uint16_t TextureDecoder::readVramPixel(const VramSnapshot &vram, int x, int y)
 }
 
 uint16_t TextureDecoder::readClutColor(const VramSnapshot &vram, int clutX, int clutY, int index,
-                                       BitDepth bitDepth, const MaterialKey &key)
+                                       BitDepth bitDepth)
 {
     const int maxIndex = bitDepth == BitDepth::Bpp4 ? 15 : 255;
     const int clamped = std::clamp(index, 0, maxIndex);
@@ -152,8 +152,7 @@ QImage TextureDecoder::decodeRegion(const VramSnapshot &vram, const MaterialKey 
                 const uint16_t word = readVramPixel(vram, wordX, vramY);
                 const uint8_t idx = (texX & 1) ? static_cast<uint8_t>((word >> 8) & 0xFF)
                                                : static_cast<uint8_t>(word & 0xFF);
-                const uint16_t c =
-                    readClutColor(vram, key.clutX, key.clutY, idx, key.bitDepth, key);
+                const uint16_t c = readClutColor(vram, key.clutX, key.clutY, idx, key.bitDepth);
                 uint8_t r, g, b, a;
                 PsxVramColor::bgr555ToRgba(c, r, g, b, a, zeroTransparent);
                 scan[x] = qRgba(r, g, b, a);
@@ -172,7 +171,7 @@ QImage TextureDecoder::decodeRegion(const VramSnapshot &vram, const MaterialKey 
             const uint16_t word = readVramPixel(vram, wordX, vramY);
             const int shift = (texX & 3) * 4;
             const uint8_t idx = static_cast<uint8_t>((word >> shift) & 0xF);
-            const uint16_t c = readClutColor(vram, key.clutX, key.clutY, idx, key.bitDepth, key);
+            const uint16_t c = readClutColor(vram, key.clutX, key.clutY, idx, key.bitDepth);
             uint8_t r, g, b, a;
             PsxVramColor::bgr555ToRgba(c, r, g, b, a, zeroTransparent);
             scan[x] = qRgba(r, g, b, a);

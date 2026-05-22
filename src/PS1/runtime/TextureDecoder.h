@@ -77,7 +77,7 @@ private:
     void warnOutOfVram(const QString &message);
     uint16_t readVramPixel(const VramSnapshot &vram, int x, int y);
     uint16_t readClutColor(const VramSnapshot &vram, int clutX, int clutY, int index,
-                           BitDepth bitDepth, const MaterialKey &key);
+                           BitDepth bitDepth);
     QImage decodeRegion(const VramSnapshot &vram, const MaterialKey &key, const QRect &region);
 
     QHash<MaterialKey, CachedMaterial> m_cache;

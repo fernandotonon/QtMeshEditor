@@ -36,10 +36,11 @@ namespace {
 constexpr float kTargetMaxExtent = 2.0f;
 constexpr int kPageTexels = 256;
 
+std::atomic<int> g_nextSessionId{0};
+
 int allocateSessionId()
 {
-    static std::atomic<int> nextId{0};
-    return ++nextId;
+    return ++g_nextSessionId;
 }
 
 QString sessionResourceGroup(int sessionId)
@@ -317,6 +318,21 @@ void removePriorCaptureNodes(Manager *mgr)
         mgr->destroySceneNode(name);
 }
 
+void purgeSessionResourceGroups()
+{
+    Ogre::ResourceGroupManager &rgm = Ogre::ResourceGroupManager::getSingleton();
+    const int lastSessionId = g_nextSessionId.load();
+    for (int id = 1; id <= lastSessionId; ++id) {
+        const std::string group = sessionResourceGroup(id).toStdString();
+        if (!rgm.resourceGroupExists(group))
+            continue;
+        try {
+            rgm.destroyResourceGroup(group);
+        } catch (...) {
+        }
+    }
+}
+
 void purgePriorCaptureGpuResources()
 {
     Ogre::MeshManager &meshMgr = Ogre::MeshManager::getSingleton();
@@ -367,6 +383,33 @@ void purgePriorCaptureGpuResources()
         } catch (...) {
         }
     }
+
+    purgeSessionResourceGroups();
+}
+
+void rollbackFailedAttach(Manager *mgr, const QStringList &nodeNames, const QString &reason)
+{
+    if (mgr) {
+        for (const QString &name : nodeNames)
+            mgr->destroySceneNode(name);
+    }
+    purgePriorCaptureGpuResources();
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.attach"), reason, QStringLiteral("error"));
+}
+
+void beginCaptureAttach(Manager *mgr, const QString &captureId, const CaptureSnapshot *textureSource,
+                        TextureBuildContext *texCtx)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.attach"), QStringLiteral("start"));
+    removePriorCaptureNodes(mgr);
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.attach"), QStringLiteral("purge"));
+    purgePriorCaptureGpuResources();
+
+    texCtx->sessionId = allocateSessionId();
+    texCtx->resourceGroup = sessionResourceGroup(texCtx->sessionId);
+    texCtx->captureId = captureId;
+    ensureResourceGroup(texCtx->resourceGroup);
+    predecodeCaptureTextures(textureSource, texCtx);
 }
 
 Ogre::AxisAlignedBox meshBounds(const ReconstructedMesh &mesh)
@@ -507,15 +550,8 @@ bool PS1RipMeshBuilder::attachToScene(const ReconstructedMesh &mesh, const QStri
         return false;
     }
 
-    removePriorCaptureNodes(mgr);
-    purgePriorCaptureGpuResources();
-
     TextureBuildContext texCtx;
-    texCtx.sessionId = allocateSessionId();
-    texCtx.resourceGroup = sessionResourceGroup(texCtx.sessionId);
-    texCtx.captureId = captureId;
-    ensureResourceGroup(texCtx.resourceGroup);
-    predecodeCaptureTextures(textureSource, &texCtx);
+    beginCaptureAttach(mgr, captureId, textureSource, &texCtx);
 
     Ogre::MeshPtr ogreMesh;
     Ogre::AxisAlignedBox localBounds;
@@ -527,6 +563,8 @@ bool PS1RipMeshBuilder::attachToScene(const ReconstructedMesh &mesh, const QStri
     Ogre::Entity *entity = mgr->createEntity(node, ogreMesh);
 
     if (!entity) {
+        rollbackFailedAttach(mgr, {nodeName},
+                             QStringLiteral("createEntity failed capture=%1").arg(captureId));
         if (errorOut)
             *errorOut = QStringLiteral("Failed to create Ogre entity for reconstructed mesh");
         return false;
@@ -538,6 +576,12 @@ bool PS1RipMeshBuilder::attachToScene(const ReconstructedMesh &mesh, const QStri
         resultOut->vertexCount = mesh.vertexCount;
         resultOut->triangleCount = mesh.triangleCount;
     }
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.attach"),
+        QStringLiteral("success capture=%1 verts=%2 tris=%3")
+            .arg(captureId)
+            .arg(mesh.vertexCount)
+            .arg(mesh.triangleCount));
     return true;
 }
 
@@ -558,9 +602,6 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
             *errorOut = QStringLiteral("Editor scene is not available");
         return false;
     }
-
-    removePriorCaptureNodes(mgr);
-    purgePriorCaptureGpuResources();
 
     QVector<Ogre::AxisAlignedBox> localBoundsByMesh(captureSet.uniqueMeshes.size());
     for (int i = 0; i < captureSet.uniqueMeshes.size(); ++i)
@@ -597,11 +638,7 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
     }
 
     TextureBuildContext texCtx;
-    texCtx.sessionId = allocateSessionId();
-    texCtx.resourceGroup = sessionResourceGroup(texCtx.sessionId);
-    texCtx.captureId = captureId;
-    ensureResourceGroup(texCtx.resourceGroup);
-    predecodeCaptureTextures(textureSource, &texCtx);
+    beginCaptureAttach(mgr, captureId, textureSource, &texCtx);
 
     int totalVerts = 0;
     int totalTris = 0;
@@ -633,8 +670,11 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
 
             Ogre::Entity *entity = mgr->createEntity(node, ogreMesh);
             if (!entity) {
-                for (const QString &createdName : createdNodeNames)
-                    mgr->destroySceneNode(createdName);
+                rollbackFailedAttach(
+                    mgr, createdNodeNames,
+                    QStringLiteral("createEntity failed capture=%1 instance=%2")
+                        .arg(captureId)
+                        .arg(instanceOrdinal - 1));
                 if (errorOut)
                     *errorOut = QStringLiteral("Failed to create Ogre entity for instance");
                 return false;
@@ -652,5 +692,12 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
         resultOut->vertexCount = totalVerts;
         resultOut->triangleCount = totalTris;
     }
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.attach"),
+        QStringLiteral("success capture=%1 verts=%2 tris=%3 instances=%4")
+            .arg(captureId)
+            .arg(totalVerts)
+            .arg(totalTris)
+            .arg(captureSet.instances.size()));
     return true;
 }
