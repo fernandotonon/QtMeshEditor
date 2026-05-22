@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 18
+OPENVAT_BUILD = 19
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -184,6 +184,34 @@ def _import_gltf_via_interchange(src_filename, dst_name):
                                    "material-shared primitives and the "
                                    "VAT will render with column-index "
                                    "mismatches.")
+
+            # CRITICAL: TEXCOORD_1 carries the per-vertex bake-column
+            # index (integers 0..5827 for this asset). By default UE
+            # stores secondary UVs as half-precision floats (16-bit),
+            # which can represent integers exactly only up to 2048
+            # (mantissa = 11 bits + hidden 1 = max exact int 2048).
+            # For columns > 2048 — i.e. everything past the first
+            # ~third of the mesh on a 5828-vertex Mixamo bake — the
+            # column index rounds to the nearest representable
+            # half-float, aliasing the per-vertex animation lookup
+            # to a NEIGHBOURING vertex's data. The visual symptom is
+            # short-bursts of distortion on small submeshes whose
+            # column ranges fall above 2048 OR are adjacent to such
+            # ranges (head, eyes, cigar surroundings, etc.) on the
+            # specific frames where the aliased neighbour happens to
+            # be displaced far from its bind. Fixed by enabling
+            # 32-bit UVs.
+            for name in ("use_full_precision_uvs",
+                         "b_use_full_precision_uvs",
+                         "bUseFullPrecisionUVs"):
+                try:
+                    common.set_editor_property(name, True)
+                    unreal.log("Interchange: common_meshes_properties."
+                               + name + " = True (preserves TEXCOORD_1 "
+                               "column indices > 2048 exactly).")
+                    break
+                except Exception:
+                    pass
         else:
             unreal.log_warning("Interchange pipeline has no "
                                "`common_meshes_properties` sub-object on "
