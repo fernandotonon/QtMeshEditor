@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 27
+OPENVAT_BUILD = 28
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -391,8 +391,12 @@ def verify_imported_uv_channels(mesh):
             rebuilt = False
             for lod in range(num_lods):
                 try:
-                    bs = unreal.MeshBuildSettings()
-                    sme.get_lod_build_settings(mesh, lod, bs)
+                    # UE 5.7 Python returns the struct by value rather
+                    # than taking an out-parameter — the C++ signature
+                    # is (mesh, lod, OutSettings&) but the Python
+                    # binding ScriptName-flattens to a 2-arg call that
+                    # returns the struct directly.
+                    bs = sme.get_lod_build_settings(mesh, lod)
                 except Exception as e:
                     unreal.log_warning("verify_uv: get_lod_build_settings"
                                        "(" + str(lod) + ") failed: "
