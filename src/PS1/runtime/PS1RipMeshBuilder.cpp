@@ -56,7 +56,7 @@ void ensureResourceGroup(const QString &groupName)
 }
 
 bool parseTpageClutMaterial(const QString &name, uint16_t &tpageOut, uint16_t &clutOut,
-                            uint8_t &semiTransOut)
+                            uint8_t &semiTransOut, uint8_t &drawModeBitOut)
 {
     static const QRegularExpression re(
         QStringLiteral("^PS1Rip_tpage_([0-9a-fA-F]+)_clut_([0-9a-fA-F]+)(?:_st([0-3]))?(?:_dm([01]))?$"));
@@ -67,7 +67,22 @@ bool parseTpageClutMaterial(const QString &name, uint16_t &tpageOut, uint16_t &c
     clutOut = static_cast<uint16_t>(match.captured(2).toUInt(nullptr, 16));
     semiTransOut = match.captured(3).isEmpty() ? 0
                                                : static_cast<uint8_t>(match.captured(3).toUInt());
+    drawModeBitOut = match.captured(4).isEmpty()
+                         ? 0
+                         : static_cast<uint8_t>(match.captured(4).toUInt());
     return true;
+}
+
+TextureDecoder::MaterialKey materialKeyFromParsedName(uint16_t tpage, uint16_t clutWord,
+                                                      uint8_t semiTrans, uint8_t drawModeBit)
+{
+    TextureDecoder::MaterialKey key{};
+    key.tpage = tpage;
+    TextureDecoder::clutCoordsFromClutWord(clutWord, key.clutX, key.clutY);
+    key.bitDepth = TextureDecoder::bitDepthFromTpage(tpage);
+    key.semiTrans = semiTrans;
+    key.drawModeBits = drawModeBit ? (1u << 11) : 0u;
+    return key;
 }
 
 void applySemiTransBlend(Ogre::Pass *pass, uint8_t semiTrans)
@@ -261,10 +276,16 @@ Ogre::MaterialPtr ensureMaterial(const QString &logicalName, TextureBuildContext
     uint16_t tpage = 0;
     uint16_t clut = 0;
     uint8_t semiTrans = 0;
-    if (parseTpageClutMaterial(logicalName, tpage, clut, semiTrans)) {
+    uint8_t drawModeBit = 0;
+    if (parseTpageClutMaterial(logicalName, tpage, clut, semiTrans, drawModeBit)) {
         applySemiTransBlend(pass, semiTrans);
 
-        const TextureDecoder::MaterialKey key = ctx->materialKeys.value(logicalName);
+        TextureDecoder::MaterialKey key = ctx->materialKeys.value(logicalName);
+        if (!ctx->materialKeys.contains(logicalName))
+            key = materialKeyFromParsedName(tpage, clut, semiTrans, drawModeBit);
+        else if (((key.drawModeBits >> 11) & 1u) != drawModeBit)
+            key.drawModeBits = drawModeBit ? (1u << 11) : 0u;
+
         const QImage tile = ctx->decoder.cachedMaterial(key);
         const QRect bounds = ctx->decoder.cachedBoundsOnPage(key);
         if (!tile.isNull()) {
