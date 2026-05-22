@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 26
+OPENVAT_BUILD = 27
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -375,49 +375,55 @@ def verify_imported_uv_channels(mesh):
 
     unreal.log("verify_uv: imported as StaticMesh ✓.")
 
-    # Force full-precision UVs at the StaticMesh BuildSettings level,
-    # rebuilding if the flag was off.
+    # Force full-precision UVs on the StaticMesh's per-LOD BuildSettings,
+    # rebuilding if the flag was off. The API lives on
+    # StaticMeshEditorSubsystem (not on UStaticMesh itself), with the
+    # value passed/returned by reference.
+    sme = None
     try:
-        num_lods = mesh.get_num_lods() if hasattr(mesh, "get_num_lods") else 1
-        rebuilt = False
-        for lod in range(num_lods):
-            try:
-                bs = mesh.get_lod_build_settings(lod) if hasattr(
-                    mesh, "get_lod_build_settings") else None
-            except Exception:
-                bs = None
-            if bs is None:
-                continue
-            cur = False
-            try:
-                cur = bool(bs.use_full_precision_u_vs)
-            except Exception:
-                pass
-            if not cur:
-                try:
-                    bs.use_full_precision_u_vs = True
-                    mesh.set_lod_build_settings(lod, bs)
-                    rebuilt = True
-                    unreal.log("verify_uv: forced LOD " + str(lod)
-                               + " bUseFullPrecisionUVs=True (was off).")
-                except Exception as e:
-                    unreal.log_warning("verify_uv: could not flip "
-                                       "LOD " + str(lod) + " "
-                                       "bUseFullPrecisionUVs: " + str(e))
-            else:
-                unreal.log("verify_uv: LOD " + str(lod) + " "
-                           "bUseFullPrecisionUVs already True ✓")
-        if rebuilt:
-            try:
-                mesh.build()
-                unreal.EditorAssetLibrary.save_loaded_asset(mesh)
-                unreal.log("verify_uv: StaticMesh rebuilt with full-"
-                           "precision UVs.")
-            except Exception as e:
-                unreal.log_warning("verify_uv: rebuild failed: "
-                                   + str(e))
+        sme = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
     except Exception as e:
-        unreal.log_warning("build-settings dump failed: " + str(e))
+        unreal.log_warning("verify_uv: no StaticMeshEditorSubsystem "
+                           "available: " + str(e))
+    if sme is not None:
+        try:
+            num_lods = mesh.get_num_lods() if hasattr(mesh, "get_num_lods") else 1
+            rebuilt = False
+            for lod in range(num_lods):
+                try:
+                    bs = unreal.MeshBuildSettings()
+                    sme.get_lod_build_settings(mesh, lod, bs)
+                except Exception as e:
+                    unreal.log_warning("verify_uv: get_lod_build_settings"
+                                       "(" + str(lod) + ") failed: "
+                                       + str(e))
+                    continue
+                cur = bool(bs.use_full_precision_u_vs)
+                if cur:
+                    unreal.log("verify_uv: LOD " + str(lod) + " "
+                               "bUseFullPrecisionUVs already True ✓")
+                else:
+                    bs.use_full_precision_u_vs = True
+                    try:
+                        sme.set_lod_build_settings(mesh, lod, bs)
+                        rebuilt = True
+                        unreal.log("verify_uv: forced LOD " + str(lod)
+                                   + " bUseFullPrecisionUVs=True "
+                                   "(was off).")
+                    except Exception as e:
+                        unreal.log_warning("verify_uv: set failed: "
+                                           + str(e))
+            if rebuilt:
+                try:
+                    mesh.build()
+                    unreal.EditorAssetLibrary.save_loaded_asset(mesh)
+                    unreal.log("verify_uv: StaticMesh rebuilt with "
+                               "full-precision UVs.")
+                except Exception as e:
+                    unreal.log_warning("verify_uv: rebuild failed: "
+                                       + str(e))
+        except Exception as e:
+            unreal.log_warning("build-settings dump failed: " + str(e))
 
     # Per-section dump for diagnostics.
     try:
