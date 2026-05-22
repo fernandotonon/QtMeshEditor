@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 23
+OPENVAT_BUILD = 24
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -436,26 +436,44 @@ def import_bake_assets():
     pos_tex = unreal.load_asset(BAKE_DIR + "/T_OpenVAT_Pos.T_OpenVAT_Pos")
     if pos_tex:
         pos_tex.set_editor_property("srgb", False)
-        # The EXR import factory routes via OpenEXRWrapper and stores
-        # as RGBA16F (or RGBA32F if available); the compression mode we
-        # want is HDR. The PNG path uses VectorDisplacementMap to keep
-        # the [0..1] quantized coords intact through BC5N-equivalent
-        # packing.
+        # IMPORTANT format choice:
+        #
+        # `TC_HDR` is RGBA16F (half-precision float). For our EXR bake
+        # that means the 32-bit positions in the source file get
+        # ROUNDED TO HALF on GPU upload — defeating the whole point of
+        # the 32-bit precision path. Half has only ~3 mm precision at
+        # the dancer's head height (~1.6 m), which is enough to flip
+        # depth-test outcomes between layered eye/teeth submeshes on
+        # specific frames. Symptom: those subsmeshes glitch unpredictably
+        # per frame even though the underlying bake is clean.
+        #
+        # `TC_HDR_F32` is RGBA32F — full float precision through the
+        # whole pipeline, sub-µm on our model scale. Verified in UE
+        # 5.7's TextureDefines.h:409:
+        #   TC_HDR_F32   UMETA(DisplayName = "HDR High Precision (RGBA32F)")
         is_exr = pos_basename.endswith(".exr")
         if is_exr:
-            pos_tex.set_editor_property("compression_settings",
-                unreal.TextureCompressionSettings.TC_HDR)
+            # Prefer TC_HDR_F32 (5.5+); fall back to TC_HDR if the
+            # enum value isn't exposed in this engine version.
+            try:
+                pos_tex.set_editor_property("compression_settings",
+                    unreal.TextureCompressionSettings.TC_HDR_F32)
+                hdr_mode = "HDR_F32 (RGBA32F)"
+            except Exception:
+                pos_tex.set_editor_property("compression_settings",
+                    unreal.TextureCompressionSettings.TC_HDR)
+                hdr_mode = "HDR (RGBA16F — fallback)"
         else:
             pos_tex.set_editor_property("compression_settings",
                 unreal.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP)
+            hdr_mode = "VectorDisplacement"
         pos_tex.set_editor_property("mip_gen_settings",
             unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
         pos_tex.set_editor_property("filter",
             unreal.TextureFilter.TF_NEAREST)
         unreal.EditorAssetLibrary.save_loaded_asset(pos_tex)
         unreal.log("Position texture configured: non-sRGB, "
-                   + ("HDR" if is_exr else "VectorDisplacement")
-                   + ", no mips, nearest")
+                   + hdr_mode + ", no mips, nearest")
     else:
         unreal.log_error("Could not load imported T_OpenVAT_Pos — bake will look wrong.")
 
