@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 19
+OPENVAT_BUILD = 20
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -821,30 +821,29 @@ def build_material(frame_count, bounds_min, bounds_max, bit_depth=16):
     me.connect_material_property(custom, "",
         unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
 
-    # PixelDepthOffset hack — only needed for 16-bit bakes. The 32-bit
-    # EXR path stores raw float32 positions so adjacent frames don't
-    # quantize to identical values; the eye/plug z-fight that hack
-    # masked simply doesn't happen at float32 precision.
-    if bit_depth != 32:
-        # Apply a small negative Pixel Depth Offset (~5mm closer to
-        # camera) so the bake's rendered fragments always win the
-        # depth test against any coplanar surface behind them.
-        # See discussion at OPENVAT_BUILD = 17 (commit c52c27e).
-        p_pdo = me.create_material_expression(mat,
-            unreal.MaterialExpressionConstant, -400, 800)
-        p_pdo.set_editor_property("r", -0.5)  # cm; subtracts from depth
-        try:
-            me.connect_material_property(p_pdo, "",
-                unreal.MaterialProperty.MP_PIXEL_DEPTH_OFFSET)
-            unreal.log("M_OpenVAT.PixelDepthOffset = -0.5cm "
-                       "(16-bit bake — masks eye z-fight).")
-        except Exception as e:
-            unreal.log_warning("Could not wire PixelDepthOffset: "
-                               + str(e))
-    else:
-        unreal.log("Skipping PixelDepthOffset hack: 32-bit bake has "
-                   "enough precision that adjacent vertices don't "
-                   "quantize-collide.")
+    # PixelDepthOffset = -0.5 cm. We had this skipped for 32-bit
+    # bakes on the theory that vertex-position precision was the
+    # only source of eye/teeth z-fight — but UE's rasterizer depth
+    # buffer precision is screen-space and depends on near/far plane
+    # ratio, not vertex precision. Mixamo's eye sclera + dental
+    # plug both sit at sub-mm depth inside the head, and even
+    # perfect float32 vertex positions can still flip on the depth
+    # test if the rasterizer's stored Z is at lower precision than
+    # the vertex Z. Bias the rendered fragments 5mm toward camera
+    # so VAT-driven shells always win z-tests against any coplanar
+    # static-pose plug. 5mm is invisible for non-coplanar surfaces
+    # so applying it globally is safe.
+    p_pdo = me.create_material_expression(mat,
+        unreal.MaterialExpressionConstant, -400, 800)
+    p_pdo.set_editor_property("r", -0.5)  # cm; subtracts from depth
+    try:
+        me.connect_material_property(p_pdo, "",
+            unreal.MaterialProperty.MP_PIXEL_DEPTH_OFFSET)
+        unreal.log("M_OpenVAT.PixelDepthOffset = -0.5cm "
+                   "(masks eye/teeth z-fight against coplanar plugs).")
+    except Exception as e:
+        unreal.log_warning("Could not wire PixelDepthOffset: "
+                           + str(e))
 
     # Albedo: sample T_Boss_Diffuse against UV0 (TexCoord 0).
     p_uv0 = me.create_material_expression(mat,
