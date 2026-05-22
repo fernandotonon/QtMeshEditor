@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 14
+OPENVAT_BUILD = 15
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -922,6 +922,21 @@ def spawn_dancer_in_level():
             except Exception as e:
                 unreal.log_warning("set_material(" + str(i) + ") failed: "
                                    + str(e))
+        # Inflate the component's bounds so WPO-displaced vertices don't
+        # get view-frustum-culled when the animation pushes them outside
+        # the bind-pose AABB. Symptom without this: small submeshes
+        # (the eyes, the cigar tip) blink out on specific frames where
+        # the head rotation puts them briefly outside the static
+        # bounding box that Unreal built at import time from the
+        # T-pose. 3× is enough headroom for a Mixamo dance without
+        # being so large it hurts large-scene culling perf.
+        try:
+            sm_comp.set_editor_property("bounds_scale", 3.0)
+            unreal.log("StaticMeshComponent.bounds_scale = 3.0 "
+                       "(prevents WPO-displaced submeshes from being "
+                       "frustum-culled mid-animation).")
+        except Exception as e:
+            unreal.log_warning("Could not set bounds_scale: " + str(e))
     else:
         skel_comp = actor.skeletal_mesh_component
         if skel_comp is None:
