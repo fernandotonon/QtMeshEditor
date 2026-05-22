@@ -143,7 +143,8 @@ TEST(TextureDecoderTest, WarnsOnOutOfRangeVramRead)
     VramSnapshot vram;
     TextureDecoder decoder;
     TextureDecoder::MaterialKey key{};
-    key.tpage = 0;
+    // TPAGE at x=960; page-local (254,0,4,1) reads VRAM x=1214..1217 (>= 1024).
+    key.tpage = 0x000F;
     key.bitDepth = TextureDecoder::BitDepth::Bpp15;
     const QImage tile = decoder.decodeMaterial(vram, key, QRect(254, 0, 4, 1));
     EXPECT_FALSE(tile.isNull());
