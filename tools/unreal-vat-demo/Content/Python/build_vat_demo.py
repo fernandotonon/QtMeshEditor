@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 25
+OPENVAT_BUILD = 26
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -348,37 +348,95 @@ def find_skeletal_mesh():
 def verify_imported_uv_channels(mesh):
     """Log the imported mesh's class so the user can confirm the
     static-mesh override took effect. Also log per-section vertex
-    counts and material slot index — useful for diagnosing whether
+    counts + material slot index — useful for diagnosing whether
     Interchange's material-merge step is corrupting the per-vertex
-    TEXCOORD_1 column index."""
+    TEXCOORD_1 column index.
+
+    Side-effect: FORCE bUseFullPrecisionUVs=True on every LOD's
+    SourceModel and rebuild the mesh. The Interchange pipeline flag
+    of the same name doesn't always propagate into the StaticMesh's
+    per-LOD BuildSettings — and when it doesn't, TEXCOORD_1 column
+    indices above 2048 alias to neighbouring even values (half-float
+    mantissa is 11 bits). On a 5828-vert Mixamo asset that aliasing
+    breaks every head submesh whose columns are > 2048 (Skin0-2,
+    Eyes0-1) — they read each other's animation data, producing the
+    "head-only specific-frame distortion" we kept chasing."""
     if not mesh:
         return
-    if isinstance(mesh, unreal.StaticMesh):
-        unreal.log("verify_uv: imported as StaticMesh ✓.")
-        try:
-            num_lods = mesh.get_num_lods() if hasattr(mesh, "get_num_lods") else 1
-            for lod in range(num_lods):
-                if not hasattr(mesh, "get_num_sections"):
-                    continue
-                nsec = mesh.get_num_sections(lod)
-                unreal.log("verify_uv: LOD " + str(lod) + " has "
-                           + str(nsec) + " section(s).")
-                for s in range(nsec):
-                    try:
-                        info = mesh.get_section_info(lod, s)
-                        unreal.log("    section " + str(s) +
-                                   ": material_slot=" + str(info.material_index))
-                    except Exception:
-                        pass
-        except Exception as e:
-            unreal.log_warning("section dump failed: " + str(e))
-    elif isinstance(mesh, unreal.SkeletalMesh):
-        unreal.log_error(
-            "*** verify_uv: imported as SkeletalMesh — the "
-            "static-mesh override failed.")
-    else:
-        unreal.log_warning("verify_uv: imported mesh is "
-                           + str(type(mesh)) + " (unexpected).")
+    if not isinstance(mesh, unreal.StaticMesh):
+        if isinstance(mesh, unreal.SkeletalMesh):
+            unreal.log_error(
+                "*** verify_uv: imported as SkeletalMesh — the "
+                "static-mesh override failed.")
+        else:
+            unreal.log_warning("verify_uv: imported mesh is "
+                               + str(type(mesh)) + " (unexpected).")
+        return
+
+    unreal.log("verify_uv: imported as StaticMesh ✓.")
+
+    # Force full-precision UVs at the StaticMesh BuildSettings level,
+    # rebuilding if the flag was off.
+    try:
+        num_lods = mesh.get_num_lods() if hasattr(mesh, "get_num_lods") else 1
+        rebuilt = False
+        for lod in range(num_lods):
+            try:
+                bs = mesh.get_lod_build_settings(lod) if hasattr(
+                    mesh, "get_lod_build_settings") else None
+            except Exception:
+                bs = None
+            if bs is None:
+                continue
+            cur = False
+            try:
+                cur = bool(bs.use_full_precision_u_vs)
+            except Exception:
+                pass
+            if not cur:
+                try:
+                    bs.use_full_precision_u_vs = True
+                    mesh.set_lod_build_settings(lod, bs)
+                    rebuilt = True
+                    unreal.log("verify_uv: forced LOD " + str(lod)
+                               + " bUseFullPrecisionUVs=True (was off).")
+                except Exception as e:
+                    unreal.log_warning("verify_uv: could not flip "
+                                       "LOD " + str(lod) + " "
+                                       "bUseFullPrecisionUVs: " + str(e))
+            else:
+                unreal.log("verify_uv: LOD " + str(lod) + " "
+                           "bUseFullPrecisionUVs already True ✓")
+        if rebuilt:
+            try:
+                mesh.build()
+                unreal.EditorAssetLibrary.save_loaded_asset(mesh)
+                unreal.log("verify_uv: StaticMesh rebuilt with full-"
+                           "precision UVs.")
+            except Exception as e:
+                unreal.log_warning("verify_uv: rebuild failed: "
+                                   + str(e))
+    except Exception as e:
+        unreal.log_warning("build-settings dump failed: " + str(e))
+
+    # Per-section dump for diagnostics.
+    try:
+        num_lods = mesh.get_num_lods() if hasattr(mesh, "get_num_lods") else 1
+        for lod in range(num_lods):
+            if not hasattr(mesh, "get_num_sections"):
+                continue
+            nsec = mesh.get_num_sections(lod)
+            unreal.log("verify_uv: LOD " + str(lod) + " has "
+                       + str(nsec) + " section(s).")
+            for s in range(nsec):
+                try:
+                    info = mesh.get_section_info(lod, s)
+                    unreal.log("    section " + str(s) +
+                               ": material_slot=" + str(info.material_index))
+                except Exception:
+                    pass
+    except Exception as e:
+        unreal.log_warning("section dump failed: " + str(e))
 
 
 def import_bake_assets():
