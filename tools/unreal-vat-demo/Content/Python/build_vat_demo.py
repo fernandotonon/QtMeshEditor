@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 24
+OPENVAT_BUILD = 25
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -681,9 +681,20 @@ def build_material(frame_count, bounds_min, bounds_max, bit_depth=16):
             unreal.MaterialDomain.MD_SURFACE)
         mat.set_editor_property("shading_model",
             unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
-        mat.set_editor_property("two_sided", False)
+        # two_sided = True is critical for VAT-driven meshes. The
+        # mesh's vertex normals are static (bind-pose), so when the
+        # WPO rotates a vertex 90+° from its bind direction, its
+        # normal still points the bind way — which means the
+        # rasterizer's back-face culling test fires based on the
+        # WRONG side of the triangle. Symptom without this:
+        # specific frames where the dance turns the head far enough
+        # that the eye/teeth/ear bind-pose normals straddle the
+        # camera-facing threshold render with those sub-meshes
+        # missing (back-face culled). Drawing both sides costs a
+        # bit of fill rate but is correct.
+        mat.set_editor_property("two_sided", True)
         unreal.log("Material modes: Opaque / Surface / DefaultLit / "
-                   "single-sided.")
+                   "two-sided.")
     except Exception as e:
         unreal.log_warning("Could not set material modes: " + str(e))
 
