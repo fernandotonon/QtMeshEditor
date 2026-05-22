@@ -20,20 +20,6 @@ uint32_t packDiffuse(uint8_t r, uint8_t g, uint8_t b)
     return cv.getAsBYTE();
 }
 
-QString textureMaterialName(uint16_t tpage, uint16_t clut, uint8_t semiTrans)
-{
-    return QStringLiteral("PS1Rip_tpage_%1_clut_%2_st%3")
-        .arg(tpage, 4, 16, QChar('0'))
-        .arg(clut, 4, 16, QChar('0'))
-        .arg(semiTrans & 3);
-}
-
-quint64 textureGroupKey(uint16_t tpage, uint16_t clut, uint8_t semiTrans)
-{
-    return (static_cast<quint64>(tpage) << 32) | clut
-           | (static_cast<quint64>(semiTrans & 3) << 48);
-}
-
 struct SubMeshAccumulator {
     QString materialName;
     QVector<ReconstructedVertex> vertices;
@@ -132,10 +118,12 @@ QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> buildMatrixGroups(const Capt
         if (prim.matrixId < static_cast<uint32_t>(snapshot.matrices.size()))
             matrix = &snapshot.matrices[static_cast<int>(prim.matrixId)];
 
-        const quint64 texKey = textureGroupKey(prim.tpage, prim.clut, prim.semiTrans);
+        const quint64 texKey = MeshReconstructor::textureGroupKey(
+            prim.tpage, prim.clut, prim.semiTrans, prim.drawModeBits);
         SubMeshAccumulator &acc = groupsByMatrix[prim.matrixId][texKey];
         if (acc.materialName.isEmpty())
-            acc.materialName = textureMaterialName(prim.tpage, prim.clut, prim.semiTrans);
+            acc.materialName = MeshReconstructor::textureMaterialName(
+                prim.tpage, prim.clut, prim.semiTrans, prim.drawModeBits);
         emitPrimitive(prim, matrix, acc);
     }
     return groupsByMatrix;
@@ -191,6 +179,24 @@ ReconstructedMesh flattenParts(const QVector<ReconstructedMesh> &parts)
 }
 
 } // namespace
+
+QString MeshReconstructor::textureMaterialName(uint16_t tpage, uint16_t clut, uint8_t semiTrans,
+                                                 uint32_t drawModeBits)
+{
+    return QStringLiteral("PS1Rip_tpage_%1_clut_%2_st%3_dm%4")
+        .arg(tpage, 4, 16, QChar('0'))
+        .arg(clut, 4, 16, QChar('0'))
+        .arg(semiTrans & 3)
+        .arg((drawModeBits >> 11) & 1u);
+}
+
+quint64 MeshReconstructor::textureGroupKey(uint16_t tpage, uint16_t clut, uint8_t semiTrans,
+                                           uint32_t drawModeBits)
+{
+    return (static_cast<quint64>(tpage) << 32) | clut
+           | (static_cast<quint64>(semiTrans & 3) << 48)
+           | (static_cast<quint64>((drawModeBits >> 11) & 1u) << 52);
+}
 
 ReconstructedMesh MeshReconstructor::reconstruct(const CaptureSnapshot &snapshot)
 {

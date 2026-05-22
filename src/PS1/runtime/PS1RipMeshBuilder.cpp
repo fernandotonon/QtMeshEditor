@@ -1,6 +1,7 @@
 #include "PS1RipMeshBuilder.h"
 
 #include "Manager.h"
+#include "MeshReconstructor.h"
 #include "SentryReporter.h"
 #include "TextureDecoder.h"
 #include "VramSnapshot.h"
@@ -58,7 +59,7 @@ bool parseTpageClutMaterial(const QString &name, uint16_t &tpageOut, uint16_t &c
                             uint8_t &semiTransOut)
 {
     static const QRegularExpression re(
-        QStringLiteral("^PS1Rip_tpage_([0-9a-fA-F]+)_clut_([0-9a-fA-F]+)(?:_st([0-3]))?$"));
+        QStringLiteral("^PS1Rip_tpage_([0-9a-fA-F]+)_clut_([0-9a-fA-F]+)(?:_st([0-3]))?(?:_dm([01]))?$"));
     const QRegularExpressionMatch match = re.match(name);
     if (!match.hasMatch())
         return false;
@@ -170,11 +171,19 @@ QImage pageImageFromCachedTile(const QImage &tile, const QRect &boundsOnPage)
     page.fill(Qt::transparent);
     if (tile.isNull() || !boundsOnPage.isValid())
         return page;
-    for (int y = 0; y < tile.height(); ++y) {
-        const QRgb *src = reinterpret_cast<const QRgb *>(tile.constScanLine(y));
-        QRgb *dst = reinterpret_cast<QRgb *>(page.scanLine(boundsOnPage.y() + y));
-        for (int x = 0; x < tile.width(); ++x)
-            dst[boundsOnPage.x() + x] = src[x];
+
+    const QRect pageRect(0, 0, kPageTexels, kPageTexels);
+    const QRect dstRect = boundsOnPage.intersected(pageRect);
+    if (dstRect.isEmpty())
+        return page;
+
+    const int srcX0 = dstRect.x() - boundsOnPage.x();
+    const int srcY0 = dstRect.y() - boundsOnPage.y();
+    for (int y = 0; y < dstRect.height(); ++y) {
+        const QRgb *src = reinterpret_cast<const QRgb *>(tile.constScanLine(srcY0 + y));
+        QRgb *dst = reinterpret_cast<QRgb *>(page.scanLine(dstRect.y() + y));
+        for (int x = 0; x < dstRect.width(); ++x)
+            dst[dstRect.x() + x] = src[srcX0 + x];
     }
     return page;
 }
@@ -204,11 +213,8 @@ void predecodeCaptureTextures(const CaptureSnapshot *textureSource, TextureBuild
         const TextureDecoder::MaterialKey key = TextureDecoder::materialKeyFromPrim(prim);
         TextureDecoder::accumulateUvBounds(prim, boundsByKey[key]);
 
-        const QString matName =
-            QStringLiteral("PS1Rip_tpage_%1_clut_%2_st%3")
-                .arg(prim.tpage, 4, 16, QChar('0'))
-                .arg(prim.clut, 4, 16, QChar('0'))
-                .arg(prim.semiTrans & 3);
+        const QString matName = MeshReconstructor::textureMaterialName(
+            prim.tpage, prim.clut, prim.semiTrans, prim.drawModeBits);
         ctx->materialKeys.insert(matName, key);
     }
 
@@ -297,7 +303,8 @@ void purgePriorCaptureGpuResources()
     Ogre::ResourceManager::ResourceMapIterator meshIt = meshMgr.getResourceIterator();
     while (meshIt.hasMoreElements()) {
         const std::string name = meshIt.peekNextValue()->getName();
-        if (name.rfind("ps1_capture_", 0) == 0 || name.rfind("ps1_part_", 0) == 0)
+        if (name.rfind("ps1_capture_", 0) == 0 || name.rfind("ps1_part_", 0) == 0
+            || name.rfind("ps1_unique_", 0) == 0)
             meshesToRemove.push_back(name);
         meshIt.moveNext();
     }

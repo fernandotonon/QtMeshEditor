@@ -208,6 +208,9 @@ void MaterialEditorQML::loadMaterial(const QString &materialName)
     }
 
     if (isPs1RipMaterial(materialName)) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("ps1_rip_material_edit_blocked:%1")
+                                          .arg(materialName));
         emit errorOccurred(tr("Material \"%1\" is a PS1 capture material (read-only). "
                               "Recapture or use a regular mesh material to edit in this window.")
                                .arg(materialName));
