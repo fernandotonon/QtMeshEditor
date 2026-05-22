@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 17
+OPENVAT_BUILD = 18
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -360,9 +360,19 @@ def import_bake_assets():
     Unreal's default Texture2D import gamma-corrects + DXT-compresses
     the data, which corrupts the per-vertex floats. We re-open after
     import and override.
+
+    The position texture is either a 16-bit PNG or a 32-bit EXR,
+    depending on what `qtmesh vat` was told to produce. We dispatch
+    on the on-disk file extension — checking the sidecar's `_bit_depth`
+    is equivalent but the filename is cheaper to look up here.
     """
-    _import_texture("mixamo.com_pos.png", "T_OpenVAT_Pos")
-    _import_texture("Boss_diffuse.png",   "T_Boss_Diffuse")
+    pos_basename = ("mixamo.com_pos.exr"
+                    if os.path.exists(os.path.join(RUMBA_FS_DIR,
+                                                    "mixamo.com_pos.exr"))
+                    else "mixamo.com_pos.png")
+    unreal.log("import_bake_assets: position texture = " + pos_basename)
+    _import_texture(pos_basename, "T_OpenVAT_Pos")
+    _import_texture("Boss_diffuse.png", "T_Boss_Diffuse")
 
     # Wipe any prior mesh-related imports under /Game/Rumba/ before
     # re-importing. Interchange will happily reuse an existing asset
@@ -392,17 +402,32 @@ def import_bake_assets():
     _import_gltf_via_interchange("source.gltf", "SM_Rumba")
 
     # Position texture override: lossless, no sRGB, no mips, nearest.
+    # Compression mode differs by source: uint16 PNG → VectorDisplacement
+    # (8-bit BC5N-like, preserves the [0..1]-quantized coords); float32
+    # EXR → HDR (RGBA16F internal; preserves the raw post-skin meters).
     pos_tex = unreal.load_asset(BAKE_DIR + "/T_OpenVAT_Pos.T_OpenVAT_Pos")
     if pos_tex:
         pos_tex.set_editor_property("srgb", False)
-        pos_tex.set_editor_property("compression_settings",
-            unreal.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP)
+        # The EXR import factory routes via OpenEXRWrapper and stores
+        # as RGBA16F (or RGBA32F if available); the compression mode we
+        # want is HDR. The PNG path uses VectorDisplacementMap to keep
+        # the [0..1] quantized coords intact through BC5N-equivalent
+        # packing.
+        is_exr = pos_basename.endswith(".exr")
+        if is_exr:
+            pos_tex.set_editor_property("compression_settings",
+                unreal.TextureCompressionSettings.TC_HDR)
+        else:
+            pos_tex.set_editor_property("compression_settings",
+                unreal.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP)
         pos_tex.set_editor_property("mip_gen_settings",
             unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
         pos_tex.set_editor_property("filter",
             unreal.TextureFilter.TF_NEAREST)
         unreal.EditorAssetLibrary.save_loaded_asset(pos_tex)
-        unreal.log("Position texture configured: non-sRGB, lossless, no mips, nearest")
+        unreal.log("Position texture configured: non-sRGB, "
+                   + ("HDR" if is_exr else "VectorDisplacement")
+                   + ", no mips, nearest")
     else:
         unreal.log_error("Could not load imported T_OpenVAT_Pos — bake will look wrong.")
 
@@ -412,7 +437,10 @@ def import_bake_assets():
 # ────────────────────────────────────────────────────────────────────
 
 def read_sidecar():
-    """Return (frame_count, bounds_min, bounds_max) from -remap_info.json."""
+    """Return (frame_count, bounds_min, bounds_max, bit_depth) from the
+    -remap_info.json next to the bake. `bit_depth` defaults to 16 when
+    the field is absent — older bakes from before the EXR-precision
+    work are uint16 PNG and don't carry the field at all."""
     path = os.path.abspath(os.path.join(
         RUMBA_FS_DIR, "mixamo.com-remap_info.json"))
     with open(path, "r") as f:
@@ -421,7 +449,8 @@ def read_sidecar():
     frames = int(os_remap["Frames"])
     mn = [float(x) for x in os_remap["Min"]]
     mx = [float(x) for x in os_remap["Max"]]
-    return frames, mn, mx
+    bit_depth = int(data.get("_bit_depth", 16))
+    return frames, mn, mx, bit_depth
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -525,7 +554,20 @@ float3 p_curr = pos_tex.Load(int3(col, base_row + curr, 0)).rgb;
 float3 p_next = pos_tex.Load(int3(col, base_row + nxt,  0)).rgb;
 float3 p = lerp(p_curr, p_next, blend);
 
-float3 target_yup_m = bounds_min + p * (bounds_max - bounds_min);
+// Decode the texel into glTF Y-up meters.
+//   decode_mode = 0  → uint16 PNG path. The texture stores
+//                      normalized [0..1] coords; remap via the
+//                      bake's bounds_min/bounds_max to get meters.
+//                      ~0.03 mm/axis precision on a 2 m model.
+//   decode_mode = 1  → float32 EXR path. The texture stores the
+//                      literal post-skin meters; no remap. Sub-micro-
+//                      metre precision, fixes Mixamo's eye z-fight.
+//                      `bounds_min`/`bounds_max` are still present in
+//                      the sidecar but unused by the shader in this
+//                      mode.
+float3 target_yup_m = (decode_mode > 0.5)
+    ? p
+    : (bounds_min + p * (bounds_max - bounds_min));
 
 // Forward-swizzle the absolute bake position from glTF Y-up meters
 // into Unreal Z-up cm. The user-tweakable swizzle matrix lets us
@@ -552,7 +594,7 @@ return target_unreal_cm - bind_local;
 """
 
 
-def build_material(frame_count, bounds_min, bounds_max):
+def build_material(frame_count, bounds_min, bounds_max, bit_depth=16):
     """Create or rebuild M_OpenVAT.
 
     Idempotent: if the asset already exists (rerun of the bootstrap
@@ -621,6 +663,16 @@ def build_material(frame_count, bounds_min, bounds_max):
         unreal.MaterialExpressionScalarParameter, -800, -100)
     p_frames.set_editor_property("parameter_name", "frame_count")
     p_frames.set_editor_property("default_value", float(frame_count))
+
+    # Decode-mode toggle: 0 = remap texel via bounds (uint16 PNG
+    # path); 1 = use texel value directly (float32 EXR path). Driven
+    # from the sidecar's `_bit_depth` so a 16-bit bake works the old
+    # way and a 32-bit bake skips the bounds remap.
+    p_decode = me.create_material_expression(mat,
+        unreal.MaterialExpressionScalarParameter, -800, -50)
+    p_decode.set_editor_property("parameter_name", "decode_mode")
+    p_decode.set_editor_property("default_value",
+        1.0 if bit_depth == 32 else 0.0)
 
     p_lo = me.create_material_expression(mat,
         unreal.MaterialExpressionVectorParameter, -800, 0)
@@ -715,7 +767,8 @@ def build_material(frame_count, bounds_min, bounds_max):
     custom_inputs = []
     for name in ("pos_tex", "uv2", "current_frame", "frame_count",
                  "bind_local", "bounds_min", "bounds_max",
-                 "swizzle_row_x", "swizzle_row_y", "swizzle_row_z"):
+                 "swizzle_row_x", "swizzle_row_y", "swizzle_row_z",
+                 "decode_mode"):
         ci = unreal.CustomInput()
         ci.set_editor_property("input_name", name)
         custom_inputs.append(ci)
@@ -731,6 +784,7 @@ def build_material(frame_count, bounds_min, bounds_max):
     me.connect_material_expressions(p_sx,     "", custom, "swizzle_row_x")
     me.connect_material_expressions(p_sy,     "", custom, "swizzle_row_y")
     me.connect_material_expressions(p_sz,     "", custom, "swizzle_row_z")
+    me.connect_material_expressions(p_decode, "", custom, "decode_mode")
 
     # The Custom node now returns a WORLD-SPACE OFFSET in centimeters,
     # ready to be summed into WPO. The HLSL does the meter→cm scale
@@ -739,35 +793,30 @@ def build_material(frame_count, bounds_min, bounds_max):
     me.connect_material_property(custom, "",
         unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
 
-    # Mixamo's eye sphere submesh sits a fraction of a mm in front
-    # of the head's "eye socket plug" submesh. With our 16-bit-
-    # quantized bake (~0.032mm/axis precision over a 2.1m bounds
-    # range), the position jitter between adjacent frames is on the
-    # same order as the eye/plug gap, which produces classic
-    # z-fighting that:
-    #   - flickers in/out frame by frame (the "underwater" look)
-    #   - depends on camera angle (depth-test resolution varies
-    #     with view-projection precision)
-    #   - tends to fail asymmetrically (one eye visible, the other
-    #     not, depending on which side of the head we view from)
-    #
-    # Apply a small negative Pixel Depth Offset (~5mm closer to
-    # camera) so the bake's rendered fragments always win the
-    # depth test against any coplanar surface behind them. The
-    # eye/iris layer is the only place this matters on Mixamo
-    # geometry and 5mm is well below visible biased-rendering.
-    p_pdo = me.create_material_expression(mat,
-        unreal.MaterialExpressionConstant, -400, 800)
-    p_pdo.set_editor_property("r", -0.5)  # cm; subtracts from depth
-    try:
-        me.connect_material_property(p_pdo, "",
-            unreal.MaterialProperty.MP_PIXEL_DEPTH_OFFSET)
-        unreal.log("M_OpenVAT.PixelDepthOffset = -0.5cm "
-                   "(fixes eye z-fight against head plug under "
-                   "16-bit position jitter).")
-    except Exception as e:
-        unreal.log_warning("Could not wire PixelDepthOffset: "
-                           + str(e))
+    # PixelDepthOffset hack — only needed for 16-bit bakes. The 32-bit
+    # EXR path stores raw float32 positions so adjacent frames don't
+    # quantize to identical values; the eye/plug z-fight that hack
+    # masked simply doesn't happen at float32 precision.
+    if bit_depth != 32:
+        # Apply a small negative Pixel Depth Offset (~5mm closer to
+        # camera) so the bake's rendered fragments always win the
+        # depth test against any coplanar surface behind them.
+        # See discussion at OPENVAT_BUILD = 17 (commit c52c27e).
+        p_pdo = me.create_material_expression(mat,
+            unreal.MaterialExpressionConstant, -400, 800)
+        p_pdo.set_editor_property("r", -0.5)  # cm; subtracts from depth
+        try:
+            me.connect_material_property(p_pdo, "",
+                unreal.MaterialProperty.MP_PIXEL_DEPTH_OFFSET)
+            unreal.log("M_OpenVAT.PixelDepthOffset = -0.5cm "
+                       "(16-bit bake — masks eye z-fight).")
+        except Exception as e:
+            unreal.log_warning("Could not wire PixelDepthOffset: "
+                               + str(e))
+    else:
+        unreal.log("Skipping PixelDepthOffset hack: 32-bit bake has "
+                   "enough precision that adjacent vertices don't "
+                   "quantize-collide.")
 
     # Albedo: sample T_Boss_Diffuse against UV0 (TexCoord 0).
     p_uv0 = me.create_material_expression(mat,
@@ -1044,11 +1093,12 @@ def main():
         return
 
     unreal.log("step 3/5: reading sidecar")
-    frames, mn, mx = read_sidecar()
-    unreal.log("  frames=%d min=%s max=%s" % (frames, mn, mx))
+    frames, mn, mx, bit_depth = read_sidecar()
+    unreal.log("  frames=%d min=%s max=%s bit_depth=%d"
+               % (frames, mn, mx, bit_depth))
 
     unreal.log("step 4/5: building material")
-    mat = build_material(frames, mn, mx)
+    mat = build_material(frames, mn, mx, bit_depth)
     if mat is None:
         unreal.log_error("=== Bootstrap STOPPED: material build failed. ===")
         return

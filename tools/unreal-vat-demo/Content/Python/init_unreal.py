@@ -33,13 +33,22 @@ def _should_run_bootstrap():
     that fix the material graph (e.g. coordinate-system fixes)."""
     here = os.path.dirname(os.path.abspath(__file__))
     rumba = os.path.normpath(os.path.join(here, "..", "Rumba"))
-    needed = ("source.gltf", "mixamo.com_pos.png",
-              "mixamo.com-remap_info.json")
+    needed = ("source.gltf", "mixamo.com-remap_info.json")
     for f in needed:
         if not os.path.exists(os.path.join(rumba, f)):
             unreal.log("init_unreal: skipping bootstrap — missing "
                        + f + " in Content/Rumba/.")
             return False
+    # The position texture is either .png (16-bit bake) or .exr
+    # (32-bit bake). At least one must exist — the demo dispatches
+    # on whichever it finds.
+    if not (os.path.exists(os.path.join(rumba, "mixamo.com_pos.png"))
+            or os.path.exists(os.path.join(rumba, "mixamo.com_pos.exr"))):
+        unreal.log("init_unreal: skipping bootstrap — neither "
+                   "mixamo.com_pos.png nor mixamo.com_pos.exr is "
+                   "present in Content/Rumba/. Re-bake with "
+                   "`qtmesh vat ... [--bake-precision 32]`.")
+        return False
     if not unreal.EditorAssetLibrary.does_asset_exist("/Game/VATDemo/M_OpenVAT"):
         return True
     # If the material exists but no mesh asset does, an earlier

@@ -116,6 +116,20 @@ qtmesh vat path/to/source.fbx --anim <name> --emit-uv2 \
 
 then re-run the bootstrap.
 
+### Bake precision (`--bake-precision 16` vs `32`)
+
+`qtmesh vat` writes the position texture at one of two precisions:
+
+| Flag                     | Format                  | File size (5828 × 142) | Per-axis precision over 2 m bounds | Use case                                          |
+|--------------------------|-------------------------|------------------------|------------------------------------|---------------------------------------------------|
+| `--bake-precision 16` (default) | 16-bit RGB PNG    | ~1.5 MB                | ~0.03 mm                            | Most assets; smaller download for web demos       |
+| `--bake-precision 32`            | 32-bit float EXR  | ~10 MB                 | float32 (sub-µm)                    | Coplanar shells (Mixamo eyes, layered hair)       |
+
+The Unreal demo auto-detects which precision the bake on disk uses
+(via the sidecar's `_bit_depth` field) and configures the texture
+import + shader decode accordingly. Bakes shipped before
+`_bit_depth` was added are treated as 16-bit (backward-compat).
+
 ## Performance notes
 
 Like the Godot demo, this scales to a 1000-instance crowd via

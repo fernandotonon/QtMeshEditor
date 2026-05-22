@@ -1,5 +1,6 @@
 {
     "_axes": "y-up-rh",
+    "_bit_depth": 32,
     "_producer": "QtMeshEditor",
     "os-remap": {
         "Frames": 71,
