@@ -79,7 +79,8 @@ See epic #412 for phased issues (#413–#431).
 
 - `VramSnapshot` — full 1024×512×16-bit VRAM buffer, view modes (RGB555, 4bpp index, 8bpp index, CLUT preview), PNG export.
 - `RipperHooks::onVramWrite` mirrors GPU uploads into the worker-owned snapshot.
-- `TextureDecoder` — CLUT-aware 4/8/15 bpp tile decode with `TileKey` cache and STP/alpha via `PsxVramColor`.
+- `TextureDecoder` — CLUT-aware 4/8/15 bpp decode keyed by `(TPAGE, CLUT, bit depth, semiTrans, draw mode)` with UV-bounds cache merge and STP/alpha via `PsxVramColor`.
+- `PS1RipMeshBuilder` — pre-decodes capture textures, uploads to `PS1Rip_Session<N>` resource group, applies PS1 semi-transparency blend modes, Sentry `ps1.rip.texture.decoded`. Ogre material resources are scoped per capture (`PS1Rip_<captureId>_tpage_…`); prior capture meshes/materials/textures are purged before each rebuild. Runtime materials use the `PS1Rip_` prefix (listed in Material Editor, read-only; GPU thumbnails are skipped to avoid UI freezes).
 - `dumpVRAM()` saves `<AppData>/ps1_rip/captures/<id>_vram.png` and feeds `VramViewerWidget` in the session window.
 - **Libretro:** `syncVramFromCore()` mirrors live core VRAM every frame; capture snapshots include a VRAM cell copy for textured mesh export.
 - Stub core fills CLUT + 4/8/15 bpp test regions via `stubFillVramPattern` when capture is armed or on `syncCaptureMirrors` (CI only).

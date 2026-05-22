@@ -20,16 +20,18 @@ uint32_t packDiffuse(uint8_t r, uint8_t g, uint8_t b)
     return cv.getAsBYTE();
 }
 
-QString textureMaterialName(uint16_t tpage, uint16_t clut)
+QString textureMaterialName(uint16_t tpage, uint16_t clut, uint8_t semiTrans)
 {
-    return QStringLiteral("PS1Rip/tpage_%1_clut_%2")
+    return QStringLiteral("PS1Rip_tpage_%1_clut_%2_st%3")
         .arg(tpage, 4, 16, QChar('0'))
-        .arg(clut, 4, 16, QChar('0'));
+        .arg(clut, 4, 16, QChar('0'))
+        .arg(semiTrans & 3);
 }
 
-quint64 textureGroupKey(uint16_t tpage, uint16_t clut)
+quint64 textureGroupKey(uint16_t tpage, uint16_t clut, uint8_t semiTrans)
 {
-    return (static_cast<quint64>(tpage) << 32) | clut;
+    return (static_cast<quint64>(tpage) << 32) | clut
+           | (static_cast<quint64>(semiTrans & 3) << 48);
 }
 
 struct SubMeshAccumulator {
@@ -130,10 +132,10 @@ QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> buildMatrixGroups(const Capt
         if (prim.matrixId < static_cast<uint32_t>(snapshot.matrices.size()))
             matrix = &snapshot.matrices[static_cast<int>(prim.matrixId)];
 
-        const quint64 texKey = textureGroupKey(prim.tpage, prim.clut);
+        const quint64 texKey = textureGroupKey(prim.tpage, prim.clut, prim.semiTrans);
         SubMeshAccumulator &acc = groupsByMatrix[prim.matrixId][texKey];
         if (acc.materialName.isEmpty())
-            acc.materialName = textureMaterialName(prim.tpage, prim.clut);
+            acc.materialName = textureMaterialName(prim.tpage, prim.clut, prim.semiTrans);
         emitPrimitive(prim, matrix, acc);
     }
     return groupsByMatrix;
