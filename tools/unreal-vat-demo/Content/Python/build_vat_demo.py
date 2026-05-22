@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 15
+OPENVAT_BUILD = 16
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -525,41 +525,30 @@ float3 p_curr = pos_tex.Load(int3(col, base_row + curr, 0)).rgb;
 float3 p_next = pos_tex.Load(int3(col, base_row + nxt,  0)).rgb;
 float3 p = lerp(p_curr, p_next, blend);
 
-// CRITICAL: Mixamo's animation frame 0 is NOT the T-pose — it's
-// the first frame of the dance, mid-pose. The bake stores absolute
-// vertex positions per-frame in Ogre/glTF coordinates. The
-// Unreal-imported mesh's `LocalPosition` IS the T-pose (the bind).
-// So WPO = target_in_unreal_space - LocalPosition is the right
-// math — we just need both in the same coord system.
-//
-// Pull LocalPosition (Unreal Z-up cm) back into bake space
-// (glTF Y-up m) by inverse-swizzling: Interchange's forward
-// transform is (gltf_x, gltf_z, gltf_y) × 100, so its inverse is
-// (unreal_x, unreal_z, unreal_y) / 100. Then do the subtract in
-// bake space, then swizzle the resulting delta forward to Unreal.
-//
-// This avoids the "what's frame 0's pose?" question entirely.
 float3 target_yup_m = bounds_min + p * (bounds_max - bounds_min);
 
-// Inverse-swizzle bind_local (Unreal cm) → bake space (glTF m).
-// Interchange forward: (gx, gy, gz) → (ux, uy, uz) = (gx, gz, gy)
-// Inverse:             (ux, uy, uz) → (gx, gy, gz) = (ux, uz, uy)
-float3 bind_yup_m = float3(bind_local.x,
-                            bind_local.z,
-                            bind_local.y) / 100.0;
-
-float3 delta_yup_m = target_yup_m - bind_yup_m;
-
-// Forward-swizzle the delta from bake space → Unreal world cm.
-// The swizzle matrix lets the user override if the bake came from
-// a non-Interchange pipeline (e.g. FBX with axis system A vs B).
-// Defaults to Interchange's (X, Z, Y) so the standard glTF path
+// Forward-swizzle the absolute bake position from glTF Y-up meters
+// into Unreal Z-up cm. The user-tweakable swizzle matrix lets us
+// adapt if the bake came from a non-Interchange pipeline. Defaults
+// match Interchange's (X, Z, Y) swizzle so the standard glTF path
 // works out of the box.
-float3 mapped;
-mapped.x = dot(delta_yup_m, swizzle_row_x);
-mapped.y = dot(delta_yup_m, swizzle_row_y);
-mapped.z = dot(delta_yup_m, swizzle_row_z);
-return mapped * 100.0;
+float3 target_unreal_cm;
+target_unreal_cm.x = dot(target_yup_m, swizzle_row_x);
+target_unreal_cm.y = dot(target_yup_m, swizzle_row_y);
+target_unreal_cm.z = dot(target_yup_m, swizzle_row_z);
+target_unreal_cm *= 100.0;
+
+// WPO = absolute_target - LocalPosition. This forces every vertex
+// to its bake-target absolute position regardless of what
+// LocalPosition says — which fixes Mixamo's "stray origin vertex"
+// quirk where a few eye/ear verts have LocalPosition = (0,0,0) in
+// the bind pose (they're meant to be entirely bone-driven) but the
+// bake correctly captured them at eye/ear height. Subtracting bind
+// from target would give a 1.7m WPO for those verts which works
+// but leaves the giant stretched triangle visible on some frames
+// when the camera sweeps past the bind origin. Absolute positioning
+// eliminates the question entirely.
+return target_unreal_cm - bind_local;
 """
 
 
