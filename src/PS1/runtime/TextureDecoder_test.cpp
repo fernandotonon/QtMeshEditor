@@ -104,7 +104,7 @@ TEST(TextureDecoderTest, MaterialKeyDedupesAcrossRegions)
 TEST(TextureDecoderTest, StpBitSetsSemiTransparentAlpha)
 {
     VramSnapshot vram;
-    vram.setPixel(0, 0, PsxVramColor::rgbaToBgr555(255, 0, 0, 128));
+    vram.setPixel(0, 0, PsxVramColor::rgbaToBgr555(255, 0, 0, 127));
     TextureDecoder decoder;
     TextureDecoder::MaterialKey key{};
     key.tpage = 0;
@@ -145,7 +145,7 @@ TEST(TextureDecoderTest, WarnsOnOutOfRangeVramRead)
     TextureDecoder::MaterialKey key{};
     key.tpage = 0;
     key.bitDepth = TextureDecoder::BitDepth::Bpp15;
-    const QImage tile = decoder.decodeMaterial(vram, key, QRect(1020, 0, 8, 1));
+    const QImage tile = decoder.decodeMaterial(vram, key, QRect(254, 0, 4, 1));
     EXPECT_FALSE(tile.isNull());
     EXPECT_FALSE(decoder.warnings().isEmpty());
 }
