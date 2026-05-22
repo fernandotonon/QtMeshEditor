@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 22
+OPENVAT_BUILD = 23
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -637,6 +637,12 @@ def build_material(frame_count, bounds_min, bounds_max, bit_depth=16):
         unreal.log("M_OpenVAT already exists — deleting and recreating "
                    "so the graph picks up the latest sidecar bounds.")
         unreal.EditorAssetLibrary.delete_asset(mat_path)
+    # Build 22 created an `M_OpenVAT_Eye` variant for per-slot PDO that
+    # we've now reverted (it made things worse, not better). Remove any
+    # leftover copies on stale projects.
+    eye_path = DEMO_DIR + "/M_OpenVAT_Eye"
+    if unreal.EditorAssetLibrary.does_asset_exist(eye_path):
+        unreal.EditorAssetLibrary.delete_asset(eye_path)
     mat_factory = unreal.MaterialFactoryNew()
     mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         "M_OpenVAT", DEMO_DIR, unreal.Material, mat_factory)
@@ -877,46 +883,6 @@ def _editor_actor_library():
     return None
 
 
-def _build_or_load_eye_pdo_mat(parent_mat):
-    """Return a Material (or Material Instance) identical to M_OpenVAT
-    but with PixelDepthOffset = -1 cm. Used for the Eyes_MAT slot only:
-    Mixamo stacks an iris/pupil sphere a fraction of a mm in front of
-    the sclera, both inside the head's eye-socket plug. The depth
-    buffer can't reliably distinguish them at sub-mm precision, so
-    bias the rendered fragments 1 cm forward of the head plug. 1 cm
-    is below the visible-bias threshold here because the eye is the
-    deepest layer in that region — pushing it forward against the
-    plug behind it doesn't fight any other coplanar layer.
-
-    We do this by editing a clone of M_OpenVAT itself rather than
-    using a MaterialInstanceDynamic — MID requires the actor to set
-    parameters at runtime, but the eye material's PDO is a constant
-    we can bake into the asset.
-    """
-    eye_path = DEMO_DIR + "/M_OpenVAT_Eye"
-    el = unreal.EditorAssetLibrary
-    if el.does_asset_exist(eye_path):
-        el.delete_asset(eye_path)
-    try:
-        duplicated = el.duplicate_asset(parent_mat.get_path_name(),
-                                        eye_path)
-        if duplicated is None:
-            unreal.log_warning("Could not duplicate M_OpenVAT for eye PDO; "
-                               "falling back to global material on eye slot.")
-            return None
-        me = unreal.MaterialEditingLibrary
-        p_pdo = me.create_material_expression(duplicated,
-            unreal.MaterialExpressionConstant, -400, 800)
-        p_pdo.set_editor_property("r", -1.0)  # cm
-        me.connect_material_property(p_pdo, "",
-            unreal.MaterialProperty.MP_PIXEL_DEPTH_OFFSET)
-        me.recompile_material(duplicated)
-        el.save_loaded_asset(duplicated)
-        unreal.log("Built M_OpenVAT_Eye (PDO=-1cm).")
-        return duplicated
-    except Exception as e:
-        unreal.log_warning("Could not build eye PDO material: " + str(e))
-        return None
 
 
 def _focus_viewport_on(actor):
@@ -1034,35 +1000,12 @@ def spawn_dancer_in_level():
         # (Skin_MAT, Clothes_MAT, …) that have no WPO, so they render
         # in bind pose while slot 0 alone animates. That's exactly the
         # "static head + animated vest" symptom in the screenshot.
-        #
-        # For the eye slot we ALSO apply a Material Instance Dynamic
-        # with PixelDepthOffset = -1cm, biasing only the iris/pupil
-        # fragments forward of the head plug they z-fight against.
-        # Global PDO (build 20) tilted everything → made more frames
-        # glitch. Per-slot PDO (this build) targets only the layer
-        # that genuinely sits coplanar with another. The teeth share
-        # Skin_MAT with the rest of the face so we can't isolate them
-        # the same way — accept that the teeth remain a small bug
-        # while the eyes get fixed cleanly.
-        eye_mat = _build_or_load_eye_pdo_mat(mat)
         num_slots = mesh.get_num_sections(0) if hasattr(
             mesh, "get_num_sections") else len(mesh.static_materials)
         unreal.log("Applying M_OpenVAT to " + str(num_slots) + " slots.")
-        try:
-            slot_names = [str(sm.material_slot_name) if hasattr(sm, "material_slot_name")
-                          else "" for sm in mesh.static_materials]
-        except Exception:
-            slot_names = ["?"] * num_slots
         for i in range(num_slots):
-            slot_name = slot_names[i] if i < len(slot_names) else ""
-            target_mat = (eye_mat if (eye_mat is not None
-                                       and "Eyes_MAT" in slot_name)
-                          else mat)
             try:
-                sm_comp.set_material(i, target_mat)
-                if target_mat is eye_mat:
-                    unreal.log("slot " + str(i) + " (" + slot_name
-                               + "): applied M_OpenVAT_Eye (PDO=-1cm)")
+                sm_comp.set_material(i, mat)
             except Exception as e:
                 unreal.log_warning("set_material(" + str(i) + ") failed: "
                                    + str(e))
