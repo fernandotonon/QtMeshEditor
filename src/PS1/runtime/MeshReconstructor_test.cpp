@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 static MatrixRecord identityMatrix()
 {
     MatrixRecord m{};
@@ -117,6 +119,74 @@ TEST(MeshReconstructorTest, DedupesIdenticalInstances)
     EXPECT_EQ(loose.instances[0].uniqueMeshIndex, 0);
     EXPECT_EQ(loose.instances[1].uniqueMeshIndex, 0);
     EXPECT_EQ(loose.instances[2].uniqueMeshIndex, 0);
+}
+
+TEST(MeshReconstructorTest, PreservesTexturedTriangleUvs)
+{
+    CaptureSnapshot snap;
+    snap.matrices.append(identityMatrix());
+
+    PrimRecord tri{};
+    tri.kind = PrimKind::TexturedTri;
+    tri.vertexCount = 3;
+    tri.matrixId = 0;
+    tri.tpage = 0x0100;
+    tri.clut = 0x0200;
+    tri.verts[0] = {16, 16, 4096, 255, 255, 255, 32, 48};
+    tri.verts[1] = {48, 16, 4096, 255, 255, 255, 160, 16};
+    tri.verts[2] = {32, 40, 4096, 255, 255, 255, 96, 200};
+    snap.prims.append(tri);
+
+    const ReconstructedMesh mesh = MeshReconstructor::reconstruct(snap);
+    ASSERT_FALSE(mesh.isEmpty());
+    ASSERT_EQ(mesh.subMeshes.size(), 1);
+
+    const auto uvMatches = [](const ReconstructedVertex &v, int psxU, int psxV) {
+        return std::abs(v.u - static_cast<float>(psxU) / 256.0f) < 1e-5f
+               && std::abs(v.v - static_cast<float>(psxV) / 256.0f) < 1e-5f;
+    };
+
+    int matched = 0;
+    for (const ReconstructedVertex &v : mesh.subMeshes[0].vertices) {
+        if (uvMatches(v, 32, 48))
+            ++matched;
+        if (uvMatches(v, 160, 16))
+            ++matched;
+        if (uvMatches(v, 96, 200))
+            ++matched;
+    }
+    EXPECT_EQ(matched, 3);
+}
+
+TEST(MeshReconstructorTest, PreservesTexturedQuadUvOrder)
+{
+    CaptureSnapshot snap;
+    snap.matrices.append(identityMatrix());
+
+    PrimRecord quad{};
+    quad.kind = PrimKind::TexturedQuad;
+    quad.vertexCount = 4;
+    quad.matrixId = 0;
+    quad.tpage = 0;
+    quad.clut = 0;
+    quad.verts[0] = {10, 10, 0, 255, 255, 255, 0, 0};
+    quad.verts[1] = {40, 10, 0, 255, 255, 255, 255, 0};
+    quad.verts[2] = {40, 40, 0, 255, 255, 255, 255, 255};
+    quad.verts[3] = {10, 40, 0, 255, 255, 255, 0, 255};
+    snap.prims.append(quad);
+
+    const ReconstructedMesh mesh = MeshReconstructor::reconstruct(snap);
+    ASSERT_EQ(mesh.subMeshes.size(), 1);
+    ASSERT_EQ(mesh.subMeshes[0].indices.size(), 6u);
+
+    const QVector<ReconstructedVertex> &verts = mesh.subMeshes[0].vertices;
+    ASSERT_EQ(verts.size(), 6);
+
+    const auto near = [](float a, float b) { return std::abs(a - b) < 1e-5f; };
+    EXPECT_TRUE(near(verts[0].u, 0.0f) && near(verts[0].v, 0.0f));
+    EXPECT_TRUE(near(verts[1].u, 1.0f) && near(verts[1].v, 0.0f));
+    EXPECT_TRUE(near(verts[2].u, 1.0f) && near(verts[2].v, 1.0f));
+    EXPECT_TRUE(near(verts[3].u, 0.0f) && near(verts[3].v, 0.0f));
 }
 
 TEST(MeshReconstructorTest, KeepsPartiallyOnScreenPrimitives)

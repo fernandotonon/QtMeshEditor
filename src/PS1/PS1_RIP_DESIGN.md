@@ -138,7 +138,7 @@ export QTMESH_PS1_TEST_ISO=/path/game.cue
 
 `PS1RipManagerLibretroArmTest` (arm/capture while a real libretro session runs) uses the same guard and env vars.
 
-**GTE / matrix tests (CI):** `PsxGteCop2Test`, `PsxGteIsoDedupeTest.StaticSceneCop2ProgramDedupesThreeDrawables`, `MeshReconstructorTest.GtePipelineCubeRoundTripsToUnitCubeMesh`. Real-ISO matrix dedupe: set `QTMESH_PS1_TEST_BIOS` + `QTMESH_PS1_TEST_ISO` (or `QTMESH_PS1_TEST_HOMEBREW_ISO`) and run `PsxGteIsoDedupeTest.RealIsoCaptureHasBoundedMatrixCount`.
+**GTE / matrix tests (CI):** `PsxGteCop2Test`, `PsxGteIsoDedupeTest.StaticSceneCop2ProgramDedupesThreeDrawables`, `MeshReconstructorTest.GtePipelineCubeRoundTripsToUnitCubeMesh`. **Mesh reconstruct (#422):** `MeshReconstructorTest.PreservesTexturedTriangleUvs` / `PreservesTexturedQuadUvOrder`; `MeshReconstructorIsoTest.GteCaptureSnapshotProducesNonEmptyMesh` and `StubCoreCaptureProducesNonEmptyMeshWithTexturedUvs` (CI); `MeshReconstructorIsoTest.RealIsoCaptureProducesNonEmptyMesh` when `QTMESH_PS1_TEST_BIOS` + `QTMESH_PS1_TEST_ISO` (or `QTMESH_PS1_TEST_HOMEBREW_ISO`) and a libretro core are present.
 
 ## Open questions
 
