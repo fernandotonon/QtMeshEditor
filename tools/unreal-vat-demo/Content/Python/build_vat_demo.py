@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 16
+OPENVAT_BUILD = 17
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -738,6 +738,36 @@ def build_material(frame_count, bounds_min, bounds_max):
     # without a Blueprint Tick or special component setup.
     me.connect_material_property(custom, "",
         unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
+
+    # Mixamo's eye sphere submesh sits a fraction of a mm in front
+    # of the head's "eye socket plug" submesh. With our 16-bit-
+    # quantized bake (~0.032mm/axis precision over a 2.1m bounds
+    # range), the position jitter between adjacent frames is on the
+    # same order as the eye/plug gap, which produces classic
+    # z-fighting that:
+    #   - flickers in/out frame by frame (the "underwater" look)
+    #   - depends on camera angle (depth-test resolution varies
+    #     with view-projection precision)
+    #   - tends to fail asymmetrically (one eye visible, the other
+    #     not, depending on which side of the head we view from)
+    #
+    # Apply a small negative Pixel Depth Offset (~5mm closer to
+    # camera) so the bake's rendered fragments always win the
+    # depth test against any coplanar surface behind them. The
+    # eye/iris layer is the only place this matters on Mixamo
+    # geometry and 5mm is well below visible biased-rendering.
+    p_pdo = me.create_material_expression(mat,
+        unreal.MaterialExpressionConstant, -400, 800)
+    p_pdo.set_editor_property("r", -0.5)  # cm; subtracts from depth
+    try:
+        me.connect_material_property(p_pdo, "",
+            unreal.MaterialProperty.MP_PIXEL_DEPTH_OFFSET)
+        unreal.log("M_OpenVAT.PixelDepthOffset = -0.5cm "
+                   "(fixes eye z-fight against head plug under "
+                   "16-bit position jitter).")
+    except Exception as e:
+        unreal.log_warning("Could not wire PixelDepthOffset: "
+                           + str(e))
 
     # Albedo: sample T_Boss_Diffuse against UV0 (TexCoord 0).
     p_uv0 = me.create_material_expression(mat,
