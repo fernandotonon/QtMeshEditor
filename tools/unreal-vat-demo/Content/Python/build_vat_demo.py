@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 13
+OPENVAT_BUILD = 14
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -520,40 +520,41 @@ float blend = frac(current_frame);
 
 int base_row = row_block * N;
 
-// Sample the bake at the current/next frame AND at frame 0 (the
-// bake's first frame, which is the animation's bind/T-pose since
-// Mixamo authoring always starts there). Subtracting frame 0
-// inside the same coordinate space sidesteps every "what coord
-// system is bind_local in?" question — we never need to know how
-// Interchange chose to swizzle/scale the mesh on import. The
-// result is a delta in glTF Y-up meters space, which we then
-// swizzle + scale to Unreal Z-up cm for WPO.
+// Sample the bake at the current/next frame.
 float3 p_curr = pos_tex.Load(int3(col, base_row + curr, 0)).rgb;
 float3 p_next = pos_tex.Load(int3(col, base_row + nxt,  0)).rgb;
-float3 p_bind = pos_tex.Load(int3(col, base_row + 0,    0)).rgb;
 float3 p = lerp(p_curr, p_next, blend);
 
-float3 delta_norm  = p - p_bind;
-float3 delta_yup_m = delta_norm * (bounds_max - bounds_min);
+// CRITICAL: Mixamo's animation frame 0 is NOT the T-pose — it's
+// the first frame of the dance, mid-pose. The bake stores absolute
+// vertex positions per-frame in Ogre/glTF coordinates. The
+// Unreal-imported mesh's `LocalPosition` IS the T-pose (the bind).
+// So WPO = target_in_unreal_space - LocalPosition is the right
+// math — we just need both in the same coord system.
+//
+// Pull LocalPosition (Unreal Z-up cm) back into bake space
+// (glTF Y-up m) by inverse-swizzling: Interchange's forward
+// transform is (gltf_x, gltf_z, gltf_y) × 100, so its inverse is
+// (unreal_x, unreal_z, unreal_y) / 100. Then do the subtract in
+// bake space, then swizzle the resulting delta forward to Unreal.
+//
+// This avoids the "what's frame 0's pose?" question entirely.
+float3 target_yup_m = bounds_min + p * (bounds_max - bounds_min);
 
-// The bake's coord system depends on the entire import chain that
-// produced it (Ogre's Assimp uses ConvertToLeftHanded by default,
-// which negates Z; Interchange's glTF importer uses (X, Z, Y)
-// without sign flip and handles handedness via index winding;
-// FBX-vs-glTF source affects axis ordering). Rather than hardcode
-// one swizzle that's right for ONE pipeline, drive the final
-// Y-up→Z-up mapping from runtime VectorParameters so the user can
-// twiddle in the Material editor without rebuilding. Each row of
-// the matrix picks one of the three input components (with sign)
-// for one of the three Unreal output axes:
-//
-//   swizzle_row_x = (Sx_x, Sx_y, Sx_z)  → output.x = dot(in, this)
-//   swizzle_row_y = (Sy_x, Sy_y, Sy_z)  → output.y = dot(in, this)
-//   swizzle_row_z = (Sz_x, Sz_y, Sz_z)  → output.z = dot(in, this)
-//
-// Defaults: (1,0,0), (0,0,1), (0,1,0) — the (X, Z, Y) Interchange
-// swizzle. Try (0,0,-1), (1,0,0), (0,1,0) etc. as the user discovers
-// which one matches their bake/import combo.
+// Inverse-swizzle bind_local (Unreal cm) → bake space (glTF m).
+// Interchange forward: (gx, gy, gz) → (ux, uy, uz) = (gx, gz, gy)
+// Inverse:             (ux, uy, uz) → (gx, gy, gz) = (ux, uz, uy)
+float3 bind_yup_m = float3(bind_local.x,
+                            bind_local.z,
+                            bind_local.y) / 100.0;
+
+float3 delta_yup_m = target_yup_m - bind_yup_m;
+
+// Forward-swizzle the delta from bake space → Unreal world cm.
+// The swizzle matrix lets the user override if the bake came from
+// a non-Interchange pipeline (e.g. FBX with axis system A vs B).
+// Defaults to Interchange's (X, Z, Y) so the standard glTF path
+// works out of the box.
 float3 mapped;
 mapped.x = dot(delta_yup_m, swizzle_row_x);
 mapped.y = dot(delta_yup_m, swizzle_row_y);
