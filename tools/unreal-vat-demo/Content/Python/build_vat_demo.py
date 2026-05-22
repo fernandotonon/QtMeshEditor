@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 12
+OPENVAT_BUILD = 13
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -536,27 +536,29 @@ float3 p = lerp(p_curr, p_next, blend);
 float3 delta_norm  = p - p_bind;
 float3 delta_yup_m = delta_norm * (bounds_max - bounds_min);
 
-// Interchange's glTF importer does NOT use the standard
-// (x, -z, y) Y-up→Z-up swizzle. Verified in UE 5.7
-// Engine/Plugins/Interchange/Runtime/Source/Parsers/GLTFCore/
-// Private/GLTF/ConversionUtilities.h:16-21:
+// The bake's coord system depends on the entire import chain that
+// produced it (Ogre's Assimp uses ConvertToLeftHanded by default,
+// which negates Z; Interchange's glTF importer uses (X, Z, Y)
+// without sign flip and handles handedness via index winding;
+// FBX-vs-glTF source affects axis ordering). Rather than hardcode
+// one swizzle that's right for ONE pipeline, drive the final
+// Y-up→Z-up mapping from runtime VectorParameters so the user can
+// twiddle in the Material editor without rebuilding. Each row of
+// the matrix picks one of the three input components (with sign)
+// for one of the three Unreal output axes:
 //
-//     inline FVector ConvertVec3(const FVector& Vec)
-//     {
-//         // glTF uses a right-handed coordinate system, with Y up.
-//         // Unreal uses a left-handed coordinate system, with Z up.
-//         return {Vec.X, Vec.Z, Vec.Y};  // NO negation
-//     }
+//   swizzle_row_x = (Sx_x, Sx_y, Sx_z)  → output.x = dot(in, this)
+//   swizzle_row_y = (Sy_x, Sy_y, Sy_z)  → output.y = dot(in, this)
+//   swizzle_row_z = (Sz_x, Sz_y, Sz_z)  → output.z = dot(in, this)
 //
-// Handedness flip happens via reversed triangle winding (same
-// file, GLTFMeshFactory.cpp:632), not by negating Y. So the
-// imported mesh's vertex positions are (x_gltf, z_gltf, y_gltf)
-// × 100, and our bake-delta needs the same un-negated swizzle to
-// land in the same coord system.
-float3 delta_zup_cm = float3(delta_yup_m.x,
-                             delta_yup_m.z,
-                             delta_yup_m.y) * 100.0;
-return delta_zup_cm;
+// Defaults: (1,0,0), (0,0,1), (0,1,0) — the (X, Z, Y) Interchange
+// swizzle. Try (0,0,-1), (1,0,0), (0,1,0) etc. as the user discovers
+// which one matches their bake/import combo.
+float3 mapped;
+mapped.x = dot(delta_yup_m, swizzle_row_x);
+mapped.y = dot(delta_yup_m, swizzle_row_y);
+mapped.z = dot(delta_yup_m, swizzle_row_z);
+return mapped * 100.0;
 """
 
 
@@ -640,6 +642,30 @@ def build_material(frame_count, bounds_min, bounds_max):
     p_hi.set_editor_property("parameter_name", "bounds_max")
     p_hi.set_editor_property("default_value", unreal.LinearColor(*bounds_max, 0))
 
+    # Swizzle matrix — Y-up bake-delta → Z-up Unreal-delta. Defaults
+    # are the (X, Z, Y) Interchange swizzle (verified in 5.7's
+    # ConversionUtilities.h:20). Override in the Material editor
+    # without rebuilding if your bake comes from a different chain
+    # (Ogre's AssimpToOgreImporter uses ConvertToLeftHanded by
+    # default which negates Z — flipping the Z component of swizzle
+    # _row_y is the usual compensation; if the dance happens in the
+    # wrong plane, permute the rows).
+    p_sx = me.create_material_expression(mat,
+        unreal.MaterialExpressionVectorParameter, -800, 500)
+    p_sx.set_editor_property("parameter_name", "swizzle_row_x")
+    p_sx.set_editor_property("default_value",
+        unreal.LinearColor(1.0, 0.0, 0.0, 0.0))
+    p_sy = me.create_material_expression(mat,
+        unreal.MaterialExpressionVectorParameter, -800, 600)
+    p_sy.set_editor_property("parameter_name", "swizzle_row_y")
+    p_sy.set_editor_property("default_value",
+        unreal.LinearColor(0.0, 0.0, 1.0, 0.0))
+    p_sz = me.create_material_expression(mat,
+        unreal.MaterialExpressionVectorParameter, -800, 700)
+    p_sz.set_editor_property("parameter_name", "swizzle_row_z")
+    p_sz.set_editor_property("default_value",
+        unreal.LinearColor(0.0, 1.0, 0.0, 0.0))
+
     # Texture parameter so the actor can hot-swap in another bake.
     p_tex = me.create_material_expression(mat,
         unreal.MaterialExpressionTextureObjectParameter, -800, 200)
@@ -698,7 +724,8 @@ def build_material(frame_count, bounds_min, bounds_max):
 
     custom_inputs = []
     for name in ("pos_tex", "uv2", "current_frame", "frame_count",
-                 "bind_local", "bounds_min", "bounds_max"):
+                 "bind_local", "bounds_min", "bounds_max",
+                 "swizzle_row_x", "swizzle_row_y", "swizzle_row_z"):
         ci = unreal.CustomInput()
         ci.set_editor_property("input_name", name)
         custom_inputs.append(ci)
@@ -711,6 +738,9 @@ def build_material(frame_count, bounds_min, bounds_max):
     me.connect_material_expressions(p_bind,   "", custom, "bind_local")
     me.connect_material_expressions(p_lo,     "", custom, "bounds_min")
     me.connect_material_expressions(p_hi,     "", custom, "bounds_max")
+    me.connect_material_expressions(p_sx,     "", custom, "swizzle_row_x")
+    me.connect_material_expressions(p_sy,     "", custom, "swizzle_row_y")
+    me.connect_material_expressions(p_sz,     "", custom, "swizzle_row_z")
 
     # The Custom node now returns a WORLD-SPACE OFFSET in centimeters,
     # ready to be summed into WPO. The HLSL does the meter→cm scale
