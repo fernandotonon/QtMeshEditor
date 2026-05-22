@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 9
+OPENVAT_BUILD = 10
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -156,14 +156,34 @@ def _import_gltf_via_interchange(src_filename, dst_name):
             # and head/arms render at body positions or vice versa.
             # Symptom: submeshes appear to render through each other
             # (the "no z-index" look — actually a per-vertex collapse).
-            try:
-                common.set_editor_property("b_keep_sections_separate", True)
-                unreal.log("Interchange: common_meshes_properties."
-                           "b_keep_sections_separate = True (each "
-                           "glTF primitive becomes its own section).")
-            except Exception as e:
-                unreal.log_warning("Could not set b_keep_sections_"
-                                   "separate: " + str(e))
+            #
+            # UE 5.7's Python binding rejects `b_keep_sections_separate`
+            # even though that's the auto-snake-case translation of
+            # the C++ name; the actually-exposed Python name is
+            # `keep_sections_separate` (the `b` prefix is stripped for
+            # this particular bool — likely because the C++ side has a
+            # `ScriptName` UFUNCTION getter/setter pair). Try every
+            # variant and log which one took.
+            ks_done = False
+            for name in ("keep_sections_separate",
+                         "b_keep_sections_separate",
+                         "bKeepSectionsSeparate"):
+                try:
+                    common.set_editor_property(name, True)
+                    unreal.log("Interchange: common_meshes_properties."
+                               + name + " = True (each glTF primitive "
+                               "becomes its own section).")
+                    ks_done = True
+                    break
+                except Exception:
+                    pass
+            if not ks_done:
+                unreal.log_warning("Could not set keep-sections-separate "
+                                   "under any known name — render-section "
+                                   "merging will collapse Mixamo's "
+                                   "material-shared primitives and the "
+                                   "VAT will render with column-index "
+                                   "mismatches.")
         else:
             unreal.log_warning("Interchange pipeline has no "
                                "`common_meshes_properties` sub-object on "
@@ -336,13 +356,13 @@ def import_bake_assets():
     _import_texture("mixamo.com_pos.png", "T_OpenVAT_Pos")
     _import_texture("Boss_diffuse.png",   "T_Boss_Diffuse")
 
-    # Wipe any prior SkeletalMesh-flavoured import under /Game/Rumba/
-    # before re-importing. Interchange will happily route to either
-    # static or skeletal depending on the pipeline-override path, and
-    # leftover SkeletalMesh assets from older bootstrap runs would
-    # otherwise win find_imported_mesh's static-preferring search by
-    # tie-breaking on the SkeletalMesh import path. Static-mesh-only
-    # cleanup keeps the bootstrap re-runnable without manual purges.
+    # Wipe any prior mesh-related imports under /Game/Rumba/ before
+    # re-importing. Interchange will happily reuse an existing asset
+    # rather than honouring our updated pipeline settings, so a
+    # leftover SM_Rumba from build N would carry N's section-merging
+    # config even after build N+1 changes the override flags. Nuke
+    # all the mesh-side assets every run; textures stay (their import
+    # is idempotent and re-import is slow).
     try:
         ar = unreal.AssetRegistryHelpers.get_asset_registry()
         prior = ar.get_assets_by_path("/Game/Rumba", recursive=True)
@@ -351,13 +371,15 @@ def import_bake_assets():
                 cls = str(ad.get_class().get_name())
             except Exception:
                 cls = ""
-            if cls in ("SkeletalMesh", "Skeleton", "PhysicsAsset"):
+            if cls in ("StaticMesh", "SkeletalMesh", "Skeleton",
+                       "PhysicsAsset", "AnimSequence", "Material",
+                       "MaterialInstance", "MaterialInstanceConstant"):
                 pkg = str(ad.package_name) if hasattr(ad, "package_name") else None
                 if pkg:
                     unreal.EditorAssetLibrary.delete_asset(pkg)
     except Exception as e:
-        unreal.log_warning("Could not pre-clean prior SkeletalMesh "
-                           "imports: " + str(e))
+        unreal.log_warning("Could not pre-clean prior mesh imports: "
+                           + str(e))
 
     _import_gltf_via_interchange("source.gltf", "SM_Rumba")
 
