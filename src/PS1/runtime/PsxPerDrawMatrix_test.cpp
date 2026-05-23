@@ -8,6 +8,7 @@
 #include "PS1/runtime/GteInverse.h"
 #include "PS1/runtime/Gp0HookDispatch.h"
 #include "PS1/runtime/MeshReconstructionStats.h"
+#include "PS1/runtime/PsxCaptureFilters.h"
 #include "PS1/runtime/RipperHooks.h"
 
 #include <atomic>
@@ -51,25 +52,25 @@ PrimRecord triAtScreenCoords(int x0, int y0, int z0, int x1, int y1, int z1, int
     return prim;
 }
 
-void appendModelTri(CaptureSnapshot &snap, MatrixRecord &matrix, uint32_t matrixId, int mx0, int my0,
-                    int mz0, int mx1, int my1, int mz1, int mx2, int my2, int mz2)
+void appendProjectedTri(CaptureSnapshot &snap, const MatrixRecord &matrix, uint32_t matrixId,
+                        int mx0, int my0, int mz0, int mx1, int my1, int mz1, int mx2, int my2,
+                        int mz2)
 {
-    int sx = 0;
-    int sy = 0;
-    int sz = 0;
-    int x0 = 0;
-    int y0 = 0;
-    int z0 = 0;
-    int x1 = 0;
-    int y1 = 0;
-    int z1 = 0;
-    int x2 = 0;
-    int y2 = 0;
-    int z2 = 0;
-    ASSERT_TRUE(GteInverse::modelToScreen(matrix, mx0, my0, mz0, x0, y0, z0));
-    ASSERT_TRUE(GteInverse::modelToScreen(matrix, mx1, my1, mz1, x1, y1, z1));
-    ASSERT_TRUE(GteInverse::modelToScreen(matrix, mx2, my2, mz2, x2, y2, z2));
-    snap.prims.append(triAtScreenCoords(x0, y0, z0, x1, y1, z1, x2, y2, z2, matrixId));
+    int sx0 = 0;
+    int sy0 = 0;
+    int sz0 = 0;
+    int sx1 = 0;
+    int sy1 = 0;
+    int sz1 = 0;
+    int sx2 = 0;
+    int sy2 = 0;
+    int sz2 = 0;
+    ASSERT_TRUE(GteInverse::modelToScreen(matrix, mx0, my0, mz0, sx0, sy0, sz0));
+    ASSERT_TRUE(GteInverse::modelToScreen(matrix, mx1, my1, mz1, sx1, sy1, sz1));
+    ASSERT_TRUE(GteInverse::modelToScreen(matrix, mx2, my2, mz2, sx2, sy2, sz2));
+    PrimRecord prim = triAtScreenCoords(sx0, sy0, sz0, sx1, sy1, sz1, sx2, sy2, sz2, matrixId);
+    ASSERT_TRUE(PsxCaptureFilters::isOnScreenPrim(prim));
+    snap.prims.append(prim);
 }
 
 } // namespace
@@ -135,24 +136,22 @@ TEST(PsxPerDrawMatrixTest, DrawingOffsetUpdatesSubmitMatrix)
 
 TEST(PsxPerDrawMatrixTest, ReconstructionReportsGteInverseStats)
 {
-    MatrixRecord matrixA = identityMatrix();
-    matrixA.tr[0] = 2048;
-    MatrixRecord matrixB = identityMatrix();
-    matrixB.tr[0] = 4096;
-
+    MatrixRecord matrix = identityMatrix();
     CaptureSnapshot snap;
-    snap.matrices.append(matrixA);
-    snap.matrices.append(matrixB);
+    snap.matrices.append(matrix);
 
-    appendModelTri(snap, matrixA, 0, 1000, -500, 3000, 1200, -500, 3000, 1100, -400, 3000);
-    appendModelTri(snap, matrixB, 1, 2000, -800, 3500, 2200, -800, 3500, 2100, -700, 3500);
+    constexpr int kModelX = 1000;
+    constexpr int kModelY = -2000;
+    constexpr int kModelZ = 3000;
+    appendProjectedTri(snap, matrix, 0, -kModelX, kModelY, kModelZ, kModelX, kModelY, kModelZ,
+                       kModelX, -kModelY, kModelZ);
 
     MeshReconstructionStats stats;
     const ReconstructedCaptureSet captureSet =
         MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, &stats);
     EXPECT_FALSE(captureSet.isEmpty());
-    EXPECT_EQ(stats.primsTotal, 2);
-    EXPECT_EQ(stats.primsWithMatrixId, 2);
+    EXPECT_EQ(stats.primsTotal, 1);
+    EXPECT_EQ(stats.primsWithMatrixId, 1);
     EXPECT_GE(stats.gteInverseVertices, 3);
     EXPECT_GE(stats.gteInversePercent(), 50);
     EXPECT_TRUE(stats.hasBounds());
