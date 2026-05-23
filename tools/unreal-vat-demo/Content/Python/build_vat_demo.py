@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 35
+OPENVAT_BUILD = 36
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -503,7 +503,37 @@ def import_bake_assets():
                     else "mixamo.com_pos.png")
     unreal.log("import_bake_assets: position texture = " + pos_basename)
     _import_texture(pos_basename, "T_OpenVAT_Pos")
-    _import_texture("Boss_diffuse.png", "T_Boss_Diffuse")
+
+    # Find the diffuse PNG by content rather than hard-coded filename.
+    # Mixamo's per-model albedo names vary (Boss_diffuse.png for Rumba,
+    # Ch14_1001_Diffuse.png for Hip Hop, etc.). Look for any *.png in
+    # the bake dir whose name contains "diffuse" or "albedo" (case-
+    # insensitive) and isn't a known bake artifact.
+    skip_patterns = ("mixamo.com_pos", "_normal", "_glossiness",
+                     "_metallic", "_roughness")
+    diffuse_candidates = []
+    for fname in sorted(os.listdir(RUMBA_FS_DIR)):
+        if not fname.lower().endswith(".png"): continue
+        lower = fname.lower()
+        if any(s in lower for s in skip_patterns): continue
+        diffuse_candidates.append(fname)
+    diffuse_basename = None
+    for c in diffuse_candidates:
+        if "diffuse" in c.lower() or "albedo" in c.lower():
+            diffuse_basename = c
+            break
+    if diffuse_basename is None and diffuse_candidates:
+        # Fallback: any PNG that isn't a bake artifact is probably the
+        # diffuse. Used when the bake's source FBX named its diffuse
+        # something unusual like `Body.png`.
+        diffuse_basename = diffuse_candidates[0]
+    if diffuse_basename is None:
+        unreal.log_warning("import_bake_assets: no diffuse PNG found in "
+                           + RUMBA_FS_DIR + " — the dancer will render "
+                           "with the default checkered material.")
+    else:
+        unreal.log("import_bake_assets: diffuse texture = " + diffuse_basename)
+        _import_texture(diffuse_basename, "T_Boss_Diffuse")
 
     # Wipe any prior mesh-related imports under /Game/Rumba/ before
     # re-importing. Interchange will happily reuse an existing asset
