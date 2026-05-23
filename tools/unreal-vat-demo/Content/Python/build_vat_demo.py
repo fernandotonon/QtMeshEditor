@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 31
+OPENVAT_BUILD = 30
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -738,42 +738,6 @@ return target_unreal_cm - bind_local;
 """
 
 
-def read_usf_normal_body():
-    """Decode the bake's per-frame world-space normal from the
-    bottom half of the position texture (rows `frame_count` …
-    `2*frame_count-1`, encoded as `(n+1)/2`). Apply the same Y-up→
-    Z-up swizzle as positions and return a unit normal in world
-    space. Set the Material's `tangent_space_normal = False` so UE
-    treats this output as world-space."""
-    return r"""
-int col = (int)uv2.x;
-int row_block = (int)uv2.y;
-int N = max((int)frame_count, 1);
-
-int curr = (int)floor(current_frame);
-curr = ((curr % N) + N) % N;
-int nxt = (curr + 1) % N;
-float blend = frac(current_frame);
-
-int base_row = row_block * N;
-// Normal half starts at row `base_row + N`.
-float3 n_curr_e = pos_tex.Load(int3(col, base_row + N + curr, 0)).rgb;
-float3 n_next_e = pos_tex.Load(int3(col, base_row + N + nxt,  0)).rgb;
-float3 n_enc = lerp(n_curr_e, n_next_e, blend);
-// Decode (n+1)/2 → n in [-1..1]. glTF Y-up RH unit normal.
-float3 n_yup = n_enc * 2.0 - 1.0;
-
-// Apply the same swizzle matrix the WPO uses, so the decoded
-// normal lands in Unreal's Z-up world space. Normalize to clean
-// up any sub-µm float drift from lerping two encoded normals.
-float3 n_unreal;
-n_unreal.x = dot(n_yup, swizzle_row_x);
-n_unreal.y = dot(n_yup, swizzle_row_y);
-n_unreal.z = dot(n_yup, swizzle_row_z);
-return normalize(n_unreal);
-"""
-
-
 def build_material(frame_count, bounds_min, bounds_max, bit_depth=16):
     """Create or rebuild M_OpenVAT.
 
@@ -953,7 +917,7 @@ def build_material(frame_count, bounds_min, bounds_max, bit_depth=16):
                            "to ExcludeOffsets: " + str(e)
                            + " — dancer may converge to bind pose.")
 
-    # Custom node carrying the openvat WPO math.
+    # Custom node carrying the openvat math.
     custom = me.create_material_expression(mat,
         unreal.MaterialExpressionCustom, -400, 0)
     custom.set_editor_property("code", read_usf_body())
@@ -989,47 +953,6 @@ def build_material(frame_count, bounds_min, bounds_max, bit_depth=16):
     # without a Blueprint Tick or special component setup.
     me.connect_material_property(custom, "",
         unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
-
-    # Second Custom node: decode the bake's per-frame world-space normal
-    # from the bottom half of the texture. Without this the rendered
-    # normal stays at the BIND pose direction — which means small
-    # submeshes (eyes, ears, teeth) whose bind-pose normals briefly
-    # straddle the camera-facing threshold during head rotation get
-    # discarded by shading/depth-pre-pass tests, producing the
-    # "blinks depending on viewing angle" artifact. Computing the
-    # correct VAT-driven normal in world space removes that source
-    # of mismatch.
-    p_normal = me.create_material_expression(mat,
-        unreal.MaterialExpressionCustom, -400, 200)
-    p_normal.set_editor_property("code", read_usf_normal_body())
-    p_normal.set_editor_property("output_type",
-        unreal.CustomMaterialOutputType.CMOT_FLOAT3)
-    p_normal.set_editor_property("description", "OpenVAT_Normal")
-    normal_inputs = []
-    for name in ("pos_tex", "uv2", "current_frame", "frame_count",
-                 "swizzle_row_x", "swizzle_row_y", "swizzle_row_z"):
-        ci = unreal.CustomInput()
-        ci.set_editor_property("input_name", name)
-        normal_inputs.append(ci)
-    p_normal.set_editor_property("inputs", normal_inputs)
-    me.connect_material_expressions(p_tex,    "", p_normal, "pos_tex")
-    me.connect_material_expressions(p_uv2,    "", p_normal, "uv2")
-    me.connect_material_expressions(p_curr,   "", p_normal, "current_frame")
-    me.connect_material_expressions(p_frames, "", p_normal, "frame_count")
-    me.connect_material_expressions(p_sx,     "", p_normal, "swizzle_row_x")
-    me.connect_material_expressions(p_sy,     "", p_normal, "swizzle_row_y")
-    me.connect_material_expressions(p_sz,     "", p_normal, "swizzle_row_z")
-    # Mark the material's Normal as world-space (otherwise UE assumes
-    # tangent-space and applies the inverse tangent basis, which would
-    # turn our world-space output into garbage).
-    try:
-        mat.set_editor_property("tangent_space_normal", False)
-        unreal.log("Material.TangentSpaceNormal = False "
-                   "(VAT outputs world-space normals).")
-    except Exception as e:
-        unreal.log_warning("Could not set TangentSpaceNormal: " + str(e))
-    me.connect_material_property(p_normal, "",
-        unreal.MaterialProperty.MP_NORMAL)
 
     # PixelDepthOffset intentionally not applied. We tried -0.5 cm
     # globally (build 17 for 16-bit, build 20 globally) — it masks
