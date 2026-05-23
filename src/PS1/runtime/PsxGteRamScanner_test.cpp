@@ -6,6 +6,8 @@
 #include "PS1/runtime/PsxGteRamScanner.h"
 #include "PS1/runtime/RipperHooks.h"
 
+#include <QSet>
+
 #include <atomic>
 #include <cstring>
 
@@ -82,7 +84,8 @@ TEST(PsxGteRamScannerTest, SyntheticGteRamLayoutDedupesMatricesAndTagsPrims)
 
     hooks.onFrameBegin();
     PsxGteRamScanner::captureFromSystemRam(ram, kGpuPacket, &hooks);
-    Gp0HookDispatch::captureFromSystemRam(ram + kGpuPacket, sizeof(ram) - kGpuPacket, &hooks);
+    QSet<QString> seen;
+    Gp0HookDispatch::captureFromSystemRam(ram + kGpuPacket, sizeof(ram) - kGpuPacket, &hooks, &seen);
     hooks.onFrameEnd();
 
     ASSERT_EQ(buffer.matrices().size(), 2);
@@ -120,7 +123,8 @@ TEST(PsxGteRamScannerTest, GteScanRunsBeforeGpuFallbackMatrix)
 
     hooks.onFrameBegin();
     PsxGteRamScanner::captureFromSystemRam(ram, kGpuOffset, &hooks);
-    Gp0HookDispatch::captureFromSystemRam(ram + kGpuOffset, sizeof(ram) - kGpuOffset, &hooks);
+    QSet<QString> seen2;
+    Gp0HookDispatch::captureFromSystemRam(ram + kGpuOffset, sizeof(ram) - kGpuOffset, &hooks, &seen2);
     hooks.onFrameEnd();
 
     ASSERT_EQ(buffer.matrices().size(), 1u);

@@ -14,7 +14,9 @@ add_library(qtmesh_ps1core_libretro MODULE
     LibretroEmuCore.cpp
     LibretroEmuCorePlugin.cpp
     LibretroHost.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/Gp0CaptureStats.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/Gp0HookDispatch.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxGp0ChainRootScanner.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/GteCapture.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxGteEngine.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxGteInstructionCapture.cpp

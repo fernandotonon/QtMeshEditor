@@ -3,6 +3,7 @@
 
 #include "CaptureBuffer.h"
 #include "EmuHooks.h"
+#include "Gp0CaptureStats.h"
 
 #include <atomic>
 #include <cstdint>
@@ -10,7 +11,7 @@
 class VramSnapshot;
 
 /**
- * Concrete EmuHooks that records into CaptureBuffer when capture is armed (#418).
+ * Concrete EmuHooks that records into CaptureBuffer when capture is armed (#418, #657).
  */
 class RipperHooks final : public EmuHooks
 {
@@ -21,7 +22,20 @@ public:
 
     bool isCaptureEnabled() const override;
     uint32_t latestMatrixId() const override;
-    void ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize) override;
+
+    void ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize, bool scanGteRam = true,
+                                      bool accumulate = false) override;
+    int submitGp0Words(const uint32_t *words, size_t wordCount) override;
+
+    QSet<QString> *livePrimDedupeKeys() override;
+    void beginGpuCapturePass(bool accumulate) override;
+    void endGpuCapturePass(Gp0CaptureStats &stats) override;
+    int capturePrimCount() const override;
+    int lastDirectHookPrimCount() const override;
+
+    void resetLiveCaptureState();
+
+    const Gp0CaptureStats &lastCaptureStats() const { return m_lastStats; }
 
     void onFrameBegin() override;
     void onFrameEnd() override;
@@ -34,10 +48,18 @@ public:
     void onDrawMode(const DrawModeRecord &mode) override;
 
 private:
+    QString primDedupeKey(const PrimRecord &prim) const;
+
     std::atomic<bool> *m_armed = nullptr;
     CaptureBuffer *m_buffer = nullptr;
     VramSnapshot *m_vram = nullptr;
     uint32_t m_latestMatrixId = UINT32_MAX;
+    bool m_accumulatePass = false;
+    bool m_clearPrimsOnFrameBegin = true;
+    bool m_ramCaptureActive = false;
+    QSet<QString> m_liveDedupe;
+    int m_directHookPrimPass = 0;
+    Gp0CaptureStats m_lastStats;
 };
 
 #endif // RIPPERHOOKS_H

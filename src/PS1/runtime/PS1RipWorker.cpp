@@ -189,10 +189,13 @@ void PS1RipWorker::setCaptureArmed(bool armed)
 {
     m_captureArmed.store(armed, std::memory_order_release);
     // Do not clear while emulation is running — runFrame capture may be writing the buffer.
-    if (!armed)
+    if (!armed) {
         m_captureBuffer->clear();
-    else if (!m_running)
+        m_ripperHooks->resetLiveCaptureState();
+    } else if (!m_running) {
         m_captureBuffer->clear();
+        m_ripperHooks->resetLiveCaptureState();
+    }
 }
 
 void PS1RipWorker::setJoypadButton(unsigned port, unsigned buttonId, bool pressed)
@@ -219,9 +222,9 @@ void PS1RipWorker::finalizeFrameCapture()
         return;
     }
 
-    m_captureBuffer->clear();
-    m_core->runFrame();
     m_core->syncCaptureMirrors();
+    if (m_captureBuffer->prims().isEmpty())
+        m_core->runFrame();
     m_core->ingestCaptureFrame();
 
     const QVector<PrimRecord> &prims = m_captureBuffer->prims();

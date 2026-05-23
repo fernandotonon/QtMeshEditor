@@ -6,6 +6,7 @@
 #include "PsxVramColor.h"
 
 #include <QCoreApplication>
+#include <QtGlobal>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -447,7 +448,13 @@ void LibretroEmuCore::runFrame()
 
     m_host.retro_run();
     syncVramFromCore();
-    // GPU/GTE RAM capture runs only on explicit Capture Frame (ingestCaptureFrame).
+
+    if (m_hooks && m_hooks->isCaptureEnabled()) {
+        const bool liveDisabled = qEnvironmentVariableIsSet("QTMESH_PS1_GP0_LIVE_CAPTURE")
+                                  && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_LIVE_CAPTURE") == 0;
+        if (!liveDisabled)
+            captureGpuFromRam(false, true);
+    }
 }
 
 void LibretroEmuCore::reset()
@@ -543,7 +550,7 @@ void LibretroEmuCore::syncCaptureMirrors()
 
 void LibretroEmuCore::ingestCaptureFrame()
 {
-    captureGpuFromRam(true);
+    captureGpuFromRam(true, true);
 }
 
 void LibretroEmuCore::mirrorFramebufferToVram()
@@ -584,7 +591,7 @@ void LibretroEmuCore::syncVramFromCore()
     mirrorFramebufferToVram();
 }
 
-void LibretroEmuCore::captureGpuFromRam(bool scanGteRam)
+void LibretroEmuCore::captureGpuFromRam(bool scanGteRam, bool accumulate)
 {
     if (!m_hooks || !m_hooks->isCaptureEnabled())
         return;
@@ -597,8 +604,8 @@ void LibretroEmuCore::captureGpuFromRam(bool scanGteRam)
     if (!ram || ramSize < 4096)
         return;
 
-    Gp0HookDispatch::captureFrameFromSystemRam(static_cast<const uint8_t *>(ram), ramSize, m_hooks,
-                                               scanGteRam);
+    m_hooks->ingestSystemRamForGpuCapture(static_cast<const uint8_t *>(ram), ramSize, scanGteRam,
+                                          accumulate);
 }
 
 void LibretroEmuCore::presentVideo(const void *data, unsigned width, unsigned height, size_t pitch)

@@ -68,9 +68,13 @@ See epic #412 for phased issues (#413–#431).
 
 - `CaptureTypes`, `GpuCommandParser`, `CaptureBuffer`, `RipperHooks`, `Gp0HookDispatch` (#418).
 - `EmuHooks` included from `EmuCore.h` (issue #418 API surface).
-- **GTE capture (#419):** On **Capture Frame**, `PsxGteInstructionCapture` scans RAM for COP2 **RTPS/RTPT**, executes setup sequences via `PsxMipsGteRunner` + `PsxGteEngine`, then `PsxGteRamScanner` supplements with matrix blobs. GP0 ingest tags primitives with `latestMatrixId`. Hash dedupe + `cameraMatrixId` heuristic in the session status bar after mesh build. Not run while armed during live play (avoids 2 MiB scans and buffer races).
-- **Libretro capture path:** `Gp0HookDispatch` in the plugin walks **ordering-table linked GP0 chains** first (`PsxOrderingTableScanner` + `PsxGp0ChainWalker`), then falls back to linear RAM opcode scan when no OT is found. OT entries are resolved as **24-bit absolute RAM pointers** (libgpu `getaddr` layout), with a relative-to-OT-base fallback for synthetic tests. Linked DR tags carry the opcode in bits 24–31 and the next packet address in bits 2–23 (`PsxGp0Opcode.h`); drawing-environment commands (0xE1–0xE6) stay in the low byte.
-- **Stub core** emits all seven GP0 primitive flavors for CI when `QTMESH_PS1_FORCE_STUB=1` or no libretro core is present.
+- **GTE capture (#419):** On **Capture Frame**, `PsxGteInstructionCapture` scans RAM for COP2 **RTPS/RTPT**, executes setup sequences via `PsxMipsGteRunner` + `PsxGteEngine`, then `PsxGteRamScanner` supplements with matrix blobs. GP0 ingest tags primitives with `latestMatrixId`. Hash dedupe + `cameraMatrixId` heuristic in the session status bar after mesh build. GTE RAM scans run on final capture ingest only (not on per-frame live GPU ticks).
+- **GP0 capture (#657):** Three paths feed `RipperHooks::onGpuPrim`:
+  - **Direct hook (`gp0_hook`):** `EmuHooks::submitGp0Words` — used by the **stub** core (synthetic seven-flavor capture via `onGpuPrim`) and reserved for true in-core mednafen FIFO hooks. Sentry breadcrumb `ps1.rip.capture.gp0_hook` records `source:gp0_hook|ram_ot|ram_linear|ram_chain_root` and per-path counts.
+  - **Libretro live frame (`ram_*`):** While capture is armed, each `retro_run()` end triggers a lightweight RAM ingest (OT + standalone chain roots + linear, no GTE scan). Primitives accumulate with cross-frame dedupe until **Capture Frame** runs a final GTE+RAM merge. Disable live ingest with `QTMESH_PS1_GP0_LIVE_CAPTURE=0`. Baseline RAM-only behavior (OT then linear, no chain-root pass) via `QTMESH_PS1_GP0_RAM_LEGACY=1`.
+  - **Merged RAM scan:** `PsxOrderingTableScanner` → `PsxGp0ChainRootScanner` → linear fallback share one dedupe set (no early return after a weak OT). OT entries use **24-bit absolute RAM pointers** (libgpu `getaddr` layout), with a relative-to-OT-base fallback for synthetic tests. Linked DR tags carry the opcode in bits 24–31 and the next packet address in bits 2–23 (`PsxGp0Opcode.h`).
+- **Stub core** (`coreId=stub`): direct `onGpuPrim` hook path for CI when `QTMESH_PS1_FORCE_STUB=1` or no libretro core is present.
+- **Libretro core** (`coreId=libretro`): live merged RAM capture at frame boundary; true mednafen GP0 FIFO dispatch hooks remain future work when the core exposes them.
 - `armCapture` / `captureFrame` wire capture to the worker thread; CSV dump to temp for verification.
 - Sentry breadcrumb `ps1.rip.capture.frame_armed` via `ui.action`.
 - Tests: synthetic OT/homebrew RAM layout, seven-flavor CSV round-trip, disarmed capture &lt;1% `runFrame` overhead (stub + optional libretro integration).
@@ -122,7 +126,7 @@ The **stub** core is active (`coreId=stub`). It draws a test pattern and synthet
 
 ### Capture mesh is a triangle “blob” (normal size, wrong shape)
 
-Capture reads GP0 packets from **ordering-table chains** when present (typical homebrew/commercial frame setup), otherwise falls back to a linear RAM opcode scan. Expect coarse geometry on titles that stream primitives outside OT/DMA-visible RAM. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass. True in-core mednafen FIFO hooks remain future work.
+Capture uses **live per-frame merged RAM ingest** while armed (libretro), then a final GTE+RAM pass on **Capture Frame**. RAM strategies: ordering-table chains, standalone linked GP0 chain roots, and linear opcode scan. Expect coarse geometry on titles that stream primitives outside RAM-visible layouts. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass. True in-core mednafen FIFO dispatch (packet-for-packet as the GPU receives them) is not wired yet — see issue #657 follow-up when beetle/mednafen exposes hooks.
 
 ### Libretro integration tests (local only)
 

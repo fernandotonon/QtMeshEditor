@@ -1,6 +1,8 @@
 #ifndef PSXORDERINGTABLESCANNER_H
 #define PSXORDERINGTABLESCANNER_H
 
+#include <QSet>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -13,8 +15,9 @@ class EmuHooks;
 class PsxOrderingTableScanner
 {
 public:
-    /** Returns number of primitives dispatched from OT chains. */
-    static int captureFromOrderingTables(const uint8_t *ram, size_t byteSize, EmuHooks *hooks);
+    /** Appends primitives from OT chains; returns count added this pass. */
+    static int captureFromOrderingTables(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
+                                       QSet<QString> *seenPrimKeys, int &primCount);
 };
 
 #endif // PSXORDERINGTABLESCANNER_H

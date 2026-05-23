@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "PS1/runtime/CaptureBuffer.h"
+#include "PS1/runtime/Gp0CaptureStats.h"
 #include "PS1/runtime/Gp0HookDispatch.h"
 #include "PS1/runtime/RipperHooks.h"
 
@@ -46,8 +47,9 @@ TEST(Gp0HookDispatchTest, DisarmedCaptureDoesNotRecordPrimitives)
     EXPECT_TRUE(buffer.prims().isEmpty());
 
     armed.store(true, std::memory_order_release);
-    hooks.ingestSystemRamForGpuCapture(ram, sizeof(ram));
+    hooks.ingestSystemRamForGpuCapture(ram, sizeof(ram), true, false);
     EXPECT_GE(buffer.prims().size(), 1);
+    EXPECT_EQ(hooks.lastCaptureStats().primarySource, Gp0CaptureSource::RamLinear);
 }
 
 #endif // ENABLE_PS1_RIP

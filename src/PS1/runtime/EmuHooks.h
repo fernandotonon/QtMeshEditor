@@ -2,12 +2,16 @@
 #define EMUHOOKS_H
 
 #include "CaptureTypes.h"
+#include "Gp0CaptureStats.h"
+
+#include <QSet>
+#include <QString>
 
 #include <cstddef>
 #include <cstdint>
 
 /**
- * GPU/GTE interception callbacks (Phase 2 — #418, #419).
+ * GPU/GTE interception callbacks (Phase 2 — #418, #419; GP0 hook path #657).
  * Implemented by RipperHooks in the app; invoked from the emulator plugin worker thread.
  */
 class EmuHooks
@@ -34,12 +38,32 @@ public:
     virtual void onVramRead(uint16_t x, uint16_t y, uint16_t w, uint16_t h) { (void)x; (void)y; (void)w; (void)h; }
     virtual void onDrawMode(const DrawModeRecord &mode) { (void)mode; }
 
-    /** Libretro path: scan main RAM for GP0 packets when capture is armed (#418). */
-    virtual void ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize)
+    /** Core GP0 FIFO path (#657): sequential GP0 packets as submitted by the plugin. */
+    virtual int submitGp0Words(const uint32_t *words, size_t wordCount)
+    {
+        (void)words;
+        (void)wordCount;
+        return 0;
+    }
+
+    /** Libretro path: scan main RAM for GP0 packets when capture is armed (#418, #657). */
+    virtual void ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize, bool scanGteRam = true,
+                                            bool accumulate = false)
     {
         (void)ram;
         (void)byteSize;
+        (void)scanGteRam;
+        (void)accumulate;
     }
+
+    /** Live armed capture: shared dedupe keys across frames (nullptr when not accumulating). */
+    virtual QSet<QString> *livePrimDedupeKeys() { return nullptr; }
+
+    virtual void beginGpuCapturePass(bool accumulate) { (void)accumulate; }
+    virtual void endGpuCapturePass(Gp0CaptureStats &stats) { (void)stats; }
+
+    virtual int capturePrimCount() const { return 0; }
+    virtual int lastDirectHookPrimCount() const { return 0; }
 };
 
 #endif // EMUHOOKS_H
