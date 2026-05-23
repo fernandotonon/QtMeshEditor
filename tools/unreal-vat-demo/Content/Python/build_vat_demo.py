@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 29
+OPENVAT_BUILD = 30
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -418,6 +418,20 @@ def verify_imported_uv_channels(mesh):
                 if hasattr(bs, "recompute_tangents") and bs.recompute_tangents:
                     bs.recompute_tangents = False
                     changed = True
+                # Even with imported tangents, UE stores them as 8-bit
+                # packed per axis by default — for Mixamo's hundreds of
+                # UV-seam-split verts in the head, adjacent triangles
+                # can end up with slightly different quantized tangents
+                # that the rasterizer's edge equations occasionally
+                # disagree on at specific rotation angles. Storing
+                # tangents at 16-bit per axis removes the quantization
+                # that turns "almost identical" tangents into
+                # "rasterizer flips" — costs ~2x tangent buffer size
+                # which is negligible.
+                if hasattr(bs, "use_high_precision_tangent_basis") and \
+                   not bs.use_high_precision_tangent_basis:
+                    bs.use_high_precision_tangent_basis = True
+                    changed = True
                 if not changed:
                     unreal.log("verify_uv: LOD " + str(lod) + " "
                                "BuildSettings already optimal ✓")
@@ -428,7 +442,8 @@ def verify_imported_uv_channels(mesh):
                         unreal.log("verify_uv: forced LOD " + str(lod)
                                    + " bUseFullPrecisionUVs=True, "
                                    "recompute_normals=False, "
-                                   "recompute_tangents=False.")
+                                   "recompute_tangents=False, "
+                                   "use_high_precision_tangent_basis=True.")
                     except Exception as e:
                         unreal.log_warning("verify_uv: set failed: "
                                            + str(e))
