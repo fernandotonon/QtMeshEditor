@@ -141,7 +141,7 @@ void Gp0HookDispatch::dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHoo
 
 int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks)
 {
-    if (!words || wordCount < 4 || !hooks || !hooks->isCaptureEnabled())
+    if (!words || wordCount == 0 || !hooks || !hooks->isCaptureEnabled())
         return 0;
 
     DrawModeRecord currentMode{};

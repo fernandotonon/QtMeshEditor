@@ -38,16 +38,38 @@ MatrixRecord identityMatrix()
     return m;
 }
 
-PrimRecord triAtScreenCoords(int x0, int y0, int x1, int y1, int x2, int y2, uint32_t matrixId)
+PrimRecord triAtScreenCoords(int x0, int y0, int z0, int x1, int y1, int z1, int x2, int y2, int z2,
+                              uint32_t matrixId)
 {
     PrimRecord prim{};
     prim.kind = PrimKind::MonoTri;
     prim.vertexCount = 3;
     prim.matrixId = matrixId;
-    prim.verts[0] = {x0, y0, 4096, 255, 0, 0, 0, 0};
-    prim.verts[1] = {x1, y1, 4096, 0, 255, 0, 0, 0};
-    prim.verts[2] = {x2, y2, 4096, 0, 0, 255, 0, 0};
+    prim.verts[0] = {x0, y0, z0, 255, 0, 0, 0, 0};
+    prim.verts[1] = {x1, y1, z1, 0, 255, 0, 0, 0};
+    prim.verts[2] = {x2, y2, z2, 0, 0, 255, 0, 0};
     return prim;
+}
+
+void appendModelTri(CaptureSnapshot &snap, MatrixRecord &matrix, uint32_t matrixId, int mx0, int my0,
+                    int mz0, int mx1, int my1, int mz1, int mx2, int my2, int mz2)
+{
+    int sx = 0;
+    int sy = 0;
+    int sz = 0;
+    int x0 = 0;
+    int y0 = 0;
+    int z0 = 0;
+    int x1 = 0;
+    int y1 = 0;
+    int z1 = 0;
+    int x2 = 0;
+    int y2 = 0;
+    int z2 = 0;
+    ASSERT_TRUE(GteInverse::modelToScreen(matrix, mx0, my0, mz0, x0, y0, z0));
+    ASSERT_TRUE(GteInverse::modelToScreen(matrix, mx1, my1, mz1, x1, y1, z1));
+    ASSERT_TRUE(GteInverse::modelToScreen(matrix, mx2, my2, mz2, x2, y2, z2));
+    snap.prims.append(triAtScreenCoords(x0, y0, z0, x1, y1, z1, x2, y2, z2, matrixId));
 }
 
 } // namespace
@@ -122,14 +144,8 @@ TEST(PsxPerDrawMatrixTest, ReconstructionReportsGteInverseStats)
     snap.matrices.append(matrixA);
     snap.matrices.append(matrixB);
 
-    int sx = 0;
-    int sy = 0;
-    int sz = 0;
-    ASSERT_TRUE(GteInverse::modelToScreen(matrixA, 1000, -500, 3000, sx, sy, sz));
-    snap.prims.append(triAtScreenCoords(sx, sy, sx + 16, sy, sx + 8, sy + 12, 0));
-
-    ASSERT_TRUE(GteInverse::modelToScreen(matrixB, 2000, -800, 3500, sx, sy, sz));
-    snap.prims.append(triAtScreenCoords(sx, sy, sx + 16, sy, sx + 8, sy + 12, 1));
+    appendModelTri(snap, matrixA, 0, 1000, -500, 3000, 1200, -500, 3000, 1100, -400, 3000);
+    appendModelTri(snap, matrixB, 1, 2000, -800, 3500, 2200, -800, 3500, 2100, -700, 3500);
 
     MeshReconstructionStats stats;
     const ReconstructedCaptureSet captureSet =
