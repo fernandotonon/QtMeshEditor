@@ -6,7 +6,7 @@ counterpart to `tools/godot-vat-demo/`.
 
 **What ships in the repo:**
 
-```
+```text
 tools/unreal-vat-demo/
 ├── QtMeshVAT.uproject           ← open this in UE 5.3+
 ├── README.md                    ← you are here
@@ -14,12 +14,14 @@ tools/unreal-vat-demo/
     ├── Rumba/                   ← bake artifacts (data files only)
     │   ├── source.gltf  + .bin  ← mesh + per-vertex column index in TEXCOORD_1
     │   ├── Boss_diffuse.png     ← diffuse texture
-    │   ├── mixamo.com_pos.png   ← 16-bit position+normal texture
+    │   ├── mixamo.com_pos.exr   ← 32-bit float position+normal texture
+    │   │                          (also valid: mixamo.com_pos.png for 16-bit bakes)
     │   ├── mixamo.com-remap_info.json
     │   ├── mixamo.com_ogre_bind.bin  ← legacy fallback, not used here
     │   └── openvat.usf          ← reference shader body
     └── Python/
-        └── build_vat_demo.py    ← runs once to create Material + BP
+        ├── init_unreal.py       ← auto-runs on editor open
+        └── build_vat_demo.py    ← runs once to create Material + Actor
 ```
 
 **Why a Python bootstrap instead of pre-built `.uasset`s:**
