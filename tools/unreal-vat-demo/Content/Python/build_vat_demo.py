@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 39
+OPENVAT_BUILD = 40
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -479,6 +479,26 @@ def verify_imported_uv_channels(mesh):
             nsec = mesh.get_num_sections(lod)
             unreal.log("verify_uv: LOD " + str(lod) + " has "
                        + str(nsec) + " section(s).")
+            # CRITICAL diagnostic: if Interchange merged verts on
+            # static-mesh build, two distinct glTF verts (at the same
+            # XYZ but different UV0/TEXCOORD_1) end up sharing one
+            # render-buffer vert and ONE TEXCOORD_1 column index. The
+            # surviving column's bake data drives both verts → on
+            # frames where the absorbed vert was supposed to be at a
+            # different position, its triangle collapses or stretches
+            # — exactly the "iris missing" symptom we see.
+            # Compare imported vertex count to the source bake count.
+            try:
+                # get_num_vertices(lod) exists on UStaticMesh in 5.x+
+                if hasattr(mesh, "get_num_vertices"):
+                    nv = mesh.get_num_vertices(lod)
+                    unreal.log("verify_uv: LOD " + str(lod) + " has "
+                               + str(nv) + " render verts (source bake "
+                               "has 6968 — if these don't match, "
+                               "Interchange merged verts and TEXCOORD_1 "
+                               "column indices got collapsed).")
+            except Exception as e:
+                unreal.log_warning("verify_uv: get_num_vertices: " + str(e))
     except Exception as e:
         unreal.log_warning("section dump failed: " + str(e))
     return True
