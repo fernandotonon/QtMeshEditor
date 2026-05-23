@@ -29,8 +29,20 @@ void writeF32LE(QByteArray& buf, float v) {
 }
 
 // Append a NUL-terminated string. EXR uses C-strings for attr names + types.
+//
+// Bounded against a 256-byte cap so a malformed (un-terminated) caller
+// can't walk off the end of the source buffer. All current call sites
+// pass string literals at most ~16 chars long, so the cap is a defense-
+// in-depth measure; if it ever fires the EXR output is structurally
+// malformed and we let the file write succeed but report nothing —
+// downstream `file` will fail to parse and the caller sees the error.
 void writeCStr(QByteArray& buf, const char* s) {
-    const size_t n = std::strlen(s);
+    if (s == nullptr) return;
+    // Bounded scan — portable equivalent of `strnlen` so the function
+    // is safe even if a future caller forgets to NUL-terminate.
+    constexpr size_t kMaxAttrLen = 256;
+    size_t n = 0;
+    while (n < kMaxAttrLen && s[n] != '\0') ++n;
     buf.append(s, static_cast<int>(n));
     buf.append('\0');
 }
