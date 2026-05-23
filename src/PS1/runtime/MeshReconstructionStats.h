@@ -18,6 +18,8 @@ struct MeshReconstructionStats {
 
     int gteInversePercent() const;
     bool hasBounds() const;
+    /** Sets slabLike from axis extents (min/max ratio below 0.12). Requires hasBounds(). */
+    void finalizeSlabMetric();
 };
 
 #endif // MESHRECONSTRUCTIONSTATS_H

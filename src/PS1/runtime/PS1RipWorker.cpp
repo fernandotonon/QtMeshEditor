@@ -5,6 +5,7 @@
 #include "EmuCoreLoader.h"
 #include "EmuFramebuffer.h"
 #include "GpuCommandParser.h"
+#include "PsxGoldenCapture.h"
 #include "RipperHooks.h"
 #include "SentryReporter.h"
 #include "VramSnapshot.h"
@@ -256,8 +257,11 @@ void PS1RipWorker::finalizeFrameCapture()
     }
     file.close();
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture"),
-                                QStringLiteral("%1 prims:%2").arg(captureId).arg(prims.size()));
+    QString captureMsg = QStringLiteral("%1 prims:%2").arg(captureId).arg(prims.size());
+    const QString goldenId = PsxGoldenCapture::activeSceneId();
+    if (!goldenId.isEmpty())
+        captureMsg += QStringLiteral(" golden_id=%1").arg(goldenId);
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture"), captureMsg);
     QVector<uint16_t> vramCells;
     if (m_vram && !m_vram->isEmpty())
         vramCells = m_vram->mutablePixels();

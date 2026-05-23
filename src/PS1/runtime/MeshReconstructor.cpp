@@ -98,18 +98,6 @@ void accumulateVertexStats(const ReconstructedVertex &v, MeshReconstructionStats
     stats.boundsMaxZ = std::max(stats.boundsMaxZ, v.pz);
 }
 
-void finalizeSlabMetric(MeshReconstructionStats &stats)
-{
-    if (!stats.hasBounds() || stats.totalVertices < 3)
-        return;
-    const float ex = stats.boundsMaxX - stats.boundsMinX;
-    const float ey = stats.boundsMaxY - stats.boundsMinY;
-    const float ez = stats.boundsMaxZ - stats.boundsMinZ;
-    const float maxExtent = std::max({ex, ey, ez, 1e-6f});
-    const float minExtent = std::min({ex, ey, ez});
-    stats.slabLike = (minExtent / maxExtent) < 0.12f;
-}
-
 void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix, SubMeshAccumulator &acc,
                    MeshReconstructionStats *statsOut)
 {
@@ -182,7 +170,7 @@ QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> buildMatrixGroups(const Capt
         emitPrimitive(prim, matrix, acc, statsOut);
     }
     if (statsOut)
-        finalizeSlabMetric(*statsOut);
+        statsOut->finalizeSlabMetric();
     return groupsByMatrix;
 }
 

@@ -46,6 +46,9 @@ public:
     bool dedupeStrict() const { return m_dedupeStrict; }
     void setDedupeStrict(bool strict) { m_dedupeStrict = strict; }
 
+    QString goldenSceneId() const;
+    void setGoldenSceneId(const QString &sceneId);
+
     void setJoypadPressed(unsigned port, unsigned buttonId, bool pressed);
     void resetJoypad(unsigned port = 0);
 
@@ -86,6 +89,7 @@ private:
     bool m_paused = false;
     bool m_captureArmed = false;
     bool m_dedupeStrict = false;
+    QString m_goldenSceneId;
 
     QThread *m_workerThread = nullptr;
     PS1RipWorker *m_worker = nullptr;
