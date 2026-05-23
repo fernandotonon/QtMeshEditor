@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 34
+OPENVAT_BUILD = 33
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -743,59 +743,6 @@ return target_unreal_cm - bind_local;
 """
 
 
-def read_usf_normal_body():
-    """Decode the per-frame normal from the bake's lower half and
-    return it in OBJECT (Local) space. Following the OpenVAT Unreal
-    reference (`OpenVAT_Basic.uasset` in sharpen3d/openvat) we feed
-    this output into a Material Transform node set to
-    Source=Local, Destination=Tangent, with the material's
-    `tangent_space_normal=True` (default) — that's the chain the
-    reference uses, and the only one that interacts cleanly with
-    UE's lighting pipeline.
-
-    Why we don't write a world-space normal:
-      * Setting `tangent_space_normal=False` AND outputting world
-        space looks correct in the Material editor preview but
-        breaks subtle parts of the lighting evaluation (build 31).
-      * Using the canonical Local→Tangent path means UE's vertex
-        shader builds the per-vertex tangent basis from the
-        original mesh attributes and applies our delta-normal on
-        top, exactly like a normal map sample would behave.
-
-    Coordinate system: the bake stores normals in glTF Y-up RH
-    meters space. Interchange's StaticMesh import applies the
-    `(X, Z, Y)` swizzle to vertex positions AND vertex normals at
-    once — so the *imported* mesh's local space already matches
-    what swizzling our bake normal that way gives us. Same swizzle
-    matrix the WPO uses works for normals too.
-    """
-    return r"""
-int col = (int)uv2.x;
-int row_block = (int)uv2.y;
-int N = max((int)frame_count, 1);
-
-int curr = (int)floor(current_frame);
-curr = ((curr % N) + N) % N;
-int nxt = (curr + 1) % N;
-float blend = frac(current_frame);
-
-int base_row = row_block * N;
-// Normal half starts at row (base_row + N).
-float3 n_curr_e = pos_tex.Load(int3(col, base_row + N + curr, 0)).rgb;
-float3 n_next_e = pos_tex.Load(int3(col, base_row + N + nxt,  0)).rgb;
-// (n+1)/2 → n in [-1..1]. glTF Y-up RH unit normal.
-float3 n_yup = lerp(n_curr_e, n_next_e, blend) * 2.0 - 1.0;
-// Apply the SAME swizzle the WPO uses, so the decoded normal
-// lands in Unreal's LOCAL (= object) space. The Transform node
-// downstream will rotate it into the per-pixel tangent basis.
-float3 n_local;
-n_local.x = dot(n_yup, swizzle_row_x);
-n_local.y = dot(n_yup, swizzle_row_y);
-n_local.z = dot(n_yup, swizzle_row_z);
-return normalize(n_local);
-"""
-
-
 def build_material(frame_count, bounds_min, bounds_max, bit_depth=16):
     """Create or rebuild M_OpenVAT.
 
@@ -1011,59 +958,6 @@ def build_material(frame_count, bounds_min, bounds_max, bit_depth=16):
     # without a Blueprint Tick or special component setup.
     me.connect_material_property(custom, "",
         unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
-
-    # Per-frame normal pipeline — matches the OpenVAT Unreal
-    # reference (`OpenVAT_Basic.uasset` in sharpen3d/openvat).
-    #
-    #   Custom HLSL ──► Transform(Local→Tangent) ──► MP_NORMAL
-    #
-    # With `tangent_space_normal=True` (the material default), the
-    # Normal pin expects a tangent-space delta. We sample the bake's
-    # per-frame OBJECT-space normal in HLSL, then the Transform node
-    # rotates it into the per-pixel tangent basis. Without this
-    # chain, WPO moves a vertex but its rendered normal stays at the
-    # static bind-pose direction, so small submeshes (eyes, ears,
-    # teeth) whose bind normals briefly straddle the camera-facing
-    # threshold during head rotation get discarded by view-dependent
-    # fragment tests — the "blinks-depending-on-angle" symptom.
-    p_normal = me.create_material_expression(mat,
-        unreal.MaterialExpressionCustom, -800, 800)
-    p_normal.set_editor_property("code", read_usf_normal_body())
-    p_normal.set_editor_property("output_type",
-        unreal.CustomMaterialOutputType.CMOT_FLOAT3)
-    p_normal.set_editor_property("description", "OpenVAT_Normal_OS")
-    normal_inputs = []
-    for name in ("pos_tex", "uv2", "current_frame", "frame_count",
-                 "swizzle_row_x", "swizzle_row_y", "swizzle_row_z"):
-        ci = unreal.CustomInput()
-        ci.set_editor_property("input_name", name)
-        normal_inputs.append(ci)
-    p_normal.set_editor_property("inputs", normal_inputs)
-    me.connect_material_expressions(p_tex,    "", p_normal, "pos_tex")
-    me.connect_material_expressions(p_uv2,    "", p_normal, "uv2")
-    me.connect_material_expressions(p_curr,   "", p_normal, "current_frame")
-    me.connect_material_expressions(p_frames, "", p_normal, "frame_count")
-    me.connect_material_expressions(p_sx,     "", p_normal, "swizzle_row_x")
-    me.connect_material_expressions(p_sy,     "", p_normal, "swizzle_row_y")
-    me.connect_material_expressions(p_sz,     "", p_normal, "swizzle_row_z")
-
-    p_transform = me.create_material_expression(mat,
-        unreal.MaterialExpressionTransform, -400, 800)
-    try:
-        p_transform.set_editor_property("transform_source_type",
-            unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_LOCAL)
-        p_transform.set_editor_property("transform_type",
-            unreal.MaterialVectorCoordTransform.TRANSFORM_TANGENT)
-        me.connect_material_expressions(p_normal, "", p_transform, "Input")
-        me.connect_material_property(p_transform, "",
-            unreal.MaterialProperty.MP_NORMAL)
-        unreal.log("OpenVAT normal chain wired: Custom(OS) → "
-                   "Transform(Local→Tangent) → MP_NORMAL.")
-    except Exception as e:
-        unreal.log_warning("Could not wire Transform node for normal "
-                           "output: " + str(e)
-                           + " — bind-pose normal will be used, which "
-                           "may produce angle-dependent submesh blink.")
 
     # PixelDepthOffset intentionally not applied. We tried -0.5 cm
     # globally (build 17 for 16-bit, build 20 globally) — it masks
