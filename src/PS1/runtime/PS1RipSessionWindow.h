@@ -45,7 +45,7 @@ private slots:
                       const QImage &nativePreview);
     void onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
                      int vertexCount, int triangleCount, int matrixCount, uint32_t cameraMatrixId,
-                     bool hasCameraMatrix);
+                     bool hasCameraMatrix, int gteInversePercent, bool slabLike);
     void onPausedChanged(bool paused);
 
 private:

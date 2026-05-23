@@ -22,6 +22,9 @@ public:
     virtual bool isCaptureEnabled() const { return false; }
     virtual uint32_t latestMatrixId() const { return UINT32_MAX; }
 
+    /** Matrix bound at the last drawing-environment command (#658). */
+    virtual uint32_t submitMatrixId() const { return UINT32_MAX; }
+
     virtual void onFrameBegin() {}
     virtual void onFrameEnd() {}
 
@@ -37,6 +40,13 @@ public:
     }
     virtual void onVramRead(uint16_t x, uint16_t y, uint16_t w, uint16_t h) { (void)x; (void)y; (void)w; (void)h; }
     virtual void onDrawMode(const DrawModeRecord &mode) { (void)mode; }
+
+    /** GP0 0xE4 drawing offset — updates the active submit matrix OFX/OFY (#658). */
+    virtual void onDrawingOffset(int32_t ofx, int32_t ofy)
+    {
+        (void)ofx;
+        (void)ofy;
+    }
 
     /** Core GP0 FIFO path (#657): sequential GP0 packets as submitted by the plugin. */
     virtual int submitGp0Words(const uint32_t *words, size_t wordCount)

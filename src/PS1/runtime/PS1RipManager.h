@@ -59,7 +59,7 @@ signals:
     void frameCaptured(const QString &captureId);
     void meshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
                    int vertexCount, int triangleCount, int matrixCount, uint32_t cameraMatrixId,
-                   bool hasCameraMatrix);
+                   bool hasCameraMatrix, int gteInversePercent, bool slabLike);
     void sceneCaptured(const QString &captureId);
     void vramDumped(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                     const QImage &nativePreview);

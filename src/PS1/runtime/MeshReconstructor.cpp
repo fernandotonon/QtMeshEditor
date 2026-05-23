@@ -37,7 +37,8 @@ struct SubMeshAccumulator {
     }
 };
 
-ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix, bool textured)
+ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix, bool textured,
+                                  bool *usedGteInverseOut = nullptr)
 {
     ReconstructedVertex out;
     out.diffuseArgb = packDiffuse(v.r, v.g, v.b);
@@ -45,6 +46,7 @@ ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix
     float mx = 0.0f;
     float my = 0.0f;
     float mz = 0.0f;
+    bool usedGte = false;
     if (matrix && GteInverse::screenToModel(*matrix, v.x, v.y, v.z, mx, my, mz)) {
         float wx = 0.0f;
         float wy = 0.0f;
@@ -55,6 +57,7 @@ ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix
             out.px = wx;
             out.py = wy;
             out.pz = wz;
+            usedGte = true;
         } else {
             GteInverse::psxScreenToWorld(static_cast<float>(v.x), static_cast<float>(v.y),
                                          static_cast<float>(v.z), out.px, out.py, out.pz);
@@ -63,6 +66,8 @@ ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix
         GteInverse::psxScreenToWorld(static_cast<float>(v.x), static_cast<float>(v.y),
                                      static_cast<float>(v.z), out.px, out.py, out.pz);
     }
+    if (usedGteInverseOut)
+        *usedGteInverseOut = usedGte;
 
     if (textured) {
         out.u = static_cast<float>(v.u) / 256.0f;
@@ -71,12 +76,53 @@ ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix
     return out;
 }
 
-void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix, SubMeshAccumulator &acc)
+void accumulateVertexStats(const ReconstructedVertex &v, MeshReconstructionStats &stats, bool usedGte)
+{
+    ++stats.totalVertices;
+    if (usedGte)
+        ++stats.gteInverseVertices;
+    else
+        ++stats.screenFallbackVertices;
+
+    if (!stats.hasBounds()) {
+        stats.boundsMinX = stats.boundsMaxX = v.px;
+        stats.boundsMinY = stats.boundsMaxY = v.py;
+        stats.boundsMinZ = stats.boundsMaxZ = v.pz;
+        return;
+    }
+    stats.boundsMinX = std::min(stats.boundsMinX, v.px);
+    stats.boundsMaxX = std::max(stats.boundsMaxX, v.px);
+    stats.boundsMinY = std::min(stats.boundsMinY, v.py);
+    stats.boundsMaxY = std::max(stats.boundsMaxY, v.py);
+    stats.boundsMinZ = std::min(stats.boundsMinZ, v.pz);
+    stats.boundsMaxZ = std::max(stats.boundsMaxZ, v.pz);
+}
+
+void finalizeSlabMetric(MeshReconstructionStats &stats)
+{
+    if (!stats.hasBounds() || stats.totalVertices < 3)
+        return;
+    const float ex = stats.boundsMaxX - stats.boundsMinX;
+    const float ey = stats.boundsMaxY - stats.boundsMinY;
+    const float ez = stats.boundsMaxZ - stats.boundsMinZ;
+    const float maxExtent = std::max({ex, ey, ez, 1e-6f});
+    const float minExtent = std::min({ex, ey, ez});
+    stats.slabLike = (minExtent / maxExtent) < 0.12f;
+}
+
+void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix, SubMeshAccumulator &acc,
+                   MeshReconstructionStats *statsOut)
 {
     const bool textured = prim.kind == PrimKind::TexturedTri || prim.kind == PrimKind::TexturedQuad
                           || prim.kind == PrimKind::Sprite;
 
-    auto vtx = [&](int i) { return vertexFromPsx(prim.verts[i], matrix, textured); };
+    auto vtx = [&](int i) {
+        bool usedGte = false;
+        ReconstructedVertex out = vertexFromPsx(prim.verts[i], matrix, textured, &usedGte);
+        if (statsOut)
+            accumulateVertexStats(out, *statsOut, usedGte);
+        return out;
+    };
 
     if (prim.kind == PrimKind::MonoTri || prim.kind == PrimKind::ShadedTri
         || prim.kind == PrimKind::TexturedTri) {
@@ -106,9 +152,18 @@ void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix, SubMeshAc
     }
 }
 
-QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> buildMatrixGroups(const CaptureSnapshot &snapshot)
+QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> buildMatrixGroups(const CaptureSnapshot &snapshot,
+                                                                    MeshReconstructionStats *statsOut)
 {
     QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> groupsByMatrix;
+
+    if (statsOut) {
+        statsOut->primsTotal = snapshot.prims.size();
+        for (const PrimRecord &prim : snapshot.prims) {
+            if (prim.matrixId < static_cast<uint32_t>(snapshot.matrices.size()))
+                ++statsOut->primsWithMatrixId;
+        }
+    }
 
     for (const PrimRecord &prim : snapshot.prims) {
         if (!PsxCaptureFilters::isOnScreenPrim(prim))
@@ -124,8 +179,10 @@ QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> buildMatrixGroups(const Capt
         if (acc.materialName.isEmpty())
             acc.materialName = MeshReconstructor::textureMaterialName(
                 prim.tpage, prim.clut, prim.semiTrans, prim.drawModeBits);
-        emitPrimitive(prim, matrix, acc);
+        emitPrimitive(prim, matrix, acc, statsOut);
     }
+    if (statsOut)
+        finalizeSlabMetric(*statsOut);
     return groupsByMatrix;
 }
 
@@ -151,11 +208,12 @@ ReconstructedMesh meshFromMatrixGroup(uint32_t matrixId,
     return result;
 }
 
-QVector<ReconstructedMesh> buildParts(const CaptureSnapshot &snapshot)
+QVector<ReconstructedMesh> buildParts(const CaptureSnapshot &snapshot,
+                                      MeshReconstructionStats *statsOut)
 {
     QVector<ReconstructedMesh> parts;
     const QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> groupsByMatrix =
-        buildMatrixGroups(snapshot);
+        buildMatrixGroups(snapshot, statsOut);
 
     for (auto matIt = groupsByMatrix.constBegin(); matIt != groupsByMatrix.constEnd(); ++matIt) {
         ReconstructedMesh part = meshFromMatrixGroup(matIt.key(), matIt.value());
@@ -200,14 +258,21 @@ quint64 MeshReconstructor::textureGroupKey(uint16_t tpage, uint16_t clut, uint8_
 
 ReconstructedMesh MeshReconstructor::reconstruct(const CaptureSnapshot &snapshot)
 {
-    return flattenParts(buildParts(snapshot));
+    return flattenParts(buildParts(snapshot, nullptr));
 }
 
 ReconstructedCaptureSet MeshReconstructor::reconstructDeduped(const CaptureSnapshot &snapshot,
                                                             MeshDedupeMode dedupeMode)
 {
+    return reconstructDeduped(snapshot, dedupeMode, nullptr);
+}
+
+ReconstructedCaptureSet MeshReconstructor::reconstructDeduped(const CaptureSnapshot &snapshot,
+                                                            MeshDedupeMode dedupeMode,
+                                                            MeshReconstructionStats *statsOut)
+{
     ReconstructedCaptureSet result;
-    const QVector<ReconstructedMesh> parts = buildParts(snapshot);
+    const QVector<ReconstructedMesh> parts = buildParts(snapshot, statsOut);
     result.capturedPartCount = parts.size();
     if (parts.isEmpty())
         return result;

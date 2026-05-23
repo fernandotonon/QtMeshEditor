@@ -74,7 +74,7 @@ See epic #412 for phased issues (#413–#431).
   - **Libretro live frame (`ram_*`):** While capture is armed, each `retro_run()` end triggers a lightweight RAM ingest (OT + standalone chain roots + linear, no GTE scan). Primitives accumulate with cross-frame dedupe until **Capture Frame** runs a final GTE+RAM merge. Disable live ingest with `QTMESH_PS1_GP0_LIVE_CAPTURE=0`. Baseline RAM-only behavior (OT then linear, no chain-root pass) via `QTMESH_PS1_GP0_RAM_LEGACY=1`.
   - **Merged RAM scan:** `PsxOrderingTableScanner` → `PsxGp0ChainRootScanner` → linear fallback share one dedupe set (no early return after a weak OT). OT entries use **24-bit absolute RAM pointers** (libgpu `getaddr` layout), with a relative-to-OT-base fallback for synthetic tests. Linked DR tags carry the opcode in bits 24–31 and the next packet address in bits 2–23 (`PsxGp0Opcode.h`).
 - **Stub core** (`coreId=stub`): direct `onGpuPrim` hook path for CI when `QTMESH_PS1_FORCE_STUB=1` or no libretro core is present.
-- **Libretro core** (`coreId=libretro`): live merged RAM capture at frame boundary; true mednafen GP0 FIFO dispatch hooks remain future work when the core exposes them.
+- **Libretro core** (`coreId=libretro`): live merged RAM capture at frame boundary; true mednafen GP0 FIFO dispatch hooks remain future work ([#662](https://github.com/fernandotonon/QtMeshEditor/issues/662)).
 - `armCapture` / `captureFrame` wire capture to the worker thread; CSV dump to temp for verification.
 - Sentry breadcrumb `ps1.rip.capture.frame_armed` via `ui.action`.
 - Tests: synthetic OT/homebrew RAM layout, seven-flavor CSV round-trip, disarmed capture &lt;1% `runFrame` overhead (stub + optional libretro integration).
@@ -98,6 +98,24 @@ See epic #412 for phased issues (#413–#431).
 - `PS1RipMeshBuilder::attachCaptureSetToScene` places one `PS1Capture_<id>_instN` SceneNode per instance at the captured world position.
 - Session toolbar **Strict dedupe** toggle (persisted in QSettings); status shows captured / unique / instance counts.
 - Sentry breadcrumbs `ps1.rip.mesh.built` and `ps1.rip.dedupe.summary`.
+
+## Per-draw matrix (#658)
+
+- **`RipperHooks::submitMatrixId`** — frozen when a GP0 drawing-environment command (`0xE1`–`0xE6`) is processed via `onDrawMode`; primitives submitted before the next draw env keep the prior matrix even if `onGteMatrix` updated `latestMatrixId`.
+- **`Gp0HookDispatch`** threads `currentMatrixId` through OT/chain/linear scans and `submitGp0Words`; `matrixIdForGpuSubmit` prefers chain-local id, then submit id, then latest.
+- **`0xE4` drawing offset** — parsed in `GpuCommandParser`; `onDrawingOffset` clones the active submit matrix with updated OFX/OFY (fixed-point `x<<16`, `y<<16`).
+- **`MeshReconstructionStats`** — counts GTE inverse vs `psxScreenToWorld` fallback vertices, bounds extent, and a `slabLike` heuristic (min/max axis ratio &lt; 0.12). Session status bar shows **GTE inverse %** and a slab warning; Sentry `ps1.rip.matrix.stats`.
+
+### Limitations (#658)
+
+- **RAM ingest ordering** — OT/chain walks start with `currentMatrixId = UINT32_MAX`; matrix association depends on draw-env packets appearing *before* primitives in the scanned buffer (typical for linked lists, not guaranteed for all titles).
+- **Shared matrix across OT** — one `currentMatrixId` per chain walk; dual-pass / multi-buffer games may still share a matrix across unrelated draws.
+- **GTE RAM supplement** — Capture Frame still merges COP2-scanned matrices; per-draw tagging applies at GP0 dispatch time, not retroactively to RAM-only captures without draw-env context.
+- **Commercial golden scenes** — manual acceptance tracked in #659; #658 reduces blob fallback but does not replace a full matrix stack or FIFO-accurate stream (#662).
+
+## GP0 FIFO follow-up (#662)
+
+Post-#657 / #661 work: true mednafen GP0 FIFO dispatch (packet-for-packet as the core submits), stub routing through `submitGp0Words`, session UI for capture-source breakdown, and golden-scene validation vs `QTMESH_PS1_GP0_RAM_LEGACY=1`. See [issue #662](https://github.com/fernandotonon/QtMeshEditor/issues/662).
 
 ## Troubleshooting
 
@@ -126,7 +144,7 @@ The **stub** core is active (`coreId=stub`). It draws a test pattern and synthet
 
 ### Capture mesh is a triangle “blob” (normal size, wrong shape)
 
-Capture uses **live per-frame merged RAM ingest** while armed (libretro), then a final GTE+RAM pass on **Capture Frame**. RAM strategies: ordering-table chains, standalone linked GP0 chain roots, and linear opcode scan. Expect coarse geometry on titles that stream primitives outside RAM-visible layouts. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass. True in-core mednafen FIFO dispatch (packet-for-packet as the GPU receives them) is not wired yet — see issue #657 follow-up when beetle/mednafen exposes hooks.
+Capture uses **live per-frame merged RAM ingest** while armed (libretro), then a final GTE+RAM pass on **Capture Frame**. RAM strategies: ordering-table chains, standalone linked GP0 chain roots, and linear opcode scan. Expect coarse geometry on titles that stream primitives outside RAM-visible layouts. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass. Per-draw matrix tagging (#658) reduces screen-space blob fallback when draw-environment packets precede primitives in the captured buffer. True in-core mednafen GP0 FIFO dispatch (packet-for-packet as the GPU receives them) is not wired yet — see [#662](https://github.com/fernandotonon/QtMeshEditor/issues/662).
 
 ### Libretro integration tests (local only)
 
@@ -142,7 +160,7 @@ export QTMESH_PS1_TEST_ISO=/path/game.cue
 
 `PS1RipManagerLibretroArmTest` (arm/capture while a real libretro session runs) uses the same guard and env vars.
 
-**GTE / matrix tests (CI):** `PsxGteCop2Test`, `PsxGteIsoDedupeTest.StaticSceneCop2ProgramDedupesThreeDrawables`, `MeshReconstructorTest.GtePipelineCubeRoundTripsToUnitCubeMesh`. Real-ISO matrix dedupe: set `QTMESH_PS1_TEST_BIOS` + `QTMESH_PS1_TEST_ISO` (or `QTMESH_PS1_TEST_HOMEBREW_ISO`) and run `PsxGteIsoDedupeTest.RealIsoCaptureHasBoundedMatrixCount`.
+**GTE / matrix tests (CI):** `PsxGteCop2Test`, `PsxGteIsoDedupeTest.StaticSceneCop2ProgramDedupesThreeDrawables`, `MeshReconstructorTest.GtePipelineCubeRoundTripsToUnitCubeMesh`, `PsxPerDrawMatrixTest` (draw-env matrix freeze, E4 offset, reconstruction stats). Real-ISO matrix dedupe: set `QTMESH_PS1_TEST_BIOS` + `QTMESH_PS1_TEST_ISO` (or `QTMESH_PS1_TEST_HOMEBREW_ISO`) and run `PsxGteIsoDedupeTest.RealIsoCaptureHasBoundedMatrixCount`.
 
 ## Open questions
 

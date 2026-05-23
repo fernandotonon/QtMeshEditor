@@ -13,15 +13,7 @@ constexpr int kMaxChainPackets = 512;
 
 QString primDedupeKey(const PrimRecord &prim)
 {
-    QString key = QStringLiteral("%1|%2").arg(static_cast<int>(prim.kind)).arg(prim.vertexCount);
-    for (int v = 0; v < 4; ++v)
-        key += QStringLiteral("|%1,%2").arg(prim.verts[v].x).arg(prim.verts[v].y);
-    key += QStringLiteral("|%1,%2|%3|%4")
-               .arg(prim.tpage)
-               .arg(prim.clut)
-               .arg(prim.semiTrans)
-               .arg(prim.matrixId);
-    return key;
+    return Gp0HookDispatch::primDedupeKey(prim);
 }
 
 } // namespace
@@ -29,7 +21,8 @@ QString primDedupeKey(const PrimRecord &prim)
 PsxGp0ChainWalker::WalkResult PsxGp0ChainWalker::walkChain(const uint8_t *ram, size_t byteSize,
                                                            uint32_t chainBaseByte, EmuHooks *hooks,
                                                            DrawModeRecord &currentMode,
-                                                           int &primCount, QSet<QString> &seenPrimKeys)
+                                                           uint32_t &currentMatrixId, int &primCount,
+                                                           QSet<QString> &seenPrimKeys)
 {
     WalkResult result;
     if (!ram || !hooks || !hooks->isCaptureEnabled() || byteSize < 8)
@@ -57,18 +50,15 @@ PsxGp0ChainWalker::WalkResult PsxGp0ChainWalker::walkChain(const uint8_t *ram, s
         if (step.hasPrim) {
             PrimRecord prim = step.prim;
             if (PsxCaptureFilters::isOnScreenPrim(prim)) {
-                const uint32_t matrixId = hooks->latestMatrixId();
-                if (matrixId != UINT32_MAX)
-                    prim.matrixId = matrixId;
                 const QString key = primDedupeKey(prim);
                 if (!seenPrimKeys.contains(key)) {
                     seenPrimKeys.insert(key);
-                    Gp0HookDispatch::dispatchStep(step, hooks, currentMode, primCount);
+                    Gp0HookDispatch::dispatchStep(step, hooks, currentMode, currentMatrixId, primCount);
                     ++result.primsDispatched;
                 }
             }
         } else {
-            Gp0HookDispatch::dispatchStep(step, hooks, currentMode, primCount);
+            Gp0HookDispatch::dispatchStep(step, hooks, currentMode, currentMatrixId, primCount);
         }
 
         const uint32_t header = words[0];

@@ -271,17 +271,27 @@ bool parseSprite(const uint32_t *words, size_t wordCount, size_t &index, PrimRec
 }
 
 bool parseDrawingEnv(const uint32_t *words, size_t wordCount, size_t &index, DrawModeRecord &out,
-                     QString &error)
+                     bool &hasDrawingOffset, int32_t &drawingOfx, int32_t &drawingOfy, QString &error)
 {
-    if (index + 1 > wordCount) {
+    if (index >= wordCount) {
         error = QStringLiteral("drawing environment: packet too short");
         return false;
     }
 
     const uint32_t cmdWord = words[index++];
+    const uint8_t cmd = psxGp0OpcodeByte(cmdWord);
     out.drawModeBits = cmdWord;
     out.tpage = static_cast<uint16_t>((cmdWord >> 16) & 0xFFFF);
     out.clut = static_cast<uint16_t>((cmdWord >> 16) & 0xFFFF);
+
+    if (cmd == 0xE4 && index < wordCount) {
+        const uint32_t xy = words[index++];
+        const int16_t x = static_cast<int16_t>(xy & 0xFFFF);
+        const int16_t y = static_cast<int16_t>((xy >> 16) & 0xFFFF);
+        drawingOfx = static_cast<int32_t>(x) << 16;
+        drawingOfy = static_cast<int32_t>(y) << 16;
+        hasDrawingOffset = true;
+    }
     return true;
 }
 
@@ -303,7 +313,11 @@ size_t packetWordCount(uint8_t cmd)
         return 8;
     if (cmd >= 0x60 && cmd <= 0x7F)
         return 4;
-    if (cmd >= 0xE1 && cmd <= 0xE6)
+    if (cmd >= 0xE1 && cmd <= 0xE3)
+        return 2;
+    if (cmd == 0xE4 || cmd == 0xE5)
+        return 2;
+    if (cmd == 0xE6)
         return 1;
     if (cmd == 0xA0 || cmd == 0xC0)
         return 3; // minimum header; variable in hardware — tests use fixed uploads
@@ -323,7 +337,8 @@ GpuCommandParser::Gp0Step GpuCommandParser::stepGp0(const uint32_t *words, size_
     const uint8_t cmd = psxGp0OpcodeByte(words[index]);
 
     if (cmd >= 0xE1 && cmd <= 0xE6) {
-        if (!parseDrawingEnv(words, wordCount, index, step.drawMode, step.error))
+        if (!parseDrawingEnv(words, wordCount, index, step.drawMode, step.hasDrawingOffset,
+                             step.drawingOfx, step.drawingOfy, step.error))
             return step;
         step.hasDrawMode = true;
         step.wordsConsumed = index - startIndex;

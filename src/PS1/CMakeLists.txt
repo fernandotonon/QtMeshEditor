@@ -37,6 +37,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGteEngine.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGteInstructionCapture.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxMipsGteRunner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructionStats.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipMeshBuilder.cpp
@@ -63,6 +64,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/CaptureSnapshot.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/CaptureTypes.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GteInverse.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructionStats.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipMeshBuilder.h

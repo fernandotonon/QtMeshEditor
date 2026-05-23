@@ -22,6 +22,7 @@ public:
 
     bool isCaptureEnabled() const override;
     uint32_t latestMatrixId() const override;
+    uint32_t submitMatrixId() const override;
 
     void ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize, bool scanGteRam = true,
                                       bool accumulate = false) override;
@@ -46,6 +47,7 @@ public:
                      const uint16_t *pixels) override;
     void onVramRead(uint16_t x, uint16_t y, uint16_t w, uint16_t h) override;
     void onDrawMode(const DrawModeRecord &mode) override;
+    void onDrawingOffset(int32_t ofx, int32_t ofy) override;
 
 private:
     QString primDedupeKey(const PrimRecord &prim) const;
@@ -54,6 +56,7 @@ private:
     CaptureBuffer *m_buffer = nullptr;
     VramSnapshot *m_vram = nullptr;
     uint32_t m_latestMatrixId = UINT32_MAX;
+    uint32_t m_submitMatrixId = UINT32_MAX;
     bool m_accumulatePass = false;
     bool m_clearPrimsOnFrameBegin = true;
     bool m_ramCaptureActive = false;

@@ -23,8 +23,8 @@ public:
 
     /** Follow one OT / DMA chain starting at @p chainBaseByte (byte address in main RAM). */
     static WalkResult walkChain(const uint8_t *ram, size_t byteSize, uint32_t chainBaseByte,
-                                EmuHooks *hooks, DrawModeRecord &currentMode, int &primCount,
-                                QSet<QString> &seenPrimKeys);
+                                EmuHooks *hooks, DrawModeRecord &currentMode, uint32_t &currentMatrixId,
+                                int &primCount, QSet<QString> &seenPrimKeys);
 };
 
 #endif // PSXGP0CHAINWALKER_H

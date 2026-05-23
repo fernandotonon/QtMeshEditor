@@ -135,6 +135,7 @@ int PsxOrderingTableScanner::captureFromOrderingTables(const uint8_t *ram, size_
 
     const int before = primCount;
     DrawModeRecord currentMode{};
+    uint32_t currentMatrixId = UINT32_MAX;
     int chainsWalked = 0;
 
     for (const OtCandidate &table : tables) {
@@ -149,8 +150,8 @@ int PsxOrderingTableScanner::captureFromOrderingTables(const uint8_t *ram, size_
             if (chainAddr == UINT32_MAX)
                 continue;
             const PsxGp0ChainWalker::WalkResult walked =
-                PsxGp0ChainWalker::walkChain(ram, byteSize, chainAddr, hooks, currentMode, primCount,
-                                             *seenPrimKeys);
+                PsxGp0ChainWalker::walkChain(ram, byteSize, chainAddr, hooks, currentMode,
+                                             currentMatrixId, primCount, *seenPrimKeys);
             if (walked.packetsParsed > 0)
                 ++chainsWalked;
         }

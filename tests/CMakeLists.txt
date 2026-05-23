@@ -154,6 +154,7 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxGteEngine.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxGteInstructionCapture.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxMipsGteRunner.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructionStats.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructor.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshTopologyHash.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipMeshBuilder.cpp
