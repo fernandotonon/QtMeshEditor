@@ -1,5 +1,6 @@
 #include "RipperHooks.h"
 
+#include "GteCapture.h"
 #include "Gp0HookDispatch.h"
 #include "SentryReporter.h"
 #include "VramSnapshot.h"
@@ -70,6 +71,7 @@ void RipperHooks::onFrameBegin()
     if (!isCaptureEnabled() || !m_buffer)
         return;
     m_latestMatrixId = UINT32_MAX;
+    m_submitMatrixId = UINT32_MAX;
     if (m_clearPrimsOnFrameBegin)
         m_buffer->beginFrame();
 }
@@ -133,11 +135,32 @@ void RipperHooks::onDrawMode(const DrawModeRecord &mode)
     if (!isCaptureEnabled() || !m_buffer)
         return;
     m_buffer->addDrawMode(mode);
+    if (m_latestMatrixId != UINT32_MAX)
+        m_submitMatrixId = m_latestMatrixId;
+}
+
+void RipperHooks::onDrawingOffset(int32_t ofx, int32_t ofy)
+{
+    if (!isCaptureEnabled() || !m_buffer || m_submitMatrixId == UINT32_MAX)
+        return;
+    if (m_submitMatrixId >= static_cast<uint32_t>(m_buffer->matrices().size()))
+        return;
+
+    MatrixRecord matrix = m_buffer->matrices()[static_cast<int>(m_submitMatrixId)];
+    matrix.ofx = ofx;
+    matrix.ofy = ofy;
+    matrix.hash = GteCapture::hashMatrix(matrix);
+    m_submitMatrixId = m_buffer->addMatrix(matrix);
 }
 
 uint32_t RipperHooks::latestMatrixId() const
 {
     return m_latestMatrixId;
+}
+
+uint32_t RipperHooks::submitMatrixId() const
+{
+    return m_submitMatrixId;
 }
 
 void RipperHooks::ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize, bool scanGteRam,

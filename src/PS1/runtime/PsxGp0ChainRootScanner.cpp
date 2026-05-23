@@ -106,6 +106,7 @@ int PsxGp0ChainRootScanner::captureFromChainRoots(const uint8_t *ram, size_t byt
               });
 
     DrawModeRecord currentMode{};
+    uint32_t currentMatrixId = UINT32_MAX;
     int before = primCount;
     QVector<ChainRootCandidate> walked;
 
@@ -126,7 +127,7 @@ int PsxGp0ChainRootScanner::captureFromChainRoots(const uint8_t *ram, size_t byt
 
         const PsxGp0ChainWalker::WalkResult result =
             PsxGp0ChainWalker::walkChain(ram, byteSize, root.byteAddr, hooks, currentMode,
-                                         primCount, *seenPrimKeys);
+                                         currentMatrixId, primCount, *seenPrimKeys);
         if (result.packetsParsed > 0)
             walked.append(root);
     }

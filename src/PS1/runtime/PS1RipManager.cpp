@@ -1,5 +1,6 @@
 #include "PS1RipManager.h"
 #include "CaptureSnapshot.h"
+#include "MeshReconstructionStats.h"
 #include "MeshReconstructor.h"
 #include "MeshTopologyHash.h"
 #include "PS1RipMeshBuilder.h"
@@ -89,8 +90,9 @@ void PS1RipManager::initializeWorkerThread()
 
                 const MeshDedupeMode dedupeMode =
                     m_dedupeStrict ? MeshDedupeMode::Strict : MeshDedupeMode::Loose;
+                MeshReconstructionStats reconStats;
                 const ReconstructedCaptureSet captureSet =
-                    MeshReconstructor::reconstructDeduped(snapshot, dedupeMode);
+                    MeshReconstructor::reconstructDeduped(snapshot, dedupeMode, &reconStats);
                 if (captureSet.isEmpty()) {
                     reportError(tr("Capture produced no reconstructable geometry"));
                     return;
@@ -120,10 +122,18 @@ void PS1RipManager::initializeWorkerThread()
                 SentryReporter::addBreadcrumb(
                     QStringLiteral("ps1.rip.mesh.built"),
                     QStringLiteral("%1 verts %2 tris").arg(built.vertexCount).arg(built.triangleCount));
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("ps1.rip.matrix.stats"),
+                    QStringLiteral("gte_inverse=%1%% prims_with_matrix=%2/%3 slab=%4")
+                        .arg(reconStats.gteInversePercent())
+                        .arg(reconStats.primsWithMatrixId)
+                        .arg(reconStats.primsTotal)
+                        .arg(reconStats.slabLike ? QStringLiteral("yes") : QStringLiteral("no")));
                 emit meshBuilt(captureId, captureSet.capturedPartCount, captureSet.uniqueCount(),
                                captureSet.instanceCount(), built.vertexCount, built.triangleCount,
                                snapshot.matrices.size(), snapshot.cameraMatrixId,
-                               snapshot.hasCameraMatrix());
+                               snapshot.hasCameraMatrix(), reconStats.gteInversePercent(),
+                               reconStats.slabLike);
             });
     connect(m_worker, &PS1RipWorker::vramFrameUpdated, this,
             [this](const QVector<uint16_t> &cells, const QImage &preview) {

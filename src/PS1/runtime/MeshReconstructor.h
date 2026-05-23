@@ -2,6 +2,7 @@
 #define MESHRECONSTRUCTOR_H
 
 #include "CaptureSnapshot.h"
+#include "MeshReconstructionStats.h"
 
 #include <QString>
 #include <QVector>
@@ -67,6 +68,9 @@ public:
     static ReconstructedMesh reconstruct(const CaptureSnapshot &snapshot);
     static ReconstructedCaptureSet reconstructDeduped(const CaptureSnapshot &snapshot,
                                                       MeshDedupeMode dedupeMode);
+    static ReconstructedCaptureSet reconstructDeduped(const CaptureSnapshot &snapshot,
+                                                      MeshDedupeMode dedupeMode,
+                                                      MeshReconstructionStats *statsOut);
 };
 
 #endif // MESHRECONSTRUCTOR_H

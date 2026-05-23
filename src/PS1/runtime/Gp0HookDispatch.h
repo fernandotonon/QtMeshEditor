@@ -24,7 +24,7 @@ public:
 
     /** Dispatch one decoded GP0 step to @p hooks (primitives, draw mode, VRAM I/O). */
     static void dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHooks *hooks,
-                             DrawModeRecord &currentMode, int &primCount);
+                             DrawModeRecord &currentMode, uint32_t &currentMatrixId, int &primCount);
 
     /**
      * Submit GP0 packets as the core would (#657 direct-hook path).
@@ -44,7 +44,7 @@ public:
 
     static void captureLinearScan(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
                                   QSet<QString> &seenPrimKeys, DrawModeRecord &currentMode,
-                                  int &primCount);
+                                  uint32_t &currentMatrixId, int &primCount);
 
     /**
      * Frame capture with optional GTE instruction + RAM scan (#418, #419, #657).

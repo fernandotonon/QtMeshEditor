@@ -91,8 +91,19 @@ QString Gp0HookDispatch::primDedupeKey(const PrimRecord &prim)
     return primDedupeKeyImpl(prim);
 }
 
+uint32_t matrixIdForGpuSubmit(EmuHooks *hooks, uint32_t currentMatrixId)
+{
+    if (currentMatrixId != UINT32_MAX)
+        return currentMatrixId;
+    const uint32_t submit = hooks->submitMatrixId();
+    if (submit != UINT32_MAX)
+        return submit;
+    return hooks->latestMatrixId();
+}
+
 void Gp0HookDispatch::dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHooks *hooks,
-                                   DrawModeRecord &currentMode, int &primCount)
+                                   DrawModeRecord &currentMode, uint32_t &currentMatrixId,
+                                   int &primCount)
 {
     if (!hooks || !hooks->isCaptureEnabled())
         return;
@@ -100,7 +111,11 @@ void Gp0HookDispatch::dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHoo
     if (step.hasDrawMode) {
         currentMode = step.drawMode;
         hooks->onDrawMode(currentMode);
+        currentMatrixId = hooks->submitMatrixId();
     }
+
+    if (step.hasDrawingOffset)
+        hooks->onDrawingOffset(step.drawingOfx, step.drawingOfy);
 
     if (step.hasVramWrite && step.vramPixels)
         hooks->onVramWrite(step.vramX, step.vramY, step.vramW, step.vramH, step.vramPixels);
@@ -116,7 +131,7 @@ void Gp0HookDispatch::dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHoo
         return;
 
     applyDrawMode(prim, currentMode);
-    const uint32_t matrixId = hooks->latestMatrixId();
+    const uint32_t matrixId = matrixIdForGpuSubmit(hooks, currentMatrixId);
     if (matrixId != UINT32_MAX)
         prim.matrixId = matrixId;
 
@@ -126,10 +141,11 @@ void Gp0HookDispatch::dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHoo
 
 int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks)
 {
-    if (!words || wordCount < 4 || !hooks || !hooks->isCaptureEnabled())
+    if (!words || wordCount == 0 || !hooks || !hooks->isCaptureEnabled())
         return 0;
 
     DrawModeRecord currentMode{};
+    uint32_t currentMatrixId = UINT32_MAX;
     int primCount = 0;
     size_t offset = 0;
     while (offset < wordCount) {
@@ -145,15 +161,15 @@ int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, Emu
             continue;
         }
 
-        dispatchStep(step, hooks, currentMode, primCount);
+        dispatchStep(step, hooks, currentMode, currentMatrixId, primCount);
         offset += step.wordsConsumed;
     }
     return primCount;
 }
 
 void Gp0HookDispatch::captureLinearScan(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
-                                          QSet<QString> &seen, DrawModeRecord &currentMode,
-                                          int &primCount)
+                                        QSet<QString> &seen, DrawModeRecord &currentMode,
+                                        uint32_t &currentMatrixId, int &primCount)
 {
     if (!ram || byteSize < 16 || !hooks)
         return;
@@ -192,7 +208,7 @@ void Gp0HookDispatch::captureLinearScan(const uint8_t *ram, size_t byteSize, Emu
             }
 
             applyDrawMode(prim, currentMode);
-            const uint32_t matrixId = hooks->latestMatrixId();
+            const uint32_t matrixId = matrixIdForGpuSubmit(hooks, currentMatrixId);
             if (matrixId != UINT32_MAX)
                 prim.matrixId = matrixId;
 
@@ -204,7 +220,7 @@ void Gp0HookDispatch::captureLinearScan(const uint8_t *ram, size_t byteSize, Emu
             seen.insert(key);
         }
 
-        dispatchStep(step, hooks, currentMode, primCount);
+        dispatchStep(step, hooks, currentMode, currentMatrixId, primCount);
         offset += step.wordsConsumed;
     }
 }
@@ -219,6 +235,7 @@ Gp0CaptureStats Gp0HookDispatch::captureFromSystemRam(const uint8_t *ram, size_t
     QSet<QString> localSeen;
     QSet<QString> &seen = seenPrimKeys ? *seenPrimKeys : localSeen;
     DrawModeRecord currentMode{};
+    uint32_t currentMatrixId = UINT32_MAX;
     int primCount = hooks->capturePrimCount();
 
     const int otBefore = primCount;
@@ -229,7 +246,7 @@ Gp0CaptureStats Gp0HookDispatch::captureFromSystemRam(const uint8_t *ram, size_t
         PsxGp0ChainRootScanner::captureFromChainRoots(ram, byteSize, hooks, &seen, primCount);
 
     const int linearBefore = primCount;
-    captureLinearScan(ram, byteSize, hooks, seen, currentMode, primCount);
+    captureLinearScan(ram, byteSize, hooks, seen, currentMode, currentMatrixId, primCount);
     stats.ramLinearPrims = primCount - linearBefore;
 
     stats.totalPrims = primCount;
@@ -246,6 +263,7 @@ Gp0CaptureStats Gp0HookDispatch::captureFromSystemRamLegacy(const uint8_t *ram, 
 
     QSet<QString> seen;
     DrawModeRecord currentMode{};
+    uint32_t currentMatrixId = UINT32_MAX;
     int primCount = 0;
 
     const int otBefore = primCount;
@@ -258,7 +276,7 @@ Gp0CaptureStats Gp0HookDispatch::captureFromSystemRamLegacy(const uint8_t *ram, 
     }
 
     const int linearBefore = primCount;
-    captureLinearScan(ram, byteSize, hooks, seen, currentMode, primCount);
+    captureLinearScan(ram, byteSize, hooks, seen, currentMode, currentMatrixId, primCount);
     stats.ramLinearPrims = primCount - linearBefore;
     stats.totalPrims = primCount;
     stats.primarySource =

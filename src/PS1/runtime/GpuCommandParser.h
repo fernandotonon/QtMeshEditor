@@ -30,6 +30,9 @@ public:
         PrimRecord prim{};
         bool hasDrawMode = false;
         DrawModeRecord drawMode{};
+        bool hasDrawingOffset = false;
+        int32_t drawingOfx = 0;
+        int32_t drawingOfy = 0;
         bool hasVramWrite = false;
         uint16_t vramX = 0;
         uint16_t vramY = 0;

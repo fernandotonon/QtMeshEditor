@@ -374,13 +374,17 @@ void PS1RipSessionWindow::onCaptureFrame()
 
 void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes,
                                     int instanceCount, int vertexCount, int triangleCount,
-                                    int matrixCount, uint32_t cameraMatrixId, bool hasCameraMatrix)
+                                    int matrixCount, uint32_t cameraMatrixId, bool hasCameraMatrix,
+                                    int gteInversePercent, bool slabLike)
 {
     QString cameraText = hasCameraMatrix
                              ? tr("camera matrix #%1").arg(cameraMatrixId)
                              : tr("camera matrix unknown");
+    QString matrixStats = tr("GTE inverse %1%").arg(gteInversePercent);
+    if (slabLike)
+        matrixStats += tr(" — slab-like bounds (check matrix association)");
     m_statusLabel->setText(
-        tr("Mesh %1 — captured %2 / unique %3 / instances %4 (%5 verts, %6 tris, %7 GTE matrices, %8)")
+        tr("Mesh %1 — captured %2 / unique %3 / instances %4 (%5 verts, %6 tris, %7 GTE matrices, %8, %9)")
             .arg(captureId)
             .arg(capturedParts)
             .arg(uniqueMeshes)
@@ -388,7 +392,8 @@ void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedPart
             .arg(vertexCount)
             .arg(triangleCount)
             .arg(matrixCount)
-            .arg(cameraText));
+            .arg(cameraText)
+            .arg(matrixStats));
 }
 
 void PS1RipSessionWindow::onVramDumped(const QString &captureId, const QString &pngPath,
