@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 28
+OPENVAT_BUILD = 29
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -402,18 +402,33 @@ def verify_imported_uv_channels(mesh):
                                        "(" + str(lod) + ") failed: "
                                        + str(e))
                     continue
-                cur = bool(bs.use_full_precision_u_vs)
-                if cur:
-                    unreal.log("verify_uv: LOD " + str(lod) + " "
-                               "bUseFullPrecisionUVs already True ✓")
-                else:
+                changed = False
+                if not bool(bs.use_full_precision_u_vs):
                     bs.use_full_precision_u_vs = True
+                    changed = True
+                # Mixamo provides clean normals and tangents — letting
+                # UE recompute them at build time can introduce subtle
+                # edge cases at UV-seam-split verts that show up as
+                # missing/flickering small submeshes on rotated head
+                # frames. Disable recompute so the imported attributes
+                # pass straight through.
+                if hasattr(bs, "recompute_normals") and bs.recompute_normals:
+                    bs.recompute_normals = False
+                    changed = True
+                if hasattr(bs, "recompute_tangents") and bs.recompute_tangents:
+                    bs.recompute_tangents = False
+                    changed = True
+                if not changed:
+                    unreal.log("verify_uv: LOD " + str(lod) + " "
+                               "BuildSettings already optimal ✓")
+                else:
                     try:
                         sme.set_lod_build_settings(mesh, lod, bs)
                         rebuilt = True
                         unreal.log("verify_uv: forced LOD " + str(lod)
-                                   + " bUseFullPrecisionUVs=True "
-                                   "(was off).")
+                                   + " bUseFullPrecisionUVs=True, "
+                                   "recompute_normals=False, "
+                                   "recompute_tangents=False.")
                     except Exception as e:
                         unreal.log_warning("verify_uv: set failed: "
                                            + str(e))
@@ -1115,8 +1130,8 @@ def spawn_dancer_in_level():
         # T-pose. 3× is enough headroom for a Mixamo dance without
         # being so large it hurts large-scene culling perf.
         try:
-            sm_comp.set_editor_property("bounds_scale", 3.0)
-            unreal.log("StaticMeshComponent.bounds_scale = 3.0 "
+            sm_comp.set_editor_property("bounds_scale", 10.0)
+            unreal.log("StaticMeshComponent.bounds_scale = 10.0 "
                        "(prevents WPO-displaced submeshes from being "
                        "frustum-culled mid-animation).")
         except Exception as e:
