@@ -123,18 +123,18 @@ QVector<OtCandidate> findOrderingTableCandidates(const uint8_t *ram, size_t byte
 } // namespace
 
 int PsxOrderingTableScanner::captureFromOrderingTables(const uint8_t *ram, size_t byteSize,
-                                                       EmuHooks *hooks)
+                                                       EmuHooks *hooks, QSet<QString> *seenPrimKeys,
+                                                       int &primCount)
 {
-    if (!ram || byteSize < 256 || !hooks || !hooks->isCaptureEnabled())
+    if (!ram || byteSize < 256 || !hooks || !hooks->isCaptureEnabled() || !seenPrimKeys)
         return 0;
 
     const QVector<OtCandidate> tables = findOrderingTableCandidates(ram, byteSize);
     if (tables.isEmpty())
         return 0;
 
-    QSet<QString> seenPrimKeys;
+    const int before = primCount;
     DrawModeRecord currentMode{};
-    int primCount = 0;
     int chainsWalked = 0;
 
     for (const OtCandidate &table : tables) {
@@ -149,12 +149,12 @@ int PsxOrderingTableScanner::captureFromOrderingTables(const uint8_t *ram, size_
             if (chainAddr == UINT32_MAX)
                 continue;
             const PsxGp0ChainWalker::WalkResult walked =
-                PsxGp0ChainWalker::walkChain(ram, byteSize, chainAddr, hooks, currentMode,
-                                             primCount, seenPrimKeys);
+                PsxGp0ChainWalker::walkChain(ram, byteSize, chainAddr, hooks, currentMode, primCount,
+                                             *seenPrimKeys);
             if (walked.packetsParsed > 0)
                 ++chainsWalked;
         }
     }
 
-    return primCount;
+    return primCount - before;
 }

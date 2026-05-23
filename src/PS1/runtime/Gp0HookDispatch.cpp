@@ -1,7 +1,10 @@
 #include "Gp0HookDispatch.h"
 
+#include <QtGlobal>
+
 #include "EmuHooks.h"
 #include "PsxCaptureFilters.h"
+#include "PsxGp0ChainRootScanner.h"
 #include "PsxGp0Opcode.h"
 #include "PsxGteInstructionCapture.h"
 #include "PsxGteRamScanner.h"
@@ -46,7 +49,29 @@ void applyDrawMode(PrimRecord &prim, const DrawModeRecord &mode)
     }
 }
 
-QString primDedupeKey(const PrimRecord &prim)
+Gp0CaptureSource pickPrimarySource(const Gp0CaptureStats &stats)
+{
+    int best = 0;
+    Gp0CaptureSource source = Gp0CaptureSource::None;
+    if (stats.directHookPrims > best) {
+        best = stats.directHookPrims;
+        source = Gp0CaptureSource::DirectHook;
+    }
+    if (stats.ramOtPrims > best) {
+        best = stats.ramOtPrims;
+        source = Gp0CaptureSource::RamOrderingTable;
+    }
+    if (stats.ramChainRootPrims > best) {
+        best = stats.ramChainRootPrims;
+        source = Gp0CaptureSource::RamChainRoot;
+    }
+    if (stats.ramLinearPrims > best) {
+        source = Gp0CaptureSource::RamLinear;
+    }
+    return source;
+}
+
+QString primDedupeKeyImpl(const PrimRecord &prim)
 {
     QString key = QStringLiteral("%1|%2").arg(static_cast<int>(prim.kind)).arg(prim.vertexCount);
     for (int v = 0; v < 4; ++v)
@@ -60,6 +85,11 @@ QString primDedupeKey(const PrimRecord &prim)
 }
 
 } // namespace
+
+QString Gp0HookDispatch::primDedupeKey(const PrimRecord &prim)
+{
+    return primDedupeKeyImpl(prim);
+}
 
 void Gp0HookDispatch::dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHooks *hooks,
                                    DrawModeRecord &currentMode, int &primCount)
@@ -94,8 +124,36 @@ void Gp0HookDispatch::dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHoo
     ++primCount;
 }
 
+int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks)
+{
+    if (!words || wordCount < 4 || !hooks || !hooks->isCaptureEnabled())
+        return 0;
+
+    DrawModeRecord currentMode{};
+    int primCount = 0;
+    size_t offset = 0;
+    while (offset < wordCount) {
+        if (primCount >= kMaxPrimsPerFrame)
+            break;
+
+        const size_t remaining = wordCount - offset;
+        const GpuCommandParser::Gp0Step step = GpuCommandParser::stepGp0(words + offset, remaining);
+        if (step.wordsConsumed == 0)
+            break;
+        if (!step.error.isEmpty()) {
+            offset += 1;
+            continue;
+        }
+
+        dispatchStep(step, hooks, currentMode, primCount);
+        offset += step.wordsConsumed;
+    }
+    return primCount;
+}
+
 void Gp0HookDispatch::captureLinearScan(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
-                                      QSet<QString> &seen, DrawModeRecord &currentMode, int &primCount)
+                                          QSet<QString> &seen, DrawModeRecord &currentMode,
+                                          int &primCount)
 {
     if (!ram || byteSize < 16 || !hooks)
         return;
@@ -138,7 +196,7 @@ void Gp0HookDispatch::captureLinearScan(const uint8_t *ram, size_t byteSize, Emu
             if (matrixId != UINT32_MAX)
                 prim.matrixId = matrixId;
 
-            const QString key = primDedupeKey(prim);
+            const QString key = primDedupeKeyImpl(prim);
             if (seen.contains(key)) {
                 offset += step.wordsConsumed;
                 continue;
@@ -151,20 +209,61 @@ void Gp0HookDispatch::captureLinearScan(const uint8_t *ram, size_t byteSize, Emu
     }
 }
 
-void Gp0HookDispatch::captureFromSystemRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks)
+Gp0CaptureStats Gp0HookDispatch::captureFromSystemRam(const uint8_t *ram, size_t byteSize,
+                                                      EmuHooks *hooks, QSet<QString> *seenPrimKeys)
 {
+    Gp0CaptureStats stats;
     if (!ram || byteSize < 16 || !hooks || !hooks->isCaptureEnabled())
-        return;
+        return stats;
+
+    QSet<QString> localSeen;
+    QSet<QString> &seen = seenPrimKeys ? *seenPrimKeys : localSeen;
+    DrawModeRecord currentMode{};
+    int primCount = hooks->capturePrimCount();
+
+    const int otBefore = primCount;
+    PsxOrderingTableScanner::captureFromOrderingTables(ram, byteSize, hooks, &seen, primCount);
+    stats.ramOtPrims = primCount - otBefore;
+
+    stats.ramChainRootPrims =
+        PsxGp0ChainRootScanner::captureFromChainRoots(ram, byteSize, hooks, &seen, primCount);
+
+    const int linearBefore = primCount;
+    captureLinearScan(ram, byteSize, hooks, seen, currentMode, primCount);
+    stats.ramLinearPrims = primCount - linearBefore;
+
+    stats.totalPrims = primCount;
+    stats.primarySource = pickPrimarySource(stats);
+    return stats;
+}
+
+Gp0CaptureStats Gp0HookDispatch::captureFromSystemRamLegacy(const uint8_t *ram, size_t byteSize,
+                                                            EmuHooks *hooks)
+{
+    Gp0CaptureStats stats;
+    if (!ram || byteSize < 16 || !hooks || !hooks->isCaptureEnabled())
+        return stats;
 
     QSet<QString> seen;
     DrawModeRecord currentMode{};
     int primCount = 0;
 
-    const int otPrims = PsxOrderingTableScanner::captureFromOrderingTables(ram, byteSize, hooks);
-    if (otPrims > 0)
-        return;
+    const int otBefore = primCount;
+    PsxOrderingTableScanner::captureFromOrderingTables(ram, byteSize, hooks, &seen, primCount);
+    stats.ramOtPrims = primCount - otBefore;
+    if (stats.ramOtPrims > 0) {
+        stats.totalPrims = primCount;
+        stats.primarySource = Gp0CaptureSource::RamOrderingTable;
+        return stats;
+    }
 
+    const int linearBefore = primCount;
     captureLinearScan(ram, byteSize, hooks, seen, currentMode, primCount);
+    stats.ramLinearPrims = primCount - linearBefore;
+    stats.totalPrims = primCount;
+    stats.primarySource =
+        stats.ramLinearPrims > 0 ? Gp0CaptureSource::RamLinear : Gp0CaptureSource::None;
+    return stats;
 }
 
 namespace {
@@ -178,20 +277,35 @@ size_t clampPs1RamSize(size_t byteSize)
 
 } // namespace
 
-void Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, size_t byteSize,
-                                                EmuHooks *hooks, bool scanGteRam)
+Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, size_t byteSize,
+                                                           EmuHooks *hooks, bool scanGteRam,
+                                                           bool accumulate)
 {
+    Gp0CaptureStats stats;
     if (!hooks || !hooks->isCaptureEnabled() || !ram || byteSize < 16)
-        return;
+        return stats;
 
     const size_t scanSize = clampPs1RamSize(byteSize);
+    const bool liveFrame = accumulate;
 
+    hooks->beginGpuCapturePass(accumulate);
     hooks->onFrameBegin();
     if (scanGteRam) {
         PsxGteInstructionCapture::captureFromSystemRam(ram, scanSize, hooks);
         PsxGteRamScanner::captureFromSystemRam(ram, scanSize, hooks);
     }
     ensureCaptureProjectionMatrix(hooks);
-    captureFromSystemRam(ram, scanSize, hooks);
+
+    QSet<QString> *seen = hooks->livePrimDedupeKeys();
+    if (qEnvironmentVariableIsSet("QTMESH_PS1_GP0_RAM_LEGACY")
+        && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_RAM_LEGACY") != 0) {
+        stats = captureFromSystemRamLegacy(ram, scanSize, hooks);
+    } else {
+        stats = captureFromSystemRam(ram, scanSize, hooks, seen);
+    }
+    stats.liveFrame = liveFrame;
+
     hooks->onFrameEnd();
+    hooks->endGpuCapturePass(stats);
+    return stats;
 }

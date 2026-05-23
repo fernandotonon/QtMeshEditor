@@ -8,6 +8,8 @@
 #include "PS1/runtime/PsxOrderingTableScanner.h"
 #include "PS1/runtime/RipperHooks.h"
 
+#include <QSet>
+
 #include <atomic>
 #include <cstring>
 
@@ -68,7 +70,10 @@ TEST(PsxOrderingTableScannerTest, CapturesPrimitivesFromSyntheticOrderingTable)
     hooks.setArmedFlag(&armed);
     hooks.setBuffer(&buffer);
 
-    const int prims = PsxOrderingTableScanner::captureFromOrderingTables(ram, sizeof(ram), &hooks);
+    QSet<QString> seen;
+    int primCount = 0;
+    const int prims =
+        PsxOrderingTableScanner::captureFromOrderingTables(ram, sizeof(ram), &hooks, &seen, primCount);
     EXPECT_GE(prims, 2);
     EXPECT_GE(buffer.prims().size(), 2);
 
@@ -119,7 +124,10 @@ TEST(PsxOrderingTableScannerTest, LinkedChainCapture)
     hooks.setArmedFlag(&armed);
     hooks.setBuffer(&buffer);
 
-    const int prims = PsxOrderingTableScanner::captureFromOrderingTables(ram, sizeof(ram), &hooks);
+    QSet<QString> seen;
+    int primCount = 0;
+    const int prims =
+        PsxOrderingTableScanner::captureFromOrderingTables(ram, sizeof(ram), &hooks, &seen, primCount);
     EXPECT_GE(prims, 2);
 }
 
@@ -147,7 +155,10 @@ TEST(PsxOrderingTableScannerTest, AbsoluteOtEntryPointers)
     hooks.setArmedFlag(&armed);
     hooks.setBuffer(&buffer);
 
-    const int prims = PsxOrderingTableScanner::captureFromOrderingTables(ram, sizeof(ram), &hooks);
+    QSet<QString> seen;
+    int primCount = 0;
+    const int prims =
+        PsxOrderingTableScanner::captureFromOrderingTables(ram, sizeof(ram), &hooks, &seen, primCount);
     EXPECT_GE(prims, 1);
     ASSERT_GE(buffer.prims().size(), 1);
     EXPECT_EQ(buffer.prims()[0].kind, PrimKind::MonoTri);
