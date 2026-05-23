@@ -5821,9 +5821,22 @@ bool emitGltfUv2(const QString& gltfPath,
         float vMin = std::numeric_limits<float>::infinity();
         float vMax = -std::numeric_limits<float>::infinity();
         for (size_t i = a; i < b; ++i) {
+            // i = Ogre vertex index = bake column index (the bake walks
+            // Ogre's vertex buffer in order, so column == Ogre index).
+            // gltfIdx = glTF buffer position of the SAME vertex after
+            // Assimp's JoinIdenticalVertices reorder.
             const uint32_t gltfIdx = permutation[i];
-            const uint32_t col = gltfIdx % static_cast<uint32_t>(texWidth);
-            const uint32_t row = gltfIdx / static_cast<uint32_t>(texWidth);
+            const uint32_t ogreIdx = static_cast<uint32_t>(i);
+            // The bake column we want this glTF vertex to read is the
+            // ORIGINAL Ogre column `i`, not `gltfIdx`. Earlier code
+            // mistakenly used `gltfIdx`, which on meshes with non-
+            // identity Assimp permutations (e.g. Mixamo Hip Hop Dancing)
+            // meant every vertex read animation data from a
+            // *different* vertex's column — body parts visibly flew
+            // apart on specific frames where the wrong-source motion
+            // was large.
+            const uint32_t col = ogreIdx % static_cast<uint32_t>(texWidth);
+            const uint32_t row = ogreIdx / static_cast<uint32_t>(texWidth);
             // The destination is glTF index gltfIdx, which is offset
             // (gltfIdx - a) within this primitive.
             const size_t localDst = static_cast<size_t>(gltfIdx) - a;

@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 37
+OPENVAT_BUILD = 38
 
 
 # ────────────────────────────────────────────────────────────────────
