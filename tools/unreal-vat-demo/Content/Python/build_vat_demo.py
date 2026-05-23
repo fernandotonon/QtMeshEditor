@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 38
+OPENVAT_BUILD = 39
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -450,20 +450,18 @@ def verify_imported_uv_channels(mesh):
                         unreal.log_warning("verify_uv: set failed: "
                                            + str(e))
             if rebuilt:
+                # UStaticMeshEditorSubsystem::SetLodBuildSettings
+                # internally calls StaticMesh->PostEditChange() (verified
+                # in 5.7's StaticMeshEditorSubsystem.cpp:586), so the
+                # rebuild has already fired by the time we get here.
+                # We just need to save the modified asset.
                 try:
-                    # UStaticMesh has no `build()` method exposed in
-                    # UE 5.7 Python; the canonical way to trigger a
-                    # rebuild after editing BuildSettings is to call
-                    # post_edit_change(), which fires
-                    # PostEditChangeProperty and re-cooks the runtime
-                    # vertex/index buffers from the source data.
-                    mesh.post_edit_change()
                     unreal.EditorAssetLibrary.save_loaded_asset(mesh)
-                    unreal.log("verify_uv: StaticMesh rebuilt via "
-                               "post_edit_change() with full-precision UVs.")
+                    unreal.log("verify_uv: StaticMesh saved with updated "
+                               "BuildSettings (rebuild triggered inside "
+                               "SetLodBuildSettings).")
                 except Exception as e:
-                    unreal.log_warning("verify_uv: rebuild failed: "
-                                       + str(e))
+                    unreal.log_warning("verify_uv: save failed: " + str(e))
         except Exception as e:
             unreal.log_warning("build-settings dump failed: " + str(e))
 
