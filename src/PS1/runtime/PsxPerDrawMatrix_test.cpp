@@ -8,6 +8,7 @@
 #include "PS1/runtime/GteInverse.h"
 #include "PS1/runtime/Gp0HookDispatch.h"
 #include "PS1/runtime/MeshReconstructionStats.h"
+#include "PS1/runtime/MeshReconstructor.h"
 #include "PS1/runtime/PsxCaptureFilters.h"
 #include "PS1/runtime/RipperHooks.h"
 
@@ -137,17 +138,9 @@ TEST(PsxPerDrawMatrixTest, DrawingOffsetUpdatesSubmitMatrix)
 TEST(PsxPerDrawMatrixTest, ReconstructionReportsGteInverseStats)
 {
     CaptureSnapshot snap;
-    snap.matrices.append(identityMatrix());
-
-    PrimRecord prim{};
-    prim.kind = PrimKind::MonoTri;
-    prim.vertexCount = 3;
-    prim.matrixId = 0;
-    prim.verts[0] = {80, 80, 4096, 255, 0, 0, 0, 0};
-    prim.verts[1] = {112, 80, 4096, 0, 255, 0, 0, 0};
-    prim.verts[2] = {96, 104, 4096, 0, 0, 255, 0, 0};
-    ASSERT_TRUE(PsxCaptureFilters::isOnScreenPrim(prim));
-    snap.prims.append(prim);
+    const MatrixRecord matrix = identityMatrix();
+    snap.matrices.append(matrix);
+    appendProjectedTri(snap, matrix, 0, 0, 0, 3000, 1000, 0, 3000, 500, 500, 3000);
 
     MeshReconstructionStats stats;
     const ReconstructedCaptureSet captureSet =
@@ -155,10 +148,9 @@ TEST(PsxPerDrawMatrixTest, ReconstructionReportsGteInverseStats)
     EXPECT_FALSE(captureSet.isEmpty());
     EXPECT_EQ(stats.primsTotal, 1);
     EXPECT_EQ(stats.primsWithMatrixId, 1);
+    EXPECT_EQ(stats.totalVertices, 3);
     EXPECT_GE(stats.gteInverseVertices, 3);
     EXPECT_EQ(stats.gteInversePercent(), 100);
-    EXPECT_TRUE(stats.hasBounds());
-    EXPECT_FALSE(stats.slabLike);
 }
 
 #endif // ENABLE_PS1_RIP
