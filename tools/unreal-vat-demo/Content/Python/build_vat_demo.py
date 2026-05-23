@@ -48,7 +48,7 @@ RUMBA_FS_DIR = os.path.join(os.path.dirname(__file__), "..", "Rumba")
 # under `OpenVATBuild` when the material is created; init_unreal
 # compares the tag against this constant and forces a rebuild on
 # mismatch.
-OPENVAT_BUILD = 32
+OPENVAT_BUILD = 33
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -362,16 +362,18 @@ def verify_imported_uv_channels(mesh):
     Eyes0-1) — they read each other's animation data, producing the
     "head-only specific-frame distortion" we kept chasing."""
     if not mesh:
-        return
+        return False
     if not isinstance(mesh, unreal.StaticMesh):
         if isinstance(mesh, unreal.SkeletalMesh):
             unreal.log_error(
                 "*** verify_uv: imported as SkeletalMesh — the "
-                "static-mesh override failed.")
+                "static-mesh override failed; UV2 column indices will "
+                "be renormalised per render section and the demo will "
+                "render with scrambled head geometry.")
         else:
             unreal.log_warning("verify_uv: imported mesh is "
                                + str(type(mesh)) + " (unexpected).")
-        return
+        return False
 
     unreal.log("verify_uv: imported as StaticMesh ✓.")
 
@@ -473,10 +475,13 @@ def verify_imported_uv_channels(mesh):
                     info = mesh.get_section_info(lod, s)
                     unreal.log("    section " + str(s) +
                                ": material_slot=" + str(info.material_index))
-                except Exception:
-                    pass
+                except Exception as e:
+                    unreal.log_warning("verify_uv: get_section_info("
+                                       + str(lod) + "," + str(s)
+                                       + ") raised: " + str(e))
     except Exception as e:
         unreal.log_warning("section dump failed: " + str(e))
+    return True
 
 
 def import_bake_assets():
@@ -1062,19 +1067,27 @@ def spawn_dancer_in_level():
                + " (" + str(mesh) + ") + M_OpenVAT (" + str(mat) + ")")
 
     # Delete any pre-existing OpenVAT_Dancer so reruns don't pile up.
+    # CodeRabbit #1070: if get_all_level_actors() raises and we fall
+    # back to [], the cleanup loop silently skips and a rerun stacks
+    # a second OpenVAT_Dancer next to the old one — the opposite of
+    # the script's idempotent contract. Return None instead so main()
+    # surfaces a partial-failure banner.
     removed = 0
     try:
         all_actors = actor_lib.get_all_level_actors()
     except Exception as e:
-        unreal.log_warning("get_all_level_actors raised: " + str(e))
-        all_actors = []
+        unreal.log_error("spawn_dancer_in_level: get_all_level_actors "
+                         "raised: " + str(e) + " — aborting to avoid "
+                         "stacking duplicate actors on rerun.")
+        return None
     for a in all_actors:
         try:
             if a and a.get_actor_label() == "OpenVAT_Dancer":
                 actor_lib.destroy_actor(a)
                 removed += 1
-        except Exception:
-            pass
+        except Exception as e:
+            unreal.log_warning("Failed to delete existing "
+                               "OpenVAT_Dancer: " + str(e))
     if removed:
         unreal.log("spawn_dancer_in_level: removed %d previous "
                    "OpenVAT_Dancer instance(s)." % removed)
@@ -1221,16 +1234,30 @@ def main():
     unreal.log("  Mesh            = %s" % mesh)
     unreal.log("  T_OpenVAT_Pos   = %s" % pos)
     unreal.log("  T_Boss_Diffuse  = %s" % diff)
-    if mesh is None:
+    # CodeRabbit #525: don't only abort on missing mesh — a missing
+    # position texture means `pos_tex` would render unbound and the
+    # dancer would stand in bind pose forever, with no obvious
+    # diagnostic from the success banner. Treat ANY missing import
+    # as a hard stop.
+    missing = []
+    if mesh is None: missing.append("mesh under /Game/Rumba/")
+    if pos  is None: missing.append("T_OpenVAT_Pos")
+    if diff is None: missing.append("T_Boss_Diffuse")
+    if missing:
         unreal.log_error(
-            "=== Bootstrap STOPPED: no mesh found under "
-            "/Game/Rumba/. Drag Content/Rumba/source.gltf into the "
-            "Content Browser manually (choose Static Mesh in the "
-            "import dialog) and re-run this script. ===")
+            "=== Bootstrap STOPPED: missing imported asset(s): "
+            + ", ".join(missing) + ". Re-import the missing bake "
+            "outputs under /Game/Rumba (drag source.gltf in as a "
+            "Static Mesh if needed) and re-run this script. ===")
         return
 
     unreal.log("step 2/5: verifying glTF + imported mesh carry UV2")
-    verify_imported_uv_channels(mesh)
+    if not verify_imported_uv_channels(mesh):
+        unreal.log_error(
+            "=== Bootstrap STOPPED: mesh imported as the wrong asset "
+            "type. Delete /Game/Rumba/ in the Content Browser and "
+            "re-run so the force-static-mesh import path triggers. ===")
+        return
     if not verify_gltf_has_uv2():
         unreal.log_warning(
             "=== Bootstrap STOPPED: source.gltf is missing TEXCOORD_1. "

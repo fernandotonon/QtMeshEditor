@@ -55,18 +55,26 @@ def _should_run_bootstrap():
     # bootstrap clearly failed mid-flight (e.g. Interchange import
     # never produced a .uasset). Rebuild rather than skipping —
     # otherwise the actor in the level renders nothing on disk.
-    el = unreal.EditorAssetLibrary
-    mesh_paths = (
-        "/Game/Rumba/SM_Rumba",
-        "/Game/Rumba/SK_Rumba",
-        "/Game/Rumba/source/StaticMeshes/SM_Rumba",
-        "/Game/Rumba/source/StaticMeshes/Rumba_Dancing_mesh",
-        "/Game/Rumba/source/SkeletalMeshes/SK_Rumba",
-        "/Game/Rumba/source/SkeletalMeshes/SM_Rumba",
-        "/Game/Rumba/source/SkeletalMeshes/Rumba_Dancing_mesh",
-        "/Game/Rumba/Rumba_Dancing_mesh",
-    )
-    if not any(el.does_asset_exist(p) for p in mesh_paths):
+    # CodeRabbit #9: walk the AssetRegistry under /Game/Rumba/
+    # recursively rather than checking a hand-maintained path list.
+    # Interchange's `destination_name` is advisory; the mesh has been
+    # observed to land at six different paths across UE 5.3..5.7. A
+    # recursive sweep matches the same surface area `find_imported_mesh`
+    # uses inside build_vat_demo, so init_unreal's "skip if mesh
+    # present" decision stays in sync with the bootstrap's "found at"
+    # decision and reruns don't trigger on a successful but
+    # non-canonically-named import.
+    try:
+        ar = unreal.AssetRegistryHelpers.get_asset_registry()
+        assets = ar.get_assets_by_path("/Game/Rumba", recursive=True)
+        has_mesh = any(
+            str(ad.get_class().get_name()) in ("StaticMesh", "SkeletalMesh")
+            for ad in assets)
+    except Exception as e:
+        unreal.log_warning("init_unreal: AssetRegistry sweep failed ("
+                           + str(e) + "), assuming mesh missing.")
+        has_mesh = False
+    if not has_mesh:
         unreal.log("init_unreal: no Rumba mesh on disk under /Game/Rumba/ "
                    "— rebuilding to re-import the glTF.")
         return True
