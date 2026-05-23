@@ -188,11 +188,11 @@ void PS1RipWorker::runFrameTick()
 void PS1RipWorker::setCaptureArmed(bool armed)
 {
     m_captureArmed.store(armed, std::memory_order_release);
-    // Do not clear while emulation is running — runFrame capture may be writing the buffer.
-    if (!armed) {
-        m_captureBuffer->clear();
+    if (armed) {
         m_ripperHooks->resetLiveCaptureState();
-    } else if (!m_running) {
+        if (!m_running)
+            m_captureBuffer->clear();
+    } else {
         m_captureBuffer->clear();
         m_ripperHooks->resetLiveCaptureState();
     }

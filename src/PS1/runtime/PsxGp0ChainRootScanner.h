@@ -2,6 +2,7 @@
 #define PSXGP0CHAINROOTSCANNER_H
 
 #include <QSet>
+#include <QString>
 
 #include <cstddef>
 #include <cstdint>

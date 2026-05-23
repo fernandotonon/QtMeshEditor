@@ -286,7 +286,7 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
         return stats;
 
     const size_t scanSize = clampPs1RamSize(byteSize);
-    stats.liveFrame = accumulate;
+    const bool liveFrame = accumulate;
 
     hooks->beginGpuCapturePass(accumulate);
     hooks->onFrameBegin();
@@ -303,6 +303,7 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     } else {
         stats = captureFromSystemRam(ram, scanSize, hooks, seen);
     }
+    stats.liveFrame = liveFrame;
 
     hooks->onFrameEnd();
     hooks->endGpuCapturePass(stats);
