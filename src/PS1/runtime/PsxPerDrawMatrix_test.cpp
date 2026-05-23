@@ -136,15 +136,18 @@ TEST(PsxPerDrawMatrixTest, DrawingOffsetUpdatesSubmitMatrix)
 
 TEST(PsxPerDrawMatrixTest, ReconstructionReportsGteInverseStats)
 {
-    MatrixRecord matrix = identityMatrix();
     CaptureSnapshot snap;
-    snap.matrices.append(matrix);
+    snap.matrices.append(identityMatrix());
 
-    constexpr int kModelX = 1000;
-    constexpr int kModelY = -2000;
-    constexpr int kModelZ = 3000;
-    appendProjectedTri(snap, matrix, 0, -kModelX, kModelY, kModelZ, kModelX, kModelY, kModelZ,
-                       kModelX, -kModelY, kModelZ);
+    PrimRecord prim{};
+    prim.kind = PrimKind::MonoTri;
+    prim.vertexCount = 3;
+    prim.matrixId = 0;
+    prim.verts[0] = {80, 80, 4096, 255, 0, 0, 0, 0};
+    prim.verts[1] = {112, 80, 4096, 0, 255, 0, 0, 0};
+    prim.verts[2] = {96, 104, 4096, 0, 0, 255, 0, 0};
+    ASSERT_TRUE(PsxCaptureFilters::isOnScreenPrim(prim));
+    snap.prims.append(prim);
 
     MeshReconstructionStats stats;
     const ReconstructedCaptureSet captureSet =
@@ -153,7 +156,7 @@ TEST(PsxPerDrawMatrixTest, ReconstructionReportsGteInverseStats)
     EXPECT_EQ(stats.primsTotal, 1);
     EXPECT_EQ(stats.primsWithMatrixId, 1);
     EXPECT_GE(stats.gteInverseVertices, 3);
-    EXPECT_GE(stats.gteInversePercent(), 50);
+    EXPECT_EQ(stats.gteInversePercent(), 100);
     EXPECT_TRUE(stats.hasBounds());
     EXPECT_FALSE(stats.slabLike);
 }
