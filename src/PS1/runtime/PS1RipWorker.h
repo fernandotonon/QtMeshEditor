@@ -36,6 +36,7 @@ public:
 
 public slots:
     void configureSession(const QString &biosPath, const QString &isoPath);
+    void setGoldenSceneId(const QString &sceneId);
     void startEmulation();
     void cancelPendingStart();
     void stopEmulation();
@@ -69,6 +70,7 @@ private:
 
     QString m_biosPath;
     QString m_isoPath;
+    QString m_goldenSceneId;
     std::unique_ptr<EmuCore> m_core;
     QTimer *m_frameTimer = nullptr;
     bool m_running = false;

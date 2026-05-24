@@ -6,7 +6,7 @@
 
 ## PS1 runtime rip (if applicable)
 
-- [ ] Read `docs/ps1_rip/golden_captures.md` when changing capture / reconstruction / GP0 / GTE paths
+- [ ] Read `src/PS1/golden_captures.md` when changing capture / reconstruction / GP0 / GTE paths
 - [ ] `MeshReconstructorGoldenTest` passes locally (no ISO required)
 - [ ] If claiming a golden-scene fix: note scene ID (`homebrew-static`, `retail-a`, `retail-b`) and manual checklist results
 

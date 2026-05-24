@@ -49,6 +49,11 @@ void PS1RipWorker::configureSession(const QString &biosPath, const QString &isoP
     m_isoPath = isoPath;
 }
 
+void PS1RipWorker::setGoldenSceneId(const QString &sceneId)
+{
+    m_goldenSceneId = sceneId;
+}
+
 bool PS1RipWorker::ensureCore(QString *errorOut)
 {
     if (m_core)
@@ -258,7 +263,9 @@ void PS1RipWorker::finalizeFrameCapture()
     file.close();
 
     QString captureMsg = QStringLiteral("%1 prims:%2").arg(captureId).arg(prims.size());
-    const QString goldenId = PsxGoldenCapture::activeSceneId();
+    QString goldenId = m_goldenSceneId;
+    if (goldenId.isEmpty())
+        goldenId = PsxGoldenCapture::activeSceneId();
     if (!goldenId.isEmpty())
         captureMsg += QStringLiteral(" golden_id=%1").arg(goldenId);
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture"), captureMsg);

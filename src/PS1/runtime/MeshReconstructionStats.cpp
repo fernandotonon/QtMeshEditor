@@ -18,6 +18,7 @@ bool MeshReconstructionStats::hasBounds() const
 
 void MeshReconstructionStats::finalizeSlabMetric()
 {
+    slabLike = false;
     if (!hasBounds() || totalVertices < 3)
         return;
     const float ex = boundsMaxX - boundsMinX;

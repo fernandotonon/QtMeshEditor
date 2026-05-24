@@ -107,12 +107,26 @@ float meshMaxExtent(const ReconstructedMesh &mesh)
 bool libretroCorePresent()
 {
     const QString base = QCoreApplication::applicationDirPath() + QStringLiteral("/PS1Cores/");
+    const auto anyExists = [&](const QStringList &names) {
+        for (const QString &name : names) {
+            if (QFileInfo(base + name).isFile())
+                return true;
+        }
+        return false;
+    };
 #if defined(Q_OS_WIN)
-    return QFileInfo::exists(base + QStringLiteral("mednafen_psx_libretro.dll"))
-           || QFileInfo::exists(base + QStringLiteral("beetle_psx_libretro.dll"));
+    return anyExists({QStringLiteral("mednafen_psx_libretro.dll"),
+                      QStringLiteral("beetle_psx_libretro.dll")});
+#elif defined(Q_OS_MACOS)
+    return anyExists({QStringLiteral("libmednafen_psx_libretro.dylib"),
+                      QStringLiteral("mednafen_psx_libretro.dylib"),
+                      QStringLiteral("libbeetle_psx_libretro.dylib"),
+                      QStringLiteral("beetle_psx_libretro.dylib")});
 #else
-    return QFileInfo::exists(base + QStringLiteral("mednafen_psx_libretro.so"))
-           || QFileInfo::exists(base + QStringLiteral("beetle_psx_libretro.so"));
+    return anyExists({QStringLiteral("libmednafen_psx_libretro.so"),
+                      QStringLiteral("mednafen_psx_libretro.so"),
+                      QStringLiteral("libbeetle_psx_libretro.so"),
+                      QStringLiteral("beetle_psx_libretro.so")});
 #endif
 }
 
@@ -126,6 +140,8 @@ void assertGoldenReconstructionHealthy(const CaptureSnapshot &snapshot, const QS
     ASSERT_FALSE(mesh.isEmpty()) << sceneId.toStdString();
     EXPECT_GE(mesh.triangleCount, PsxGoldenCapture::kMinTrianglesEnvIntegration)
         << sceneId.toStdString();
+    EXPECT_TRUE(stats.hasBounds()) << sceneId.toStdString();
+    EXPECT_FALSE(stats.slabLike) << sceneId.toStdString();
     EXPECT_GT(meshMaxExtent(mesh), 0.1f) << sceneId.toStdString();
     EXPECT_GT(mesh.triangleCount, 0) << sceneId.toStdString();
 }

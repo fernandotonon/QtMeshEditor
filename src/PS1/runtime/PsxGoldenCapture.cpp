@@ -11,7 +11,8 @@ QString existingFileFromEnv(const char *name)
     const QString path = qEnvironmentVariable(name);
     if (path.isEmpty())
         return {};
-    if (!QFileInfo::exists(path))
+    const QFileInfo info(path);
+    if (!info.isFile())
         return {};
     return path;
 }

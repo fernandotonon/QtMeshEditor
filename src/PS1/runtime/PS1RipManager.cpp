@@ -52,6 +52,10 @@ void PS1RipManager::setGoldenSceneId(const QString &sceneId)
 {
     if (sceneId.isEmpty() || PsxGoldenCapture::isKnownSceneId(sceneId))
         m_goldenSceneId = sceneId;
+    if (m_worker) {
+        QMetaObject::invokeMethod(m_worker, "setGoldenSceneId", Qt::QueuedConnection,
+                                  Q_ARG(QString, m_goldenSceneId));
+    }
 }
 
 PS1RipManager::~PS1RipManager()
@@ -171,6 +175,10 @@ void PS1RipManager::initializeWorkerThread()
             });
 
     connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
+    connect(m_workerThread, &QThread::started, this, [this]() {
+        QMetaObject::invokeMethod(m_worker, "setGoldenSceneId", Qt::QueuedConnection,
+                                  Q_ARG(QString, m_goldenSceneId));
+    });
 
     m_workerThread->start();
 }
