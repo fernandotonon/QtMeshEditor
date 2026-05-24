@@ -54,7 +54,7 @@ export QTMESH_PS1_GOLDEN_SCENE_ID=retail-a
 ./build/bin/UnitTests --gtest_filter='MeshReconstructorGoldenTest.*'
 ```
 
-`ConfiguredGoldenIsoReconstructsWithVolume` skips when BIOS/ISO paths are unset. When set, it boots libretro, captures ~240 frames, and asserts non-empty reconstruction, `!slabLike`, and `hasBounds()`.
+`ConfiguredGoldenIsoReconstructsWithVolume` is a no-op when BIOS/ISO paths are unset (CI has no retail ISOs). When configured locally, it boots libretro, captures ~240 frames, and asserts non-empty reconstruction, `!slabLike`, and `hasBounds()`.
 
 Unset `QTMESH_PS1_FORCE_STUB` locally (CI forces stub).
 
