@@ -111,7 +111,7 @@ See epic #412 for phased issues (#413–#431).
 - **RAM ingest ordering** — OT/chain walks start with `currentMatrixId = UINT32_MAX`; matrix association depends on draw-env packets appearing *before* primitives in the scanned buffer (typical for linked lists, not guaranteed for all titles).
 - **Shared matrix across OT** — one `currentMatrixId` per chain walk; dual-pass / multi-buffer games may still share a matrix across unrelated draws.
 - **GTE RAM supplement** — Capture Frame still merges COP2-scanned matrices; per-draw tagging applies at GP0 dispatch time, not retroactively to RAM-only captures without draw-env context.
-- **Commercial golden scenes** — manual acceptance tracked in #659; #658 reduces blob fallback but does not replace a full matrix stack or FIFO-accurate stream (#662).
+- **Commercial golden scenes** — manual acceptance tracked in [#659](https://github.com/fernandotonon/QtMeshEditor/issues/659) (`src/PS1/golden_captures.md`); #658 reduces blob fallback but does not replace a full matrix stack or FIFO-accurate stream (#662).
 
 ## GP0 FIFO follow-up (#662)
 
@@ -160,7 +160,14 @@ export QTMESH_PS1_TEST_ISO=/path/game.cue
 
 `PS1RipManagerLibretroArmTest` (arm/capture while a real libretro session runs) uses the same guard and env vars.
 
-**GTE / matrix tests (CI):** `PsxGteCop2Test`, `PsxGteIsoDedupeTest.StaticSceneCop2ProgramDedupesThreeDrawables`, `MeshReconstructorTest.GtePipelineCubeRoundTripsToUnitCubeMesh`, `PsxPerDrawMatrixTest` (draw-env matrix freeze, E4 offset, reconstruction stats). Real-ISO matrix dedupe: set `QTMESH_PS1_TEST_BIOS` + `QTMESH_PS1_TEST_ISO` (or `QTMESH_PS1_TEST_HOMEBREW_ISO`) and run `PsxGteIsoDedupeTest.RealIsoCaptureHasBoundedMatrixCount`.
+**GTE / matrix tests (CI):** `PsxGteCop2Test`, `PsxGteIsoDedupeTest.StaticSceneCop2ProgramDedupesThreeDrawables`, `MeshReconstructorTest.GtePipelineCubeRoundTripsToUnitCubeMesh`, `PsxPerDrawMatrixTest` (draw-env matrix freeze, E4 offset, reconstruction stats), `MeshReconstructorGoldenTest` (slab vs volume heuristics; always on). Real-ISO matrix dedupe: set `QTMESH_PS1_TEST_BIOS` + `QTMESH_PS1_TEST_ISO` (or `QTMESH_PS1_TEST_HOMEBREW_ISO`) and run `PsxGteIsoDedupeTest.RealIsoCaptureHasBoundedMatrixCount`.
+
+### Golden capture suite (#659)
+
+- **Doc:** `src/PS1/golden_captures.md` — homebrew + two retail acceptance scenes, manual checklist, env var names.
+- **Env:** `QTMESH_PS1_GOLDEN_SCENE_ID`, `QTMESH_PS1_GOLDEN_HOMEBREW_ISO`, `QTMESH_PS1_GOLDEN_RETAIL_A_ISO`, `QTMESH_PS1_GOLDEN_RETAIL_B_ISO` (plus legacy `QTMESH_PS1_TEST_*` aliases).
+- **CI:** `MeshReconstructorGoldenTest.SlabMetricHeuristic*` / `ScreenCubeReconstructionHasVolume` run without ROMs. `ConfiguredGoldenIsoReconstructsWithVolume` runs when BIOS + at least one golden ISO path is set (skips in CI by default).
+- **Telemetry:** `ps1.rip.capture.golden` and `ps1.rip.matrix.stats` include `golden_id=` when `QTMESH_PS1_GOLDEN_SCENE_ID` is set or `PS1RipManager::setGoldenSceneId()` is used (session UI picker: #425).
 
 ## Open questions
 

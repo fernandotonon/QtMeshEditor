@@ -50,6 +50,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxBiosValidator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxDiscResolver.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGoldenCapture.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxJoypadState.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxCaptureFilters.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGpuRamScanner.cpp
@@ -89,6 +90,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxJoypadBindings.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxBiosValidator.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxDiscResolver.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGoldenCapture.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxJoypadState.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxCaptureFilters.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGpuRamScanner.h

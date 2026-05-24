@@ -7,6 +7,7 @@
 #include "PS1RipWorker.h"
 #include "PsxBiosValidator.h"
 #include "PsxDiscResolver.h"
+#include "PsxGoldenCapture.h"
 #include "SentryReporter.h"
 
 #include <QFileInfo>
@@ -36,7 +37,25 @@ void PS1RipManager::kill()
 PS1RipManager::PS1RipManager(QObject *parent)
     : QObject(parent)
 {
+    m_goldenSceneId = PsxGoldenCapture::activeSceneId();
     initializeWorkerThread();
+}
+
+QString PS1RipManager::goldenSceneId() const
+{
+    if (!m_goldenSceneId.isEmpty())
+        return m_goldenSceneId;
+    return PsxGoldenCapture::activeSceneId();
+}
+
+void PS1RipManager::setGoldenSceneId(const QString &sceneId)
+{
+    if (sceneId.isEmpty() || PsxGoldenCapture::isKnownSceneId(sceneId))
+        m_goldenSceneId = sceneId;
+    if (m_worker) {
+        QMetaObject::invokeMethod(m_worker, "setGoldenSceneId", Qt::QueuedConnection,
+                                  Q_ARG(QString, m_goldenSceneId));
+    }
 }
 
 PS1RipManager::~PS1RipManager()
@@ -85,6 +104,12 @@ void PS1RipManager::initializeWorkerThread()
             [this](const QString &captureId, const CaptureSnapshot &snapshot, int) {
                 SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
                                               QStringLiteral("ps1_rip_frame:%1").arg(captureId));
+                const QString goldenId = goldenSceneId();
+                if (!goldenId.isEmpty()) {
+                    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture.golden"),
+                                                  QStringLiteral("id=%1 capture=%2")
+                                                      .arg(goldenId, captureId));
+                }
 
                 emit frameCaptured(captureId);
 
@@ -122,13 +147,15 @@ void PS1RipManager::initializeWorkerThread()
                 SentryReporter::addBreadcrumb(
                     QStringLiteral("ps1.rip.mesh.built"),
                     QStringLiteral("%1 verts %2 tris").arg(built.vertexCount).arg(built.triangleCount));
-                SentryReporter::addBreadcrumb(
-                    QStringLiteral("ps1.rip.matrix.stats"),
+                QString matrixStats =
                     QStringLiteral("gte_inverse=%1%% prims_with_matrix=%2/%3 slab=%4")
                         .arg(reconStats.gteInversePercent())
                         .arg(reconStats.primsWithMatrixId)
                         .arg(reconStats.primsTotal)
-                        .arg(reconStats.slabLike ? QStringLiteral("yes") : QStringLiteral("no")));
+                        .arg(reconStats.slabLike ? QStringLiteral("yes") : QStringLiteral("no"));
+                if (!goldenId.isEmpty())
+                    matrixStats += QStringLiteral(" golden_id=%1").arg(goldenId);
+                SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.matrix.stats"), matrixStats);
                 emit meshBuilt(captureId, captureSet.capturedPartCount, captureSet.uniqueCount(),
                                captureSet.instanceCount(), built.vertexCount, built.triangleCount,
                                snapshot.matrices.size(), snapshot.cameraMatrixId,
@@ -148,6 +175,10 @@ void PS1RipManager::initializeWorkerThread()
             });
 
     connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
+    connect(m_workerThread, &QThread::started, this, [this]() {
+        QMetaObject::invokeMethod(m_worker, "setGoldenSceneId", Qt::QueuedConnection,
+                                  Q_ARG(QString, m_goldenSceneId));
+    });
 
     m_workerThread->start();
 }

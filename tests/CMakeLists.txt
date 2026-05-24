@@ -168,6 +168,7 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipWorker.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxBiosValidator.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxDiscResolver.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxGoldenCapture.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxJoypadState.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxCaptureFilters.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxGpuRamScanner.cpp
