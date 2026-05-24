@@ -10,6 +10,8 @@ The MIT License
 
 #include "VATBaker.h"
 
+#include "MinimalEXRWriter.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -172,14 +174,16 @@ size_t collectPostSkinNormals(Ogre::Entity* entity,
 
 namespace { QString buildOpenVATSidecar(int frameCount,
                                         const Ogre::Vector3& lo,
-                                        const Ogre::Vector3& hi); }
+                                        const Ogre::Vector3& hi,
+                                        int bitDepth); }
 
 QString VATBaker::buildSidecarJson(const BakeResult& result,
-                                   const Options& /*opts*/)
+                                   const Options& opts)
 {
     return buildOpenVATSidecar(result.frameCount,
                                result.minBound,
-                               result.maxBound);
+                               result.maxBound,
+                               opts.bitDepth);
 }
 
 // ---------------------------------------------------------------------------
@@ -260,9 +264,16 @@ inline QString openvatFormatFloat(float v) {
 // openvatRoundMin/openvatRoundMax to snap before calling). We just
 // format them; rounding here would silently re-snap rounded values
 // and decouple the sidecar from whatever the texture encoder used.
+//
+// `bitDepth` is recorded as an extension field (`_bit_depth`) so a
+// consumer can tell at a glance whether the texture next to this
+// sidecar is uint16 (PNG) or float32 (EXR). Standard openvat
+// consumers ignore unknown top-level keys; the field is purely for
+// our own consumers (the Unreal demo dispatches on it).
 QString buildOpenVATSidecar(int frameCount,
                             const Ogre::Vector3& lo,
-                            const Ogre::Vector3& hi)
+                            const Ogre::Vector3& hi,
+                            int bitDepth = 16)
 {
     QJsonArray jMin {
         openvatFormatFloat(lo.x),
@@ -288,8 +299,12 @@ QString buildOpenVATSidecar(int frameCount,
     // (the openvat Godot reference shader hardcodes a Blender→Godot
     // `vec3(x, z, -y)` swizzle; our output is Y-up right-handed Ogre,
     // which needs a different one).
-    root["_producer"] = QStringLiteral("QtMeshEditor");
-    root["_axes"]     = QStringLiteral("y-up-rh");
+    root["_producer"]  = QStringLiteral("QtMeshEditor");
+    root["_axes"]      = QStringLiteral("y-up-rh");
+    // Per-channel bit depth of the position+normal texture sitting
+    // next to this sidecar. 16 → PNG (uint16), 32 → EXR (float32).
+    // Consumers that don't care can ignore it.
+    root["_bit_depth"] = bitDepth;
 
     QJsonDocument doc(root);
     return QString::fromUtf8(doc.toJson(QJsonDocument::Indented));
@@ -359,6 +374,71 @@ std::vector<uint16_t> packOpenVAT16(
             out[off + 0] = static_cast<uint16_t>(std::lround(nx * 65535.0f));
             out[off + 1] = static_cast<uint16_t>(std::lround(ny * 65535.0f));
             out[off + 2] = static_cast<uint16_t>(std::lround(nz * 65535.0f));
+        }
+    }
+    return out;
+}
+
+// 32-bit variant of `packOpenVAT16`. Same layout (top half positions,
+// bottom half normals; same column-permutation contract), but emits
+// raw float32s instead of quantizing to uint16.
+//
+//   Positions: stored as the literal post-skin coord (in the bake's
+//              Y-up-RH meters space). NO normalization — consumers
+//              read the value directly. This means the EXR is NOT
+//              compatible with the 16-bit `bounds_min..bounds_max`
+//              decode path; the sidecar's `_bit_depth: 32` tells the
+//              consumer to skip the bounds remap and use the texel
+//              value as-is.
+//
+//   Normals:  (n+1)/2 still, so the value lives in [0..1] same as
+//             the 16-bit path. Identical decode on the consumer
+//             side ((tex * 2) - 1).
+std::vector<float> packOpenVAT32(
+    const std::vector<Ogre::Vector3>& flat,
+    const std::vector<Ogre::Vector3>& normals,
+    int frameCount,
+    int vertexCount,
+    const std::vector<uint32_t>& permutation = {})
+{
+    const size_t framesCount = static_cast<size_t>(frameCount);
+    const size_t vcount      = static_cast<size_t>(vertexCount);
+    const size_t imgHeight   = framesCount * 2u;
+    const size_t pixels      = imgHeight * vcount;
+
+    std::vector<float> out;
+    if (frameCount <= 0 || vertexCount <= 0) return out;
+    if (flat.size()    != framesCount * vcount) return out;
+    if (normals.size() != framesCount * vcount) return out;
+    if (!permutation.empty() && permutation.size() != vcount) return out;
+
+    out.resize(pixels * 3u, 0.0f);
+    const bool hasPerm = !permutation.empty();
+    auto dstCol = [&](size_t srcCol) -> size_t {
+        return hasPerm ? static_cast<size_t>(permutation[srcCol]) : srcCol;
+    };
+
+    // Top half — raw position floats (Y-up-RH meters).
+    for (size_t f = 0; f < framesCount; ++f) {
+        const size_t rowBase = f * vcount;
+        for (size_t c = 0; c < vcount; ++c) {
+            const auto& p = flat[rowBase + c];
+            const size_t pix = rowBase + dstCol(c);
+            out[pix * 3 + 0] = p.x;
+            out[pix * 3 + 1] = p.y;
+            out[pix * 3 + 2] = p.z;
+        }
+    }
+    // Bottom half — (n+1)/2 in [0..1].
+    const size_t offset = framesCount * vcount;
+    for (size_t f = 0; f < framesCount; ++f) {
+        const size_t rowBase = f * vcount;
+        for (size_t c = 0; c < vcount; ++c) {
+            const auto& n = normals[rowBase + c];
+            const size_t pix = offset + rowBase + dstCol(c);
+            out[pix * 3 + 0] = (n.x + 1.0f) * 0.5f;
+            out[pix * 3 + 1] = (n.y + 1.0f) * 0.5f;
+            out[pix * 3 + 2] = (n.z + 1.0f) * 0.5f;
         }
     }
     return out;
@@ -530,9 +610,14 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
     result.minBound    = roundedLo;
     result.maxBound    = roundedHi;
 
+    // bitDepth in {16, 32}; anything else is a caller bug. Normalize
+    // here so the rest of bake() doesn't have to defend against it.
+    const int bitDepth = (opts.bitDepth == 32) ? 32 : 16;
+
     QDir().mkpath(opts.outputDir);
     const QString base = opts.basename.isEmpty() ? opts.animationName : opts.basename;
-    result.posTexPath = QDir(opts.outputDir).filePath(base + "_pos.png");
+    const char* posExt = (bitDepth == 32) ? "_pos.exr" : "_pos.png";
+    result.posTexPath = QDir(opts.outputDir).filePath(base + QString::fromLatin1(posExt));
     result.jsonPath   = QDir(opts.outputDir).filePath(base + "-remap_info.json");
 
     if (!opts.vertexPermutation.empty()) {
@@ -559,40 +644,62 @@ VATBaker::BakeResult VATBaker::bake(Ogre::Entity* entity, const Options& opts)
             seen[dst] = true;
         }
     }
-    auto packed = packOpenVAT16(flat, normals, frameCount, vertexCount,
-                                roundedLo, roundedHi,
-                                opts.vertexPermutation);
-    if (packed.empty()) {
-        result.error = QStringLiteral("OpenVAT pack produced empty buffer");
-        return result;
-    }
     const int imgHeight = frameCount * 2;
-    // RGBX64 is Qt's 16-bit-per-channel 4-channel format. The X channel
-    // is padding; PNG can store 3-channel data losslessly but Qt's PNG
-    // writer infers RGB-vs-RGBA from the QImage format, and Format_RGB
-    // doesn't exist at 16-bit precision. Padding to RGBX64 costs a few
-    // hundred KB on a 5828×142 image — acceptable for a one-off bake.
-    QImage img(vertexCount, imgHeight, QImage::Format_RGBX64);
-    img.fill(0);
-    for (int y = 0; y < imgHeight; ++y) {
-        const uint16_t* src = packed.data()
-                            + static_cast<size_t>(y)
-                              * static_cast<size_t>(vertexCount) * 3u;
-        auto* dst = reinterpret_cast<uint16_t*>(img.scanLine(y));
-        for (int x = 0; x < vertexCount; ++x) {
-            dst[x * 4 + 0] = src[x * 3 + 0];
-            dst[x * 4 + 1] = src[x * 3 + 1];
-            dst[x * 4 + 2] = src[x * 3 + 2];
-            dst[x * 4 + 3] = 65535;
+
+    if (bitDepth == 32) {
+        // 32-bit float EXR. Bypasses uint16 quantization entirely: the
+        // texture stores raw post-skin meters; the consumer reads them
+        // back via `texel.rgb` directly (no bounds_min/bounds_max
+        // decode). Eliminates the sub-mm precision artifacts that
+        // cause Mixamo's eye-sphere/head-plug z-fights to flicker on
+        // adjacent frames.
+        auto packed = packOpenVAT32(flat, normals, frameCount, vertexCount,
+                                    opts.vertexPermutation);
+        if (packed.empty()) {
+            result.error = QStringLiteral("OpenVAT 32-bit pack produced empty buffer");
+            return result;
+        }
+        if (!MinimalEXR::writeRGB32F(result.posTexPath, vertexCount,
+                                     imgHeight, packed)) {
+            result.error = QStringLiteral("failed to write OpenVAT EXR: %1")
+                               .arg(result.posTexPath);
+            return result;
+        }
+    } else {
+        auto packed = packOpenVAT16(flat, normals, frameCount, vertexCount,
+                                    roundedLo, roundedHi,
+                                    opts.vertexPermutation);
+        if (packed.empty()) {
+            result.error = QStringLiteral("OpenVAT pack produced empty buffer");
+            return result;
+        }
+        // RGBX64 is Qt's 16-bit-per-channel 4-channel format. The X channel
+        // is padding; PNG can store 3-channel data losslessly but Qt's PNG
+        // writer infers RGB-vs-RGBA from the QImage format, and Format_RGB
+        // doesn't exist at 16-bit precision. Padding to RGBX64 costs a few
+        // hundred KB on a 5828×142 image — acceptable for a one-off bake.
+        QImage img(vertexCount, imgHeight, QImage::Format_RGBX64);
+        img.fill(0);
+        for (int y = 0; y < imgHeight; ++y) {
+            const uint16_t* src = packed.data()
+                                + static_cast<size_t>(y)
+                                  * static_cast<size_t>(vertexCount) * 3u;
+            auto* dst = reinterpret_cast<uint16_t*>(img.scanLine(y));
+            for (int x = 0; x < vertexCount; ++x) {
+                dst[x * 4 + 0] = src[x * 3 + 0];
+                dst[x * 4 + 1] = src[x * 3 + 1];
+                dst[x * 4 + 2] = src[x * 3 + 2];
+                dst[x * 4 + 3] = 65535;
+            }
+        }
+        if (!img.save(result.posTexPath, "PNG")) {
+            result.error = QStringLiteral("failed to write OpenVAT texture: %1")
+                               .arg(result.posTexPath);
+            return result;
         }
     }
-    if (!img.save(result.posTexPath, "PNG")) {
-        result.error = QStringLiteral("failed to write OpenVAT texture: %1")
-                           .arg(result.posTexPath);
-        return result;
-    }
 
-    const QString sidecar = buildOpenVATSidecar(frameCount, roundedLo, roundedHi);
+    const QString sidecar = buildOpenVATSidecar(frameCount, roundedLo, roundedHi, bitDepth);
     QFile jf(result.jsonPath);
     if (!jf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         result.error = QStringLiteral("failed to open OpenVAT sidecar for write: %1")

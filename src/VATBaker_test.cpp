@@ -234,6 +234,11 @@ TEST_F(VATBakerEndToEndTest, OpenVATSidecarMatchesReferenceShape) {
     const int dotPos = minX.indexOf(QChar('.'));
     ASSERT_GT(dotPos, -1) << "Min[0] should contain a decimal point: " << minX.toStdString();
     EXPECT_EQ(minX.size() - dotPos - 1, 8) << minX.toStdString();
+
+    // The bit-depth extension field tells consumers whether to look
+    // for `_pos.png` (16) or `_pos.exr` (32) next to this sidecar.
+    ASSERT_TRUE(root.contains("_bit_depth"));
+    EXPECT_EQ(root["_bit_depth"].toInt(), 16) << "default bake should be uint16";
 }
 
 TEST_F(VATBakerEndToEndTest, OpenVATBoundsRoundedOutwardToTenth) {
@@ -306,6 +311,38 @@ TEST_F(VATBakerEndToEndTest, OpenVATTextureIs16BitRgb) {
                 fmt == QImage::Format_RGBA64 ||
                 fmt == QImage::Format_RGBA64_Premultiplied)
         << "expected 16-bit format, got " << static_cast<int>(fmt);
+}
+
+TEST_F(VATBakerEndToEndTest, OpenVAT32BitWritesEXRAndTagsSidecar) {
+    auto* entity = createAnimatedTestEntity("VAT_E2E_OpenVAT_32");
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    VATBaker::Options opts;
+    opts.animationName = QStringLiteral("TestAnim");
+    opts.fps = 30.0;
+    opts.outputDir = tmp.path();
+    opts.basename = QStringLiteral("OV32");
+    opts.bitDepth = 32;
+
+    auto r = VATBaker::bake(entity, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+
+    // 32-bit mode writes an EXR alongside the sidecar, NOT the PNG.
+    EXPECT_TRUE(r.posTexPath.endsWith(QStringLiteral("_pos.exr")))
+        << r.posTexPath.toStdString();
+    EXPECT_TRUE(QFile::exists(r.posTexPath));
+
+    // Sidecar must declare the bit depth so consumers know which
+    // file to look for and how to interpret texel values (raw vs
+    // remap-via-bounds).
+    QFile jf(r.jsonPath);
+    ASSERT_TRUE(jf.open(QIODevice::ReadOnly));
+    const auto doc = QJsonDocument::fromJson(jf.readAll());
+    ASSERT_TRUE(doc.isObject());
+    EXPECT_EQ(doc.object()["_bit_depth"].toInt(), 32);
 }
 
 TEST_F(VATBakerEndToEndTest, RejectsMissingAnimationOnLiveEntity) {

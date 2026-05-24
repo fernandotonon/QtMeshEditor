@@ -57,6 +57,26 @@ public:
         QString  outputDir;               ///< Required.
         QString  basename;                ///< Without extension. Defaults to animationName when empty.
 
+        /// Bit depth per channel for the position+normal texture.
+        ///   16 → quantize into [0..65535] over per-axis bounds; PNG out.
+        ///        Smallest file, but the position quantization step is
+        ///        `(boundsMax - boundsMin) / 65535` per axis — for a
+        ///        ~2 m Mixamo dance that's ~0.03 mm. Sub-mm-coplanar
+        ///        geometry (Mixamo eye sphere vs. head plug) z-fights
+        ///        on specific frames because two adjacent vertices
+        ///        round to the same uint16 → same final position →
+        ///        depth ties resolved arbitrarily by the renderer.
+        ///   32 → write raw float32 positions + (n+1)/2 normals; EXR
+        ///        out. No quantization; round-trips to within float
+        ///        rounding error (sub-micrometre at sub-1m scales),
+        ///        which is plenty to keep coplanar shells separated.
+        ///        File is ~2× larger than the PNG for typical bakes.
+        ///
+        /// Default 16 for backward compatibility — existing consumers
+        /// of `qtmesh vat` that read `_pos.png` keep working unchanged.
+        /// Pass 32 from the CLI via `--bake-precision 32`.
+        int      bitDepth     = 16;
+
         /// Per-vertex column permutation. `vertexPermutation[c]` is the
         /// texture column to write Ogre vertex `c` into. Empty = identity.
         ///

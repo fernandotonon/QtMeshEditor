@@ -91,6 +91,7 @@ VertexColorBaker.cpp
 VATBaker.cpp
 VATBakerController.cpp
 VATShaderEmitter.cpp
+MinimalEXRWriter.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp

@@ -689,7 +689,7 @@ void CLIPipeline::printUsage()
         "                                    triangle, rasterizes barycentric-interpolated vertex colors,\n"
         "                                    then dilates outward by N pixels to mask seam bleed at MIP time.\n"
         "                                    Default resolution=1024, dilation=4. Output PNG is RGBA.\n"
-        "  vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--json]\n"
+        "  vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]\n"
         "                                    Bake a skeletal animation into a Vertex Animation Texture\n"
         "                                    in OpenVAT (sharpen3d/openvat) format: a single 16-bit RGB\n"
         "                                    PNG (height = 2 × frames; top half positions, bottom half\n"
@@ -5821,9 +5821,22 @@ bool emitGltfUv2(const QString& gltfPath,
         float vMin = std::numeric_limits<float>::infinity();
         float vMax = -std::numeric_limits<float>::infinity();
         for (size_t i = a; i < b; ++i) {
+            // i = Ogre vertex index = bake column index (the bake walks
+            // Ogre's vertex buffer in order, so column == Ogre index).
+            // gltfIdx = glTF buffer position of the SAME vertex after
+            // Assimp's JoinIdenticalVertices reorder.
             const uint32_t gltfIdx = permutation[i];
-            const uint32_t col = gltfIdx % static_cast<uint32_t>(texWidth);
-            const uint32_t row = gltfIdx / static_cast<uint32_t>(texWidth);
+            const uint32_t ogreIdx = static_cast<uint32_t>(i);
+            // The bake column we want this glTF vertex to read is the
+            // ORIGINAL Ogre column `i`, not `gltfIdx`. Earlier code
+            // mistakenly used `gltfIdx`, which on meshes with non-
+            // identity Assimp permutations (e.g. Mixamo Hip Hop Dancing)
+            // meant every vertex read animation data from a
+            // *different* vertex's column — body parts visibly flew
+            // apart on specific frames where the wrong-source motion
+            // was large.
+            const uint32_t col = ogreIdx % static_cast<uint32_t>(texWidth);
+            const uint32_t row = ogreIdx / static_cast<uint32_t>(texWidth);
             // The destination is glTF index gltfIdx, which is offset
             // (gltfIdx - a) within this primitive.
             const size_t localDst = static_cast<size_t>(gltfIdx) - a;
@@ -5916,7 +5929,7 @@ bool emitGltfUv2(const QString& gltfPath,
 
 int CLIPipeline::cmdVat(int argc, char* argv[])
 {
-    // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--json]
+    // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]
     //
     // Output is always OpenVAT (sharpen3d/openvat) — a single packed
     // 16-bit RGB PNG (`<basename>_pos.png`, height = 2*frames, top half
@@ -5934,6 +5947,12 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // bind-sidecar matching and just read TEXCOORD_<channel> as
     // (column % tex_width, column / tex_width) directly.
     int emitUv2Channel = -1;
+    // --bake-precision {16,32}: per-channel bit depth for the position
+    // texture. Default 16 (PNG, ~0.03mm precision over 2m bounds).
+    // 32 writes an EXR with raw float32 positions — sidesteps the
+    // sub-mm quantization artifact that flickers Mixamo's coplanar
+    // eye-sphere/head-plug geometry. ~2× larger file.
+    int bakeBitDepth = 16;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -5953,6 +5972,17 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outDir = QString(argv[++i]); continue;
+        }
+        if (arg == "--bake-precision" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString(argv[++i]).toInt(&ok);
+            if (!ok || (v != 16 && v != 32)) {
+                err() << "Error: --bake-precision must be 16 or 32 "
+                         "(got \"" << argv[i] << "\")." << Qt::endl;
+                return 2;
+            }
+            bakeBitDepth = v;
+            continue;
         }
         // --include-shaders <list>: comma-separated subset of
         // {godot, unity, unreal} (or "all") — copies the matching
@@ -6023,7 +6053,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
 
     if (filePath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--json]" << Qt::endl;
+        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]" << Qt::endl;
         return 2;
     }
     if (animName.isEmpty()) {
@@ -6225,6 +6255,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     opts.fps               = fps;
     opts.outputDir         = outDir;
     opts.basename          = animName;
+    opts.bitDepth          = bakeBitDepth;
     // Keep a copy for the UV2 post-pass (the move below sinks the
     // original into VATBaker::Options).
     std::vector<uint32_t> vertexPermCopy = vertexPerm;
