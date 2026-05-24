@@ -33,3 +33,13 @@ TEST(VramSnapshotTest, SavePngRoundTrip)
     ASSERT_TRUE(vram.savePng(path));
     EXPECT_TRUE(QFileInfo::exists(path));
 }
+
+TEST(VramSnapshotTest, HasNonZeroOutsideRectDetectsTpageRegion)
+{
+    VramSnapshot vram;
+    vram.setPixel(10, 10, 0x7C00u);
+    EXPECT_FALSE(vram.hasNonZeroOutsideRect(QRect(0, 0, 320, 240), 1));
+
+    vram.setPixel(400, 300, 0x7C00u);
+    EXPECT_TRUE(vram.hasNonZeroOutsideRect(QRect(0, 0, 320, 240), 1));
+}

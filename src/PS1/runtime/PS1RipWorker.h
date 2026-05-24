@@ -18,6 +18,8 @@ class EmuCore;
 class QTimer;
 class RipperHooks;
 
+enum class PsxVramMirrorMode;
+
 /**
  * Runs EmuCore on a dedicated QThread owned by PS1RipManager (#415).
  */
@@ -55,7 +57,8 @@ signals:
     void emulationError(const QString &message);
     /** Non-fatal operational warning (does not stop the session). */
     void sessionWarning(const QString &message);
-    void frameCaptureReady(const QString &captureId, const CaptureSnapshot &snapshot, int primCount);
+    void frameCaptureReady(const QString &captureId, const CaptureSnapshot &snapshot, int primCount,
+                           PsxVramMirrorMode vramMirrorMode);
     void vramDumpReady(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                        const QImage &nativePreview);
     void vramFrameUpdated(const QVector<uint16_t> &cells, const QImage &nativePreview);

@@ -30,6 +30,8 @@ public:
     bool isEmpty() const;
     /** True when at least @p minNonZero cells are non-zero (VRAM may be mostly black in-game). */
     bool hasVisibleContent(int minNonZero = 64) const;
+    /** True when non-zero cells exist outside @p rect (ignores rect interior). */
+    bool hasNonZeroOutsideRect(const QRect &rect, int minNonZero = 8) const;
 
     void writeRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels);
     uint16_t pixel(int x, int y) const;

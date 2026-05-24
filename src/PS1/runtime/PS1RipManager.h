@@ -9,6 +9,8 @@
 
 class PS1RipWorker;
 
+enum class PsxVramMirrorMode;
+
 /**
  * Main-thread coordinator for PS1 runtime geometry extraction (epic #412).
  */
@@ -62,7 +64,8 @@ signals:
     void frameCaptured(const QString &captureId);
     void meshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
                    int vertexCount, int triangleCount, int matrixCount, uint32_t cameraMatrixId,
-                   bool hasCameraMatrix, int gteInversePercent, bool slabLike);
+                   bool hasCameraMatrix, int gteInversePercent, bool slabLike,
+                   PsxVramMirrorMode vramMirrorMode);
     void sceneCaptured(const QString &captureId);
     void vramDumped(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                     const QImage &nativePreview);

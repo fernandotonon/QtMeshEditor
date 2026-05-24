@@ -22,7 +22,7 @@ Epic close requires **at least 2 of 3** scenes to pass the manual checklist on a
 
 1. **Capture Frame** → non-empty mesh in the editor (vertex/triangle counts in status).
 2. Mesh is **visually recognizable** (not a flat screen-space slab) — compare to the PS1 viewport screenshot.
-3. Vertex colors and at least one texture page look plausible, **or** note a **geometry-only** pass in the test log.
+3. Vertex colors and at least one texture page look plausible, **or** note a **geometry-only** pass in the test log (acceptable when VRAM status shows framebuffer mirror only — see #660).
 4. Export to glTF ([#427](https://github.com/fernandotonon/QtMeshEditor/issues/427)) opens in an external viewer without fatal errors.
 
 Record pass/fail and QtMeshEditor version in your PR or release notes when claiming epic #412.
@@ -57,6 +57,8 @@ export QTMESH_PS1_GOLDEN_SCENE_ID=retail-a
 `ConfiguredGoldenIsoReconstructsWithVolume` is a no-op when BIOS/ISO paths are unset (CI has no retail ISOs). When configured locally, it boots libretro, captures ~240 frames, and asserts non-empty reconstruction, `!slabLike`, and `hasBounds()`.
 
 Unset `QTMESH_PS1_FORCE_STUB` locally (CI forces stub).
+
+**Textures (#660):** use `mednafen_psx_libretro` / `beetle_psx_libretro` (software renderer). Avoid `beetle_psx_hw`. After capture, the session status bar shows `VRAM: full VRAM` when texture decode can read TPAGE/CLUT pages.
 
 ## Related issues
 

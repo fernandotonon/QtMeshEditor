@@ -1,6 +1,7 @@
 #include "LibretroEmuCore.h"
 #include "EmuFramebuffer.h"
 #include "Gp0HookDispatch.h"
+#include "LibretroCoreOptions.h"
 #include "PsxBiosValidator.h"
 #include "PsxDiscResolver.h"
 #include "PsxVramColor.h"
@@ -25,19 +26,17 @@ constexpr size_t kPsxVramBytes = static_cast<size_t>(kPsxVramWidth) * kPsxVramHe
 
 QStringList libretroCoreCandidates()
 {
+    // Software-capable cores only (#660). beetle_psx_hw keeps VRAM on the GPU.
     QStringList names;
 #if defined(Q_OS_WIN)
     names << QStringLiteral("mednafen_psx_libretro.dll")
-          << QStringLiteral("beetle_psx_libretro.dll")
-          << QStringLiteral("beetle_psx_hw_libretro.dll");
+          << QStringLiteral("beetle_psx_libretro.dll");
 #elif defined(Q_OS_MACOS)
     names << QStringLiteral("mednafen_psx_libretro.dylib")
-          << QStringLiteral("beetle_psx_libretro.dylib")
-          << QStringLiteral("beetle_psx_hw_libretro.dylib");
+          << QStringLiteral("beetle_psx_libretro.dylib");
 #else
     names << QStringLiteral("mednafen_psx_libretro.so")
-          << QStringLiteral("beetle_psx_libretro.so")
-          << QStringLiteral("beetle_psx_hw_libretro.so");
+          << QStringLiteral("beetle_psx_libretro.so");
 #endif
     return names;
 }
@@ -210,12 +209,28 @@ bool installBiosAliases(const QString &biosPath, const QString &biosLabel)
     return QFile::copy(biosPath, target);
 }
 
+void writeSoftwareRendererCoreConfig(const QString &biosDirPath)
+{
+    if (LibretroCoreOptions::rendererPreferenceFromEnv() != "software")
+        return;
+
+    const QString cfgPath = QDir(biosDirPath).filePath(QStringLiteral("Beetle PSX.cfg"));
+    QFile cfg(cfgPath);
+    if (!cfg.open(QIODevice::WriteOnly | QIODevice::Text))
+        return;
+
+    cfg.write("beetle_psx_renderer = \"software\"\n");
+    cfg.write("beetle_psx_skip_bios = \"enabled\"\n");
+    cfg.write("beetle_psx_override_bios = \"disabled\"\n");
+}
+
 } // namespace
 
 LibretroEmuCore *LibretroEmuCore::s_active = nullptr;
 
 LibretroEmuCore::LibretroEmuCore()
 {
+    m_rendererPreference = LibretroCoreOptions::rendererPreferenceFromEnv();
     resetJoypad();
     for (EmuFramebuffer &buf : m_buffers) {
         buf.width = 320;
@@ -244,8 +259,19 @@ QString LibretroEmuCore::coreId() const
 QString LibretroEmuCore::resolveLibretroCorePath(QString *errorOut)
 {
     const QString envPath = envCorePath();
-    if (!envPath.isEmpty() && QFileInfo::exists(envPath))
-        return QFileInfo(envPath).absoluteFilePath();
+    if (!envPath.isEmpty()) {
+        if (LibretroCoreOptions::isHardwareOnlyCorePath(envPath)) {
+            if (errorOut) {
+                *errorOut = QObject::tr(
+                    "QTMESH_PS1_LIBRETRO_CORE points at a hardware-only core (%1). Use "
+                    "mednafen_psx_libretro for texture ripping.")
+                        .arg(QFileInfo(envPath).fileName());
+            }
+            return {};
+        }
+        if (QFileInfo::exists(envPath))
+            return QFileInfo(envPath).absoluteFilePath();
+    }
 
     const QString appDir = QCoreApplication::applicationDirPath();
     // Only load cores shipped next to the app (or via env). Distro libretro builds are often
@@ -288,6 +314,7 @@ bool LibretroEmuCore::loadBios(const QString &biosPath)
     m_biosPath = info.absoluteFilePath();
     m_biosLabel = fp.knownLabel;
     installBiosAliases(m_biosPath, m_biosLabel);
+    writeSoftwareRendererCoreConfig(QFileInfo(m_biosPath).absolutePath());
     return true;
 }
 
@@ -323,6 +350,15 @@ bool LibretroEmuCore::ensureInitialized(QString *errorOut)
     m_corePath = resolveLibretroCorePath(errorOut);
     if (m_corePath.isEmpty())
         return false;
+
+    if (LibretroCoreOptions::isHardwareOnlyCorePath(m_corePath)) {
+        if (errorOut) {
+            *errorOut = QObject::tr(
+                "beetle_psx_hw does not expose VRAM for texture ripping. Install "
+                "mednafen_psx_libretro (software) into PS1Cores/.");
+        }
+        return false;
+    }
 
     prependCoreDirToLibraryPath(m_corePath);
 
@@ -407,6 +443,7 @@ void LibretroEmuCore::unloadGame()
     m_hasVideoFrame = false;
     m_vramPtr = nullptr;
     m_vramBytes = 0;
+    m_lastVramMirrorMode = PsxVramMirrorMode::Unknown;
     m_memoryRegions.clear();
 }
 
@@ -584,11 +621,18 @@ void LibretroEmuCore::syncVramFromCore()
     m_vramUsesFramebufferFallback = false;
     if (src && m_vramBytes >= kPsxVramBytes) {
         m_hooks->onVramWrite(0, 0, kPsxVramWidth, kPsxVramHeight, src);
+        m_lastVramMirrorMode = PsxVramMirrorMode::FullVram;
         return;
     }
 
     m_vramUsesFramebufferFallback = true;
+    m_lastVramMirrorMode = PsxVramMirrorMode::FramebufferFallback;
     mirrorFramebufferToVram();
+}
+
+PsxVramMirrorMode LibretroEmuCore::lastVramMirrorMode() const
+{
+    return m_lastVramMirrorMode;
 }
 
 void LibretroEmuCore::captureGpuFromRam(bool scanGteRam, bool accumulate)
@@ -709,25 +753,14 @@ bool LibretroEmuCore::environmentCallback(unsigned cmd, void *data)
         auto *var = static_cast<retro_variable *>(data);
         if (!var || !var->key)
             return false;
-        if (strcmp(var->key, "beetle_psx_skip_bios") == 0) {
-            self->m_envVarUtf8 = "enabled";
-            var->value = self->m_envVarUtf8.constData();
-            return true;
-        }
-        if (strcmp(var->key, "beetle_psx_override_bios") == 0) {
-            self->m_envVarUtf8 = "disabled";
-            var->value = self->m_envVarUtf8.constData();
-            return true;
-        }
-        // Hardware/Vulkan renderers keep VRAM on the GPU and do not expose it via
-        // RETRO_MEMORY_VIDEO_RAM or SET_MEMORY_MAPS. Software renderer is required for
-        // VRAM dump / texture decode in the rip pipeline.
-        if (strcmp(var->key, "beetle_psx_renderer") == 0) {
-            self->m_envVarUtf8 = "software";
-            var->value = self->m_envVarUtf8.constData();
-            return true;
-        }
-        return false;
+        const char *value =
+            LibretroCoreOptions::valueForKey(var->key, self->m_rendererPreference);
+        if (!value)
+            return false;
+        const QByteArray keyBytes(var->key);
+        self->m_coreVariableStorage[keyBytes] = QByteArray(value);
+        var->value = self->m_coreVariableStorage[keyBytes].constData();
+        return true;
     }
     case RETRO_ENVIRONMENT_SET_MEMORY_MAPS: {
         auto *map = static_cast<retro_memory_map *>(data);

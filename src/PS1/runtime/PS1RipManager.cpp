@@ -8,6 +8,7 @@
 #include "PsxBiosValidator.h"
 #include "PsxDiscResolver.h"
 #include "PsxGoldenCapture.h"
+#include "PsxVramMirrorMode.h"
 #include "SentryReporter.h"
 
 #include <QFileInfo>
@@ -67,6 +68,7 @@ void PS1RipManager::initializeWorkerThread()
 {
     qRegisterMetaType<QVector<uint16_t>>("QVector<uint16_t>");
     qRegisterMetaType<CaptureSnapshot>("CaptureSnapshot");
+    qRegisterMetaType<PsxVramMirrorMode>("PsxVramMirrorMode");
 
     m_workerThread = new QThread(this);
     m_worker = new PS1RipWorker();
@@ -101,7 +103,8 @@ void PS1RipManager::initializeWorkerThread()
     connect(m_worker, &PS1RipWorker::sessionWarning, this, &PS1RipManager::reportError);
     connect(m_worker, &PS1RipWorker::framePresented, this, &PS1RipManager::framePresented);
     connect(m_worker, &PS1RipWorker::frameCaptureReady, this,
-            [this](const QString &captureId, const CaptureSnapshot &snapshot, int) {
+            [this](const QString &captureId, const CaptureSnapshot &snapshot, int,
+                   PsxVramMirrorMode vramMirrorMode) {
                 SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
                                               QStringLiteral("ps1_rip_frame:%1").arg(captureId));
                 const QString goldenId = goldenSceneId();
@@ -156,11 +159,15 @@ void PS1RipManager::initializeWorkerThread()
                 if (!goldenId.isEmpty())
                     matrixStats += QStringLiteral(" golden_id=%1").arg(goldenId);
                 SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.matrix.stats"), matrixStats);
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("ps1.rip.vram.sync"),
+                    QStringLiteral("capture=%1 mode=%2")
+                        .arg(captureId, psxVramMirrorModeLabel(vramMirrorMode)));
                 emit meshBuilt(captureId, captureSet.capturedPartCount, captureSet.uniqueCount(),
                                captureSet.instanceCount(), built.vertexCount, built.triangleCount,
                                snapshot.matrices.size(), snapshot.cameraMatrixId,
                                snapshot.hasCameraMatrix(), reconStats.gteInversePercent(),
-                               reconStats.slabLike);
+                               reconStats.slabLike, vramMirrorMode);
             });
     connect(m_worker, &PS1RipWorker::vramFrameUpdated, this,
             [this](const QVector<uint16_t> &cells, const QImage &preview) {

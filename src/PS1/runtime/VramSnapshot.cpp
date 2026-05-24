@@ -35,6 +35,26 @@ bool VramSnapshot::hasVisibleContent(int minNonZero) const
     return false;
 }
 
+bool VramSnapshot::hasNonZeroOutsideRect(const QRect &rect, int minNonZero) const
+{
+    if (minNonZero <= 0)
+        return false;
+
+    const QRect clip = rect.intersected(QRect(0, 0, kWidth, kHeight));
+    int count = 0;
+    for (int y = 0; y < kHeight; ++y) {
+        for (int x = 0; x < kWidth; ++x) {
+            if (clip.contains(x, y))
+                continue;
+            if (m_pixels[y * kWidth + x] == 0)
+                continue;
+            if (++count >= minNonZero)
+                return true;
+        }
+    }
+    return false;
+}
+
 void VramSnapshot::writeRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels)
 {
     if (!pixels || w == 0 || h == 0)

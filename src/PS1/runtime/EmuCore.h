@@ -3,6 +3,7 @@
 
 #include "EmuFramebuffer.h"
 #include "EmuHooks.h"
+#include "PsxVramMirrorMode.h"
 
 #include <QString>
 #include <memory>
@@ -29,6 +30,7 @@ public:
     virtual void syncCaptureMirrors() {}
     /** Re-scan emulated RAM for GPU packets into the capture buffer (libretro path). */
     virtual void ingestCaptureFrame() {}
+    virtual PsxVramMirrorMode lastVramMirrorMode() const { return PsxVramMirrorMode::Unknown; }
     virtual QString lastError() const { return QString(); }
 
     virtual void setJoypadButton(unsigned port, unsigned buttonId, bool pressed)
