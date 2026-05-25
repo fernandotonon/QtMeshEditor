@@ -7,6 +7,7 @@
 #include "PsxJoypadBindings.h"
 #include "SentryReporter.h"
 #include "PsxJoypadState.h"
+#include "PsxVramMirrorMode.h"
 #include "VramViewerWidget.h"
 
 #include <QAction>
@@ -375,7 +376,7 @@ void PS1RipSessionWindow::onCaptureFrame()
 void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes,
                                     int instanceCount, int vertexCount, int triangleCount,
                                     int matrixCount, uint32_t cameraMatrixId, bool hasCameraMatrix,
-                                    int gteInversePercent, bool slabLike)
+                                    int gteInversePercent, bool slabLike, PsxVramMirrorMode vramMirrorMode)
 {
     QString cameraText = hasCameraMatrix
                              ? tr("camera matrix #%1").arg(cameraMatrixId)
@@ -383,8 +384,12 @@ void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedPart
     QString matrixStats = tr("GTE inverse %1%").arg(gteInversePercent);
     if (slabLike)
         matrixStats += tr(" — slab-like bounds (check matrix association)");
+    QString vramText = psxVramMirrorModeLabel(vramMirrorMode);
+    if (vramMirrorMode != PsxVramMirrorMode::FullVram)
+        vramText += tr(" — textures may be wrong");
     m_statusLabel->setText(
-        tr("Mesh %1 — captured %2 / unique %3 / instances %4 (%5 verts, %6 tris, %7 GTE matrices, %8, %9)")
+        tr("Mesh %1 — captured %2 / unique %3 / instances %4 (%5 verts, %6 tris, %7 GTE matrices, "
+           "%8, %9, VRAM: %10)")
             .arg(captureId)
             .arg(capturedParts)
             .arg(uniqueMeshes)
@@ -393,7 +398,8 @@ void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedPart
             .arg(triangleCount)
             .arg(matrixCount)
             .arg(cameraText)
-            .arg(matrixStats));
+            .arg(matrixStats)
+            .arg(vramText));
 }
 
 void PS1RipSessionWindow::onVramDumped(const QString &captureId, const QString &pngPath,

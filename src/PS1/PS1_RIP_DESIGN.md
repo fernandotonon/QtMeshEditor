@@ -86,7 +86,7 @@ See epic #412 for phased issues (#413–#431).
 - `TextureDecoder` — CLUT-aware 4/8/15 bpp decode keyed by `(TPAGE, CLUT, bit depth, semiTrans, draw mode)` with UV-bounds cache merge and STP/alpha via `PsxVramColor`.
 - `PS1RipMeshBuilder` — pre-decodes capture textures, uploads to `PS1Rip_Session<N>` resource group, applies PS1 semi-transparency blend modes, Sentry `ps1.rip.texture.decoded`. Ogre material resources are scoped per capture (`PS1Rip_<captureId>_tpage_…`); prior capture meshes/materials/textures are purged before each rebuild. Runtime materials use the `PS1Rip_` prefix (listed in Material Editor, read-only; GPU thumbnails are skipped to avoid UI freezes).
 - `dumpVRAM()` saves `<AppData>/ps1_rip/captures/<id>_vram.png` and feeds `VramViewerWidget` in the session window.
-- **Libretro:** `syncVramFromCore()` mirrors live core VRAM every frame; capture snapshots include a VRAM cell copy for textured mesh export.
+- **Libretro:** `syncVramFromCore()` mirrors live core VRAM every frame; capture snapshots include a VRAM cell copy for textured mesh export. Software renderer (`beetle_psx_renderer=software`, #660) is required for full TPAGE/CLUT decode on retail captures; framebuffer-only fallback remains for unsupported cores.
 - Stub core fills CLUT + 4/8/15 bpp test regions via `stubFillVramPattern` when capture is armed or on `syncCaptureMirrors` (CI only).
 
 ## Phase 4 status (#422 / #423)
@@ -140,7 +140,11 @@ The **stub** core is active (`coreId=stub`). It draws a test pattern and synthet
 
 1. **Empty while the game viewport is black** — the mirror is filled from libretro each frame. Press **Start**, wait until you see gameplay in the PS1 viewport, then dump again.
 2. **Session died after the warning** — non-fatal dump/capture issues use `sessionWarning` only. Older builds used `emulationError` and stopped the session, so a second dump showed “no session”.
-3. **Hardware renderer (mednafen default)** — `RETRO_MEMORY_VIDEO_RAM` is often **not** exposed (VRAM stays on the GPU). QtMeshEditor falls back to mirroring the **visible framebuffer** into the top-left of the VRAM snapshot so dump/preview still work. This is **not** the full 1024×512 texture atlas — only what is on screen. Full VRAM needs a software-renderer core build that exports memory maps (future improvement).
+3. **Hardware renderer (mednafen default)** — `beetle_psx_hw` and hardware GL/Vulkan renderers keep VRAM on the GPU and do **not** expose `RETRO_MEMORY_VIDEO_RAM`. QtMeshEditor forces **`beetle_psx_renderer = software`** via libretro core options (override + `Beetle PSX.cfg` in the BIOS folder) and **excludes** `beetle_psx_hw_*` from auto-discovery. With software mednafen/beetle, texture decode (#421) reads the full 1024×512 VRAM snapshot at capture time.
+
+   If the status bar still shows **VRAM: framebuffer mirror only**, the loaded core is not exposing VRAM — confirm `PS1Cores/mednafen_psx_libretro.*` (not `_hw_`), unset `QTMESH_PS1_LIBRETRO_RENDERER=auto` unless debugging, and re-run `scripts/install-ps1-libretro-core.sh`. Optional env: `QTMESH_PS1_LIBRETRO_RENDERER=software|hardware|auto` (default **software**).
+
+   **Partial tier:** when only the visible framebuffer is mirrored, GP0 VRAM-upload packets during armed capture may still patch texture pages outside the FB rect (**framebuffer + GP0 texture patches**). Golden-scene geometry-only passes are documented in `src/PS1/golden_captures.md`.
 
 ### Capture mesh is a triangle “blob” (normal size, wrong shape)
 
@@ -166,8 +170,15 @@ export QTMESH_PS1_TEST_ISO=/path/game.cue
 
 - **Doc:** `src/PS1/golden_captures.md` — homebrew + two retail acceptance scenes, manual checklist, env var names.
 - **Env:** `QTMESH_PS1_GOLDEN_SCENE_ID`, `QTMESH_PS1_GOLDEN_HOMEBREW_ISO`, `QTMESH_PS1_GOLDEN_RETAIL_A_ISO`, `QTMESH_PS1_GOLDEN_RETAIL_B_ISO` (plus legacy `QTMESH_PS1_TEST_*` aliases).
-- **CI:** `MeshReconstructorGoldenTest.SlabMetricHeuristic*` / `ScreenCubeReconstructionHasVolume` run without ROMs. `ConfiguredGoldenIsoReconstructsWithVolume` runs when BIOS + at least one golden ISO path is set (skips in CI by default).
+- **CI:** `MeshReconstructorGoldenTest.SlabMetricHeuristic*` / `ScreenCubeReconstructionHasVolume` run without ROMs. `ConfiguredGoldenIsoReconstructsWithVolume` is a no-op when BIOS/ISO paths are unset.
 - **Telemetry:** `ps1.rip.capture.golden` and `ps1.rip.matrix.stats` include `golden_id=` when `QTMESH_PS1_GOLDEN_SCENE_ID` is set or `PS1RipManager::setGoldenSceneId()` is used (session UI picker: #425).
+
+### Full VRAM / textures (#660)
+
+- **Software renderer:** libretro host forces `beetle_psx_renderer=software` (env override `QTMESH_PS1_LIBRETRO_RENDERER`, default software) and rejects `beetle_psx_hw_*` cores.
+- **Status bar:** after capture, `VRAM: full VRAM` vs `framebuffer mirror only` vs `framebuffer + GP0 texture patches`.
+- **Sentry:** `ps1.rip.vram.sync` breadcrumb on capture with mode label.
+- **Tests:** `LibretroCoreOptionsTest`, `VramSnapshotTest.HasNonZeroOutsideRectDetectsTpageRegion`, stub VRAM tests unchanged.
 
 ## Open questions
 

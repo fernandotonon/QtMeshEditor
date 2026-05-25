@@ -6,6 +6,7 @@
 #include "EmuFramebuffer.h"
 #include "GpuCommandParser.h"
 #include "PsxGoldenCapture.h"
+#include "PsxVramMirrorMode.h"
 #include "RipperHooks.h"
 #include "SentryReporter.h"
 #include "VramSnapshot.h"
@@ -13,11 +14,34 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QRect>
 #include <QStandardPaths>
 #include <QElapsedTimer>
 #include <QTimer>
 
 #include <cstring>
+
+namespace {
+
+PsxVramMirrorMode effectiveVramMirrorMode(const EmuCore *core, const VramSnapshot *vram)
+{
+    if (!core)
+        return PsxVramMirrorMode::Unknown;
+
+    PsxVramMirrorMode mode = core->lastVramMirrorMode();
+    if (mode != PsxVramMirrorMode::FramebufferFallback || !vram)
+        return mode;
+
+    const EmuFramebuffer &fb = core->framebuffer();
+    if (!fb.isValid())
+        return mode;
+
+    if (vram->hasNonZeroOutsideRect(QRect(0, 0, fb.width, fb.height), 8))
+        return PsxVramMirrorMode::Gp0Hybrid;
+    return mode;
+}
+
+} // namespace
 
 PS1RipWorker::PS1RipWorker(QObject *parent)
     : QObject(parent)
@@ -269,12 +293,15 @@ void PS1RipWorker::finalizeFrameCapture()
     if (!goldenId.isEmpty())
         captureMsg += QStringLiteral(" golden_id=%1").arg(goldenId);
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture"), captureMsg);
+    const PsxVramMirrorMode vramMode = effectiveVramMirrorMode(m_core.get(), m_vram.get());
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.vram.sync"),
+                                  QStringLiteral("mode=%1").arg(psxVramMirrorModeLabel(vramMode)));
     QVector<uint16_t> vramCells;
     if (m_vram && !m_vram->isEmpty())
         vramCells = m_vram->mutablePixels();
 
     emit frameCaptureReady(captureId, CaptureSnapshot::fromBuffer(*m_captureBuffer, vramCells),
-                           prims.size());
+                           prims.size(), vramMode);
 }
 
 void PS1RipWorker::dumpVram()
@@ -292,6 +319,17 @@ void PS1RipWorker::dumpVram()
             tr("VRAM mirror is still empty — confirm the game is running (video in the viewport), "
                "then try again."));
         return;
+    }
+
+    const PsxVramMirrorMode vramMode = effectiveVramMirrorMode(m_core.get(), m_vram.get());
+    if (vramMode == PsxVramMirrorMode::FramebufferFallback) {
+        emit sessionWarning(
+            tr("VRAM is framebuffer-only — textures may be missing. Use mednafen_psx_libretro "
+               "(software renderer) in PS1Cores/; avoid beetle_psx_hw."));
+    } else if (vramMode == PsxVramMirrorMode::Gp0Hybrid) {
+        emit sessionWarning(
+            tr("VRAM is partial (framebuffer + GP0 patches). Full texture pages require software "
+               "renderer VRAM access."));
     }
 
     const QString captureId = QString::number(QDateTime::currentMSecsSinceEpoch());

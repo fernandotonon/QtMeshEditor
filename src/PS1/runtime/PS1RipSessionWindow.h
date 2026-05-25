@@ -12,6 +12,8 @@ class PS1RipManager;
 class QMenu;
 class VramViewerWidget;
 
+enum class PsxVramMirrorMode;
+
 /** Temporary host for emulator viewport + transport (#416 / #417). */
 class PS1RipSessionWindow : public QMainWindow
 {
@@ -45,7 +47,8 @@ private slots:
                       const QImage &nativePreview);
     void onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
                      int vertexCount, int triangleCount, int matrixCount, uint32_t cameraMatrixId,
-                     bool hasCameraMatrix, int gteInversePercent, bool slabLike);
+                     bool hasCameraMatrix, int gteInversePercent, bool slabLike,
+                     PsxVramMirrorMode vramMirrorMode);
     void onPausedChanged(bool paused);
 
 private:

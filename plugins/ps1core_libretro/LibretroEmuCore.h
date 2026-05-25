@@ -3,8 +3,10 @@
 
 #include "EmuCore.h"
 #include "LibretroHost.h"
+#include "PsxVramMirrorMode.h"
 
 #include <QByteArray>
+#include <QHash>
 #include <QString>
 #include <QVector>
 
@@ -27,6 +29,7 @@ public:
     void setHooks(EmuHooks *hooks) override;
     void syncCaptureMirrors() override;
     void ingestCaptureFrame() override;
+    PsxVramMirrorMode lastVramMirrorMode() const override;
     QString lastError() const override { return m_lastError; }
     void setJoypadButton(unsigned port, unsigned buttonId, bool pressed) override;
     void resetJoypad(unsigned port = 0) override;
@@ -64,11 +67,13 @@ private:
     retro_pixel_format m_pixelFormat = RETRO_PIXEL_FORMAT_0RGB1555;
     bool m_hasVideoFrame = false;
     QString m_lastError;
-    QByteArray m_envVarUtf8;
     QByteArray m_envSystemDirUtf8;
+    QByteArray m_rendererPreference;
+    QHash<QByteArray, QByteArray> m_coreVariableStorage;
     const uint16_t *m_vramPtr = nullptr;
     size_t m_vramBytes = 0;
     bool m_vramUsesFramebufferFallback = false;
+    PsxVramMirrorMode m_lastVramMirrorMode = PsxVramMirrorMode::Unknown;
 
     struct MemoryRegion {
         const void *ptr = nullptr;

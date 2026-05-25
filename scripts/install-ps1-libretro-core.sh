@@ -62,7 +62,7 @@ if [[ -n "${QTMESH_PS1_LIBRETRO_CORE:-}" ]]; then
 fi
 
 if fetch_buildbot_beetle; then
-  echo "Using libretro buildbot mednafen_psx_libretro (recommended for .iso rips)."
+  echo "Using libretro buildbot mednafen_psx_libretro (software renderer — required for VRAM texture rip #660)."
   exit 0
 fi
 
