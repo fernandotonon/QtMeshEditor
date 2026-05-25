@@ -23,7 +23,15 @@ namespace QtMeshEditor.VAT.Editor
         const string kSidecarName    = "mixamo.com-remap_info.json";
         const string kPositionTexName = "mixamo.com_pos.png";
         const string kDiffuseTexName  = "Boss_diffuse.png";
-        const string kSourceGltfName  = "source.gltf";
+        // We probe FBX first because Unity 6's stock importer handles
+        // .fbx natively (.gltf needs the UnityGLTF package). The bake's
+        // vertex column order is preserved across both formats since
+        // `qtmesh convert` re-exports through the same Ogre intermediate
+        // the baker walked.
+        static readonly string[] kSourceMeshCandidates = {
+            "source.fbx",
+            "source.gltf",
+        };
 
         static BootstrapVAT()
         {
@@ -58,7 +66,13 @@ namespace QtMeshEditor.VAT.Editor
             if (p.diffuseTexture == null)
                 p.diffuseTexture  = AssetDatabase.LoadAssetAtPath<Texture2D>($"{kBakeDir}/{kDiffuseTexName}");
             if (p.sourceMesh == null)
-                p.sourceMesh = FindFirstMeshInGltf($"{kBakeDir}/{kSourceGltfName}");
+            {
+                foreach (var name in kSourceMeshCandidates)
+                {
+                    p.sourceMesh = FindFirstMeshInModel($"{kBakeDir}/{name}");
+                    if (p.sourceMesh != null) break;
+                }
+            }
             p.frameCount = frames;
             p.boundsMin  = mn;
             p.boundsMax  = mx;
@@ -68,14 +82,14 @@ namespace QtMeshEditor.VAT.Editor
         }
 
         // ── Mesh sub-asset lookup ────────────────────────────────────
-        // The glTF imports as a Model: a top-level GameObject prefab with
-        // every Mesh stored as a sub-asset of that single .gltf importer.
-        // Reaching them via GetComponentInChildren<>() depends on the
-        // import settings — for skinned meshes the importer may strip
-        // the SkinnedMeshRenderer down to a static MeshFilter, in which
-        // case the first lookup misses. Enumerating sub-assets directly
-        // is robust against that variability.
-        static Mesh FindFirstMeshInGltf(string assetPath)
+        // .fbx (and .gltf with UnityGLTF) imports as a Model: a top-level
+        // GameObject prefab with every Mesh stored as a sub-asset of the
+        // importer. Reaching them via GetComponentInChildren<>() depends
+        // on the import settings — for skinned meshes the importer may
+        // strip the SkinnedMeshRenderer down to a static MeshFilter, in
+        // which case the first lookup misses. Enumerating sub-assets
+        // directly is robust against that variability.
+        static Mesh FindFirstMeshInModel(string assetPath)
         {
             var subAssets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
             if (subAssets == null) return null;

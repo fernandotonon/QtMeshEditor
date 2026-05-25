@@ -26,7 +26,8 @@ tools/unity-vat-demo/
     ├── Scenes/                       ← (empty — you build these in 30 seconds, see below)
     └── VAT/
         └── Rumba/                    ← bake artifacts (data files only)
-            ├── source.gltf + .bin    ← mesh
+            ├── source.fbx            ← mesh (Unity's stock importer handles FBX)
+            ├── source.gltf + .bin    ← same mesh in glTF (used by the Godot + Unreal demos)
             ├── Boss_diffuse.png      ← diffuse texture
             ├── mixamo.com_pos.png    ← packed positions + normals
             ├── mixamo.com-remap_info.json
@@ -64,12 +65,20 @@ that's identical to what we'd ship anyway.
    Click Apply.
 
 4. **Mesh import setting — Read/Write must be ON.**
-   Click `Assets/VAT/Rumba/source.gltf` and on the Model tab:
+   Click `Assets/VAT/Rumba/source.fbx` and on the Model tab:
    - **Read/Write Enabled:** ON — `VATPlayer.EnsureUV2()` writes a
      synthesized UV2 channel into the mesh at runtime, which needs
      CPU-side access.
 
    Click Apply.
+
+   > **Why FBX, not glTF?** Unity 6's stock importer only handles
+   > `.fbx`, `.obj`, `.dae`, and `.3ds`. `.gltf` needs the optional
+   > [UnityGLTF](https://github.com/KhronosGroup/UnityGLTF) package.
+   > The bake ships both formats and the demo prefers the FBX — same
+   > 5828 verts in the same order (via `qtmesh convert`'s Ogre
+   > intermediate), so the position-texture columns line up either
+   > way. The Godot and Unreal demos use the glTF.
 
 ## Build the web/single-dancer scene (30 seconds)
 
