@@ -3,7 +3,11 @@
 
 #include <QByteArray>
 #include <QFileInfo>
+#include <QList>
+#include <QPair>
+#include <QSet>
 #include <QString>
+#include <QStringList>
 
 #include <QtGlobal>
 
@@ -61,6 +65,41 @@ inline const char *valueForKey(const char *key, const QByteArray &rendererPrefer
     }
 
     return nullptr;
+}
+
+/**
+ * Merge `managed` `key = "value"` pairs into an existing core-config line set,
+ * preserving every untouched line (comments, blank lines, unrelated keys) in
+ * its original order. Managed keys are removed in-place and re-appended at the
+ * end so multiple QtMeshEditor sessions converge to the same canonical layout.
+ */
+inline QStringList mergeCoreConfigLines(
+    const QStringList &existingLines,
+    const QList<QPair<QByteArray, QByteArray>> &managed)
+{
+    QSet<QString> managedKeys;
+    for (const auto &kv : managed)
+        managedKeys.insert(QString::fromLatin1(kv.first));
+
+    QStringList out;
+    out.reserve(existingLines.size() + managed.size());
+    for (const QString &line : existingLines) {
+        const int eq = line.indexOf(QLatin1Char('='));
+        if (eq < 0) {
+            out.append(line);
+            continue;
+        }
+        const QString key = line.left(eq).trimmed();
+        if (managedKeys.contains(key))
+            continue;
+        out.append(line);
+    }
+    for (const auto &kv : managed) {
+        out.append(QStringLiteral("%1 = \"%2\"")
+                       .arg(QString::fromLatin1(kv.first),
+                            QString::fromLatin1(kv.second)));
+    }
+    return out;
 }
 
 } // namespace LibretroCoreOptions

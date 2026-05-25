@@ -1,5 +1,6 @@
 #include "PS1RipManager.h"
 #include "CaptureSnapshot.h"
+#include "LibretroCoreOptions.h"
 #include "MeshReconstructionStats.h"
 #include "MeshReconstructor.h"
 #include "MeshTopologyHash.h"
@@ -268,6 +269,17 @@ bool PS1RipManager::loadBios(const QString &path)
     else if (fp.sizeOk)
         biosMsg += QStringLiteral(" known=unknown");
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.bios.load"), biosMsg);
+
+    // #660: record which libretro renderer we'll request so rip sessions can be
+    // correlated with VRAM-mode telemetry below. The plugin can't link Sentry
+    // (it's a runtime-loaded MODULE), so the breadcrumb originates here.
+    const QByteArray rendererPref = LibretroCoreOptions::rendererPreferenceFromEnv();
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.renderer"),
+        QStringLiteral("preference=%1")
+            .arg(rendererPref.isEmpty() ? QStringLiteral("auto")
+                                        : QString::fromUtf8(rendererPref)));
+
     syncWorkerSession();
     return true;
 }

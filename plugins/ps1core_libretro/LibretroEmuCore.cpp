@@ -16,7 +16,10 @@
 #include <cstdarg>
 #include <cstring>
 
+#include <QList>
+#include <QPair>
 #include <QString>
+#include <QStringList>
 
 namespace {
 
@@ -209,19 +212,47 @@ bool installBiosAliases(const QString &biosPath, const QString &biosLabel)
     return QFile::copy(biosPath, target);
 }
 
+// Merge our keys into an existing Beetle PSX.cfg rather than truncating it,
+// so unrelated user/core settings (and other libretro frontends sharing the
+// directory) survive across rip sessions. Review feedback on PR #671.
 void writeSoftwareRendererCoreConfig(const QString &biosDirPath)
 {
     if (LibretroCoreOptions::rendererPreferenceFromEnv() != "software")
         return;
 
-    const QString cfgPath = QDir(biosDirPath).filePath(QStringLiteral("Beetle PSX.cfg"));
-    QFile cfg(cfgPath);
-    if (!cfg.open(QIODevice::WriteOnly | QIODevice::Text))
-        return;
+    const QList<QPair<QByteArray, QByteArray>> managed = {
+        {QByteArrayLiteral("beetle_psx_renderer"), QByteArrayLiteral("software")},
+        {QByteArrayLiteral("beetle_psx_skip_bios"), QByteArrayLiteral("enabled")},
+        {QByteArrayLiteral("beetle_psx_override_bios"), QByteArrayLiteral("disabled")},
+    };
 
-    cfg.write("beetle_psx_renderer = \"software\"\n");
-    cfg.write("beetle_psx_skip_bios = \"enabled\"\n");
-    cfg.write("beetle_psx_override_bios = \"disabled\"\n");
+    const QString cfgPath = QDir(biosDirPath).filePath(QStringLiteral("Beetle PSX.cfg"));
+
+    QStringList existingLines;
+    {
+        QFile in(cfgPath);
+        if (in.exists() && in.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            while (!in.atEnd()) {
+                QByteArray raw = in.readLine();
+                while (raw.endsWith('\n') || raw.endsWith('\r'))
+                    raw.chop(1);
+                existingLines.append(QString::fromUtf8(raw));
+            }
+        }
+    }
+
+    const QStringList outLines = LibretroCoreOptions::mergeCoreConfigLines(existingLines, managed);
+
+    QFile out(cfgPath);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        qWarning() << "[ps1-rip] Failed to write Beetle PSX core config:"
+                   << cfgPath << out.errorString();
+        return;
+    }
+    for (const QString &line : outLines) {
+        out.write(line.toUtf8());
+        out.write("\n");
+    }
 }
 
 } // namespace
