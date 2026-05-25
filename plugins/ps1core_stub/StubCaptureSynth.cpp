@@ -7,6 +7,115 @@
 #include <QVector>
 #include <QtGlobal>
 
+namespace {
+
+// PS1 GP0 packet builders (psx-spx / nocash) — opcode goes in the **low** byte
+// per QtMeshEditor's `psxGp0OpcodeByte` convention. Each builder appends raw
+// 32-bit words to the FIFO buffer so the stub feeds the same code path the
+// real libretro plugin uses (#662 — issue acceptance item 2).
+
+uint32_t cmdWord(uint8_t opcode, uint8_t r, uint8_t g, uint8_t b)
+{
+    return static_cast<uint32_t>(opcode)
+           | (static_cast<uint32_t>(r) << 8)
+           | (static_cast<uint32_t>(g) << 16)
+           | (static_cast<uint32_t>(b) << 24);
+}
+
+uint32_t posWord(int16_t x, int16_t y)
+{
+    return (static_cast<uint32_t>(static_cast<uint16_t>(y)) << 16)
+           | static_cast<uint32_t>(static_cast<uint16_t>(x));
+}
+
+uint32_t uvWord(uint8_t u, uint8_t v, uint16_t clutOrTpage)
+{
+    return (static_cast<uint32_t>(clutOrTpage) << 16)
+           | (static_cast<uint32_t>(v) << 8)
+           | static_cast<uint32_t>(u);
+}
+
+uint32_t colorWord(uint8_t r, uint8_t g, uint8_t b)
+{
+    return (static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(g) << 8)
+           | static_cast<uint32_t>(r);
+}
+
+void emitMonoTri(QVector<uint32_t> &fifo, int16_t x0, int16_t y0)
+{
+    fifo.append(cmdWord(0x20, 200, 40, 40));
+    fifo.append(posWord(x0, y0));
+    fifo.append(posWord(x0 + 32, y0));
+    fifo.append(posWord(x0 + 16, y0 + 24));
+}
+
+void emitShadedTri(QVector<uint32_t> &fifo, int16_t x0, int16_t y0)
+{
+    fifo.append(cmdWord(0x30, 200, 40, 40));
+    fifo.append(posWord(x0, y0));
+    fifo.append(colorWord(40, 200, 40));
+    fifo.append(posWord(x0 + 32, y0));
+    fifo.append(colorWord(40, 40, 200));
+    fifo.append(posWord(x0 + 16, y0 + 24));
+}
+
+void emitTexturedTri(QVector<uint32_t> &fifo, int16_t x0, int16_t y0, uint16_t clut,
+                     uint16_t tpage)
+{
+    fifo.append(cmdWord(0x24, 200, 40, 40));
+    fifo.append(posWord(x0, y0));
+    fifo.append(uvWord(8, 8, clut));
+    fifo.append(posWord(x0 + 32, y0));
+    fifo.append(uvWord(40, 8, tpage));
+    fifo.append(posWord(x0 + 16, y0 + 24));
+    fifo.append(uvWord(24, 32, tpage));
+}
+
+void emitMonoQuad(QVector<uint32_t> &fifo, int16_t x0, int16_t y0)
+{
+    fifo.append(cmdWord(0x28, 200, 40, 40));
+    fifo.append(posWord(x0, y0));
+    fifo.append(posWord(x0 + 32, y0));
+    fifo.append(posWord(x0 + 16, y0 + 24));
+    fifo.append(posWord(x0 + 32, y0 + 24));
+}
+
+void emitShadedQuad(QVector<uint32_t> &fifo, int16_t x0, int16_t y0)
+{
+    fifo.append(cmdWord(0x38, 200, 40, 40));
+    fifo.append(posWord(x0, y0));
+    fifo.append(colorWord(40, 200, 40));
+    fifo.append(posWord(x0 + 32, y0));
+    fifo.append(colorWord(40, 40, 200));
+    fifo.append(posWord(x0 + 16, y0 + 24));
+    fifo.append(colorWord(200, 200, 40));
+    fifo.append(posWord(x0 + 32, y0 + 24));
+}
+
+void emitTexturedQuad(QVector<uint32_t> &fifo, int16_t x0, int16_t y0, uint16_t clut,
+                      uint16_t tpage)
+{
+    fifo.append(cmdWord(0x2C, 200, 40, 40));
+    fifo.append(posWord(x0, y0));
+    fifo.append(uvWord(8, 8, clut));
+    fifo.append(posWord(x0 + 32, y0));
+    fifo.append(uvWord(40, 8, tpage));
+    fifo.append(posWord(x0 + 16, y0 + 24));
+    fifo.append(uvWord(24, 32, tpage));
+    fifo.append(posWord(x0 + 32, y0 + 24));
+    fifo.append(uvWord(40, 32, tpage));
+}
+
+void emitSprite(QVector<uint32_t> &fifo, int16_t x0, int16_t y0, uint16_t clut)
+{
+    fifo.append(cmdWord(0x64, 200, 40, 40));
+    fifo.append(posWord(x0, y0));
+    fifo.append(posWord(x0 + 32, y0));
+    fifo.append(uvWord(8, 8, clut));
+}
+
+} // namespace
+
 void stubEmitCaptureSample(EmuHooks *hooks)
 {
     if (!hooks || !hooks->isCaptureEnabled())
@@ -19,48 +128,37 @@ void stubEmitCaptureSample(EmuHooks *hooks)
     matrix.rt.m[1][1] = 1 << 12;
     matrix.rt.m[2][2] = 1 << 12;
     matrix.h = 256;
-    const uint32_t matrixId = hooks->onGteMatrix(matrix);
+    hooks->onGteMatrix(matrix);
 
-    auto emitPrim = [&](PrimKind kind, uint8_t count, int x0, int y0) {
-        PrimRecord prim{};
-        prim.kind = kind;
-        prim.vertexCount = count;
-        prim.matrixId = matrixId;
-        prim.tpage = 0x100;
-        prim.clut = 0x200;
-        prim.verts[0].x = x0;
-        prim.verts[0].y = y0;
-        prim.verts[0].r = 200;
-        prim.verts[0].g = 40;
-        prim.verts[0].b = 40;
-        prim.verts[0].u = 8;
-        prim.verts[0].v = 8;
-        if (count >= 2) {
-            prim.verts[1].x = x0 + 32;
-            prim.verts[1].y = y0;
-        }
-        if (count >= 3) {
-            prim.verts[2].x = x0 + 16;
-            prim.verts[2].y = y0 + 24;
-        }
-        if (count >= 4) {
-            prim.verts[3].x = x0 + 32;
-            prim.verts[3].y = y0 + 24;
-        }
-        hooks->onGpuPrim(prim);
-    };
+    // Build the seven-flavor capture as one contiguous GP0 FIFO stream and
+    // submit it via submitGp0Words so the stub exercises the same direct-hook
+    // path as a real in-core mednafen GP0 dispatch would (#662).
+    QVector<uint32_t> fifo;
+    fifo.reserve(96);
 
-    emitPrim(PrimKind::MonoTri, 3, 16, 16);
-    emitPrim(PrimKind::ShadedTri, 3, 64, 16);
-    emitPrim(PrimKind::TexturedTri, 3, 112, 16);
-    emitPrim(PrimKind::MonoQuad, 4, 16, 64);
-    emitPrim(PrimKind::ShadedQuad, 4, 64, 64);
-    emitPrim(PrimKind::TexturedQuad, 4, 112, 64);
-    emitPrim(PrimKind::Sprite, 2, 160, 64);
+    // 0xE4 drawing offset (0,0) — 2-word packet (opcode + xy) per the parser's
+    // convention. Stamps submit-matrix OFX/OFY (#658).
+    fifo.append(static_cast<uint32_t>(0xE4));
+    fifo.append(posWord(0, 0));
 
+    constexpr uint16_t kClut = 0x200;
+    constexpr uint16_t kTpage = 0x100;
+
+    emitMonoTri(fifo, 16, 16);
+    emitShadedTri(fifo, 64, 16);
+    emitTexturedTri(fifo, 112, 16, kClut, kTpage);
+    emitMonoQuad(fifo, 16, 64);
+    emitShadedQuad(fifo, 64, 64);
+    emitTexturedQuad(fifo, 112, 64, kClut, kTpage);
+    emitSprite(fifo, 160, 64, kClut);
+
+    hooks->submitGp0Words(fifo.constData(), static_cast<size_t>(fifo.size()));
+
+    // Mirror the legacy DrawMode emission so tests/observers that watch
+    // `onDrawMode` still see a final mode update.
     DrawModeRecord mode{};
     mode.drawModeBits = 0x1234;
-    mode.tpage = 0x100;
+    mode.tpage = kTpage;
     hooks->onDrawMode(mode);
 
     hooks->onFrameEnd();

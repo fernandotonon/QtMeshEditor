@@ -69,12 +69,22 @@ See epic #412 for phased issues (#413–#431).
 - `CaptureTypes`, `GpuCommandParser`, `CaptureBuffer`, `RipperHooks`, `Gp0HookDispatch` (#418).
 - `EmuHooks` included from `EmuCore.h` (issue #418 API surface).
 - **GTE capture (#419):** On **Capture Frame**, `PsxGteInstructionCapture` scans RAM for COP2 **RTPS/RTPT**, executes setup sequences via `PsxMipsGteRunner` + `PsxGteEngine`, then `PsxGteRamScanner` supplements with matrix blobs. GP0 ingest tags primitives with `latestMatrixId`. Hash dedupe + `cameraMatrixId` heuristic in the session status bar after mesh build. GTE RAM scans run on final capture ingest only (not on per-frame live GPU ticks).
-- **GP0 capture (#657):** Three paths feed `RipperHooks::onGpuPrim`:
-  - **Direct hook (`gp0_hook`):** `EmuHooks::submitGp0Words` — used by the **stub** core (synthetic seven-flavor capture via `onGpuPrim`) and reserved for true in-core mednafen FIFO hooks. Sentry breadcrumb `ps1.rip.capture.gp0_hook` records `source:gp0_hook|ram_ot|ram_linear|ram_chain_root` and per-path counts.
-  - **Libretro live frame (`ram_*`):** While capture is armed, each `retro_run()` end triggers a lightweight RAM ingest (OT + standalone chain roots + linear, no GTE scan). Primitives accumulate with cross-frame dedupe until **Capture Frame** runs a final GTE+RAM merge. Disable live ingest with `QTMESH_PS1_GP0_LIVE_CAPTURE=0`. Baseline RAM-only behavior (OT then linear, no chain-root pass) via `QTMESH_PS1_GP0_RAM_LEGACY=1`.
-  - **Merged RAM scan:** `PsxOrderingTableScanner` → `PsxGp0ChainRootScanner` → linear fallback share one dedupe set (no early return after a weak OT). OT entries use **24-bit absolute RAM pointers** (libgpu `getaddr` layout), with a relative-to-OT-base fallback for synthetic tests. Linked DR tags carry the opcode in bits 24–31 and the next packet address in bits 2–23 (`PsxGp0Opcode.h`).
-- **Stub core** (`coreId=stub`): direct `onGpuPrim` hook path for CI when `QTMESH_PS1_FORCE_STUB=1` or no libretro core is present.
-- **Libretro core** (`coreId=libretro`): live merged RAM capture at frame boundary; true mednafen GP0 FIFO dispatch hooks remain future work ([#662](https://github.com/fernandotonon/QtMeshEditor/issues/662)).
+- **GP0 capture (#657 / #662):** Four paths feed `RipperHooks::onGpuPrim`, sorted by attribution priority in `Gp0CaptureStats::primarySource`:
+  - **Direct hook (`gp0_hook`):** `EmuHooks::submitGp0Words` — the canonical FIFO code path. Used by the **stub** core (synthetic seven-flavor capture, post-#662) and by the **libretro live FIFO bridge** (`EmuHooks::submitFifoChainsFromRam`, `Gp0HookDispatch::submitChainsFromRam`) which walks RAM-resident DMA chains per frame and dispatches each chain's raw word range via `submitGp0Words`. `RipperHooks` saves/restores `m_ramCaptureActive` around the bridge call so prims it dispatches count toward `directHookPrims` even when nested inside a wrapping RAM-capture pass. Disable with `QTMESH_PS1_GP0_FIFO_BRIDGE=0` to A/B vs the legacy RAM-only attribution.
+  - **OT chain (`ram_ot`):** `PsxOrderingTableScanner` walks ordering-table entries (libgpu `getaddr`) and follows linked DR-tag chains.
+  - **Chain root (`ram_chain_root`):** `PsxGp0ChainRootScanner` finds standalone linked roots that no OT pointer touched.
+  - **Linear (`ram_linear`):** opcode-by-opcode fallback for buffers without OT/chain headers.
+  All four share one dedupe set (no early return after a weak OT). Linked DR tags carry the opcode in bits 24–31 and the next packet address in bits 2–23 (`PsxGp0Opcode.h`). Sentry breadcrumb `ps1.rip.capture.gp0_hook` records per-path counts; session status bar surfaces `GP0 <source> (hook X / ot Y / chain Z / linear W)` after each capture.
+- **Per-core capability (#662):**
+  | Core | VRAM | GP0 FIFO source | Notes |
+  |------|------|-----------------|-------|
+  | `mednafen_psx_libretro` (software) | full 1024×512 (#660) | live FIFO bridge (`gp0_hook`) + merged RAM | recommended |
+  | `beetle_psx_libretro` (software) | full 1024×512 (#660) | live FIFO bridge (`gp0_hook`) + merged RAM | recommended |
+  | `beetle_psx_hw_*` | none | excluded — `gp0_hook` path unavailable | rejected by `LibretroCoreOptions` |
+  | `stub` (`qtmesh_ps1core_stub`) | synthetic test pattern | direct stub via `submitGp0Words` (`gp0_hook`) | CI / no-disc smoke |
+- **Libretro live frame:** While capture is armed, each `retro_run()` end calls `captureGpuFromRam(false, true)` → `Gp0HookDispatch::captureFrameFromSystemRam`. Inside that pass, the FIFO bridge fires first (DirectHook attribution) and the merged RAM scan runs second (Ram* attribution). Primitives accumulate with cross-frame dedupe (`m_liveDedupe`) until **Capture Frame** runs a final GTE+RAM merge. Disable live ingest with `QTMESH_PS1_GP0_LIVE_CAPTURE=0`. Baseline RAM-only behavior (OT then linear, no chain-root pass, no FIFO bridge) via `QTMESH_PS1_GP0_RAM_LEGACY=1` + `QTMESH_PS1_GP0_FIFO_BRIDGE=0`.
+- **Stub core** (`coreId=stub`): seven-flavor capture is now emitted as a contiguous GP0 word buffer routed through `submitGp0Words` (#662) — the production stub matches the same code path retail captures use.
+- **Libretro core** (`coreId=libretro`): live FIFO bridge ships in this slice (#662). True packet-for-packet in-core mednafen GP0 hooks (i.e. patched `mednafen_psx_libretro` with a `RipperHooks`-aware GPU_Write callback) remain out of scope until a forked core ships — the bridge approximates FIFO ordering by walking DMA chains per frame, which is sufficient to surface `gp0_hook` attribution and to feed the canonical hook code path on retail captures.
 - `armCapture` / `captureFrame` wire capture to the worker thread; CSV dump to temp for verification.
 - Sentry breadcrumb `ps1.rip.capture.frame_armed` via `ui.action`.
 - Tests: synthetic OT/homebrew RAM layout, seven-flavor CSV round-trip, disarmed capture &lt;1% `runFrame` overhead (stub + optional libretro integration).
@@ -115,7 +125,14 @@ See epic #412 for phased issues (#413–#431).
 
 ## GP0 FIFO follow-up (#662)
 
-Post-#657 / #661 work: true mednafen GP0 FIFO dispatch (packet-for-packet as the core submits), stub routing through `submitGp0Words`, session UI for capture-source breakdown, and golden-scene validation vs `QTMESH_PS1_GP0_RAM_LEGACY=1`. See [issue #662](https://github.com/fernandotonon/QtMeshEditor/issues/662).
+Shipped in this slice:
+- **Stub via `submitGp0Words`** — seven-flavor synthetic capture builds a contiguous GP0 word buffer (`StubCaptureSynth.cpp`) and submits via `hooks->submitGp0Words`, matching the canonical hook code path (`Gp0CapturePathsTest.StubSeven*` regressions).
+- **Live FIFO bridge for libretro** — `EmuHooks::submitFifoChainsFromRam` (override on `RipperHooks`) calls `Gp0HookDispatch::submitChainsFromRam`, which sweeps the first 512 KiB of mednafen system RAM for contiguous DMA chain roots and dispatches each chain's word range through `submitGp0Words`. Bridge runs inside `captureFrameFromSystemRam` *before* the merged RAM scan; `m_ramCaptureActive` is cleared so prims it produces are attributed as `Gp0CaptureSource::DirectHook`. Disabled with `QTMESH_PS1_GP0_FIFO_BRIDGE=0`.
+- **Session UI / Sentry** — `PS1RipSessionWindow` status bar now appends `GP0 <primary> (hook X / ot Y / chain Z / linear W)`; `PS1RipWorker` emits a `ps1.rip.capture.summary` Sentry breadcrumb with the same breakdown.
+
+Still open work:
+- **In-core mednafen GP0 hook** — patching a fork of `mednafen_psx_libretro` with a callback that pushes each `GPU_Write32` to `submitGp0Words` would give true packet-for-packet ordering (vs the per-frame RAM walk the bridge approximates today). Tracked in [#662](https://github.com/fernandotonon/QtMeshEditor/issues/662) for a follow-up.
+- **Golden-scene regression vs the legacy RAM-only path** — see `src/PS1/golden_captures.md`. A/B with `QTMESH_PS1_GP0_FIFO_BRIDGE=0` to confirm the bridge's `gp0_hook` attribution doesn't regress prim counts on known scenes.
 
 ## Troubleshooting
 
@@ -148,7 +165,7 @@ The **stub** core is active (`coreId=stub`). It draws a test pattern and synthet
 
 ### Capture mesh is a triangle “blob” (normal size, wrong shape)
 
-Capture uses **live per-frame merged RAM ingest** while armed (libretro), then a final GTE+RAM pass on **Capture Frame**. RAM strategies: ordering-table chains, standalone linked GP0 chain roots, and linear opcode scan. Expect coarse geometry on titles that stream primitives outside RAM-visible layouts. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass. Per-draw matrix tagging (#658) reduces screen-space blob fallback when draw-environment packets precede primitives in the captured buffer. True in-core mednafen GP0 FIFO dispatch (packet-for-packet as the GPU receives them) is not wired yet — see [#662](https://github.com/fernandotonon/QtMeshEditor/issues/662).
+Capture uses **live per-frame merged RAM ingest** while armed (libretro), then a final GTE+RAM pass on **Capture Frame**. Four strategies feed the same dedupe set: the **live FIFO bridge** (DMA chain walk → `submitGp0Words`, #662), ordering-table chains, standalone linked GP0 chain roots, and linear opcode scan. Status bar surfaces the per-source breakdown — if `hook` is 0 and the mesh still looks wrong, the title likely streams chains the bridge isn't recognizing, or draws outside RAM-visible layouts. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass. Per-draw matrix tagging (#658) reduces screen-space blob fallback when draw-environment packets precede primitives in the captured buffer. True packet-for-packet in-core mednafen GP0 hooks (a forked `mednafen_psx_libretro`) remain future work — see [#662](https://github.com/fernandotonon/QtMeshEditor/issues/662).
 
 ### Libretro integration tests (local only)
 

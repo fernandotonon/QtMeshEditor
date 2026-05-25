@@ -33,6 +33,19 @@ public:
     static int submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks);
 
     /**
+     * Live FIFO bridge (#662): scan RAM for GP0 DMA chain roots and submit each
+     * chain's raw word range through @ref submitGp0Words. Prims dispatched this
+     * way are tagged as `Gp0CaptureSource::DirectHook` (gp0_hook) since they
+     * exercise the same code path a true in-core mednafen FIFO hook would.
+     *
+     * Intended for per-frame live capture. Best-effort: walks up to 48 chain
+     * roots (deduped against @p seenPrimKeys) to keep frame overhead bounded.
+     * Returns the number of primitives dispatched.
+     */
+    static int submitChainsFromRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
+                                   QSet<QString> *seenPrimKeys);
+
+    /**
      * Merged RAM capture: OT chains, standalone chain roots, then linear scan (#657).
      */
     static Gp0CaptureStats captureFromSystemRam(const uint8_t *ram, size_t byteSize,

@@ -300,8 +300,25 @@ void PS1RipWorker::finalizeFrameCapture()
     if (m_vram && !m_vram->isEmpty())
         vramCells = m_vram->mutablePixels();
 
+    const Gp0CaptureStats stats = m_ripperHooks ? m_ripperHooks->lastCaptureStats()
+                                                : Gp0CaptureStats{};
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.capture.summary"),
+        QStringLiteral("capture=%1 source=%2 total=%3 hook=%4 ot=%5 chain=%6 linear=%7 legacy=%8")
+            .arg(captureId)
+            .arg(stats.primarySourceLabel())
+            .arg(stats.totalPrims)
+            .arg(stats.directHookPrims)
+            .arg(stats.ramOtPrims)
+            .arg(stats.ramChainRootPrims)
+            .arg(stats.ramLinearPrims)
+            .arg(qEnvironmentVariableIsSet("QTMESH_PS1_GP0_RAM_LEGACY")
+                         && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_RAM_LEGACY") != 0
+                     ? QStringLiteral("yes")
+                     : QStringLiteral("no")));
+
     emit frameCaptureReady(captureId, CaptureSnapshot::fromBuffer(*m_captureBuffer, vramCells),
-                           prims.size(), vramMode);
+                           prims.size(), vramMode, stats);
 }
 
 void PS1RipWorker::dumpVram()

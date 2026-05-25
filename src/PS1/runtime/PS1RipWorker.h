@@ -2,6 +2,7 @@
 #define PS1RIPWORKER_H
 
 #include "CaptureSnapshot.h"
+#include "Gp0CaptureStats.h"
 
 #include <QImage>
 #include <QObject>
@@ -58,7 +59,7 @@ signals:
     /** Non-fatal operational warning (does not stop the session). */
     void sessionWarning(const QString &message);
     void frameCaptureReady(const QString &captureId, const CaptureSnapshot &snapshot, int primCount,
-                           PsxVramMirrorMode vramMirrorMode);
+                           PsxVramMirrorMode vramMirrorMode, Gp0CaptureStats captureStats);
     void vramDumpReady(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                        const QImage &nativePreview);
     void vramFrameUpdated(const QVector<uint16_t> &cells, const QImage &nativePreview);

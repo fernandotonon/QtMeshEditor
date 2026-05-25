@@ -376,7 +376,8 @@ void PS1RipSessionWindow::onCaptureFrame()
 void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes,
                                     int instanceCount, int vertexCount, int triangleCount,
                                     int matrixCount, uint32_t cameraMatrixId, bool hasCameraMatrix,
-                                    int gteInversePercent, bool slabLike, PsxVramMirrorMode vramMirrorMode)
+                                    int gteInversePercent, bool slabLike, PsxVramMirrorMode vramMirrorMode,
+                                    Gp0CaptureStats captureStats)
 {
     QString cameraText = hasCameraMatrix
                              ? tr("camera matrix #%1").arg(cameraMatrixId)
@@ -387,9 +388,18 @@ void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedPart
     QString vramText = psxVramMirrorModeLabel(vramMirrorMode);
     if (vramMirrorMode != PsxVramMirrorMode::FullVram)
         vramText += tr(" — textures may be wrong");
+    // GP0 capture-source breakdown surfaces the #662 FIFO bridge attribution
+    // alongside the merged-RAM scan paths so users can see at a glance which
+    // path produced the geometry (gp0_hook vs ram_*).
+    const QString gp0Text = tr("GP0 %1 (hook %2 / ot %3 / chain %4 / linear %5)")
+                                .arg(captureStats.primarySourceLabel())
+                                .arg(captureStats.directHookPrims)
+                                .arg(captureStats.ramOtPrims)
+                                .arg(captureStats.ramChainRootPrims)
+                                .arg(captureStats.ramLinearPrims);
     m_statusLabel->setText(
         tr("Mesh %1 — captured %2 / unique %3 / instances %4 (%5 verts, %6 tris, %7 GTE matrices, "
-           "%8, %9, VRAM: %10)")
+           "%8, %9, VRAM: %10, %11)")
             .arg(captureId)
             .arg(capturedParts)
             .arg(uniqueMeshes)
@@ -399,7 +409,8 @@ void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedPart
             .arg(matrixCount)
             .arg(cameraText)
             .arg(matrixStats)
-            .arg(vramText));
+            .arg(vramText)
+            .arg(gp0Text));
 }
 
 void PS1RipSessionWindow::onVramDumped(const QString &captureId, const QString &pngPath,

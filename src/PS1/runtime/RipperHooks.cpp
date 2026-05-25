@@ -175,3 +175,20 @@ int RipperHooks::submitGp0Words(const uint32_t *words, size_t wordCount)
         return 0;
     return Gp0HookDispatch::submitGp0Words(words, wordCount, this);
 }
+
+int RipperHooks::submitFifoChainsFromRam(const uint8_t *ram, size_t byteSize)
+{
+    if (!isCaptureEnabled())
+        return 0;
+    // Temporarily clear the RAM-capture flag so the bridge's prims arrive via
+    // submitGp0Words → onGpuPrim with m_ramCaptureActive=false and bump
+    // m_directHookPrimPass (Gp0CaptureSource::DirectHook for #662 attribution).
+    // We may be called from inside a wrapping captureFromSystemRam pass, so
+    // restore the prior value to keep the merged RAM scan working unchanged.
+    const bool wasRamActive = m_ramCaptureActive;
+    m_ramCaptureActive = false;
+    const int dispatched =
+        Gp0HookDispatch::submitChainsFromRam(ram, byteSize, this, livePrimDedupeKeys());
+    m_ramCaptureActive = wasRamActive;
+    return dispatched;
+}

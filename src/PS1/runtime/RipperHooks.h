@@ -27,6 +27,7 @@ public:
     void ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize, bool scanGteRam = true,
                                       bool accumulate = false) override;
     int submitGp0Words(const uint32_t *words, size_t wordCount) override;
+    int submitFifoChainsFromRam(const uint8_t *ram, size_t byteSize) override;
 
     QSet<QString> *livePrimDedupeKeys() override;
     void beginGpuCapturePass(bool accumulate) override;

@@ -1,6 +1,7 @@
 #ifndef GP0CAPTURESTATS_H
 #define GP0CAPTURESTATS_H
 
+#include <QMetaType>
 #include <QString>
 
 /**
@@ -29,5 +30,7 @@ struct Gp0CaptureStats {
 
     QString primarySourceLabel() const;
 };
+
+Q_DECLARE_METATYPE(Gp0CaptureStats)
 
 #endif // GP0CAPTURESTATS_H
