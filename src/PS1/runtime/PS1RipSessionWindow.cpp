@@ -393,15 +393,19 @@ void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedPart
     // path produced the geometry (gp0_hook vs ram_*).
     // #674: append TMD / HMD counts so users see the model-space scanner contribution.
     // On TMD-using games this is what flips the source label to `ram_model_mesh` and the
-    // GTE inverse % to non-zero.
-    const QString gp0Text = tr("GP0 %1 (hook %2 / ot %3 / chain %4 / linear %5 / tmd %6 / hmd %7)")
-                                .arg(captureStats.primarySourceLabel())
-                                .arg(captureStats.directHookPrims)
-                                .arg(captureStats.ramOtPrims)
-                                .arg(captureStats.ramChainRootPrims)
-                                .arg(captureStats.ramLinearPrims)
-                                .arg(captureStats.ramTmdMeshes)
-                                .arg(captureStats.ramHmdMeshes);
+    // GTE inverse % to non-zero. `hmd` is emitted-meshes (zero until v2 walker lands);
+    // `hmd_cand` is the v1 diagnostics count of plausible HMD magic-byte candidates so
+    // testers can confirm magic detection without the walker (#674 review).
+    const QString gp0Text =
+        tr("GP0 %1 (hook %2 / ot %3 / chain %4 / linear %5 / tmd %6 / hmd %7 / hmd_cand %8)")
+            .arg(captureStats.primarySourceLabel())
+            .arg(captureStats.directHookPrims)
+            .arg(captureStats.ramOtPrims)
+            .arg(captureStats.ramChainRootPrims)
+            .arg(captureStats.ramLinearPrims)
+            .arg(captureStats.ramTmdMeshes)
+            .arg(captureStats.ramHmdMeshes)
+            .arg(captureStats.ramHmdCandidates);
     m_statusLabel->setText(
         tr("Mesh %1 — captured %2 / unique %3 / instances %4 (%5 verts, %6 tris, %7 GTE matrices, "
            "%8, %9, VRAM: %10, %11)")

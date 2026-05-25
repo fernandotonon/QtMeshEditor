@@ -165,13 +165,20 @@ yields clean meshes with no inverse step.
   on TMD-using games.
 
 - **Stats / UI / Sentry**:
-  - `Gp0CaptureStats::ramTmdMeshes` / `ramHmdMeshes` track per-frame counts.
-  - `Gp0CaptureSource::RamModelMesh` (label `ram_model_mesh`) is the new primary source
-    when *any* TMD/HMD surfaced, overriding the prim-count-winner from `pickPrimarySource`.
-  - Status bar: `GP0 <source> (hook X / ot Y / chain Z / linear W / tmd T / hmd H)`.
+  - `Gp0CaptureStats::ramTmdMeshes` / `ramHmdMeshes` track per-frame **emitted** mesh
+    counts (i.e. successful `EmuHooks::onModelMesh` calls). HMD v1 always reports 0
+    here — it doesn't emit yet.
+  - `Gp0CaptureStats::ramHmdCandidates` is the v1 diagnostics count of plausible HMD
+    magic-bytes hits and **does not** flip the primary source. It exists so testers can
+    confirm the magic-bytes scan works on HMD-using titles before the walker lands.
+  - `Gp0CaptureSource::RamModelMesh` (label `ram_model_mesh`) becomes the primary
+    source only when actual model-mesh emissions happened (`ramTmdMeshes > 0`
+    or `ramHmdMeshes > 0`) — bare candidate counts never promote the label.
+  - Status bar: `GP0 <source> (hook X / ot Y / chain Z / linear W / tmd T / hmd H / hmd_cand C)`.
   - Sentry breadcrumbs: `ps1.rip.capture.gp0_hook` and `ps1.rip.capture.summary` carry
-    `tmd=…  hmd=…`; new `ps1.rip.capture.modelmesh` fires only when meshes were emitted;
-    `ps1.rip.matrix.stats` adds `model_meshes=…`.
+    `tmd=…  hmd=…  hmd_cand=…`; new `ps1.rip.capture.modelmesh` fires only when meshes
+    were actually emitted (not candidate-only); `ps1.rip.matrix.stats` adds
+    `model_meshes=…`.
 
 - **Per-format coverage:**
 

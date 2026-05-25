@@ -342,4 +342,79 @@ TEST(PsxTmdRamScannerTest, EmitsCorrectMaterialNameForTexturedPrim)
     EXPECT_TRUE(foundTextured) << "Textured prim must produce a PS1Rip_tpage_* sub-mesh";
 }
 
+// #674 review: computeTmdSpan must cover the full primitive payload, not a fixed 8 bytes
+// per prim. Two TMDs that differ only DEEP inside the primitive payload (past the old
+// 8-byte-per-prim window) must produce DIFFERENT contentHash values so they are NOT
+// dedupe-merged into one.
+TEST(PsxTmdRamScannerTest, ContentHashCoversFullPrimitivePayload)
+{
+    // Build a TMD with one 0x28 flag=0 ilen=4 prim (mono quad — 16-byte payload).
+    // The prim parser at this mode reads v3 index from d[12..13]. Old computeTmdSpan
+    // hashed only the first 8 bytes of the prim packet (header + 4 payload bytes),
+    // so changes to v3 — at offset 12..13 within payload — would NOT change the hash.
+    auto buildMonoQuadTmd = [](uint8_t *ram, size_t tmdStart, uint16_t v3Idx) {
+        writeU32le(ram + tmdStart + 0, kTmdMagic);
+        writeU32le(ram + tmdStart + 4, 0u);
+        writeU32le(ram + tmdStart + 8, 1u);
+
+        constexpr size_t kVertOffRel = kObjHeaderSize;
+        constexpr size_t kNormOffRel = kVertOffRel + 4u * 8u;
+        constexpr size_t kPrimOffRel = kNormOffRel + 1u * 8u;
+        const size_t objHdr = tmdStart + kTmdHeaderSize;
+        writeU32le(ram + objHdr + 0, static_cast<uint32_t>(kVertOffRel));
+        writeU32le(ram + objHdr + 4, 4u);
+        writeU32le(ram + objHdr + 8, static_cast<uint32_t>(kNormOffRel));
+        writeU32le(ram + objHdr + 12, 1u);
+        writeU32le(ram + objHdr + 16, static_cast<uint32_t>(kPrimOffRel));
+        writeU32le(ram + objHdr + 20, 1u);
+
+        const size_t vertBase = tmdStart + kTmdHeaderSize + kVertOffRel;
+        for (int i = 0; i < 4; ++i)
+            writeI16le(ram + vertBase + i * 8 + 0, static_cast<int16_t>(100 + i * 10));
+
+        const size_t normBase = tmdStart + kTmdHeaderSize + kNormOffRel;
+        writeI16le(ram + normBase + 4, 4096);
+
+        // 0x28 flag=0 ilen=4 packet (mono quad, 16-byte payload). Per parser at
+        // line ~317: d[0..2] = color, d[6..7] = v0, d[8..9] = v1, d[10..11] = v2,
+        // d[12..13] = v3. We vary v3 between the two builds to exercise the "deep
+        // payload" coverage of computeTmdSpan/contentHash.
+        const size_t primBase = tmdStart + kTmdHeaderSize + kPrimOffRel;
+        ram[primBase + 0] = 4;     // olen
+        ram[primBase + 1] = 4;     // ilen
+        ram[primBase + 2] = 0;     // flag
+        ram[primBase + 3] = 0x28;  // mode
+        ram[primBase + 4 + 0] = 0x80;
+        ram[primBase + 4 + 1] = 0x80;
+        ram[primBase + 4 + 2] = 0x80;
+        ram[primBase + 4 + 6] = 0;    // v0
+        ram[primBase + 4 + 8] = 1;    // v1
+        ram[primBase + 4 + 10] = 2;   // v2
+        ram[primBase + 4 + 12] = static_cast<uint8_t>(v3Idx & 0xFFu);
+        ram[primBase + 4 + 13] = static_cast<uint8_t>((v3Idx >> 8) & 0xFFu);
+    };
+
+    auto captureHash = [&](uint16_t v3) -> uint64_t {
+        std::vector<uint8_t> ram(64u * 1024u, 0u);
+        buildMonoQuadTmd(ram.data(), 0x1000, v3);
+        std::atomic<bool> armed{true};
+        CaptureBuffer buffer;
+        RipperHooks hooks;
+        hooks.setArmedFlag(&armed);
+        hooks.setBuffer(&buffer);
+        EXPECT_EQ(PsxTmdRamScanner::captureFromSystemRam(ram.data(), ram.size(), &hooks), 1);
+        if (buffer.modelMeshes().isEmpty())
+            return 0ULL;
+        return buffer.modelMeshes().front().contentHash;
+    };
+
+    const uint64_t hashV3_3 = captureHash(3);
+    const uint64_t hashV3_2 = captureHash(2);
+    ASSERT_NE(hashV3_3, 0ULL);
+    ASSERT_NE(hashV3_2, 0ULL);
+    EXPECT_NE(hashV3_3, hashV3_2)
+        << "contentHash must cover the full primitive payload — a byte change at "
+           "offset 12 inside a 16-byte payload must change the hash";
+}
+
 #endif // ENABLE_PS1_RIP

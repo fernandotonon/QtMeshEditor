@@ -145,6 +145,10 @@ struct PrimContext {
     ReconstructedSubMesh *flatColor;
     QHash<quint64, int> *textureSubMeshIndex;
     QVector<ReconstructedSubMesh> *textureSubMeshes;
+    // Highest byte position reached by the primitive walker across every object
+    // in this TMD. Used to size the content hash + scanner skip span correctly,
+    // since primitive packets have variable payloads (#674 review).
+    size_t maxPrimStreamEnd = 0;
 };
 
 ReconstructedSubMesh &ensureTextureSubMesh(PrimContext &ctx, uint16_t tpage, uint16_t clut)
@@ -213,6 +217,8 @@ bool walkPrimitives(const uint8_t *ram, size_t ramSize, uint32_t flags, size_t t
             return false;
         const uint8_t *d = ram + p + 4;
         p += 4 + payload;
+        if (p > ctx.maxPrimStreamEnd)
+            ctx.maxPrimStreamEnd = p;
         ++consumed;
         (void)olen;
 
@@ -409,9 +415,15 @@ bool walkPrimitives(const uint8_t *ram, size_t ramSize, uint32_t flags, size_t t
 
 /** Compute the byte extent covered by all of a TMD's pools and primitive streams. We use
  *  this to (a) build a content hash and (b) skip the scanner past the entire blob so we
- *  don't accidentally rescan inner bytes as a second TMD candidate. */
+ *  don't accidentally rescan inner bytes as a second TMD candidate.
+ *
+ *  `primStreamEnd` is the exact byte position the primitive walker reached across every
+ *  object — primitive packets have variable `ilen`-driven payload sizes (5/6/8/12+ words),
+ *  so the old "8 bytes per prim" assumption underestimated the real extent and could
+ *  cause prefix-equal blobs to dedupe or the scanner to resume inside the same blob
+ *  (#674 review). */
 size_t computeTmdSpan(const uint8_t *ram, size_t ramSize, uint32_t flags, size_t tmdStart,
-                      const QVector<ObjectHeader> &headers)
+                      const QVector<ObjectHeader> &headers, size_t primStreamEnd)
 {
     size_t maxEnd = tmdStart + kTmdHeaderSize + size_t(headers.size()) * kObjHeaderSize;
     for (const ObjectHeader &h : headers) {
@@ -425,14 +437,11 @@ size_t computeTmdSpan(const uint8_t *ram, size_t ramSize, uint32_t flags, size_t
             if (r.ok)
                 maxEnd = std::max(maxEnd, r.base + size_t(h.nNorm) * 8u);
         }
-        if (h.nPrim > 0) {
-            // We don't know prim-payload sizes ahead of time. Conservatively reserve 8 bytes
-            // per prim (smallest packet) — used purely for dedupe range, not for parsing.
-            const auto r = resolveOffset(h.primOff, flags, tmdStart, ramSize, size_t(h.nPrim) * 8u);
-            if (r.ok)
-                maxEnd = std::max(maxEnd, r.base + size_t(h.nPrim) * 8u);
-        }
     }
+    // The walker stops AT the last consumed byte (one past the last payload byte) — use
+    // that directly instead of guessing from header counts.
+    if (primStreamEnd > maxEnd)
+        maxEnd = primStreamEnd;
     return maxEnd > ramSize ? ramSize : maxEnd;
 }
 
@@ -510,9 +519,11 @@ int PsxTmdRamScanner::captureFromSystemRam(const uint8_t *ram, size_t byteSize, 
             continue;
         }
 
-        // Span covers the bytes the TMD actually occupies; we'll skip the scan stride past
-        // this so inner bytes don't get rescanned as second-level candidates.
-        const size_t span = computeTmdSpan(ram, byteSize, flags, offset, headers);
+        // Span covers the bytes the TMD actually occupies — built from the actual primitive
+        // walker end position (see PrimContext::maxPrimStreamEnd) so variable-length prim
+        // packets are accounted for. We use this to (a) hash the full content and (b) skip
+        // the scan stride past it so inner bytes don't get rescanned (#674 review).
+        const size_t span = computeTmdSpan(ram, byteSize, flags, offset, headers, ctx.maxPrimStreamEnd);
 
         ReconstructedMesh mesh;
         mesh.meshName = QStringLiteral("ps1_tmd_at_0x%1").arg(offset, 0, 16);

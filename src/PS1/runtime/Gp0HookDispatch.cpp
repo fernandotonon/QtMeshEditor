@@ -76,8 +76,10 @@ Gp0CaptureSource pickPrimarySource(const Gp0CaptureStats &stats)
 }
 
 /** Model-space meshes always beat screen-space prims for quality, so if any TMD or HMD
- *  surfaced this frame the primary label flips to ram_model_mesh regardless of the GP0
- *  prim count winner from `pickPrimarySource`. (#674) */
+ *  actually surfaced (i.e. emitted via `EmuHooks::onModelMesh`) this frame, the primary
+ *  label flips to ram_model_mesh regardless of the GP0 prim count winner from
+ *  `pickPrimarySource`. Bare HMD candidate counts (`ramHmdCandidates`) do NOT count —
+ *  the v1 stub records candidates without emitting geometry (#674 review). */
 Gp0CaptureSource promoteModelMeshSource(const Gp0CaptureStats &stats, Gp0CaptureSource fallback)
 {
     if (stats.ramTmdMeshes > 0 || stats.ramHmdMeshes > 0)
@@ -496,10 +498,13 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     const bool tmdScannerDisabled = qEnvironmentVariableIsSet("QTMESH_PS1_TMD_SCANNER")
                                     && qEnvironmentVariableIntValue("QTMESH_PS1_TMD_SCANNER") == 0;
     int tmdMeshes = 0;
-    int hmdMeshes = 0;
+    // HMD v1 returns candidate counts, not emitted-mesh counts (the walker is a
+    // follow-up). The two are recorded separately so the candidate count never
+    // promotes primary source to RamModelMesh (#674 review).
+    int hmdCandidates = 0;
     if (!tmdScannerDisabled)
         tmdMeshes = PsxTmdRamScanner::captureFromSystemRam(ram, scanSize, hooks);
-    hmdMeshes = PsxHmdRamScanner::captureFromSystemRam(ram, scanSize, hooks);
+    hmdCandidates = PsxHmdRamScanner::captureFromSystemRam(ram, scanSize, hooks);
 
     // #662 live FIFO bridge: route contiguous RAM-resident DMA chains through
     // submitGp0Words so each prim is attributed to Gp0CaptureSource::DirectHook
@@ -520,7 +525,9 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
         stats = captureFromSystemRam(ram, scanSize, hooks, seen);
     }
     stats.ramTmdMeshes = tmdMeshes;
-    stats.ramHmdMeshes = hmdMeshes;
+    // ramHmdMeshes stays 0 until the v2 HMD walker emits actual meshes — until
+    // then the candidate count is surfaced separately for diagnostics (#674).
+    stats.ramHmdCandidates = hmdCandidates;
     stats.liveFrame = liveFrame;
 
     hooks->onFrameEnd();

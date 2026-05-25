@@ -318,7 +318,8 @@ void PS1RipWorker::finalizeFrameCapture()
     }
     SentryReporter::addBreadcrumb(
         QStringLiteral("ps1.rip.capture.summary"),
-        QStringLiteral("capture=%1 source=%2 total=%3 hook=%4 ot=%5 chain=%6 linear=%7 tmd=%8 hmd=%9 legacy=%10")
+        QStringLiteral("capture=%1 source=%2 total=%3 hook=%4 ot=%5 chain=%6 linear=%7 tmd=%8 "
+                       "hmd=%9 hmd_cand=%10 legacy=%11")
             .arg(captureId)
             .arg(stats.primarySourceLabel())
             .arg(stats.totalPrims)
@@ -328,18 +329,23 @@ void PS1RipWorker::finalizeFrameCapture()
             .arg(stats.ramLinearPrims)
             .arg(stats.ramTmdMeshes)
             .arg(stats.ramHmdMeshes)
+            .arg(stats.ramHmdCandidates)
             .arg(qEnvironmentVariableIsSet("QTMESH_PS1_GP0_RAM_LEGACY")
                          && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_RAM_LEGACY") != 0
                      ? QStringLiteral("yes")
                      : QStringLiteral("no")));
 
+    // Only log the modelmesh breadcrumb when actual model-mesh emissions happened.
+    // ramHmdCandidates by itself is just a diagnostics count of plausible HMD magic
+    // bytes — it does NOT indicate a successful capture (#674 review).
     if (stats.ramTmdMeshes > 0 || stats.ramHmdMeshes > 0) {
         SentryReporter::addBreadcrumb(
             QStringLiteral("ps1.rip.capture.modelmesh"),
-            QStringLiteral("capture=%1 tmd=%2 hmd=%3 buffer_modelmeshes=%4")
+            QStringLiteral("capture=%1 tmd=%2 hmd=%3 hmd_cand=%4 buffer_modelmeshes=%5")
                 .arg(captureId)
                 .arg(stats.ramTmdMeshes)
                 .arg(stats.ramHmdMeshes)
+                .arg(stats.ramHmdCandidates)
                 .arg(m_captureBuffer ? m_captureBuffer->modelMeshes().size() : 0));
     }
 
