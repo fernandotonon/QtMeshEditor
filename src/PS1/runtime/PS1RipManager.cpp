@@ -153,11 +153,12 @@ void PS1RipManager::initializeWorkerThread()
                     QStringLiteral("ps1.rip.mesh.built"),
                     QStringLiteral("%1 verts %2 tris").arg(built.vertexCount).arg(built.triangleCount));
                 QString matrixStats =
-                    QStringLiteral("gte_inverse=%1%% prims_with_matrix=%2/%3 slab=%4")
+                    QStringLiteral("gte_inverse=%1%% prims_with_matrix=%2/%3 slab=%4 model_meshes=%5")
                         .arg(reconStats.gteInversePercent())
                         .arg(reconStats.primsWithMatrixId)
                         .arg(reconStats.primsTotal)
-                        .arg(reconStats.slabLike ? QStringLiteral("yes") : QStringLiteral("no"));
+                        .arg(reconStats.slabLike ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(snapshot.modelMeshes.size());
                 if (!goldenId.isEmpty())
                     matrixStats += QStringLiteral(" golden_id=%1").arg(goldenId);
                 SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.matrix.stats"), matrixStats);

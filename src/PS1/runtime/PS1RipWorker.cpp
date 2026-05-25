@@ -318,7 +318,7 @@ void PS1RipWorker::finalizeFrameCapture()
     }
     SentryReporter::addBreadcrumb(
         QStringLiteral("ps1.rip.capture.summary"),
-        QStringLiteral("capture=%1 source=%2 total=%3 hook=%4 ot=%5 chain=%6 linear=%7 legacy=%8")
+        QStringLiteral("capture=%1 source=%2 total=%3 hook=%4 ot=%5 chain=%6 linear=%7 tmd=%8 hmd=%9 legacy=%10")
             .arg(captureId)
             .arg(stats.primarySourceLabel())
             .arg(stats.totalPrims)
@@ -326,10 +326,22 @@ void PS1RipWorker::finalizeFrameCapture()
             .arg(stats.ramOtPrims)
             .arg(stats.ramChainRootPrims)
             .arg(stats.ramLinearPrims)
+            .arg(stats.ramTmdMeshes)
+            .arg(stats.ramHmdMeshes)
             .arg(qEnvironmentVariableIsSet("QTMESH_PS1_GP0_RAM_LEGACY")
                          && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_RAM_LEGACY") != 0
                      ? QStringLiteral("yes")
                      : QStringLiteral("no")));
+
+    if (stats.ramTmdMeshes > 0 || stats.ramHmdMeshes > 0) {
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("ps1.rip.capture.modelmesh"),
+            QStringLiteral("capture=%1 tmd=%2 hmd=%3 buffer_modelmeshes=%4")
+                .arg(captureId)
+                .arg(stats.ramTmdMeshes)
+                .arg(stats.ramHmdMeshes)
+                .arg(m_captureBuffer ? m_captureBuffer->modelMeshes().size() : 0));
+    }
 
     emit frameCaptureReady(captureId, CaptureSnapshot::fromBuffer(*m_captureBuffer, vramCells),
                            prims.size(), vramMode, stats);

@@ -8,7 +8,9 @@
 #include "PsxGp0Opcode.h"
 #include "PsxGteInstructionCapture.h"
 #include "PsxGteRamScanner.h"
+#include "PsxHmdRamScanner.h"
 #include "PsxOrderingTableScanner.h"
+#include "PsxTmdRamScanner.h"
 
 #include <QSet>
 #include <QString>
@@ -71,6 +73,16 @@ Gp0CaptureSource pickPrimarySource(const Gp0CaptureStats &stats)
         source = Gp0CaptureSource::RamLinear;
     }
     return source;
+}
+
+/** Model-space meshes always beat screen-space prims for quality, so if any TMD or HMD
+ *  surfaced this frame the primary label flips to ram_model_mesh regardless of the GP0
+ *  prim count winner from `pickPrimarySource`. (#674) */
+Gp0CaptureSource promoteModelMeshSource(const Gp0CaptureStats &stats, Gp0CaptureSource fallback)
+{
+    if (stats.ramTmdMeshes > 0 || stats.ramHmdMeshes > 0)
+        return Gp0CaptureSource::RamModelMesh;
+    return fallback;
 }
 
 QString primDedupeKeyImpl(const PrimRecord &prim)
@@ -411,7 +423,7 @@ Gp0CaptureStats Gp0HookDispatch::captureFromSystemRam(const uint8_t *ram, size_t
     stats.ramLinearPrims = primCount - linearBefore;
 
     stats.totalPrims = primCount;
-    stats.primarySource = pickPrimarySource(stats);
+    stats.primarySource = promoteModelMeshSource(stats, pickPrimarySource(stats));
     return stats;
 }
 
@@ -475,6 +487,20 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     }
     ensureCaptureProjectionMatrix(hooks);
 
+    // #674 model-space RAM scanners: look for Sony SDK TMD (0x00000041) blobs in main RAM
+    // and emit them as fully-formed model-space meshes via EmuHooks::onModelMesh. Unlike
+    // the screen-space GP0 path below, these bypass MeshReconstructor::screenToModel
+    // entirely — they're the only reliable way to recover model-space geometry from
+    // closed-source retail games until #676 (forked mednafen with in-core GTE hook) lands.
+    // Disable per-format with QTMESH_PS1_TMD_SCANNER=0; HMD is opt-in via QTMESH_PS1_HMD_SCANNER=1.
+    const bool tmdScannerDisabled = qEnvironmentVariableIsSet("QTMESH_PS1_TMD_SCANNER")
+                                    && qEnvironmentVariableIntValue("QTMESH_PS1_TMD_SCANNER") == 0;
+    int tmdMeshes = 0;
+    int hmdMeshes = 0;
+    if (!tmdScannerDisabled)
+        tmdMeshes = PsxTmdRamScanner::captureFromSystemRam(ram, scanSize, hooks);
+    hmdMeshes = PsxHmdRamScanner::captureFromSystemRam(ram, scanSize, hooks);
+
     // #662 live FIFO bridge: route contiguous RAM-resident DMA chains through
     // submitGp0Words so each prim is attributed to Gp0CaptureSource::DirectHook
     // before the merged RAM scan runs. The bridge runs in-pass; RipperHooks
@@ -493,6 +519,8 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     } else {
         stats = captureFromSystemRam(ram, scanSize, hooks, seen);
     }
+    stats.ramTmdMeshes = tmdMeshes;
+    stats.ramHmdMeshes = hmdMeshes;
     stats.liveFrame = liveFrame;
 
     hooks->onFrameEnd();

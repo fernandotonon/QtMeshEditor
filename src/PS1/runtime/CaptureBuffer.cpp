@@ -52,11 +52,25 @@ void CaptureBuffer::addDrawMode(const DrawModeRecord &mode)
     m_drawModes.append(mode);
 }
 
+bool CaptureBuffer::addModelMesh(const CapturedModelMesh &mesh)
+{
+    if (mesh.mesh.isEmpty())
+        return false;
+    if (mesh.contentHash != 0 && m_modelMeshHashes.contains(mesh.contentHash))
+        return false;
+    m_modelMeshes.append(mesh);
+    if (mesh.contentHash != 0)
+        m_modelMeshHashes.insert(mesh.contentHash);
+    return true;
+}
+
 void CaptureBuffer::clear()
 {
     m_prims.clear();
     m_matrices.clear();
     m_drawModes.clear();
+    m_modelMeshes.clear();
+    m_modelMeshHashes.clear();
     m_matrixIndexByHash.clear();
     m_matrixUseCount.clear();
     m_cameraMatrixId = UINT32_MAX;

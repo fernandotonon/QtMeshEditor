@@ -55,6 +55,8 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxCaptureFilters.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGpuRamScanner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGteRamScanner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxHmdRamScanner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxTmdRamScanner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/RipperHooks.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/TextureDecoder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/VramSnapshot.cpp
@@ -62,11 +64,14 @@ if(ENABLE_PS1_RIP)
     )
     list(APPEND HEADER_FILES
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/CaptureBuffer.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/CapturedModelMesh.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/CaptureSnapshot.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/CaptureTypes.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/GteInverse.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructionStats.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxModelRamScanCommon.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/ReconstructedMesh.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipMeshBuilder.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuCore.h
@@ -98,6 +103,8 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGteInstructionCapture.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxMipsGteRunner.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxGteRamScanner.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxHmdRamScanner.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxTmdRamScanner.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipWorker.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxVramColor.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/TextureDecoder.h

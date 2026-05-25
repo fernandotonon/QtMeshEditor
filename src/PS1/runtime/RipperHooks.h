@@ -54,6 +54,7 @@ public:
 
     uint32_t onGteMatrix(const MatrixRecord &matrix) override;
     void onGpuPrim(const PrimRecord &prim) override;
+    bool onModelMesh(const CapturedModelMesh &mesh) override;
     void onVramWrite(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                      const uint16_t *pixels) override;
     void onVramRead(uint16_t x, uint16_t y, uint16_t w, uint16_t h) override;

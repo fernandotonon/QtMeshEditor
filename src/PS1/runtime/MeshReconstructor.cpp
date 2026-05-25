@@ -8,6 +8,7 @@
 
 #include <QHash>
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -208,6 +209,43 @@ QVector<ReconstructedMesh> buildParts(const CaptureSnapshot &snapshot,
         if (!part.isEmpty())
             parts.append(part);
     }
+
+    // #674 — Model-space meshes from PsxTmdRamScanner / PsxHmdRamScanner. These bypass the
+    // screen-space inverse-projection path entirely and arrive in editor world units, so
+    // they're appended as additional parts. The dedupe pass in `reconstructDeduped` then
+    // collapses byte-identical copies via MeshTopologyHash, the same way it does for
+    // matrix-grouped screen-space parts.
+    for (const CapturedModelMesh &cap : snapshot.modelMeshes) {
+        if (cap.mesh.isEmpty())
+            continue;
+        parts.append(cap.mesh);
+        if (statsOut) {
+            int verts = 0;
+            for (const ReconstructedSubMesh &sub : cap.mesh.subMeshes) {
+                verts += sub.vertices.size();
+                for (const ReconstructedVertex &v : sub.vertices) {
+                    // Match accumulateVertexStats: use `hasBounds()` to detect the very
+                    // first vertex (otherwise bounds start at 0/0/0 and we'd anchor an
+                    // all-positive mesh to the origin incorrectly).
+                    if (!statsOut->hasBounds()) {
+                        statsOut->boundsMinX = statsOut->boundsMaxX = v.px;
+                        statsOut->boundsMinY = statsOut->boundsMaxY = v.py;
+                        statsOut->boundsMinZ = statsOut->boundsMaxZ = v.pz;
+                    } else {
+                        statsOut->boundsMinX = std::min(statsOut->boundsMinX, v.px);
+                        statsOut->boundsMaxX = std::max(statsOut->boundsMaxX, v.px);
+                        statsOut->boundsMinY = std::min(statsOut->boundsMinY, v.py);
+                        statsOut->boundsMaxY = std::max(statsOut->boundsMaxY, v.py);
+                        statsOut->boundsMinZ = std::min(statsOut->boundsMinZ, v.pz);
+                        statsOut->boundsMaxZ = std::max(statsOut->boundsMaxZ, v.pz);
+                    }
+                }
+            }
+            statsOut->modelMeshVertices += verts;
+            statsOut->totalVertices += verts;
+        }
+    }
+
     return parts;
 }
 

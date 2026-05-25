@@ -17,6 +17,8 @@ enum class Gp0CaptureSource : uint8_t {
     RamLinear,
     /** Standalone linked GP0 chain roots in RAM. */
     RamChainRoot,
+    /** Model-space TMD/HMD blob found by a format-aware RAM scanner (#674). */
+    RamModelMesh,
 };
 
 struct Gp0CaptureStats {
@@ -25,6 +27,10 @@ struct Gp0CaptureStats {
     int ramOtPrims = 0;
     int ramLinearPrims = 0;
     int ramChainRootPrims = 0;
+    /** Unique TMD meshes accepted from `PsxTmdRamScanner` this frame (#674). */
+    int ramTmdMeshes = 0;
+    /** HMD candidates found (or meshes emitted, once v2 lands) by `PsxHmdRamScanner`. */
+    int ramHmdMeshes = 0;
     int totalPrims = 0;
     bool liveFrame = false;
 
