@@ -58,27 +58,32 @@ namespace QtMeshEditor.VAT.Editor
             if (p.diffuseTexture == null)
                 p.diffuseTexture  = AssetDatabase.LoadAssetAtPath<Texture2D>($"{kBakeDir}/{kDiffuseTexName}");
             if (p.sourceMesh == null)
-            {
-                // Unity imports .gltf as a Model — the first SkinnedMeshRenderer
-                // or MeshFilter inside the prefab has the mesh we want.
-                var go = AssetDatabase.LoadAssetAtPath<GameObject>($"{kBakeDir}/{kSourceGltfName}");
-                if (go != null)
-                {
-                    var smr = go.GetComponentInChildren<SkinnedMeshRenderer>();
-                    if (smr != null) p.sourceMesh = smr.sharedMesh;
-                    if (p.sourceMesh == null)
-                    {
-                        var mf = go.GetComponentInChildren<MeshFilter>();
-                        if (mf != null) p.sourceMesh = mf.sharedMesh;
-                    }
-                }
-            }
+                p.sourceMesh = FindFirstMeshInGltf($"{kBakeDir}/{kSourceGltfName}");
             p.frameCount = frames;
             p.boundsMin  = mn;
             p.boundsMax  = mx;
 
             EditorUtility.SetDirty(p);
             Debug.Log($"BootstrapVAT: auto-wired VATPlayer from {sidecarPath} (frames={frames}, bounds=[{mn} .. {mx}]).");
+        }
+
+        // ── Mesh sub-asset lookup ────────────────────────────────────
+        // The glTF imports as a Model: a top-level GameObject prefab with
+        // every Mesh stored as a sub-asset of that single .gltf importer.
+        // Reaching them via GetComponentInChildren<>() depends on the
+        // import settings — for skinned meshes the importer may strip
+        // the SkinnedMeshRenderer down to a static MeshFilter, in which
+        // case the first lookup misses. Enumerating sub-assets directly
+        // is robust against that variability.
+        static Mesh FindFirstMeshInGltf(string assetPath)
+        {
+            var subAssets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
+            if (subAssets == null) return null;
+            foreach (var a in subAssets)
+            {
+                if (a is Mesh m) return m;
+            }
+            return null;
         }
 
         // ── Parser ──────────────────────────────────────────────────

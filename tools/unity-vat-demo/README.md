@@ -90,6 +90,12 @@ that's identical to what we'd ship anyway.
      manually drag the assets into the four slots and copy `Frames`,
      `Min`, `Max` from `mixamo.com-remap_info.json` into the matching
      fields.)
+   - **Mesh picker hint:** clicking the dot ⊙ next to `Source Mesh`
+     shows an empty picker because Unity only lists *top-level* Mesh
+     assets, and the glTF's actual Mesh is a *sub-asset* of the .gltf
+     importer. Either type `t:Mesh` in the picker search box to surface
+     nested meshes, or expand the `▶ source.gltf` row in the Project
+     window and drag the Mesh sub-asset directly onto the slot.
 
 4. **Light:**
    - GameObject → Light → Directional Light. The default values are fine.
