@@ -141,9 +141,19 @@ void Gp0HookDispatch::dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHoo
     ++primCount;
 }
 
-int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks)
+int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks,
+                                    int maxPrims)
 {
     if (!words || wordCount == 0 || !hooks || !hooks->isCaptureEnabled())
+        return 0;
+
+    // -1 (default) means "use the per-frame cap". Any positive value is
+    // clamped to the per-frame cap so callers can chain submit passes and
+    // share a single per-frame budget (#662).
+    const int limit = (maxPrims < 0)
+                          ? kMaxPrimsPerFrame
+                          : std::min(maxPrims, kMaxPrimsPerFrame);
+    if (limit <= 0)
         return 0;
 
     DrawModeRecord currentMode{};
@@ -151,7 +161,7 @@ int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, Emu
     int primCount = 0;
     size_t offset = 0;
     while (offset < wordCount) {
-        if (primCount >= kMaxPrimsPerFrame)
+        if (primCount >= limit)
             break;
 
         const size_t remaining = wordCount - offset;
@@ -285,6 +295,12 @@ int Gp0HookDispatch::submitChainsFromRam(const uint8_t *ram, size_t byteSize, Em
     for (const ChainProbe &probe : candidates) {
         if (walked.size() >= kMaxRootsToWalk)
             break;
+        // Per-frame primitive budget shared across every chain dispatched in
+        // this pass (#662 review). Without this, each submitGp0Words call had
+        // its own 2048-prim cap, so scenes with many candidate roots could
+        // ingest several × the intended budget in a single frame.
+        if (totalDispatched >= kMaxPrimsPerFrame)
+            break;
 
         bool overlaps = false;
         for (const ChainProbe &prior : walked) {
@@ -298,11 +314,12 @@ int Gp0HookDispatch::submitChainsFromRam(const uint8_t *ram, size_t byteSize, Em
 
         const auto *chainWords =
             reinterpret_cast<const uint32_t *>(ram + probe.startByte);
+        const int remainingBudget = kMaxPrimsPerFrame - totalDispatched;
         // submitGp0Words is the hook code path (#657): RipperHooks tags prims
         // dispatched outside the m_ramCaptureActive window as DirectHook, so
         // these prims surface in Gp0CaptureStats as gp0_hook (#662).
         const int dispatched =
-            Gp0HookDispatch::submitGp0Words(chainWords, probe.totalWords, hooks);
+            Gp0HookDispatch::submitGp0Words(chainWords, probe.totalWords, hooks, remainingBudget);
 
         totalDispatched += dispatched;
         walked.append(probe);

@@ -226,4 +226,57 @@ TEST(Gp0CapturePathsTest, FifoBridgeEnvDisableHonoured)
     EXPECT_NE(stats.primarySource, Gp0CaptureSource::DirectHook);
 }
 
+// submitGp0Words honours a caller-supplied maxPrims so chained submits share
+// a single per-frame budget (#662 review).
+TEST(Gp0CapturePathsTest, SubmitGp0WordsHonoursMaxPrimsCap)
+{
+    // 4 triangles total — should be trivially dispatchable, but we cap to 2.
+    const uint32_t words[] = {
+        colorCmd(0x20, 1, 2, 3),  pos(8, 16),  pos(40, 16), pos(24, 32),
+        colorCmd(0x20, 4, 5, 6),  pos(60, 16), pos(80, 16), pos(70, 32),
+        colorCmd(0x20, 7, 8, 9),  pos(80, 16), pos(100, 16), pos(90, 32),
+        colorCmd(0x20, 10, 11, 12), pos(110, 16), pos(130, 16), pos(120, 32),
+    };
+
+    std::atomic<bool> armed{true};
+    CaptureBuffer buffer;
+    RipperHooks hooks;
+    hooks.setArmedFlag(&armed);
+    hooks.setBuffer(&buffer);
+
+    const int dispatched =
+        Gp0HookDispatch::submitGp0Words(words, std::size(words), &hooks, /*maxPrims=*/2);
+    EXPECT_EQ(dispatched, 2);
+    EXPECT_EQ(buffer.prims().size(), 2);
+}
+
+// lastCaptureStatsFresh() reports false until endGpuCapturePass runs, so
+// PS1RipWorker can detect stub-core paths that never ran a GP0 pass and
+// avoid surfacing stale stats (#662 review).
+TEST(Gp0CapturePathsTest, CaptureStatsFreshnessTracking)
+{
+    std::atomic<bool> armed{true};
+    CaptureBuffer buffer;
+    RipperHooks hooks;
+    hooks.setArmedFlag(&armed);
+    hooks.setBuffer(&buffer);
+
+    EXPECT_FALSE(hooks.lastCaptureStatsFresh());
+
+    constexpr size_t kRamBytes = 64 * 4;
+    alignas(4) uint8_t ram[kRamBytes] = {};
+    auto putWord = [&](size_t i, uint32_t w) { std::memcpy(ram + i * 4, &w, sizeof(w)); };
+    putWord(0, colorCmd(0x20, 1, 2, 3));
+    putWord(1, pos(8, 16));
+    putWord(2, pos(40, 16));
+    putWord(3, pos(24, 32));
+
+    Gp0HookDispatch::captureFrameFromSystemRam(ram, sizeof(ram), &hooks, /*scanGteRam=*/false,
+                                               /*accumulate=*/false);
+    EXPECT_TRUE(hooks.lastCaptureStatsFresh());
+
+    hooks.markCaptureStatsConsumed();
+    EXPECT_FALSE(hooks.lastCaptureStatsFresh());
+}
+
 #endif // ENABLE_PS1_RIP

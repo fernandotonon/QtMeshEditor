@@ -35,6 +35,7 @@ void RipperHooks::endGpuCapturePass(Gp0CaptureStats &stats)
                >= stats.ramOtPrims + stats.ramLinearPrims + stats.ramChainRootPrims)
         stats.primarySource = Gp0CaptureSource::DirectHook;
     m_lastStats = stats;
+    m_lastStatsFresh = true;
     m_ramCaptureActive = false;
     if (!isCaptureEnabled())
         return;

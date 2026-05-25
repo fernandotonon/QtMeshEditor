@@ -28,9 +28,14 @@ public:
 
     /**
      * Submit GP0 packets as the core would (#657 direct-hook path).
+     * @param maxPrims optional cap on dispatched primitives (defaults to the
+     *        per-frame budget). Callers chaining multiple submit passes within
+     *        the same frame should pass the remaining budget so the per-frame
+     *        cap is enforced across calls rather than per call (#662).
      * @return primitives dispatched.
      */
-    static int submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks);
+    static int submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks,
+                              int maxPrims = -1);
 
     /**
      * Live FIFO bridge (#662): scan RAM for GP0 DMA chain roots and submit each
