@@ -147,38 +147,46 @@ Shader "QtMeshEditor/OpenVAT_URP"
             {
                 Varyings OUT;
                 // Unpack column index from vertex Color (R = low byte,
-                // G = high byte).
+                // G = high byte). URP may apply sRGB on the Color
+                // channel — guard against that by clamping > 1.0
+                // values (a sign that something pre-multiplied).
                 float colLow  = IN.color.r * 255.0;
                 float colHigh = IN.color.g * 255.0;
                 float rowBlk  = IN.color.b * 255.0;
                 float colF    = colLow + colHigh * 256.0;
+                // DIAGNOSTIC: pass the RAW UNINTERPRETED IN.color.r
+                // and IN.color.g through so the fragment can show the
+                // actual byte values the GPU received. If we see solid
+                // black/white blobs, Color isn't varying per-vertex.
+                // If we see a clear 256-step gradient, the encoding is
+                // intact at the GPU.
 
-                // DIAGNOSTIC: sample the position texture at this
-                // vertex's column (frame 0) AT VERTEX STAGE. Pass the
-                // sampled value to the fragment as a color. If the
-                // dancer's silhouette shows smooth color variation
-                // (each submesh's range of colors matches its
-                // texture rows), texture sampling is working. If we
-                // see solid blocks of constant color, sampling is
-                // broken on the GPU vertex side.
-                uint texW = uint(_openVAT_main_TexelSize.z);
-                uint texH = uint(_openVAT_main_TexelSize.w);
-                int col = int(colF + 0.5);
-                int row = 0;   // frame 0
-                float u_norm = (col + 0.5) * _openVAT_main_TexelSize.x;
-                float v_norm = (row + 0.5) * _openVAT_main_TexelSize.y;
-                float4 sampled = SAMPLE_TEXTURE2D_LOD(
-                    _openVAT_main, sampler_openVAT_main,
-                    float2(u_norm, v_norm), 0);
+                // Real VAT replay using vertex Color as the column
+                // source. Sample the position texture per-vertex using
+                // LOAD_TEXTURE2D (integer texel coordinates — bypasses
+                // any sampler-state filtering / lod selection that
+                // could collapse per-vertex variation).
+                float safeFrames2 = max(_frames, 1.0);
+                float t2 = _UseTime > 0.5 ? _Time.y * _speed * safeFrames2 : _frame;
+                int curr2 = int(floor(t2)) % int(safeFrames2);
+                if (curr2 < 0) curr2 += int(safeFrames2);
 
-                // Pass the sampled value through positions so we can
-                // visualise BOTH the deformation AND the color.
-                float3 nrm = float3(0,1,0);
+                int col2 = int(colF + 0.5);
+                int rowPos2 = curr2;
+                int rowNrm2 = curr2 + int(safeFrames2);
+
+                float3 posSample = LOAD_TEXTURE2D_LOD(
+                    _openVAT_main, int2(col2, rowPos2), 0).rgb;
+                float3 nrmSample = LOAD_TEXTURE2D_LOD(
+                    _openVAT_main, int2(col2, rowNrm2), 0).rgb;
+
                 float3 vatPos = float3(
-                    lerp(_minValues.x, _maxValues.x, sampled.r),
-                    lerp(_minValues.y, _maxValues.y, sampled.g),
-                    lerp(_minValues.z, _maxValues.z, sampled.b)
+                    lerp(_minValues.x, _maxValues.x, posSample.r),
+                    lerp(_minValues.y, _maxValues.y, posSample.g),
+                    lerp(_minValues.z, _maxValues.z, posSample.b)
                 );
+                float3 nrm = normalize(nrmSample * 2.0 - 1.0);
+
                 float3 bindPos = IN.positionOS.xyz;
                 float3 finalPos = lerp(bindPos, vatPos, saturate(_exaggeration));
 
@@ -186,21 +194,21 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 OUT.positionCS = vpi.positionCS;
                 OUT.positionWS = vpi.positionWS;
                 OUT.normalWS   = normalize(mul((float3x3)UNITY_MATRIX_M, nrm));
-                // Pass sampled RGB through uv (Vector2 carries only 2
-                // channels; use g+b for diagnostic, and put R in uv2_dbg
-                // via a separate path — actually just put R/G in uv).
-                OUT.uv = float2(sampled.r, sampled.g);
+                OUT.uv         = IN.uv * _Basecolor_ST.xy + _Basecolor_ST.zw;
                 return OUT;
             }
 
             half4 frag(Varyings IN) : SV_Target
             {
-                // Diagnostic: paint by what the vertex shader sampled.
-                // R+G channels of the position texture, projected to
-                // 2D color. If we see varied colors across the dancer,
-                // the texture sampling per-vertex worked. If solid,
-                // sampling collapsed to a single texel.
-                return half4(IN.uv.x, IN.uv.y, 0.5, 1.0);
+                half3 albedo = SAMPLE_TEXTURE2D(_Basecolor, sampler_Basecolor, IN.uv).rgb;
+
+                Light mainLight = GetMainLight();
+                float3 N = normalize(IN.normalWS);
+                float3 L = mainLight.direction;
+                float ndotl = saturate(dot(N, L));
+                float3 ambient = SampleSH(N);
+                float3 lit = albedo * (ambient + mainLight.color * ndotl);
+                return half4(lit, 1);
             }
             ENDHLSL
         }
