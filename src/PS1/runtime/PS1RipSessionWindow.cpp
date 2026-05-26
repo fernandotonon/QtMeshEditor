@@ -299,12 +299,34 @@ void PS1RipSessionWindow::createNormalizerDock()
     // nodes pick them up immediately on session resume.
     m_manager->setNormalizerSettings(persisted);
 
-    auto onChanged = [this]() { pushNormalizerSettings(); };
-    connect(m_normalizeScaleSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, onChanged);
-    connect(m_normalizeFlipX, &QCheckBox::toggled, this, onChanged);
-    connect(m_normalizeFlipY, &QCheckBox::toggled, this, onChanged);
-    connect(m_normalizeFlipZ, &QCheckBox::toggled, this, onChanged);
-    connect(m_normalizePerspectiveUV, &QCheckBox::toggled, this, onChanged);
+    // Per-control ui.action breadcrumbs so telemetry distinguishes a direct
+    // user gesture from the downstream ps1.rip.coord.normalize emitted by the
+    // manager (CodeRabbit Minor on the original #424 PR). The lambda captures
+    // the breadcrumb message by value so each connect picks the right one.
+    auto onChanged = [this](const QString &msg) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), msg);
+        pushNormalizerSettings();
+    };
+    connect(m_normalizeScaleSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this, onChanged](double v) {
+                onChanged(QStringLiteral("ps1_rip_normalize_scale_changed=%1").arg(v, 0, 'g', 4));
+            });
+    connect(m_normalizeFlipX, &QCheckBox::toggled, this, [onChanged](bool on) {
+        onChanged(on ? QStringLiteral("ps1_rip_normalize_flip_x_on")
+                     : QStringLiteral("ps1_rip_normalize_flip_x_off"));
+    });
+    connect(m_normalizeFlipY, &QCheckBox::toggled, this, [onChanged](bool on) {
+        onChanged(on ? QStringLiteral("ps1_rip_normalize_flip_y_on")
+                     : QStringLiteral("ps1_rip_normalize_flip_y_off"));
+    });
+    connect(m_normalizeFlipZ, &QCheckBox::toggled, this, [onChanged](bool on) {
+        onChanged(on ? QStringLiteral("ps1_rip_normalize_flip_z_on")
+                     : QStringLiteral("ps1_rip_normalize_flip_z_off"));
+    });
+    connect(m_normalizePerspectiveUV, &QCheckBox::toggled, this, [onChanged](bool on) {
+        onChanged(on ? QStringLiteral("ps1_rip_normalize_perspective_uv_on")
+                     : QStringLiteral("ps1_rip_normalize_perspective_uv_off"));
+    });
 }
 
 void PS1RipSessionWindow::pushNormalizerSettings()

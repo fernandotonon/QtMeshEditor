@@ -145,6 +145,55 @@ TEST(Ps1CoordinateNormalizerTest, YDownQuadProducesYUpWithCorrectWinding)
     EXPECT_GT(flipYZDet, 0.0f);
 }
 
+// Regression for the Codex P1 / CodeRabbit Major finding on the original #424
+// PR: scaling/flipping the per-mesh transform without scaling the per-instance
+// pivot let a multi-instance deduped capture set drift apart at 0.5× or
+// collapse onto itself on a single-axis flip. composeNodeTransform must drive
+// both with the same factor.
+TEST(Ps1CoordinateNormalizerTest, ComposeNodeTransformDrivesPositionAndScaleTogether)
+{
+    Ps1NormalizerSettings def;
+    float scaleOut[3] = {0, 0, 0};
+    float posOut[3] = {0, 0, 0};
+    Ps1CoordinateNormalizer::composeNodeTransform(def, 0.25f, 4.0f, 8.0f, -2.0f,
+                                                  scaleOut, posOut);
+    // userScale = 1, all signs +1 → position should equal basePos × placementScale,
+    // scale should be uniform placementScale × userScale.
+    EXPECT_FLOAT_EQ(scaleOut[0], 0.25f);
+    EXPECT_FLOAT_EQ(scaleOut[1], 0.25f);
+    EXPECT_FLOAT_EQ(scaleOut[2], 0.25f);
+    EXPECT_FLOAT_EQ(posOut[0], 4.0f * 0.25f);
+    EXPECT_FLOAT_EQ(posOut[1], 8.0f * 0.25f);
+    EXPECT_FLOAT_EQ(posOut[2], -2.0f * 0.25f);
+
+    // userScale = 2 → scale doubles AND position doubles, so inter-instance
+    // offsets stay proportional to the mesh size. Two instances at base
+    // (10, 0, 0) and (20, 0, 0) at userScale=2 land at (20,0,0) and (40,0,0).
+    Ps1NormalizerSettings hi;
+    hi.userScale = 2.0f;
+    Ps1CoordinateNormalizer::composeNodeTransform(hi, 1.0f, 10.0f, 0.0f, 0.0f,
+                                                  scaleOut, posOut);
+    EXPECT_FLOAT_EQ(scaleOut[0], 2.0f);
+    EXPECT_FLOAT_EQ(posOut[0], 20.0f);
+
+    Ps1CoordinateNormalizer::composeNodeTransform(hi, 1.0f, 20.0f, 0.0f, 0.0f,
+                                                  scaleOut, posOut);
+    EXPECT_FLOAT_EQ(scaleOut[0], 2.0f);
+    EXPECT_FLOAT_EQ(posOut[0], 40.0f);
+
+    // flipY → position.y negates with scale.y. A row at (x, +1) and (x, -1)
+    // stays a row (not a single overlapping point) after the flip.
+    Ps1NormalizerSettings flipY;
+    flipY.flipY = true;
+    Ps1CoordinateNormalizer::composeNodeTransform(flipY, 1.0f, 5.0f, 1.0f, 0.0f,
+                                                  scaleOut, posOut);
+    EXPECT_FLOAT_EQ(scaleOut[1], -1.0f);
+    EXPECT_FLOAT_EQ(posOut[1], -1.0f);
+    Ps1CoordinateNormalizer::composeNodeTransform(flipY, 1.0f, 5.0f, -1.0f, 0.0f,
+                                                  scaleOut, posOut);
+    EXPECT_FLOAT_EQ(posOut[1], 1.0f);
+}
+
 TEST(Ps1CoordinateNormalizerTest, UserScaleClampedOnSettingsLoad)
 {
     TempIniSettings tmp;

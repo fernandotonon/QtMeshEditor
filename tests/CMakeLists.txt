@@ -158,6 +158,7 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructionStats.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructor.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshTopologyHash.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/Ps1CoordinateNormalizer.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipMeshBuilder.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipGamepadBridge.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PS1RipInputSettingsDialog.cpp

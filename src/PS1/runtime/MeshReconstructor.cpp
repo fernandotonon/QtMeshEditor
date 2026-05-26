@@ -187,7 +187,11 @@ void emitTri(const PsxVertex &a, const PsxVertex &b, const PsxVertex &c,
              const MatrixRecord *matrix, bool textured, SubMeshAccumulator &acc,
              MeshReconstructionStats *statsOut, const Ps1NormalizerSettings &settings)
 {
-    if (settings.perspectiveCorrectUVs && settings.perspectiveMaxDepth > 0) {
+    // Perspective-correct subdivision exists to reproduce PS1 affine UV
+    // sampling at fine grain. There's no UV channel on mono / shaded prims
+    // (HUDs, flat-shaded geometry), so tessellating them would just inflate
+    // triangle counts without changing the visual — skip them.
+    if (textured && settings.perspectiveCorrectUVs && settings.perspectiveMaxDepth > 0) {
         emitTriSubdivided(a, b, c, matrix, textured, acc, statsOut,
                           settings.perspectiveTolerance, settings.perspectiveMaxDepth);
         return;

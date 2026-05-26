@@ -31,29 +31,64 @@ bool Ps1NormalizerSettings::isDefault() const
         && perspectiveMaxDepth == d.perspectiveMaxDepth;
 }
 
+void Ps1CoordinateNormalizer::composeNodeTransform(const Ps1NormalizerSettings &settings,
+                                                   float placementScale,
+                                                   float basePosX, float basePosY, float basePosZ,
+                                                   float outScale[3], float outPosition[3])
+{
+    // Same factor goes into BOTH scale and position so a multi-instance
+    // capture set (deduped buildings, props, etc.) scales / mirrors as one
+    // coherent layout. Scaling only the per-mesh transform while leaving
+    // pivots at attach-time positions left adjacent instances overlapping
+    // at < 1.0 scale and crossing each other on a single-axis flip — the
+    // Codex P1 / CodeRabbit Major finding on the original #424 PR.
+    const float sx = placementScale * settings.userScale * settings.signX();
+    const float sy = placementScale * settings.userScale * settings.signY();
+    const float sz = placementScale * settings.userScale * settings.signZ();
+    outScale[0] = sx;
+    outScale[1] = sy;
+    outScale[2] = sz;
+    outPosition[0] = basePosX * sx;
+    outPosition[1] = basePosY * sy;
+    outPosition[2] = basePosZ * sz;
+}
+
 void Ps1CoordinateNormalizer::applyToSceneNode(Ogre::SceneNode *node,
                                                const Ps1NormalizerSettings &settings)
 {
 #ifdef ENABLE_PS1_RIP
     if (!node)
         return;
-    // PS1RipMeshBuilder stamps the auto-fit-to-target-extent factor here at
-    // attach time. Honouring it lets us recompose (placementScale × userScale
-    // × per-axis sign) without losing the original fit when the user toggles
-    // a flip live (#424).
+    // PS1RipMeshBuilder stamps the auto-fit-to-target-extent factor + the raw
+    // capture-time instance position on the node at attach time. Reading them
+    // back lets us recompose both transforms (scale + position) from a fresh
+    // (userScale × per-axis sign) without losing the original auto-fit or
+    // letting the layout drift when the user toggles a flip live (#424).
     float placementScale = 1.0f;
-    const Ogre::Any &any = node->getUserObjectBindings().getUserAny("ps1RipPlacementScale");
-    if (any.has_value()) {
+    const Ogre::Any &psAny = node->getUserObjectBindings().getUserAny("ps1RipPlacementScale");
+    if (psAny.has_value()) {
         try {
-            placementScale = Ogre::any_cast<float>(any);
+            placementScale = Ogre::any_cast<float>(psAny);
         } catch (const Ogre::Exception &) {
             placementScale = 1.0f;
         }
     }
-    const float sx = placementScale * settings.userScale * settings.signX();
-    const float sy = placementScale * settings.userScale * settings.signY();
-    const float sz = placementScale * settings.userScale * settings.signZ();
-    node->setScale(Ogre::Vector3(sx, sy, sz));
+    Ogre::Vector3 basePos(0.0f, 0.0f, 0.0f);
+    const Ogre::Any &bpAny = node->getUserObjectBindings().getUserAny("ps1RipBasePosition");
+    if (bpAny.has_value()) {
+        try {
+            basePos = Ogre::any_cast<Ogre::Vector3>(bpAny);
+        } catch (const Ogre::Exception &) {
+            basePos = Ogre::Vector3(0.0f, 0.0f, 0.0f);
+        }
+    }
+
+    float scaleOut[3];
+    float posOut[3];
+    composeNodeTransform(settings, placementScale, basePos.x, basePos.y, basePos.z,
+                         scaleOut, posOut);
+    node->setScale(Ogre::Vector3(scaleOut[0], scaleOut[1], scaleOut[2]));
+    node->setPosition(Ogre::Vector3(posOut[0], posOut[1], posOut[2]));
 #else
     (void)node;
     (void)settings;

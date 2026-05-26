@@ -222,27 +222,36 @@ edited from the new "Normalize" dock in `PS1RipSessionWindow`.
 
 ### How each control composes
 
-- **Scale (`userScale`, default 1.0)** — multiplied into the SceneNode scale at
-  attach time alongside the placement auto-fit. `placementScale` is stashed in
-  `node->getUserObjectBindings().setUserAny("ps1RipPlacementScale", …)` so live
-  toggles don't lose the auto-fit. The issue's stated "default 1/4096" is the
+- **Scale (`userScale`, default 1.0)** — multiplied into BOTH the SceneNode
+  scale AND its position alongside the placement auto-fit, so multi-instance
+  deduped captures (a city of buildings, a row of props) scale as one coherent
+  assembly instead of each mesh growing/shrinking around its own pivot.
+  `placementScale` AND the raw capture-time `(inst.px, inst.py, inst.pz)` are
+  stashed in `node->getUserObjectBindings()` as `ps1RipPlacementScale` /
+  `ps1RipBasePosition`, and `Ps1CoordinateNormalizer::composeNodeTransform`
+  rebuilds both transforms from those base values on every live toggle. The
+  issue's stated "default 1/4096" is the
   PSX 12.4 fixed-point divisor; we expose it as a slider rather than as the
   baked default because freshly-loaded captures need to land at the same
   magnitude as FBX/glTF imports (acceptance criterion). Users who want raw
   PSX-native magnitude can dial the slider down to ≈0.024 (= 1/4096 / 0.01).
 - **Per-axis flip (`flipX/Y/Z`, default off)** — applied as ±1 multipliers in
-  the SceneNode scale. An odd number of negated axes produces a negative
-  transform determinant; Ogre auto-flips back-face culling for those nodes so
-  the visible front face stays correct **without any per-vertex winding swap
-  in the mesh data**. This is what makes "per-axis flip toggles work without
-  re-capturing" — no mesh rebuild needed.
-- **Perspective-correct UVs (default off)** — when on, screen-space prims whose
+  the SceneNode scale AND mirrored into the SceneNode position so two
+  instances at `(x, +1, 0)` and `(x, -1, 0)` swap places under a Y flip rather
+  than collapsing onto each other. An odd number of negated axes produces a
+  negative transform determinant; Ogre auto-flips back-face culling for those
+  nodes so the visible front face stays correct **without any per-vertex
+  winding swap in the mesh data**. This is what makes "per-axis flip toggles
+  work without re-capturing" — no mesh rebuild needed.
+- **Perspective-correct UVs (default off)** — when on, **textured** prims whose
   vertex depth ratio max(sz)/min(sz) exceeds `perspectiveTolerance` (default
   1.3) get split into 4 sub-tris via midpoint triangulation in
   `MeshReconstructor::emitTriSubdivided`. New midpoint UVs use screen-space
   linear interpolation (the PS1 affine convention) so Ogre's perspective-
   correct rendering of the resulting fine mesh approximates what the original
   PS1 GPU showed — the "warped quad fix" used by modern PSX remasters.
+  Mono / shaded prims (no UV channel — HUDs, flat-shaded geometry) are
+  skipped, so the triangle count of non-textured geometry never inflates.
   Recursion is bounded by `perspectiveMaxDepth` (default 3 → 4³ = 64 sub-tris
   per input prim worst case). Bakes into mesh data, so this **does** require a
   fresh capture after toggling. Prims with sz=0 (GP0-only captures, #675) skip

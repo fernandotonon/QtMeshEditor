@@ -212,6 +212,34 @@ TEST(MeshReconstructorTest, PerspectiveCorrectKeepsFlatPrimsUntouched)
     EXPECT_EQ(tris, 2);
 }
 
+// Perspective-correct subdivision only makes sense for textured prims —
+// mono / shaded prims have no UV channel, so subdividing them just inflates
+// triangle counts without changing the visual. Verify a high-depth-variance
+// MONO prim with the toggle ON stays a single triangle (CodeRabbit Major on
+// the original #424 PR).
+TEST(MeshReconstructorTest, PerspectiveCorrectSkipsMonoPrims)
+{
+    CaptureSnapshot snap;
+    snap.matrices.append(identityMatrix());
+    PrimRecord mono{};
+    mono.kind = PrimKind::MonoTri;
+    mono.vertexCount = 3;
+    mono.matrixId = 0;
+    // High depth variance — would trigger subdivision if the gate were absent.
+    mono.verts[0] = {40,  60,  200,  255, 0, 0, 0, 0};
+    mono.verts[1] = {200, 60,  2000, 0, 255, 0, 0, 0};
+    mono.verts[2] = {120, 180, 1000, 0, 0, 255, 0, 0};
+    snap.prims.append(mono);
+
+    Ps1NormalizerSettings pc;
+    pc.perspectiveCorrectUVs = true;
+    const ReconstructedCaptureSet result = MeshReconstructor::reconstructDeduped(
+        snap, MeshDedupeMode::Loose, pc, nullptr);
+    int tris = 0;
+    for (const auto &m : result.uniqueMeshes) tris += m.triangleCount;
+    EXPECT_EQ(tris, 1);
+}
+
 // Perspective-correct must gracefully handle GP0-only captures where sz=0
 // for every vertex (the #675 "no depth" path). Subdivision is skipped — no
 // way to compute a meaningful depth ratio — and the prim renders as-is.
@@ -219,11 +247,20 @@ TEST(MeshReconstructorTest, PerspectiveCorrectGracefullyHandlesZeroDepth)
 {
     CaptureSnapshot snap;
     snap.matrices.append(identityMatrix());
-    PrimRecord prim = coloredTri(16, 16, 0);
-    // coloredTri already sets z=0 on each vertex; assert defensively in case
-    // the helper's defaults change.
-    for (int i = 0; i < 3; ++i)
-        ASSERT_EQ(prim.verts[i].z, 0);
+    // Textured prim so the depth-variance gate is reached (the textured-only
+    // gate above only short-circuits mono / shaded prims). z=0 on all three
+    // vertices simulates the GP0-only capture case (#675) — no usable depth
+    // for the depth-ratio test, so subdivision must skip cleanly without
+    // dividing by zero or emitting a degenerate sub-triangle.
+    PrimRecord prim{};
+    prim.kind = PrimKind::TexturedTri;
+    prim.vertexCount = 3;
+    prim.matrixId = 0;
+    prim.tpage = 0x100;
+    prim.clut = 0x200;
+    prim.verts[0] = {16,  16, 0, 255, 255, 255, 0, 0};
+    prim.verts[1] = {48,  16, 0, 255, 255, 255, 255, 0};
+    prim.verts[2] = {32,  48, 0, 255, 255, 255, 128, 255};
     snap.prims.append(prim);
 
     Ps1NormalizerSettings pc;

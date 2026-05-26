@@ -72,8 +72,24 @@ struct Ps1NormalizerSettings {
 class Ps1CoordinateNormalizer
 {
 public:
-    /** Set `node`'s scale to (userScale * signX, userScale * signY, userScale * signZ).
-     *  Idempotent — call again whenever settings change. No-op when `node` is null. */
+    /** Pure-data compose helper exposed so tests + non-Ogre callers can verify
+     *  the position/scale math without instantiating a SceneNode. Returns the
+     *  same transform `applyToSceneNode` writes for the given inputs.
+     *
+     *  `out*` arrays receive `(x, y, z)` in editor units. `basePos` is the raw
+     *  capture-time position (`inst.px/py/pz`, no scaling); `placementScale`
+     *  is the auto-fit-to-target-extent factor stamped at attach time. */
+    static void composeNodeTransform(const Ps1NormalizerSettings &settings,
+                                     float placementScale,
+                                     float basePosX, float basePosY, float basePosZ,
+                                     float outScale[3], float outPosition[3]);
+
+    /** Reapply `settings` to `node`. Updates both scale AND position so
+     *  multi-instance deduped capture layouts scale/mirror as one assembly —
+     *  scaling only the per-mesh transform while keeping pivots fixed would
+     *  let buildings drift apart at 0.5× or collapse / cross over each other
+     *  on a single-axis flip (Codex P1 / CodeRabbit Major). Idempotent —
+     *  call again whenever settings change. No-op when `node` is null. */
     static void applyToSceneNode(Ogre::SceneNode *node, const Ps1NormalizerSettings &settings);
 
     /** Walk every `PS1Capture_*` SceneNode in the editor scene and re-apply
