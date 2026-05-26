@@ -37,7 +37,11 @@ using UnityEngine;
 
 namespace QtMeshEditor.VAT.Editor
 {
-    [ScriptedImporter(version: 1, ext: "gltf")]
+    // Version bumps invalidate Unity's cached imports — bump when the
+    // import-time data transformation changes (e.g. UV2 normalization
+    // added in v2). Without this Unity reuses the previously-cached
+    // Mesh asset and your importer code changes go unnoticed.
+    [ScriptedImporter(version: 2, ext: "gltf")]
     public class QtmGltfImporter : ScriptedImporter
     {
         public override void OnImportAsset(AssetImportContext ctx)
