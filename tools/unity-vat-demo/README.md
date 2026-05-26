@@ -25,7 +25,39 @@ is the recommended path:
 The bake's sidecar format (`os-remap.Min/Max/Frames`) is compatible
 with what OpenVATEditor expects — no schema translation needed.
 
-## Status: Both BiRP and URP paths blocked by Unity 6 + Metal vertex texture fetch
+## Status: WebGL build animates but vertex→column mapping is still off
+
+After a deep debugging session through three render pipelines (BiRP,
+URP/Metal, URP/WebGL2) we landed on a WebGL build where:
+- ✅ The Rumba mesh imports correctly via QtmGltfImporter — 5828
+  verts across 11 submeshes with stable vertex order.
+- ✅ Per-vertex column index encoded into vertex Color32 (R = low
+  byte, G = high byte) preserves all 5828 unique values losslessly
+  end-to-end (CPU and GPU).
+- ✅ `LOAD_TEXTURE2D_LOD` with integer texel coordinates samples the
+  position texture per-vertex correctly (confirmed by a diagnostic
+  showing a static bind-pose dancer with per-vertex pastel colors).
+- ✅ Animation drives `_frame` from OpenVATDriver per Update.
+- ❌ With VAT replay engaged, the dancer is an animated chaotic
+  confetti egg — vertices ARE sampling per-vertex, but each vertex
+  samples a column DIFFERENT from its own (the vertex→column
+  mapping is scrambled somewhere in the OpenVATEditor pipeline).
+
+Suspected root cause: OpenVATEditor's `Instantiate(LoadAssetAtPath<
+GameObject>(modelPath))` produces a runtime mesh whose vertex order
+doesn't match the column ordering that QtmGltfImporter baked into
+the Color32 channel. The `c[N] = N` invariant verified at runtime
+suggests the encoding is correct from the importer's perspective —
+but Unity's runtime mesh may renumber when the prefab is
+instantiated or when the renderer batches submeshes.
+
+### Suggested next steps (out of scope for this in-session work)
+- Write a `MeshDataArray`-based mesh-cooker that builds the
+  per-vertex column buffer FROM the post-import mesh's vertex order
+  rather than the importer's, eliminating the renumber risk.
+- OR: ship a runtime `StructuredBuffer<int>` of column indices,
+  indexed by `SV_VertexID` directly inside the shader instead of
+  relying on attributes.
 
 After a long debugging session we hit the same wall in both render
 pipelines: **`SAMPLE_TEXTURE2D_LOD` in the vertex shader does NOT
