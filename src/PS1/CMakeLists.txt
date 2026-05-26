@@ -40,6 +40,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructionStats.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshReconstructor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/Ps1CoordinateNormalizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipMeshBuilder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipGamepadBridge.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipInputSettingsDialog.cpp
@@ -73,6 +74,7 @@ if(ENABLE_PS1_RIP)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PsxModelRamScanCommon.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/ReconstructedMesh.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/MeshTopologyHash.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/Ps1CoordinateNormalizer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/PS1RipMeshBuilder.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuCore.h
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime/EmuCoreLoader.h

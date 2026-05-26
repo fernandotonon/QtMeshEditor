@@ -588,7 +588,8 @@ bool PS1RipMeshBuilder::attachToScene(const ReconstructedMesh &mesh, const QStri
 bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &captureSet,
                                                 const QString &captureId,
                                                 const CaptureSnapshot *textureSource,
-                                                BuildResult *resultOut, QString *errorOut)
+                                                BuildResult *resultOut, QString *errorOut,
+                                                const Ps1NormalizerSettings &normalize)
 {
     if (captureSet.isEmpty()) {
         if (errorOut)
@@ -664,9 +665,23 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
                 QStringLiteral("PS1Capture_%1_inst%2").arg(captureId).arg(instanceOrdinal++);
             Ogre::SceneNode *node = mgr->addSceneNode(nodeName);
             createdNodeNames.append(nodeName);
-            node->setPosition(inst.px * placementScale, inst.py * placementScale,
-                              inst.pz * placementScale);
-            node->setScale(placementScale, placementScale, placementScale);
+            // Stash the auto-fit scale + raw capture-time position on the node
+            // so live normalizer tweaks (Ps1CoordinateNormalizer::applyToCaptureNodes)
+            // can recompose both transforms (placementScale × userScale × per-axis
+            // sign for scale; same factor × base position for position) without
+            // losing the auto-fit and without letting multi-instance layouts drift
+            // when the user toggles a flip / changes scale (#424).
+            node->getUserObjectBindings().setUserAny(
+                "ps1RipPlacementScale", Ogre::Any(placementScale));
+            node->getUserObjectBindings().setUserAny(
+                "ps1RipBasePosition", Ogre::Any(Ogre::Vector3(inst.px, inst.py, inst.pz)));
+
+            float scaleOut[3];
+            float posOut[3];
+            Ps1CoordinateNormalizer::composeNodeTransform(
+                normalize, placementScale, inst.px, inst.py, inst.pz, scaleOut, posOut);
+            node->setScale(scaleOut[0], scaleOut[1], scaleOut[2]);
+            node->setPosition(posOut[0], posOut[1], posOut[2]);
 
             Ogre::Entity *entity = mgr->createEntity(node, ogreMesh);
             if (!entity) {

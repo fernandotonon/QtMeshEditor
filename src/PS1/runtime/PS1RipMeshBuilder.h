@@ -3,6 +3,7 @@
 
 #include "CaptureSnapshot.h"
 #include "MeshReconstructor.h"
+#include "Ps1CoordinateNormalizer.h"
 
 #include <QString>
 
@@ -26,11 +27,14 @@ public:
                               const CaptureSnapshot *textureSource, BuildResult *resultOut,
                               QString *errorOut = nullptr);
 
-    /** Places deduplicated meshes with one SceneNode per instance (#423). */
+    /** Places deduplicated meshes with one SceneNode per instance (#423).
+     *  Applies `normalize` as SceneNode scale on each newly created capture
+     *  node so the user's flip/scale settings take effect immediately (#424). */
     static bool attachCaptureSetToScene(const ReconstructedCaptureSet &captureSet,
                                         const QString &captureId,
                                         const CaptureSnapshot *textureSource, BuildResult *resultOut,
-                                        QString *errorOut = nullptr);
+                                        QString *errorOut = nullptr,
+                                        const Ps1NormalizerSettings &normalize = {});
 };
 
 #endif // PS1RIPMESHBUILDER_H

@@ -8,11 +8,14 @@
 #include <QVector>
 
 class EmuViewport;
+class QCheckBox;
+class QDoubleSpinBox;
 class QLabel;
 class PS1RipGamepadBridge;
 class PS1RipManager;
 class QMenu;
 class VramViewerWidget;
+struct Ps1NormalizerSettings;
 
 enum class PsxVramMirrorMode;
 
@@ -59,6 +62,14 @@ private:
     void addRecentIso(const QString &path);
     void applyIsoPath(const QString &path);
     void rebuildRecentIsoMenu();
+    /** Builds the right-side "Normalize" dock (capture scale, per-axis flip,
+     *  perspective-correct UVs). Each control persists to QSettings under
+     *  `ps1Rip/normalize/*` and pushes the new value to PS1RipManager so the
+     *  user sees the change live without re-capturing (#424). */
+    void createNormalizerDock();
+    /** Snapshot the current dock widget values into a settings struct and
+     *  forward to the manager + QSettings. */
+    void pushNormalizerSettings();
 
     EmuViewport *m_viewport = nullptr;
     VramViewerWidget *m_vramViewer = nullptr;
@@ -66,6 +77,11 @@ private:
     QMenu *m_recentIsoMenu = nullptr;
     PS1RipGamepadBridge *m_gamepadBridge = nullptr;
     PS1RipManager *m_manager = nullptr;
+    QDoubleSpinBox *m_normalizeScaleSpin = nullptr;
+    QCheckBox *m_normalizeFlipX = nullptr;
+    QCheckBox *m_normalizeFlipY = nullptr;
+    QCheckBox *m_normalizeFlipZ = nullptr;
+    QCheckBox *m_normalizePerspectiveUV = nullptr;
     qint64 m_lastFrameMs = 0;
     quint64 m_lastFrameIndex = 0;
     double m_smoothedFps = 0.0;

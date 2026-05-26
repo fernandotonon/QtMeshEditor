@@ -2,6 +2,7 @@
 #define PS1RIPMANAGER_H
 
 #include "Gp0CaptureStats.h"
+#include "Ps1CoordinateNormalizer.h"
 
 #include <QImage>
 #include <QObject>
@@ -50,6 +51,14 @@ public:
     bool dedupeStrict() const { return m_dedupeStrict; }
     void setDedupeStrict(bool strict) { m_dedupeStrict = strict; }
 
+    /** Coordinate normalization knobs (#424). userScale + per-axis flips are
+     *  applied as SceneNode scale at attach time and re-applied to existing
+     *  capture nodes on every setter call, so the user sees changes live
+     *  without re-capturing. Perspective-correct UVs is consumed by the next
+     *  mesh build (it bakes into the mesh data — can't be a SceneNode toggle). */
+    const Ps1NormalizerSettings &normalizerSettings() const { return m_normalize; }
+    void setNormalizerSettings(const Ps1NormalizerSettings &settings);
+
     QString goldenSceneId() const;
     void setGoldenSceneId(const QString &sceneId);
 
@@ -95,6 +104,7 @@ private:
     bool m_paused = false;
     bool m_captureArmed = false;
     bool m_dedupeStrict = false;
+    Ps1NormalizerSettings m_normalize;
     QString m_goldenSceneId;
 
     QThread *m_workerThread = nullptr;

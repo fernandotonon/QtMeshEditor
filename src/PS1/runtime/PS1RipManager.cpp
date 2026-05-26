@@ -6,6 +6,7 @@
 #include "MeshTopologyHash.h"
 #include "PS1RipMeshBuilder.h"
 #include "PS1RipWorker.h"
+#include "Ps1CoordinateNormalizer.h"
 #include "PsxBiosValidator.h"
 #include "PsxDiscResolver.h"
 #include "PsxGoldenCapture.h"
@@ -48,6 +49,21 @@ QString PS1RipManager::goldenSceneId() const
     if (!m_goldenSceneId.isEmpty())
         return m_goldenSceneId;
     return PsxGoldenCapture::activeSceneId();
+}
+
+void PS1RipManager::setNormalizerSettings(const Ps1NormalizerSettings &settings)
+{
+    m_normalize = settings;
+    // Per-axis flip + userScale are SceneNode-level — apply immediately to
+    // every existing PS1Capture_* node so the user sees the change without
+    // re-capturing (#424 acceptance criterion). perspectiveCorrectUVs is
+    // baked into mesh data, so it only takes effect on the next capture.
+    const int touched = Ps1CoordinateNormalizer::applyToCaptureNodes(m_normalize);
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.coord.normalize"),
+        QStringLiteral("settings=%1 touched=%2")
+            .arg(Ps1CoordinateNormalizer::describe(m_normalize))
+            .arg(touched));
 }
 
 void PS1RipManager::setGoldenSceneId(const QString &sceneId)
@@ -122,7 +138,8 @@ void PS1RipManager::initializeWorkerThread()
                     m_dedupeStrict ? MeshDedupeMode::Strict : MeshDedupeMode::Loose;
                 MeshReconstructionStats reconStats;
                 const ReconstructedCaptureSet captureSet =
-                    MeshReconstructor::reconstructDeduped(snapshot, dedupeMode, &reconStats);
+                    MeshReconstructor::reconstructDeduped(snapshot, dedupeMode, m_normalize,
+                                                          &reconStats);
                 if (captureSet.isEmpty()) {
                     reportError(tr("Capture produced no reconstructable geometry"));
                     return;
@@ -132,7 +149,7 @@ void PS1RipManager::initializeWorkerThread()
                 QString buildErr;
                 try {
                     if (!PS1RipMeshBuilder::attachCaptureSetToScene(captureSet, captureId, &snapshot,
-                                                                    &built, &buildErr)) {
+                                                                    &built, &buildErr, m_normalize)) {
                         reportError(buildErr.isEmpty() ? tr("Failed to build capture mesh")
                                                      : buildErr);
                         return;
