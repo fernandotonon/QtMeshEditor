@@ -50,7 +50,8 @@ private slots:
     void onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
                      int vertexCount, int triangleCount, int matrixCount, uint32_t cameraMatrixId,
                      bool hasCameraMatrix, int gteInversePercent, bool slabLike,
-                     PsxVramMirrorMode vramMirrorMode, Gp0CaptureStats captureStats);
+                     int primsWithMatrixId, int primsTotal, PsxVramMirrorMode vramMirrorMode,
+                     Gp0CaptureStats captureStats);
     void onPausedChanged(bool paused);
 
 private:

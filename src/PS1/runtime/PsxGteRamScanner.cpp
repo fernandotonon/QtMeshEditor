@@ -14,9 +14,19 @@ namespace {
 constexpr size_t kMatrixBytes = sizeof(MatrixRecord) - sizeof(uint64_t);
 constexpr int kMaxMatricesPerFrame = 48;
 
+// #675: tightened from the pre-#675 looksLikeMatrixRecord (`h ∈ [50, 8192]`,
+// per-entry magnitude only) which accepted ~192 false positives per single-box
+// retail capture. Real PS1 GTE matrices satisfy three structural invariants —
+// (a) `H` lives in the cluster of common projection denominators (~64..2048,
+// titles author 128/200/240/256/300/320/400/512 almost exclusively per
+// psx-spx), (b) `OFX`/`OFY` decoded to pixels fits the 1024×512 framebuffer,
+// (c) the RT block is an orthonormal rotation in 12.4 fixed point. The
+// orthonormal check (rows have unit magnitude, are mutually orthogonal, det == +1)
+// is delegated to GteCapture::looksOrthonormalRotation so the same gate is
+// reused by GteInverse::screenToModel's RT^T fast path.
 bool looksLikeMatrixRecord(const MatrixRecord &matrix)
 {
-    if (matrix.h < 50 || matrix.h > 8192)
+    if (matrix.h < 64 || matrix.h > 2048)
         return false;
     if (matrix.ofx < 0 || matrix.ofy < 0)
         return false;
@@ -26,25 +36,21 @@ bool looksLikeMatrixRecord(const MatrixRecord &matrix)
     if (ofxScreen > 1024 || ofyScreen > 1024)
         return false;
 
-    bool anyRotation = false;
+    // Reject anything where any RT entry overflows a sane 12.4 fixed-point
+    // rotation before the more expensive orthonormality check.
     for (int r = 0; r < 3; ++r) {
         for (int c = 0; c < 3; ++c) {
-            const int32_t v = matrix.rt.m[r][c];
-            if (v == 0)
-                continue;
-            if (std::abs(v) > (1 << 16))
+            if (std::abs(matrix.rt.m[r][c]) > (1 << 13))
                 return false;
-            anyRotation = true;
         }
     }
-    if (!anyRotation)
-        return false;
 
     for (int i = 0; i < 3; ++i) {
         if (std::abs(matrix.tr[i]) > (1 << 20))
             return false;
     }
-    return true;
+
+    return GteCapture::looksOrthonormalRotation(matrix);
 }
 
 bool readMatrixAt(const uint8_t *ram, size_t byteSize, size_t byteOffset, MatrixRecord &out)

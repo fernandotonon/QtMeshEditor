@@ -170,7 +170,8 @@ void PS1RipManager::initializeWorkerThread()
                                captureSet.instanceCount(), built.vertexCount, built.triangleCount,
                                snapshot.matrices.size(), snapshot.cameraMatrixId,
                                snapshot.hasCameraMatrix(), reconStats.gteInversePercent(),
-                               reconStats.slabLike, vramMirrorMode, captureStats);
+                               reconStats.slabLike, reconStats.primsWithMatrixId,
+                               reconStats.primsTotal, vramMirrorMode, captureStats);
             });
     connect(m_worker, &PS1RipWorker::vramFrameUpdated, this,
             [this](const QVector<uint16_t> &cells, const QImage &preview) {

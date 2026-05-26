@@ -125,6 +125,71 @@ See epic #412 for phased issues (#413–#431).
 - **GTE RAM supplement** — Capture Frame still merges COP2-scanned matrices; per-draw tagging applies at GP0 dispatch time, not retroactively to RAM-only captures without draw-env context.
 - **Commercial golden scenes** — manual acceptance tracked in [#659](https://github.com/fernandotonon/QtMeshEditor/issues/659) (`src/PS1/golden_captures.md`); #658 reduces blob fallback but does not replace a full matrix stack or FIFO-accurate stream (#662).
 
+## Screen-space inverse projection (#675)
+
+The screen-space capture paths (live FIFO bridge, OT chains, chain roots, linear scan)
+all deliver post-projection GP0 vertex coordinates — to land them in editor world units
+the reconstructor inverts the PSX GTE projection in `GteInverse::screenToModel`. The
+forward / inverse math matters: when it's wrong, every screen-space vertex falls through
+to `psxScreenToWorld` (a pure pixel-to-flat-XY mapping) and the reconstructed mesh is the
+classic flat-plate "blob".
+
+- **The math:** `GteInverse::modelToScreen` implements the psx-spx RTPS formula
+  `IR[r] = (RT[r][:] · V) / 4096 + TR[r]`, `SX_pixel = H * IR[0] / IR[2] + OFX/65536`
+  (similarly for SY), `SZ = IR[2]`. `GteInverse::screenToModel` inverts it via
+  `IR[2] = sz`, `IR[i<2] = (screen_i - OF_i) * IR[2] / H`, then
+  `V = RT^T * (IR - TR)` (the `RT^T` fast path exploits the fact that PS1 RT matrices
+  are orthonormal — `RT^-1 == RT^T` for unit rotations). Pre-#675 both `modelToScreen`
+  and `screenToModel` were diagonal-only (`vx / RT[0][0]`) which silently passed the
+  identity-matrix roundtrip test in CI but rejected every real rotation matrix at the
+  `kMaxVertexRadius` filter in `MeshReconstructor::vertexFromPsx`.
+- **The orthonormal gate (`GteCapture::looksOrthonormalRotation`):** validates that an
+  `MatrixRecord`'s 3×3 RT block satisfies `|row|^2 ≈ 4096^2`, `dot(row_i, row_j) ≈ 0` and
+  `det ≈ +4096^3` (each within 5–10% slack so 12.4 quantisation of `cos`/`sin` tables
+  doesn't false-reject). Used in two places:
+  - `PsxGteRamScanner::looksLikeMatrixRecord` — drops false-positive matrix candidates.
+    Combined with the narrowed `H ∈ [64, 2048]` and tightened RT entry magnitude
+    (`|RT[r][c]| ≤ 8192`), pseudo-random 16 KB RAM blocks produce **zero** accepted
+    matrices in the regression suite (`PsxGteRamScannerTest.RejectsPseudoRandomGarbage`).
+  - Future: `GteInverse::screenToModel` callers can pre-check this if they want to skip
+    the inverse for non-orthonormal matrices and force `psxScreenToWorld` instead — for
+    now the `RT^T` solve is harmless on any input that survives the scanner gate.
+- **Diagnostics (`MeshReconstructionStats`):** `primsTotal`, `primsWithMatrixId`,
+  `gteInverseVertices`, `screenFallbackVertices`. Plumbed through
+  `PS1RipManager::meshBuilt(... primsWithMatrixId, primsTotal ...)` into
+  `PS1RipSessionWindow`'s status bar as
+  `GTE inverse N% (matrix tag X/Y)`. Sentry breadcrumb `ps1.rip.matrix.stats` carries
+  the same `gte_inverse=N%% prims_with_matrix=X/Y` for off-line analysis.
+- **Acceptance tests** (`GteInverseTest`, `GteCaptureTest`, `PsxGteRamScannerTest`):
+  90° Y rotation and arbitrary 3D Euler (`30° + 45° + 15°`) round-trip within 2–4
+  fixed-point units; identity, real rotations accepted by the validator; scaled
+  rotation, reflection (det = `-4096^3`) and pseudo-random garbage rejected.
+- **GP0 carries no depth (`sz == 0` guard):** PS1 GP0 polygon packets store *only* 2D
+  screen-space XY for each vertex. The GTE writes Z into a separate `SZ` FIFO that the
+  CPU drains *before* assembling the GP0 word, so `PsxVertex::z` is identically 0 for
+  every prim ingested from the GP0 hook or the live FIFO bridge. With `sz == 0` the
+  inverse degenerates — `IR[0] = IR[1] = 0`, every vertex of a given matrix tag maps to
+  the same point `RT^T · (-TR) / 4096`, and the resulting per-matrix sub-mesh has zero
+  extent (invisible in the viewport but still reported as `GTE inverse 100%`).
+  `GteInverse::screenToModel` therefore early-returns `false` when `sz == 0`, forcing
+  `MeshReconstructor::vertexFromPsx` to fall back to `psxScreenToWorld` (the flat-XY
+  blob). The fallback is intentional: an ugly-but-visible mesh beats a degenerate
+  zero-extent one. Real per-vertex depth recovery for GP0-only captures requires the
+  in-core GTE hook in #676 (or future RAM scanner work that recovers the SZ FIFO
+  contents alongside the matrix snapshot).
+- **When the inverse *does* run:** model-space test fixtures (`PsxPerDrawMatrixTest`,
+  `MeshReconstructorCubePipelineTest`) inject vertices via `modelToScreen` so they carry
+  the forward-projected `sz` — the math fix is verified on those paths. On retail GP0
+  captures the inverse stays gated by `sz == 0`, so the status bar reports
+  `GTE inverse 0% (matrix tag X/Y)`. That is the *correct* signal: matrix association is
+  fine (`X/Y` nonzero), but depth was lost at the GP0 boundary.
+- **Out of scope:** matrix→primitive *association* (which RT was active when this prim
+  was drawn) remains heuristic via per-draw matrix tagging (#658). The math fix in #675
+  makes the inverse correct when association is correct *and* depth is available;
+  ground-truth depth + association on retail games still needs the forked-mednafen
+  in-core GTE hook tracked in
+  [#676](https://github.com/fernandotonon/QtMeshEditor/issues/676).
+
 ## Model-space RAM scanners (#674)
 
 Screen-space GP0 prims always carry information loss because they're post-projection — the
@@ -246,20 +311,70 @@ The **stub** core is active (`coreId=stub`). It draws a test pattern and synthet
 ### Capture mesh is a triangle “blob” (normal size, wrong shape)
 
 The screen-space GP0 path (live FIFO bridge + ordering-table chains + standalone chain
-roots + linear scan) always produces a flat-XY blob on retail games because the GTE
-inverse-projection it relies on is heuristic-grade — true ground-truth recovery requires
-the forked-mednafen in-core GTE hook tracked in [#676](https://github.com/fernandotonon/QtMeshEditor/issues/676).
-Until that ships, the recommended path for "real meshes from real games" is the
-**model-space TMD/HMD RAM scanner** (#674): if the title uses Sony SDK formats the
-scanner finds the model-space vertex pools in RAM and emits them directly, bypassing the
-inverse-projection entirely.
+roots + linear scan) used to **always** produce a flat-XY blob because both the GTE
+forward and inverse transforms in `GteInverse` were diagonal-only and silently rejected
+every non-identity rotation matrix (the existing roundtrip test only exercised identity).
+**#675** replaces them with the real psx-spx math (`IR = (RT * V + TR)`, with `RT^T`
+inverse for orthonormal rotations) and adds an orthonormal validator
+(`GteCapture::looksOrthonormalRotation`) that gates both the `screenToModel` fast path
+and the `PsxGteRamScanner` candidate filter. Combined effect:
 
-- Status bar shows `tmd N` / `hmd N` and the primary source flips to `ram_model_mesh`
-  when meshes are found — that's your "this is a clean mesh" signal.
-- **TMD-using games (where this works):** Tekken 1/2/3, Ridge Racer 1/RR, Net Yaroze SDK
-  demos, Wipeout 1/2097, R-Type Delta, Klonoa, many pre-FF7 Square titles.
-- **Custom-engine games (where it does NOT work):** Crash, Spyro, FFVII field models,
-  MGS post-Yaroze. These games author their own packed mesh layouts; only #676 covers them.
+- Real rotations (90° Y, mixed XYZ Euler, etc.) now round-trip within ~2 fixed-point
+  units instead of producing radius-million garbage rejected by `kMaxVertexRadius`.
+- The matrix scanner drops false positives — single-box retail captures that previously
+  reported ~192 "matrices" should land in the single-digit-to-low-double-digit range
+  because pseudo-random RAM bytes cannot satisfy `|row|^2 ≈ 4096^2 ∧ row_i · row_j ≈ 0
+  ∧ det ≈ +4096^3` all at once.
+
+**Diagnostic reading order** (post-#675 status bar):
+1. `GTE inverse N%` — fraction of vertices that successfully ran through the inverse.
+   On GP0-only captures this is **expected to be 0%** because the GP0 stream carries no
+   per-vertex depth (see the "GP0 carries no depth" bullet in the section above) — the
+   inverse refuses to run, callers fall back to `psxScreenToWorld`, and the result is a
+   flat-XY blob *that you can still see in the viewport*. Healthy non-GP0 capture
+   (model-space scanner, model-projected test fixture) is ≥ ~50%. If 0% **and** you
+   expected real model-space, jump straight to step 3.
+2. `matrix tag X/Y` — how many primitives were associated with a captured matrix.
+   `0/Y` means matrix association is the bottleneck (no `0xE4` draw-environment packets
+   captured, or per-draw matrix tagging from #658 didn't run). `Y/Y` with low inverse %
+   means either depth is missing (GP0-only — expected) **or** the math is rejecting the
+   matrices because they aren't orthonormal (often because the title uses a custom
+   transform stack).
+3. `tmd N / hmd N` — model-space scanner hits (#674). If ≥ 1, the primary source flips
+   to `ram_model_mesh` and you're on the clean-mesh path regardless of the screen-space
+   stats. **This is the only path that produces ground-truth model-space meshes on retail
+   games today.**
+
+### Captured scene tree has nodes but viewport is empty (mesh exists, invisible)
+
+This is the failure mode the first build of #675 hit: the math fix made
+`screenToModel` correct, but with `sz == 0` on every GP0 vertex the inverse collapsed
+every prim of a given matrix to a single point. The mesh existed (`PS1Capture_*_inst*`
+nodes in the scene tree, non-zero vertex/triangle counts in the status bar) but had
+zero extent and rendered as nothing. The `sz == 0` guard in `GteInverse::screenToModel`
+now forces the `psxScreenToWorld` fallback in this case — verify by looking at the
+status bar:
+
+- `GTE inverse 0% (matrix tag X/Y)` with `X == Y` and a visible blob: **correct
+  post-guard behaviour** on GP0-only captures. The blob is ugly but visible, and is the
+  best the screen-space path can do without depth.
+- `GTE inverse 100%` with an invisible scene-tree mesh: the guard is bypassed
+  somewhere. Confirm `PsxVertex::z` is 0 on the inputs (it should be — nothing in the
+  GP0 capture path writes it) and that `screenToModel` returns false for `sz == 0` in
+  `GteInverseTest.ScreenToModelRefusesZeroDepth`.
+
+The recommended path for "real meshes from real games" remains the **model-space
+TMD/HMD RAM scanner** (#674) for Sony SDK titles. #675's screen-space math fix
+**unblocks** the screen-space path when matrix association is correct, but the
+matrix-to-draw linkage on retail games is still heuristic — true ground-truth recovery
+requires the forked-mednafen in-core GTE hook tracked in
+[#676](https://github.com/fernandotonon/QtMeshEditor/issues/676).
+
+- **TMD-using games (clean meshes today via #674):** Tekken 1/2/3, Ridge Racer 1/RR,
+  Net Yaroze SDK demos, Wipeout 1/2097, R-Type Delta, Klonoa, many pre-FF7 Square titles.
+- **Custom-engine games (still partial recovery):** Crash, Spyro, FFVII field models,
+  MGS post-Yaroze. These games author their own packed mesh layouts and bespoke transform
+  stacks; only #676 covers them.
 - Tune via `QTMESH_PS1_TMD_SCANNER=0` to disable TMD scanning for a baseline, and
   `QTMESH_PS1_HMD_SCANNER=1` to opt into the v1 HMD candidate counter.
 
