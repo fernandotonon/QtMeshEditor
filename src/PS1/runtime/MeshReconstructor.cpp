@@ -107,37 +107,131 @@ void accumulateVertexStats(const ReconstructedVertex &v, MeshReconstructionStats
     expandBounds(stats, v);
 }
 
-void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix, SubMeshAccumulator &acc,
+PsxVertex midpointPsx(const PsxVertex &a, const PsxVertex &b)
+{
+    // Integer division on screen coords is fine: even at the coarsest PS1
+    // resolution (640px-wide modes) a 1-pixel rounding error along an edge
+    // is well below the perspective-correct UV subdivision's own tolerance
+    // (1.3 default depth ratio). UV is i16/256 fixed-point so the same
+    // integer halving preserves screen-space affine interpolation exactly.
+    PsxVertex m;
+    m.x = (a.x + b.x) / 2;
+    m.y = (a.y + b.y) / 2;
+    m.z = (a.z + b.z) / 2;
+    m.u = static_cast<int16_t>((static_cast<int>(a.u) + static_cast<int>(b.u)) / 2);
+    m.v = static_cast<int16_t>((static_cast<int>(a.v) + static_cast<int>(b.v)) / 2);
+    m.r = static_cast<uint8_t>((static_cast<int>(a.r) + static_cast<int>(b.r)) / 2);
+    m.g = static_cast<uint8_t>((static_cast<int>(a.g) + static_cast<int>(b.g)) / 2);
+    m.b = static_cast<uint8_t>((static_cast<int>(a.b) + static_cast<int>(b.b)) / 2);
+    return m;
+}
+
+/** True when the triangle's per-vertex screen-space depth (sz) varies enough
+ *  that the perspective-vs-affine UV gap is visibly larger than `tolerance`.
+ *  Falls back to "don't subdivide" when any sz is zero (GP0-only captures
+ *  have no depth — see GteInverse::screenToModel sz==0 guard, #675). */
+bool depthRatioExceedsTolerance(const PsxVertex &a, const PsxVertex &b, const PsxVertex &c,
+                                float tolerance)
+{
+    const int zs[3] = { a.z, b.z, c.z };
+    int zmin = zs[0], zmax = zs[0];
+    for (int i = 1; i < 3; ++i) {
+        zmin = std::min(zmin, zs[i]);
+        zmax = std::max(zmax, zs[i]);
+    }
+    if (zmin <= 0)
+        return false;
+    return static_cast<float>(zmax) / static_cast<float>(zmin) > tolerance;
+}
+
+void emitTriDirect(const PsxVertex &a, const PsxVertex &b, const PsxVertex &c,
+                   const MatrixRecord *matrix, bool textured, SubMeshAccumulator &acc,
                    MeshReconstructionStats *statsOut)
 {
-    const bool textured = prim.kind == PrimKind::TexturedTri || prim.kind == PrimKind::TexturedQuad
-                          || prim.kind == PrimKind::Sprite;
-
-    auto vtx = [&](int i) {
+    auto vtx = [&](const PsxVertex &pv) {
         bool usedGte = false;
-        ReconstructedVertex out = vertexFromPsx(prim.verts[i], matrix, textured, &usedGte);
+        ReconstructedVertex out = vertexFromPsx(pv, matrix, textured, &usedGte);
         if (statsOut)
             accumulateVertexStats(out, *statsOut, usedGte);
         return out;
     };
+    acc.addTriangle(vtx(a), vtx(b), vtx(c));
+}
+
+/** Recursive midpoint subdivision: when the triangle's depth ratio exceeds
+ *  `tolerance`, split into 4 sub-tris via edge midpoints and recurse.
+ *  New midpoint vertices' UVs are computed via screen-space linear interp
+ *  (the PS1 affine convention) so Ogre's perspective-correct rendering of
+ *  the resulting fine mesh approximates what the original PS1 GPU showed.
+ *  Bounded by `maxDepth` so a single very-warped prim can't blow up to
+ *  thousands of tris (4^3 = 64 sub-tris at the default depth=3). */
+void emitTriSubdivided(const PsxVertex &a, const PsxVertex &b, const PsxVertex &c,
+                       const MatrixRecord *matrix, bool textured, SubMeshAccumulator &acc,
+                       MeshReconstructionStats *statsOut, float tolerance, int remainingDepth)
+{
+    if (remainingDepth <= 0 || !depthRatioExceedsTolerance(a, b, c, tolerance)) {
+        emitTriDirect(a, b, c, matrix, textured, acc, statsOut);
+        return;
+    }
+    const PsxVertex ab = midpointPsx(a, b);
+    const PsxVertex bc = midpointPsx(b, c);
+    const PsxVertex ca = midpointPsx(c, a);
+    const int next = remainingDepth - 1;
+    emitTriSubdivided(a,  ab, ca, matrix, textured, acc, statsOut, tolerance, next);
+    emitTriSubdivided(ab, b,  bc, matrix, textured, acc, statsOut, tolerance, next);
+    emitTriSubdivided(ca, bc, c,  matrix, textured, acc, statsOut, tolerance, next);
+    emitTriSubdivided(ab, bc, ca, matrix, textured, acc, statsOut, tolerance, next);
+}
+
+void emitTri(const PsxVertex &a, const PsxVertex &b, const PsxVertex &c,
+             const MatrixRecord *matrix, bool textured, SubMeshAccumulator &acc,
+             MeshReconstructionStats *statsOut, const Ps1NormalizerSettings &settings)
+{
+    if (settings.perspectiveCorrectUVs && settings.perspectiveMaxDepth > 0) {
+        emitTriSubdivided(a, b, c, matrix, textured, acc, statsOut,
+                          settings.perspectiveTolerance, settings.perspectiveMaxDepth);
+        return;
+    }
+    emitTriDirect(a, b, c, matrix, textured, acc, statsOut);
+}
+
+void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix, SubMeshAccumulator &acc,
+                   MeshReconstructionStats *statsOut, const Ps1NormalizerSettings &settings)
+{
+    const bool textured = prim.kind == PrimKind::TexturedTri || prim.kind == PrimKind::TexturedQuad
+                          || prim.kind == PrimKind::Sprite;
 
     if (prim.kind == PrimKind::MonoTri || prim.kind == PrimKind::ShadedTri
         || prim.kind == PrimKind::TexturedTri) {
         if (prim.vertexCount >= 3)
-            acc.addTriangle(vtx(0), vtx(1), vtx(2));
+            emitTri(prim.verts[0], prim.verts[1], prim.verts[2], matrix, textured, acc,
+                    statsOut, settings);
         return;
     }
 
     if (prim.kind == PrimKind::MonoQuad || prim.kind == PrimKind::ShadedQuad
         || prim.kind == PrimKind::TexturedQuad) {
         if (prim.vertexCount >= 4) {
-            acc.addTriangle(vtx(0), vtx(1), vtx(2));
-            acc.addTriangle(vtx(0), vtx(2), vtx(3));
+            emitTri(prim.verts[0], prim.verts[1], prim.verts[2], matrix, textured, acc,
+                    statsOut, settings);
+            emitTri(prim.verts[0], prim.verts[2], prim.verts[3], matrix, textured, acc,
+                    statsOut, settings);
         }
         return;
     }
 
     if (prim.kind == PrimKind::Sprite && prim.vertexCount >= 2) {
+        // Sprites are screen-aligned billboards (no depth variance across the
+        // pair), so subdivision is a no-op for them — we keep the original
+        // 2-tri expansion. The pinned 0.05f py offset stays because the
+        // captured pair lacks the second pair of corners.
+        auto vtx = [&](int i) {
+            bool usedGte = false;
+            ReconstructedVertex out = vertexFromPsx(prim.verts[i], matrix, textured, &usedGte);
+            if (statsOut)
+                accumulateVertexStats(out, *statsOut, usedGte);
+            return out;
+        };
         ReconstructedVertex a = vtx(0);
         ReconstructedVertex b = vtx(1);
         ReconstructedVertex c = b;
@@ -150,7 +244,8 @@ void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix, SubMeshAc
 }
 
 QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> buildMatrixGroups(const CaptureSnapshot &snapshot,
-                                                                    MeshReconstructionStats *statsOut)
+                                                                    MeshReconstructionStats *statsOut,
+                                                                    const Ps1NormalizerSettings &settings)
 {
     QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> groupsByMatrix;
 
@@ -176,7 +271,7 @@ QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> buildMatrixGroups(const Capt
         if (acc.materialName.isEmpty())
             acc.materialName = MeshReconstructor::textureMaterialName(
                 prim.tpage, prim.clut, prim.semiTrans, prim.drawModeBits);
-        emitPrimitive(prim, matrix, acc, statsOut);
+        emitPrimitive(prim, matrix, acc, statsOut, settings);
     }
     if (statsOut)
         statsOut->finalizeSlabMetric();
@@ -206,11 +301,12 @@ ReconstructedMesh meshFromMatrixGroup(uint32_t matrixId,
 }
 
 QVector<ReconstructedMesh> buildParts(const CaptureSnapshot &snapshot,
-                                      MeshReconstructionStats *statsOut)
+                                      MeshReconstructionStats *statsOut,
+                                      const Ps1NormalizerSettings &settings)
 {
     QVector<ReconstructedMesh> parts;
     const QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> groupsByMatrix =
-        buildMatrixGroups(snapshot, statsOut);
+        buildMatrixGroups(snapshot, statsOut, settings);
 
     for (auto matIt = groupsByMatrix.constBegin(); matIt != groupsByMatrix.constEnd(); ++matIt) {
         ReconstructedMesh part = meshFromMatrixGroup(matIt.key(), matIt.value());
@@ -280,21 +376,29 @@ quint64 MeshReconstructor::textureGroupKey(uint16_t tpage, uint16_t clut, uint8_
 
 ReconstructedMesh MeshReconstructor::reconstruct(const CaptureSnapshot &snapshot)
 {
-    return flattenParts(buildParts(snapshot, nullptr));
+    return flattenParts(buildParts(snapshot, nullptr, Ps1NormalizerSettings{}));
 }
 
 ReconstructedCaptureSet MeshReconstructor::reconstructDeduped(const CaptureSnapshot &snapshot,
                                                             MeshDedupeMode dedupeMode)
 {
-    return reconstructDeduped(snapshot, dedupeMode, nullptr);
+    return reconstructDeduped(snapshot, dedupeMode, Ps1NormalizerSettings{}, nullptr);
 }
 
 ReconstructedCaptureSet MeshReconstructor::reconstructDeduped(const CaptureSnapshot &snapshot,
                                                             MeshDedupeMode dedupeMode,
                                                             MeshReconstructionStats *statsOut)
 {
+    return reconstructDeduped(snapshot, dedupeMode, Ps1NormalizerSettings{}, statsOut);
+}
+
+ReconstructedCaptureSet MeshReconstructor::reconstructDeduped(const CaptureSnapshot &snapshot,
+                                                            MeshDedupeMode dedupeMode,
+                                                            const Ps1NormalizerSettings &normalize,
+                                                            MeshReconstructionStats *statsOut)
+{
     ReconstructedCaptureSet result;
-    const QVector<ReconstructedMesh> parts = buildParts(snapshot, statsOut);
+    const QVector<ReconstructedMesh> parts = buildParts(snapshot, statsOut, normalize);
     result.capturedPartCount = parts.size();
     if (parts.isEmpty())
         return result;

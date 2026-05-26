@@ -3,6 +3,7 @@
 
 #include "CaptureSnapshot.h"
 #include "MeshReconstructionStats.h"
+#include "Ps1CoordinateNormalizer.h"
 #include "ReconstructedMesh.h"
 
 #include <QString>
@@ -43,6 +44,17 @@ public:
                                                       MeshDedupeMode dedupeMode);
     static ReconstructedCaptureSet reconstructDeduped(const CaptureSnapshot &snapshot,
                                                       MeshDedupeMode dedupeMode,
+                                                      MeshReconstructionStats *statsOut);
+    /** Variant that honours the user's normalizer settings (#424). When
+     *  `normalize.perspectiveCorrectUVs` is true, screen-space prims whose
+     *  vertex-depth ratio exceeds `normalize.perspectiveTolerance` are
+     *  subdivided via midpoint triangulation (recursion capped at
+     *  `normalize.perspectiveMaxDepth`). The per-axis flip / userScale fields
+     *  are applied via SceneNode scale by `PS1RipMeshBuilder`, not by this
+     *  reconstructor — they don't affect the mesh data. */
+    static ReconstructedCaptureSet reconstructDeduped(const CaptureSnapshot &snapshot,
+                                                      MeshDedupeMode dedupeMode,
+                                                      const Ps1NormalizerSettings &normalize,
                                                       MeshReconstructionStats *statsOut);
 };
 

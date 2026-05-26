@@ -4,6 +4,7 @@
 #include "PS1RipInputSettingsDialog.h"
 #include "PS1RipLegalityDialog.h"
 #include "PS1RipManager.h"
+#include "Ps1CoordinateNormalizer.h"
 #include "PsxJoypadBindings.h"
 #include "SentryReporter.h"
 #include "PsxJoypadState.h"
@@ -16,8 +17,11 @@
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QDockWidget>
+#include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFormLayout>
+#include <QGroupBox>
 #include <QMenu>
 #include <QTimer>
 #include <QLabel>
@@ -28,6 +32,8 @@
 #include <QMenuBar>
 #include <QToolBar>
 #include <QToolButton>
+#include <QVBoxLayout>
+#include <QWidget>
 
 namespace {
 constexpr auto kSettingsGroup = "ps1Rip";
@@ -37,6 +43,7 @@ constexpr auto kDedupeStrictKey = "dedupeStrict";
 constexpr auto kViewportIntegerScaleKey = "viewportIntegerScale";
 constexpr auto kViewportSmoothFilterKey = "viewportSmoothFilter";
 constexpr auto kViewportAspect43Key = "viewportAspect43";
+constexpr auto kNormalizePrefix = "ps1Rip/normalize";
 
 QString ps1SettingsKey(const char *name)
 {
@@ -171,6 +178,8 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     vramDock->setMinimumHeight(220);
     addDockWidget(Qt::BottomDockWidgetArea, vramDock);
 
+    createNormalizerDock();
+
     m_statusLabel = new QLabel(this);
     statusBar()->addPermanentWidget(m_statusLabel);
 
@@ -227,6 +236,92 @@ PS1RipSessionWindow::~PS1RipSessionWindow()
         m_manager->stop();
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.viewport.close"),
                                 QStringLiteral("PS1 rip session window closed"));
+}
+
+void PS1RipSessionWindow::createNormalizerDock()
+{
+    QSettings qs;
+    const Ps1NormalizerSettings persisted =
+        Ps1CoordinateNormalizer::load(qs, QString::fromLatin1(kNormalizePrefix));
+
+    auto *dock = new QDockWidget(tr("Normalize"), this);
+    auto *body = new QWidget(dock);
+    auto *layout = new QVBoxLayout(body);
+    layout->setContentsMargins(8, 8, 8, 8);
+
+    auto *form = new QFormLayout();
+    form->setContentsMargins(0, 0, 0, 0);
+
+    m_normalizeScaleSpin = new QDoubleSpinBox(body);
+    m_normalizeScaleSpin->setRange(0.001, 1000.0);
+    m_normalizeScaleSpin->setDecimals(4);
+    m_normalizeScaleSpin->setSingleStep(0.1);
+    m_normalizeScaleSpin->setValue(persisted.userScale);
+    m_normalizeScaleSpin->setToolTip(
+        tr("Multiplier on top of the built-in capture scale.\n"
+           "1.0 = default magnitude (~FBX/glTF scale). 0.024 ≈ PSX-native (1/4096)."));
+    form->addRow(tr("Scale:"), m_normalizeScaleSpin);
+
+    auto *flipBox = new QGroupBox(tr("Flip axes"), body);
+    auto *flipLayout = new QVBoxLayout(flipBox);
+    flipLayout->setContentsMargins(8, 4, 8, 4);
+    m_normalizeFlipX = new QCheckBox(tr("Flip X"), flipBox);
+    m_normalizeFlipY = new QCheckBox(tr("Flip Y"), flipBox);
+    m_normalizeFlipZ = new QCheckBox(tr("Flip Z"), flipBox);
+    m_normalizeFlipX->setChecked(persisted.flipX);
+    m_normalizeFlipY->setChecked(persisted.flipY);
+    m_normalizeFlipZ->setChecked(persisted.flipZ);
+    m_normalizeFlipX->setToolTip(tr("Mirror around X. Ogre auto-flips winding for negative-determinant scale."));
+    m_normalizeFlipY->setToolTip(tr("Mirror around Y. Useful for games with unconventional up axis."));
+    m_normalizeFlipZ->setToolTip(tr("Mirror around Z. Combine with another axis to keep CCW winding."));
+    flipLayout->addWidget(m_normalizeFlipX);
+    flipLayout->addWidget(m_normalizeFlipY);
+    flipLayout->addWidget(m_normalizeFlipZ);
+
+    m_normalizePerspectiveUV = new QCheckBox(tr("Perspective-correct UVs"), body);
+    m_normalizePerspectiveUV->setChecked(persisted.perspectiveCorrectUVs);
+    m_normalizePerspectiveUV->setToolTip(
+        tr("Subdivide triangles with high depth variance and recompute affine\n"
+           "UVs at midpoints — the classic warped-quad fix used in modern PSX\n"
+           "remasters. Takes effect on the next capture (mesh data only)."));
+
+    layout->addLayout(form);
+    layout->addWidget(flipBox);
+    layout->addWidget(m_normalizePerspectiveUV);
+    layout->addStretch(1);
+
+    body->setLayout(layout);
+    dock->setWidget(body);
+    dock->setMinimumWidth(180);
+    addDockWidget(Qt::RightDockWidgetArea, dock);
+
+    // Push the loaded settings now so the manager + any existing capture
+    // nodes pick them up immediately on session resume.
+    m_manager->setNormalizerSettings(persisted);
+
+    auto onChanged = [this]() { pushNormalizerSettings(); };
+    connect(m_normalizeScaleSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, onChanged);
+    connect(m_normalizeFlipX, &QCheckBox::toggled, this, onChanged);
+    connect(m_normalizeFlipY, &QCheckBox::toggled, this, onChanged);
+    connect(m_normalizeFlipZ, &QCheckBox::toggled, this, onChanged);
+    connect(m_normalizePerspectiveUV, &QCheckBox::toggled, this, onChanged);
+}
+
+void PS1RipSessionWindow::pushNormalizerSettings()
+{
+    Ps1NormalizerSettings s;
+    if (m_normalizeScaleSpin)
+        s.userScale = static_cast<float>(m_normalizeScaleSpin->value());
+    if (m_normalizeFlipX) s.flipX = m_normalizeFlipX->isChecked();
+    if (m_normalizeFlipY) s.flipY = m_normalizeFlipY->isChecked();
+    if (m_normalizeFlipZ) s.flipZ = m_normalizeFlipZ->isChecked();
+    if (m_normalizePerspectiveUV)
+        s.perspectiveCorrectUVs = m_normalizePerspectiveUV->isChecked();
+
+    QSettings qs;
+    Ps1CoordinateNormalizer::save(qs, QString::fromLatin1(kNormalizePrefix), s);
+    if (m_manager)
+        m_manager->setNormalizerSettings(s);
 }
 
 void PS1RipSessionWindow::showSession(QWidget *parent)

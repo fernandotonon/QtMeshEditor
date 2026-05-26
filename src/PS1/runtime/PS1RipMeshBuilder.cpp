@@ -588,7 +588,8 @@ bool PS1RipMeshBuilder::attachToScene(const ReconstructedMesh &mesh, const QStri
 bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &captureSet,
                                                 const QString &captureId,
                                                 const CaptureSnapshot *textureSource,
-                                                BuildResult *resultOut, QString *errorOut)
+                                                BuildResult *resultOut, QString *errorOut,
+                                                const Ps1NormalizerSettings &normalize)
 {
     if (captureSet.isEmpty()) {
         if (errorOut)
@@ -666,7 +667,15 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
             createdNodeNames.append(nodeName);
             node->setPosition(inst.px * placementScale, inst.py * placementScale,
                               inst.pz * placementScale);
-            node->setScale(placementScale, placementScale, placementScale);
+            // Stash the auto-fit scale on the node so live normalizer tweaks
+            // (Ps1CoordinateNormalizer::applyToCaptureNodes) can recompose
+            // (placementScale × userScale × per-axis sign) without losing
+            // the original fit-to-target-extent normalization (#424).
+            node->getUserObjectBindings().setUserAny(
+                "ps1RipPlacementScale", Ogre::Any(placementScale));
+            node->setScale(placementScale * normalize.userScale * normalize.signX(),
+                           placementScale * normalize.userScale * normalize.signY(),
+                           placementScale * normalize.userScale * normalize.signZ());
 
             Ogre::Entity *entity = mgr->createEntity(node, ogreMesh);
             if (!entity) {

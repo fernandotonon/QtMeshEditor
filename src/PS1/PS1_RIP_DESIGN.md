@@ -203,6 +203,82 @@ yields clean meshes with no inverse step.
 - **Disable:** `QTMESH_PS1_TMD_SCANNER=0` skips the TMD pass entirely (debug / golden
   baselines). HMD scanner is opt-in (`QTMESH_PS1_HMD_SCANNER=1`).
 
+## Coordinate normalization & affine-UV handling (#424)
+
+Captures land in the editor through three different source-specific conversions
+that all share the same target basis (right-handed Y-up, CCW front-face winding,
+~FBX/glTF magnitude):
+
+| Source path | Conversion | Comment |
+|-------------|-----------|---------|
+| `GteInverse::modelToEditor` | `(mx, my, mz) × 0.01 → (wx, -wy, -wz)` | Y- and Z-negated → determinant +1 → CCW winding preserved |
+| `GteInverse::psxScreenToWorld` | `(sx − 160, sy − 120, sz) × 0.01 → (wx, -wy, wz)` | fallback path used when sz=0 (see #675) — single Y flip |
+| `PsxTmdRamScanner` | `(x, y, z) × 10/4096`, 180° Z-rotation, CCW index swap | mirrors `PS1TMD::importTmd` so on-disk and RAM paths agree |
+
+`Ps1CoordinateNormalizer` (`runtime/Ps1CoordinateNormalizer.{h,cpp}`) layers a
+user-controllable **scale + per-axis flip + perspective-correct UV** override
+on top of those built-in conversions. The state lives on `PS1RipManager` and is
+edited from the new "Normalize" dock in `PS1RipSessionWindow`.
+
+### How each control composes
+
+- **Scale (`userScale`, default 1.0)** — multiplied into the SceneNode scale at
+  attach time alongside the placement auto-fit. `placementScale` is stashed in
+  `node->getUserObjectBindings().setUserAny("ps1RipPlacementScale", …)` so live
+  toggles don't lose the auto-fit. The issue's stated "default 1/4096" is the
+  PSX 12.4 fixed-point divisor; we expose it as a slider rather than as the
+  baked default because freshly-loaded captures need to land at the same
+  magnitude as FBX/glTF imports (acceptance criterion). Users who want raw
+  PSX-native magnitude can dial the slider down to ≈0.024 (= 1/4096 / 0.01).
+- **Per-axis flip (`flipX/Y/Z`, default off)** — applied as ±1 multipliers in
+  the SceneNode scale. An odd number of negated axes produces a negative
+  transform determinant; Ogre auto-flips back-face culling for those nodes so
+  the visible front face stays correct **without any per-vertex winding swap
+  in the mesh data**. This is what makes "per-axis flip toggles work without
+  re-capturing" — no mesh rebuild needed.
+- **Perspective-correct UVs (default off)** — when on, screen-space prims whose
+  vertex depth ratio max(sz)/min(sz) exceeds `perspectiveTolerance` (default
+  1.3) get split into 4 sub-tris via midpoint triangulation in
+  `MeshReconstructor::emitTriSubdivided`. New midpoint UVs use screen-space
+  linear interpolation (the PS1 affine convention) so Ogre's perspective-
+  correct rendering of the resulting fine mesh approximates what the original
+  PS1 GPU showed — the "warped quad fix" used by modern PSX remasters.
+  Recursion is bounded by `perspectiveMaxDepth` (default 3 → 4³ = 64 sub-tris
+  per input prim worst case). Bakes into mesh data, so this **does** require a
+  fresh capture after toggling. Prims with sz=0 (GP0-only captures, #675) skip
+  subdivision because there's no usable depth signal.
+
+### Live updates
+
+`PS1RipManager::setNormalizerSettings` calls
+`Ps1CoordinateNormalizer::applyToCaptureNodes`, which walks every
+`PS1Capture_*` SceneNode in `Manager::getSceneNodes()` and re-applies the new
+scale tuple. Cost: O(scene nodes), no Ogre mesh / material rebuild. Emits a
+`ps1.rip.coord.normalize` Sentry breadcrumb with the compact descriptor
+returned by `Ps1CoordinateNormalizer::describe` and the node-touched count.
+
+Settings persist to `QSettings` under `ps1Rip/normalize/*` so a user's
+per-game tweaks survive across sessions. Values are clamped on load
+(`userScale ∈ [0.001, 1000]`, `perspectiveTolerance ∈ [1.0, 1000]`,
+`perspectiveMaxDepth ∈ [0, 6]`) so a corrupted ini can't bake invisible or
+explosively-scaled capture nodes.
+
+### Bounds & framing
+
+`PS1RipMeshBuilder::buildMeshResources` already calls
+`ogreMesh->_setBounds(bounds)` per unique mesh (#658), so `SpaceCamera::
+frameSelection()` (`F` shortcut) picks the captured AABB up via
+`getWorldBoundingBox(true)` without any extra plumbing. Hit `F` on any
+`PS1Capture_*_inst*` node to frame it.
+
+### Test coverage
+
+- `Ps1CoordinateNormalizer_test.cpp` — settings roundtrip, describe, isDefault,
+  per-axis sign math, YDownQuad → YUp winding behaviour, clamp on corrupted
+  ini values.
+- `MeshReconstructor_test.cpp` — perspective-correct subdivision tessellates a
+  warped quad, no-ops on flat prims, gracefully handles sz=0 GP0 captures.
+
 ## GP0 FIFO follow-up (#662)
 
 Shipped in this slice:
@@ -269,6 +345,25 @@ TMD importer is also wrong, fix it in `PS1TMD.cpp` and the RAM scanner picks it 
 the matching constants. Per-draw matrix tagging (#658) and the live FIFO bridge (#662)
 still help on the screen-space side but cannot reconstruct topology from screen-space
 prims alone.
+
+### Captured mesh is the wrong size, flipped, or has visible texture warping
+
+The "Normalize" dock in the rip session window (#424) is the user-facing
+override for these:
+
+- **Wrong size** — drag the **Scale** spinbox. 1.0 (default) matches FBX/glTF
+  magnitude; ≈0.024 gives raw PSX-native (1/4096) for engine-side math.
+- **Wrong axis / upside-down** — toggle **Flip X / Y / Z**. The change applies
+  live to existing capture nodes; no re-capture needed. Pair two flips to keep
+  CCW winding when chasing a Z-up game into editor Y-up.
+- **Texture wobble looks wrong on near-camera surfaces** — enable
+  **Perspective-correct UVs** and re-capture. Triangles with high depth
+  variance get subdivided + midpoint-resampled so Ogre's perspective-correct
+  rendering reproduces the artist's affine intent (the PSX-remaster fix).
+
+All four are persisted to `QSettings` under `ps1Rip/normalize/*` so per-game
+tweaks survive across sessions. Sentry: each setter call emits
+`ps1.rip.coord.normalize` with the compact descriptor.
 
 ### Libretro integration tests (local only)
 
