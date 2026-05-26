@@ -146,38 +146,69 @@ Shader "QtMeshEditor/OpenVAT_URP"
             Varyings vert(Attributes IN)
             {
                 Varyings OUT;
-                // Bind-pose render so we can confirm geometry stays correct.
-                // The fragment will visualise the SAMPLED texel.
-                VertexPositionInputs vpi = GetVertexPositionInputs(IN.positionOS.xyz);
-                OUT.positionCS = vpi.positionCS;
-                OUT.positionWS = vpi.positionWS;
-                OUT.normalWS   = float3(0, 1, 0);
 
-                // Unpack the column index from vertex Color (same path
-                // that delivered chaotic per-vertex colors in the
-                // earlier diagnostic — KNOWN to work end-to-end).
+                // Unpack the column index from vertex Color (R = low
+                // byte, G = high byte). Confirmed per-vertex working
+                // by the earlier diagnostic.
                 float colLow  = IN.color.r * 255.0;
                 float colHigh = IN.color.g * 255.0;
+                float rowBlk  = IN.color.b * 255.0;
                 float colF    = colLow + colHigh * 256.0;
                 int col       = int(colF + 0.5);
+                int rowBase   = int(rowBlk + 0.5) * int(max(_frames, 1.0));
 
-                // Sample the position texture at (col, 0) using
-                // LOAD_TEXTURE2D (integer-coord texelFetch). Pass the
-                // sampled RGB through uv (.xy) and uv2_dbg (.x) so the
-                // fragment shader can show what was sampled.
-                float3 sampled = LOAD_TEXTURE2D_LOD(
-                    _openVAT_main, int2(col, 0), 0).rgb;
-                // Cram R,G into uv. Lose B for now (Varyings has no
-                // spare channel) — uv.x, uv.y will paint the dancer
-                // by the sampled red+green channels.
-                OUT.uv = float2(sampled.r, sampled.g);
+                // Pick the current frame index from either Time-driven
+                // or explicit-frame mode.
+                float safeFrames = max(_frames, 1.0);
+                float t = _UseTime > 0.5 ? _Time.y * _speed * safeFrames : _frame;
+                int curr = int(floor(t)) % int(safeFrames);
+                if (curr < 0) curr += int(safeFrames);
+
+                // Bake layout: positions in rows [rowBase..rowBase+frames-1],
+                // normals in [rowBase+frames..rowBase+2*frames-1].
+                int rowPos = rowBase + curr;
+                int rowNrm = rowBase + curr + int(safeFrames);
+
+                // LOAD_TEXTURE2D = integer-coord texelFetch. Bypasses
+                // any sampler-state filtering or LOD selection that
+                // collapses per-vertex variation on URP / WebGL.
+                float3 posSample = LOAD_TEXTURE2D_LOD(
+                    _openVAT_main, int2(col, rowPos), 0).rgb;
+                float3 nrmSample = LOAD_TEXTURE2D_LOD(
+                    _openVAT_main, int2(col, rowNrm), 0).rgb;
+
+                // Decode position from [0,1] into the bake's bounds.
+                float3 vatPos = float3(
+                    lerp(_minValues.x, _maxValues.x, posSample.r),
+                    lerp(_minValues.y, _maxValues.y, posSample.g),
+                    lerp(_minValues.z, _maxValues.z, posSample.b)
+                );
+                // Decode normal from [0,1] sRGB-style to [-1,1].
+                float3 nrm = normalize(nrmSample * 2.0 - 1.0);
+
+                // Mix bind-pose with VAT-pose by _exaggeration.
+                float3 bindPos = IN.positionOS.xyz;
+                float3 finalPos = lerp(bindPos, vatPos, saturate(_exaggeration));
+
+                VertexPositionInputs vpi = GetVertexPositionInputs(finalPos);
+                OUT.positionCS = vpi.positionCS;
+                OUT.positionWS = vpi.positionWS;
+                OUT.normalWS   = normalize(mul((float3x3)UNITY_MATRIX_M, nrm));
+                OUT.uv         = IN.uv * _Basecolor_ST.xy + _Basecolor_ST.zw;
                 return OUT;
             }
 
             half4 frag(Varyings IN) : SV_Target
             {
-                // Paint by the sampled texel's RG channels.
-                return half4(IN.uv.x, IN.uv.y, 0.5, 1);
+                half3 albedo = SAMPLE_TEXTURE2D(_Basecolor, sampler_Basecolor, IN.uv).rgb;
+
+                Light mainLight = GetMainLight();
+                float3 N = normalize(IN.normalWS);
+                float3 L = mainLight.direction;
+                float ndotl = saturate(dot(N, L));
+                float3 ambient = SampleSH(N);
+                float3 lit = albedo * (ambient + mainLight.color * ndotl);
+                return half4(lit, 1);
             }
             ENDHLSL
         }
