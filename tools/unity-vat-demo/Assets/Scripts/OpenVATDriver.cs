@@ -61,6 +61,36 @@ namespace QtMeshEditor.VAT
             }
             _mats = mats.ToArray();
             Debug.Log($"OpenVATDriver: bound {_mats.Length} VAT materials, fps={fps}, frames={frames}");
+
+            // UV2 sanity log — verifies the bake-column index reached
+            // the runtime mesh intact across the OpenVATEditor pipeline.
+            foreach (var r in renderers)
+            {
+                Mesh m = (r is SkinnedMeshRenderer smr) ? smr.sharedMesh
+                        : r.GetComponent<MeshFilter>()?.sharedMesh;
+                if (m == null) continue;
+                var uv2 = m.uv2;
+                if (uv2 == null || uv2.Length == 0)
+                {
+                    Debug.LogWarning($"OpenVATDriver: mesh '{m.name}' has NO uv2 — VAT replay will fail. " +
+                                      "Re-bake with `qtmesh vat --emit-uv2`.");
+                    continue;
+                }
+                float minX = float.MaxValue, maxX = float.MinValue;
+                for (int i = 0; i < uv2.Length; i++)
+                {
+                    if (uv2[i].x < minX) minX = uv2[i].x;
+                    if (uv2[i].x > maxX) maxX = uv2[i].x;
+                }
+                int uniq = 0;
+                var seen = new System.Collections.Generic.HashSet<float>();
+                for (int i = 0; i < uv2.Length; i++) if (seen.Add(uv2[i].x)) uniq++;
+                Debug.Log($"OpenVATDriver: mesh '{m.name}' uv2 range=[{minX:F2}..{maxX:F2}], " +
+                          $"{uniq} unique X values across {uv2.Length} verts. " +
+                          $"(samples: uv2[0]={uv2[0]}, uv2[1024]={(uv2.Length>1024?uv2[1024]:Vector2.zero)}, " +
+                          $"uv2[5000]={(uv2.Length>5000?uv2[5000]:Vector2.zero)})");
+                break;  // one mesh is enough
+            }
         }
 
         void Update()
