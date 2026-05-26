@@ -97,8 +97,9 @@ namespace QtMeshEditor.VAT
                     if (uv1[j].x > hi) hi = uv1[j].x;
                 }
                 Debug.Log($"VATPlayer: runtime UV1 u-range on {sourceMesh.name} = [{lo}..{hi}] " +
-                          $"(positionTexture width = {positionTexture.width}, " +
-                          $"expected max = {positionTexture.width - 1}).");
+                          $"(positionTexture: {positionTexture.width}×{positionTexture.height}, " +
+                          $"format={positionTexture.graphicsFormat}, " +
+                          $"expected max u = {positionTexture.width - 1}).");
             }
 
             // Bind the mesh to the MeshFilter explicitly — the user might

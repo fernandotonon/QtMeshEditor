@@ -88,17 +88,30 @@ namespace QtMeshEditor.VAT.Editor
             // Height=142) → does NOT get rounded to a power-of-two.
             imp.maxTextureSize  = 8192;
             imp.npotScale       = TextureImporterNPOTScale.None;
-            // Override the per-platform setting too — the platform
-            // override takes precedence over the default, and Unity
-            // 6 sets a platform-specific 2048 cap on Standalone by
-            // default.
+            // Override the per-platform settings too — the platform
+            // override takes precedence over the default, and Unity 6
+            // applies (a) a 2048 max-size cap on Standalone, and (b)
+            // an 8-bit-per-channel format (RGBA32) by default, even
+            // when the source PNG is 16-bit RGB. RGBA32 quantizes the
+            // bake's position values to 256 levels per axis → ~8 mm
+            // of jitter on a 2 m character → the dancer renders as
+            // a cloud of confetti instead of an animated character.
+            //
+            // RGBA64 (16-bit per channel) matches the source PNG's
+            // bit depth and gives ~30 µm precision on the same bounds.
+            // We force this on every platform override so a build for
+            // any target picks it up.
             foreach (string platform in new[] { "Standalone", "WebGL", "iPhone", "Android" })
             {
                 var settings = imp.GetPlatformTextureSettings(platform);
-                if (settings.overridden || settings.maxTextureSize < 8192)
+                bool needsUpdate = !settings.overridden
+                                || settings.maxTextureSize < 8192
+                                || settings.format != TextureImporterFormat.RGBA64;
+                if (needsUpdate)
                 {
                     settings.overridden     = true;
                     settings.maxTextureSize = 8192;
+                    settings.format         = TextureImporterFormat.RGBA64;
                     settings.textureCompression = TextureImporterCompression.Uncompressed;
                     imp.SetPlatformTextureSettings(settings);
                 }
