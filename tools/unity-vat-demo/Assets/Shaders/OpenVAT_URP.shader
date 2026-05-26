@@ -78,7 +78,8 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 float4 positionOS   : POSITION;
                 float3 normalOS     : NORMAL;
                 float2 uv           : TEXCOORD0;
-                float2 uv2          : TEXCOORD1;   // bake-column index, preserved across importer reorders
+                float2 uv2          : TEXCOORD1;   // bake-column index (kept for compatibility, FP16-quantized)
+                float4 color        : COLOR;       // packed column index (R8G8 = 16-bit unsigned)
             };
 
             struct Varyings
@@ -112,30 +113,12 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 uint texW = uint(_openVAT_main_TexelSize.z);  // texelSize.z = width
                 uint texH = uint(_openVAT_main_TexelSize.w);  // texelSize.w = height
 
-                // UV2.x carries the bake's column index. We accept it
-                // either as a raw integer (0..texWidth-1) or as a
-                // normalized [0,1] float (× texWidth in the shader),
-                // so the same shader works for whichever path the
-                // importer takes. Detect normalized form by the
-                // observed range — if any vertex's uv2.x ≤ 1.0, treat
-                // as normalized.
-                //
-                // FP16 quantization: URP under Metal silently
-                // downcasts UV channels to half-float during the GPU
-                // vertex upload, even though VertexChannelCompressionMask
-                // says otherwise. FP16 can represent integers up to
-                // 2048 exactly; values 2048+ snap to the nearest
-                // multiple of 2, 4, 8 etc. → eggs. Reading from a
-                // normalized [0,1] form sidesteps the quantization.
-                float texWidthF = _openVAT_main_TexelSize.z;
-                float colF = uv2.x;
-                // Heuristic: if max possible uv2 (5827) was sent raw,
-                // colF could be anywhere in [0..texWidth]; if normalized,
-                // colF is in [0..1]. Multiply by texWidth iff we're
-                // clearly in the [0..1] range.
-                if (colF <= 1.0001) colF *= texWidthF;
-                int col = int(colF + 0.5);
-                int rowBlock = int(uv2.y);
+                // Column index comes in pre-unpacked from the vertex
+                // Color attribute as a raw integer 0..textureWidth-1
+                // (see vert() — packed at import time into Color32 to
+                // sidestep URP/Metal FP16 quantization on UV channels).
+                int col = int(uv2.x + 0.5);
+                int rowBlock = int(uv2.y + 0.5);
                 int baseRow = rowBlock * int(safeFrames);
                 int rowPos = baseRow + curr;
                 int rowNrm = baseRow + curr + int(safeFrames);
@@ -163,8 +146,18 @@ Shader "QtMeshEditor/OpenVAT_URP"
             Varyings vert(Attributes IN)
             {
                 Varyings OUT;
+                // Unpack column index from vertex Color (R = low byte,
+                // G = high byte). Color channels are R8G8B8A8_UNorm in
+                // [0,1], so multiply by 255 to recover the byte value.
+                // 16-bit total: max representable column = 65535.
+                float colLow  = IN.color.r * 255.0;
+                float colHigh = IN.color.g * 255.0;
+                float rowBlk  = IN.color.b * 255.0;
+                float colF    = colLow + colHigh * 256.0;
+
                 float3 nrm;
-                float3 vatPos = SampleVATPosition(IN.uv2, nrm);
+                float2 packedUV2 = float2(colF, rowBlk);
+                float3 vatPos = SampleVATPosition(packedUV2, nrm);
                 // Mix between bind-pose and VAT-pose by _exaggeration.
                 float3 bindPos = IN.positionOS.xyz;
                 float3 finalPos = lerp(bindPos, vatPos, saturate(_exaggeration));
@@ -173,25 +166,21 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 OUT.positionCS = vpi.positionCS;
                 OUT.positionWS = vpi.positionWS;
                 OUT.normalWS   = normalize(mul((float3x3)UNITY_MATRIX_M, nrm));
-                // Diagnostic: pass uv2.x as our fragment uv.x so the
-                // fragment shader can paint by it. If we see a SMOOTH
-                // red-to-cyan gradient across the dancer (red where
-                // uv2.x is low, cyan where high), UV2 made it to the
-                // GPU per-vertex. If we see chunky bands → FP16
-                // quantization at the vertex input attribute fetch.
-                OUT.uv = float2(IN.uv2.x, IN.uv.y);
+                OUT.uv         = IN.uv * _Basecolor_ST.xy + _Basecolor_ST.zw;
                 return OUT;
             }
 
             half4 frag(Varyings IN) : SV_Target
             {
-                // Diagnostic output: visualise uv2.x.
-                // IN.uv.x already carries uv2.x from the vertex shader.
-                // Map to [0,1] (if already normalized) or divide by 5828
-                // (if raw integer). Detect by magnitude.
-                float u = IN.uv.x;
-                if (u > 1.5) u /= 5828.0;
-                return half4(u, 1.0 - u, 0.0, 1.0);
+                half3 albedo = SAMPLE_TEXTURE2D(_Basecolor, sampler_Basecolor, IN.uv).rgb;
+
+                Light mainLight = GetMainLight();
+                float3 N = normalize(IN.normalWS);
+                float3 L = mainLight.direction;
+                float ndotl = saturate(dot(N, L));
+                float3 ambient = SampleSH(N);
+                float3 lit = albedo * (ambient + mainLight.color * ndotl);
+                return half4(lit, 1);
             }
             ENDHLSL
         }

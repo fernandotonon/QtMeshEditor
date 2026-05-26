@@ -41,7 +41,7 @@ namespace QtMeshEditor.VAT.Editor
     // import-time data transformation changes (e.g. UV2 normalization
     // added in v2). Without this Unity reuses the previously-cached
     // Mesh asset and your importer code changes go unnoticed.
-    [ScriptedImporter(version: 2, ext: "gltf")]
+    [ScriptedImporter(version: 3, ext: "gltf")]
     public class QtmGltfImporter : ScriptedImporter
     {
         public override void OnImportAsset(AssetImportContext ctx)
@@ -208,6 +208,9 @@ namespace QtMeshEditor.VAT.Editor
                 new UnityEngine.Rendering.VertexAttributeDescriptor(
                     UnityEngine.Rendering.VertexAttribute.TexCoord1,
                     UnityEngine.Rendering.VertexAttributeFormat.Float32, 2),
+                new UnityEngine.Rendering.VertexAttributeDescriptor(
+                    UnityEngine.Rendering.VertexAttribute.Color,
+                    UnityEngine.Rendering.VertexAttributeFormat.UNorm8, 4),
             };
             mesh.SetVertexBufferParams(allVerts.Count, layout);
 
@@ -215,28 +218,40 @@ namespace QtMeshEditor.VAT.Editor
             mesh.SetNormals(allNormals);
             mesh.SetUVs(0, allUv0);
 
-            // Normalize UV1 column indices to [0,1] to survive GPU FP16
-            // vertex compression. URP under Metal quantizes UV channels
-            // to half-float regardless of VertexChannelCompressionMask;
-            // FP16 represents integers above ~1024 with progressively
-            // worse precision (2048+ snaps to multiples of 2, 4096+ to
-            // multiples of 4 etc.), turning the dancer's body into an
-            // egg shape. [0,1] floats survive FP16 perfectly across the
-            // full range, so we divide by texWidth at import time and
-            // multiply back in the shader.
+            // GPU FP16 quantization defeats both raw and [0,1]-normalized
+            // UV2 representations of large column indices (FP16 in [0,1]
+            // only has ~2048 unique values, but our bake has 5828 cols).
+            // Encode the column index into a Color32 (R8G8B8A8) instead
+            // — that's 8 bits per channel × 2 channels = 16 bits of
+            // integer precision, plenty for 5828 columns. Unity always
+            // upload vertex colors as bytes without quantization tricks
+            // (it's the lossless channel).
+            //
+            // Pack: R = col % 256, G = col / 256.
+            // Unpack in shader: col = colors.r * 255 + colors.g * 255 * 256.
             float maxU = 0f;
             for (int i = 0; i < allUv1.Count; i++) if (allUv1[i].x > maxU) maxU = allUv1[i].x;
-            // texWidth = maxU + 1 (since columns are 0..maxU). Round up
-            // to a power-of-two for cleaner shader math; we tell the
-            // shader the divisor via a Mesh tag (the shader reads it
-            // from the position texture's actual width at runtime).
-            if (maxU > 1.5f)   // only normalize when we have raw integer indices
+            if (maxU > 1.5f)   // only encode when we have raw integer indices
             {
-                float divisor = maxU + 1f;   // 5828 for the Rumba bake
+                var colors = new Color32[allUv1.Count];
                 for (int i = 0; i < allUv1.Count; i++)
-                    allUv1[i] = new Vector2(allUv1[i].x / divisor, allUv1[i].y);
-                Debug.Log($"QtmGltfImporter: normalized UV1 by {divisor:F0} to fit FP16 precision (max raw was {maxU:F0})");
+                {
+                    int col = Mathf.RoundToInt(allUv1[i].x);
+                    int row = Mathf.RoundToInt(allUv1[i].y);
+                    // Low byte = col & 0xFF, high byte = col >> 8.
+                    // Row stored in B (typically 0; supports up to 256 row blocks).
+                    colors[i] = new Color32(
+                        (byte)(col & 0xFF),
+                        (byte)((col >> 8) & 0xFF),
+                        (byte)(row & 0xFF),
+                        0);
+                }
+                mesh.colors32 = colors;
+                Debug.Log($"QtmGltfImporter: encoded column index into vertex Color32 (max col was {maxU:F0})");
             }
+            // Keep UV1 for compatibility — shader's older `IN.uv2.x`
+            // code path is dropped but the channel is preserved for
+            // any external tooling that still reads it.
             mesh.SetUVs(1, allUv1);
 
             mesh.subMeshCount = subMeshes.Count;
