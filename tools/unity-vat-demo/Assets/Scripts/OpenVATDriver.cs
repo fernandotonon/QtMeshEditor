@@ -23,6 +23,7 @@ namespace QtMeshEditor.VAT
 
         void Start()
         {
+            Debug.Log($"OpenVATDriver.Start on {gameObject.name}");
             // Collect every Material on every Renderer in this hierarchy
             // and force them to manual-time mode. Using `Renderer.materials`
             // (plural, returns instance copies) so each instance has its
@@ -44,6 +45,7 @@ namespace QtMeshEditor.VAT
                 r.materials = ms;
             }
             _mats = mats.ToArray();
+            Debug.Log($"OpenVATDriver: bound {_mats.Length} VAT materials, fps={fps}, frames={frames}");
         }
 
         void Update()
@@ -52,6 +54,9 @@ namespace QtMeshEditor.VAT
             float safeFrames = Mathf.Max(1, frames);
             _currentFrame += Time.deltaTime * fps;
             _currentFrame %= safeFrames;
+            // Log first 5 frames so we can confirm the driver IS pushing values.
+            if (Time.frameCount < 5)
+                Debug.Log($"OpenVATDriver: frame {Time.frameCount} → _frame={_currentFrame:F2} / {safeFrames}");
             foreach (var m in _mats)
                 m.SetFloat("_frame", _currentFrame);
         }

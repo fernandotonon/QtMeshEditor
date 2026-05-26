@@ -246,6 +246,12 @@ namespace QtMeshEditor.VAT.Editor
             {
                 var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
                 instance.transform.position = Vector3.zero;
+                // Unpack the prefab connection so AddComponent + the new
+                // values actually serialize into the scene rather than
+                // staying on the prefab override. Without this, the
+                // OpenVATDriver component drops on scene reopen.
+                PrefabUtility.UnpackPrefabInstance(instance,
+                    PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
                 // Attach an OpenVATDriver that ticks `_frame` per
                 // Update — the shadergraph's `_Time`-driven path doesn't
                 // animate reliably in the standalone player on Unity 6.
@@ -253,6 +259,7 @@ namespace QtMeshEditor.VAT.Editor
                 var driver = instance.AddComponent<OpenVATDriver>();
                 driver.fps = 30f;
                 driver.frames = 71;
+                Debug.Log("CLISetupURPAndBuild: attached OpenVATDriver to scene instance, unpacked prefab connection");
             }
 
             const string scenePath = "Assets/Scenes/OpenVATWeb.unity";
@@ -433,6 +440,18 @@ namespace QtMeshEditor.VAT.Editor
                 if (posTex != null && Mathf.Abs(mat.GetFloat("_resolutionY") - posTex.height) > 0.5f)
                 {
                     mat.SetFloat("_resolutionY", posTex.height);
+                    dirty = true;
+                }
+                // _exaggeration multiplies the encoded vertex
+                // displacement. Defaults to 0 on a freshly-created
+                // material (and the shadergraph schema default is 0
+                // too), which silently mutes ALL animation regardless
+                // of how `_frame` / `_Time` ticks — the deformation
+                // amplitude is zero, so verts always sit at bind pose.
+                // 1.0 = "play back at the bake's natural amplitude".
+                if (mat.HasProperty("_exaggeration") && Mathf.Abs(mat.GetFloat("_exaggeration")) < 0.001f)
+                {
+                    mat.SetFloat("_exaggeration", 1f);
                     dirty = true;
                 }
                 if (dirty)

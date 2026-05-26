@@ -25,6 +25,38 @@ is the recommended path:
 The bake's sidecar format (`os-remap.Min/Max/Frames`) is compatible
 with what OpenVATEditor expects — no schema translation needed.
 
+## Status: URP path renders correctly; animation playback is still flaky
+
+After switching to URP + the official OpenVAT package, the dancer now
+renders correctly: full T-pose silhouette, all 11 submeshes, proper
+textures from the bake. What's NOT working yet: visible animation
+playback. The dancer stays in a static textured T-pose.
+
+What we verified is set correctly on the material in the build:
+- `_UseTime: 1`, `_UsePackedNormals: 1`, `_exaggeration: 1`
+- `_speed: 1`, `_frames: 71`, `_resolutionY: 142`
+- `_openVAT_main` bound to the position texture (5828×142 RGBA64)
+- `_minValues` / `_maxValues` populated from the sidecar JSON
+
+And the runtime `OpenVATDriver.cs` script attached to the dancer is
+confirmed running (`Debug.Log("OpenVATDriver: bound 11 VAT materials,
+fps=30, frames=71")` fires at Start) and writing `_frame` per Update.
+Yet the visible deformation amplitude is 0.
+
+This is a deeper integration issue with the OpenVAT URP Shader Graph's
+internal time/frame wiring that we couldn't crack in-session. Possible
+next steps for a future investigation:
+- Open the project in the Unity editor, drop the prefab into a scene
+  manually, hit Play, see whether the Editor-time playback works (vs
+  Player-time which is what we've been testing).
+- Drop the `OpenVAT_Decoder_basic` Shader Graph into the editor and
+  inspect the runtime values via the Frame Debugger / Material Property
+  Block inspector to see which uniforms actually reach the GPU.
+- Try the more comprehensive `openVAT_decoder.shadergraph` instead of
+  `_basic` — the editor we invoke picks one based on whether a
+  basecolor texture was found; maybe the full graph wires `_frame`
+  differently.
+
 ## Status: BiRP custom shader path is incomplete
 
 This folder also ships a hand-rolled BiRP `Hidden/QTM/VAT` shader for
@@ -41,8 +73,8 @@ Metal on Apple Silicon despite:
   (textureLod) paths at `#pragma target 3.0+` — both return (0,0,0)
 
 This is most likely a Unity 6 + Metal + BiRP-shader interaction that
-warrants targeted research. Until that's fixed, **use the official
-OpenVAT Unity package** described above.
+warrants targeted research. The URP path (above) is closer to working
+and is the recommended starting point.
 
 **What ships in the repo:**
 
