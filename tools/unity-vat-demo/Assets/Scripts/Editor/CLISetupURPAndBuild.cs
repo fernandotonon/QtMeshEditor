@@ -151,6 +151,19 @@ namespace QtMeshEditor.VAT.Editor
                 throw new Exception($"folder {folder} doesn't exist — copy the bake into it first");
             }
 
+            // Force-reimport the position texture FIRST so the
+            // VATAssetPostprocessor applies maxTextureSize=8192 +
+            // RGBA64. Without this, the texture downscales to 64px tall
+            // and OpenVATEditor records that as `_resolutionY` on the
+            // material — the shader then samples the wrong rows and
+            // playback dies.
+            foreach (var f in Directory.GetFiles(folder, "*_vat.png"))
+            {
+                string assetPath = f.Replace("\\", "/");
+                AssetDatabase.ImportAsset(assetPath,
+                    ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+            }
+
             Type openVatEditorType = AppDomain.CurrentDomain.GetAssemblies()
                 .SelectMany(a => SafeGetTypes(a))
                 .FirstOrDefault(t => t != null && t.Name == "OpenVATEditor");
@@ -185,6 +198,17 @@ namespace QtMeshEditor.VAT.Editor
             // Fix by walking the prefab and replicating the VAT
             // material across every slot.
             FixupMultiSubmeshPrefab(folder);
+            // Two more material fixups OpenVATEditor leaves us with:
+            //   - `_speed = 0` — the shader's default is 1.0 but
+            //     CreateMaterial seeds it to 0, so without us setting
+            //     it the dancer stays at frame 0 forever.
+            //   - `_resolutionY = 64` (or whatever Unity decided on first
+            //     import). The position texture is 5828×142; if the
+            //     texture importer hadn't finished the maxTextureSize=8192
+            //     resize before OpenVATEditor read `.height`, the material
+            //     gets a stale value. Set it directly from the asset on
+            //     disk (PNG header is authoritative).
+            FixupAnimationUniforms(folder);
         }
 
         // Construct a simple URP scene that uses the prefab OpenVAT
@@ -308,6 +332,45 @@ namespace QtMeshEditor.VAT.Editor
                 {
                     PrefabUtility.SavePrefabAsset(prefab);
                     Debug.Log($"FixupMultiSubmeshPrefab: replicated VAT material across all submesh slots on {prefabPath}");
+                }
+            }
+            AssetDatabase.SaveAssets();
+        }
+
+        // Patches `_speed` and `_resolutionY` on every *_mat.mat file
+        // OpenVATEditor produced under `folder`. Without this the dancer
+        // stays static (speed=0) and the frame-row calculation samples
+        // the wrong rows (resolutionY=64 vs the actual 142).
+        static void FixupAnimationUniforms(string folder)
+        {
+            var matGuids = AssetDatabase.FindAssets("t:Material", new[] { folder });
+            foreach (var g in matGuids)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(g);
+                if (!path.EndsWith("_mat.mat")) continue;
+                var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+                if (mat == null) continue;
+
+                bool dirty = false;
+                if (Mathf.Abs(mat.GetFloat("_speed")) < 0.001f)
+                {
+                    mat.SetFloat("_speed", 1f);
+                    dirty = true;
+                }
+                // Read the position-texture's TRUE height directly from
+                // the .png on disk via the AssetDatabase (the importer
+                // settings now force maxTextureSize 8192, so this matches
+                // the source 142).
+                var posTex = mat.GetTexture("_openVAT_main") as Texture2D;
+                if (posTex != null && Mathf.Abs(mat.GetFloat("_resolutionY") - posTex.height) > 0.5f)
+                {
+                    mat.SetFloat("_resolutionY", posTex.height);
+                    dirty = true;
+                }
+                if (dirty)
+                {
+                    EditorUtility.SetDirty(mat);
+                    Debug.Log($"FixupAnimationUniforms: patched {path} → _speed={mat.GetFloat("_speed")}, _resolutionY={mat.GetFloat("_resolutionY")}");
                 }
             }
             AssetDatabase.SaveAssets();

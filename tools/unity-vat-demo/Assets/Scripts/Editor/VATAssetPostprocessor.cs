@@ -33,11 +33,25 @@ namespace QtMeshEditor.VAT.Editor
 {
     public class VATAssetPostprocessor : AssetPostprocessor
     {
+        // Watch both the legacy custom-shader bake folder AND the
+        // OpenVAT-official content folder so position textures land at
+        // their native resolution regardless of which import path the
+        // demo took.
+        static readonly string[] kBakeDirs = {
+            "Assets/VAT/Rumba",
+            "Assets/OpenVATContent",
+        };
+        static bool InBakeDir(string path)
+        {
+            foreach (var d in kBakeDirs)
+                if (path.StartsWith(d)) return true;
+            return false;
+        }
         const string kBakeDir = "Assets/VAT/Rumba";
 
         void OnPreprocessModel()
         {
-            if (!assetPath.StartsWith(kBakeDir)) return;
+            if (!InBakeDir(assetPath)) return;
 
             var imp = (ModelImporter)assetImporter;
             bool dirty = false;
@@ -64,10 +78,11 @@ namespace QtMeshEditor.VAT.Editor
 
         void OnPreprocessTexture()
         {
-            if (!assetPath.StartsWith(kBakeDir)) return;
+            if (!InBakeDir(assetPath)) return;
             // Only retune the packed-data texture, not the diffuse —
-            // the diffuse stays sRGB.
-            if (!assetPath.EndsWith("_pos.png")) return;
+            // the diffuse stays sRGB. The custom-shader path uses
+            // `_pos.png`; the OpenVAT-official path uses `_vat.png`.
+            if (!assetPath.EndsWith("_pos.png") && !assetPath.EndsWith("_vat.png")) return;
 
             var imp = (TextureImporter)assetImporter;
             imp.sRGBTexture     = false;
