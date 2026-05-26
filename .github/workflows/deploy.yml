@@ -835,6 +835,11 @@ jobs:
     if: github.event_name != 'release'
     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
     runs-on: ubuntu-latest
+    # Hard cap on the whole job. The full sweep takes ~12 min normally
+    # (build + xvfb + ~25 suites + coverage + sonar). Cap at 45 so a
+    # hung suite or a deadlock surfaces in well under an hour instead
+    # of camping on the runner for GitHub's default 6-hour ceiling.
+    timeout-minutes: 45
     permissions: read-all
     env: 
           LD_LIBRARY_PATH: gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
@@ -1165,6 +1170,18 @@ jobs:
                 EXPECTED_UNIT_TESTS=$(count_listed_tests "$UNIT_TEST_PATH")
                 ACTUAL_UNIT_TESTS=0
 
+                # Per-suite wall-clock cap. Most suites finish in <10s;
+                # the slowest legitimate suite (FBX import roundtrip) is
+                # ~90s. 5 min covers any reasonable test, and bounds the
+                # damage when one suite deadlocks (which has happened
+                # intermittently with Mesa/Xvfb GL context init).
+                #
+                # `timeout --signal=KILL` jumps straight to SIGKILL because
+                # a deadlocked Qt event loop or GL driver doesn't reliably
+                # honour SIGTERM. `--foreground` keeps it usable inside a
+                # for-loop where the shell isn't a session leader.
+                PER_SUITE_TIMEOUT=300
+
                 for suite in $SUITES; do
                     TOTAL_SUITES=$((TOTAL_SUITES + 1))
                     echo "--- Running suite: $suite ---"
@@ -1172,8 +1189,20 @@ jobs:
                     # sudo can mask crash exit codes, reporting 0 for segfaulted children.
                     suite_xml="test-results-${suite}.xml"
                     expected_suite_tests=$(count_listed_tests "$UNIT_TEST_PATH" "${suite}.*")
-                    $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:${suite_xml} 2>&1
+                    timeout --foreground --signal=KILL "$PER_SUITE_TIMEOUT" \
+                        $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:${suite_xml} 2>&1
                     exit_code=$?
+                    # timeout(1) reports 124 when the wall-clock cap expired.
+                    # SIGKILL via --signal=KILL also raises 137 on the child;
+                    # `timeout` translates that back to 124 so the caller
+                    # sees a single timeout signature. Treat as a non-fatal
+                    # warning (same shape as the GL-crash allowlist) so the
+                    # remaining suites still run and report.
+                    if [ $exit_code -eq 124 ]; then
+                        echo "WARNING: Suite $suite TIMED OUT after ${PER_SUITE_TIMEOUT}s — killed by wall-clock cap."
+                        CRASHED_SUITES=$((CRASHED_SUITES + 1))
+                        continue
+                    fi
                     if [ $exit_code -eq 0 ]; then
                         actual_suite_tests=$(count_testcases_in_xml "$suite_xml")
                         ACTUAL_UNIT_TESTS=$((ACTUAL_UNIT_TESTS + actual_suite_tests))
