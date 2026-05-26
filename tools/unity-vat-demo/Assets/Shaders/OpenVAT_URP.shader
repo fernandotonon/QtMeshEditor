@@ -173,21 +173,25 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 OUT.positionCS = vpi.positionCS;
                 OUT.positionWS = vpi.positionWS;
                 OUT.normalWS   = normalize(mul((float3x3)UNITY_MATRIX_M, nrm));
-                OUT.uv         = IN.uv * _Basecolor_ST.xy + _Basecolor_ST.zw;
+                // Diagnostic: pass uv2.x as our fragment uv.x so the
+                // fragment shader can paint by it. If we see a SMOOTH
+                // red-to-cyan gradient across the dancer (red where
+                // uv2.x is low, cyan where high), UV2 made it to the
+                // GPU per-vertex. If we see chunky bands → FP16
+                // quantization at the vertex input attribute fetch.
+                OUT.uv = float2(IN.uv2.x, IN.uv.y);
                 return OUT;
             }
 
             half4 frag(Varyings IN) : SV_Target
             {
-                half3 albedo = SAMPLE_TEXTURE2D(_Basecolor, sampler_Basecolor, IN.uv).rgb;
-
-                Light mainLight = GetMainLight();
-                float3 N = normalize(IN.normalWS);
-                float3 L = mainLight.direction;
-                float ndotl = saturate(dot(N, L));
-                float3 ambient = SampleSH(N);
-                float3 lit = albedo * (ambient + mainLight.color * ndotl);
-                return half4(lit, 1);
+                // Diagnostic output: visualise uv2.x.
+                // IN.uv.x already carries uv2.x from the vertex shader.
+                // Map to [0,1] (if already normalized) or divide by 5828
+                // (if raw integer). Detect by magnitude.
+                float u = IN.uv.x;
+                if (u > 1.5) u /= 5828.0;
+                return half4(u, 1.0 - u, 0.0, 1.0);
             }
             ENDHLSL
         }
