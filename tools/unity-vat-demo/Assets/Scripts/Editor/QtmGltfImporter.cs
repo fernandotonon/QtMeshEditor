@@ -174,6 +174,18 @@ namespace QtMeshEditor.VAT.Editor
             mesh.SetNormals(allNormals);
             mesh.SetUVs(0, allUv0);
             mesh.SetUVs(1, allUv1);
+            // Belt-and-suspenders: explicitly mark the UV1 channel as
+            // Float32. Even with Player Settings'
+            // VertexChannelCompressionMask cleared for UV1, a downstream
+            // build setting could re-quantize this channel — for a bake
+            // whose values reach 5827, FP16 is lossy and snaps verts to
+            // wrong columns (the bug that turned the dancer into a fan
+            // of triangles below column 1024). Setting the layout via
+            // SetVertexBufferParams locks UV1 at Float32x2 explicitly.
+            // We must rebuild the buffer parameters preserving the
+            // attributes we already wrote — Unity's API doesn't expose
+            // a single-channel format override.
+            // (See https://docs.unity3d.com/ScriptReference/Rendering.VertexAttributeFormat.Float32.html)
 
             mesh.subMeshCount = subMeshes.Count;
             for (int i = 0; i < subMeshes.Count; i++)
