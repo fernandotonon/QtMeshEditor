@@ -1,6 +1,6 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
---- !u!114 &-7270992650685451010
+--- !u!114 &-8033022310229138013
 MonoBehaviour:
   m_ObjectHideFlags: 11
   m_CorrespondingSourceObject: {fileID: 0}
@@ -21,7 +21,7 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: rumba_mat
-  m_Shader: {fileID: -6465566751694194690, guid: 6f2cd47ef786f57458bc08637482ca71, type: 3}
+  m_Shader: {fileID: 4800000, guid: a393ec0e1894a4b9d8cb2ff376773e62, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
