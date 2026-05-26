@@ -143,16 +143,28 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 return pos;
             }
 
+            // Inverse of sRGB→Linear so we recover the original byte
+            // value from a Color channel URP gamma-corrected on upload.
+            float3 LinearToSRGB(float3 lin)
+            {
+                float3 lo = lin * 12.92;
+                float3 hi = 1.055 * pow(abs(lin), 1.0/2.4) - 0.055;
+                return lerp(lo, hi, step(0.0031308, lin));
+            }
+
             Varyings vert(Attributes IN)
             {
                 Varyings OUT;
-                // Unpack column index from vertex Color (R = low byte,
-                // G = high byte). URP may apply sRGB on the Color
-                // channel — guard against that by clamping > 1.0
-                // values (a sign that something pre-multiplied).
-                float colLow  = IN.color.r * 255.0;
-                float colHigh = IN.color.g * 255.0;
-                float rowBlk  = IN.color.b * 255.0;
+                // URP under Linear color space applies sRGB→Linear on
+                // vertex Color channels by default, which destroys our
+                // byte-packed integer payload (col=100 → r=0.392 →
+                // gets gamma-decoded to ~0.127 → unpacked as col=32).
+                // Undo by applying the inverse transform (Linear→sRGB)
+                // — see LinearToSRGB() defined above the Pass block.
+                float3 raw_color = LinearToSRGB(IN.color.rgb);
+                float colLow  = raw_color.r * 255.0;
+                float colHigh = raw_color.g * 255.0;
+                float rowBlk  = raw_color.b * 255.0;
                 float colF    = colLow + colHigh * 256.0;
                 // DIAGNOSTIC: pass the RAW UNINTERPRETED IN.color.r
                 // and IN.color.g through so the fragment can show the
