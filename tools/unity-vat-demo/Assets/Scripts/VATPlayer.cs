@@ -69,9 +69,12 @@ namespace QtMeshEditor.VAT
                 return;
             }
 
-            // Synthesize UV2 from VERTEX_ID since Unity's glTF importer
-            // drops TEXCOORD_1. Layout: row_block 0 = positions, row_block
-            // 1 = normals (height = 2 × frame_count).
+            // Verify the source mesh ships TEXCOORD_1 (UV2 in Unity-speak).
+            // The custom QtmGltfImporter pulls UV1 directly from the
+            // `qtmesh vat --emit-uv2` output, where each entry is an
+            // integer (col, row) coordinate pointing at the vertex's
+            // dedicated bake column. Without it, the shader's texelFetch
+            // path samples random columns and the dancer turns into noise.
             EnsureUV2();
 
             // Bind the mesh to the MeshFilter explicitly — the user might
@@ -148,20 +151,28 @@ namespace QtMeshEditor.VAT
             if (_material != null) _material.SetFloat("_CurrentFrame", f);
         }
 
-        /// <summary>Apply a per-frame texture-column lookup on the mesh
-        /// without authored TEXCOORD_1. The shader's texelFetch path
-        /// reads UV2 as (col, row_block) integers — col = vertex index
-        /// modulo texture width, row_block = vertex index / width.</summary>
+        /// <summary>Fallback when the imported mesh has no TEXCOORD_1.
+        /// `qtmesh vat --emit-uv2` writes a per-vertex (col, row)
+        /// integer UV2 into the glTF, and the custom QtmGltfImporter
+        /// preserves it — so this should be a no-op on a fresh bake.
+        /// It runs as a defensive synth for the (rare) case where the
+        /// bake was produced without `--emit-uv2`, or the importer
+        /// dropped UV1. Logs a warning if it has to synthesize because
+        /// the result is only correct when the mesh is a single
+        /// primitive whose vertex order matches the texture's column
+        /// order — multi-primitive meshes need real authored UV2.</summary>
         void EnsureUV2()
         {
-            int width = positionTexture.width;
-            // If the source mesh already has uv2 with the right count we
-            // assume the project's import pipeline already supplied it.
-            // (Unity ships Vector2[] arrays for uv channels; an empty
-            // channel is `null` or zero-length on this API.)
             var existing = sourceMesh.uv2;
             if (existing != null && existing.Length == sourceMesh.vertexCount) return;
 
+            Debug.LogWarning(
+                "VATPlayer: source mesh has no TEXCOORD_1 — synthesising integer UV2 " +
+                "from vertex order. Only correct for single-primitive bakes. Re-bake with " +
+                "`qtmesh vat --emit-uv2` for multi-submesh assets like Mixamo characters.",
+                this);
+
+            int width = positionTexture.width;
             var uv2 = new Vector2[sourceMesh.vertexCount];
             for (int j = 0; j < sourceMesh.vertexCount; j++)
             {
@@ -170,8 +181,6 @@ namespace QtMeshEditor.VAT
                 uv2[j] = new Vector2(col, rowBlock);
             }
             sourceMesh.uv2 = uv2;
-            // false: don't mark as no-longer-readable; we may set uv2
-            // again on hot-reload during editor play sessions.
             sourceMesh.UploadMeshData(false);
         }
     }

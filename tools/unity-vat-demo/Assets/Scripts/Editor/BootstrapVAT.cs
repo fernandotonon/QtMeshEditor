@@ -23,16 +23,11 @@ namespace QtMeshEditor.VAT.Editor
         const string kSidecarName    = "mixamo.com-remap_info.json";
         const string kPositionTexName = "mixamo.com_pos.png";
         const string kDiffuseTexName  = "Boss_diffuse.png";
-        // We probe OBJ first because Unity 6's stock importer handles
-        // .obj natively, and `qtmesh`'s custom FBX writer produces
-        // 7300 binaries that Autodesk's strict FBX SDK (which Unity
-        // uses) rejects as corrupt. `.gltf` needs the UnityGLTF
-        // package — kept as a fallback for users who installed it.
-        // The bake's vertex column order is preserved across formats
-        // since `qtmesh convert` re-exports through the same Ogre
-        // intermediate the baker walked.
+        // The custom QtmGltfImporter (in the same Editor folder) handles
+        // .gltf directly, preserving vertex order — Unity's built-in
+        // OBJ/FBX importers don't, and Mixamo bakes need exact column
+        // alignment with the position texture for VAT replay to work.
         static readonly string[] kSourceMeshCandidates = {
-            "source.obj",
             "source.gltf",
         };
 
@@ -102,7 +97,7 @@ namespace QtMeshEditor.VAT.Editor
             EditorUtility.SetDirty(p);
             if (verbose || p.sourceMesh != null)
             {
-                string meshName = p.sourceMesh != null ? p.sourceMesh.name : "<not found — re-run after Unity finishes importing the FBX>";
+                string meshName = p.sourceMesh != null ? p.sourceMesh.name : "<not found — re-run after Unity finishes importing source.gltf>";
                 Debug.Log($"BootstrapVAT: auto-wired VATPlayer from {sidecarPath} (frames={frames}, bounds=[{mn} .. {mx}], mesh={meshName}).");
             }
         }

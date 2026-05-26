@@ -26,8 +26,7 @@ tools/unity-vat-demo/
     ├── Scenes/                       ← (empty — you build these in 30 seconds, see below)
     └── VAT/
         └── Rumba/                    ← bake artifacts (data files only)
-            ├── source.obj + .mtl     ← mesh (Unity's stock OBJ importer is reliable)
-            ├── source.gltf + .bin    ← same mesh in glTF (used by the Godot + Unreal demos)
+            ├── source.gltf + .bin    ← mesh, consumed by the custom QtmGltfImporter (vertex-order-preserving)
             ├── Boss_diffuse.png      ← diffuse texture
             ├── mixamo.com_pos.png    ← packed positions + normals
             ├── mixamo.com-remap_info.json
@@ -64,22 +63,23 @@ that's identical to what we'd ship anyway.
 
    Click Apply.
 
-4. **Mesh import settings — handled automatically.**
-   `VATAssetPostprocessor` (in `Assets/Scripts/Editor/`) runs on every
-   import of files under `Assets/VAT/Rumba/` and enforces the right
-   settings: Read/Write ON, Animation Type = None, Optimize Mesh = OFF,
-   Weld Vertices = OFF (the last two preserve vertex order, which is
-   essential — the VAT bake indexes column N to the Nth vertex). You
-   can verify by clicking `source.obj` and checking the inspector.
+4. **Mesh import — handled by a custom ScriptedImporter.**
+   The bake's `source.gltf` is imported by `QtmGltfImporter.cs` (in
+   `Assets/Scripts/Editor/`), a minimal vertex-order-preserving glTF
+   reader specifically written for VAT replay. It reads positions,
+   normals, UV0, and TEXCOORD_1 (the per-vertex bake-column index
+   written by `qtmesh vat --emit-uv2`) and emits a Unity Mesh sub-
+   asset without welding, deduping, or reordering verts — preserving
+   the exact column alignment the position texture needs.
 
-   > **Why OBJ, not FBX or glTF?** Unity 6's FBX importer uses
-   > Autodesk's strict FBX SDK and rejects `qtmesh`'s 7300 binary
-   > output as corrupt. `.gltf` needs the optional
-   > [UnityGLTF](https://github.com/KhronosGroup/UnityGLTF) package.
-   > OBJ is universally supported with no plugins — same 5828 verts
-   > in the same order (via `qtmesh convert`'s Ogre intermediate), so
-   > the position-texture columns line up. The Godot and Unreal demos
-   > consume the .gltf directly.
+   > **Why a custom importer instead of Unity's stock importers?**
+   > Unity 6's FBX importer uses Autodesk's strict FBX SDK and rejects
+   > `qtmesh`'s 7300 binary output as corrupt. The OBJ importer reorders
+   > vertices into face-walk order during the rebuild into a unified
+   > vertex buffer, which breaks the VAT column indexing. Unity also
+   > has no built-in glTF support. A 350-line ScriptedImporter is the
+   > cleanest path — no Package Manager add, no plugin dependency, and
+   > we control exactly what happens to the vertex buffer.
 
 ## Build the web/single-dancer scene (30 seconds)
 
@@ -180,20 +180,20 @@ matching shaders for Godot / Unity / Unreal live at
 ## Re-baking the demo
 
 ```bash
-# From the repo root, with the qtmesh CLI installed:
-qtmesh vat path/to/your/source.fbx --anim Rumba \
+# From the repo root, with the qtmesh CLI installed.
+# --emit-uv2 is REQUIRED — it writes the per-vertex bake-column index
+# into the glTF as TEXCOORD_1. Without it, multi-submesh meshes (like
+# Mixamo's) won't replay correctly because Unity's importer can't
+# reconstruct the original column order from face-walk alone.
+qtmesh vat path/to/your/source.fbx --anim Rumba --emit-uv2 \
            -o tools/unity-vat-demo/Assets/VAT/Rumba/
-
-# Then convert the bake's source.gltf to .obj (Unity's stock importer):
-qtmesh convert tools/unity-vat-demo/Assets/VAT/Rumba/source.gltf \
-               -o tools/unity-vat-demo/Assets/VAT/Rumba/source.obj
 ```
 
 After re-baking, switch back to Unity (or restart the editor). The
-`VATAssetPostprocessor` will re-run on the new files and re-apply
-the import settings automatically — no manual inspector tweaks
-needed. Then click the VATPlayer's **"Auto-Wire from Bake"** button
-to pick up the new frame count + bounds from the updated sidecar.
+custom `QtmGltfImporter` will re-run on the new files, and the
+`VATAssetPostprocessor` will re-apply the texture settings.
+Then click the VATPlayer's **"Auto-Wire from Bake"** button to pick
+up the new frame count + bounds from the updated sidecar.
 
 ## How it relates to the rest of the project
 
