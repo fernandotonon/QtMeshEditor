@@ -41,13 +41,32 @@ namespace QtMeshEditor.VAT.Editor
 
         static void OnComponentAdded(Component c)
         {
-            if (c is VATPlayer p) TryAutoWire(p);
+            // Fire-on-add is best-effort. The bake's AssetDatabase entries
+            // may not exist yet on first project open (Unity is still
+            // importing the FBX), in which case AutoWire silently leaves
+            // empty slots empty — the inspector button is the user's
+            // explicit follow-up.
+            if (c is VATPlayer p) AutoWire(p, verbose: false);
         }
 
-        static void TryAutoWire(VATPlayer p)
+        /// <summary>Re-populate the VATPlayer's bake fields from
+        /// `Assets/VAT/Rumba/`. Slots that the user has already filled
+        /// in are preserved; slots that are null get auto-filled. Frame
+        /// count + bounds are always overwritten from the sidecar (the
+        /// sidecar is the source of truth for those — typing them by
+        /// hand only invites desync).</summary>
+        /// <param name="verbose">When true, log even when auto-wire
+        /// could only partially populate the slots (the inspector
+        /// button passes true; the auto-fire on add passes false to
+        /// keep the console quiet during normal use).</param>
+        public static void AutoWire(VATPlayer p, bool verbose)
         {
             string sidecarPath = $"{kBakeDir}/{kSidecarName}";
-            if (!File.Exists(sidecarPath)) return;
+            if (!File.Exists(sidecarPath))
+            {
+                if (verbose) Debug.LogWarning($"BootstrapVAT: sidecar not found at {sidecarPath}.");
+                return;
+            }
 
             // Parse the JSON sidecar. Unity's JsonUtility doesn't handle
             // string-encoded floats in arrays, so we do a tiny hand-roll.
@@ -59,8 +78,8 @@ namespace QtMeshEditor.VAT.Editor
                 return;
             }
 
-            // Skip auto-wire when the user has already populated either
-            // texture slot — they presumably know what they're doing.
+            // Skip auto-wire on slots the user has already populated —
+            // they presumably know what they're doing.
             if (p.positionTexture == null)
                 p.positionTexture = AssetDatabase.LoadAssetAtPath<Texture2D>($"{kBakeDir}/{kPositionTexName}");
             if (p.diffuseTexture == null)
@@ -78,7 +97,11 @@ namespace QtMeshEditor.VAT.Editor
             p.boundsMax  = mx;
 
             EditorUtility.SetDirty(p);
-            Debug.Log($"BootstrapVAT: auto-wired VATPlayer from {sidecarPath} (frames={frames}, bounds=[{mn} .. {mx}]).");
+            if (verbose || p.sourceMesh != null)
+            {
+                string meshName = p.sourceMesh != null ? p.sourceMesh.name : "<not found — re-run after Unity finishes importing the FBX>";
+                Debug.Log($"BootstrapVAT: auto-wired VATPlayer from {sidecarPath} (frames={frames}, bounds=[{mn} .. {mx}], mesh={meshName}).");
+            }
         }
 
         // ── Mesh sub-asset lookup ────────────────────────────────────

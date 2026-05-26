@@ -99,12 +99,19 @@ that's identical to what we'd ship anyway.
      manually drag the assets into the four slots and copy `Frames`,
      `Min`, `Max` from `mixamo.com-remap_info.json` into the matching
      fields.)
-   - **Mesh picker hint:** clicking the dot ⊙ next to `Source Mesh`
-     shows an empty picker because Unity only lists *top-level* Mesh
-     assets, and the glTF's actual Mesh is a *sub-asset* of the .gltf
-     importer. Either type `t:Mesh` in the picker search box to surface
-     nested meshes, or expand the `▶ source.gltf` row in the Project
-     window and drag the Mesh sub-asset directly onto the slot.
+   - **Slot still empty?** Click the **"Auto-Wire from Bake"** button
+     at the bottom of the VAT Player inspector. The button (re)reads
+     the sidecar JSON and walks the FBX's sub-assets directly — bypasses
+     Unity's Mesh picker, which by default hides sub-assets nested
+     inside a Model importer (the FBX's actual Mesh lives as a sub-asset,
+     not a top-level Mesh asset). The auto-wire-on-add hook does the
+     same thing automatically, but only fires the moment you add the
+     component — if Unity was still importing the FBX at that moment
+     (common on first project open), the auto-fire misses and the
+     button is your follow-up.
+   - **If you want to pick manually anyway:** expand the `▶ source.fbx`
+     row in the Project window — you'll see the Mesh sub-asset there
+     and can drag it directly onto the slot.
 
 4. **Light:**
    - GameObject → Light → Directional Light. The default values are fine.
