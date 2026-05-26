@@ -119,7 +119,7 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
---- !u!1 &155478666
+--- !u!1 &376618482
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -127,109 +127,8 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 155478668}
-  - component: {fileID: 155478667}
-  m_Layer: 0
-  m_Name: PerfSpawner
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &155478667
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 155478666}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: d4ee329544e9a428e80b31e6dcb5fc94, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::QtMeshEditor.VAT.PerfSpawnerVAT
-  sourceMesh: {fileID: -8670151273213183110, guid: c1492d8645c5843d0b195b84b1350d34, type: 3}
-  positionTexture: {fileID: 2800000, guid: 78a4526d367da44079893f9460b3202a, type: 3}
-  diffuseTexture: {fileID: 2800000, guid: 434f5da5a93c64074a90c1a13fa0a713, type: 3}
-  frameCount: 71
-  boundsMin: {x: -0.7, y: -0.1, z: -0.6}
-  boundsMax: {x: 0.6, y: 2, z: 0.4}
-  gridSize: 32
-  spacing: 1.6
-  phaseJitter: 30
-  fps: 30
---- !u!4 &155478668
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 155478666}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &741758999
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 741759001}
-  - component: {fileID: 741759000}
-  m_Layer: 0
-  m_Name: FPSOverlay
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &741759000
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 741758999}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f3cef3f0d649d4b8a8e2056919519388, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::QtMeshEditor.VAT.FPSOverlay
-  windowFrames: 60
-  textColor: {r: 1, g: 1, b: 1, a: 1}
-  fontSize: 20
---- !u!4 &741759001
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 741758999}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &884080448
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 884080450}
-  - component: {fileID: 884080449}
+  - component: {fileID: 376618484}
+  - component: {fileID: 376618483}
   m_Layer: 0
   m_Name: Directional Light
   m_TagString: Untagged
@@ -237,13 +136,13 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!108 &884080449
+--- !u!108 &376618483
 Light:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 884080448}
+  m_GameObject: {fileID: 376618482}
   m_Enabled: 1
   serializedVersion: 13
   m_Type: 1
@@ -302,13 +201,13 @@ Light:
   m_LightUnit: 1
   m_LuxAtDistance: 1
   m_EnableSpotReflector: 1
---- !u!4 &884080450
+--- !u!4 &376618484
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 884080448}
+  m_GameObject: {fileID: 376618482}
   serializedVersion: 2
   m_LocalRotation: {x: 0.40821794, y: -0.23456973, z: 0.10938166, w: 0.8754261}
   m_LocalPosition: {x: 0, y: 0, z: 0}
@@ -317,7 +216,7 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &1554007076
+--- !u!1 &955216528
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -325,10 +224,111 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 1554007080}
-  - component: {fileID: 1554007079}
-  - component: {fileID: 1554007078}
-  - component: {fileID: 1554007077}
+  - component: {fileID: 955216530}
+  - component: {fileID: 955216529}
+  m_Layer: 0
+  m_Name: FPSOverlay
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &955216529
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 955216528}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f3cef3f0d649d4b8a8e2056919519388, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::QtMeshEditor.VAT.FPSOverlay
+  windowFrames: 60
+  textColor: {r: 1, g: 1, b: 1, a: 1}
+  fontSize: 20
+--- !u!4 &955216530
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 955216528}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1539224340
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1539224342}
+  - component: {fileID: 1539224341}
+  m_Layer: 0
+  m_Name: PerfSpawner
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1539224341
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1539224340}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d4ee329544e9a428e80b31e6dcb5fc94, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::QtMeshEditor.VAT.PerfSpawnerVAT
+  sourceMesh: {fileID: -8670151273213183110, guid: c1492d8645c5843d0b195b84b1350d34, type: 3}
+  positionTexture: {fileID: 2800000, guid: 78a4526d367da44079893f9460b3202a, type: 3}
+  diffuseTexture: {fileID: 2800000, guid: 434f5da5a93c64074a90c1a13fa0a713, type: 3}
+  frameCount: 71
+  boundsMin: {x: -0.7, y: -0.1, z: -0.6}
+  boundsMax: {x: 0.6, y: 2, z: 0.4}
+  gridSize: 32
+  spacing: 1.6
+  phaseJitter: 30
+  fps: 30
+--- !u!4 &1539224342
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1539224340}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1989648509
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1989648513}
+  - component: {fileID: 1989648512}
+  - component: {fileID: 1989648511}
+  - component: {fileID: 1989648510}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -336,13 +336,13 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &1554007077
+--- !u!114 &1989648510
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1554007076}
+  m_GameObject: {fileID: 1989648509}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 256d983016fa545f7a39d710c80a6a36, type: 3}
@@ -358,21 +358,21 @@ MonoBehaviour:
   maxDistance: 120
   minPitch: -85
   maxPitch: 85
---- !u!81 &1554007078
+--- !u!81 &1989648511
 AudioListener:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1554007076}
+  m_GameObject: {fileID: 1989648509}
   m_Enabled: 1
---- !u!20 &1554007079
+--- !u!20 &1989648512
 Camera:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1554007076}
+  m_GameObject: {fileID: 1989648509}
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 1
@@ -417,13 +417,13 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
---- !u!4 &1554007080
+--- !u!4 &1989648513
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1554007076}
+  m_GameObject: {fileID: 1989648509}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
@@ -436,7 +436,7 @@ Transform:
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
-  - {fileID: 884080450}
-  - {fileID: 1554007080}
-  - {fileID: 155478668}
-  - {fileID: 741759001}
+  - {fileID: 376618484}
+  - {fileID: 1989648513}
+  - {fileID: 1539224342}
+  - {fileID: 955216530}

@@ -53,6 +53,7 @@ namespace QtMeshEditor.VAT
 
         Material _material;
         float    _currentFrame;
+        static bool _loggedUV1Range;
 
         void Start()
         {
@@ -76,6 +77,29 @@ namespace QtMeshEditor.VAT
             // dedicated bake column. Without it, the shader's texelFetch
             // path samples random columns and the dancer turns into noise.
             EnsureUV2();
+
+            // Runtime sanity-log — verifies UV1 made it through Unity's
+            // mesh asset cook intact. If u-range is anywhere near
+            // [0..positionTexture.width-1] this fires once per scene
+            // and goes away; if u-range looks quantized (e.g.
+            // [0..~5824] with gaps), Unity's build pipeline is still
+            // FP16-ing the channel and the VAT replay will be
+            // mangled. We only log the first instance — repeat warnings
+            // for the perf grid would flood the log.
+            if (!_loggedUV1Range)
+            {
+                _loggedUV1Range = true;
+                var uv1 = sourceMesh.uv2;
+                float lo = float.MaxValue, hi = float.MinValue;
+                for (int j = 0; j < uv1.Length; j++)
+                {
+                    if (uv1[j].x < lo) lo = uv1[j].x;
+                    if (uv1[j].x > hi) hi = uv1[j].x;
+                }
+                Debug.Log($"VATPlayer: runtime UV1 u-range on {sourceMesh.name} = [{lo}..{hi}] " +
+                          $"(positionTexture width = {positionTexture.width}, " +
+                          $"expected max = {positionTexture.width - 1}).");
+            }
 
             // Bind the mesh to the MeshFilter explicitly — the user might
             // have left the slot empty.

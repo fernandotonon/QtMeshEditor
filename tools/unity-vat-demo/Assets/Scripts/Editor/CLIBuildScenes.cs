@@ -35,12 +35,21 @@ namespace QtMeshEditor.VAT.Editor
         {
             Directory.CreateDirectory(kScenesDir);
 
-            // Force-reimport the bake's source.gltf so the custom
-            // QtmGltfImporter's UV1-range log fires every time we
-            // CI-build. Without this, Unity uses the cached import
-            // result and the diagnostics never surface.
-            AssetDatabase.ImportAsset("Assets/VAT/Rumba/source.gltf",
-                ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+            // Force-reimport the bake assets so the VATAssetPostprocessor
+            // + QtmGltfImporter run with the latest settings every time
+            // we CI-build. Without this, Unity uses the cached import
+            // results and changes to importer settings don't apply
+            // until the user deletes Library/.
+            foreach (var path in new[]
+            {
+                "Assets/VAT/Rumba/source.gltf",
+                "Assets/VAT/Rumba/mixamo.com_pos.png",
+                "Assets/VAT/Rumba/Boss_diffuse.png",
+            })
+            {
+                AssetDatabase.ImportAsset(path,
+                    ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+            }
 
             var webScene  = BuildWeb();
             var perfScene = BuildPerfVAT();

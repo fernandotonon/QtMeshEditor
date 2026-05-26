@@ -170,22 +170,42 @@ namespace QtMeshEditor.VAT.Editor
             var mesh = new Mesh();
             mesh.name = Path.GetFileNameWithoutExtension(ctx.assetPath);
             if (allVerts.Count > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+
+            // Force a Float32 vertex buffer layout BEFORE writing the
+            // channels. Without this Unity's mesh asset cook can quantize
+            // UV channels to FP16 even when VertexChannelCompressionMask
+            // says otherwise — Unity 6 made the Player Setting an
+            // internal hint rather than a hard contract, and the build
+            // pipeline still applies per-channel compression based on
+            // the SerializedData's declared format.
+            //
+            // For VAT replay UV1 carries integer column indices up to
+            // 5827; FP16 has ~10 mantissa bits and snaps integers above
+            // ~1024 to nearby multiples-of-2, turning the dancer into a
+            // fan of triangles below the boundary (visible on PerfVAT
+            // as a forest of red/black cones). The Float32 declaration
+            // locks the channel at full precision in the cooked mesh.
+            var layout = new[]
+            {
+                new UnityEngine.Rendering.VertexAttributeDescriptor(
+                    UnityEngine.Rendering.VertexAttribute.Position,
+                    UnityEngine.Rendering.VertexAttributeFormat.Float32, 3),
+                new UnityEngine.Rendering.VertexAttributeDescriptor(
+                    UnityEngine.Rendering.VertexAttribute.Normal,
+                    UnityEngine.Rendering.VertexAttributeFormat.Float32, 3),
+                new UnityEngine.Rendering.VertexAttributeDescriptor(
+                    UnityEngine.Rendering.VertexAttribute.TexCoord0,
+                    UnityEngine.Rendering.VertexAttributeFormat.Float32, 2),
+                new UnityEngine.Rendering.VertexAttributeDescriptor(
+                    UnityEngine.Rendering.VertexAttribute.TexCoord1,
+                    UnityEngine.Rendering.VertexAttributeFormat.Float32, 2),
+            };
+            mesh.SetVertexBufferParams(allVerts.Count, layout);
+
             mesh.SetVertices(allVerts);
             mesh.SetNormals(allNormals);
             mesh.SetUVs(0, allUv0);
             mesh.SetUVs(1, allUv1);
-            // Belt-and-suspenders: explicitly mark the UV1 channel as
-            // Float32. Even with Player Settings'
-            // VertexChannelCompressionMask cleared for UV1, a downstream
-            // build setting could re-quantize this channel — for a bake
-            // whose values reach 5827, FP16 is lossy and snaps verts to
-            // wrong columns (the bug that turned the dancer into a fan
-            // of triangles below column 1024). Setting the layout via
-            // SetVertexBufferParams locks UV1 at Float32x2 explicitly.
-            // We must rebuild the buffer parameters preserving the
-            // attributes we already wrote — Unity's API doesn't expose
-            // a single-channel format override.
-            // (See https://docs.unity3d.com/ScriptReference/Rendering.VertexAttributeFormat.Float32.html)
 
             mesh.subMeshCount = subMeshes.Count;
             for (int i = 0; i < subMeshes.Count; i++)

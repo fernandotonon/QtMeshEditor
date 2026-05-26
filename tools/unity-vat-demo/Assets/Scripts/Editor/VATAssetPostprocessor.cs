@@ -78,6 +78,31 @@ namespace QtMeshEditor.VAT.Editor
             // alphaSource = None — the bake has no alpha channel and
             // the sampler reads `.rgb` only.
             imp.alphaSource     = TextureImporterAlphaSource.None;
+            // Max-size cap: the per-platform default is 2048, but the
+            // Rumba bake is 5828 columns wide (and other bakes can be
+            // larger). If left at 2048, Unity downscales the position
+            // texture and every column index > 2047 reads the SAME
+            // boundary column → mass collapse into fan-of-triangles.
+            // 8192 covers the 5828-wide bake plus headroom for future
+            // larger ones. Use NPOTScale.None so the (Width=5828,
+            // Height=142) → does NOT get rounded to a power-of-two.
+            imp.maxTextureSize  = 8192;
+            imp.npotScale       = TextureImporterNPOTScale.None;
+            // Override the per-platform setting too — the platform
+            // override takes precedence over the default, and Unity
+            // 6 sets a platform-specific 2048 cap on Standalone by
+            // default.
+            foreach (string platform in new[] { "Standalone", "WebGL", "iPhone", "Android" })
+            {
+                var settings = imp.GetPlatformTextureSettings(platform);
+                if (settings.overridden || settings.maxTextureSize < 8192)
+                {
+                    settings.overridden     = true;
+                    settings.maxTextureSize = 8192;
+                    settings.textureCompression = TextureImporterCompression.Uncompressed;
+                    imp.SetPlatformTextureSettings(settings);
+                }
+            }
 
             Debug.Log($"VATAssetPostprocessor: normalized texture settings on {assetPath} for VAT replay.");
         }
