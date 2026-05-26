@@ -7,7 +7,10 @@ int MeshReconstructionStats::gteInversePercent() const
 {
     if (totalVertices <= 0)
         return 0;
-    return (gteInverseVertices * 100) / totalVertices;
+    // Model-mesh verts are trusted-by-construction (already in model space), so they
+    // count toward the "quality" numerator the same way GTE-inverted verts do (#674).
+    const int trusted = gteInverseVertices + modelMeshVertices;
+    return (trusted * 100) / totalVertices;
 }
 
 bool MeshReconstructionStats::hasBounds() const

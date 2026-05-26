@@ -173,6 +173,8 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxCaptureFilters.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxGpuRamScanner.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxGteRamScanner.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxHmdRamScanner.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/PsxTmdRamScanner.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/RipperHooks.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/TextureDecoder.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/VramSnapshot.cpp

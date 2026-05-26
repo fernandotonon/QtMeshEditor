@@ -8,7 +8,9 @@
 #include "PsxGp0Opcode.h"
 #include "PsxGteInstructionCapture.h"
 #include "PsxGteRamScanner.h"
+#include "PsxHmdRamScanner.h"
 #include "PsxOrderingTableScanner.h"
+#include "PsxTmdRamScanner.h"
 
 #include <QSet>
 #include <QString>
@@ -71,6 +73,18 @@ Gp0CaptureSource pickPrimarySource(const Gp0CaptureStats &stats)
         source = Gp0CaptureSource::RamLinear;
     }
     return source;
+}
+
+/** Model-space meshes always beat screen-space prims for quality, so if any TMD or HMD
+ *  actually surfaced (i.e. emitted via `EmuHooks::onModelMesh`) this frame, the primary
+ *  label flips to ram_model_mesh regardless of the GP0 prim count winner from
+ *  `pickPrimarySource`. Bare HMD candidate counts (`ramHmdCandidates`) do NOT count —
+ *  the v1 stub records candidates without emitting geometry (#674 review). */
+Gp0CaptureSource promoteModelMeshSource(const Gp0CaptureStats &stats, Gp0CaptureSource fallback)
+{
+    if (stats.ramTmdMeshes > 0 || stats.ramHmdMeshes > 0)
+        return Gp0CaptureSource::RamModelMesh;
+    return fallback;
 }
 
 QString primDedupeKeyImpl(const PrimRecord &prim)
@@ -411,6 +425,11 @@ Gp0CaptureStats Gp0HookDispatch::captureFromSystemRam(const uint8_t *ram, size_t
     stats.ramLinearPrims = primCount - linearBefore;
 
     stats.totalPrims = primCount;
+    // Model-mesh promotion is deferred to the outer captureFrameFromSystemRam
+    // wrapper — this function never sees TMD/HMD counts (those are owned by the
+    // model-space scanners that run alongside it), so promoting here is a no-op
+    // that just hides the bug if you ever start relying on its return value
+    // outside the wrapper (#674 review).
     stats.primarySource = pickPrimarySource(stats);
     return stats;
 }
@@ -475,6 +494,23 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     }
     ensureCaptureProjectionMatrix(hooks);
 
+    // #674 model-space RAM scanners: look for Sony SDK TMD (0x00000041) blobs in main RAM
+    // and emit them as fully-formed model-space meshes via EmuHooks::onModelMesh. Unlike
+    // the screen-space GP0 path below, these bypass MeshReconstructor::screenToModel
+    // entirely — they're the only reliable way to recover model-space geometry from
+    // closed-source retail games until #676 (forked mednafen with in-core GTE hook) lands.
+    // Disable per-format with QTMESH_PS1_TMD_SCANNER=0; HMD is opt-in via QTMESH_PS1_HMD_SCANNER=1.
+    const bool tmdScannerDisabled = qEnvironmentVariableIsSet("QTMESH_PS1_TMD_SCANNER")
+                                    && qEnvironmentVariableIntValue("QTMESH_PS1_TMD_SCANNER") == 0;
+    int tmdMeshes = 0;
+    // HMD v1 returns candidate counts, not emitted-mesh counts (the walker is a
+    // follow-up). The two are recorded separately so the candidate count never
+    // promotes primary source to RamModelMesh (#674 review).
+    int hmdCandidates = 0;
+    if (!tmdScannerDisabled)
+        tmdMeshes = PsxTmdRamScanner::captureFromSystemRam(ram, scanSize, hooks);
+    hmdCandidates = PsxHmdRamScanner::captureFromSystemRam(ram, scanSize, hooks);
+
     // #662 live FIFO bridge: route contiguous RAM-resident DMA chains through
     // submitGp0Words so each prim is attributed to Gp0CaptureSource::DirectHook
     // before the merged RAM scan runs. The bridge runs in-pass; RipperHooks
@@ -493,6 +529,15 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     } else {
         stats = captureFromSystemRam(ram, scanSize, hooks, seen);
     }
+    stats.ramTmdMeshes = tmdMeshes;
+    // ramHmdMeshes stays 0 until the v2 HMD walker emits actual meshes — until
+    // then the candidate count is surfaced separately for diagnostics (#674).
+    stats.ramHmdCandidates = hmdCandidates;
+    // Re-evaluate primary source now that model-mesh counts are populated —
+    // captureFromSystemRam() above couldn't see them (#674 review). Without this
+    // line, RamModelMesh could only be picked by the fallback path inside
+    // RipperHooks::endGpuCapturePass.
+    stats.primarySource = promoteModelMeshSource(stats, stats.primarySource);
     stats.liveFrame = liveFrame;
 
     hooks->onFrameEnd();

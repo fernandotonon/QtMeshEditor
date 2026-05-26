@@ -8,6 +8,7 @@
 
 #include <QHash>
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -76,14 +77,12 @@ ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix
     return out;
 }
 
-void accumulateVertexStats(const ReconstructedVertex &v, MeshReconstructionStats &stats, bool usedGte)
+/** Expand `stats`' AABB to include `v`. First call initialises the bounds to the
+ *  vertex (we can't anchor at 0 — meshes that live entirely on one side of the
+ *  origin would lose their min or max). Shared by every code path that needs to
+ *  fold a vertex into stats so the behavior stays in lock-step (#674 review). */
+void expandBounds(MeshReconstructionStats &stats, const ReconstructedVertex &v)
 {
-    ++stats.totalVertices;
-    if (usedGte)
-        ++stats.gteInverseVertices;
-    else
-        ++stats.screenFallbackVertices;
-
     if (!stats.hasBounds()) {
         stats.boundsMinX = stats.boundsMaxX = v.px;
         stats.boundsMinY = stats.boundsMaxY = v.py;
@@ -96,6 +95,16 @@ void accumulateVertexStats(const ReconstructedVertex &v, MeshReconstructionStats
     stats.boundsMaxY = std::max(stats.boundsMaxY, v.py);
     stats.boundsMinZ = std::min(stats.boundsMinZ, v.pz);
     stats.boundsMaxZ = std::max(stats.boundsMaxZ, v.pz);
+}
+
+void accumulateVertexStats(const ReconstructedVertex &v, MeshReconstructionStats &stats, bool usedGte)
+{
+    ++stats.totalVertices;
+    if (usedGte)
+        ++stats.gteInverseVertices;
+    else
+        ++stats.screenFallbackVertices;
+    expandBounds(stats, v);
 }
 
 void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix, SubMeshAccumulator &acc,
@@ -208,6 +217,31 @@ QVector<ReconstructedMesh> buildParts(const CaptureSnapshot &snapshot,
         if (!part.isEmpty())
             parts.append(part);
     }
+
+    // #674 — Model-space meshes from PsxTmdRamScanner / PsxHmdRamScanner. These bypass the
+    // screen-space inverse-projection path entirely and arrive in editor world units, so
+    // they're appended as additional parts. The dedupe pass in `reconstructDeduped` then
+    // collapses byte-identical copies via MeshTopologyHash, the same way it does for
+    // matrix-grouped screen-space parts.
+    for (const CapturedModelMesh &cap : snapshot.modelMeshes) {
+        if (cap.mesh.isEmpty())
+            continue;
+        parts.append(cap.mesh);
+        if (statsOut) {
+            int verts = 0;
+            for (const ReconstructedSubMesh &sub : cap.mesh.subMeshes) {
+                verts += sub.vertices.size();
+                // Share the bounds-update helper with accumulateVertexStats so a
+                // future tweak to the bounds anchoring stays in lock-step
+                // (#674 review).
+                for (const ReconstructedVertex &v : sub.vertices)
+                    expandBounds(*statsOut, v);
+            }
+            statsOut->modelMeshVertices += verts;
+            statsOut->totalVertices += verts;
+        }
+    }
+
     return parts;
 }
 

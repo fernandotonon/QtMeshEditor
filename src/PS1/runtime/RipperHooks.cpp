@@ -34,6 +34,11 @@ void RipperHooks::endGpuCapturePass(Gp0CaptureStats &stats)
         && stats.directHookPrims
                >= stats.ramOtPrims + stats.ramLinearPrims + stats.ramChainRootPrims)
         stats.primarySource = Gp0CaptureSource::DirectHook;
+    // #674: model-space meshes always beat any screen-space source for quality, so flip
+    // the label here AFTER the DirectHook override above. Only actually emitted meshes
+    // count — bare HMD candidate counts must not flip the label (#674 review).
+    if (stats.ramTmdMeshes > 0 || stats.ramHmdMeshes > 0)
+        stats.primarySource = Gp0CaptureSource::RamModelMesh;
     m_lastStats = stats;
     m_lastStatsFresh = true;
     m_ramCaptureActive = false;
@@ -42,13 +47,17 @@ void RipperHooks::endGpuCapturePass(Gp0CaptureStats &stats)
 
     SentryReporter::addBreadcrumb(
         QStringLiteral("ps1.rip.capture.gp0_hook"),
-        QStringLiteral("source:%1 total:%2 hook:%3 ot:%4 linear:%5 chain:%6 live:%7")
+        QStringLiteral(
+            "source:%1 total:%2 hook:%3 ot:%4 linear:%5 chain:%6 tmd:%7 hmd:%8 hmd_cand:%9 live:%10")
             .arg(stats.primarySourceLabel())
             .arg(stats.totalPrims)
             .arg(stats.directHookPrims)
             .arg(stats.ramOtPrims)
             .arg(stats.ramLinearPrims)
             .arg(stats.ramChainRootPrims)
+            .arg(stats.ramTmdMeshes)
+            .arg(stats.ramHmdMeshes)
+            .arg(stats.ramHmdCandidates)
             .arg(stats.liveFrame ? QStringLiteral("yes") : QStringLiteral("no")));
 }
 
@@ -114,6 +123,13 @@ void RipperHooks::onGpuPrim(const PrimRecord &prim)
     }
 
     m_buffer->addPrim(prim);
+}
+
+bool RipperHooks::onModelMesh(const CapturedModelMesh &mesh)
+{
+    if (!isCaptureEnabled() || !m_buffer)
+        return false;
+    return m_buffer->addModelMesh(mesh);
 }
 
 void RipperHooks::onVramWrite(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels)

@@ -1,6 +1,7 @@
 #ifndef EMUHOOKS_H
 #define EMUHOOKS_H
 
+#include "CapturedModelMesh.h"
 #include "CaptureTypes.h"
 #include "Gp0CaptureStats.h"
 
@@ -76,6 +77,19 @@ public:
         (void)ram;
         (void)byteSize;
         return 0;
+    }
+
+    /**
+     * Format-aware model-space scanner emission (#674). Called by `PsxTmdRamScanner` and
+     * friends when they recognize a Sony SDK mesh structure (TMD/HMD/...) in RAM. The
+     * mesh arrives already in editor world units so no GTE inverse is needed; the receiver
+     * is expected to dedupe by `CapturedModelMesh::contentHash` and append to the capture
+     * buffer. Returns `true` if accepted (newly added), `false` if dedupe rejected it.
+     */
+    virtual bool onModelMesh(const CapturedModelMesh &mesh)
+    {
+        (void)mesh;
+        return false;
     }
 
     /** Live armed capture: shared dedupe keys across frames (nullptr when not accumulating). */

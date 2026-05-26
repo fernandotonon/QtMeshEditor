@@ -75,13 +75,15 @@ See epic #412 for phased issues (#413–#431).
   - **Chain root (`ram_chain_root`):** `PsxGp0ChainRootScanner` finds standalone linked roots that no OT pointer touched.
   - **Linear (`ram_linear`):** opcode-by-opcode fallback for buffers without OT/chain headers.
   All four share one dedupe set (no early return after a weak OT). Linked DR tags carry the opcode in bits 24–31 and the next packet address in bits 2–23 (`PsxGp0Opcode.h`). Sentry breadcrumb `ps1.rip.capture.gp0_hook` records per-path counts; session status bar surfaces `GP0 <source> (hook X / ot Y / chain Z / linear W)` after each capture.
-- **Per-core capability (#662):**
-  | Core | VRAM | GP0 FIFO source | Notes |
-  |------|------|-----------------|-------|
-  | `mednafen_psx_libretro` (software) | full 1024×512 (#660) | live FIFO bridge (`gp0_hook`) + merged RAM | recommended |
-  | `beetle_psx_libretro` (software) | full 1024×512 (#660) | live FIFO bridge (`gp0_hook`) + merged RAM | recommended |
-  | `beetle_psx_hw_*` | none | excluded — `gp0_hook` path unavailable | rejected by `LibretroCoreOptions` |
-  | `stub` (`qtmesh_ps1core_stub`) | synthetic test pattern | direct stub via `submitGp0Words` (`gp0_hook`) | CI / no-disc smoke |
+- **Per-core capability (#662, #674):**
+
+  | Core | VRAM | GP0 FIFO source | TMD/HMD scan | Notes |
+  |------|------|-----------------|--------------|-------|
+  | `mednafen_psx_libretro` (software) | full 1024×512 (#660) | live FIFO bridge (`gp0_hook`) + merged RAM | TMD active, HMD opt-in | recommended |
+  | `beetle_psx_libretro` (software) | full 1024×512 (#660) | live FIFO bridge (`gp0_hook`) + merged RAM | TMD active, HMD opt-in | recommended |
+  | `beetle_psx_hw_*` | none | excluded — `gp0_hook` path unavailable | excluded (no RAM access) | rejected by `LibretroCoreOptions` |
+  | `stub` (`qtmesh_ps1core_stub`) | synthetic test pattern | direct stub via `submitGp0Words` (`gp0_hook`) | not scanned (synthetic RAM is GP0-only) | CI / no-disc smoke |
+
 - **Libretro live frame:** While capture is armed, each `retro_run()` end calls `captureGpuFromRam(false, true)` → `Gp0HookDispatch::captureFrameFromSystemRam`. Inside that pass, the FIFO bridge fires first (DirectHook attribution) and the merged RAM scan runs second (Ram* attribution). Primitives accumulate with cross-frame dedupe (`m_liveDedupe`) until **Capture Frame** runs a final GTE+RAM merge. Disable live ingest with `QTMESH_PS1_GP0_LIVE_CAPTURE=0`. Baseline RAM-only behavior (OT then linear, no chain-root pass, no FIFO bridge) via `QTMESH_PS1_GP0_RAM_LEGACY=1` + `QTMESH_PS1_GP0_FIFO_BRIDGE=0`.
 - **Stub core** (`coreId=stub`): seven-flavor capture is now emitted as a contiguous GP0 word buffer routed through `submitGp0Words` (#662) — the production stub matches the same code path retail captures use.
 - **Libretro core** (`coreId=libretro`): live FIFO bridge ships in this slice (#662). True packet-for-packet in-core mednafen GP0 hooks (i.e. patched `mednafen_psx_libretro` with a `RipperHooks`-aware GPU_Write callback) remain out of scope until a forked core ships — the bridge approximates FIFO ordering by walking DMA chains per frame, which is sufficient to surface `gp0_hook` attribution and to feed the canonical hook code path on retail captures.
@@ -122,6 +124,84 @@ See epic #412 for phased issues (#413–#431).
 - **Shared matrix across OT** — one `currentMatrixId` per chain walk; dual-pass / multi-buffer games may still share a matrix across unrelated draws.
 - **GTE RAM supplement** — Capture Frame still merges COP2-scanned matrices; per-draw tagging applies at GP0 dispatch time, not retroactively to RAM-only captures without draw-env context.
 - **Commercial golden scenes** — manual acceptance tracked in [#659](https://github.com/fernandotonon/QtMeshEditor/issues/659) (`src/PS1/golden_captures.md`); #658 reduces blob fallback but does not replace a full matrix stack or FIFO-accurate stream (#662).
+
+## Model-space RAM scanners (#674)
+
+Screen-space GP0 prims always carry information loss because they're post-projection — the
+GTE has applied rotation, translation, perspective divide, and 16-bit truncation by the
+time they hit RAM. Inverse-projecting them requires recovering the exact GTE matrix used
+for each draw, which on retail games is heuristic-grade and produces flat-XY "blob"
+meshes when the math drifts. Sony's TMD / HMD / PMD asset formats sidestep this entirely:
+the assets sit in RAM as **model-space** structures with 16-bit fixed-point vertex pools
+and packet-encoded primitives. Scanning RAM for them and emitting the vertices directly
+yields clean meshes with no inverse step.
+
+- **`PsxTmdRamScanner`** — sweeps RAM (4-byte stride) for `0x00000041`-tagged TMD blobs.
+  For each candidate validates `flags ∈ {0, 1}`, `numObj ∈ [1, 256]`, every object header's
+  vertex/normal/primitive offsets resolve in-bounds, counts ≤ 8192, and the primitive walk
+  produces ≥ 1 emitted triangle (the false-positive filter). Both `flag=0` (offsets
+  relative to file-byte 12, on-disk form) and `flag=1` (offsets are KSEG0 RAM pointers,
+  masked with `0x001FFFFF`) are supported. Coordinate transform mirrors the on-disk
+  `PS1TMD::importTmd`: PSX 12.4 fixed × editor uniform scale × 180° Z rotation. Primitive
+  set covers `0x20`, `0x30` (ilen 4 & 6), `0x24`, `0x34`, `0x28` (flag 0 & 4), `0x25`,
+  `0x35` — the bread-and-butter Sony SDK packets. Each unique TMD found emits via
+  `EmuHooks::onModelMesh(CapturedModelMesh)`; the `CaptureBuffer` dedupes by FNV-1a 64-bit
+  hash of the TMD byte span so the same asset encountered every frame only stores once.
+  Material names for textured packets use the standard `MeshReconstructor::textureMaterialName`
+  format (`PS1Rip_tpage_XXXX_clut_YYYY_stN_dmN`), so the existing capture texture-decode
+  path (#421) binds them with zero extra wiring.
+
+- **`PsxHmdRamScanner`** — v1 stub for `0x00000050`-tagged HMD blobs. The HMD layout
+  embeds a hierarchical primitive-node tree whose tag types are significantly more
+  involved than TMD's flat object table, and parsing it speculatively from RAM is a
+  documented source of false positives. v1 ships the scaffold + a magic-bytes candidate
+  count so per-title testing can be enabled via `QTMESH_PS1_HMD_SCANNER=1` without code
+  changes; the actual primitive walk lands once a known-good HMD asset is available.
+
+- **`MeshReconstructor::buildParts`** — after the screen-space `buildMatrixGroups` pass,
+  every `snapshot.modelMeshes[i].mesh` is appended as an additional part. They flow
+  through the same `MeshTopologyHash`-based dedupe in `reconstructDeduped`, so byte-identical
+  TMDs collapse to one unique mesh + N instance transforms (matching the screen-space dedupe
+  semantics). Stats: `MeshReconstructionStats::modelMeshVertices` plus `gteInversePercent`
+  now treats model-mesh verts as trusted, so the quality indicator flips from 0% to ~100%
+  on TMD-using games.
+
+- **Stats / UI / Sentry**:
+  - `Gp0CaptureStats::ramTmdMeshes` / `ramHmdMeshes` track per-frame **emitted** mesh
+    counts (i.e. successful `EmuHooks::onModelMesh` calls). HMD v1 always reports 0
+    here — it doesn't emit yet.
+  - `Gp0CaptureStats::ramHmdCandidates` is the v1 diagnostics count of plausible HMD
+    magic-bytes hits and **does not** flip the primary source. It exists so testers can
+    confirm the magic-bytes scan works on HMD-using titles before the walker lands.
+  - `Gp0CaptureSource::RamModelMesh` (label `ram_model_mesh`) becomes the primary
+    source only when actual model-mesh emissions happened (`ramTmdMeshes > 0`
+    or `ramHmdMeshes > 0`) — bare candidate counts never promote the label.
+  - Status bar: `GP0 <source> (hook X / ot Y / chain Z / linear W / tmd T / hmd H / hmd_cand C)`.
+  - Sentry breadcrumbs: `ps1.rip.capture.gp0_hook` and `ps1.rip.capture.summary` carry
+    `tmd=…  hmd=…  hmd_cand=…`; new `ps1.rip.capture.modelmesh` fires only when meshes
+    were actually emitted (not candidate-only); `ps1.rip.matrix.stats` adds
+    `model_meshes=…`.
+
+- **Per-format coverage:**
+
+  | Format | Magic | Where used | v1 scanner |
+  |--------|-------|-----------|------------|
+  | TMD | `0x00000041` | static models — most Sony SDK titles (Tekken 1/2/3, Ridge Racer 1/RR, Net Yaroze homebrew, Wipeout 1/2097, R-Type Delta, Klonoa, many Square pre-FF7) | **emits meshes** |
+  | HMD | `0x00000050` | hierarchical/skinned models — Sony SDK animations | stub (counts candidates only) |
+  | PMD | n/a (engine) | Net Yaroze homebrew TMD subset — handled by TMD scanner | — (TMD path) |
+  | TIM | `0x00000010` | textures — bound via the VRAM mirror, not model-space | — (texture path) |
+  | RSD / PLY / MAT / GRP | text | disc/artist formats — compiled to TMD before being loaded; not present in RAM during gameplay | — (offline) |
+
+- **Out of scope (#675, #676, #677):**
+  - `#675` — heuristic + math fix for the screen-space inverse path (tighten matrix scanner,
+    real-rotation inverse roundtrip tests, surface `prims_with_matrix=X/N`).
+  - `#676` — forked `mednafen_psx_libretro` with an in-core RTPS/RTPT callback for
+    ground-truth model-space recovery on any game including custom engines (Crash, Spyro,
+    FFVII field models, MGS).
+  - `#677` — disc/ISO scanner for RSD/PLY/MAT/GRP/TIX off-line ripping (separate CLI/MCP).
+
+- **Disable:** `QTMESH_PS1_TMD_SCANNER=0` skips the TMD pass entirely (debug / golden
+  baselines). HMD scanner is opt-in (`QTMESH_PS1_HMD_SCANNER=1`).
 
 ## GP0 FIFO follow-up (#662)
 
@@ -165,7 +245,30 @@ The **stub** core is active (`coreId=stub`). It draws a test pattern and synthet
 
 ### Capture mesh is a triangle “blob” (normal size, wrong shape)
 
-Capture uses **live per-frame merged RAM ingest** while armed (libretro), then a final GTE+RAM pass on **Capture Frame**. Four strategies feed the same dedupe set: the **live FIFO bridge** (DMA chain walk → `submitGp0Words`, #662), ordering-table chains, standalone linked GP0 chain roots, and linear opcode scan. Status bar surfaces the per-source breakdown — if `hook` is 0 and the mesh still looks wrong, the title likely streams chains the bridge isn't recognizing, or draws outside RAM-visible layouts. Filters drop off-screen coordinates and cap at 2048 primitives per ingest pass. Per-draw matrix tagging (#658) reduces screen-space blob fallback when draw-environment packets precede primitives in the captured buffer. True packet-for-packet in-core mednafen GP0 hooks (a forked `mednafen_psx_libretro`) remain future work — see [#662](https://github.com/fernandotonon/QtMeshEditor/issues/662).
+The screen-space GP0 path (live FIFO bridge + ordering-table chains + standalone chain
+roots + linear scan) always produces a flat-XY blob on retail games because the GTE
+inverse-projection it relies on is heuristic-grade — true ground-truth recovery requires
+the forked-mednafen in-core GTE hook tracked in [#676](https://github.com/fernandotonon/QtMeshEditor/issues/676).
+Until that ships, the recommended path for "real meshes from real games" is the
+**model-space TMD/HMD RAM scanner** (#674): if the title uses Sony SDK formats the
+scanner finds the model-space vertex pools in RAM and emits them directly, bypassing the
+inverse-projection entirely.
+
+- Status bar shows `tmd N` / `hmd N` and the primary source flips to `ram_model_mesh`
+  when meshes are found — that's your "this is a clean mesh" signal.
+- **TMD-using games (where this works):** Tekken 1/2/3, Ridge Racer 1/RR, Net Yaroze SDK
+  demos, Wipeout 1/2097, R-Type Delta, Klonoa, many pre-FF7 Square titles.
+- **Custom-engine games (where it does NOT work):** Crash, Spyro, FFVII field models,
+  MGS post-Yaroze. These games author their own packed mesh layouts; only #676 covers them.
+- Tune via `QTMESH_PS1_TMD_SCANNER=0` to disable TMD scanning for a baseline, and
+  `QTMESH_PS1_HMD_SCANNER=1` to opt into the v1 HMD candidate counter.
+
+If the scanner produces meshes but they look wrong (wrong axis flip, wrong scale), the
+coordinate transform in `PsxTmdRamScanner` mirrors `PS1TMD::importTmd` — if the on-disk
+TMD importer is also wrong, fix it in `PS1TMD.cpp` and the RAM scanner picks it up via
+the matching constants. Per-draw matrix tagging (#658) and the live FIFO bridge (#662)
+still help on the screen-space side but cannot reconstruct topology from screen-space
+prims alone.
 
 ### Libretro integration tests (local only)
 

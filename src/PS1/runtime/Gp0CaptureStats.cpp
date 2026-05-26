@@ -11,6 +11,8 @@ QString Gp0CaptureStats::primarySourceLabel() const
         return QStringLiteral("ram_linear");
     case Gp0CaptureSource::RamChainRoot:
         return QStringLiteral("ram_chain_root");
+    case Gp0CaptureSource::RamModelMesh:
+        return QStringLiteral("ram_model_mesh");
     case Gp0CaptureSource::None:
     default:
         return QStringLiteral("none");
