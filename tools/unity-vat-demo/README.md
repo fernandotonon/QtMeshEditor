@@ -4,6 +4,46 @@ The Rumba dancer baked by `qtmesh vat` running inside Unity via the
 shipped `openvat.shader` Built-in Render Pipeline shader. This is the
 Unity counterpart to `tools/godot-vat-demo/` and `tools/unreal-vat-demo/`.
 
+## ⚠️ Recommended path: the official OpenVAT Unity package
+
+The author of the OpenVAT format ships a maintained Unity package at
+[`sharpen3d/openvat-unity`](https://github.com/sharpen3d/openvat-unity).
+It uses **Shader Graph decoders**, which require URP or HDRP — not
+Built-in Render Pipeline. If you're starting a fresh project, that
+is the recommended path:
+
+1. Create a new Unity 2022.1+ project with the **URP** template.
+2. Open Window → Package Manager → `+` → "Add package from git URL"
+   and paste `https://github.com/sharpen3d/openvat-unity.git`.
+3. Copy this folder's bake (`Assets/VAT/Rumba/`) into your project's
+   `Assets/OpenVATContent/`, renaming `mixamo.com_pos.png` →
+   `mixamo.com_vat.png` (OpenVATEditor looks for `*_vat.png`).
+4. **Tools → OpenVAT Editor** → set folder path → "Process OpenVAT
+   Content". The editor reads the sidecar JSON, builds a Shader Graph
+   material, and spawns the dancer prefab.
+
+The bake's sidecar format (`os-remap.Min/Max/Frames`) is compatible
+with what OpenVATEditor expects — no schema translation needed.
+
+## Status: BiRP custom shader path is incomplete
+
+This folder also ships a hand-rolled BiRP `Hidden/QTM/VAT` shader for
+projects that can't or won't use URP. **It currently produces an
+egg-shaped blob instead of the dancer** — the cause has been narrowed
+down to vertex-stage texture sampling returning constant values under
+Metal on Apple Silicon despite:
+- UV2 confirmed per-vertex correct in the Mesh asset (verified by a
+  bind-pose-with-uv2-gradient diagnostic that paints a smooth red→blue
+  gradient across the dancer)
+- Position texture confirmed at 5828×142, R16G16B16A16_UNorm at runtime
+- Pixel values confirmed in [0,1] when sampled from CPU
+- Tested with both `_PosTex.Load(int3)` (texelFetch) and `tex2Dlod()`
+  (textureLod) paths at `#pragma target 3.0+` — both return (0,0,0)
+
+This is most likely a Unity 6 + Metal + BiRP-shader interaction that
+warrants targeted research. Until that's fixed, **use the official
+OpenVAT Unity package** described above.
+
 **What ships in the repo:**
 
 ```text
