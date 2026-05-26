@@ -246,6 +246,13 @@ namespace QtMeshEditor.VAT.Editor
             {
                 var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
                 instance.transform.position = Vector3.zero;
+                // Attach an OpenVATDriver that ticks `_frame` per
+                // Update — the shadergraph's `_Time`-driven path doesn't
+                // animate reliably in the standalone player on Unity 6.
+                // Driving _frame from C# guarantees playback.
+                var driver = instance.AddComponent<OpenVATDriver>();
+                driver.fps = 30f;
+                driver.frames = 71;
             }
 
             const string scenePath = "Assets/Scenes/OpenVATWeb.unity";
@@ -355,6 +362,67 @@ namespace QtMeshEditor.VAT.Editor
                 if (Mathf.Abs(mat.GetFloat("_speed")) < 0.001f)
                 {
                     mat.SetFloat("_speed", 1f);
+                    dirty = true;
+                }
+                // _UseTime defaults to 1 in the shadergraph properties,
+                // but materials created via `new Material(shader)` end
+                // up with the toggle at 0 (Unity initialises boolean
+                // toggles to false regardless of the property default).
+                // With _UseTime=0 the shader reads `_frame` instead of
+                // `_Time.y * _speed * _frames` → dancer freezes at frame 0.
+                // OpenVAT's shader graph declares the property as
+                // `_UseTIme` (typo: capital T followed by lowercase im
+                // followed by capital m, total 6 chars). Unity 6
+                // normalizes the property name when stamping it on
+                // a Material to `_UseTime` (standard CamelCase). We
+                // set BOTH spellings — only one will hit, but neither
+                // throws. Same for the keyword.
+                if (mat.HasProperty("_UseTIme") && mat.GetFloat("_UseTIme") < 0.5f)
+                {
+                    mat.SetFloat("_UseTIme", 1f);
+                    dirty = true;
+                }
+                if (mat.HasProperty("_UseTime") && mat.GetFloat("_UseTime") < 0.5f)
+                {
+                    mat.SetFloat("_UseTime", 1f);
+                    dirty = true;
+                }
+                mat.EnableKeyword("_USETIME_ON");
+                mat.EnableKeyword("_USETIME_ON".Replace("USETIME", "USETIME"));   // no-op alt spelling
+                // Diagnostic dump of every property the shader exposes
+                // and its current value, so we know what the build will
+                // actually see.
+                int propCount = mat.shader.GetPropertyCount();
+                var props = new System.Text.StringBuilder();
+                for (int i = 0; i < propCount; i++)
+                {
+                    string pname = mat.shader.GetPropertyName(i);
+                    var ptype = mat.shader.GetPropertyType(i);
+                    string val;
+                    try
+                    {
+                        val = ptype switch
+                        {
+                            UnityEngine.Rendering.ShaderPropertyType.Float => mat.GetFloat(pname).ToString("F3"),
+                            UnityEngine.Rendering.ShaderPropertyType.Range => mat.GetFloat(pname).ToString("F3"),
+                            UnityEngine.Rendering.ShaderPropertyType.Vector => mat.GetVector(pname).ToString(),
+                            UnityEngine.Rendering.ShaderPropertyType.Color => mat.GetColor(pname).ToString(),
+                            UnityEngine.Rendering.ShaderPropertyType.Texture => mat.GetTexture(pname) != null ? "<tex>" : "null",
+                            UnityEngine.Rendering.ShaderPropertyType.Int => mat.GetInt(pname).ToString(),
+                            _ => "?",
+                        };
+                    }
+                    catch (Exception) { val = "<err>"; }
+                    props.Append($"\n    {pname} ({ptype}) = {val}");
+                }
+                Debug.Log($"FixupAnimationUniforms: shader '{mat.shader.name}' properties:{props}");
+                // Same story for _UsePackedNormals — our bake packs the
+                // normals into the bottom half of the texture (Frames..
+                // 2*Frames rows). Setting this enables that decode path.
+                if (mat.GetFloat("_UsePackedNormals") < 0.5f)
+                {
+                    mat.SetFloat("_UsePackedNormals", 1f);
+                    mat.EnableKeyword("_USEPACKEDNORMALS_ON");
                     dirty = true;
                 }
                 // Read the position-texture's TRUE height directly from
