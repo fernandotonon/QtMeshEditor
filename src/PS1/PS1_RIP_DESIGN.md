@@ -60,7 +60,7 @@ See epic #412 for phased issues (#413–#431).
 - `EmuCore` + `IEmuCorePlugin` + `EmuCoreLoader` landed (#415).
 - **Libretro host** `plugins/ps1core_libretro/` loads `mednafen_psx_libretro` / `beetle_psx_*` from `PS1Cores/`, system paths, or `QTMESH_PS1_LIBRETRO_CORE`. Runs a real ISO when BIOS + disc image are set.
 - Stub plugin `plugins/ps1core_stub/` remains for CI (test pattern + synthetic capture).
-- `PS1RipSessionWindow` + `EmuViewport` (#416): software framebuffer via `QPainter`, integer-scale and bilinear toggles (View menu), 4:3 NTSC/PAL letterbox mode, FPS overlay, frame pacing tied to `runFrame()` completion (~16 ms target). Hosted in a temporary session window from *Tools → Experimental → PS1 Runtime Ripper…* until #425 dock lands.
+- `PS1RipSessionWindow` + `EmuViewport` (#416 / #425): software framebuffer via `QPainter`, integer-scale and bilinear toggles (View menu), 4:3 NTSC/PAL letterbox mode, FPS overlay, frame pacing tied to `runFrame()` completion (~16 ms target). Hosted in a session window from *Tools → Experimental → PS1 Runtime Ripper…* — see [Capture controls + scene capture (#425)](#capture-controls--scene-capture-425) for the full capture surface (transport toolbar, Capture Frame / Scene / Stop / VRAM, Normalize dock, live status footer, `C`/`Shift+C`/`V` hotkeys).
 - Legality dialog + BIOS/ISO + keyboard/gamepad (#417): first-run acknowledgement (`ps1Rip/acknowledged`), BIOS SHA-256 fingerprint logged (not enforced), ISO picker with recent list (last 5), **Reload ISO** transport, configurable keyboard mapping (`Input → Keyboard mapping…`), Qt Gamepad for controller 1 when `Qt6::Gamepad` is available.
 - Install helper: `scripts/install-ps1-libretro-core.sh` copies a distro libretro core into `build/bin/PS1Cores/`.
 
@@ -352,6 +352,66 @@ frameSelection()` (`F` shortcut) picks the captured AABB up via
   ini values.
 - `MeshReconstructor_test.cpp` — perspective-correct subdivision tessellates a
   warped quad, no-ops on flat prims, gracefully handles sz=0 GP0 captures.
+
+## Capture controls + scene capture (#425)
+
+The session window (`PS1RipSessionWindow`) hosts the full capture surface:
+emulator viewport, transport, capture actions, Normalize dock (#424), VRAM
+viewer, status bar. Capture is split into three lanes, all routed through the
+single `PS1RipManager` singleton:
+
+- **Capture Frame** (`captureFrame()` → worker `finalizeFrameCapture`) — the
+  legacy single-shot path. Requires the buffer to already be armed; takes a
+  snapshot of whatever the worker has accumulated since arming and emits
+  `frameCaptured` → `meshBuilt`. Sentry category: `ps1.rip.capture.frame`.
+  Hotkey: `C`.
+- **Capture Scene** (`captureScene(seconds)`) — multi-frame capture. Auto-arms
+  if not already armed, starts a 1 Hz countdown on the GUI thread, emits
+  `sceneCaptureStarted/Progress` so the UI footer can show the timer, and on
+  expiry queues `finalizeFrameCapture` on the worker — the same code path
+  Capture Frame uses, so deduping + mesh build + breadcrumbs are identical.
+  When the worker's `frameCaptureReady` returns the manager sees the
+  `m_sceneCaptureAwaitingResult` flag and emits `sceneCaptured(captureId)` +
+  `sceneCaptureFinished(false, captureId)` so the UI can flip out of scene
+  mode. Sentry category: `ps1.rip.capture.scene` (with `started` / `finalised`
+  / `cancelled` payloads). Hotkey: `Shift+C`. Default duration: 5 s, range
+  1–60 s, persisted in `QSettings ps1Rip/sceneCaptureSeconds`.
+- **Dump VRAM** (`dumpVRAM()`) — snapshot the GPU VRAM mirror to PNG. Sentry
+  category: `ps1.rip.capture.vram`. Hotkey: `V`.
+
+**Stop Capture** (`stopSceneCapture()` + `armCapture(false)` chained in the UI)
+cancels an in-flight scene capture and disarms in one click. The toolbar
+action is disabled while no scene capture is running; the same cancellation
+path fires on session stop and on Arm Capture untoggled mid-countdown so the
+UI never gets stuck in "scene capture in flight" state.
+
+**Live status footer** — the worker emits a throttled `captureProgress(prims,
+triangles, texPages, bytes)` signal every 15 frames (~4 Hz at 60 FPS) while
+armed; the manager forwards it to the GUI, which renders a separate
+right-aligned status-bar label. Format: `Armed · 1234 tris · 8 tex pages ·
+256 KiB` (idle) or `Scene capture 3/5 s · 1234 tris · …` (during a scene
+capture). On disarm / session stop the counters reset and the footer clears.
+
+**Hotkeys** are `QShortcut`s scoped to `Qt::WindowShortcut`, so they only fire
+when the session window has keyboard focus — they don't shadow `C/V/Shift+C`
+in the rest of the editor.
+
+The "Auto-show *Extracted Asset Browser* on first capture" line in the issue's
+scope depends on #426 (Extracted Asset Browser) which is a separate epic
+deliverable. Once #426 lands, the natural hook is `sceneCaptured` /
+`frameCaptured` in `PS1RipManager` → show the browser dock; the signals are
+already in place.
+
+### QML migration note
+
+The issue's scope mentions a `qml/PS1RipperDock.qml` rewrite. The session UI
+currently lives in `QMainWindow + QWidget` (the central `EmuViewport` renders
+emulator framebuffers via `QPainter` — converting it to a `QQuickItem` is a
+non-trivial follow-up). The functional acceptance criteria — Reset / Pause /
+Step / Reload / Capture Frame / Capture Scene / Dump VRAM / Stop, dedupe
+toggle + scale + perspective-correct UVs (#424), status footer numbers,
+Sentry breadcrumbs — are all met in the existing widget shell. A pure-QML
+port can ship later without changing the manager API.
 
 ## GP0 FIFO follow-up (#662)
 

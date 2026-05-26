@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QMetaObject>
 #include <QMetaType>
+#include <QTimer>
 
 PS1RipManager *PS1RipManager::s_instance = nullptr;
 
@@ -41,6 +42,14 @@ PS1RipManager::PS1RipManager(QObject *parent)
     : QObject(parent)
 {
     m_goldenSceneId = PsxGoldenCapture::activeSceneId();
+    // 1 Hz countdown for `captureScene()` — driven on the GUI thread so the UI
+    // can subscribe to `sceneCaptureProgress` directly without bouncing across
+    // threads. The actual capture buffer accumulation happens on the worker
+    // thread via the normal `m_captureArmed` path (#425).
+    m_sceneCaptureTimer = new QTimer(this);
+    m_sceneCaptureTimer->setInterval(1000);
+    m_sceneCaptureTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_sceneCaptureTimer, &QTimer::timeout, this, &PS1RipManager::onSceneCaptureTick);
     initializeWorkerThread();
 }
 
@@ -87,6 +96,11 @@ void PS1RipManager::initializeWorkerThread()
     qRegisterMetaType<CaptureSnapshot>("CaptureSnapshot");
     qRegisterMetaType<PsxVramMirrorMode>("PsxVramMirrorMode");
     qRegisterMetaType<Gp0CaptureStats>("Gp0CaptureStats");
+    // qint64 is a Qt-built-in type so it doesn't strictly need registration for
+    // queued connections, but be explicit here so the captureProgress signal
+    // (#425) never trips Qt's "Cannot queue arguments of type 'qint64'" warning
+    // on systems where the typedef collapses oddly.
+    qRegisterMetaType<qint64>("qint64");
 
     m_workerThread = new QThread(this);
     m_worker = new PS1RipWorker();
@@ -133,6 +147,31 @@ void PS1RipManager::initializeWorkerThread()
                 }
 
                 emit frameCaptured(captureId);
+
+                // If this finalize was driven by `captureScene()`, attribute it
+                // to the scene path (Sentry category + UI completion signal)
+                // before the per-frame mesh build runs. We deliberately fire
+                // the completion signal even if the mesh build below fails so
+                // the UI can flip out of "scene capture in flight" state — the
+                // build error is surfaced separately via `error()`.
+                const bool wasSceneCapture = m_sceneCaptureAwaitingResult;
+                if (wasSceneCapture) {
+                    m_sceneCaptureAwaitingResult = false;
+                    SentryReporter::addBreadcrumb(
+                        QStringLiteral("ps1.rip.capture.scene"),
+                        QStringLiteral("finalised capture=%1 prims=%2 duration=%3s")
+                            .arg(captureId)
+                            .arg(snapshot.prims.size())
+                            .arg(m_sceneCaptureTotal));
+                    emit sceneCaptured(captureId);
+                    finalizeSceneCapture(false, captureId);
+                } else {
+                    SentryReporter::addBreadcrumb(
+                        QStringLiteral("ps1.rip.capture.frame"),
+                        QStringLiteral("finalised capture=%1 prims=%2")
+                            .arg(captureId)
+                            .arg(snapshot.prims.size()));
+                }
 
                 const MeshDedupeMode dedupeMode =
                     m_dedupeStrict ? MeshDedupeMode::Strict : MeshDedupeMode::Loose;
@@ -194,6 +233,11 @@ void PS1RipManager::initializeWorkerThread()
             [this](const QVector<uint16_t> &cells, const QImage &preview) {
                 emit vramFrameUpdated(cells, preview);
             });
+    // Forward the worker's throttled live capture-buffer stats (#425) — used
+    // by the session UI's status footer. No further processing here; the
+    // captureProgress payload is already worker-thread-safe and rate-limited.
+    connect(m_worker, &PS1RipWorker::captureProgress, this,
+            &PS1RipManager::forwardCaptureProgress);
     connect(m_worker, &PS1RipWorker::vramDumpReady, this,
             [this](const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                    const QImage &preview) {
@@ -378,6 +422,12 @@ bool PS1RipManager::stop()
     if (!m_sessionActive && !m_startPending)
         return false;
 
+    // Cancel any in-flight scene capture before disarming so the UI flips out
+    // of "scene capture in flight" state even when the user stops the
+    // emulator mid-countdown (#425).
+    if (m_sceneCaptureRemaining > 0)
+        finalizeSceneCapture(true, QString());
+
     m_captureArmed = false;
     syncWorkerCaptureArmed();
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip"), QStringLiteral("stop"));
@@ -418,6 +468,13 @@ bool PS1RipManager::step()
 
 bool PS1RipManager::armCapture(bool armed)
 {
+    // Disarming mid-scene-capture cancels the countdown — the worker's
+    // `setCaptureArmed(false)` clears the buffer, so attempting to finalise
+    // afterwards would emit a no-prims warning. Cancel up-front so the UI
+    // sees a clean `sceneCaptureFinished(true, "")` (#425).
+    if (!armed && m_sceneCaptureRemaining > 0)
+        finalizeSceneCapture(true, QString());
+
     m_captureArmed = armed;
     if (armed) {
         SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
@@ -441,6 +498,8 @@ bool PS1RipManager::captureFrame()
         reportError(tr("No active PS1 session"));
         return false;
     }
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture.frame"),
+                                  QStringLiteral("requested"));
     PS1RipWorker *worker = m_worker;
     QMetaObject::invokeMethod(worker, "finalizeFrameCapture", Qt::QueuedConnection);
     return true;
@@ -452,12 +511,106 @@ bool PS1RipManager::captureScene(int seconds)
         reportError(tr("Scene capture duration must be positive"));
         return false;
     }
-    if (!m_captureArmed) {
-        reportError(tr("Capture is not armed"));
+    if (!m_sessionActive) {
+        reportError(tr("No active PS1 session"));
         return false;
     }
-    reportError(tr("Scene capture pipeline not implemented yet"));
-    return false;
+    if (m_sceneCaptureRemaining > 0) {
+        reportError(tr("A scene capture is already in flight"));
+        return false;
+    }
+    // Auto-arm if the user hit Capture Scene directly without first toggling
+    // Arm Capture. Matches the issue's "single-shot, materializes a node now"
+    // semantics for Capture Frame: the caller doesn't have to manage arming
+    // explicitly (#425).
+    if (!m_captureArmed)
+        armCapture(true);
+
+    m_sceneCaptureTotal = seconds;
+    m_sceneCaptureRemaining = seconds;
+    m_sceneCaptureAwaitingResult = false;
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.capture.scene"),
+        QStringLiteral("started duration=%1s").arg(seconds));
+    emit sceneCaptureStarted(seconds);
+    emit sceneCaptureProgress(m_sceneCaptureRemaining, m_sceneCaptureTotal);
+    if (m_sceneCaptureTimer)
+        m_sceneCaptureTimer->start();
+    return true;
+}
+
+bool PS1RipManager::stopSceneCapture()
+{
+    if (m_sceneCaptureRemaining <= 0)
+        return false;
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.capture.scene"),
+        QStringLiteral("cancelled at=%1s of %2s")
+            .arg(m_sceneCaptureTotal - m_sceneCaptureRemaining)
+            .arg(m_sceneCaptureTotal));
+    finalizeSceneCapture(true, QString());
+    return true;
+}
+
+void PS1RipManager::onSceneCaptureTick()
+{
+    // Defensive: if state was cleared between ticks (e.g. session stopped),
+    // bail out silently — finalizeSceneCapture will have stopped the timer.
+    if (m_sceneCaptureRemaining <= 0)
+        return;
+
+    --m_sceneCaptureRemaining;
+    emit sceneCaptureProgress(m_sceneCaptureRemaining, m_sceneCaptureTotal);
+
+    if (m_sceneCaptureRemaining > 0)
+        return;
+
+    // Time's up — flag this finalize as scene-attributed so the result handler
+    // emits `sceneCaptured/sceneCaptureFinished` instead of treating it like a
+    // single-shot. Then route through the same worker path Capture Frame uses
+    // so we benefit from all its plumbing (CSV, golden, dedupe summary, mesh
+    // build).
+    m_sceneCaptureAwaitingResult = true;
+    if (m_sceneCaptureTimer)
+        m_sceneCaptureTimer->stop();
+
+    if (!m_sessionActive) {
+        reportError(tr("Session stopped during scene capture"));
+        finalizeSceneCapture(true, QString());
+        return;
+    }
+    if (!m_captureArmed) {
+        reportError(tr("Capture was disarmed during scene capture"));
+        finalizeSceneCapture(true, QString());
+        return;
+    }
+    PS1RipWorker *worker = m_worker;
+    if (!worker) {
+        reportError(tr("PS1 worker not ready"));
+        finalizeSceneCapture(true, QString());
+        return;
+    }
+    QMetaObject::invokeMethod(worker, "finalizeFrameCapture", Qt::QueuedConnection);
+}
+
+void PS1RipManager::finalizeSceneCapture(bool cancelled, const QString &captureId)
+{
+    if (m_sceneCaptureRemaining <= 0 && !m_sceneCaptureAwaitingResult && captureId.isEmpty()
+        && !cancelled)
+        return;
+
+    if (m_sceneCaptureTimer)
+        m_sceneCaptureTimer->stop();
+    m_sceneCaptureRemaining = 0;
+    m_sceneCaptureTotal = 0;
+    m_sceneCaptureAwaitingResult = false;
+    emit sceneCaptureFinished(cancelled, captureId);
+}
+
+void PS1RipManager::forwardCaptureProgress(qint64 prims, qint64 triangles, int texturePages,
+                                           qint64 bytesEstimate)
+{
+    emit captureProgress(prims, triangles, texturePages, bytesEstimate);
 }
 
 bool PS1RipManager::dumpVRAM()
@@ -467,6 +620,8 @@ bool PS1RipManager::dumpVRAM()
         return false;
     }
     PS1RipWorker *worker = m_worker;
+    SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.capture.vram"),
+                                  QStringLiteral("requested"));
     QMetaObject::invokeMethod(worker, &PS1RipWorker::dumpVram, Qt::QueuedConnection);
     return true;
 }

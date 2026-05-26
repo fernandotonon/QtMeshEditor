@@ -22,13 +22,17 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QKeySequence>
 #include <QMenu>
 #include <QTimer>
 #include <QLabel>
 #include <QMessageBox>
 #include <QSettings>
+#include <QShortcut>
+#include <QSpinBox>
 #include <QStatusBar>
 #include <QCheckBox>
+#include <QLocale>
 #include <QMenuBar>
 #include <QToolBar>
 #include <QToolButton>
@@ -44,10 +48,31 @@ constexpr auto kViewportIntegerScaleKey = "viewportIntegerScale";
 constexpr auto kViewportSmoothFilterKey = "viewportSmoothFilter";
 constexpr auto kViewportAspect43Key = "viewportAspect43";
 constexpr auto kNormalizePrefix = "ps1Rip/normalize";
+/** Persisted spinbox value for `Capture Scene` (#425). Default 5 s per the
+ *  issue spec. */
+constexpr auto kSceneCaptureSecondsKey = "sceneCaptureSeconds";
+constexpr int kSceneCaptureSecondsDefault = 5;
+constexpr int kSceneCaptureSecondsMin = 1;
+constexpr int kSceneCaptureSecondsMax = 60;
 
 QString ps1SettingsKey(const char *name)
 {
     return QString::fromLatin1(kSettingsGroup) + QLatin1Char('/') + QString::fromLatin1(name);
+}
+
+/** Render a byte count compactly (#425 status footer). Uses 1024-based units
+ *  because that's what every engine / inspector / Qt tool in the codebase
+ *  shows for in-memory sizes. */
+QString humaniseBytes(qint64 bytes)
+{
+    if (bytes < 1024)
+        return PS1RipSessionWindow::tr("%1 B").arg(bytes);
+    if (bytes < 1024 * 1024)
+        return PS1RipSessionWindow::tr("%1 KiB").arg(QLocale().toString(double(bytes) / 1024.0, 'f', 1));
+    if (bytes < 1024LL * 1024 * 1024)
+        return PS1RipSessionWindow::tr("%1 MiB").arg(QLocale().toString(double(bytes) / 1024.0 / 1024.0, 'f', 2));
+    return PS1RipSessionWindow::tr("%1 GiB")
+        .arg(QLocale().toString(double(bytes) / 1024.0 / 1024.0 / 1024.0, 'f', 2));
 }
 } // namespace
 
@@ -149,13 +174,61 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     toolbar->addSeparator();
     auto *armCapAct = toolbar->addAction(tr("Arm Capture"));
     armCapAct->setCheckable(true);
-    connect(armCapAct, &QAction::toggled, this, [this](bool on) { m_manager->armCapture(on); });
-    connect(m_manager, &PS1RipManager::sessionStopped, this, [armCapAct]() {
+    connect(armCapAct, &QAction::toggled, this, [this](bool on) {
+        m_manager->armCapture(on);
+        if (!on) {
+            // Disarming clears the worker's capture buffer, so the previous
+            // live counters are stale — wipe them so the footer doesn't show
+            // ghost stats from a previous capture (#425).
+            m_lastCaptureTriangles = 0;
+            m_lastCaptureTexPages = 0;
+            m_lastCaptureBytes = 0;
+        }
+        refreshCaptureStatusFooter();
+    });
+    connect(m_manager, &PS1RipManager::sessionStopped, this, [this, armCapAct]() {
         QSignalBlocker blocker(armCapAct);
         armCapAct->setChecked(false);
+        m_lastCaptureTriangles = 0;
+        m_lastCaptureTexPages = 0;
+        m_lastCaptureBytes = 0;
+        m_sceneCaptureRemaining = 0;
+        m_sceneCaptureTotal = 0;
+        if (m_captureSceneAct)
+            m_captureSceneAct->setEnabled(true);
+        if (m_sceneCaptureSecondsSpin)
+            m_sceneCaptureSecondsSpin->setEnabled(true);
+        if (m_stopCaptureAct)
+            m_stopCaptureAct->setEnabled(false);
+        refreshCaptureStatusFooter();
     });
     auto *captureAct = toolbar->addAction(tr("Capture Frame"));
+    captureAct->setToolTip(tr("Materialise a single-frame capture (hotkey: C)"));
     connect(captureAct, &QAction::triggered, this, &PS1RipSessionWindow::onCaptureFrame);
+
+    // Scene capture controls (#425). Spinner is bounded to a sensible range
+    // so an accidentally huge number can't lock up the GUI thread on the
+    // 1-Hz countdown. Default 5 s matches the issue spec.
+    m_sceneCaptureSecondsSpin = new QSpinBox(this);
+    m_sceneCaptureSecondsSpin->setRange(kSceneCaptureSecondsMin, kSceneCaptureSecondsMax);
+    m_sceneCaptureSecondsSpin->setSuffix(tr(" s"));
+    m_sceneCaptureSecondsSpin->setValue(
+        settings.value(ps1SettingsKey(kSceneCaptureSecondsKey), kSceneCaptureSecondsDefault).toInt());
+    m_sceneCaptureSecondsSpin->setToolTip(
+        tr("Scene-capture duration in seconds (default 5, max 60)."));
+    toolbar->addWidget(m_sceneCaptureSecondsSpin);
+
+    m_captureSceneAct = toolbar->addAction(tr("Capture Scene"));
+    m_captureSceneAct->setToolTip(
+        tr("Accumulate every primitive over N seconds, dedupe, materialise once.\n"
+           "Hotkey: Shift+C"));
+    connect(m_captureSceneAct, &QAction::triggered, this, &PS1RipSessionWindow::onCaptureScene);
+
+    m_stopCaptureAct = toolbar->addAction(tr("Stop Capture"));
+    m_stopCaptureAct->setToolTip(tr("Cancel an in-flight scene capture (disarms)."));
+    m_stopCaptureAct->setEnabled(false);
+    connect(m_stopCaptureAct, &QAction::triggered, this, &PS1RipSessionWindow::onStopCapture);
+
     auto *strictDedupe = new QCheckBox(tr("Strict dedupe"), this);
     strictDedupe->setToolTip(tr("Bit-exact topology hash (off = 0.01 position snap)"));
     strictDedupe->setChecked(settings.value(ps1SettingsKey(kDedupeStrictKey), false).toBool());
@@ -170,7 +243,19 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     });
     toolbar->addWidget(strictDedupe);
     auto *dumpVramAct = toolbar->addAction(tr("Dump VRAM"));
+    dumpVramAct->setToolTip(tr("Snapshot the GPU VRAM mirror to PNG (hotkey: V)"));
     connect(dumpVramAct, &QAction::triggered, this, &PS1RipSessionWindow::onDumpVram);
+
+    // Persist the duration whenever it changes so a session restart keeps the
+    // user's last preference. Sentry breadcrumb fires here too so we can
+    // correlate scene-capture cancels with the chosen duration in telemetry.
+    connect(m_sceneCaptureSecondsSpin, qOverload<int>(&QSpinBox::valueChanged), this,
+            [](int v) {
+                QSettings().setValue(ps1SettingsKey(kSceneCaptureSecondsKey), v);
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("ui.action"),
+                    QStringLiteral("ps1_rip_scene_capture_seconds=%1").arg(v));
+            });
 
     m_vramViewer = new VramViewerWidget(this);
     auto *vramDock = new QDockWidget(tr("VRAM"), this);
@@ -181,10 +266,41 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     createNormalizerDock();
 
     m_statusLabel = new QLabel(this);
-    statusBar()->addPermanentWidget(m_statusLabel);
+    statusBar()->addPermanentWidget(m_statusLabel, /*stretch=*/1);
+    // Capture status footer (#425) — distinct widget so the live 4 Hz counter
+    // doesn't overwrite the mesh-built summary in the primary status label.
+    m_captureFooterLabel = new QLabel(this);
+    m_captureFooterLabel->setMinimumWidth(220);
+    m_captureFooterLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    statusBar()->addPermanentWidget(m_captureFooterLabel);
+    refreshCaptureStatusFooter();
+
+    // Window-scoped hotkeys (#425) — Qt::WindowShortcut means they fire only
+    // when this window has keyboard focus (matching the issue's "only while
+    // focused" requirement). Wired to the same handlers as the toolbar
+    // actions so behaviour stays consistent.
+    m_hotkeyCaptureFrame = new QShortcut(QKeySequence(Qt::Key_C), this);
+    m_hotkeyCaptureFrame->setContext(Qt::WindowShortcut);
+    connect(m_hotkeyCaptureFrame, &QShortcut::activated, this, &PS1RipSessionWindow::onCaptureFrame);
+
+    m_hotkeyCaptureScene = new QShortcut(QKeySequence(Qt::SHIFT | Qt::Key_C), this);
+    m_hotkeyCaptureScene->setContext(Qt::WindowShortcut);
+    connect(m_hotkeyCaptureScene, &QShortcut::activated, this, &PS1RipSessionWindow::onCaptureScene);
+
+    m_hotkeyDumpVram = new QShortcut(QKeySequence(Qt::Key_V), this);
+    m_hotkeyDumpVram->setContext(Qt::WindowShortcut);
+    connect(m_hotkeyDumpVram, &QShortcut::activated, this, &PS1RipSessionWindow::onDumpVram);
 
     connect(m_manager, &PS1RipManager::framePresented, this, &PS1RipSessionWindow::onFrame);
     connect(m_manager, &PS1RipManager::pausedChanged, this, &PS1RipSessionWindow::onPausedChanged);
+    connect(m_manager, &PS1RipManager::captureProgress, this,
+            &PS1RipSessionWindow::onCaptureProgress);
+    connect(m_manager, &PS1RipManager::sceneCaptureStarted, this,
+            &PS1RipSessionWindow::onSceneCaptureStarted);
+    connect(m_manager, &PS1RipManager::sceneCaptureProgress, this,
+            &PS1RipSessionWindow::onSceneCaptureProgress);
+    connect(m_manager, &PS1RipManager::sceneCaptureFinished, this,
+            &PS1RipSessionWindow::onSceneCaptureFinished);
     connect(m_manager, &PS1RipManager::sessionStarted, this, [this](const QString &coreId) {
         if (m_viewport) {
             m_viewport->setFocus(Qt::OtherFocusReason);
@@ -488,6 +604,100 @@ void PS1RipSessionWindow::onCaptureFrame()
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("ps1_rip_capture_frame"));
     m_manager->captureFrame();
+}
+
+void PS1RipSessionWindow::onCaptureScene()
+{
+    const int seconds =
+        m_sceneCaptureSecondsSpin ? m_sceneCaptureSecondsSpin->value() : kSceneCaptureSecondsDefault;
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ui.action"),
+        QStringLiteral("ps1_rip_capture_scene_requested=%1s").arg(seconds));
+    m_manager->captureScene(seconds);
+}
+
+void PS1RipSessionWindow::onStopCapture()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("ps1_rip_capture_stop"));
+    // Cancel any in-flight scene capture AND drop the armed flag so the user
+    // returns to a clean idle state. Matches the issue's "Stop — disarms"
+    // line (#425). If no scene capture is running, disarming alone is the
+    // observable effect.
+    m_manager->stopSceneCapture();
+    m_manager->armCapture(false);
+}
+
+void PS1RipSessionWindow::onSceneCaptureStarted(int totalSeconds)
+{
+    m_sceneCaptureTotal = totalSeconds;
+    m_sceneCaptureRemaining = totalSeconds;
+    if (m_captureSceneAct)
+        m_captureSceneAct->setEnabled(false);
+    if (m_sceneCaptureSecondsSpin)
+        m_sceneCaptureSecondsSpin->setEnabled(false);
+    if (m_stopCaptureAct)
+        m_stopCaptureAct->setEnabled(true);
+    refreshCaptureStatusFooter();
+}
+
+void PS1RipSessionWindow::onSceneCaptureProgress(int remainingSeconds, int totalSeconds)
+{
+    m_sceneCaptureRemaining = remainingSeconds;
+    m_sceneCaptureTotal = totalSeconds;
+    refreshCaptureStatusFooter();
+}
+
+void PS1RipSessionWindow::onSceneCaptureFinished(bool cancelled, const QString &captureId)
+{
+    Q_UNUSED(captureId);
+    m_sceneCaptureRemaining = 0;
+    m_sceneCaptureTotal = 0;
+    if (m_captureSceneAct)
+        m_captureSceneAct->setEnabled(true);
+    if (m_sceneCaptureSecondsSpin)
+        m_sceneCaptureSecondsSpin->setEnabled(true);
+    if (m_stopCaptureAct)
+        m_stopCaptureAct->setEnabled(false);
+    if (cancelled)
+        m_statusLabel->setText(tr("Scene capture cancelled"));
+    refreshCaptureStatusFooter();
+}
+
+void PS1RipSessionWindow::onCaptureProgress(qint64 primitives, qint64 triangles, int texturePages,
+                                            qint64 bytesEstimate)
+{
+    Q_UNUSED(primitives);
+    m_lastCaptureTriangles = triangles;
+    m_lastCaptureTexPages = texturePages;
+    m_lastCaptureBytes = bytesEstimate;
+    refreshCaptureStatusFooter();
+}
+
+void PS1RipSessionWindow::refreshCaptureStatusFooter()
+{
+    if (!m_captureFooterLabel)
+        return;
+    if (!m_manager) {
+        m_captureFooterLabel->clear();
+        return;
+    }
+    QString text;
+    if (m_sceneCaptureRemaining > 0) {
+        text = tr("Scene capture %1/%2 s · ")
+                   .arg(m_sceneCaptureTotal - m_sceneCaptureRemaining)
+                   .arg(m_sceneCaptureTotal);
+    } else if (m_manager->isCaptureArmed()) {
+        text = tr("Armed · ");
+    } else {
+        m_captureFooterLabel->clear();
+        return;
+    }
+    text += tr("%1 tris · %2 tex pages · %3")
+                .arg(QLocale().toString(m_lastCaptureTriangles))
+                .arg(m_lastCaptureTexPages)
+                .arg(humaniseBytes(m_lastCaptureBytes));
+    m_captureFooterLabel->setText(text);
 }
 
 void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes,

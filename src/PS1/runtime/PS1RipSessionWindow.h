@@ -8,9 +8,12 @@
 #include <QVector>
 
 class EmuViewport;
+class QAction;
 class QCheckBox;
 class QDoubleSpinBox;
 class QLabel;
+class QShortcut;
+class QSpinBox;
 class PS1RipGamepadBridge;
 class PS1RipManager;
 class QMenu;
@@ -48,6 +51,18 @@ private slots:
     void onError(const QString &message);
     void onDumpVram();
     void onCaptureFrame();
+    /** Pull the duration spinbox value, ask the manager to start a scene
+     *  capture, persist the duration to QSettings (#425). */
+    void onCaptureScene();
+    /** Cancel an in-flight scene capture without disarming the regular
+     *  Capture button (#425). */
+    void onStopCapture();
+    void onSceneCaptureStarted(int totalSeconds);
+    void onSceneCaptureProgress(int remainingSeconds, int totalSeconds);
+    void onSceneCaptureFinished(bool cancelled, const QString &captureId);
+    /** Live capture-buffer stats forwarded from the worker (#425). */
+    void onCaptureProgress(qint64 primitives, qint64 triangles, int texturePages,
+                           qint64 bytesEstimate);
     void onVramDumped(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                       const QImage &nativePreview);
     void onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
@@ -70,10 +85,20 @@ private:
     /** Snapshot the current dock widget values into a settings struct and
      *  forward to the manager + QSettings. */
     void pushNormalizerSettings();
+    /** Rebuild the rightmost status footer chunk (#425): when armed, it shows
+     *  live capture stats; when a scene capture is in flight it shows the
+     *  remaining countdown; when idle it stays empty. Stored values come from
+     *  `onCaptureProgress` and `onSceneCaptureProgress`. */
+    void refreshCaptureStatusFooter();
 
     EmuViewport *m_viewport = nullptr;
     VramViewerWidget *m_vramViewer = nullptr;
     QLabel *m_statusLabel = nullptr;
+    /** Permanent right-side footer carrying the live capture-buffer stats and
+     *  scene-capture countdown (#425). Separate from `m_statusLabel` so the
+     *  primary mesh-built / session-state message isn't overwritten by every
+     *  4 Hz progress update. */
+    QLabel *m_captureFooterLabel = nullptr;
     QMenu *m_recentIsoMenu = nullptr;
     PS1RipGamepadBridge *m_gamepadBridge = nullptr;
     PS1RipManager *m_manager = nullptr;
@@ -82,9 +107,23 @@ private:
     QCheckBox *m_normalizeFlipY = nullptr;
     QCheckBox *m_normalizeFlipZ = nullptr;
     QCheckBox *m_normalizePerspectiveUV = nullptr;
+    /** Scene-capture toolbar widgets (#425). */
+    QSpinBox *m_sceneCaptureSecondsSpin = nullptr;
+    QAction *m_captureSceneAct = nullptr;
+    QAction *m_stopCaptureAct = nullptr;
+    QShortcut *m_hotkeyCaptureFrame = nullptr;
+    QShortcut *m_hotkeyCaptureScene = nullptr;
+    QShortcut *m_hotkeyDumpVram = nullptr;
     qint64 m_lastFrameMs = 0;
     quint64 m_lastFrameIndex = 0;
     double m_smoothedFps = 0.0;
+    /** Last live-progress snapshot from the worker (#425). */
+    qint64 m_lastCaptureTriangles = 0;
+    int m_lastCaptureTexPages = 0;
+    qint64 m_lastCaptureBytes = 0;
+    /** Scene-capture countdown state mirrored locally for footer rendering. */
+    int m_sceneCaptureRemaining = 0;
+    int m_sceneCaptureTotal = 0;
 };
 
 #endif // PS1RIPSESSIONWINDOW_H
