@@ -23,13 +23,16 @@ namespace QtMeshEditor.VAT.Editor
         const string kSidecarName    = "mixamo.com-remap_info.json";
         const string kPositionTexName = "mixamo.com_pos.png";
         const string kDiffuseTexName  = "Boss_diffuse.png";
-        // We probe FBX first because Unity 6's stock importer handles
-        // .fbx natively (.gltf needs the UnityGLTF package). The bake's
-        // vertex column order is preserved across both formats since
-        // `qtmesh convert` re-exports through the same Ogre intermediate
-        // the baker walked.
+        // We probe OBJ first because Unity 6's stock importer handles
+        // .obj natively, and `qtmesh`'s custom FBX writer produces
+        // 7300 binaries that Autodesk's strict FBX SDK (which Unity
+        // uses) rejects as corrupt. `.gltf` needs the UnityGLTF
+        // package — kept as a fallback for users who installed it.
+        // The bake's vertex column order is preserved across formats
+        // since `qtmesh convert` re-exports through the same Ogre
+        // intermediate the baker walked.
         static readonly string[] kSourceMeshCandidates = {
-            "source.fbx",
+            "source.obj",
             "source.gltf",
         };
 

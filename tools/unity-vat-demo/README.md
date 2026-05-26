@@ -26,7 +26,7 @@ tools/unity-vat-demo/
     ├── Scenes/                       ← (empty — you build these in 30 seconds, see below)
     └── VAT/
         └── Rumba/                    ← bake artifacts (data files only)
-            ├── source.fbx            ← mesh (Unity's stock importer handles FBX)
+            ├── source.obj + .mtl     ← mesh (Unity's stock OBJ importer is reliable)
             ├── source.gltf + .bin    ← same mesh in glTF (used by the Godot + Unreal demos)
             ├── Boss_diffuse.png      ← diffuse texture
             ├── mixamo.com_pos.png    ← packed positions + normals
@@ -64,21 +64,22 @@ that's identical to what we'd ship anyway.
 
    Click Apply.
 
-4. **Mesh import setting — Read/Write must be ON.**
-   Click `Assets/VAT/Rumba/source.fbx` and on the Model tab:
-   - **Read/Write Enabled:** ON — `VATPlayer.EnsureUV2()` writes a
-     synthesized UV2 channel into the mesh at runtime, which needs
-     CPU-side access.
+4. **Mesh import settings — handled automatically.**
+   `VATAssetPostprocessor` (in `Assets/Scripts/Editor/`) runs on every
+   import of files under `Assets/VAT/Rumba/` and enforces the right
+   settings: Read/Write ON, Animation Type = None, Optimize Mesh = OFF,
+   Weld Vertices = OFF (the last two preserve vertex order, which is
+   essential — the VAT bake indexes column N to the Nth vertex). You
+   can verify by clicking `source.obj` and checking the inspector.
 
-   Click Apply.
-
-   > **Why FBX, not glTF?** Unity 6's stock importer only handles
-   > `.fbx`, `.obj`, `.dae`, and `.3ds`. `.gltf` needs the optional
+   > **Why OBJ, not FBX or glTF?** Unity 6's FBX importer uses
+   > Autodesk's strict FBX SDK and rejects `qtmesh`'s 7300 binary
+   > output as corrupt. `.gltf` needs the optional
    > [UnityGLTF](https://github.com/KhronosGroup/UnityGLTF) package.
-   > The bake ships both formats and the demo prefers the FBX — same
-   > 5828 verts in the same order (via `qtmesh convert`'s Ogre
-   > intermediate), so the position-texture columns line up either
-   > way. The Godot and Unreal demos use the glTF.
+   > OBJ is universally supported with no plugins — same 5828 verts
+   > in the same order (via `qtmesh convert`'s Ogre intermediate), so
+   > the position-texture columns line up. The Godot and Unreal demos
+   > consume the .gltf directly.
 
 ## Build the web/single-dancer scene (30 seconds)
 
@@ -182,11 +183,17 @@ matching shaders for Godot / Unity / Unreal live at
 # From the repo root, with the qtmesh CLI installed:
 qtmesh vat path/to/your/source.fbx --anim Rumba \
            -o tools/unity-vat-demo/Assets/VAT/Rumba/
+
+# Then convert the bake's source.gltf to .obj (Unity's stock importer):
+qtmesh convert tools/unity-vat-demo/Assets/VAT/Rumba/source.gltf \
+               -o tools/unity-vat-demo/Assets/VAT/Rumba/source.obj
 ```
 
-After re-baking, restart the Unity editor so it re-imports the new
-files, then re-set the texture import options on `mixamo.com_pos.png`
-(Compression = None, Filter = Point — Unity's auto-import resets these).
+After re-baking, switch back to Unity (or restart the editor). The
+`VATAssetPostprocessor` will re-run on the new files and re-apply
+the import settings automatically — no manual inspector tweaks
+needed. Then click the VATPlayer's **"Auto-Wire from Bake"** button
+to pick up the new frame count + bounds from the updated sidecar.
 
 ## How it relates to the rest of the project
 

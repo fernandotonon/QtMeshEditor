@@ -1,5 +1,10 @@
 *.dll
 *.obj
+# Exempt 3D-mesh OBJs shipped with the engine-demo bake folders. The
+# *.obj above is for compiled C/C++ object files; the demo assets are
+# Wavefront .obj geometry that the bake tooling produces.
+!tools/*-vat-demo/Assets/**/*.obj
+!tools/*-vat-demo/Assets/**/*.mtl
 *.exe
 *.cfg
 *.pro

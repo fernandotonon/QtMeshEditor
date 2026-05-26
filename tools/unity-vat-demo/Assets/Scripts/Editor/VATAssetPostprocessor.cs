@@ -10,12 +10,15 @@
 // place to encode "this is what this asset needs to look like".
 //
 // What it enforces:
-//   • source.fbx → Read/Write enabled (VATPlayer writes uv2 at runtime),
-//                  Animation Type = None (so the Mesh surfaces as a
-//                  standalone sub-asset selectable in the picker —
-//                  Humanoid hides it inside the SkinnedMeshRenderer),
-//                  No animation import (the VAT texture replaces the
-//                  Animator entirely).
+//   • source.obj / source.gltf → Read/Write enabled (VATPlayer writes
+//                  uv2 at runtime), Animation Type = None (so the
+//                  Mesh surfaces as a standalone sub-asset selectable
+//                  in the picker — Humanoid hides it inside the
+//                  SkinnedMeshRenderer), No animation import (the VAT
+//                  texture replaces the Animator entirely), Optimize
+//                  Mesh = OFF (we depend on vertex-index stability so
+//                  column-N in the position texture maps to the
+//                  Nth vertex Unity rendered).
 //   • mixamo.com_pos.png → sRGB OFF (positions are linear data),
 //                          Compression None (any lossy compression
 //                          corrupts the position values),
@@ -51,6 +54,12 @@ namespace QtMeshEditor.VAT.Editor
             // Stripping it also makes the Mesh sub-asset surface as a
             // first-class MeshFilter source in the picker.
             if (imp.optimizeGameObjects)      { imp.optimizeGameObjects = false;                       dirty = true; }
+            // Vertex order MUST be preserved. The VAT bake indexes
+            // column N to the Nth vertex Unity rendered — if the
+            // optimizer reorders verts, every column lookup goes to
+            // the wrong sample and the dancer turns into noise.
+            if (imp.meshOptimizationFlags != 0) { imp.meshOptimizationFlags = 0;                       dirty = true; }
+            if (imp.weldVertices)             { imp.weldVertices = false;                              dirty = true; }
 
             if (dirty)
                 Debug.Log($"VATAssetPostprocessor: normalized import settings on {assetPath} for VAT replay.");
