@@ -39,11 +39,12 @@
 Shader "Hidden/QTM/VAT" {
     Properties {
         _PosTex         ("Packed Position+Normal Texture", 2D) = "white" {}
+        _MainTex        ("Diffuse / Albedo",               2D) = "white" {}
         _CurrentFrame   ("Current Frame",  Float) = 0
         _FrameCount     ("Frame Count",    Int)   = 1
         _BoundsMin      ("Bounds Min",     Vector) = (0,0,0,0)
         _BoundsMax      ("Bounds Max",     Vector) = (1,1,1,0)
-        _BaseColor      ("Base Color",     Color)  = (0.85, 0.78, 0.65, 1)
+        _BaseColor      ("Base Color (tinted onto _MainTex)", Color) = (1, 1, 1, 1)
         // 1 → UV2 is packed integer (col, row_block) pixel coords →
         //     texelFetch path. Use this when GDScript/C# synthesizes
         //     UV2 because the imported mesh lacked it.
@@ -51,6 +52,11 @@ Shader "Hidden/QTM/VAT" {
         //     openvat reference shader behavior).
         // See header comment for the math.
         [Toggle] _SynthesizedUV2 ("Synthesized integer UV2", Float) = 0
+        // 1 → modulate the lit colour by tex2D(_MainTex, IN.uv) so the
+        //     diffuse map appears. 0 → use _BaseColor as a flat tint
+        //     only (legacy openvat behaviour, useful when the mesh
+        //     has no UV0 or you want to debug lighting).
+        [Toggle] _UseDiffuseMap  ("Use Diffuse Map", Float) = 1
     }
 
     SubShader {
@@ -74,6 +80,8 @@ Shader "Hidden/QTM/VAT" {
             // legacy sampler2D path.
             Texture2D _PosTex;
             SamplerState sampler_PosTex;
+            sampler2D _MainTex;
+            float4    _MainTex_ST;
 
             float  _CurrentFrame;
             int    _FrameCount;
@@ -81,6 +89,7 @@ Shader "Hidden/QTM/VAT" {
             float4 _BoundsMax;
             float4 _BaseColor;
             float  _SynthesizedUV2;
+            float  _UseDiffuseMap;
 
             struct appdata {
                 float4 vertex   : POSITION;
@@ -151,7 +160,15 @@ Shader "Hidden/QTM/VAT" {
                 float3 L = normalize(_WorldSpaceLightPos0.xyz);
                 float ndotl = saturate(dot(N, L));
                 float3 ambient = ShadeSH9(half4(N, 1)).rgb;
-                float3 col = _BaseColor.rgb * (ambient + _LightColor0.rgb * ndotl);
+                // Sample the diffuse with the standard ST transform so
+                // the inspector's Tiling/Offset fields work. _UseDiffuseMap
+                // gates between "modulate by texture" and "flat tint" so
+                // a bake without UV0 (rare but possible) can still render.
+                float2 uv = IN.uv * _MainTex_ST.xy + _MainTex_ST.zw;
+                float3 albedo = lerp(_BaseColor.rgb,
+                                     _BaseColor.rgb * tex2D(_MainTex, uv).rgb,
+                                     _UseDiffuseMap);
+                float3 col = albedo * (ambient + _LightColor0.rgb * ndotl);
                 return fixed4(col, 1.0);
             }
             ENDCG

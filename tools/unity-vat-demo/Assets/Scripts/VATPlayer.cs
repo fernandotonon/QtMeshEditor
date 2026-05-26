@@ -89,7 +89,15 @@ namespace QtMeshEditor.VAT
             }
             _material = new Material(shader) { name = "VAT_" + name };
             _material.SetTexture("_PosTex", positionTexture);
-            if (diffuseTexture != null) _material.SetTexture("_MainTex", diffuseTexture);
+            if (diffuseTexture != null)
+            {
+                _material.SetTexture("_MainTex", diffuseTexture);
+                _material.SetFloat("_UseDiffuseMap", 1f);
+            }
+            else
+            {
+                _material.SetFloat("_UseDiffuseMap", 0f);
+            }
             _material.SetColor("_BaseColor", baseColor);
             _material.SetInt("_FrameCount", Mathf.Max(1, frameCount));
             _material.SetVector("_BoundsMin", boundsMin);
@@ -98,7 +106,24 @@ namespace QtMeshEditor.VAT
             // (col, row_block), not a [0,1] float UV.
             _material.SetFloat("_SynthesizedUV2", 1f);
 
-            GetComponent<MeshRenderer>().sharedMaterial = _material;
+            // Replicate the material across every submesh slot. The Rumba
+            // OBJ has 11 submeshes; with only one material assigned the
+            // renderer draws submesh 0 and silently drops the other 10
+            // (head + torso render, arms/legs/eyes/cigar vanish). All
+            // 11 submeshes share the same VAT texture + UV0 layout, so
+            // they want the same Material — just N instances of it.
+            var renderer = GetComponent<MeshRenderer>();
+            int subCount = sourceMesh.subMeshCount;
+            if (subCount <= 1)
+            {
+                renderer.sharedMaterial = _material;
+            }
+            else
+            {
+                var mats = new Material[subCount];
+                for (int i = 0; i < subCount; i++) mats[i] = _material;
+                renderer.sharedMaterials = mats;
+            }
         }
 
         void Update()
