@@ -89,6 +89,26 @@ namespace QtMeshEditor.VAT
                           $"{uniq} unique X values across {uv2.Length} verts. " +
                           $"(samples: uv2[0]={uv2[0]}, uv2[1024]={(uv2.Length>1024?uv2[1024]:Vector2.zero)}, " +
                           $"uv2[5000]={(uv2.Length>5000?uv2[5000]:Vector2.zero)})");
+                // Verify the Color32 encoding made it through.
+                var colors = m.colors32;
+                if (colors == null || colors.Length == 0)
+                {
+                    Debug.LogWarning("OpenVATDriver: mesh has no Color32 channel — the FP16-bypass encoding wasn't written. Re-import after a QtmGltfImporter version bump.");
+                }
+                else
+                {
+                    int uniqCols = 0;
+                    var seenC = new System.Collections.Generic.HashSet<int>();
+                    int maxColUnpacked = 0;
+                    for (int i = 0; i < colors.Length; i++)
+                    {
+                        int c = colors[i].r + (colors[i].g << 8);
+                        if (seenC.Add(c)) uniqCols++;
+                        if (c > maxColUnpacked) maxColUnpacked = c;
+                    }
+                    Debug.Log($"OpenVATDriver: mesh has {colors.Length} vertex colors, {uniqCols} unique unpacked column values, max={maxColUnpacked}. " +
+                              $"(samples: c[0]={(colors[0].r + (colors[0].g << 8))}, c[1024]={(colors.Length>1024?(colors[1024].r + (colors[1024].g << 8)):0)}, c[5000]={(colors.Length>5000?(colors[5000].r + (colors[5000].g << 8)):0)})");
+                }
                 break;  // one mesh is enough
             }
         }

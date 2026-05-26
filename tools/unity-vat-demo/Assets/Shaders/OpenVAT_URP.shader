@@ -147,9 +147,7 @@ Shader "QtMeshEditor/OpenVAT_URP"
             {
                 Varyings OUT;
                 // Unpack column index from vertex Color (R = low byte,
-                // G = high byte). Color channels are R8G8B8A8_UNorm in
-                // [0,1], so multiply by 255 to recover the byte value.
-                // 16-bit total: max representable column = 65535.
+                // G = high byte).
                 float colLow  = IN.color.r * 255.0;
                 float colHigh = IN.color.g * 255.0;
                 float rowBlk  = IN.color.b * 255.0;
@@ -158,7 +156,6 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 float3 nrm;
                 float2 packedUV2 = float2(colF, rowBlk);
                 float3 vatPos = SampleVATPosition(packedUV2, nrm);
-                // Mix between bind-pose and VAT-pose by _exaggeration.
                 float3 bindPos = IN.positionOS.xyz;
                 float3 finalPos = lerp(bindPos, vatPos, saturate(_exaggeration));
 
@@ -166,21 +163,20 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 OUT.positionCS = vpi.positionCS;
                 OUT.positionWS = vpi.positionWS;
                 OUT.normalWS   = normalize(mul((float3x3)UNITY_MATRIX_M, nrm));
-                OUT.uv         = IN.uv * _Basecolor_ST.xy + _Basecolor_ST.zw;
+                // DIAGNOSTIC: pass unpacked colF through uv.x to the
+                // fragment so we can verify the GPU's view of the
+                // column index.
+                OUT.uv = float2(colF, IN.uv.y);
                 return OUT;
             }
 
             half4 frag(Varyings IN) : SV_Target
             {
-                half3 albedo = SAMPLE_TEXTURE2D(_Basecolor, sampler_Basecolor, IN.uv).rgb;
-
-                Light mainLight = GetMainLight();
-                float3 N = normalize(IN.normalWS);
-                float3 L = mainLight.direction;
-                float ndotl = saturate(dot(N, L));
-                float3 ambient = SampleSH(N);
-                float3 lit = albedo * (ambient + mainLight.color * ndotl);
-                return half4(lit, 1);
+                // Diagnostic: red→cyan gradient based on the COLOR-packed
+                // column index. Smooth gradient = Color32 lossless;
+                // chunky bands = Color also being quantized somehow.
+                float u = saturate(IN.uv.x / 5828.0);
+                return half4(u, 1.0 - u, 0.0, 1.0);
             }
             ENDHLSL
         }
