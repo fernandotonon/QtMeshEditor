@@ -77,14 +77,12 @@ ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix
     return out;
 }
 
-void accumulateVertexStats(const ReconstructedVertex &v, MeshReconstructionStats &stats, bool usedGte)
+/** Expand `stats`' AABB to include `v`. First call initialises the bounds to the
+ *  vertex (we can't anchor at 0 — meshes that live entirely on one side of the
+ *  origin would lose their min or max). Shared by every code path that needs to
+ *  fold a vertex into stats so the behavior stays in lock-step (#674 review). */
+void expandBounds(MeshReconstructionStats &stats, const ReconstructedVertex &v)
 {
-    ++stats.totalVertices;
-    if (usedGte)
-        ++stats.gteInverseVertices;
-    else
-        ++stats.screenFallbackVertices;
-
     if (!stats.hasBounds()) {
         stats.boundsMinX = stats.boundsMaxX = v.px;
         stats.boundsMinY = stats.boundsMaxY = v.py;
@@ -97,6 +95,16 @@ void accumulateVertexStats(const ReconstructedVertex &v, MeshReconstructionStats
     stats.boundsMaxY = std::max(stats.boundsMaxY, v.py);
     stats.boundsMinZ = std::min(stats.boundsMinZ, v.pz);
     stats.boundsMaxZ = std::max(stats.boundsMaxZ, v.pz);
+}
+
+void accumulateVertexStats(const ReconstructedVertex &v, MeshReconstructionStats &stats, bool usedGte)
+{
+    ++stats.totalVertices;
+    if (usedGte)
+        ++stats.gteInverseVertices;
+    else
+        ++stats.screenFallbackVertices;
+    expandBounds(stats, v);
 }
 
 void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix, SubMeshAccumulator &acc,
@@ -223,23 +231,11 @@ QVector<ReconstructedMesh> buildParts(const CaptureSnapshot &snapshot,
             int verts = 0;
             for (const ReconstructedSubMesh &sub : cap.mesh.subMeshes) {
                 verts += sub.vertices.size();
-                for (const ReconstructedVertex &v : sub.vertices) {
-                    // Match accumulateVertexStats: use `hasBounds()` to detect the very
-                    // first vertex (otherwise bounds start at 0/0/0 and we'd anchor an
-                    // all-positive mesh to the origin incorrectly).
-                    if (!statsOut->hasBounds()) {
-                        statsOut->boundsMinX = statsOut->boundsMaxX = v.px;
-                        statsOut->boundsMinY = statsOut->boundsMaxY = v.py;
-                        statsOut->boundsMinZ = statsOut->boundsMaxZ = v.pz;
-                    } else {
-                        statsOut->boundsMinX = std::min(statsOut->boundsMinX, v.px);
-                        statsOut->boundsMaxX = std::max(statsOut->boundsMaxX, v.px);
-                        statsOut->boundsMinY = std::min(statsOut->boundsMinY, v.py);
-                        statsOut->boundsMaxY = std::max(statsOut->boundsMaxY, v.py);
-                        statsOut->boundsMinZ = std::min(statsOut->boundsMinZ, v.pz);
-                        statsOut->boundsMaxZ = std::max(statsOut->boundsMaxZ, v.pz);
-                    }
-                }
+                // Share the bounds-update helper with accumulateVertexStats so a
+                // future tweak to the bounds anchoring stays in lock-step
+                // (#674 review).
+                for (const ReconstructedVertex &v : sub.vertices)
+                    expandBounds(*statsOut, v);
             }
             statsOut->modelMeshVertices += verts;
             statsOut->totalVertices += verts;

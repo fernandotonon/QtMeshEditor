@@ -76,12 +76,14 @@ See epic #412 for phased issues (#413–#431).
   - **Linear (`ram_linear`):** opcode-by-opcode fallback for buffers without OT/chain headers.
   All four share one dedupe set (no early return after a weak OT). Linked DR tags carry the opcode in bits 24–31 and the next packet address in bits 2–23 (`PsxGp0Opcode.h`). Sentry breadcrumb `ps1.rip.capture.gp0_hook` records per-path counts; session status bar surfaces `GP0 <source> (hook X / ot Y / chain Z / linear W)` after each capture.
 - **Per-core capability (#662, #674):**
+
   | Core | VRAM | GP0 FIFO source | TMD/HMD scan | Notes |
   |------|------|-----------------|--------------|-------|
   | `mednafen_psx_libretro` (software) | full 1024×512 (#660) | live FIFO bridge (`gp0_hook`) + merged RAM | TMD active, HMD opt-in | recommended |
   | `beetle_psx_libretro` (software) | full 1024×512 (#660) | live FIFO bridge (`gp0_hook`) + merged RAM | TMD active, HMD opt-in | recommended |
   | `beetle_psx_hw_*` | none | excluded — `gp0_hook` path unavailable | excluded (no RAM access) | rejected by `LibretroCoreOptions` |
   | `stub` (`qtmesh_ps1core_stub`) | synthetic test pattern | direct stub via `submitGp0Words` (`gp0_hook`) | not scanned (synthetic RAM is GP0-only) | CI / no-disc smoke |
+
 - **Libretro live frame:** While capture is armed, each `retro_run()` end calls `captureGpuFromRam(false, true)` → `Gp0HookDispatch::captureFrameFromSystemRam`. Inside that pass, the FIFO bridge fires first (DirectHook attribution) and the merged RAM scan runs second (Ram* attribution). Primitives accumulate with cross-frame dedupe (`m_liveDedupe`) until **Capture Frame** runs a final GTE+RAM merge. Disable live ingest with `QTMESH_PS1_GP0_LIVE_CAPTURE=0`. Baseline RAM-only behavior (OT then linear, no chain-root pass, no FIFO bridge) via `QTMESH_PS1_GP0_RAM_LEGACY=1` + `QTMESH_PS1_GP0_FIFO_BRIDGE=0`.
 - **Stub core** (`coreId=stub`): seven-flavor capture is now emitted as a contiguous GP0 word buffer routed through `submitGp0Words` (#662) — the production stub matches the same code path retail captures use.
 - **Libretro core** (`coreId=libretro`): live FIFO bridge ships in this slice (#662). True packet-for-packet in-core mednafen GP0 hooks (i.e. patched `mednafen_psx_libretro` with a `RipperHooks`-aware GPU_Write callback) remain out of scope until a forked core ships — the bridge approximates FIFO ordering by walking DMA chains per frame, which is sufficient to surface `gp0_hook` attribution and to feed the canonical hook code path on retail captures.

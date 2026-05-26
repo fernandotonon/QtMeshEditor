@@ -42,8 +42,11 @@ inline uint32_t safeReadU32(const uint8_t *ram, size_t byteSize, size_t offset)
  */
 inline uint64_t fnv1a64(const uint8_t *data, size_t size)
 {
-    constexpr uint64_t kFnvOffset = 1469598103934665603ULL;
-    constexpr uint64_t kFnvPrime = 1099511628211ULL;
+    // Canonical FNV-1a 64-bit constants (#674 review). The previous offset basis
+    // 1469598103934665603ULL was missing a digit; the real basis is
+    // 0xcbf29ce484222325 = 14695981039346656037.
+    constexpr uint64_t kFnvOffset = 0xcbf29ce484222325ULL;
+    constexpr uint64_t kFnvPrime = 0x100000001b3ULL;
     uint64_t hash = kFnvOffset;
     for (size_t i = 0; i < size; ++i) {
         hash ^= static_cast<uint64_t>(data[i]);

@@ -425,7 +425,12 @@ Gp0CaptureStats Gp0HookDispatch::captureFromSystemRam(const uint8_t *ram, size_t
     stats.ramLinearPrims = primCount - linearBefore;
 
     stats.totalPrims = primCount;
-    stats.primarySource = promoteModelMeshSource(stats, pickPrimarySource(stats));
+    // Model-mesh promotion is deferred to the outer captureFrameFromSystemRam
+    // wrapper — this function never sees TMD/HMD counts (those are owned by the
+    // model-space scanners that run alongside it), so promoting here is a no-op
+    // that just hides the bug if you ever start relying on its return value
+    // outside the wrapper (#674 review).
+    stats.primarySource = pickPrimarySource(stats);
     return stats;
 }
 
@@ -528,6 +533,11 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     // ramHmdMeshes stays 0 until the v2 HMD walker emits actual meshes — until
     // then the candidate count is surfaced separately for diagnostics (#674).
     stats.ramHmdCandidates = hmdCandidates;
+    // Re-evaluate primary source now that model-mesh counts are populated —
+    // captureFromSystemRam() above couldn't see them (#674 review). Without this
+    // line, RamModelMesh could only be picked by the fallback path inside
+    // RipperHooks::endGpuCapturePass.
+    stats.primarySource = promoteModelMeshSource(stats, stats.primarySource);
     stats.liveFrame = liveFrame;
 
     hooks->onFrameEnd();

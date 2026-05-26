@@ -3,6 +3,9 @@
 #include <gtest/gtest.h>
 
 #include "PS1/runtime/CaptureBuffer.h"
+#include "PS1/runtime/Gp0CaptureStats.h"
+#include "PS1/runtime/Gp0HookDispatch.h"
+#include "PS1/runtime/PsxModelRamScanCommon.h"
 #include "PS1/runtime/PsxTmdRamScanner.h"
 #include "PS1/runtime/RipperHooks.h"
 
@@ -415,6 +418,43 @@ TEST(PsxTmdRamScannerTest, ContentHashCoversFullPrimitivePayload)
     EXPECT_NE(hashV3_3, hashV3_2)
         << "contentHash must cover the full primitive payload — a byte change at "
            "offset 12 inside a 16-byte payload must change the hash";
+}
+
+// #674 review: FNV-1a 64-bit constants must match the canonical spec. Regression
+// guard against the missing-digit offset basis we shipped initially.
+TEST(PsxTmdRamScannerTest, Fnv1a64MatchesCanonicalReference)
+{
+    // Canonical FNV-1a 64-bit hash of "foobar" per http://isthe.com/chongo/tech/comp/fnv/
+    // (also matches https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function).
+    const uint8_t input[] = {'f', 'o', 'o', 'b', 'a', 'r'};
+    EXPECT_EQ(PsxModelRamScan::fnv1a64(input, sizeof(input)), 0x85944171f73967e8ULL);
+    // Empty input must return the offset basis unchanged.
+    EXPECT_EQ(PsxModelRamScan::fnv1a64(nullptr, 0), 0xcbf29ce484222325ULL);
+}
+
+// #674 review: a TMD found in RAM must flip Gp0CaptureStats::primarySource to
+// RamModelMesh in the captureFrameFromSystemRam wrapper. Without the post-counter
+// promoteModelMeshSource call, the source was picked while ramTmdMeshes was still
+// zero and RamModelMesh could never win.
+TEST(PsxTmdRamScannerTest, CaptureFramePromotesPrimarySourceWhenTmdEmitted)
+{
+    std::vector<uint8_t> ram(2u * 1024u * 1024u, 0u);
+    constexpr size_t kTmdStart = 0x10000;
+    ASSERT_GT(writeSimpleTmd(ram.data(), kTmdStart), 0u);
+
+    std::atomic<bool> armed{true};
+    CaptureBuffer buffer;
+    RipperHooks hooks;
+    hooks.setArmedFlag(&armed);
+    hooks.setBuffer(&buffer);
+
+    const Gp0CaptureStats stats =
+        Gp0HookDispatch::captureFrameFromSystemRam(ram.data(), ram.size(), &hooks,
+                                                   /*scanGteRam=*/false,
+                                                   /*accumulate=*/false);
+
+    EXPECT_GE(stats.ramTmdMeshes, 1);
+    EXPECT_EQ(stats.primarySource, Gp0CaptureSource::RamModelMesh);
 }
 
 #endif // ENABLE_PS1_RIP
