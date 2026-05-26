@@ -28,9 +28,27 @@ public:
 
     /**
      * Submit GP0 packets as the core would (#657 direct-hook path).
+     * @param maxPrims optional cap on dispatched primitives (defaults to the
+     *        per-frame budget). Callers chaining multiple submit passes within
+     *        the same frame should pass the remaining budget so the per-frame
+     *        cap is enforced across calls rather than per call (#662).
      * @return primitives dispatched.
      */
-    static int submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks);
+    static int submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks,
+                              int maxPrims = -1);
+
+    /**
+     * Live FIFO bridge (#662): scan RAM for GP0 DMA chain roots and submit each
+     * chain's raw word range through @ref submitGp0Words. Prims dispatched this
+     * way are tagged as `Gp0CaptureSource::DirectHook` (gp0_hook) since they
+     * exercise the same code path a true in-core mednafen FIFO hook would.
+     *
+     * Intended for per-frame live capture. Best-effort: walks up to 48 chain
+     * roots (deduped against @p seenPrimKeys) to keep frame overhead bounded.
+     * Returns the number of primitives dispatched.
+     */
+    static int submitChainsFromRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
+                                   QSet<QString> *seenPrimKeys);
 
     /**
      * Merged RAM capture: OT chains, standalone chain roots, then linear scan (#657).

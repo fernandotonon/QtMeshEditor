@@ -27,6 +27,7 @@ public:
     void ingestSystemRamForGpuCapture(const uint8_t *ram, size_t byteSize, bool scanGteRam = true,
                                       bool accumulate = false) override;
     int submitGp0Words(const uint32_t *words, size_t wordCount) override;
+    int submitFifoChainsFromRam(const uint8_t *ram, size_t byteSize) override;
 
     QSet<QString> *livePrimDedupeKeys() override;
     void beginGpuCapturePass(bool accumulate) override;
@@ -37,6 +38,16 @@ public:
     void resetLiveCaptureState();
 
     const Gp0CaptureStats &lastCaptureStats() const { return m_lastStats; }
+
+    /**
+     * Returns true iff @ref endGpuCapturePass was called since the last
+     * @ref markCaptureStatsConsumed (or since construction). Used by the
+     * session worker to detect stub-core paths that never run the GP0 capture
+     * pass, so the breadcrumb / status bar don't surface stale stats from a
+     * prior pass (#662 review).
+     */
+    bool lastCaptureStatsFresh() const { return m_lastStatsFresh; }
+    void markCaptureStatsConsumed() { m_lastStatsFresh = false; }
 
     void onFrameBegin() override;
     void onFrameEnd() override;
@@ -63,6 +74,7 @@ private:
     QSet<QString> m_liveDedupe;
     int m_directHookPrimPass = 0;
     Gp0CaptureStats m_lastStats;
+    bool m_lastStatsFresh = false;
 };
 
 #endif // RIPPERHOOKS_H

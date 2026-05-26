@@ -12,7 +12,9 @@
 
 #include <QSet>
 #include <QString>
+#include <QVector>
 
+#include <algorithm>
 #include <cstring>
 
 namespace {
@@ -139,9 +141,19 @@ void Gp0HookDispatch::dispatchStep(const GpuCommandParser::Gp0Step &step, EmuHoo
     ++primCount;
 }
 
-int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks)
+int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, EmuHooks *hooks,
+                                    int maxPrims)
 {
     if (!words || wordCount == 0 || !hooks || !hooks->isCaptureEnabled())
+        return 0;
+
+    // -1 (default) means "use the per-frame cap". Any positive value is
+    // clamped to the per-frame cap so callers can chain submit passes and
+    // share a single per-frame budget (#662).
+    const int limit = (maxPrims < 0)
+                          ? kMaxPrimsPerFrame
+                          : std::min(maxPrims, kMaxPrimsPerFrame);
+    if (limit <= 0)
         return 0;
 
     DrawModeRecord currentMode{};
@@ -149,7 +161,7 @@ int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, Emu
     int primCount = 0;
     size_t offset = 0;
     while (offset < wordCount) {
-        if (primCount >= kMaxPrimsPerFrame)
+        if (primCount >= limit)
             break;
 
         const size_t remaining = wordCount - offset;
@@ -165,6 +177,155 @@ int Gp0HookDispatch::submitGp0Words(const uint32_t *words, size_t wordCount, Emu
         offset += step.wordsConsumed;
     }
     return primCount;
+}
+
+namespace {
+
+// Probe a single chain root: returns the linked packet count + the byte range
+// that covers every packet (so we can slice it as one submitGp0Words call).
+// Mirrors PsxGp0ChainRootScanner::estimateChainPackets but also returns the
+// last-packet word count so we can size the slice exactly.
+struct ChainProbe {
+    int packets = 0;
+    uint32_t startByte = 0;
+    size_t totalWords = 0;
+};
+
+ChainProbe probeChainRoot(const uint8_t *ram, size_t byteSize, uint32_t startAddr)
+{
+    ChainProbe out;
+    out.startByte = startAddr;
+
+    uint32_t addr = startAddr;
+    for (int guard = 0; guard < 64; ++guard) {
+        if (addr + 4 > byteSize || (addr % 4) != 0)
+            break;
+
+        uint32_t word = 0;
+        std::memcpy(&word, ram + addr, sizeof(word));
+        if (!psxLooksLikeGp0Opcode(word))
+            break;
+
+        const size_t remainingWords = (byteSize - addr) / 4;
+        const auto *words = reinterpret_cast<const uint32_t *>(ram + addr);
+        const GpuCommandParser::Gp0Step step =
+            GpuCommandParser::stepGp0(words, remainingWords);
+        if (step.wordsConsumed == 0 || !step.error.isEmpty())
+            break;
+
+        out.packets += 1;
+        out.totalWords += step.wordsConsumed;
+
+        if ((word & 1u) == 0)
+            break;
+
+        const uint32_t nextAddr = psxGp0TagNextByteAddr(word);
+        if (nextAddr == addr || nextAddr + 4 > byteSize || (nextAddr % 4) != 0)
+            break;
+        // Live FIFO bridge: we only submit packets that are contiguous in RAM,
+        // because submitGp0Words takes a flat word slice. Chains that hop to a
+        // non-contiguous address fall back to the merged RAM scanner.
+        if (nextAddr != addr + static_cast<uint32_t>(step.wordsConsumed) * 4u)
+            break;
+        addr = nextAddr;
+    }
+    return out;
+}
+
+bool chainOverlaps(uint32_t aStart, size_t aWords, uint32_t bStart, size_t bWords)
+{
+    const uint32_t aEnd = aStart + static_cast<uint32_t>(aWords) * 4u;
+    const uint32_t bEnd = bStart + static_cast<uint32_t>(bWords) * 4u;
+    return !(aEnd <= bStart || bEnd <= aStart);
+}
+
+} // namespace
+
+int Gp0HookDispatch::submitChainsFromRam(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
+                                         QSet<QString> *seenPrimKeys)
+{
+    if (!ram || byteSize < 64 || !hooks || !hooks->isCaptureEnabled())
+        return 0;
+
+    constexpr int kMaxRootsToWalk = 48;
+    constexpr int kMinChainPackets = 2;
+    constexpr size_t kScanStrideBytes = 16;
+
+    // PS1 main RAM is 2 MiB. We only walk the lower 512 KiB by default to match
+    // PsxGp0ChainRootScanner's budget — large enough for typical game GPU
+    // double-buffer + display list regions, small enough to keep per-frame cost
+    // sub-millisecond on commodity hardware.
+    const size_t scanLimit = byteSize > (512u * 1024u) ? (512u * 1024u) : byteSize;
+
+    QVector<ChainProbe> candidates;
+    candidates.reserve(64);
+    for (size_t off = 0; off + 4 <= scanLimit; off += kScanStrideBytes) {
+        uint32_t word = 0;
+        std::memcpy(&word, ram + off, sizeof(word));
+        if ((word & 1u) == 0u)
+            continue;
+        if (!psxLooksLikeGp0Opcode(word))
+            continue;
+
+        const ChainProbe probe = probeChainRoot(ram, byteSize, static_cast<uint32_t>(off));
+        if (probe.packets < kMinChainPackets)
+            continue;
+
+        candidates.append(probe);
+    }
+
+    if (candidates.isEmpty())
+        return 0;
+
+    std::sort(candidates.begin(), candidates.end(),
+              [](const ChainProbe &a, const ChainProbe &b) {
+                  return a.packets > b.packets;
+              });
+
+    // Dedupe key set is accepted for API parity with captureFromSystemRam, but
+    // we rely on RipperHooks::m_liveDedupe for cross-pass dedupe between this
+    // chain bridge and the subsequent merged-RAM scan in the same accumulate
+    // pass — both go through onGpuPrim which consults that set.
+    Q_UNUSED(seenPrimKeys);
+
+    int totalDispatched = 0;
+    QVector<ChainProbe> walked;
+    walked.reserve(kMaxRootsToWalk);
+
+    for (const ChainProbe &probe : candidates) {
+        if (walked.size() >= kMaxRootsToWalk)
+            break;
+        // Per-frame primitive budget shared across every chain dispatched in
+        // this pass (#662 review). Without this, each submitGp0Words call had
+        // its own 2048-prim cap, so scenes with many candidate roots could
+        // ingest several × the intended budget in a single frame.
+        if (totalDispatched >= kMaxPrimsPerFrame)
+            break;
+
+        bool overlaps = false;
+        for (const ChainProbe &prior : walked) {
+            if (chainOverlaps(probe.startByte, probe.totalWords, prior.startByte, prior.totalWords)) {
+                overlaps = true;
+                break;
+            }
+        }
+        if (overlaps)
+            continue;
+
+        const auto *chainWords =
+            reinterpret_cast<const uint32_t *>(ram + probe.startByte);
+        const int remainingBudget = kMaxPrimsPerFrame - totalDispatched;
+        // submitGp0Words is the hook code path (#657): RipperHooks tags prims
+        // dispatched outside the m_ramCaptureActive window as DirectHook, so
+        // these prims surface in Gp0CaptureStats as gp0_hook (#662).
+        const int dispatched =
+            Gp0HookDispatch::submitGp0Words(chainWords, probe.totalWords, hooks, remainingBudget);
+
+        totalDispatched += dispatched;
+        walked.append(probe);
+    }
+
+    return totalDispatched;
 }
 
 void Gp0HookDispatch::captureLinearScan(const uint8_t *ram, size_t byteSize, EmuHooks *hooks,
@@ -313,6 +474,17 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
         PsxGteRamScanner::captureFromSystemRam(ram, scanSize, hooks);
     }
     ensureCaptureProjectionMatrix(hooks);
+
+    // #662 live FIFO bridge: route contiguous RAM-resident DMA chains through
+    // submitGp0Words so each prim is attributed to Gp0CaptureSource::DirectHook
+    // before the merged RAM scan runs. The bridge runs in-pass; RipperHooks
+    // toggles m_ramCaptureActive so the DirectHook counter only counts the
+    // bridge's prims, not the merged scan's. Disable with
+    // QTMESH_PS1_GP0_FIFO_BRIDGE=0 for the legacy RAM-only baseline.
+    const bool fifoBridgeDisabled = qEnvironmentVariableIsSet("QTMESH_PS1_GP0_FIFO_BRIDGE")
+                                    && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_FIFO_BRIDGE") == 0;
+    if (!fifoBridgeDisabled)
+        hooks->submitFifoChainsFromRam(ram, scanSize);
 
     QSet<QString> *seen = hooks->livePrimDedupeKeys();
     if (qEnvironmentVariableIsSet("QTMESH_PS1_GP0_RAM_LEGACY")

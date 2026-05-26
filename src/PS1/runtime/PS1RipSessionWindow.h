@@ -1,6 +1,8 @@
 #ifndef PS1RIPSESSIONWINDOW_H
 #define PS1RIPSESSIONWINDOW_H
 
+#include "Gp0CaptureStats.h"
+
 #include <QImage>
 #include <QMainWindow>
 #include <QVector>
@@ -48,7 +50,7 @@ private slots:
     void onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,
                      int vertexCount, int triangleCount, int matrixCount, uint32_t cameraMatrixId,
                      bool hasCameraMatrix, int gteInversePercent, bool slabLike,
-                     PsxVramMirrorMode vramMirrorMode);
+                     PsxVramMirrorMode vramMirrorMode, Gp0CaptureStats captureStats);
     void onPausedChanged(bool paused);
 
 private:

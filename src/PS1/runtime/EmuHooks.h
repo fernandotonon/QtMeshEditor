@@ -66,6 +66,18 @@ public:
         (void)accumulate;
     }
 
+    /**
+     * Live FIFO bridge (#662): scan main RAM for contiguous GP0 DMA chains
+     * and submit them through @ref submitGp0Words so prims are tagged as
+     * `Gp0CaptureSource::DirectHook`. Returns prims dispatched (informational).
+     */
+    virtual int submitFifoChainsFromRam(const uint8_t *ram, size_t byteSize)
+    {
+        (void)ram;
+        (void)byteSize;
+        return 0;
+    }
+
     /** Live armed capture: shared dedupe keys across frames (nullptr when not accumulating). */
     virtual QSet<QString> *livePrimDedupeKeys() { return nullptr; }
 

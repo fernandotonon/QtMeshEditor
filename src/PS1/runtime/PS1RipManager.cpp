@@ -70,6 +70,7 @@ void PS1RipManager::initializeWorkerThread()
     qRegisterMetaType<QVector<uint16_t>>("QVector<uint16_t>");
     qRegisterMetaType<CaptureSnapshot>("CaptureSnapshot");
     qRegisterMetaType<PsxVramMirrorMode>("PsxVramMirrorMode");
+    qRegisterMetaType<Gp0CaptureStats>("Gp0CaptureStats");
 
     m_workerThread = new QThread(this);
     m_worker = new PS1RipWorker();
@@ -105,7 +106,7 @@ void PS1RipManager::initializeWorkerThread()
     connect(m_worker, &PS1RipWorker::framePresented, this, &PS1RipManager::framePresented);
     connect(m_worker, &PS1RipWorker::frameCaptureReady, this,
             [this](const QString &captureId, const CaptureSnapshot &snapshot, int,
-                   PsxVramMirrorMode vramMirrorMode) {
+                   PsxVramMirrorMode vramMirrorMode, Gp0CaptureStats captureStats) {
                 SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
                                               QStringLiteral("ps1_rip_frame:%1").arg(captureId));
                 const QString goldenId = goldenSceneId();
@@ -168,7 +169,7 @@ void PS1RipManager::initializeWorkerThread()
                                captureSet.instanceCount(), built.vertexCount, built.triangleCount,
                                snapshot.matrices.size(), snapshot.cameraMatrixId,
                                snapshot.hasCameraMatrix(), reconStats.gteInversePercent(),
-                               reconStats.slabLike, vramMirrorMode);
+                               reconStats.slabLike, vramMirrorMode, captureStats);
             });
     connect(m_worker, &PS1RipWorker::vramFrameUpdated, this,
             [this](const QVector<uint16_t> &cells, const QImage &preview) {

@@ -255,6 +255,13 @@ void PS1RipWorker::finalizeFrameCapture()
     m_core->syncCaptureMirrors();
     if (m_captureBuffer->prims().isEmpty())
         m_core->runFrame();
+    // Clear the freshness flag before ingest so we can tell whether the core
+    // path actually ran a GP0 capture pass (libretro path) vs left
+    // lastCaptureStats() stale (stub core / cores without GP0 hooks). Without
+    // this, the breadcrumb + status bar can surface stats from a prior pass
+    // and misattribute the source (#662 review).
+    if (m_ripperHooks)
+        m_ripperHooks->markCaptureStatsConsumed();
     m_core->ingestCaptureFrame();
 
     const QVector<PrimRecord> &prims = m_captureBuffer->prims();
@@ -300,8 +307,32 @@ void PS1RipWorker::finalizeFrameCapture()
     if (m_vram && !m_vram->isEmpty())
         vramCells = m_vram->mutablePixels();
 
+    Gp0CaptureStats stats;
+    if (m_ripperHooks && m_ripperHooks->lastCaptureStatsFresh()) {
+        stats = m_ripperHooks->lastCaptureStats();
+    } else {
+        // Stub-core path didn't run a GP0 capture pass — synthesize a minimal
+        // stats record from the buffer so the breadcrumb reflects this
+        // capture instead of a stale one (#662 review).
+        stats.totalPrims = prims.size();
+    }
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.capture.summary"),
+        QStringLiteral("capture=%1 source=%2 total=%3 hook=%4 ot=%5 chain=%6 linear=%7 legacy=%8")
+            .arg(captureId)
+            .arg(stats.primarySourceLabel())
+            .arg(stats.totalPrims)
+            .arg(stats.directHookPrims)
+            .arg(stats.ramOtPrims)
+            .arg(stats.ramChainRootPrims)
+            .arg(stats.ramLinearPrims)
+            .arg(qEnvironmentVariableIsSet("QTMESH_PS1_GP0_RAM_LEGACY")
+                         && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_RAM_LEGACY") != 0
+                     ? QStringLiteral("yes")
+                     : QStringLiteral("no")));
+
     emit frameCaptureReady(captureId, CaptureSnapshot::fromBuffer(*m_captureBuffer, vramCells),
-                           prims.size(), vramMode);
+                           prims.size(), vramMode, stats);
 }
 
 void PS1RipWorker::dumpVram()

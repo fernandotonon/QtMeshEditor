@@ -520,8 +520,13 @@ void LibretroEmuCore::runFrame()
     if (m_hooks && m_hooks->isCaptureEnabled()) {
         const bool liveDisabled = qEnvironmentVariableIsSet("QTMESH_PS1_GP0_LIVE_CAPTURE")
                                   && qEnvironmentVariableIntValue("QTMESH_PS1_GP0_LIVE_CAPTURE") == 0;
-        if (!liveDisabled)
+        if (!liveDisabled) {
+            // captureFrameFromSystemRam internally runs the #662 FIFO bridge
+            // before the merged RAM scan, attributing those prims as
+            // Gp0CaptureSource::DirectHook (gp0_hook). Disable with
+            // QTMESH_PS1_GP0_FIFO_BRIDGE=0 for A/B vs the RAM-only baseline.
             captureGpuFromRam(false, true);
+        }
     }
 }
 
