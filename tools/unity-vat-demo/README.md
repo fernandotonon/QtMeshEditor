@@ -25,37 +25,67 @@ is the recommended path:
 The bake's sidecar format (`os-remap.Min/Max/Frames`) is compatible
 with what OpenVATEditor expects — no schema translation needed.
 
-## Status: URP path renders correctly; animation playback is still flaky
+## Status: Both BiRP and URP paths blocked by Unity 6 + Metal vertex texture fetch
 
-After switching to URP + the official OpenVAT package, the dancer now
-renders correctly: full T-pose silhouette, all 11 submeshes, proper
-textures from the bake. What's NOT working yet: visible animation
-playback. The dancer stays in a static textured T-pose.
+After a long debugging session we hit the same wall in both render
+pipelines: **`SAMPLE_TEXTURE2D_LOD` in the vertex shader does NOT
+vary per-vertex on Unity 6 + Metal on Apple Silicon.** Every vertex
+appears to sample the SAME texel, regardless of how varied the input
+texture coordinates are.
 
-What we verified is set correctly on the material in the build:
-- `_UseTime: 1`, `_UsePackedNormals: 1`, `_exaggeration: 1`
-- `_speed: 1`, `_frames: 71`, `_resolutionY: 142`
-- `_openVAT_main` bound to the position texture (5828×142 RGBA64)
-- `_minValues` / `_maxValues` populated from the sidecar JSON
+### Confirmed working end-to-end
+- The custom QtmGltfImporter parses the bake's glTF correctly and
+  preserves vertex order across 11 submeshes (5828 verts × 11 prims).
+- UV2 reaches the runtime mesh.uv2 array with 5828 unique X values
+  in range [0..5827], one per vertex.
+- Color32 encoding (R = col low byte, G = col high byte) also
+  preserves all 5828 unique unpacked column values losslessly.
+- All material parameters set correctly: `_UseTime=1`,
+  `_UsePackedNormals=1`, `_exaggeration=1`, `_speed=1`, `_frames=71`,
+  `_resolutionY=142`, plus the bounds from the sidecar.
+- The OpenVATDriver MonoBehaviour ticks `_frame` per Update and the
+  console confirms it's incrementing.
+- All 11 submeshes get the VAT material assigned via
+  `FixupMultiSubmeshPrefab`.
+- The custom HLSL shader (`Assets/Shaders/OpenVAT_URP.shader`) is
+  bound and compiles cleanly (the upstream OpenVAT shadergraph leaves
+  VertexDescription.Position unwired — confirmed by tracing the
+  graph JSON's edge list).
 
-And the runtime `OpenVATDriver.cs` script attached to the dancer is
-confirmed running (`Debug.Log("OpenVATDriver: bound 11 VAT materials,
-fps=30, frames=71")` fires at Start) and writing `_frame` per Update.
-Yet the visible deformation amplitude is 0.
+### The remaining failure mode
+A diagnostic shader (in `OpenVAT_URP.shader`) painted by the sampled
+texture's RG channels showed a SMOOTH pastel gradient across the
+whole egg-shaped mesh — i.e. every fragment sees the same sampled
+value as its triangle's neighbours, interpolated bilinearly. If
+texture sampling varied per-vertex, we'd see 5828 distinct colors
+scattered chaotically across the surface; instead we see a single
+smooth gradient with NO per-vertex variation.
 
-This is a deeper integration issue with the OpenVAT URP Shader Graph's
-internal time/frame wiring that we couldn't crack in-session. Possible
-next steps for a future investigation:
-- Open the project in the Unity editor, drop the prefab into a scene
-  manually, hit Play, see whether the Editor-time playback works (vs
-  Player-time which is what we've been testing).
-- Drop the `OpenVAT_Decoder_basic` Shader Graph into the editor and
-  inspect the runtime values via the Frame Debugger / Material Property
-  Block inspector to see which uniforms actually reach the GPU.
-- Try the more comprehensive `openVAT_decoder.shadergraph` instead of
-  `_basic` — the editor we invoke picks one based on whether a
-  basecolor texture was found; maybe the full graph wires `_frame`
-  differently.
+### What this means
+Unity 6's Metal backend treats the position texture as a fragment-
+stage resource and doesn't bind it as a vertex-stage texture, even
+when we use `SAMPLE_TEXTURE2D_LOD(...,0)` explicitly. This is
+documented as a known limitation in some Unity 6 Metal threads but
+isn't well-publicised.
+
+### Next steps (out of scope for this demo)
+- Move position decode to a compute shader that pre-bakes each frame's
+  positions into a runtime-allocated `MeshDataArray`. The vertex
+  shader then reads from the CPU-uploaded vertex buffer — no GPU-side
+  texture fetch needed.
+- OR: write a custom `MaterialPropertyBlock`-based per-instance
+  position array, indexed by `SV_VertexID` from a `StructuredBuffer`.
+- OR: switch the demo's target to a render pipeline + platform combo
+  where vertex texture fetch is reliable (BiRP on DirectX, URP on
+  DirectX, or HDRP). The bake itself is platform-agnostic.
+
+### Working artifacts to keep
+- The bake under `Assets/OpenVATContent/` is correct and reusable.
+- The OpenVAT package integration (Packages/manifest.json) is wired.
+- The CLISetupURPAndBuild editor script automates the whole import +
+  scene build + standalone build pipeline.
+- The mesh import, material setup, and animation tick infrastructure
+  are all working — only the GPU texture sampling is the blocker.
 
 ## Status: BiRP custom shader path is incomplete
 
