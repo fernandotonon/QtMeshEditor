@@ -34,6 +34,7 @@ namespace QtMeshEditor.VAT.Editor
             {
                 Debug.Log("CLISetupURPAndBuild: starting URP + OpenVAT pipeline");
                 EnsureColorSpace();
+                ForceOpenGLCoreOnMac();
                 EnsureURPAsset();
                 RunOpenVATEditor();
                 BuildScene();
@@ -46,6 +47,25 @@ namespace QtMeshEditor.VAT.Editor
                 Debug.LogError("CLISetupURPAndBuild failed: " + e);
                 EditorApplication.Exit(1);
             }
+        }
+
+        // Force the macOS Standalone target to use OpenGLCore instead
+        // of Metal. Unity 6's Metal backend doesn't bind textures to
+        // the vertex stage on Apple Silicon — every vertex texture
+        // fetch returns the same texel regardless of input UV, which
+        // breaks VAT replay. OpenGL's vertex shaders handle the same
+        // SAMPLE_TEXTURE2D_LOD calls correctly.
+        //
+        // The setting is `PlayerSettings.SetGraphicsAPIs(target, apis[])`
+        // + `SetUseDefaultGraphicsAPIs(target, false)` to opt out of
+        // Unity's "let the platform decide" path.
+        static void ForceOpenGLCoreOnMac()
+        {
+            PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.StandaloneOSX, false);
+            PlayerSettings.SetGraphicsAPIs(BuildTarget.StandaloneOSX,
+                new[] { UnityEngine.Rendering.GraphicsDeviceType.OpenGLCore });
+            AssetDatabase.SaveAssets();
+            Debug.Log("CLISetupURPAndBuild: set StandaloneOSX graphics API to OpenGLCore (workaround for Metal vertex-stage texture fetch bug)");
         }
 
         // URP wants Linear color space (Gamma + URP produces washed-out lighting).
