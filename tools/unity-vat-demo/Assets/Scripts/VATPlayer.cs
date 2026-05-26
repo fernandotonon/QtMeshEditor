@@ -50,6 +50,8 @@ namespace QtMeshEditor.VAT
         public bool selfDriven = true;
         [Tooltip("Material BaseColor when no diffuse is bound.")]
         public Color baseColor = new Color(0.85f, 0.78f, 0.65f, 1f);
+        [Tooltip("DIAGNOSTIC — when true, the shader skips VAT replay and renders the bind pose. Helps isolate whether the mesh import is correct.")]
+        public bool bypassVAT = false;
 
         Material _material;
         float    _currentFrame;
@@ -99,7 +101,25 @@ namespace QtMeshEditor.VAT
                 Debug.Log($"VATPlayer: runtime UV1 u-range on {sourceMesh.name} = [{lo}..{hi}] " +
                           $"(positionTexture: {positionTexture.width}×{positionTexture.height}, " +
                           $"format={positionTexture.graphicsFormat}, " +
-                          $"expected max u = {positionTexture.width - 1}).");
+                          $"expected max u = {positionTexture.width - 1}). " +
+                          $"Bounds: min={boundsMin}, max={boundsMax}, frames={frameCount}.");
+                // Sample a known column and log the raw texture value.
+                // Col 0 = vertex 0; reading row 0 (frame 0 of positions)
+                // should give a position-encoded RGB tuple inside [0,1].
+                // If the value isn't in that range, the texture format
+                // / colorspace path is wrong.
+                if (positionTexture.isReadable)
+                {
+                    var c0 = positionTexture.GetPixel(0, 0);
+                    var c500 = positionTexture.GetPixel(500, 0);
+                    var c5000 = positionTexture.GetPixel(5000, 0);
+                    Debug.Log($"VATPlayer: texture samples (row 0, frame 0) — " +
+                              $"col[0]={c0}, col[500]={c500}, col[5000]={c5000}.");
+                }
+                else
+                {
+                    Debug.LogWarning("VATPlayer: positionTexture not readable — can't sample pixel values from CPU. Toggle 'Read/Write Enabled' on the texture asset to enable this diagnostic.");
+                }
             }
 
             // Bind the mesh to the MeshFilter explicitly — the user might
@@ -133,6 +153,7 @@ namespace QtMeshEditor.VAT
             // Tell the shader to use the texelFetch path — UV2 is integer
             // (col, row_block), not a [0,1] float UV.
             _material.SetFloat("_SynthesizedUV2", 1f);
+            _material.SetFloat("_BypassVAT", bypassVAT ? 1f : 0f);
 
             // Replicate the material across every submesh slot. The Rumba
             // OBJ has 11 submeshes; with only one material assigned the

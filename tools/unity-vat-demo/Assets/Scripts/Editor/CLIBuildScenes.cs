@@ -95,6 +95,10 @@ namespace QtMeshEditor.VAT.Editor
             var player = dancer.AddComponent<VATPlayer>();
             // Auto-wire from the bake (reads sidecar JSON).
             BootstrapVAT.AutoWire(player, verbose: true);
+            // Diagnostic mode: bypass VAT replay and render the bind
+            // pose, so we can confirm the mesh import is correct
+            // independently of the VAT path.
+            player.bypassVAT = true;
 
             string path = $"{kScenesDir}/Web.unity";
             EditorSceneManager.SaveScene(scene, path);

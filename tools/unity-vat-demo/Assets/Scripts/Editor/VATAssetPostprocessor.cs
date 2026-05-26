@@ -78,6 +78,12 @@ namespace QtMeshEditor.VAT.Editor
             // alphaSource = None — the bake has no alpha channel and
             // the sampler reads `.rgb` only.
             imp.alphaSource     = TextureImporterAlphaSource.None;
+            // Read/Write enabled so VATPlayer can sample texels from
+            // C# (Texture2D.GetPixel) for the runtime diagnostic.
+            // Costs ~4 MB on the Rumba bake (CPU-side copy of the
+            // 5828×142 RGBA64 texture), worth it for catching the
+            // last 10% of these silent-quantization classes of bugs.
+            imp.isReadable      = true;
             // Max-size cap: the per-platform default is 2048, but the
             // Rumba bake is 5828 columns wide (and other bakes can be
             // larger). If left at 2048, Unity downscales the position
