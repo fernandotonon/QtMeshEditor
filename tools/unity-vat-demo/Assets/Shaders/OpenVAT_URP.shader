@@ -78,6 +78,7 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 float4 positionOS   : POSITION;
                 float3 normalOS     : NORMAL;
                 float2 uv           : TEXCOORD0;
+                float2 uv2          : TEXCOORD1;   // bake-column index, preserved across importer reorders
             };
 
             struct Varyings
@@ -90,9 +91,15 @@ Shader "QtMeshEditor/OpenVAT_URP"
 
             // Picks the current frame index from either Time-driven or
             // explicit-frame mode, then samples the position texture
-            // for this vertex (col = vertex ID modulo texture width,
-            // row = current frame).
-            float3 SampleVATPosition(uint vertexId, out float3 nrm)
+            // for this vertex. The bake-column index lives in UV2 (the
+            // `--emit-uv2` flag injects it at bake time as TEXCOORD_1);
+            // using SV_VertexID instead breaks the moment any importer
+            // reorders vertices, which is what Unity's stock glTF
+            // importer does. OpenVATEditor goes through that importer
+            // when it builds the prefab — not our QtmGltfImporter — so
+            // we MUST read the column index from UV2 to survive the
+            // reorder.
+            float3 SampleVATPosition(float2 uv2, out float3 nrm)
             {
                 float safeFrames = max(_frames, 1.0);
                 float t = _UseTime > 0.5 ? _Time.y * _speed * safeFrames : _frame;
@@ -105,9 +112,14 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 uint texW = uint(_openVAT_main_TexelSize.z);  // texelSize.z = width
                 uint texH = uint(_openVAT_main_TexelSize.w);  // texelSize.w = height
 
-                int col = int(vertexId);   // bake walks verts in order — col == vertex id
-                int rowPos = curr;
-                int rowNrm = curr + int(safeFrames);
+                // UV2.x carries the bake's column index for THIS vertex
+                // (an integer 0..textureWidth-1). UV2.y carries the row
+                // block (almost always 0 for single-row bakes).
+                int col = int(uv2.x);
+                int rowBlock = int(uv2.y);
+                int baseRow = rowBlock * int(safeFrames);
+                int rowPos = baseRow + curr;
+                int rowNrm = baseRow + curr + int(safeFrames);
 
                 float u = (col + 0.5) * _openVAT_main_TexelSize.x;
                 float vPos = (rowPos + 0.5) * _openVAT_main_TexelSize.y;
@@ -129,11 +141,11 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 return pos;
             }
 
-            Varyings vert(Attributes IN, uint vid : SV_VertexID)
+            Varyings vert(Attributes IN)
             {
                 Varyings OUT;
                 float3 nrm;
-                float3 vatPos = SampleVATPosition(vid, nrm);
+                float3 vatPos = SampleVATPosition(IN.uv2, nrm);
                 // Mix between bind-pose and VAT-pose by _exaggeration.
                 float3 bindPos = IN.positionOS.xyz;
                 float3 finalPos = lerp(bindPos, vatPos, saturate(_exaggeration));
