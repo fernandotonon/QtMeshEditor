@@ -41,7 +41,7 @@ namespace QtMeshEditor.VAT.Editor
     // import-time data transformation changes (e.g. UV2 normalization
     // added in v2). Without this Unity reuses the previously-cached
     // Mesh asset and your importer code changes go unnoticed.
-    [ScriptedImporter(version: 3, ext: "gltf")]
+    [ScriptedImporter(version: 4, ext: "gltf")]
     public class QtmGltfImporter : ScriptedImporter
     {
         public override void OnImportAsset(AssetImportContext ctx)

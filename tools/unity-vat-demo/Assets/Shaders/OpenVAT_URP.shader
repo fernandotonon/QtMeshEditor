@@ -155,16 +155,12 @@ Shader "QtMeshEditor/OpenVAT_URP"
             Varyings vert(Attributes IN)
             {
                 Varyings OUT;
-                // URP under Linear color space applies sRGB→Linear on
-                // vertex Color channels by default, which destroys our
-                // byte-packed integer payload (col=100 → r=0.392 →
-                // gets gamma-decoded to ~0.127 → unpacked as col=32).
-                // Undo by applying the inverse transform (Linear→sRGB)
-                // — see LinearToSRGB() defined above the Pass block.
-                float3 raw_color = LinearToSRGB(IN.color.rgb);
-                float colLow  = raw_color.r * 255.0;
-                float colHigh = raw_color.g * 255.0;
-                float rowBlk  = raw_color.b * 255.0;
+                // Read packed column index from vertex Color. URP delivers
+                // Color in [0,1] floats; multiply by 255 to recover the
+                // byte values from the Color32 encoding.
+                float colLow  = IN.color.r * 255.0;
+                float colHigh = IN.color.g * 255.0;
+                float rowBlk  = IN.color.b * 255.0;
                 float colF    = colLow + colHigh * 256.0;
                 // DIAGNOSTIC: pass the RAW UNINTERPRETED IN.color.r
                 // and IN.color.g through so the fragment can show the
