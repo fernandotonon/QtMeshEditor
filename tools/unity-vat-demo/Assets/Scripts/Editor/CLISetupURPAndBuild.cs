@@ -190,6 +190,13 @@ namespace QtMeshEditor.VAT.Editor
             AssetDatabase.SaveAssets();
             Debug.Log("CLISetupURPAndBuild: ran OpenVATEditor.ProcessOpenVATContent");
 
+            // Swap the material's shader from the broken
+            // `Shader Graphs/openVAT_decoder` (whose
+            // VertexDescription.Position block is not wired to the
+            // texture-sampling subgraph in the upstream package — see
+            // README's Status section) to our custom HLSL shader that
+            // does the vertex deformation correctly.
+            SwapToCustomHlslShader(folder);
             // OpenVATEditor assigns `Renderer.sharedMaterial` (singular)
             // to the generated prefab, which only paints submesh 0. For
             // a multi-submesh source like the Rumba dancer (11 material
@@ -291,6 +298,33 @@ namespace QtMeshEditor.VAT.Editor
             bool ok = report.summary.result == UnityEditor.Build.Reporting.BuildResult.Succeeded;
             Debug.Log($"CLISetupURPAndBuild: build {(ok ? "SUCCEEDED" : "FAILED")} ({report.summary.totalSize} bytes)");
             if (!ok) throw new Exception("BuildPipeline.BuildPlayer failed");
+        }
+
+        // Swap the OpenVATEditor-assigned shader for our custom HLSL one
+        // that actually wires the vertex deformation. The upstream graph
+        // declares all the same uniforms (so texture + bounds + frame
+        // count carry over) but leaves VertexDescription.Position
+        // disconnected.
+        static void SwapToCustomHlslShader(string folder)
+        {
+            var newShader = Shader.Find("QtMeshEditor/OpenVAT_URP");
+            if (newShader == null)
+            {
+                Debug.LogWarning("SwapToCustomHlslShader: QtMeshEditor/OpenVAT_URP shader not found in project");
+                return;
+            }
+            var matGuids = AssetDatabase.FindAssets("t:Material", new[] { folder });
+            foreach (var g in matGuids)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(g);
+                if (!path.EndsWith("_mat.mat")) continue;
+                var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+                if (mat == null) continue;
+                mat.shader = newShader;
+                EditorUtility.SetDirty(mat);
+                Debug.Log($"SwapToCustomHlslShader: swapped {path} → QtMeshEditor/OpenVAT_URP");
+            }
+            AssetDatabase.SaveAssets();
         }
 
         // Walk every prefab + every loose mesh asset OpenVATEditor
