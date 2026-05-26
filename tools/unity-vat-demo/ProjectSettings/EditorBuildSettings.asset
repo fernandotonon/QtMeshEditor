@@ -6,9 +6,6 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
-    path: Assets/Scenes/Web.unity
-    guid: fde3fae550170472ebeda43b94645c17
-  - enabled: 1
-    path: Assets/Scenes/PerfVAT.unity
-    guid: fdc06cb0cadd54f39a37dd68dc0cfac1
+    path: Assets/Scenes/OpenVATWeb.unity
+    guid: 885ea591d29c14757aaff6969647d6d1
   m_configObjects: {}
