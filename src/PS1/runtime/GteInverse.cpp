@@ -84,6 +84,19 @@ bool screenToModel(const MatrixRecord &matrix, int sx, int sy, int sz, float &mx
     if (h == 0.0)
         return false;
 
+    // GP0 polygon packets only carry 2D screen-space XY. The GTE writes Z into
+    // a separate SZ FIFO that the CPU reads and consumes *before* constructing
+    // the GP0 word, so PsxVertex::z is 0 for every capture sourced from GP0
+    // alone. Without depth, the pinhole inverse degenerates: IR[0] and IR[1]
+    // collapse to 0 and every vertex of a given matrix tag maps to the same
+    // model-space point (~RT^T·(-TR)/4096). The mesh exists with zero extent,
+    // which renders as nothing in the viewport. Refuse the inverse so callers
+    // fall back to psxScreenToWorld — the screen-space "blob" is ugly but at
+    // least visible. Real per-vertex depth needs an in-core GTE hook (#676)
+    // or a RAM scanner that recovers the SZ FIFO contents.
+    if (sz == 0)
+        return false;
+
     const double ir2 = static_cast<double>(sz);
     const double ofxPixel = static_cast<double>(matrix.ofx) / 65536.0;
     const double ofyPixel = static_cast<double>(matrix.ofy) / 65536.0;

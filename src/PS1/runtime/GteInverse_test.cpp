@@ -180,6 +180,53 @@ TEST(GteInverseTest, ModelToScreenRoundTripsArbitrary3DRotation)
     EXPECT_NEAR(mz, static_cast<float>(kModelZ), 4.0f);
 }
 
+// PS1 GP0 polygon packets only carry 2D screen-space XY. The GTE writes Z into
+// a separate SZ FIFO that the CPU drains *before* building the GP0 word, so
+// PsxVertex::z stays 0 for any capture sourced from GP0 alone. Without depth,
+// the pinhole inverse degenerates: IR[0]/IR[1] collapse to 0 and every vertex
+// of a given matrix tag maps to the same model-space point (~RT^T·(-TR)/4096).
+// vertexFromPsx must then fall back to psxScreenToWorld so the mesh is at
+// least visible — not silently emit a zero-extent collapse. This is the
+// regression that bit the first build of #675.
+TEST(GteInverseTest, ScreenToModelRefusesZeroDepth)
+{
+    MatrixRecord matrix = rotationMatrixXYZ(0.0, M_PI / 4.0, 0.0);
+    matrix.tr[0] = 1000;
+    matrix.tr[1] = -500;
+    matrix.tr[2] = 5000;
+
+    float mx = 0.0f, my = 0.0f, mz = 0.0f;
+    EXPECT_FALSE(GteInverse::screenToModel(matrix, 160, 120, 0, mx, my, mz));
+    EXPECT_FALSE(GteInverse::screenToModel(matrix, 200, 80, 0, mx, my, mz));
+    EXPECT_FALSE(GteInverse::screenToModel(matrix, -50, 50, 0, mx, my, mz));
+}
+
+// Companion to the test above: if multiple vertices share a matrix and sz=0
+// were accepted, all of them would collapse onto a single model-space point
+// (the mesh becomes invisible because every reconstructed sub-mesh has zero
+// extent). With the guard in place those calls fail and the caller is forced
+// to use psxScreenToWorld, which preserves the per-vertex screen XY spread.
+TEST(GteInverseTest, ScreenToModelWithZeroDepthDoesNotCollapseVertices)
+{
+    MatrixRecord matrix = rotationMatrixXYZ(M_PI / 12.0, M_PI / 8.0, 0.0);
+    matrix.tr[0] = 256;
+    matrix.tr[1] = 128;
+    matrix.tr[2] = 4096;
+
+    float mx0 = 0.0f, my0 = 0.0f, mz0 = 0.0f;
+    float mx1 = 0.0f, my1 = 0.0f, mz1 = 0.0f;
+    EXPECT_FALSE(GteInverse::screenToModel(matrix, 100, 100, 0, mx0, my0, mz0));
+    EXPECT_FALSE(GteInverse::screenToModel(matrix, 200, 150, 0, mx1, my1, mz1));
+    // Failure path leaves outputs untouched — confirm the caller's fallback
+    // is what produces vertex-to-vertex divergence, not the inverse itself.
+    EXPECT_EQ(mx0, 0.0f);
+    EXPECT_EQ(my0, 0.0f);
+    EXPECT_EQ(mz0, 0.0f);
+    EXPECT_EQ(mx1, 0.0f);
+    EXPECT_EQ(my1, 0.0f);
+    EXPECT_EQ(mz1, 0.0f);
+}
+
 TEST(GteInverseTest, ModelToScreenForwardChangesAllAxesForRotatedMatrix)
 {
     // Pre-#675 the forward math was diagonal-only, so a Y rotation produced the same
