@@ -16,6 +16,7 @@
 //     -executeMethod QtMeshEditor.VAT.Editor.CLIBuildScenes.BuildAll
 
 #if UNITY_EDITOR
+using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
@@ -53,16 +54,23 @@ namespace QtMeshEditor.VAT.Editor
 
             var webScene  = BuildWeb();
             var perfScene = BuildPerfVAT();
+            var perfSkeletonPath = $"{kScenesDir}/PerfSkeleton.unity";
 
             // Register in Build Settings — first scene is the boot
-            // scene the runtime opens at Play.
-            EditorBuildSettings.scenes = new[]
+            // scene the runtime opens at Play. Preserve PerfSkeleton if
+            // a separate workflow has already produced it so we don't
+            // drop it from the build settings.
+            var scenes = new List<EditorBuildSettingsScene>
             {
                 new EditorBuildSettingsScene(webScene,  enabled: true),
                 new EditorBuildSettingsScene(perfScene, enabled: true),
             };
+            if (File.Exists(perfSkeletonPath))
+                scenes.Add(new EditorBuildSettingsScene(perfSkeletonPath, enabled: true));
+            EditorBuildSettings.scenes = scenes.ToArray();
             AssetDatabase.SaveAssets();
-            Debug.Log($"CLIBuildScenes: built {kScenesDir}/Web.unity + {kScenesDir}/PerfVAT.unity");
+            Debug.Log($"CLIBuildScenes: built {kScenesDir}/Web.unity + {kScenesDir}/PerfVAT.unity" +
+                      (File.Exists(perfSkeletonPath) ? $" + {kScenesDir}/PerfSkeleton.unity" : ""));
         }
 
         static string BuildWeb()
@@ -141,6 +149,20 @@ namespace QtMeshEditor.VAT.Editor
             ps.sourceMesh      = FindBakeMesh();
             ps.positionTexture = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/VAT/Rumba/mixamo.com_pos.png");
             ps.diffuseTexture  = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/VAT/Rumba/Boss_diffuse.png");
+            // Fail fast if any required asset is missing — saving the
+            // scene with nulls would emit a "successful" build that
+            // crashes at runtime. List the specific gap so the user can
+            // fix the bake.
+            if (ps.sourceMesh == null || ps.positionTexture == null || ps.diffuseTexture == null)
+            {
+                var missing = new List<string>();
+                if (ps.sourceMesh == null)      missing.Add("sourceMesh (Assets/VAT/Rumba/source.gltf)");
+                if (ps.positionTexture == null) missing.Add("positionTexture (Assets/VAT/Rumba/mixamo.com_pos.png)");
+                if (ps.diffuseTexture == null)  missing.Add("diffuseTexture (Assets/VAT/Rumba/Boss_diffuse.png)");
+                throw new InvalidOperationException(
+                    "CLIBuildScenes: required VAT assets are missing — cannot build PerfVAT scene: " +
+                    string.Join(", ", missing));
+            }
             // The Rumba bake's sidecar values — hard-coded here because
             // the spawner constructs all instances at Start() and
             // doesn't read the JSON itself.

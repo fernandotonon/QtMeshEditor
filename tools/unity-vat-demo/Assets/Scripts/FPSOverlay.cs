@@ -17,13 +17,22 @@ namespace QtMeshEditor.VAT
         float _smoothedAvg;
         float _windowMin = float.MaxValue;
 
+        void OnValidate()
+        {
+            // Negative / zero from the Inspector would underflow the
+            // dequeue loop below; clamp on edit so the inspector value
+            // is always safe.
+            windowFrames = Mathf.Max(1, windowFrames);
+        }
+
         void Update()
         {
             float dt = Time.unscaledDeltaTime;
             float fps = dt > 0 ? 1f / dt : 0f;
 
             _samples.Enqueue(fps);
-            while (_samples.Count > windowFrames) _samples.Dequeue();
+            int frames = Mathf.Max(1, windowFrames);
+            while (_samples.Count > frames) _samples.Dequeue();
 
             float sum = 0f, mn = float.MaxValue;
             foreach (var s in _samples) { sum += s; if (s < mn) mn = s; }

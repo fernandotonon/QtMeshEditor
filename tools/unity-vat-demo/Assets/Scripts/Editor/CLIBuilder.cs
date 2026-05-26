@@ -43,11 +43,13 @@ namespace QtMeshEditor.VAT.Editor
 
             if (scenes.Count == 0)
             {
-                Debug.LogWarning(
+                Debug.LogError(
                     "CLIBuilder: no .unity scenes found under Assets/. " +
                     "Build the Web/PerfVAT/PerfSkeleton scenes per the README " +
                     "(File → New Scene → save under Assets/Scenes/) then re-run.");
-                EditorApplication.Exit(0);
+                // Headless CI must fail when no scenes were built. Exit
+                // 0 here would silently "succeed" with an empty player.
+                EditorApplication.Exit(1);
                 return;
             }
 

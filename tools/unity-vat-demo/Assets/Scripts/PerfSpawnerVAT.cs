@@ -86,12 +86,16 @@ namespace QtMeshEditor.VAT
         {
             _clock += Time.deltaTime * fps;
             if (_players == null) return;
+            // Guard against a zero/negative phaseJitter set via the
+            // inspector — `x % 0` is NaN-producing on floats and would
+            // break every spawned instance's playback simultaneously.
+            float jitter = phaseJitter > 0f ? phaseJitter : 1f;
             for (int i = 0; i < _players.Length; i++)
             {
                 if (_players[i] == null) continue;
                 // Deterministic per-instance phase — same formula as the
                 // Godot demo so the visual feel matches.
-                float phase = (i * 7919) % phaseJitter;  // 7919 is a small prime → spreads phases
+                float phase = (i * 7919) % jitter;  // 7919 is a small prime → spreads phases
                 _players[i].SetCurrentFrame(_clock + phase);
             }
         }

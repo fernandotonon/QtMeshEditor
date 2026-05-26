@@ -137,23 +137,29 @@ namespace QtMeshEditor.VAT
             }
             _material = new Material(shader) { name = "VAT_" + name };
             _material.SetTexture("_PosTex", positionTexture);
-            if (diffuseTexture != null)
-            {
+            // Guard each property write with HasProperty — different
+            // VAT shaders (BiRP `Hidden/QTM/VAT`, the URP variant, or
+            // a user's custom drop-in) may not declare every slot.
+            // Without the guard Unity logs a "shader doesn't have
+            // property X" warning per instance per frame.
+            if (diffuseTexture != null && _material.HasProperty("_MainTex"))
                 _material.SetTexture("_MainTex", diffuseTexture);
-                _material.SetFloat("_UseDiffuseMap", 1f);
-            }
-            else
-            {
-                _material.SetFloat("_UseDiffuseMap", 0f);
-            }
-            _material.SetColor("_BaseColor", baseColor);
-            _material.SetInt("_FrameCount", Mathf.Max(1, frameCount));
-            _material.SetVector("_BoundsMin", boundsMin);
-            _material.SetVector("_BoundsMax", boundsMax);
+            if (_material.HasProperty("_UseDiffuseMap"))
+                _material.SetFloat("_UseDiffuseMap", diffuseTexture != null ? 1f : 0f);
+            if (_material.HasProperty("_BaseColor"))
+                _material.SetColor("_BaseColor", baseColor);
+            if (_material.HasProperty("_FrameCount"))
+                _material.SetInt("_FrameCount", Mathf.Max(1, frameCount));
+            if (_material.HasProperty("_BoundsMin"))
+                _material.SetVector("_BoundsMin", boundsMin);
+            if (_material.HasProperty("_BoundsMax"))
+                _material.SetVector("_BoundsMax", boundsMax);
             // Tell the shader to use the texelFetch path — UV2 is integer
             // (col, row_block), not a [0,1] float UV.
-            _material.SetFloat("_SynthesizedUV2", 1f);
-            _material.SetFloat("_BypassVAT", bypassVAT ? 1f : 0f);
+            if (_material.HasProperty("_SynthesizedUV2"))
+                _material.SetFloat("_SynthesizedUV2", 1f);
+            if (_material.HasProperty("_BypassVAT"))
+                _material.SetFloat("_BypassVAT", bypassVAT ? 1f : 0f);
 
             // Replicate the material across every submesh slot. The Rumba
             // OBJ has 11 submeshes; with only one material assigned the

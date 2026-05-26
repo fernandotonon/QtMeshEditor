@@ -26,6 +26,7 @@
 //                          packed-data texture is nonsense).
 
 #if UNITY_EDITOR
+using System;
 using UnityEditor;
 using UnityEngine;
 
@@ -41,10 +42,17 @@ namespace QtMeshEditor.VAT.Editor
             "Assets/VAT/Rumba",
             "Assets/OpenVATContent",
         };
+        // Boundary-aware path matching: kBakeDir is e.g. `Assets/VAT/Rumba`
+        // (no trailing slash). A naive StartsWith(kBakeDir) would falsely
+        // match `Assets/VAT/Rumba_backup/...`, applying VAT-specific
+        // import settings to unrelated sibling folders. Require the next
+        // character after the prefix to be the path separator. Ordinal
+        // comparison so the check doesn't depend on the current culture.
         static bool InBakeDir(string path)
         {
             foreach (var d in kBakeDirs)
-                if (path.StartsWith(d)) return true;
+                if (path.StartsWith(d + "/", StringComparison.Ordinal))
+                    return true;
             return false;
         }
         const string kBakeDir = "Assets/VAT/Rumba";

@@ -74,9 +74,20 @@ namespace QtMeshEditor.VAT.Editor
                     ctx.LogImportError("glTF buffer with no URI — embedded .glb buffers aren't supported by this importer");
                     return;
                 }
-                string binPath = Path.Combine(gltfDir, uri);
-                ctx.DependsOnSourceAsset(binPath);
-                buffers.Add(File.ReadAllBytes(binPath));
+                // Canonicalize and enforce directory containment — a
+                // malicious `../../etc/passwd`-style URI in an imported
+                // glTF would otherwise let the importer read arbitrary
+                // local files. Require the resolved path to live under
+                // the glTF's own directory.
+                string baseDir     = Path.GetFullPath(gltfDir + Path.DirectorySeparatorChar);
+                string fullBinPath = Path.GetFullPath(Path.Combine(gltfDir, uri));
+                if (!fullBinPath.StartsWith(baseDir, StringComparison.Ordinal))
+                {
+                    ctx.LogImportError($"Refusing buffer URI outside glTF directory: {uri}");
+                    return;
+                }
+                ctx.DependsOnSourceAsset(fullBinPath);
+                buffers.Add(File.ReadAllBytes(fullBinPath));
             }
 
             var bufferViews = AsList(doc, "bufferViews");
@@ -312,6 +323,8 @@ namespace QtMeshEditor.VAT.Editor
                                       List<object> bufferViews,
                                       Dictionary<string, object> acc)
         {
+            ValidateAccessor(acc, "VEC3", componentType: 5126);
+            EnsureTightlyPacked(bufferViews, acc, elementSizeBytes: 12, label: "VEC3");
             int count = (int)(long)acc["count"];
             var bytes = SliceAccessor(buffers, bufferViews, acc, count * 12);
             var result = new List<Vector3>(count);
@@ -330,6 +343,8 @@ namespace QtMeshEditor.VAT.Editor
                                       List<object> bufferViews,
                                       Dictionary<string, object> acc)
         {
+            ValidateAccessor(acc, "VEC2", componentType: 5126);
+            EnsureTightlyPacked(bufferViews, acc, elementSizeBytes: 8, label: "VEC2");
             int count = (int)(long)acc["count"];
             var bytes = SliceAccessor(buffers, bufferViews, acc, count * 8);
             var result = new List<Vector2>(count);
@@ -341,6 +356,30 @@ namespace QtMeshEditor.VAT.Editor
                     BitConverter.ToSingle(bytes, o + 4)));
             }
             return result;
+        }
+
+        // Both readers assume tightly-packed float32 vectors. A valid
+        // glTF with interleaved attributes (a `byteStride` on the
+        // bufferView) or non-float component types would otherwise be
+        // decoded from the wrong byte layout and produce silent
+        // vertex/UV corruption. Fail loud instead so the user knows the
+        // bake's glTF needs to be re-exported in the supported layout.
+        static void ValidateAccessor(Dictionary<string, object> acc, string expectedType, int componentType)
+        {
+            string type = acc.ContainsKey("type") ? acc["type"] as string : null;
+            int actualComponentType = acc.ContainsKey("componentType") ? (int)(long)acc["componentType"] : -1;
+            if (type != expectedType || actualComponentType != componentType)
+                throw new Exception($"unsupported {expectedType} accessor layout: type={type}, componentType={actualComponentType} (expected float32 / componentType={componentType})");
+        }
+
+        static void EnsureTightlyPacked(List<object> bufferViews, Dictionary<string, object> acc, int elementSizeBytes, string label)
+        {
+            int bvIdx = (int)(long)acc["bufferView"];
+            var bv = (Dictionary<string, object>)bufferViews[bvIdx];
+            if (!bv.ContainsKey("byteStride")) return;   // tightly packed by default
+            int byteStride = (int)(long)bv["byteStride"];
+            if (byteStride != 0 && byteStride != elementSizeBytes)
+                throw new Exception($"{label} accessor uses interleaved layout (byteStride={byteStride}); QtmGltfImporter only supports tightly-packed accessors");
         }
 
         static int[] ReadIndices(List<byte[]> buffers,

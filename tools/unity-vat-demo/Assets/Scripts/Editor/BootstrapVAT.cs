@@ -136,9 +136,14 @@ namespace QtMeshEditor.VAT.Editor
                 if (remapIdx < 0) return false;
 
                 frames = ParseIntField(json, remapIdx, "Frames");
-                mn     = ParseVec3Field(json, remapIdx, "Min");
-                mx     = ParseVec3Field(json, remapIdx, "Max");
-                return frames > 0;
+                // Require BOTH min and max to parse — otherwise the
+                // VAT remap silently applies (0,0,0) bounds and the
+                // dancer renders at the origin. Better to fail the
+                // auto-wire and log a clear "sidecar parse failed"
+                // than to ship a broken-looking material.
+                bool okMin = TryParseVec3Field(json, remapIdx, "Min", out mn);
+                bool okMax = TryParseVec3Field(json, remapIdx, "Max", out mx);
+                return frames > 0 && okMin && okMax;
             }
             catch { return false; }
         }
@@ -152,21 +157,26 @@ namespace QtMeshEditor.VAT.Editor
             return int.TryParse(s.Substring(colon + 1, end - colon - 1).Trim(), out int v) ? v : 0;
         }
 
-        static Vector3 ParseVec3Field(string s, int start, string key)
+        static bool TryParseVec3Field(string s, int start, string key, out Vector3 value)
         {
+            value = Vector3.zero;
             int k = s.IndexOf("\"" + key + "\"", start);
-            if (k < 0) return Vector3.zero;
+            if (k < 0) return false;
             int open  = s.IndexOf('[', k);
             int close = s.IndexOf(']', open);
-            if (open < 0 || close < 0) return Vector3.zero;
+            if (open < 0 || close < 0) return false;
             string body = s.Substring(open + 1, close - open - 1);
             // The three numbers may or may not be quoted — strip both.
             body = body.Replace("\"", "");
             var parts = body.Split(',');
-            float a = parts.Length > 0 ? float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture) : 0f;
-            float b = parts.Length > 1 ? float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture) : 0f;
-            float c = parts.Length > 2 ? float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture) : 0f;
-            return new Vector3(a, b, c);
+            if (parts.Length < 3) return false;
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var style = System.Globalization.NumberStyles.Float;
+            if (!float.TryParse(parts[0].Trim(), style, inv, out float a)) return false;
+            if (!float.TryParse(parts[1].Trim(), style, inv, out float b)) return false;
+            if (!float.TryParse(parts[2].Trim(), style, inv, out float c)) return false;
+            value = new Vector3(a, b, c);
+            return true;
         }
     }
 }
