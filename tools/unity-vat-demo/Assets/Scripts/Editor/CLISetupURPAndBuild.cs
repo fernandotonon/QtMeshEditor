@@ -346,6 +346,14 @@ namespace QtMeshEditor.VAT.Editor
             // Make sure WebGL is the active target — BuildPlayer needs it.
             EditorUserBuildSettings.SwitchActiveBuildTarget(
                 BuildTargetGroup.WebGL, BuildTarget.WebGL);
+            // Disable build-compression so any plain HTTP server (e.g.
+            // python3 -m http.server) can serve the bundle without
+            // needing to set `Content-Encoding: gzip` per response.
+            // Without this Unity gzips Web.wasm/data/framework.js and
+            // the WebGL loader explodes with "Unable to parse
+            // Build/Web.framework.js.gz" because the server delivers
+            // a literal .gz blob instead of decompressing in transit.
+            PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Disabled;
             var report = BuildPipeline.BuildPlayer(opts);
             bool ok = report.summary.result == UnityEditor.Build.Reporting.BuildResult.Succeeded;
             Debug.Log($"CLISetupURPAndBuild.RunWeb: build {(ok ? "SUCCEEDED" : "FAILED")} ({report.summary.totalSize} bytes)");
