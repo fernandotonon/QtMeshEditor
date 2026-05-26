@@ -125,6 +125,51 @@ See epic #412 for phased issues (#413–#431).
 - **GTE RAM supplement** — Capture Frame still merges COP2-scanned matrices; per-draw tagging applies at GP0 dispatch time, not retroactively to RAM-only captures without draw-env context.
 - **Commercial golden scenes** — manual acceptance tracked in [#659](https://github.com/fernandotonon/QtMeshEditor/issues/659) (`src/PS1/golden_captures.md`); #658 reduces blob fallback but does not replace a full matrix stack or FIFO-accurate stream (#662).
 
+## Screen-space inverse projection (#675)
+
+The screen-space capture paths (live FIFO bridge, OT chains, chain roots, linear scan)
+all deliver post-projection GP0 vertex coordinates — to land them in editor world units
+the reconstructor inverts the PSX GTE projection in `GteInverse::screenToModel`. The
+forward / inverse math matters: when it's wrong, every screen-space vertex falls through
+to `psxScreenToWorld` (a pure pixel-to-flat-XY mapping) and the reconstructed mesh is the
+classic flat-plate "blob".
+
+- **The math:** `GteInverse::modelToScreen` implements the psx-spx RTPS formula
+  `IR[r] = (RT[r][:] · V) / 4096 + TR[r]`, `SX_pixel = H * IR[0] / IR[2] + OFX/65536`
+  (similarly for SY), `SZ = IR[2]`. `GteInverse::screenToModel` inverts it via
+  `IR[2] = sz`, `IR[i<2] = (screen_i - OF_i) * IR[2] / H`, then
+  `V = RT^T * (IR - TR)` (the `RT^T` fast path exploits the fact that PS1 RT matrices
+  are orthonormal — `RT^-1 == RT^T` for unit rotations). Pre-#675 both `modelToScreen`
+  and `screenToModel` were diagonal-only (`vx / RT[0][0]`) which silently passed the
+  identity-matrix roundtrip test in CI but rejected every real rotation matrix at the
+  `kMaxVertexRadius` filter in `MeshReconstructor::vertexFromPsx`.
+- **The orthonormal gate (`GteCapture::looksOrthonormalRotation`):** validates that an
+  `MatrixRecord`'s 3×3 RT block satisfies `|row|^2 ≈ 4096^2`, `dot(row_i, row_j) ≈ 0` and
+  `det ≈ +4096^3` (each within 5–10% slack so 12.4 quantisation of `cos`/`sin` tables
+  doesn't false-reject). Used in two places:
+  - `PsxGteRamScanner::looksLikeMatrixRecord` — drops false-positive matrix candidates.
+    Combined with the narrowed `H ∈ [64, 2048]` and tightened RT entry magnitude
+    (`|RT[r][c]| ≤ 8192`), pseudo-random 16 KB RAM blocks produce **zero** accepted
+    matrices in the regression suite (`PsxGteRamScannerTest.RejectsPseudoRandomGarbage`).
+  - Future: `GteInverse::screenToModel` callers can pre-check this if they want to skip
+    the inverse for non-orthonormal matrices and force `psxScreenToWorld` instead — for
+    now the `RT^T` solve is harmless on any input that survives the scanner gate.
+- **Diagnostics (`MeshReconstructionStats`):** `primsTotal`, `primsWithMatrixId`,
+  `gteInverseVertices`, `screenFallbackVertices`. Plumbed through
+  `PS1RipManager::meshBuilt(... primsWithMatrixId, primsTotal ...)` into
+  `PS1RipSessionWindow`'s status bar as
+  `GTE inverse N% (matrix tag X/Y)`. Sentry breadcrumb `ps1.rip.matrix.stats` carries
+  the same `gte_inverse=N%% prims_with_matrix=X/Y` for off-line analysis.
+- **Acceptance tests** (`GteInverseTest`, `GteCaptureTest`, `PsxGteRamScannerTest`):
+  90° Y rotation and arbitrary 3D Euler (`30° + 45° + 15°`) round-trip within 2–4
+  fixed-point units; identity, real rotations accepted by the validator; scaled
+  rotation, reflection (det = `-4096^3`) and pseudo-random garbage rejected.
+- **Out of scope:** matrix→primitive *association* (which RT was active when this prim
+  was drawn) remains heuristic via per-draw matrix tagging (#658). The math fix in #675
+  makes the inverse correct when association is correct; ground-truth association on
+  retail games still needs the forked-mednafen in-core GTE hook tracked in
+  [#676](https://github.com/fernandotonon/QtMeshEditor/issues/676).
+
 ## Model-space RAM scanners (#674)
 
 Screen-space GP0 prims always carry information loss because they're post-projection — the
@@ -246,20 +291,45 @@ The **stub** core is active (`coreId=stub`). It draws a test pattern and synthet
 ### Capture mesh is a triangle “blob” (normal size, wrong shape)
 
 The screen-space GP0 path (live FIFO bridge + ordering-table chains + standalone chain
-roots + linear scan) always produces a flat-XY blob on retail games because the GTE
-inverse-projection it relies on is heuristic-grade — true ground-truth recovery requires
-the forked-mednafen in-core GTE hook tracked in [#676](https://github.com/fernandotonon/QtMeshEditor/issues/676).
-Until that ships, the recommended path for "real meshes from real games" is the
-**model-space TMD/HMD RAM scanner** (#674): if the title uses Sony SDK formats the
-scanner finds the model-space vertex pools in RAM and emits them directly, bypassing the
-inverse-projection entirely.
+roots + linear scan) used to **always** produce a flat-XY blob because both the GTE
+forward and inverse transforms in `GteInverse` were diagonal-only and silently rejected
+every non-identity rotation matrix (the existing roundtrip test only exercised identity).
+**#675** replaces them with the real psx-spx math (`IR = (RT * V + TR)`, with `RT^T`
+inverse for orthonormal rotations) and adds an orthonormal validator
+(`GteCapture::looksOrthonormalRotation`) that gates both the `screenToModel` fast path
+and the `PsxGteRamScanner` candidate filter. Combined effect:
 
-- Status bar shows `tmd N` / `hmd N` and the primary source flips to `ram_model_mesh`
-  when meshes are found — that's your "this is a clean mesh" signal.
-- **TMD-using games (where this works):** Tekken 1/2/3, Ridge Racer 1/RR, Net Yaroze SDK
-  demos, Wipeout 1/2097, R-Type Delta, Klonoa, many pre-FF7 Square titles.
-- **Custom-engine games (where it does NOT work):** Crash, Spyro, FFVII field models,
-  MGS post-Yaroze. These games author their own packed mesh layouts; only #676 covers them.
+- Real rotations (90° Y, mixed XYZ Euler, etc.) now round-trip within ~2 fixed-point
+  units instead of producing radius-million garbage rejected by `kMaxVertexRadius`.
+- The matrix scanner drops false positives — single-box retail captures that previously
+  reported ~192 "matrices" should land in the single-digit-to-low-double-digit range
+  because pseudo-random RAM bytes cannot satisfy `|row|^2 ≈ 4096^2 ∧ row_i · row_j ≈ 0
+  ∧ det ≈ +4096^3` all at once.
+
+**Diagnostic reading order** (post-#675 status bar):
+1. `GTE inverse N%` — fraction of vertices that successfully ran through the inverse.
+   Healthy retail capture ≥ ~50%. If 0%, see step 2.
+2. `matrix tag X/Y` — how many primitives were associated with a captured matrix.
+   `0/Y` means matrix association is the bottleneck (no `0xE4` draw-environment packets
+   captured, or per-draw matrix tagging from #658 didn't run). `Y/Y` with low inverse %
+   means the math is rejecting the matrices — usually because they aren't orthonormal,
+   often because the title uses a custom transform stack.
+3. `tmd N / hmd N` — model-space scanner hits (#674). If ≥ 1, the primary source flips
+   to `ram_model_mesh` and you're on the clean-mesh path regardless of the screen-space
+   stats.
+
+The recommended path for "real meshes from real games" remains the **model-space
+TMD/HMD RAM scanner** (#674) for Sony SDK titles. #675's screen-space math fix
+**unblocks** the screen-space path when matrix association is correct, but the
+matrix-to-draw linkage on retail games is still heuristic — true ground-truth recovery
+requires the forked-mednafen in-core GTE hook tracked in
+[#676](https://github.com/fernandotonon/QtMeshEditor/issues/676).
+
+- **TMD-using games (clean meshes today via #674):** Tekken 1/2/3, Ridge Racer 1/RR,
+  Net Yaroze SDK demos, Wipeout 1/2097, R-Type Delta, Klonoa, many pre-FF7 Square titles.
+- **Custom-engine games (still partial recovery):** Crash, Spyro, FFVII field models,
+  MGS post-Yaroze. These games author their own packed mesh layouts and bespoke transform
+  stacks; only #676 covers them.
 - Tune via `QTMESH_PS1_TMD_SCANNER=0` to disable TMD scanning for a baseline, and
   `QTMESH_PS1_HMD_SCANNER=1` to opt into the v1 HMD candidate counter.
 

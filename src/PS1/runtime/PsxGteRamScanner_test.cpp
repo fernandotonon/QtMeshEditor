@@ -9,7 +9,9 @@
 #include <QSet>
 
 #include <atomic>
+#include <cmath>
 #include <cstring>
+#include <random>
 
 namespace {
 
@@ -35,6 +37,30 @@ MatrixRecord makeMatrix(int trX, int h = 256)
     matrix.rt.m[1][1] = 1 << 12;
     matrix.rt.m[2][2] = 1 << 12;
     matrix.tr[0] = trX;
+    matrix.h = h;
+    matrix.ofx = 160 << 16;
+    matrix.ofy = 120 << 16;
+    return matrix;
+}
+
+// #675 — 45° Y rotation in 12.4 fixed point. Real PS1 SDK matrices look like this:
+// orthonormal rows, |row|=4096, det=+4096^3.
+MatrixRecord make45DegYRotation(int h = 300)
+{
+    constexpr double kFixed = 4096.0;
+    const int32_t cos45 = static_cast<int32_t>(std::lround(std::cos(M_PI / 4.0) * kFixed));
+    const int32_t sin45 = static_cast<int32_t>(std::lround(std::sin(M_PI / 4.0) * kFixed));
+
+    MatrixRecord matrix{};
+    matrix.rt.m[0][0] = cos45;
+    matrix.rt.m[0][1] = 0;
+    matrix.rt.m[0][2] = sin45;
+    matrix.rt.m[1][0] = 0;
+    matrix.rt.m[1][1] = static_cast<int32_t>(kFixed);
+    matrix.rt.m[1][2] = 0;
+    matrix.rt.m[2][0] = -sin45;
+    matrix.rt.m[2][1] = 0;
+    matrix.rt.m[2][2] = cos45;
     matrix.h = h;
     matrix.ofx = 160 << 16;
     matrix.ofy = 120 << 16;
@@ -130,6 +156,84 @@ TEST(PsxGteRamScannerTest, GteScanRunsBeforeGpuFallbackMatrix)
     ASSERT_EQ(buffer.matrices().size(), 1u);
     ASSERT_GE(buffer.prims().size(), 1);
     EXPECT_EQ(buffer.prims()[0].matrixId, 0u);
+}
+
+// #675 regression: pre-#675 looksLikeMatrixRecord only checked per-entry magnitude,
+// so a scaled rotation (each entry doubled) would still be accepted as a valid
+// matrix.  This is the false-positive class that produced ~192 "matrices" in
+// real single-box scenes.  With the orthonormal check it must be rejected.
+TEST(PsxGteRamScannerTest, RejectsNonOrthonormalScaledRotation)
+{
+    alignas(4) uint8_t ram[2 * 1024];
+    std::memset(ram, 0, sizeof(ram));
+
+    MatrixRecord scaled = makeMatrix(0);
+    // Each row magnitude is now (2*4096)^2 = 4*4096^2 — well outside the 5% gate.
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            scaled.rt.m[r][c] *= 2;
+    writeMatrix(ram, 0x000, scaled);
+
+    std::atomic<bool> armed{true};
+    CaptureBuffer buffer;
+    RipperHooks hooks;
+    hooks.setArmedFlag(&armed);
+    hooks.setBuffer(&buffer);
+
+    hooks.onFrameBegin();
+    PsxGteRamScanner::captureFromSystemRam(ram, sizeof(ram), &hooks);
+    hooks.onFrameEnd();
+
+    EXPECT_EQ(buffer.matrices().size(), 0u);
+}
+
+// #675 regression: a real-game 45° Y rotation must still be accepted by the
+// tightened scanner.  Pre-tightening this always passed; post-tightening we
+// must not over-reject and lock out the actual use case.
+TEST(PsxGteRamScannerTest, Accepts45DegYRotation)
+{
+    alignas(4) uint8_t ram[2 * 1024];
+    std::memset(ram, 0, sizeof(ram));
+    writeMatrix(ram, 0x000, make45DegYRotation());
+
+    std::atomic<bool> armed{true};
+    CaptureBuffer buffer;
+    RipperHooks hooks;
+    hooks.setArmedFlag(&armed);
+    hooks.setBuffer(&buffer);
+
+    hooks.onFrameBegin();
+    PsxGteRamScanner::captureFromSystemRam(ram, sizeof(ram), &hooks);
+    hooks.onFrameEnd();
+
+    EXPECT_EQ(buffer.matrices().size(), 1u);
+}
+
+// #675 regression: 16 KB of pseudo-random bytes must produce zero accepted
+// matrices.  Pre-tightening this would accept dozens (false-positive class
+// that produced the "192 matrices in a single-box scene" stat).  Post-tightening
+// the orthonormal invariant rejects all of them — random bytes cannot happen
+// to form a unit-length, mutually-orthogonal 3×3 with det == +4096^3.
+TEST(PsxGteRamScannerTest, RejectsPseudoRandomGarbage)
+{
+    constexpr size_t kRamSize = 16 * 1024;
+    std::vector<uint8_t> ram(kRamSize, 0);
+    std::mt19937 rng(0x675);
+    std::uniform_int_distribution<int> byteDist(0, 255);
+    for (size_t i = 0; i < kRamSize; ++i)
+        ram[i] = static_cast<uint8_t>(byteDist(rng));
+
+    std::atomic<bool> armed{true};
+    CaptureBuffer buffer;
+    RipperHooks hooks;
+    hooks.setArmedFlag(&armed);
+    hooks.setBuffer(&buffer);
+
+    hooks.onFrameBegin();
+    PsxGteRamScanner::captureFromSystemRam(ram.data(), ram.size(), &hooks);
+    hooks.onFrameEnd();
+
+    EXPECT_EQ(buffer.matrices().size(), 0u);
 }
 
 #endif // ENABLE_PS1_RIP

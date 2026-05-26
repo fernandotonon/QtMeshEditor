@@ -376,13 +376,20 @@ void PS1RipSessionWindow::onCaptureFrame()
 void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes,
                                     int instanceCount, int vertexCount, int triangleCount,
                                     int matrixCount, uint32_t cameraMatrixId, bool hasCameraMatrix,
-                                    int gteInversePercent, bool slabLike, PsxVramMirrorMode vramMirrorMode,
-                                    Gp0CaptureStats captureStats)
+                                    int gteInversePercent, bool slabLike,
+                                    int primsWithMatrixId, int primsTotal,
+                                    PsxVramMirrorMode vramMirrorMode, Gp0CaptureStats captureStats)
 {
     QString cameraText = hasCameraMatrix
                              ? tr("camera matrix #%1").arg(cameraMatrixId)
                              : tr("camera matrix unknown");
     QString matrixStats = tr("GTE inverse %1%").arg(gteInversePercent);
+    // #675: surface the prim → matrix association ratio so users can tell at a glance
+    // whether the bottleneck is the inverse math (`tag X/X` with low %) or the matrix
+    // association (`tag 0/N`). Without this you'd have to read the Sentry breadcrumb
+    // to know which subsystem to debug.
+    if (primsTotal > 0)
+        matrixStats += tr(" (matrix tag %1/%2)").arg(primsWithMatrixId).arg(primsTotal);
     if (slabLike)
         matrixStats += tr(" — slab-like bounds (check matrix association)");
     QString vramText = psxVramMirrorModeLabel(vramMirrorMode);
