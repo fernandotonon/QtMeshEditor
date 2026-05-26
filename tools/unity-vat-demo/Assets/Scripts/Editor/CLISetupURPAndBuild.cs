@@ -19,6 +19,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEditor.Rendering;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -59,13 +60,22 @@ namespace QtMeshEditor.VAT.Editor
         // The setting is `PlayerSettings.SetGraphicsAPIs(target, apis[])`
         // + `SetUseDefaultGraphicsAPIs(target, false)` to opt out of
         // Unity's "let the platform decide" path.
+        // The macOS Standalone target on Apple Silicon is stuck on
+        // Metal — Unity 6 requires Metal in the API list for ARM64
+        // builds, and the runtime always picks Metal even when
+        // OpenGLCore is also listed (it's the only path that compiles
+        // the arm64 slice). The x64-only fallback to Rosetta+OpenGL
+        // was a viable workaround but adds Rosetta dependency.
+        //
+        // WebGL is a better target: builds run in the browser via
+        // OpenGL ES 3 / WebGL 2 — different vertex-stage path entirely,
+        // not subject to Metal's vertex texture fetch bug. The build
+        // target switch happens in BuildPlayer; this method only
+        // documents the rationale.
         static void ForceOpenGLCoreOnMac()
         {
-            PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.StandaloneOSX, false);
-            PlayerSettings.SetGraphicsAPIs(BuildTarget.StandaloneOSX,
-                new[] { UnityEngine.Rendering.GraphicsDeviceType.OpenGLCore });
-            AssetDatabase.SaveAssets();
-            Debug.Log("CLISetupURPAndBuild: set StandaloneOSX graphics API to OpenGLCore (workaround for Metal vertex-stage texture fetch bug)");
+            // No-op kept as a hook for any future Mac-specific GL
+            // tweaks. WebGL avoids the issue.
         }
 
         // URP wants Linear color space (Gamma + URP produces washed-out lighting).
@@ -299,6 +309,47 @@ namespace QtMeshEditor.VAT.Editor
             };
             AssetDatabase.SaveAssets();
             Debug.Log($"CLISetupURPAndBuild: built scene {scenePath}");
+        }
+
+        public static void RunWeb()
+        {
+            try
+            {
+                Debug.Log("CLISetupURPAndBuild.RunWeb: starting WebGL build");
+                EnsureColorSpace();
+                EnsureURPAsset();
+                RunOpenVATEditor();
+                BuildScene();
+                BuildWebPlayer();
+                Debug.Log("CLISetupURPAndBuild.RunWeb: done");
+                EditorApplication.Exit(0);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("CLISetupURPAndBuild.RunWeb failed: " + e);
+                EditorApplication.Exit(1);
+            }
+        }
+
+        static void BuildWebPlayer()
+        {
+            string outputDir = Path.Combine(Application.dataPath, "..", "Build", "Web");
+            Directory.CreateDirectory(outputDir);
+            var scenes = EditorBuildSettings.scenes.Where(s => s.enabled).Select(s => s.path).ToArray();
+            var opts = new BuildPlayerOptions
+            {
+                scenes           = scenes,
+                locationPathName = outputDir,
+                target           = BuildTarget.WebGL,
+                options          = BuildOptions.None,
+            };
+            // Make sure WebGL is the active target — BuildPlayer needs it.
+            EditorUserBuildSettings.SwitchActiveBuildTarget(
+                BuildTargetGroup.WebGL, BuildTarget.WebGL);
+            var report = BuildPipeline.BuildPlayer(opts);
+            bool ok = report.summary.result == UnityEditor.Build.Reporting.BuildResult.Succeeded;
+            Debug.Log($"CLISetupURPAndBuild.RunWeb: build {(ok ? "SUCCEEDED" : "FAILED")} ({report.summary.totalSize} bytes)");
+            if (!ok) throw new Exception("BuildPipeline.BuildPlayer (WebGL) failed");
         }
 
         static void BuildPlayer()
