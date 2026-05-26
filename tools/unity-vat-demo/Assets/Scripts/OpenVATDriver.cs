@@ -40,6 +40,21 @@ namespace QtMeshEditor.VAT
                     if (!m.HasProperty("_frame")) continue;
                     if (m.HasProperty("_UseTime")) m.SetFloat("_UseTime", 0f);
                     if (m.HasProperty("_UseTIme")) m.SetFloat("_UseTIme", 0f);  // alt spelling
+                    // Also disable the keyword in case ShaderGraph
+                    // compiled a static-branch variant rather than a
+                    // uniform-branch — the editor pipeline enabled
+                    // _USETIME_ON, which we must undo here so the
+                    // shader runs the `frame` branch instead.
+                    m.DisableKeyword("_USETIME_ON");
+                    // Also ensure exaggeration is non-zero — the
+                    // ShaderGraph default is 0 (which silently mutes
+                    // deformation), and even the editor's fixup might
+                    // get clobbered by ShaderGraph variant cooking.
+                    if (m.HasProperty("_exaggeration") && m.GetFloat("_exaggeration") < 0.01f)
+                    {
+                        m.SetFloat("_exaggeration", 1f);
+                        Debug.Log("OpenVATDriver: restored _exaggeration=1 on " + m.name);
+                    }
                     mats.Add(m);
                 }
                 r.materials = ms;
