@@ -112,10 +112,29 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 uint texW = uint(_openVAT_main_TexelSize.z);  // texelSize.z = width
                 uint texH = uint(_openVAT_main_TexelSize.w);  // texelSize.w = height
 
-                // UV2.x carries the bake's column index for THIS vertex
-                // (an integer 0..textureWidth-1). UV2.y carries the row
-                // block (almost always 0 for single-row bakes).
-                int col = int(uv2.x);
+                // UV2.x carries the bake's column index. We accept it
+                // either as a raw integer (0..texWidth-1) or as a
+                // normalized [0,1] float (× texWidth in the shader),
+                // so the same shader works for whichever path the
+                // importer takes. Detect normalized form by the
+                // observed range — if any vertex's uv2.x ≤ 1.0, treat
+                // as normalized.
+                //
+                // FP16 quantization: URP under Metal silently
+                // downcasts UV channels to half-float during the GPU
+                // vertex upload, even though VertexChannelCompressionMask
+                // says otherwise. FP16 can represent integers up to
+                // 2048 exactly; values 2048+ snap to the nearest
+                // multiple of 2, 4, 8 etc. → eggs. Reading from a
+                // normalized [0,1] form sidesteps the quantization.
+                float texWidthF = _openVAT_main_TexelSize.z;
+                float colF = uv2.x;
+                // Heuristic: if max possible uv2 (5827) was sent raw,
+                // colF could be anywhere in [0..texWidth]; if normalized,
+                // colF is in [0..1]. Multiply by texWidth iff we're
+                // clearly in the [0..1] range.
+                if (colF <= 1.0001) colF *= texWidthF;
+                int col = int(colF + 0.5);
                 int rowBlock = int(uv2.y);
                 int baseRow = rowBlock * int(safeFrames);
                 int rowPos = baseRow + curr;

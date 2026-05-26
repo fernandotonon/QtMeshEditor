@@ -132,6 +132,11 @@ namespace QtMeshEditor.VAT.Editor
                         // an explicit TEXCOORD_1.
                         for (int k = 0; k < positions.Count; k++) allUv1.Add(new Vector2(vertexBase + k, 0));
 
+                    // Mark that the uv1 values we just appended are
+                    // raw integer column indices. We'll normalise
+                    // them to [0,1] below, after we've concatenated
+                    // every primitive's UV1 and know the maximum.
+
                     // Indices.
                     int[] indices;
                     if (prim.ContainsKey("indices"))
@@ -205,6 +210,29 @@ namespace QtMeshEditor.VAT.Editor
             mesh.SetVertices(allVerts);
             mesh.SetNormals(allNormals);
             mesh.SetUVs(0, allUv0);
+
+            // Normalize UV1 column indices to [0,1] to survive GPU FP16
+            // vertex compression. URP under Metal quantizes UV channels
+            // to half-float regardless of VertexChannelCompressionMask;
+            // FP16 represents integers above ~1024 with progressively
+            // worse precision (2048+ snaps to multiples of 2, 4096+ to
+            // multiples of 4 etc.), turning the dancer's body into an
+            // egg shape. [0,1] floats survive FP16 perfectly across the
+            // full range, so we divide by texWidth at import time and
+            // multiply back in the shader.
+            float maxU = 0f;
+            for (int i = 0; i < allUv1.Count; i++) if (allUv1[i].x > maxU) maxU = allUv1[i].x;
+            // texWidth = maxU + 1 (since columns are 0..maxU). Round up
+            // to a power-of-two for cleaner shader math; we tell the
+            // shader the divisor via a Mesh tag (the shader reads it
+            // from the position texture's actual width at runtime).
+            if (maxU > 1.5f)   // only normalize when we have raw integer indices
+            {
+                float divisor = maxU + 1f;   // 5828 for the Rumba bake
+                for (int i = 0; i < allUv1.Count; i++)
+                    allUv1[i] = new Vector2(allUv1[i].x / divisor, allUv1[i].y);
+                Debug.Log($"QtmGltfImporter: normalized UV1 by {divisor:F0} to fit FP16 precision (max raw was {maxU:F0})");
+            }
             mesh.SetUVs(1, allUv1);
 
             mesh.subMeshCount = subMeshes.Count;
