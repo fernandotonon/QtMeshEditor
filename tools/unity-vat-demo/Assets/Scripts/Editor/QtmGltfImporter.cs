@@ -147,25 +147,19 @@ namespace QtMeshEditor.VAT.Editor
                         for (int i = 0; i < indices.Length; i++) indices[i] = i;
                     }
 
-                    // Glb→Unity coordinate system: glTF is right-handed +Y up,
-                    // Unity is left-handed +Y up. We negate X on positions and
-                    // normals and flip the index winding so triangle culling
-                    // still works the same way as the bake authored it.
-                    int prevCount = vertexBase;
-                    for (int i = 0; i < positions.Count; i++)
-                    {
-                        int absIdx = prevCount + i;
-                        var p = allVerts[absIdx];   p.x = -p.x; allVerts[absIdx]   = p;
-                        var n = allNormals[absIdx]; n.x = -n.x; allNormals[absIdx] = n;
-                    }
-                    // Rebase indices to the merged buffer and flip winding.
+                    // No coordinate-system fix-up — the VAT shader overrides
+                    // every vertex position via the texture sample, so what
+                    // matters is (a) UV1 reaches the GPU with the correct
+                    // column index, and (b) the texture sample lands at the
+                    // bake-authored coordinate convention. Touching the
+                    // vertex array here (X-negate, winding flip) is dead
+                    // code for VAT replay and risks Unity recomputing
+                    // tangents / bounds that obscure the actual issue.
+
+                    // Rebase indices to the merged buffer (no winding flip).
                     var subIndices = new int[indices.Length];
-                    for (int t = 0; t + 2 < indices.Length; t += 3)
-                    {
-                        subIndices[t + 0] = indices[t + 0] + vertexBase;
-                        subIndices[t + 2] = indices[t + 1] + vertexBase;   // swap 1↔2
-                        subIndices[t + 1] = indices[t + 2] + vertexBase;
-                    }
+                    for (int t = 0; t < indices.Length; t++)
+                        subIndices[t] = indices[t] + vertexBase;
                     subMeshes.Add(subIndices);
 
                     vertexBase += positions.Count;
@@ -189,6 +183,23 @@ namespace QtMeshEditor.VAT.Editor
             // Deliberately NOT calling RecalculateNormals or
             // OptimizeIndexBuffers / Optimize — both would reorder verts
             // and silently invalidate the VAT column lookup.
+
+            // Sanity-log so we can verify UV1 reached the mesh intact —
+            // VAT replay completely depends on these column indices
+            // surviving Unity's mesh upload to the GPU.
+            float u1Min = float.MaxValue, u1Max = float.MinValue;
+            float v1Min = float.MaxValue, v1Max = float.MinValue;
+            foreach (var u in allUv1)
+            {
+                if (u.x < u1Min) u1Min = u.x;
+                if (u.x > u1Max) u1Max = u.x;
+                if (u.y < v1Min) v1Min = u.y;
+                if (u.y > v1Max) v1Max = u.y;
+            }
+            Debug.Log($"QtmGltfImporter: imported {allVerts.Count} verts across " +
+                      $"{subMeshes.Count} submeshes from {ctx.assetPath}. " +
+                      $"UV1 range u=[{u1Min}..{u1Max}], v=[{v1Min}..{v1Max}] " +
+                      $"(must be integer column indices in [0..texWidth-1] for VAT replay).");
 
             ctx.AddObjectToAsset("mesh", mesh);
 
