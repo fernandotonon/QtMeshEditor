@@ -1171,16 +1171,20 @@ jobs:
                 ACTUAL_UNIT_TESTS=0
 
                 # Per-suite wall-clock cap. Most suites finish in <10s;
-                # the slowest legitimate suite (FBX import roundtrip) is
-                # ~90s. 5 min covers any reasonable test, and bounds the
-                # damage when one suite deadlocks (which has happened
-                # intermittently with Mesa/Xvfb GL context init).
+                # but the CLIPipelineCmdTest suite re-imports a small
+                # FBX (Twist Dance) inside every test case (~50 tests
+                # × ~20s/import on the CI runner ≈ 4–6 min total),
+                # which intermittently exceeded the prior 5-min cap.
+                # Bump to 10 min — still tight enough to catch a real
+                # deadlock (a hung Qt event loop never finishes anyway)
+                # but generous enough for legitimate slow suites under
+                # the GitHub-Linux runner's variable I/O.
                 #
                 # `timeout --signal=KILL` jumps straight to SIGKILL because
                 # a deadlocked Qt event loop or GL driver doesn't reliably
                 # honour SIGTERM. `--foreground` keeps it usable inside a
                 # for-loop where the shell isn't a session leader.
-                PER_SUITE_TIMEOUT=300
+                PER_SUITE_TIMEOUT=600
 
                 for suite in $SUITES; do
                     TOTAL_SUITES=$((TOTAL_SUITES + 1))
