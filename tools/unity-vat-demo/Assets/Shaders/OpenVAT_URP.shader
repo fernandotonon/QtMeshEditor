@@ -153,9 +153,32 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 float rowBlk  = IN.color.b * 255.0;
                 float colF    = colLow + colHigh * 256.0;
 
-                float3 nrm;
-                float2 packedUV2 = float2(colF, rowBlk);
-                float3 vatPos = SampleVATPosition(packedUV2, nrm);
+                // DIAGNOSTIC: sample the position texture at this
+                // vertex's column (frame 0) AT VERTEX STAGE. Pass the
+                // sampled value to the fragment as a color. If the
+                // dancer's silhouette shows smooth color variation
+                // (each submesh's range of colors matches its
+                // texture rows), texture sampling is working. If we
+                // see solid blocks of constant color, sampling is
+                // broken on the GPU vertex side.
+                uint texW = uint(_openVAT_main_TexelSize.z);
+                uint texH = uint(_openVAT_main_TexelSize.w);
+                int col = int(colF + 0.5);
+                int row = 0;   // frame 0
+                float u_norm = (col + 0.5) * _openVAT_main_TexelSize.x;
+                float v_norm = (row + 0.5) * _openVAT_main_TexelSize.y;
+                float4 sampled = SAMPLE_TEXTURE2D_LOD(
+                    _openVAT_main, sampler_openVAT_main,
+                    float2(u_norm, v_norm), 0);
+
+                // Pass the sampled value through positions so we can
+                // visualise BOTH the deformation AND the color.
+                float3 nrm = float3(0,1,0);
+                float3 vatPos = float3(
+                    lerp(_minValues.x, _maxValues.x, sampled.r),
+                    lerp(_minValues.y, _maxValues.y, sampled.g),
+                    lerp(_minValues.z, _maxValues.z, sampled.b)
+                );
                 float3 bindPos = IN.positionOS.xyz;
                 float3 finalPos = lerp(bindPos, vatPos, saturate(_exaggeration));
 
@@ -163,20 +186,21 @@ Shader "QtMeshEditor/OpenVAT_URP"
                 OUT.positionCS = vpi.positionCS;
                 OUT.positionWS = vpi.positionWS;
                 OUT.normalWS   = normalize(mul((float3x3)UNITY_MATRIX_M, nrm));
-                // DIAGNOSTIC: pass unpacked colF through uv.x to the
-                // fragment so we can verify the GPU's view of the
-                // column index.
-                OUT.uv = float2(colF, IN.uv.y);
+                // Pass sampled RGB through uv (Vector2 carries only 2
+                // channels; use g+b for diagnostic, and put R in uv2_dbg
+                // via a separate path — actually just put R/G in uv).
+                OUT.uv = float2(sampled.r, sampled.g);
                 return OUT;
             }
 
             half4 frag(Varyings IN) : SV_Target
             {
-                // Diagnostic: red→cyan gradient based on the COLOR-packed
-                // column index. Smooth gradient = Color32 lossless;
-                // chunky bands = Color also being quantized somehow.
-                float u = saturate(IN.uv.x / 5828.0);
-                return half4(u, 1.0 - u, 0.0, 1.0);
+                // Diagnostic: paint by what the vertex shader sampled.
+                // R+G channels of the position texture, projected to
+                // 2D color. If we see varied colors across the dancer,
+                // the texture sampling per-vertex worked. If solid,
+                // sampling collapsed to a single texel.
+                return half4(IN.uv.x, IN.uv.y, 0.5, 1.0);
             }
             ENDHLSL
         }
