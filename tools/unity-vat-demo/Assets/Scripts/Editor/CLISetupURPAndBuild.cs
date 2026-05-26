@@ -176,6 +176,15 @@ namespace QtMeshEditor.VAT.Editor
             ScriptableObject.DestroyImmediate(instance);
             AssetDatabase.SaveAssets();
             Debug.Log("CLISetupURPAndBuild: ran OpenVATEditor.ProcessOpenVATContent");
+
+            // OpenVATEditor assigns `Renderer.sharedMaterial` (singular)
+            // to the generated prefab, which only paints submesh 0. For
+            // a multi-submesh source like the Rumba dancer (11 material
+            // slots: Skin/Clothes/Eyes/Cigar etc.) the other 10 slots
+            // stay null and render with Unity's missing-material pink.
+            // Fix by walking the prefab and replicating the VAT
+            // material across every slot.
+            FixupMultiSubmeshPrefab(folder);
         }
 
         // Construct a simple URP scene that uses the prefab OpenVAT
@@ -244,6 +253,64 @@ namespace QtMeshEditor.VAT.Editor
             bool ok = report.summary.result == UnityEditor.Build.Reporting.BuildResult.Succeeded;
             Debug.Log($"CLISetupURPAndBuild: build {(ok ? "SUCCEEDED" : "FAILED")} ({report.summary.totalSize} bytes)");
             if (!ok) throw new Exception("BuildPipeline.BuildPlayer failed");
+        }
+
+        // Walk every prefab + every loose mesh asset OpenVATEditor
+        // produced and make sure the VAT material covers all submesh
+        // slots — not just slot 0.
+        static void FixupMultiSubmeshPrefab(string folder)
+        {
+            // Find the material OpenVAT created (named *_mat.mat).
+            var matGuids = AssetDatabase.FindAssets("t:Material", new[] { folder });
+            Material vatMat = null;
+            foreach (var g in matGuids)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(g);
+                if (path.EndsWith("_mat.mat"))
+                {
+                    vatMat = AssetDatabase.LoadAssetAtPath<Material>(path);
+                    if (vatMat != null) break;
+                }
+            }
+            if (vatMat == null)
+            {
+                Debug.LogWarning("FixupMultiSubmeshPrefab: no *_mat.mat found in " + folder);
+                return;
+            }
+
+            // Walk every prefab in the folder.
+            var prefabGuids = AssetDatabase.FindAssets("t:Prefab", new[] { folder });
+            foreach (var g in prefabGuids)
+            {
+                var prefabPath = AssetDatabase.GUIDToAssetPath(g);
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                if (prefab == null) continue;
+
+                bool changed = false;
+                foreach (var renderer in prefab.GetComponentsInChildren<Renderer>(true))
+                {
+                    Mesh m = null;
+                    var mf = renderer.GetComponent<MeshFilter>();
+                    if (mf != null) m = mf.sharedMesh;
+                    if (m == null && renderer is SkinnedMeshRenderer smr) m = smr.sharedMesh;
+                    if (m == null) continue;
+
+                    int subCount = m.subMeshCount;
+                    if (renderer.sharedMaterials.Length >= subCount &&
+                        renderer.sharedMaterials.All(x => x != null)) continue;
+
+                    var arr = new Material[subCount];
+                    for (int i = 0; i < subCount; i++) arr[i] = vatMat;
+                    renderer.sharedMaterials = arr;
+                    changed = true;
+                }
+                if (changed)
+                {
+                    PrefabUtility.SavePrefabAsset(prefab);
+                    Debug.Log($"FixupMultiSubmeshPrefab: replicated VAT material across all submesh slots on {prefabPath}");
+                }
+            }
+            AssetDatabase.SaveAssets();
         }
 
         static Type[] SafeGetTypes(Assembly a)
