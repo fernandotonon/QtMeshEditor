@@ -172,9 +172,9 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     auto *resetAct = toolbar->addAction(tr("Reset"));
     connect(resetAct, &QAction::triggered, this, &PS1RipSessionWindow::onReset);
     toolbar->addSeparator();
-    auto *armCapAct = toolbar->addAction(tr("Arm Capture"));
-    armCapAct->setCheckable(true);
-    connect(armCapAct, &QAction::toggled, this, [this](bool on) {
+    m_armCaptureAct = toolbar->addAction(tr("Arm Capture"));
+    m_armCaptureAct->setCheckable(true);
+    connect(m_armCaptureAct, &QAction::toggled, this, [this](bool on) {
         m_manager->armCapture(on);
         if (!on) {
             // Disarming clears the worker's capture buffer, so the previous
@@ -186,9 +186,11 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
         }
         refreshCaptureStatusFooter();
     });
-    connect(m_manager, &PS1RipManager::sessionStopped, this, [this, armCapAct]() {
-        QSignalBlocker blocker(armCapAct);
-        armCapAct->setChecked(false);
+    connect(m_manager, &PS1RipManager::sessionStopped, this, [this]() {
+        if (m_armCaptureAct) {
+            QSignalBlocker blocker(m_armCaptureAct);
+            m_armCaptureAct->setChecked(false);
+        }
         m_lastCaptureTriangles = 0;
         m_lastCaptureTexPages = 0;
         m_lastCaptureBytes = 0;
@@ -200,6 +202,8 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
             m_sceneCaptureSecondsSpin->setEnabled(true);
         if (m_stopCaptureAct)
             m_stopCaptureAct->setEnabled(false);
+        if (m_hotkeyCaptureScene)
+            m_hotkeyCaptureScene->setEnabled(true);
         refreshCaptureStatusFooter();
     });
     auto *captureAct = toolbar->addAction(tr("Capture Frame"));
@@ -608,6 +612,14 @@ void PS1RipSessionWindow::onCaptureFrame()
 
 void PS1RipSessionWindow::onCaptureScene()
 {
+    // Guard against the Shift+C hotkey firing while a capture is in flight
+    // (the toolbar action is disabled in that case, but the QShortcut isn't
+    // automatically gated by the action's enabled state) — CodeRabbit Minor
+    // on #677.
+    if (m_manager && m_manager->isSceneCaptureActive())
+        return;
+    if (m_captureSceneAct && !m_captureSceneAct->isEnabled())
+        return;
     const int seconds =
         m_sceneCaptureSecondsSpin ? m_sceneCaptureSecondsSpin->value() : kSceneCaptureSecondsDefault;
     SentryReporter::addBreadcrumb(
@@ -626,6 +638,15 @@ void PS1RipSessionWindow::onStopCapture()
     // observable effect.
     m_manager->stopSceneCapture();
     m_manager->armCapture(false);
+    // Backend is now disarmed, but the toolbar QAction is checkable and was
+    // only following user clicks — sync its checked state explicitly so the
+    // toolbar doesn't show a misleading "armed" indicator while the manager
+    // is actually disarmed (Codex P2 / CodeRabbit Major on #677).
+    if (m_armCaptureAct && m_armCaptureAct->isChecked()) {
+        QSignalBlocker blocker(m_armCaptureAct);
+        m_armCaptureAct->setChecked(false);
+    }
+    refreshCaptureStatusFooter();
 }
 
 void PS1RipSessionWindow::onSceneCaptureStarted(int totalSeconds)
@@ -638,6 +659,11 @@ void PS1RipSessionWindow::onSceneCaptureStarted(int totalSeconds)
         m_sceneCaptureSecondsSpin->setEnabled(false);
     if (m_stopCaptureAct)
         m_stopCaptureAct->setEnabled(true);
+    // Mirror the QAction-disabled state on the keyboard shortcut so Shift+C
+    // can't bypass the gate while a capture is already running
+    // (CodeRabbit Minor on #677).
+    if (m_hotkeyCaptureScene)
+        m_hotkeyCaptureScene->setEnabled(false);
     refreshCaptureStatusFooter();
 }
 
@@ -659,6 +685,8 @@ void PS1RipSessionWindow::onSceneCaptureFinished(bool cancelled, const QString &
         m_sceneCaptureSecondsSpin->setEnabled(true);
     if (m_stopCaptureAct)
         m_stopCaptureAct->setEnabled(false);
+    if (m_hotkeyCaptureScene)
+        m_hotkeyCaptureScene->setEnabled(true);
     if (cancelled)
         m_statusLabel->setText(tr("Scene capture cancelled"));
     refreshCaptureStatusFooter();

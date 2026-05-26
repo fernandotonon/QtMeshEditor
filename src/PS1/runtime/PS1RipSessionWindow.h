@@ -111,6 +111,13 @@ private:
     QSpinBox *m_sceneCaptureSecondsSpin = nullptr;
     QAction *m_captureSceneAct = nullptr;
     QAction *m_stopCaptureAct = nullptr;
+    /** Arm Capture toggle promoted to a member so Stop Capture and
+     *  sessionStopped can keep its checked state in sync with the backend
+     *  (Codex P2 / CodeRabbit Major on #677). Without this, clicking Stop
+     *  Capture while Arm Capture was checked left the toolbar visibly
+     *  armed even though the manager had already disarmed, so the next
+     *  Capture Frame click was rejected with "Capture is not armed". */
+    QAction *m_armCaptureAct = nullptr;
     QShortcut *m_hotkeyCaptureFrame = nullptr;
     QShortcut *m_hotkeyCaptureScene = nullptr;
     QShortcut *m_hotkeyDumpVram = nullptr;

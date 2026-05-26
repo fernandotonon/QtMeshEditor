@@ -58,7 +58,20 @@ public:
     bool stopSceneCapture();
     bool dumpVRAM();
 
-    bool isSceneCaptureActive() const { return m_sceneCaptureRemaining > 0; }
+    /** True from `captureScene()` until either cancellation or the worker
+     *  delivers the finalised snapshot. Note this is **wider** than
+     *  `m_sceneCaptureRemaining > 0` — once the countdown hits zero we're
+     *  still in a scene capture while the worker's queued
+     *  `finalizeFrameCapture` completes and `frameCaptureReady` round-trips
+     *  back to the GUI thread. Codex P1 / CodeRabbit Major on #677: gating
+     *  only on `m_sceneCaptureRemaining` here let a Stop Capture click in
+     *  the finalize window disarm the worker before it processed the queued
+     *  finalize, so the worker bailed out with "Capture is not armed" and
+     *  no `sceneCaptureFinished` was ever emitted. */
+    bool isSceneCaptureActive() const
+    {
+        return m_sceneCaptureRemaining > 0 || m_sceneCaptureAwaitingResult;
+    }
     int sceneCaptureSecondsRemaining() const { return m_sceneCaptureRemaining; }
     int sceneCaptureSecondsTotal() const { return m_sceneCaptureTotal; }
 

@@ -424,8 +424,10 @@ bool PS1RipManager::stop()
 
     // Cancel any in-flight scene capture before disarming so the UI flips out
     // of "scene capture in flight" state even when the user stops the
-    // emulator mid-countdown (#425).
-    if (m_sceneCaptureRemaining > 0)
+    // emulator mid-countdown (#425). Uses the combined `isSceneCaptureActive`
+    // predicate so a stop during the worker-finalize window (timer at 0,
+    // awaiting `frameCaptureReady`) also flushes UI state.
+    if (isSceneCaptureActive())
         finalizeSceneCapture(true, QString());
 
     m_captureArmed = false;
@@ -471,8 +473,11 @@ bool PS1RipManager::armCapture(bool armed)
     // Disarming mid-scene-capture cancels the countdown — the worker's
     // `setCaptureArmed(false)` clears the buffer, so attempting to finalise
     // afterwards would emit a no-prims warning. Cancel up-front so the UI
-    // sees a clean `sceneCaptureFinished(true, "")` (#425).
-    if (!armed && m_sceneCaptureRemaining > 0)
+    // sees a clean `sceneCaptureFinished(true, "")` (#425). Uses the wider
+    // `isSceneCaptureActive()` predicate so a disarm during the worker
+    // finalize window (m_sceneCaptureAwaitingResult=true after timer hit 0)
+    // also tears down state cleanly.
+    if (!armed && isSceneCaptureActive())
         finalizeSceneCapture(true, QString());
 
     m_captureArmed = armed;
@@ -515,7 +520,7 @@ bool PS1RipManager::captureScene(int seconds)
         reportError(tr("No active PS1 session"));
         return false;
     }
-    if (m_sceneCaptureRemaining > 0) {
+    if (isSceneCaptureActive()) {
         reportError(tr("A scene capture is already in flight"));
         return false;
     }
@@ -541,7 +546,11 @@ bool PS1RipManager::captureScene(int seconds)
 
 bool PS1RipManager::stopSceneCapture()
 {
-    if (m_sceneCaptureRemaining <= 0)
+    // Accept cancellation in the worker-finalize window too so the user can
+    // bail out of a scene capture that's stuck waiting for `frameCaptureReady`
+    // (Codex P1 on #677 — without this, a Stop click in that window returned
+    // false and left the UI's scene-capture state on screen indefinitely).
+    if (!isSceneCaptureActive())
         return false;
     SentryReporter::addBreadcrumb(
         QStringLiteral("ps1.rip.capture.scene"),
@@ -595,8 +604,11 @@ void PS1RipManager::onSceneCaptureTick()
 
 void PS1RipManager::finalizeSceneCapture(bool cancelled, const QString &captureId)
 {
-    if (m_sceneCaptureRemaining <= 0 && !m_sceneCaptureAwaitingResult && captureId.isEmpty()
-        && !cancelled)
+    // Idempotent — only fire once per scene capture even if multiple cancel
+    // paths converge (Stop button + session stopped + worker finalize all
+    // racing during teardown). If nothing was in flight and the caller isn't
+    // delivering a finalized captureId, this is a no-op.
+    if (!isSceneCaptureActive() && captureId.isEmpty())
         return;
 
     if (m_sceneCaptureTimer)

@@ -375,6 +375,46 @@ TEST_F(PS1RipManagerTest, SceneCaptureProgressTicksAndCompletes)
     manager->stop();
 }
 
+TEST_F(PS1RipManagerTest, SceneCaptureIsActiveBetweenStartAndStop)
+{
+    // Verifies `isSceneCaptureActive()` (the combined predicate driving the
+    // Stop-Capture-in-finalize-window fix, Codex P1 / CodeRabbit Major on
+    // #677) flips to true as soon as captureScene() returns and back to
+    // false once the user cancels via stopSceneCapture(). Without this
+    // predicate, stop-during-finalize left the UI stuck.
+    if (!stubPluginAvailable())
+        GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
+
+    QTemporaryFile bios;
+    QTemporaryFile iso;
+    const QString biosPath = writeStubBios(bios);
+    ASSERT_FALSE(biosPath.isEmpty());
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
+
+    ASSERT_TRUE(manager->loadBios(biosPath));
+    ASSERT_TRUE(manager->loadIso(isoPath));
+
+    QSignalSpy startedSessionSpy(manager, &PS1RipManager::sessionStarted);
+    ASSERT_TRUE(manager->start());
+    ASSERT_TRUE(startedSessionSpy.wait(3000));
+
+    EXPECT_FALSE(manager->isSceneCaptureActive());
+    ASSERT_TRUE(manager->captureScene(30));
+    EXPECT_TRUE(manager->isSceneCaptureActive());
+
+    // Cancellation in the active window must succeed.
+    EXPECT_TRUE(manager->stopSceneCapture());
+    EXPECT_FALSE(manager->isSceneCaptureActive());
+
+    // A second stop with no scene capture in flight must be a no-op (false)
+    // so callers can chain Stop Capture + Disarm without spurious double
+    // breadcrumbs / signal storms.
+    EXPECT_FALSE(manager->stopSceneCapture());
+
+    manager->stop();
+}
+
 TEST_F(PS1RipManagerTest, SceneCaptureRejectsConcurrent)
 {
     if (!stubPluginAvailable())
