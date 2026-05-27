@@ -612,11 +612,17 @@ void PS1RipSessionWindow::onCaptureFrame()
 
 void PS1RipSessionWindow::onCaptureScene()
 {
+    // `m_manager` is bound in the constructor from the PS1RipManager singleton
+    // so it should never be null in practice, but make the contract explicit
+    // so SonarCloud's symbolic-execution doesn't flag the unconditional
+    // captureScene() call below as a null-deref bug.
+    if (!m_manager)
+        return;
     // Guard against the Shift+C hotkey firing while a capture is in flight
     // (the toolbar action is disabled in that case, but the QShortcut isn't
     // automatically gated by the action's enabled state) — CodeRabbit Minor
     // on #677.
-    if (m_manager && m_manager->isSceneCaptureActive())
+    if (m_manager->isSceneCaptureActive())
         return;
     if (m_captureSceneAct && !m_captureSceneAct->isEnabled())
         return;
@@ -632,6 +638,8 @@ void PS1RipSessionWindow::onStopCapture()
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   QStringLiteral("ps1_rip_capture_stop"));
+    if (!m_manager)
+        return;
     // Cancel any in-flight scene capture AND drop the armed flag so the user
     // returns to a clean idle state. Matches the issue's "Stop — disarms"
     // line (#425). If no scene capture is running, disarming alone is the
