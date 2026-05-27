@@ -2764,11 +2764,11 @@ Rectangle {
                     color: PropertiesPanelController.textColor; font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                ComboBox {
+                ThemedComboBox {
                     id: lodBackendCombo
-                    model: ["meshopt", "ogre"]
+                    width: 90; height: 26
+                    model: ["ogre", "meshopt"]
                     currentIndex: 0
-                    width: 120
                     font.pixelSize: 11
                 }
             }
@@ -3005,6 +3005,26 @@ Rectangle {
                 }
             }
 
+            // Backend selector — same options as the LOD section.
+            // Default `ogre`; `meshopt` exposes meshoptimizer's
+            // attribute-aware simplify for callers that need UV-seam
+            // / skin-weight preservation.
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Backend:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    id: decimateBackendCombo
+                    width: 90; height: 26
+                    model: ["ogre", "meshopt"]
+                    currentIndex: 0
+                    font.pixelSize: 11
+                }
+            }
+
             // Apply / Reset row
             Row {
                 spacing: 6; width: parent.width - 16
@@ -3017,7 +3037,8 @@ Rectangle {
                     Text { anchors.centerIn: parent; text: "Apply"; color: "white"; font.pixelSize: 12 }
                     MouseArea {
                         id: applyMouse; anchors.fill: parent; hoverEnabled: true
-                        onClicked: MeshDecimatorController.applyReduction(decimateContent.reduction)
+                        onClicked: MeshDecimatorController.applyReductionWithAlgo(
+                            decimateContent.reduction, decimateBackendCombo.currentText)
                     }
                 }
 

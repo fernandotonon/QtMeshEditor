@@ -1,4 +1,5 @@
 #include "MeshDecimator.h"
+#include "MeshOptimizerLod.h"
 
 #include <Ogre.h>
 #include <OgreMesh.h>
@@ -133,6 +134,20 @@ void promoteFirstLodToBase(const Ogre::MeshPtr& mesh)
         sub->mLodFaceList.front() = original; // keep ownership balanced
     }
     mesh->removeLodLevels();
+
+    // Decimation rewrites the index buffer in place — the cached
+    // `qtme.faces.<i>` n-gon bindings (set up by quad-migration #326)
+    // still describe the BASE mesh's polygons and now reference
+    // vertex indices that no longer exist after the simplify. Both
+    // FBXExporter and EditableMesh rehydrate from those bindings in
+    // preference to `subMesh->indexData`, so leaving them in place
+    // would silently emit the original mesh and crash with
+    // out-of-bounds reads in the n-gon path. Erase them; the next
+    // edit-mode entry rebuilds them off the new triangle list.
+    auto& bindings = mesh->getUserObjectBindings();
+    for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+        bindings.eraseUserAny(std::string("qtme.faces.") + std::to_string(s));
+    }
 }
 
 
@@ -201,6 +216,12 @@ DecimationReport MeshDecimator::projectEntity(const Ogre::Entity* entity, double
 
 DecimationReport MeshDecimator::decimateEntity(Ogre::Entity* entity, double reduction)
 {
+    return decimateEntity(entity, reduction, Algorithm::Ogre);
+}
+
+DecimationReport MeshDecimator::decimateEntity(Ogre::Entity* entity, double reduction,
+                                               Algorithm algo)
+{
     DecimationReport report;
     if (!entity) return report;
     Ogre::MeshPtr mesh = entity->getMesh();
@@ -219,21 +240,44 @@ DecimationReport MeshDecimator::decimateEntity(Ogre::Entity* entity, double redu
         return report;
     }
 
-    // Snapshot then clear the existing LOD chain so the generator builds
-    // a fresh one from scratch (a stray pre-existing LOD-0 would otherwise
-    // get promoted into the base in promoteFirstLodToBase below).
+    // Snapshot then clear the existing LOD chain so whichever backend
+    // runs sees an empty `mLodFaceList` — both paths write into slot 0
+    // and we promote it into the base below.
     LodFaceListSnapshot saved = snapshotLodFaceLists(mesh);
 
-    Ogre::LodConfig lodConfig(mesh);
-    lodConfig.createGeneratedLodLevel(0.0f, // distance — meaningless when collapsing in place
-                                      static_cast<float>(report.appliedReduction),
-                                      Ogre::LodLevel::VRM_PROPORTIONAL);
+    bool ok = false;
+    if (algo == Algorithm::Meshopt) {
+        // meshoptimizer path. Returns one LodLevel; we stash its
+        // IndexData* into each submesh's slot 0 and let
+        // promoteFirstLodToBase do the swap.
+        std::vector<float> r = { static_cast<float>(report.appliedReduction) };
+        auto levels = MeshOptimizerLod::generateLods(mesh.get(), r);
+        if (!levels.empty()) {
+            const unsigned int numSubs = mesh->getNumSubMeshes();
+            for (unsigned int s = 0; s < numSubs && s < levels[0].indices.size(); ++s) {
+                Ogre::SubMesh* sub = mesh->getSubMesh(s);
+                if (!sub) continue;
+                sub->mLodFaceList.assign(1, levels[0].indices[s]);
+                levels[0].indices[s] = nullptr; // ownership transferred
+            }
+            ok = true;
+        }
+    } else {
+        Ogre::LodConfig lodConfig(mesh);
+        lodConfig.createGeneratedLodLevel(0.0f, // distance — meaningless when collapsing in place
+                                          static_cast<float>(report.appliedReduction),
+                                          Ogre::LodLevel::VRM_PROPORTIONAL);
+        try {
+            // Use the shared singleton — lazy-construct if no MeshLodController
+            // has been instantiated yet (CLI / MCP / test contexts).
+            sharedLodGenerator().generateLodLevels(lodConfig);
+            ok = true;
+        } catch (const Ogre::Exception& /*e*/) {
+            ok = false;
+        }
+    }
 
-    try {
-        // Use the shared singleton — lazy-construct if no MeshLodController
-        // has been instantiated yet (CLI / MCP / test contexts).
-        sharedLodGenerator().generateLodLevels(lodConfig);
-    } catch (const Ogre::Exception& /*e*/) {
+    if (!ok) {
         restoreLodFaceLists(mesh, saved);
         report.totalTrianglesAfter = report.totalTrianglesBefore;
         return report;

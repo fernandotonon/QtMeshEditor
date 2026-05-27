@@ -2743,13 +2743,13 @@ QJsonObject MCPServer::toolGenerateLods(const QJsonObject &args)
             reductions << v.toDouble();
     }
 
-    // `algo` selects the LOD backend. Default `meshopt` (issue #398)
-    // — meshoptimizer's `simplifyWithAttributes` preserves UV seams
-    // and skin weights, which Ogre's stock `MeshLodGenerator` does
-    // not. Pass `"ogre"` to keep the legacy path for round-trip
-    // testing or when meshopt's output isn't desired.
+    // `algo` selects the LOD backend. Default `ogre` (Ogre's stock
+    // `MeshLodGenerator`). Pass `"meshopt"` to use meshoptimizer's
+    // attribute-aware `simplifyWithAttributes` (issue #398) — it
+    // preserves UV seams + skin weights but in practice tends to
+    // produce a softer silhouette than Ogre's path.
     QString algoStr = args.contains("algo")
-        ? args["algo"].toString().toLower() : QStringLiteral("meshopt");
+        ? args["algo"].toString().toLower() : QStringLiteral("ogre");
     if (algoStr != "meshopt" && algoStr != "ogre") {
         return makeErrorResult(
             QString("Invalid algo '%1' (expected 'meshopt' or 'ogre').").arg(algoStr));
@@ -2980,17 +2980,27 @@ QJsonObject MCPServer::toolDecimateMesh(const QJsonObject &args)
             return makeErrorResult(
                 "Pass one of: reduction (0..1), target_tris, or target_verts.");
 
+        QString algoStr = args.contains("algo")
+            ? args["algo"].toString().toLower() : QStringLiteral("ogre");
+        if (algoStr != "ogre" && algoStr != "meshopt") {
+            return makeErrorResult(
+                QString("Invalid algo '%1' (expected 'ogre' or 'meshopt').").arg(algoStr));
+        }
+        const auto algoEnum = (algoStr == "meshopt")
+            ? MeshDecimator::Algorithm::Meshopt
+            : MeshDecimator::Algorithm::Ogre;
+
         const DecimationReport report = dryRun
             ? MeshDecimator::projectEntity(target, reduction)
-            : MeshDecimator::decimateEntity(target, reduction);
+            : MeshDecimator::decimateEntity(target, reduction, algoEnum);
 
         // A real (non-dry-run) decimation that didn't apply means the
         // generator failed — automation should treat that as an error, not
         // assume the mesh was modified.
         if (!dryRun && !report.applied && reduction > 0.0) {
             return makeErrorResult(
-                "Decimation failed: MeshLodGenerator could not produce a reduced mesh. "
-                "The mesh may not be suitable (e.g. zero index data).");
+                QString("Decimation failed: %1 backend could not produce a reduced mesh. "
+                        "The mesh may not be suitable (e.g. zero index data).").arg(algoStr));
         }
 
         QJsonObject result = makeSuccessResult(MeshDecimator::toText(report));
@@ -5308,11 +5318,11 @@ QJsonArray MCPServer::buildToolsList()
         props["count"] = QJsonObject{{"type", "integer"}, {"description", "Number of LOD levels to generate (1–4, default 3)."}};
         props["reductions"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "number"}}},
             {"description", "Optional array of reduction ratios per LOD level (0.0–1.0). E.g. [0.5, 0.25, 0.1]."}};
-        props["algo"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"meshopt", "ogre"}},
+        props["algo"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"ogre", "meshopt"}},
             {"description",
-             "LOD backend. 'meshopt' (default, recommended) preserves UV seams and skin "
-             "weights via meshoptimizer's attribute-aware simplify. 'ogre' uses Ogre's "
-             "stock MeshLodGenerator (legacy path, kept for compatibility)."}};
+             "LOD backend. 'ogre' (default) uses Ogre's stock MeshLodGenerator. "
+             "'meshopt' uses meshoptimizer's attribute-aware simplify — preserves UV "
+             "seams + skin weights but typically gives a softer silhouette."}};
         appendTool(
             "generate_lods",
             "Generate LOD (Level of Detail) levels for the selected mesh, reducing polygon count at distance. "
@@ -5411,13 +5421,20 @@ QJsonArray MCPServer::buildToolsList()
             {"description", "Reduce until total vertex count is approximately this value."}};
         props["dry_run"] = QJsonObject{{"type", "boolean"},
             {"description", "When true, return a projected report without mutating the mesh."}};
+        props["algo"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"ogre", "meshopt"}},
+            {"description",
+             "Decimation backend. 'ogre' (default) uses Ogre's stock MeshLodGenerator. "
+             "'meshopt' uses meshoptimizer's attribute-aware simplify — preserves UV "
+             "seams + skin weights but typically gives a softer silhouette. Same option "
+             "set as `generate_lods`."}};
         appendTool(
             "decimate_mesh",
             "Single-pass mesh decimation via edge-collapse. Reduces the base mesh in place "
             "(unlike generate_lods which builds a discrete LOD chain). Pass one of "
-            "`reduction` (0..0.95), `target_tris`, or `target_verts`. The response includes "
-            "a human-readable summary in 'content' and a structured 'decimation' object with "
-            "per-submesh and total triangle counts before / after.",
+            "`reduction` (0..0.95), `target_tris`, or `target_verts`. Backend is "
+            "selected via `algo` (default `ogre`). The response includes a human-readable "
+            "summary in 'content' and a structured 'decimation' object with per-submesh "
+            "and total triangle counts before / after.",
             props
         );
     }

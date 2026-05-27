@@ -159,6 +159,11 @@ void MeshDecimatorController::clearPreview()
 
 void MeshDecimatorController::applyReduction(double reduction)
 {
+    applyReductionWithAlgo(reduction, QStringLiteral("ogre"));
+}
+
+void MeshDecimatorController::applyReductionWithAlgo(double reduction, const QString& algo)
+{
     const QList<Ogre::Entity*> targets = decimateTargets();
     if (targets.isEmpty()) {
         emit error(QStringLiteral("No mesh selected."));
@@ -167,6 +172,11 @@ void MeshDecimatorController::applyReduction(double reduction)
     const double r = MeshDecimator::clampReduction(reduction);
     if (r <= 0.0) return;
 
+    const auto algoEnum = (algo.toLower() == QStringLiteral("meshopt"))
+        ? MeshDecimator::Algorithm::Meshopt
+        : MeshDecimator::Algorithm::Ogre;
+    const char* algoName = (algoEnum == MeshDecimator::Algorithm::Meshopt) ? "meshopt" : "ogre";
+
     // Drop any preview-only LOD swap before committing — applyEntity does
     // its own removeLodLevels() too, but resetting the bias first keeps the
     // viewport honest if the apply fails halfway.
@@ -174,11 +184,12 @@ void MeshDecimatorController::applyReduction(double reduction)
         entity->setMeshLodBias(1.0f, 0,
                                std::numeric_limits<unsigned short>::max());
 
-    SentryReporter::addBreadcrumb("ui.action",
-        QString("Decimate (in-place, r=%1)").arg(r, 0, 'f', 2));
+    SentryReporter::addBreadcrumb(
+        algoEnum == MeshDecimator::Algorithm::Meshopt ? "ai.assist.decimate" : "ui.action",
+        QString("Decimate (in-place, r=%1, algo=%2)").arg(r, 0, 'f', 2).arg(algoName));
 
     Ogre::Entity* entity = targets.front();
-    const DecimationReport report = MeshDecimator::decimateEntity(entity, r);
+    const DecimationReport report = MeshDecimator::decimateEntity(entity, r, algoEnum);
     if (!report.applied) {
         emit error(QStringLiteral("Decimation failed. The mesh may not be "
                                   "suitable for in-place reduction."));

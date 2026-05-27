@@ -57,6 +57,10 @@ public:
     // Commit the current preview (if any) to the base mesh. Subsequent
     // operations see the reduced mesh as the new baseline. Emits applied().
     Q_INVOKABLE void applyReduction(double reduction);
+    // Backend-selecting variant. `algo` is "ogre" (default) or
+    // "meshopt"; anything else falls back to "ogre". Mirrors the
+    // LOD section's `MeshLodController::generateLodsWithAlgo`.
+    Q_INVOKABLE void applyReductionWithAlgo(double reduction, const QString& algo);
 
 signals:
     void selectionChanged();

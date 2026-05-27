@@ -133,16 +133,18 @@ void MeshLodController::previewLod(int lodIndex)
 
 void MeshLodController::generateLods(int count, QVariantList reductions)
 {
-    // QML-facing default: meshoptimizer backend (issue #398).
-    generateLods(count, reductions, Algorithm::Meshopt);
+    // QML-facing default: Ogre's built-in MeshLodGenerator. The
+    // meshoptimizer backend (issue #398) is reachable via the
+    // 3-arg overload / `generateLodsWithAlgo` / `--algo meshopt`.
+    generateLods(count, reductions, Algorithm::Ogre);
 }
 
 void MeshLodController::generateLodsWithAlgo(int count, QVariantList reductions,
                                              const QString& algo)
 {
-    const auto a = (algo.toLower() == QStringLiteral("ogre"))
-        ? Algorithm::Ogre
-        : Algorithm::Meshopt;
+    const auto a = (algo.toLower() == QStringLiteral("meshopt"))
+        ? Algorithm::Meshopt
+        : Algorithm::Ogre;
     generateLods(count, reductions, a);
 }
 

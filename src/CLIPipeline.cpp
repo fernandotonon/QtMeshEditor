@@ -2317,7 +2317,7 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
     bool removeMode = false;
     bool infoMode   = false;
     bool jsonOutput = false;
-    QString algo = "meshopt";   // default: meshoptimizer (issue #398)
+    QString algo = "ogre";      // default backend. Meshopt (#398) is opt-in via --algo meshopt.
     QVariantList reductions;
 
     for (int i = 1; i < argc; ++i) {
@@ -4573,6 +4573,7 @@ struct DecimateCmdArgs {
     double reduction = -1.0;  // -1 = unset (only one of reduction / targetTris / targetVerts wins)
     int targetTris = -1;
     int targetVerts = -1;
+    QString algo = "ogre";    // "ogre" (default) or "meshopt". Same options as `qtmesh lod --algo`.
 };
 
 // Parse a numeric --target-* flag strictly: any non-numeric input (e.g. a
@@ -4625,6 +4626,15 @@ int applyDecimateArg(const QString& arg, int argc, char* argv[], int& i,
         return parseStrictInt("--target-verts",
                               QString::fromLocal8Bit(argv[i++]),
                               out.targetVerts) ? 1 : 0;
+    }
+    if (arg == "--algo" && i < argc) {
+        const QString val = QString::fromLocal8Bit(argv[i++]).toLower();
+        if (val != "ogre" && val != "meshopt") {
+            err() << "Error: --algo must be 'ogre' or 'meshopt' (got '" << val << "')." << Qt::endl;
+            return 0;
+        }
+        out.algo = val;
+        return 1;
     }
     if (!arg.startsWith("-") && out.filePath.isEmpty()) out.filePath = arg;
     return 1;
@@ -4688,7 +4698,8 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
         if (cmdArgs.filePath.isEmpty()) {
             err() << "Error: No input file specified." << Qt::endl;
             err() << "Usage: qtmesh decimate <file> -o <output> "
-                     "(--reduction <r> | --target-tris N | --target-verts N) [--json]"
+                     "(--reduction <r> | --target-tris N | --target-verts N) "
+                     "[--algo ogre|meshopt] [--json]"
                   << Qt::endl;
         }
         return 2;
@@ -4761,9 +4772,12 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
         // Still produce a no-op output file so callers can rely on the path existing.
     }
 
-    const DecimationReport report = MeshDecimator::decimateEntity(entity, reduction);
+    const auto algoEnum = (cmdArgs.algo == "meshopt")
+        ? MeshDecimator::Algorithm::Meshopt
+        : MeshDecimator::Algorithm::Ogre;
+    const DecimationReport report = MeshDecimator::decimateEntity(entity, reduction, algoEnum);
     if (!report.applied && reduction > 0.0) {
-        err() << "Error: Decimation failed (MeshLodGenerator). The mesh may not be "
+        err() << "Error: Decimation failed (" << cmdArgs.algo << "). The mesh may not be "
                  "suitable for in-place reduction (e.g. zero index data)." << Qt::endl;
         return 1;
     }
