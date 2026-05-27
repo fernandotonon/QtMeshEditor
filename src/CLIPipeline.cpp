@@ -8,6 +8,7 @@
 #include "SentryReporter.h"
 #include "ScanConfig.h"
 #include "ScanEngine.h"
+#include "PlatformProfile.h"
 #include "FBX/FBXExporter.h"
 #include "MaterialPresetLibrary.h"
 #include "TextureChannelPacker.h"
@@ -577,6 +578,8 @@ void CLIPipeline::printUsage()
         "  material --list-presets         List the built-in preset names\n"
         "\n"
         "Scan options:\n"
+        "  --profile <id>            Built-in platform profile (e.g. example-minimal) or path to .json\n"
+        "  --list-profiles           List built-in platform profile ids and exit\n"
         "  --config <file>           Config file (default: qtmesh.yml, qtmesh.json)\n"
         "  --json                    Output as JSON\n"
         "  --report <file>           Write JSON report to file\n"
@@ -630,7 +633,9 @@ void CLIPipeline::printUsage()
         "  Cloud rules: if no --config and QTMESH_TOKEN or --token is set, remote rules are\n"
         "  fetched first (local qtmesh.yml is ignored). If the API fails, built-in defaults apply.\n"
         "  Without a token, qtmesh.yml|yaml|json in the cwd is used if present.\n"
-        "  --config always wins. Scan JSON uploads when a token is set (unless --no-upload).\n"
+        "  Config precedence: defaults → platform profile → project config → CLI flags.\n"
+        "  Set profile in qtmesh.yml with `profile: <id>` or pass --profile (CLI wins).\n"
+        "  --config always wins over cloud rules. Scan JSON uploads when a token is set (unless --no-upload).\n"
         "  Override API base with QTMESH_API_BASE.\n"
         "\n"
         "Fix flags:\n"
@@ -3724,6 +3729,8 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     // Parse: scan [path] [options]
     QString scanRoot;
     QString configPath;
+    QString profileIdArg;
+    bool listProfiles = false;
     QString tokenArg;
     bool strictUpload = false;
     bool noUpload = false;
@@ -3824,8 +3831,12 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (arg == "--dry-run") { dryRun = true; continue; }
         if (arg == "--strict-upload") { strictUpload = true; continue; }
         if (arg == "--no-upload") { noUpload = true; continue; }
+        if (arg == "--list-profiles") { listProfiles = true; continue; }
         QString value;
-        ParseValueResult parseResult = parseValueArg(arg, "--config", i, value);
+        ParseValueResult parseResult = parseValueArg(arg, "--profile", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { profileIdArg = value; continue; }
+        parseResult = parseValueArg(arg, "--config", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
         if (parseResult == ParseValueResult::Matched) { configPath = value; continue; }
         parseResult = parseValueArg(arg, "--report", i, value);
@@ -3975,23 +3986,40 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (!arg.startsWith("-") && scanRoot.isEmpty()) { scanRoot = arg; continue; }
     }
 
+    if (listProfiles) {
+        const QStringList ids = PlatformProfileLoader::listBuiltinIds();
+        if (ids.isEmpty()) {
+            err() << "No built-in platform profiles found (searched "
+                 << PlatformProfileLoader::builtinProfilesDirectory() << ")." << Qt::endl;
+            return 2;
+        }
+        cliWrite(QStringLiteral("Built-in platform profiles:\n"));
+        for (const QString& id : ids)
+            cliWrite(QStringLiteral("  %1\n").arg(id));
+        return 0;
+    }
+
     // Load config (precedence):
-    // 1) --config path (never fetch remote rules)
-    // 2) Else if ingest token set → GET /v1/ingest/rules (skips local qtmesh.yml|yaml|json)
-    // 3) Else local qtmesh.yml | yaml | json in cwd
-    // 4) Else built-in defaults
-    ScanConfig config;
+    // 1) ScanConfig::defaults()
+    // 2) Platform profile (--profile or profile: in project file)
+    // 3) Project config (--config, cloud rules, or local qtmesh.yml|yaml|json)
+    // 4) CLI flags (below)
+    ScanConfig config = ScanConfig::defaults();
+    QVariantMap projectRoot;
+
     if (!configPath.isEmpty()) {
         if (!QFileInfo::exists(configPath)) {
             err() << "Error: Config file not found: " << configPath << Qt::endl;
             return 2;
         }
-        config = ScanConfig::loadFromFile(configPath);
+        projectRoot = ScanConfig::loadProjectMapFromFile(configPath);
         if (!resolveIngestToken(tokenArg).isEmpty()) {
             err() << "Note: Using --config file; remote cloud rules were not fetched."
                  << " Scan JSON is still uploaded when an ingest token is set (unless --no-upload)."
                  << Qt::endl;
         }
+        if (!projectRoot.isEmpty())
+            err() << "Note: Using config file " << configPath << "." << Qt::endl;
     } else {
         const QString ingestForRules = resolveIngestToken(tokenArg);
         if (!ingestForRules.isEmpty()) {
@@ -3999,14 +4027,13 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
                 QStringLiteral("QtMesh Cloud fetchRules: requested"));
             const auto rules = QtMeshCloudClient::fetchRules(ingestForRules);
             if (rules.ok) {
-                config = ScanConfig::fromJson(rules.config);
+                projectRoot = rules.config.toVariantMap();
                 err() << "Note: Using QtMesh Cloud rules (source: " << rules.source << ")." << Qt::endl;
                 SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
                     QStringLiteral("QtMesh Cloud fetchRules: ok source=%1").arg(rules.source));
             } else {
                 err() << "Warning: Could not load QtMesh Cloud rules (" << rules.errorString
                      << "). Using built-in defaults." << Qt::endl;
-                config = ScanConfig::defaults();
                 SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
                     QStringLiteral("QtMesh Cloud fetchRules: failed %1").arg(rules.errorString),
                     QStringLiteral("warning"));
@@ -4021,13 +4048,33 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
                 localAutoPath = QStringLiteral("qtmesh.json");
 
             if (!localAutoPath.isEmpty()) {
-                config = ScanConfig::loadFromFile(localAutoPath);
-                err() << "Note: Using local " << localAutoPath << "." << Qt::endl;
-            } else {
-                config = ScanConfig::defaults();
+                projectRoot = ScanConfig::loadProjectMapFromFile(localAutoPath);
+                if (!projectRoot.isEmpty())
+                    err() << "Note: Using local " << localAutoPath << "." << Qt::endl;
             }
         }
     }
+
+    QString profileId = profileIdArg.trimmed();
+    if (profileId.isEmpty())
+        profileId = projectRoot.value(QStringLiteral("profile")).toString().trimmed();
+
+    if (!profileId.isEmpty()) {
+        const PlatformProfileLoadResult loaded = PlatformProfileLoader::load(profileId);
+        if (!loaded.ok) {
+            err() << "Error: " << loaded.error << Qt::endl;
+            return 2;
+        }
+        for (const QString& w : loaded.warnings)
+            err() << "Warning: " << w << Qt::endl;
+        applyPlatformProfile(config, loaded.profile);
+        err() << "Note: Using platform profile '" << loaded.profile.id << "'." << Qt::endl;
+        SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
+            QStringLiteral("platform profile=%1").arg(loaded.profile.id));
+    }
+
+    if (!projectRoot.isEmpty())
+        ScanConfig::applyProjectConfig(config, projectRoot);
 
     // CLI overrides
     if (fix)     config.fixEnabled = true;

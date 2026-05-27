@@ -1,0 +1,13 @@
+{
+  "id": "example-minimal",
+  "displayName": "Example Minimal",
+  "description": "Small validation profile used by unit tests.",
+  "extends": "example-base",
+  "rules": {
+    "max_vertex_count": 10000,
+    "max_material_count": 8
+  },
+  "metadata": {
+    "category": "example"
+  }
+}

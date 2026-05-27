@@ -389,34 +389,39 @@ ScanConfig ScanConfig::defaults()
     return ScanConfig();
 }
 
-ScanConfig ScanConfig::loadFromFile(const QString& path)
+QVariantMap ScanConfig::loadProjectMapFromFile(const QString& path)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream(stderr) << "Warning: Cannot open config file: " << path << Qt::endl;
-        return defaults();
+        return {};
     }
 
-    QString content = QString::fromUtf8(file.readAll());
+    const QString content = QString::fromUtf8(file.readAll());
 
-    if (path.endsWith(".json", Qt::CaseInsensitive)) {
+    if (path.endsWith(QStringLiteral(".json"), Qt::CaseInsensitive)) {
         QJsonDocument doc = QJsonDocument::fromJson(content.toUtf8());
-        if (doc.isNull()) {
+        if (doc.isNull() || !doc.isObject()) {
             QTextStream(stderr) << "Warning: Invalid JSON in config file: " << path << Qt::endl;
-            return defaults();
+            return {};
         }
-        return fromJson(doc.object());
+        return doc.object().toVariantMap();
     }
 
-    QVariantMap map = parseSimpleYaml(content);
+    return parseSimpleYaml(content);
+}
+
+ScanConfig ScanConfig::loadFromFile(const QString& path)
+{
+    const QVariantMap map = loadProjectMapFromFile(path);
+    if (map.isEmpty())
+        return defaults();
     return fromVariantMap(map);
 }
 
-ScanConfig ScanConfig::fromVariantMap(const QVariantMap& root)
+void ScanConfig::applyProjectConfig(ScanConfig& config, const QVariantMap& root)
 {
-    ScanConfig config;
-
-    config.version = root.value("version", 1).toInt();
+    config.version = root.value(QStringLiteral("version"), config.version).toInt();
 
     // scan section
     QVariantMap scan = root.value("scan").toMap();
@@ -520,6 +525,12 @@ ScanConfig ScanConfig::fromVariantMap(const QVariantMap& root)
         config.failOn       = report.value("fail_on",      config.failOn).toString();
     }
 
+}
+
+ScanConfig ScanConfig::fromVariantMap(const QVariantMap& root)
+{
+    ScanConfig config = defaults();
+    applyProjectConfig(config, root);
     return config;
 }
 
