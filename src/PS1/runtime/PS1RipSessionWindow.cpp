@@ -1,11 +1,16 @@
 #include "PS1RipSessionWindow.h"
 #include "EmuViewport.h"
+#include "Manager.h"
+#include "PS1CapturedAssets.h"
+#include "PS1ExtractedAssetBrowser.h"
+#include "PS1GeometryInspectorPanel.h"
 #include "PS1RipGamepadBridge.h"
 #include "PS1RipInputSettingsDialog.h"
 #include "PS1RipLegalityDialog.h"
 #include "PS1RipManager.h"
 #include "Ps1CoordinateNormalizer.h"
 #include "PsxJoypadBindings.h"
+#include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "PsxJoypadState.h"
 #include "PsxVramMirrorMode.h"
@@ -38,6 +43,8 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <Ogre.h>
 
 namespace {
 constexpr auto kSettingsGroup = "ps1Rip";
@@ -80,6 +87,7 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     : QMainWindow(parent)
     , m_manager(PS1RipManager::getSingleton())
 {
+    s_lastInstance = this;
     PsxJoypadBindings::load();
 
     setWindowTitle(tr("PS1 Runtime Ripper"));
@@ -268,6 +276,7 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     addDockWidget(Qt::BottomDockWidgetArea, vramDock);
 
     createNormalizerDock();
+    createInspectorDocks();
 
     m_statusLabel = new QLabel(this);
     statusBar()->addPermanentWidget(m_statusLabel, /*stretch=*/1);
@@ -354,8 +363,19 @@ PS1RipSessionWindow::~PS1RipSessionWindow()
 {
     if (m_manager && m_manager->isSessionActive())
         m_manager->stop();
+    if (s_lastInstance == this)
+        s_lastInstance = nullptr;
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.viewport.close"),
                                 QStringLiteral("PS1 rip session window closed"));
+}
+
+PS1RipSessionWindow *PS1RipSessionWindow::s_lastInstance = nullptr;
+
+bool PS1RipSessionWindow::promoteUniqueMeshById(int meshIndex, const QString &assetId)
+{
+    if (!s_lastInstance)
+        return false;
+    return s_lastInstance->promoteUniqueMesh(meshIndex, assetId);
 }
 
 void PS1RipSessionWindow::createNormalizerDock()
@@ -469,6 +489,190 @@ void PS1RipSessionWindow::pushNormalizerSettings()
     Ps1CoordinateNormalizer::save(qs, QString::fromLatin1(kNormalizePrefix), s);
     if (m_manager)
         m_manager->setNormalizerSettings(s);
+}
+
+void PS1RipSessionWindow::createInspectorDocks()
+{
+    PS1CapturedAssets *store = PS1CapturedAssets::getSingleton();
+
+    m_inspector.inspectorPanel = new PS1GeometryInspectorPanel(store, this);
+    m_inspector.inspectorDock = new QDockWidget(tr("Geometry Inspector"), this);
+    m_inspector.inspectorDock->setWidget(m_inspector.inspectorPanel);
+    m_inspector.inspectorDock->setMinimumHeight(220);
+    addDockWidget(Qt::BottomDockWidgetArea, m_inspector.inspectorDock);
+
+    m_inspector.browser = new PS1ExtractedAssetBrowser(store, this);
+    m_inspector.browserDock = new QDockWidget(tr("Extracted Assets"), this);
+    m_inspector.browserDock->setWidget(m_inspector.browser);
+    m_inspector.browserDock->setMinimumWidth(260);
+    addDockWidget(Qt::RightDockWidgetArea, m_inspector.browserDock);
+
+    connect(m_inspector.inspectorPanel, &PS1GeometryInspectorPanel::highlightRow, this,
+            &PS1RipSessionWindow::highlightInspectorRow);
+    connect(m_inspector.inspectorPanel, &PS1GeometryInspectorPanel::hideSubmeshRequested, this,
+            [this](int row) { setInspectorRowVisible(row, /*visible=*/false); });
+    connect(m_inspector.inspectorPanel, &PS1GeometryInspectorPanel::showSubmeshRequested, this,
+            [this](int row) { setInspectorRowVisible(row, /*visible=*/true); });
+    connect(m_inspector.inspectorPanel, &PS1GeometryInspectorPanel::promoteRowRequested, this,
+            &PS1RipSessionWindow::promoteInspectorRow);
+    connect(m_inspector.inspectorPanel, &PS1GeometryInspectorPanel::discardRowRequested, this,
+            [this](int row) {
+                if (PS1CapturedAssets *s = PS1CapturedAssets::getSingletonPtr()) {
+                    const bool wasDiscarded = s->captureSet().rows.at(row - 1).discarded;
+                    discardInspectorRow(row, !wasDiscarded);
+                }
+            });
+    connect(m_inspector.browser, &PS1ExtractedAssetBrowser::instantiateMesh, this,
+            [this](int meshIndex, const QString &assetId) {
+                promoteUniqueMesh(meshIndex, assetId);
+            });
+}
+
+void PS1RipSessionWindow::highlightInspectorRow(int rowIndex)
+{
+    if (rowIndex < 1)
+        return;
+    PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr();
+    if (!store)
+        return;
+    const CapturedAssetSet &set = store->captureSet();
+    if (rowIndex > set.rows.size())
+        return;
+    const CapturedAssetRow &row = set.rows.at(rowIndex - 1);
+    if (row.instanceIndex < 0)
+        return;
+    const QString nodeName = set.instanceNodeNames.value(row.instanceIndex);
+    if (nodeName.isEmpty())
+        return;
+    Manager *mgr = Manager::getSingletonPtr();
+    SelectionSet *sel = SelectionSet::getSingleton();
+    if (!mgr || !sel)
+        return;
+    Ogre::SceneNode *node = mgr->getSceneNode(nodeName);
+    if (!node)
+        return;
+    sel->selectOne(node);
+}
+
+void PS1RipSessionWindow::setInspectorRowVisible(int rowIndex, bool visible)
+{
+    PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr();
+    if (!store)
+        return;
+    const CapturedAssetSet &set = store->captureSet();
+    if (rowIndex < 1 || rowIndex > set.rows.size())
+        return;
+    const CapturedAssetRow &row = set.rows.at(rowIndex - 1);
+    if (row.instanceIndex < 0)
+        return;
+    const QString nodeName = set.instanceNodeNames.value(row.instanceIndex);
+    if (nodeName.isEmpty())
+        return;
+    if (Manager *mgr = Manager::getSingletonPtr()) {
+        if (Ogre::SceneNode *node = mgr->getSceneNode(nodeName))
+            node->setVisible(visible, /*cascade=*/true);
+    }
+    store->setRowHidden(rowIndex, !visible);
+}
+
+void PS1RipSessionWindow::discardInspectorRow(int rowIndex, bool discarded)
+{
+    setInspectorRowVisible(rowIndex, !discarded);
+    if (PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr())
+        store->setRowDiscarded(rowIndex, discarded);
+}
+
+void PS1RipSessionWindow::promoteInspectorRow(int rowIndex)
+{
+    PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr();
+    if (!store)
+        return;
+    const CapturedAssetSet &set = store->captureSet();
+    if (rowIndex < 1 || rowIndex > set.rows.size())
+        return;
+    const CapturedAssetRow &row = set.rows.at(rowIndex - 1);
+    if (row.uniqueMeshIndex < 0)
+        return;
+    const QString meshAssetId =
+        set.uniqueMeshes.at(row.uniqueMeshIndex).meshName + QLatin1Char('_') + set.captureId;
+    promoteUniqueMesh(row.uniqueMeshIndex, meshAssetId);
+}
+
+bool PS1RipSessionWindow::promoteUniqueMesh(int meshIndex, const QString &assetId)
+{
+    PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr();
+    if (!store || meshIndex < 0)
+        return false;
+    const CapturedAssetSet &set = store->captureSet();
+    if (meshIndex >= set.uniqueMeshes.size())
+        return false;
+    Manager *mgr = Manager::getSingletonPtr();
+    if (!mgr || !mgr->getSceneMgr())
+        return false;
+
+    // Find an existing capture node for this mesh so we can copy its
+    // current world transform — that way a promoted entity drops where the
+    // user already sees the live preview, even after normalizer tweaks.
+    Ogre::Vector3 worldPos(0, 0, 0);
+    Ogre::Vector3 worldScale(1, 1, 1);
+    Ogre::Quaternion worldOri = Ogre::Quaternion::IDENTITY;
+    QString sourceNodeName;
+    for (auto it = set.instanceNodeNames.constBegin(); it != set.instanceNodeNames.constEnd(); ++it) {
+        const int instIdx = it.key();
+        if (instIdx < 0 || instIdx >= set.instances.size())
+            continue;
+        if (set.instances.at(instIdx).uniqueMeshIndex != meshIndex)
+            continue;
+        if (Ogre::SceneNode *src = mgr->getSceneNode(it.value())) {
+            worldPos = src->_getDerivedPosition();
+            worldScale = src->_getDerivedScale();
+            worldOri = src->_getDerivedOrientation();
+            sourceNodeName = it.value();
+            break;
+        }
+    }
+
+    const std::string ogreMeshName = assetId.toStdString();
+    if (!Ogre::MeshManager::getSingleton().resourceExists(ogreMeshName)) {
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("ps1.rip.inspector.promote"),
+            QStringLiteral("error mesh=%1 reason=missing-ogre-mesh").arg(assetId),
+            QStringLiteral("error"));
+        return false;
+    }
+    Ogre::MeshPtr srcMesh = Ogre::MeshManager::getSingleton().getByName(ogreMeshName);
+    if (!srcMesh)
+        return false;
+
+    // Clone the mesh under a permanent name so destroying the live capture
+    // (next Capture Frame / Stop) doesn't yank the underlying buffers.
+    const int promoId = ++m_inspector.promotionCounter;
+    const QString cloneName =
+        QStringLiteral("PS1Imported_%1_mesh%2_p%3").arg(set.captureId).arg(meshIndex).arg(promoId);
+    if (Ogre::MeshManager::getSingleton().resourceExists(cloneName.toStdString()))
+        Ogre::MeshManager::getSingleton().remove(cloneName.toStdString());
+    Ogre::MeshPtr clone = srcMesh->clone(cloneName.toStdString());
+
+    const QString nodeName =
+        QStringLiteral("PS1Imported_%1_mesh%2_n%3").arg(set.captureId).arg(meshIndex).arg(promoId);
+    Ogre::SceneNode *node = mgr->addSceneNode(nodeName);
+    if (!node)
+        return false;
+    node->setPosition(worldPos);
+    node->setScale(worldScale);
+    node->setOrientation(worldOri);
+    Ogre::Entity *entity = mgr->createEntity(node, clone);
+    if (!entity) {
+        mgr->destroySceneNode(node);
+        return false;
+    }
+
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.inspector.promote"),
+        QStringLiteral("ok mesh=%1 source=%2 node=%3")
+            .arg(meshIndex)
+            .arg(sourceNodeName.isEmpty() ? QStringLiteral("(none)") : sourceNodeName, nodeName));
+    return true;
 }
 
 void PS1RipSessionWindow::showSession(QWidget *parent)

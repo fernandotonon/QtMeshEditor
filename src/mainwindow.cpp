@@ -2915,6 +2915,29 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event)
 
 void MainWindow::dropEvent(QDropEvent *event)
 {
+    // PS1 Extracted Asset Browser → editor viewport drag-and-drop (#426).
+    // The asset browser publishes its tile's mesh-index list under a custom
+    // MIME type and the matching meshIndex list under a sibling type so the
+    // promote path doesn't have to re-parse the assetId string. We dispatch
+    // before the URL/file path branch so a drag that also carries a text
+    // representation doesn't get mis-routed as a file import.
+    static constexpr auto kPs1RipMeshMime = "application/x-ps1rip-mesh";
+    static constexpr auto kPs1RipMeshIndexMime = "application/x-ps1rip-meshindex";
+    if (event->mimeData()->hasFormat(QString::fromLatin1(kPs1RipMeshMime))) {
+        const QStringList assetIds =
+            QString::fromUtf8(event->mimeData()->data(QString::fromLatin1(kPs1RipMeshMime)))
+                .split(QLatin1Char(';'), Qt::SkipEmptyParts);
+        const QStringList meshIndexes =
+            QString::fromUtf8(event->mimeData()->data(QString::fromLatin1(kPs1RipMeshIndexMime)))
+                .split(QLatin1Char(';'), Qt::SkipEmptyParts);
+        for (int i = 0; i < assetIds.size(); ++i) {
+            const int meshIndex = i < meshIndexes.size() ? meshIndexes.at(i).toInt() : -1;
+            PS1RipSessionWindow::promoteUniqueMeshById(meshIndex, assetIds.at(i));
+        }
+        event->acceptProposedAction();
+        return;
+    }
+
     QStringList validFiles;
     for (const QUrl& url : event->mimeData()->urls())
     {

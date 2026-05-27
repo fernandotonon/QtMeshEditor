@@ -413,6 +413,129 @@ toggle + scale + perspective-correct UVs (#424), status footer numbers,
 Sentry breadcrumbs — are all met in the existing widget shell. A pure-QML
 port can ship later without changing the manager API.
 
+## Geometry inspector + extracted-asset browser (#426)
+
+Built on top of the captured data flow finalised in #424/#425. The goal is
+to let the user see *what was captured*, drill from a draw call down to a
+sub-mesh in the live viewport, and pick which captured assets become
+permanent (i.e. survive a Stop or the next Capture).
+
+### Captured asset store
+
+`PS1CapturedAssets` is a GUI-thread singleton that mirrors the last
+successful `meshBuilt` into three data flat collections:
+
+- `rows`: one `CapturedAssetRow` per `PrimRecord` in the capture
+  (`#`, `frame`, `type`, `verts`, `tpage`, `clut`, `matrix#`,
+  `material`, `triangles` — the columns the issue specs).
+- `uniqueMeshes` + `instances`: pass-through of the dedupe output
+  from `MeshReconstructor::reconstructDeduped` (#423).
+- `instanceNodeNames`: instance index → Ogre SceneNode name
+  (`PS1Capture_<id>_inst<N>`), so the inspector resolves a click into a
+  real node without re-walking the scene tree.
+- `textureImages`: decoded texture page (256×256 RGBA) keyed by logical
+  material name. Populated by `PS1RipMeshBuilder` from the `TextureDecoder`
+  cache so the browser doesn't have to re-decode VRAM.
+
+Update flow: the manager assembles the set via
+`PS1CapturedAssets::buildFromCapture()` on the main thread immediately
+before emitting `meshBuilt`, so any UI listening to that signal is
+guaranteed to see a fully-populated store.
+
+### Geometry Inspector dock
+
+`PS1GeometryInspectorPanel` (`PS1GeometryInspectorModel` +
+`PS1GeometryInspectorFilter` + Qt UI) lives inside `PS1RipSessionWindow`
+as a bottom dock. Single-click on a row routes through
+`PS1RipSessionWindow::highlightInspectorRow`, which resolves the row's
+instance to its SceneNode and calls `SelectionSet::selectOne` so the
+editor outlines the sub-mesh.
+
+Right-click context menu (the issue's three required actions):
+
+- **Hide / Show this submesh** — toggles `SceneNode::setVisible`. The
+  store records `row.hidden` so the inspector keeps the hidden rows
+  in-view but greyed out.
+- **Promote to permanent entity** — clones the underlying Ogre mesh into
+  a fresh `PS1Imported_<id>_meshN_pK` resource and creates a brand new
+  `SceneNode` carrying the same world transform as the capture node.
+  Survives the next Capture / Stop because the live capture cleanup
+  only walks `PS1Capture_*` names. Emits a
+  `ps1.rip.inspector.promote ok mesh=... node=...` Sentry breadcrumb.
+- **Discard** — hides the SceneNode and grey-outs the row. Reversible
+  via "Restore (un-discard)" which re-shows the node.
+
+Filter chips above the table: `Textured`, `Colored`, `Instanced`, plus a
+"Hide discarded" toggle and a free-text Material search box. The filter
+is a `QSortFilterProxyModel` so toggling a chip is a single
+`invalidateFilter()` — no model rebuild.
+
+Counts header: `Captured: N prims · M unique meshes · K textures`,
+recomputed from the store on every `captureSetChanged()`.
+
+### Extracted Asset Browser dock
+
+`PS1ExtractedAssetBrowser` is a separate right-dock with a QTabWidget
+holding three `QListView` (IconMode) grids:
+
+- **Meshes** — one tile per `uniqueMesh` with a colored-swatch
+  placeholder thumbnail (Sobel-style hue derived from the first
+  submesh's material name, so the same mesh shows the same swatch across
+  captures). Tiles are drag-enabled (`Qt::ItemIsDragEnabled`); the model
+  exposes the asset id under MIME type `application/x-ps1rip-mesh` and
+  the mesh index under `application/x-ps1rip-meshindex`.
+- **Textures** — one tile per decoded texture page, thumbnail is the
+  256×256 page itself scaled to 96 px.
+- **Materials** — one tile per logical material name (textured pages +
+  the synthetic `PS1Rip_color`). Textured materials use the page image;
+  solid materials use a hue swatch.
+
+Drag-and-drop: `MainWindow::dropEvent` recognises the two MIME types and
+calls `PS1RipSessionWindow::promoteUniqueMeshById(meshIndex, assetId)`,
+which routes through the same `promoteUniqueMesh` impl as the inspector
+context menu. So both "double-click in the browser" and "drag a mesh
+tile into the editor viewport" satisfy the acceptance criterion
+"Drag-and-drop creates a permanent entity that persists after Stop".
+
+Filter chips (`Textured`, `Colored only`, `Instanced`) and a search box
+share state across all three tabs — same `QSortFilterProxyModel`
+template, one chip toggle invalidates every tab's filter.
+
+### Sentry breadcrumbs
+
+`ps1.rip.inspector.promote` is emitted from both the inspector right-click
+and the asset-browser instantiation paths, with the source tag
+(`row-context-menu`, `browser-doubleclick`, `dropEvent`) baked into the
+message so telemetry can tell them apart. `ui.action` breadcrumbs cover
+each chip toggle and search edit for follow-up analytics.
+
+### Tests
+
+`PS1CapturedAssets_test.cpp` exercises:
+
+- `buildFromCapture` row attribution (textured/colored prim → matching
+  unique mesh + instance index).
+- `instanceNodeNames` matches `PS1RipMeshBuilder`'s scene-node naming.
+- `setCaptureSet` fires `captureSetChanged` exactly once.
+- `setRowHidden` / `setRowDiscarded` fire `rowChanged` on real changes
+  and no-op for redundant / out-of-range mutations.
+- `PS1ExtractedAssetBrowser::buildTilesForKind` produces the expected
+  tiles for Mesh / Texture / Material kinds (including the
+  textured/coloredOnly flag plumbing).
+
+These are pure-data unit tests — no Ogre, no QWidget tree — so they run
+on the headless CI fixture without an X server.
+
+### Open follow-ups
+
+- Mesh thumbnails are currently colored-swatch placeholders. An Ogre
+  off-screen RTT (similar to `ModelTurntableRenderer`) would produce
+  real renders without changing the public model/view API.
+- Promotions inherit the capture node's auto-fit scale and normalizer
+  flips. A "Reset to identity transform" option in the right-click menu
+  would let users decouple a promoted entity from those view-time
+  adjustments.
+
 ## GP0 FIFO follow-up (#662)
 
 Shipped in this slice:
