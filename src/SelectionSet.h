@@ -82,6 +82,11 @@ public :
 private:
     void hideBoundingBox(Ogre::SceneNode* node)  const;
     void hideAllBoundingBox()  const;
+    /** Drop any selection entries tied to `node` or its attached
+     *  entities. Connected to `Manager::sceneNodeDestroyed` so a fresh
+     *  PS1 capture (which destroys `PS1Capture_*` nodes) cannot leave
+     *  dangling pointers that crash the next `selectOne` / promote. */
+    void onSceneNodeDestroyed(Ogre::SceneNode *node);
 signals:
     void selectionChanged();
     void nodeSelectionChanged();

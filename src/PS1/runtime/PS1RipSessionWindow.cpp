@@ -27,6 +27,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QImage>
 #include <QKeySequence>
 #include <QMenu>
 #include <QTimer>
@@ -537,6 +538,61 @@ void PS1RipSessionWindow::createInspectorDocks()
 
 namespace {
 
+/** Strip the `PS1Rip_<captureId>_` prefix from a capture-scoped material
+ *  resource name to recover the logical name (`PS1Rip_tpage_…` or
+ *  `PS1Rip_color`) that keys `CapturedAssetSet::textureImages`. */
+QString logicalMaterialFromScopedName(const QString &scopedName, const QString &captureId)
+{
+    const QString prefix = QStringLiteral("PS1Rip_%1_").arg(captureId);
+    if (scopedName.startsWith(prefix))
+        return scopedName.mid(prefix.size());
+    return scopedName;
+}
+
+/** CPU upload for promoted textures — mirrors `PS1RipMeshBuilder`'s
+ *  `uploadTextureToOgre` but always lands in the default resource group so
+ *  promoted assets survive the next capture's session-group purge. */
+bool uploadPromotedTexture(const QString &resourceName, const QImage &image)
+{
+    if (image.isNull() || image.width() < 1 || image.height() < 1)
+        return false;
+
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    if (rgba.isNull())
+        return false;
+    const int tightStride = rgba.width() * 4;
+    if (rgba.bytesPerLine() != tightStride)
+        rgba = rgba.copy();
+
+    Ogre::Image ogreImage;
+    try {
+        ogreImage.loadDynamicImage(rgba.bits(), static_cast<Ogre::uint32>(rgba.width()),
+                                   static_cast<Ogre::uint32>(rgba.height()), 1, Ogre::PF_BYTE_RGBA,
+                                   false);
+    } catch (const Ogre::Exception &) {
+        return false;
+    }
+
+    const std::string texName = resourceName.toStdString();
+    Ogre::TextureManager &texMgr = Ogre::TextureManager::getSingleton();
+    if (texMgr.resourceExists(texName))
+        texMgr.remove(texName);
+
+    Ogre::TexturePtr texture = texMgr.createManual(
+        texName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, Ogre::TEX_TYPE_2D,
+        ogreImage.getWidth(), ogreImage.getHeight(), 0, ogreImage.getFormat(),
+        Ogre::TU_STATIC_WRITE_ONLY);
+    if (!texture)
+        return false;
+
+    Ogre::HardwarePixelBufferSharedPtr pixelBuffer = texture->getBuffer(0, 0);
+    if (!pixelBuffer)
+        return false;
+    pixelBuffer->blitFromMemory(ogreImage.getPixelBox());
+    texture->load();
+    return true;
+}
+
 /** Resolve a `CapturedAssetRow` to the live Ogre entity + sub-entity in the
  *  capture preview. Returns null pointers when any link is missing so the
  *  callers can short-circuit instead of crashing on a stale row (#679
@@ -664,59 +720,39 @@ namespace {
 
 /** Walk the cloned mesh's submeshes and replace every `PS1Rip_*` capture
  *  material reference with a freshly-named clone that mirrors the source
- *  pass, its texture units, and any referenced `ps1rip_*` textures. The
- *  next `beginCaptureAttach` purges everything matching the `PS1Rip_*`
- *  and `ps1rip_*` patterns, so without this the supposedly permanent
- *  promoted entity would silently lose its material + texture binding
- *  the moment the user takes another capture (#679 review feedback). */
-void rebindPromotedMaterials(Ogre::Mesh *clone, const QString &captureId, int promoId)
+ *  pass and re-uploads textures from `textureImages` (CPU path — the
+ *  previous GPU `HardwarePixelBuffer::blit` between session-group
+ *  textures crashed on double-click promote). The next `beginCaptureAttach`
+ *  purges everything matching the `PS1Rip_*` / `ps1rip_*` patterns, so
+ *  without this the promoted entity would lose its binding on the next
+ *  capture (#679 review feedback). */
+void rebindPromotedMaterials(Ogre::Mesh *clone, const QString &captureId, int promoId,
+                             const QHash<QString, QImage> &textureImages)
 {
     if (!clone)
         return;
     Ogre::MaterialManager &matMgr = Ogre::MaterialManager::getSingleton();
-    Ogre::TextureManager &texMgr = Ogre::TextureManager::getSingleton();
 
     QHash<QString, QString> textureRenames;
     QHash<QString, QString> materialRenames;
 
-    auto cloneTexture = [&](const QString &srcName) -> QString {
-        if (!srcName.startsWith(QStringLiteral("ps1rip_")))
-            return srcName;
-        if (textureRenames.contains(srcName))
-            return textureRenames.value(srcName);
-        const std::string srcStd = srcName.toStdString();
-        if (!texMgr.resourceExists(srcStd))
-            return srcName;
-        Ogre::TexturePtr src = texMgr.getByName(srcStd);
-        if (!src)
-            return srcName;
-        const QString dstName = QStringLiteral("ps1imported_%1_p%2_%3")
-                                    .arg(captureId)
-                                    .arg(promoId)
-                                    .arg(srcName);
-        const std::string dstStd = dstName.toStdString();
-        if (!texMgr.resourceExists(dstStd)) {
-            // `Resource::clone` isn't part of Ogre's Texture API; we copy
-            // the pixel buffer into a freshly-created manual texture.
-            Ogre::TexturePtr dst = texMgr.createManual(
-                dstStd, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, src->getTextureType(),
-                src->getWidth(), src->getHeight(), src->getNumMipmaps(), src->getFormat(),
-                src->getUsage());
-            if (dst) {
-                Ogre::HardwarePixelBufferSharedPtr srcBuf = src->getBuffer(0, 0);
-                Ogre::HardwarePixelBufferSharedPtr dstBuf = dst->getBuffer(0, 0);
-                if (srcBuf && dstBuf) {
-                    // blit() copies the full src buffer into dst — both buffers
-                    // are the same dimensions/format so a region-restricted
-                    // blit isn't needed. Avoids manually managing PixelBox
-                    // memory and ensures the dst is upload-ready.
-                    dstBuf->blit(srcBuf);
-                }
-                dst->load();
-            }
-        }
-        textureRenames.insert(srcName, dstName);
-        return dstName;
+    auto promotedTextureName = [&](const QString &logicalName) -> QString {
+        return QStringLiteral("ps1imported_%1_p%2_%3")
+            .arg(captureId)
+            .arg(promoId)
+            .arg(logicalName);
+    };
+
+    auto ensurePromotedTexture = [&](const QString &logicalName) -> QString {
+        if (textureRenames.contains(logicalName))
+            return textureRenames.value(logicalName);
+        const auto imgIt = textureImages.constFind(logicalName);
+        if (imgIt == textureImages.constEnd())
+            return {};
+        const QString dstName = promotedTextureName(logicalName);
+        if (uploadPromotedTexture(dstName, imgIt.value()))
+            textureRenames.insert(logicalName, dstName);
+        return textureRenames.value(logicalName, {});
     };
 
     auto cloneMaterial = [&](const QString &srcName) -> QString {
@@ -738,6 +774,8 @@ void rebindPromotedMaterials(Ogre::Mesh *clone, const QString &captureId, int pr
         Ogre::MaterialPtr dst =
             matMgr.resourceExists(dstStd) ? matMgr.getByName(dstStd) : src->clone(dstStd);
         if (dst) {
+            const QString logicalName = logicalMaterialFromScopedName(srcName, captureId);
+            const QString promotedTex = ensurePromotedTexture(logicalName);
             for (unsigned short t = 0; t < dst->getNumTechniques(); ++t) {
                 Ogre::Technique *tech = dst->getTechnique(t);
                 if (!tech)
@@ -746,14 +784,12 @@ void rebindPromotedMaterials(Ogre::Mesh *clone, const QString &captureId, int pr
                     Ogre::Pass *pass = tech->getPass(p);
                     if (!pass)
                         continue;
-                    for (unsigned short u = 0; u < pass->getNumTextureUnitStates(); ++u) {
-                        Ogre::TextureUnitState *tus = pass->getTextureUnitState(u);
-                        if (!tus)
-                            continue;
-                        const QString oldTex = QString::fromStdString(tus->getTextureName());
-                        const QString newTex = cloneTexture(oldTex);
-                        if (newTex != oldTex)
-                            tus->setTextureName(newTex.toStdString());
+                    if (!promotedTex.isEmpty()) {
+                        pass->removeAllTextureUnitStates();
+                        Ogre::TextureUnitState *tus = pass->createTextureUnitState(promotedTex.toStdString());
+                        tus->setTextureFiltering(Ogre::TFO_NONE);
+                        tus->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
+                        pass->setVertexColourTracking(Ogre::TVC_AMBIENT | Ogre::TVC_DIFFUSE);
                     }
                 }
             }
@@ -764,14 +800,20 @@ void rebindPromotedMaterials(Ogre::Mesh *clone, const QString &captureId, int pr
         return dstName;
     };
 
-    for (unsigned short i = 0; i < clone->getNumSubMeshes(); ++i) {
-        Ogre::SubMesh *sm = clone->getSubMesh(i);
-        if (!sm)
-            continue;
-        const QString currentMat = QString::fromStdString(sm->getMaterialName());
-        const QString newMat = cloneMaterial(currentMat);
-        if (newMat != currentMat)
-            sm->setMaterialName(newMat.toStdString());
+    try {
+        for (unsigned short i = 0; i < clone->getNumSubMeshes(); ++i) {
+            Ogre::SubMesh *sm = clone->getSubMesh(i);
+            if (!sm)
+                continue;
+            const QString currentMat = QString::fromStdString(sm->getMaterialName());
+            const QString newMat = cloneMaterial(currentMat);
+            if (newMat != currentMat)
+                sm->setMaterialName(newMat.toStdString());
+        }
+    } catch (const Ogre::Exception &e) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.inspector.promote"),
+                                      QString::fromStdString(e.getFullDescription()),
+                                      QStringLiteral("error"));
     }
 }
 
@@ -848,7 +890,7 @@ bool PS1RipSessionWindow::promoteUniqueMesh(int meshIndex, const QString &assetI
     // Rebind to permanent-named material + texture clones so the next
     // capture's purge of `PS1Rip_*` / `ps1rip_*` doesn't strip them
     // (#679 review feedback — Codex: "Preserve promoted materials").
-    rebindPromotedMaterials(clone.get(), set.captureId, promoId);
+    rebindPromotedMaterials(clone.get(), set.captureId, promoId, set.textureImages);
 
     const QString nodeName =
         QStringLiteral("PS1Imported_%1_mesh%2_n%3").arg(set.captureId).arg(meshIndex).arg(promoId);
