@@ -57,6 +57,11 @@ Shader "Hidden/QTM/VAT" {
         //     only (legacy openvat behaviour, useful when the mesh
         //     has no UV0 or you want to debug lighting).
         [Toggle] _UseDiffuseMap  ("Use Diffuse Map", Float) = 1
+        // Diagnostic — when 1, the vertex shader bypasses the VAT
+        // texture lookup and renders the mesh in its bind pose. Use
+        // to isolate whether the source mesh is correctly imported
+        // independent of the VAT replay path.
+        [Toggle] _BypassVAT      ("Bypass VAT (render bind pose)", Float) = 0
     }
 
     SubShader {
@@ -90,6 +95,7 @@ Shader "Hidden/QTM/VAT" {
             float4 _BaseColor;
             float  _SynthesizedUV2;
             float  _UseDiffuseMap;
+            float  _BypassVAT;
 
             struct appdata {
                 float4 vertex   : POSITION;
@@ -106,6 +112,19 @@ Shader "Hidden/QTM/VAT" {
             };
 
             v2f vert(appdata IN) {
+                // Diagnostic short-circuit — render the mesh at its
+                // bind-pose vertex positions, no VAT lookup. If the
+                // dancer is visible and recognisable in this mode but
+                // garbled when _BypassVAT=0, the bug is in the VAT
+                // path; if it's garbled in both, the bug is mesh-side.
+                if (_BypassVAT > 0.5) {
+                    v2f OUT;
+                    OUT.pos      = UnityObjectToClipPos(IN.vertex);
+                    OUT.worldNrm = normalize(mul((float3x3)unity_ObjectToWorld, IN.normal));
+                    OUT.worldPos = mul(unity_ObjectToWorld, IN.vertex).xyz;
+                    OUT.uv       = IN.uv;
+                    return OUT;
+                }
                 int safeFrames = max(_FrameCount, 1);
                 int curr = ((int)floor(_CurrentFrame)) % safeFrames;
                 if (curr < 0) curr += safeFrames;
