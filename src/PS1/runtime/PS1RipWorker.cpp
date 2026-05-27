@@ -1,6 +1,7 @@
 #include "PS1RipWorker.h"
 #include "CaptureBuffer.h"
 #include "CaptureSnapshot.h"
+#include "CaptureTypes.h"
 #include "EmuCore.h"
 #include "EmuCoreLoader.h"
 #include "EmuFramebuffer.h"
@@ -15,6 +16,7 @@
 #include <QDir>
 #include <QFile>
 #include <QRect>
+#include <QSet>
 #include <QStandardPaths>
 #include <QElapsedTimer>
 #include <QTimer>
@@ -205,6 +207,44 @@ void PS1RipWorker::runFrameTick()
     if ((fb.frameIndex % 30) == 0 && m_vram && m_vram->hasVisibleContent(32)) {
         const QVector<uint16_t> cells = m_vram->mutablePixels();
         emit vramFrameUpdated(cells, m_vram->toImage(VramSnapshot::ViewMode::Native16));
+    }
+
+    // Throttled live capture-buffer stats for the status footer (#425). Every
+    // 15 frames at the ~60 Hz target ≈ 4 Hz updates — fast enough that the
+    // user sees prims tick up during a scene capture, slow enough that the
+    // GUI thread isn't woken on every emulated frame. Uses default
+    // (seq_cst) ordering — these reads are far from a hot path so the
+    // tighter ordering pays for itself in simpler reasoning (SonarCloud
+    // S8417 also prefers it over an explicit acquire here).
+    if (m_captureArmed.load() && (fb.frameIndex % 15) == 0 && m_captureBuffer) {
+        const QVector<PrimRecord> &prims = m_captureBuffer->prims();
+        qint64 tris = 0;
+        QSet<uint16_t> pages;
+        pages.reserve(16);
+        for (const PrimRecord &p : prims) {
+            switch (p.kind) {
+            case PrimKind::MonoTri:
+            case PrimKind::ShadedTri:
+            case PrimKind::TexturedTri:
+                tris += 1;
+                break;
+            case PrimKind::MonoQuad:
+            case PrimKind::ShadedQuad:
+            case PrimKind::TexturedQuad:
+            case PrimKind::Sprite:
+                tris += 2;
+                break;
+            }
+            if (p.kind == PrimKind::TexturedTri || p.kind == PrimKind::TexturedQuad
+                || p.kind == PrimKind::Sprite)
+                pages.insert(p.tpage);
+        }
+        const qint64 bytes =
+            qint64(prims.size()) * qint64(sizeof(PrimRecord))
+            + qint64(m_captureBuffer->matrices().size()) * qint64(sizeof(MatrixRecord))
+            + qint64(m_captureBuffer->drawModes().size()) * qint64(sizeof(DrawModeRecord));
+        emit captureProgress(qint64(prims.size()), tris,
+                             static_cast<int>(pages.size()), bytes);
     }
 
     if (!m_running || m_paused || !m_core)

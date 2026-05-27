@@ -63,6 +63,12 @@ signals:
     void vramDumpReady(const QString &captureId, const QString &pngPath, const QVector<uint16_t> &cells,
                        const QImage &nativePreview);
     void vramFrameUpdated(const QVector<uint16_t> &cells, const QImage &nativePreview);
+    /** Throttled live snapshot of the capture buffer while armed (#425). Used
+     *  by the session UI to populate the status footer; emitted from
+     *  `runFrameTick` every ~250 ms so a 5-second scene capture only stirs
+     *  the GUI thread ~20 times. */
+    void captureProgress(qint64 primitives, qint64 triangles, int texturePages,
+                         qint64 bytesEstimate);
 
 private slots:
     void runFrameTick();

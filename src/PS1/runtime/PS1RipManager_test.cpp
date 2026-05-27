@@ -206,4 +206,241 @@ TEST_F(PS1RipManagerTest, ArmedCaptureAccumulatesPrimitives)
     manager->stop();
 }
 
+// --- Scene capture lifecycle (#425) -----------------------------------------
+
+TEST_F(PS1RipManagerTest, SceneCaptureRejectsNonPositiveDuration)
+{
+    QSignalSpy startedSpy(manager, &PS1RipManager::sceneCaptureStarted);
+    QSignalSpy errorSpy(manager, &PS1RipManager::error);
+
+    EXPECT_FALSE(manager->captureScene(0));
+    EXPECT_FALSE(manager->captureScene(-1));
+    EXPECT_TRUE(startedSpy.isEmpty());
+    EXPECT_GE(errorSpy.count(), 1);
+    EXPECT_FALSE(manager->isSceneCaptureActive());
+}
+
+TEST_F(PS1RipManagerTest, SceneCaptureRejectsWithoutSession)
+{
+    QSignalSpy startedSpy(manager, &PS1RipManager::sceneCaptureStarted);
+    QSignalSpy errorSpy(manager, &PS1RipManager::error);
+
+    EXPECT_FALSE(manager->captureScene(2));
+    EXPECT_TRUE(startedSpy.isEmpty());
+    EXPECT_GE(errorSpy.count(), 1);
+    EXPECT_FALSE(manager->isSceneCaptureActive());
+}
+
+TEST_F(PS1RipManagerTest, SceneCaptureCancellableViaStopSceneCapture)
+{
+    if (!stubPluginAvailable())
+        GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
+
+    QTemporaryFile bios;
+    QTemporaryFile iso;
+    const QString biosPath = writeStubBios(bios);
+    ASSERT_FALSE(biosPath.isEmpty());
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
+
+    ASSERT_TRUE(manager->loadBios(biosPath));
+    ASSERT_TRUE(manager->loadIso(isoPath));
+
+    QSignalSpy startedSessionSpy(manager, &PS1RipManager::sessionStarted);
+    ASSERT_TRUE(manager->start());
+    ASSERT_TRUE(startedSessionSpy.wait(3000));
+
+    QSignalSpy startedSpy(manager, &PS1RipManager::sceneCaptureStarted);
+    QSignalSpy finishedSpy(manager, &PS1RipManager::sceneCaptureFinished);
+    // Long duration so the test can cancel before the timer would fire.
+    ASSERT_TRUE(manager->captureScene(30));
+    EXPECT_TRUE(manager->isSceneCaptureActive());
+    EXPECT_EQ(startedSpy.count(), 1);
+    EXPECT_EQ(startedSpy.at(0).at(0).toInt(), 30);
+    // captureScene auto-arms when the user didn't pre-arm.
+    EXPECT_TRUE(manager->isCaptureArmed());
+
+    ASSERT_TRUE(manager->stopSceneCapture());
+    EXPECT_FALSE(manager->isSceneCaptureActive());
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_TRUE(finishedSpy.at(0).at(0).toBool()); // cancelled
+    EXPECT_TRUE(finishedSpy.at(0).at(1).toString().isEmpty()); // no captureId
+
+    manager->stop();
+}
+
+TEST_F(PS1RipManagerTest, SceneCaptureCancelledOnDisarm)
+{
+    if (!stubPluginAvailable())
+        GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
+
+    QTemporaryFile bios;
+    QTemporaryFile iso;
+    const QString biosPath = writeStubBios(bios);
+    ASSERT_FALSE(biosPath.isEmpty());
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
+
+    ASSERT_TRUE(manager->loadBios(biosPath));
+    ASSERT_TRUE(manager->loadIso(isoPath));
+
+    QSignalSpy startedSessionSpy(manager, &PS1RipManager::sessionStarted);
+    ASSERT_TRUE(manager->start());
+    ASSERT_TRUE(startedSessionSpy.wait(3000));
+
+    QSignalSpy finishedSpy(manager, &PS1RipManager::sceneCaptureFinished);
+    ASSERT_TRUE(manager->captureScene(30));
+    EXPECT_TRUE(manager->isSceneCaptureActive());
+
+    manager->armCapture(false);
+    EXPECT_FALSE(manager->isSceneCaptureActive());
+    EXPECT_FALSE(manager->isCaptureArmed());
+    ASSERT_GE(finishedSpy.count(), 1);
+    EXPECT_TRUE(finishedSpy.first().at(0).toBool()); // cancelled
+
+    manager->stop();
+}
+
+TEST_F(PS1RipManagerTest, SceneCaptureCancelledOnStop)
+{
+    if (!stubPluginAvailable())
+        GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
+
+    QTemporaryFile bios;
+    QTemporaryFile iso;
+    const QString biosPath = writeStubBios(bios);
+    ASSERT_FALSE(biosPath.isEmpty());
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
+
+    ASSERT_TRUE(manager->loadBios(biosPath));
+    ASSERT_TRUE(manager->loadIso(isoPath));
+
+    QSignalSpy startedSessionSpy(manager, &PS1RipManager::sessionStarted);
+    ASSERT_TRUE(manager->start());
+    ASSERT_TRUE(startedSessionSpy.wait(3000));
+
+    QSignalSpy finishedSpy(manager, &PS1RipManager::sceneCaptureFinished);
+    ASSERT_TRUE(manager->captureScene(30));
+    EXPECT_TRUE(manager->isSceneCaptureActive());
+
+    manager->stop();
+    EXPECT_FALSE(manager->isSceneCaptureActive());
+    ASSERT_GE(finishedSpy.count(), 1);
+    EXPECT_TRUE(finishedSpy.first().at(0).toBool()); // cancelled
+}
+
+TEST_F(PS1RipManagerTest, SceneCaptureProgressTicksAndCompletes)
+{
+    if (!stubPluginAvailable())
+        GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
+
+    QTemporaryFile bios;
+    QTemporaryFile iso;
+    const QString biosPath = writeStubBios(bios);
+    ASSERT_FALSE(biosPath.isEmpty());
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
+
+    ASSERT_TRUE(manager->loadBios(biosPath));
+    ASSERT_TRUE(manager->loadIso(isoPath));
+
+    QSignalSpy startedSessionSpy(manager, &PS1RipManager::sessionStarted);
+    ASSERT_TRUE(manager->start());
+    ASSERT_TRUE(startedSessionSpy.wait(3000));
+
+    QSignalSpy progressSpy(manager, &PS1RipManager::sceneCaptureProgress);
+    QSignalSpy finishedSpy(manager, &PS1RipManager::sceneCaptureFinished);
+    ASSERT_TRUE(manager->captureScene(2));
+    EXPECT_EQ(manager->sceneCaptureSecondsRemaining(), 2);
+    EXPECT_EQ(manager->sceneCaptureSecondsTotal(), 2);
+    // First progress emission fires immediately so the UI shows the full
+    // duration without waiting for the first 1 s tick.
+    ASSERT_GE(progressSpy.count(), 1);
+
+    // Wait long enough for both timer ticks + the finalize round-trip through
+    // the worker thread (~2 s + slack).
+    ASSERT_TRUE(finishedSpy.wait(8000));
+    EXPECT_FALSE(manager->isSceneCaptureActive());
+    EXPECT_GE(progressSpy.count(), 2);
+    // The completion signal may be cancelled (e.g. when the stub core didn't
+    // produce captureable prims), but it MUST fire so the UI exits scene-
+    // capture state. Test that both branches drop us out cleanly.
+    const bool cancelled = finishedSpy.first().at(0).toBool();
+    if (!cancelled) {
+        // Success path: captureId must be non-empty so the UI can correlate.
+        EXPECT_FALSE(finishedSpy.first().at(1).toString().isEmpty());
+    }
+
+    manager->stop();
+}
+
+TEST_F(PS1RipManagerTest, SceneCaptureIsActiveBetweenStartAndStop)
+{
+    // Verifies `isSceneCaptureActive()` (the combined predicate driving the
+    // Stop-Capture-in-finalize-window fix, Codex P1 / CodeRabbit Major on
+    // #677) flips to true as soon as captureScene() returns and back to
+    // false once the user cancels via stopSceneCapture(). Without this
+    // predicate, stop-during-finalize left the UI stuck.
+    if (!stubPluginAvailable())
+        GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
+
+    QTemporaryFile bios;
+    QTemporaryFile iso;
+    const QString biosPath = writeStubBios(bios);
+    ASSERT_FALSE(biosPath.isEmpty());
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
+
+    ASSERT_TRUE(manager->loadBios(biosPath));
+    ASSERT_TRUE(manager->loadIso(isoPath));
+
+    QSignalSpy startedSessionSpy(manager, &PS1RipManager::sessionStarted);
+    ASSERT_TRUE(manager->start());
+    ASSERT_TRUE(startedSessionSpy.wait(3000));
+
+    EXPECT_FALSE(manager->isSceneCaptureActive());
+    ASSERT_TRUE(manager->captureScene(30));
+    EXPECT_TRUE(manager->isSceneCaptureActive());
+
+    // Cancellation in the active window must succeed.
+    EXPECT_TRUE(manager->stopSceneCapture());
+    EXPECT_FALSE(manager->isSceneCaptureActive());
+
+    // A second stop with no scene capture in flight must be a no-op (false)
+    // so callers can chain Stop Capture + Disarm without spurious double
+    // breadcrumbs / signal storms.
+    EXPECT_FALSE(manager->stopSceneCapture());
+
+    manager->stop();
+}
+
+TEST_F(PS1RipManagerTest, SceneCaptureRejectsConcurrent)
+{
+    if (!stubPluginAvailable())
+        GTEST_SKIP() << "PS1 stub core plugin not beside test binary";
+
+    QTemporaryFile bios;
+    QTemporaryFile iso;
+    const QString biosPath = writeStubBios(bios);
+    ASSERT_FALSE(biosPath.isEmpty());
+    const QString isoPath = writeMinimalTestIso(iso);
+    ASSERT_FALSE(isoPath.isEmpty());
+
+    ASSERT_TRUE(manager->loadBios(biosPath));
+    ASSERT_TRUE(manager->loadIso(isoPath));
+
+    QSignalSpy startedSessionSpy(manager, &PS1RipManager::sessionStarted);
+    ASSERT_TRUE(manager->start());
+    ASSERT_TRUE(startedSessionSpy.wait(3000));
+
+    ASSERT_TRUE(manager->captureScene(30));
+    QSignalSpy errorSpy(manager, &PS1RipManager::error);
+    EXPECT_FALSE(manager->captureScene(5));
+    EXPECT_GE(errorSpy.count(), 1);
+
+    manager->stopSceneCapture();
+    manager->stop();
+}
+
 #endif // ENABLE_PS1_RIP
