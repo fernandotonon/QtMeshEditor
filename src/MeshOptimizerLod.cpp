@@ -221,12 +221,18 @@ std::vector<LodLevel> generateLods(Ogre::Mesh* mesh,
     const float targetError = errorBudget * scale;
 
     for (float reduction : reductions) {
-        if (reduction <= 0.0f || reduction >= 1.0f) {
+        // Negative / zero ratios are nonsense; reject explicitly so we
+        // don't waste a `meshopt_simplify` call. A reduction of 1.0
+        // (collapse to a single triangle) is occasionally requested
+        // — `count=4` with default fallbacks produces exactly that —
+        // so clamp it just below 1.0 instead of dropping the level.
+        if (reduction <= 0.0f) {
             if (logger) logger->logMessage(
-                "[MeshOptimizerLod] skipping reduction " + std::to_string(reduction) +
-                " — must be in (0,1)");
+                "[MeshOptimizerLod] skipping non-positive reduction " +
+                std::to_string(reduction));
             continue;
         }
+        if (reduction >= 1.0f) reduction = 0.99f;
 
         LodLevel level;
         level.indices.reserve(numSubs);
