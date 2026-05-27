@@ -2915,12 +2915,15 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event)
 
 void MainWindow::dropEvent(QDropEvent *event)
 {
+#ifdef ENABLE_PS1_RIP
     // PS1 Extracted Asset Browser → editor viewport drag-and-drop (#426).
     // The asset browser publishes its tile's mesh-index list under a custom
     // MIME type and the matching meshIndex list under a sibling type so the
     // promote path doesn't have to re-parse the assetId string. We dispatch
     // before the URL/file path branch so a drag that also carries a text
-    // representation doesn't get mis-routed as a file import.
+    // representation doesn't get mis-routed as a file import. Whole branch
+    // is guarded by `ENABLE_PS1_RIP` because `PS1RipSessionWindow` lives in
+    // the optional PS1 ripping subsystem (off on macOS CI builds).
     static constexpr auto kPs1RipMeshMime = "application/x-ps1rip-mesh";
     static constexpr auto kPs1RipMeshIndexMime = "application/x-ps1rip-meshindex";
     if (event->mimeData()->hasFormat(QString::fromLatin1(kPs1RipMeshMime))) {
@@ -2937,6 +2940,7 @@ void MainWindow::dropEvent(QDropEvent *event)
         event->acceptProposedAction();
         return;
     }
+#endif // ENABLE_PS1_RIP
 
     QStringList validFiles;
     for (const QUrl& url : event->mimeData()->urls())

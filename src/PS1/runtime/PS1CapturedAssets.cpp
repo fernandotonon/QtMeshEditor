@@ -121,35 +121,38 @@ CapturedAssetSet PS1CapturedAssets::buildFromCapture(const QString &captureId,
     set.instances = reconstructed.instances;
     set.textureImages = textureImages;
 
-    // Walk the instance vector once so a row's `instanceIndex` is a direct
-    // lookup later. `instanceByMesh[meshIndex]` is the index of the FIRST
-    // instance using that mesh — many PS1 games re-issue the same matrix
-    // for every quad of the same prop, so taking the first match is fine
-    // for the inspector's "highlight one node" semantics.
-    QHash<int, int> firstInstanceByMesh;
-    for (int i = 0; i < reconstructed.instances.size(); ++i) {
-        const int meshIndex = reconstructed.instances[i].uniqueMeshIndex;
-        if (!firstInstanceByMesh.contains(meshIndex))
-            firstInstanceByMesh.insert(meshIndex, i);
-    }
+    // Per-prim provenance from the reconstructor — the authoritative source
+    // for "which (uniqueMesh, submesh, instance) did this draw call land in".
+    // The previous material-name-first-match heuristic collapsed every
+    // solid-color row onto a single mesh / instance and broke inspector
+    // actions for any capture with > 1 matrix group sharing a material
+    // (#679 review feedback). When the reconstructor didn't emit provenance
+    // (e.g. unit tests that hand-build a `ReconstructedCaptureSet`), we
+    // fall back to a material-name lookup so legacy callers keep working.
+    const QVector<PrimProvenance> &provenance = reconstructed.primProvenance;
+    const bool hasProvenance = provenance.size() == snapshot.prims.size();
 
-    // Build a material-name → uniqueMeshIndex lookup from the reconstructed
-    // submesh list. A material can appear in multiple unique meshes if the
-    // capture had instances with different geometry but the same texture
-    // page — in that case we just attribute the prim to the first mesh
-    // that uses the material, which matches the dedupe order.
-    QHash<QString, int> meshByMaterial;
-    for (int meshIdx = 0; meshIdx < reconstructed.uniqueMeshes.size(); ++meshIdx) {
-        const ReconstructedMesh &mesh = reconstructed.uniqueMeshes[meshIdx];
-        for (const ReconstructedSubMesh &sub : mesh.subMeshes) {
-            if (!meshByMaterial.contains(sub.materialName))
-                meshByMaterial.insert(sub.materialName, meshIdx);
+    QHash<QString, int> meshByMaterialFallback;
+    QHash<int, int> firstInstanceByMeshFallback;
+    if (!hasProvenance) {
+        for (int meshIdx = 0; meshIdx < reconstructed.uniqueMeshes.size(); ++meshIdx) {
+            const ReconstructedMesh &mesh = reconstructed.uniqueMeshes[meshIdx];
+            for (const ReconstructedSubMesh &sub : mesh.subMeshes) {
+                if (!meshByMaterialFallback.contains(sub.materialName))
+                    meshByMaterialFallback.insert(sub.materialName, meshIdx);
+            }
+        }
+        for (int i = 0; i < reconstructed.instances.size(); ++i) {
+            const int meshIndex = reconstructed.instances[i].uniqueMeshIndex;
+            if (!firstInstanceByMeshFallback.contains(meshIndex))
+                firstInstanceByMeshFallback.insert(meshIndex, i);
         }
     }
 
     set.rows.reserve(snapshot.prims.size());
     int rowOrdinal = 0;
-    for (const PrimRecord &prim : snapshot.prims) {
+    for (int primIdx = 0; primIdx < snapshot.prims.size(); ++primIdx) {
+        const PrimRecord &prim = snapshot.prims[primIdx];
         ++rowOrdinal;
         CapturedAssetRow row;
         row.rowIndex = rowOrdinal;
@@ -173,12 +176,31 @@ CapturedAssetSet PS1CapturedAssets::buildFromCapture(const QString &captureId,
             row.materialName = QStringLiteral("PS1Rip_color");
         }
 
-        const auto meshIt = meshByMaterial.constFind(row.materialName);
-        if (meshIt != meshByMaterial.constEnd()) {
-            row.uniqueMeshIndex = meshIt.value();
-            const auto instIt = firstInstanceByMesh.constFind(row.uniqueMeshIndex);
-            if (instIt != firstInstanceByMesh.constEnd())
-                row.instanceIndex = instIt.value();
+        if (hasProvenance) {
+            const PrimProvenance &p = provenance.at(primIdx);
+            row.uniqueMeshIndex = p.uniqueMeshIndex;
+            row.subMeshIndex = p.subMeshIndex;
+            row.instanceIndex = p.instanceIndex;
+        } else {
+            const auto meshIt = meshByMaterialFallback.constFind(row.materialName);
+            if (meshIt != meshByMaterialFallback.constEnd()) {
+                row.uniqueMeshIndex = meshIt.value();
+                const auto instIt = firstInstanceByMeshFallback.constFind(row.uniqueMeshIndex);
+                if (instIt != firstInstanceByMeshFallback.constEnd())
+                    row.instanceIndex = instIt.value();
+                // Best-effort submesh lookup by material name.
+                if (row.uniqueMeshIndex >= 0
+                    && row.uniqueMeshIndex < reconstructed.uniqueMeshes.size()) {
+                    const auto &subs =
+                        reconstructed.uniqueMeshes.at(row.uniqueMeshIndex).subMeshes;
+                    for (int s = 0; s < subs.size(); ++s) {
+                        if (subs.at(s).materialName == row.materialName) {
+                            row.subMeshIndex = s;
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         set.totalPrims += 1;

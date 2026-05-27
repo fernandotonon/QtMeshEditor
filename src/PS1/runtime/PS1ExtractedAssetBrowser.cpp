@@ -311,6 +311,12 @@ PS1ExtractedAssetBrowser::PS1ExtractedAssetBrowser(PS1CapturedAssets *store, QWi
         connect(m_store, &PS1CapturedAssets::captureSetChanged, this,
                 &PS1ExtractedAssetBrowser::onCaptureSetChanged);
     rebuildModels();
+    // Populate the counts label up front so the "No capture yet" hint is
+    // visible from the moment the dock is shown, and any pre-existing
+    // capture (e.g. ripper reopened after a successful frame capture in
+    // the same session) is reflected without waiting for the next
+    // captureSetChanged signal (#679 review feedback).
+    refreshHeader();
 }
 
 void PS1ExtractedAssetBrowser::refreshHeader()

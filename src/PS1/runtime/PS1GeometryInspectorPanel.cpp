@@ -238,10 +238,12 @@ bool PS1GeometryInspectorFilter::filterAcceptsRow(int sourceRow,
         return false;
     if (!row.textured && row.colored && !m_showColored)
         return false;
-    if (row.instanceIndex >= 0 && !m_showInstanced && !row.textured && !row.colored) {
-        // "Instanced" chip is a positive filter for prims that landed on
-        // a non-zero matrix instance — covers solid-color props attached
-        // to a transform that the camera path didn't consume.
+    if (row.instanceIndex >= 0 && !m_showInstanced) {
+        // "Instanced" chip is a positive filter: when it's off, hide every
+        // prim that resolved to a non-zero matrix instance, regardless of
+        // textured / colored state. The earlier `!row.textured && !row.colored`
+        // qualifier neutered the chip because virtually every PS1 prim is
+        // either textured or colored (#679 review feedback).
         return false;
     }
     if (!m_searchText.isEmpty()) {

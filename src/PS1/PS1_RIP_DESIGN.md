@@ -509,19 +509,75 @@ and the asset-browser instantiation paths, with the source tag
 message so telemetry can tell them apart. `ui.action` breadcrumbs cover
 each chip toggle and search edit for follow-up analytics.
 
+### Row provenance (post-review #679)
+
+A `materialName → first uniqueMeshIndex` lookup was the original
+attribution path inside `buildFromCapture`. It collapsed every solid-
+color row onto the first mesh that contained `PS1Rip_color`, so two
+prims drawn by different matrix groups would compete for the same
+inspector handle — highlight, hide, discard, and promote all targeted
+the same node, breaking the per-row semantics #426 promised.
+
+The corrected path uses **per-prim provenance** emitted by
+`MeshReconstructor::reconstructDeduped` in `ReconstructedCaptureSet::primProvenance`,
+parallel to `CaptureSnapshot::prims`:
+
+- `meshFromMatrixGroup` records `(texKey → subMeshIndex)` for the part
+  it builds.
+- `buildParts` records `(matrixId → partIndex)` and stashes the inner
+  per-part `(texKey → subMeshIndex)` map.
+- `reconstructDeduped` walks parts in order, so `instanceIndex == partIndex`,
+  and a `(partIndex → uniqueMeshIndex)` table folds the dedupe step in.
+- For each `PrimRecord`, `(matrixId, texKey)` resolves to
+  `(uniqueMeshIndex, subMeshIndex, instanceIndex)` — that's the row's
+  authoritative scene location.
+
+`PS1CapturedAssets::buildFromCapture` consumes the provenance when its
+length matches `snapshot.prims`; otherwise it falls back to the legacy
+material-name lookup so hand-built `ReconstructedCaptureSet` fixtures
+(unit tests, tooling experiments) keep working.
+
+The inspector's row handlers consume `subMeshIndex` to scope
+`setVisible` / `selectOne` to the exact `Ogre::SubEntity`, and
+`promoteUniqueMesh` accepts an optional `instanceIndex` so right-click
+**Promote** on row N copies that row's specific matrix transform
+instead of the first instance using the mesh.
+
+### Promoted-asset material lifetime
+
+`beginCaptureAttach()` purges every Ogre resource matching the
+`PS1Rip_*` material / `ps1rip_*` texture pattern at the start of the
+next capture. A promoted mesh that still referenced those materials
+would render untextured/black the moment the user took a second
+capture. `rebindPromotedMaterials()` (called inside `promoteUniqueMesh`
+after `Mesh::clone`) walks the cloned submeshes, clones any
+capture-scoped material under `PS1Imported_<captureId>_p<promoId>_*`,
+copies its texture buffers into a sibling `ps1imported_*` texture,
+rebinds the TUS, and binds the cloned material back on the submesh.
+The clones live in the default resource group and are out of scope of
+the purge regex, so promoted entities survive an arbitrary number of
+subsequent captures.
+
 ### Tests
 
 `PS1CapturedAssets_test.cpp` exercises:
 
 - `buildFromCapture` row attribution (textured/colored prim → matching
-  unique mesh + instance index).
+  unique mesh + instance index) via the legacy material-name fallback.
 - `instanceNodeNames` matches `PS1RipMeshBuilder`'s scene-node naming.
 - `setCaptureSet` fires `captureSetChanged` exactly once.
 - `setRowHidden` / `setRowDiscarded` fire `rowChanged` on real changes
   and no-op for redundant / out-of-range mutations.
+- Provenance disambiguates rows that share a material across multiple
+  unique meshes (regression test for the original bug).
+- Provenance carries per-row submesh indices when two prims drawn by
+  the same matrix use different materials.
 - `PS1ExtractedAssetBrowser::buildTilesForKind` produces the expected
-  tiles for Mesh / Texture / Material kinds (including the
-  textured/coloredOnly flag plumbing).
+  tiles for Mesh / Texture / Material kinds.
+
+`MeshReconstructor_test.cpp::DedupesIdenticalInstances` also pins the
+per-prim instance ordinal so a future refactor of the part-to-instance
+ordering doesn't silently regress provenance.
 
 These are pure-data unit tests — no Ogre, no QWidget tree — so they run
 on the headless CI fixture without an X server.

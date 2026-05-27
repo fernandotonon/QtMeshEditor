@@ -44,6 +44,13 @@ struct CapturedAssetRow
     /** Index into `CapturedAssetSet::uniqueMeshes` that contains this prim.
      *  -1 if the prim couldn't be matched (matrixId mismatch, etc.). */
     int uniqueMeshIndex = -1;
+    /** Submesh index within `uniqueMeshes[uniqueMeshIndex].subMeshes` that
+     *  this prim wrote into. -1 if the prim wasn't matched. Used by the
+     *  inspector to scope hide / highlight / discard actions to the
+     *  specific `SubEntity` instead of the whole `SceneNode`, so two rows
+     *  sharing an instance but different submeshes don't clobber each
+     *  other (#679 review feedback). */
+    int subMeshIndex = -1;
     /** Index into `CapturedAssetSet::instances` for the placed copy this
      *  prim belongs to. -1 if no instance was created for the prim's
      *  matrix group (e.g. the camera matrix). */

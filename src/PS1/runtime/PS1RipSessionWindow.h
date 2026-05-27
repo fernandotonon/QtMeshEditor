@@ -127,8 +127,15 @@ private:
      *  the row stays addressable for undo via "Restore"). */
     void discardInspectorRow(int rowIndex, bool discarded);
     /** Shared promotion impl used by the inspector right-click action
-     *  and the asset-browser double-click / drag-drop. */
-    bool promoteUniqueMesh(int meshIndex, const QString &assetId);
+     *  and the asset-browser double-click / drag-drop.
+     *
+     *  When `instanceIndex >= 0` the promoted node copies that specific
+     *  instance's world transform (so promoting inspector row N drops the
+     *  entity exactly where row N is rendered). When `-1`, falls back to
+     *  the first instance using the mesh — the right answer for
+     *  drag-and-drop, where the asset browser shows one tile per unique
+     *  mesh and there is no per-instance disambiguation. */
+    bool promoteUniqueMesh(int meshIndex, const QString &assetId, int instanceIndex = -1);
 
     /** Capture toolbar widgets bundled into one struct so the class stays
      *  under SonarCloud's S1820 field-count threshold (#425 — without the
