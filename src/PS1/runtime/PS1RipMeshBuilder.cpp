@@ -212,6 +212,11 @@ struct TextureBuildContext {
     VramSnapshot vram;
     QHash<QString, TextureDecoder::MaterialKey> materialKeys;
     QHash<QString, Ogre::MaterialPtr> materials;
+    /** Per-material decoded page image, copied from the decoder cache as
+     *  each material is materialised. Surfaced through `BuildResult` so
+     *  the geometry inspector / asset browser (#426) can render texture
+     *  thumbnails without re-reading VRAM. */
+    QHash<QString, QImage> textureImages;
 };
 
 void predecodeCaptureTextures(const CaptureSnapshot *textureSource, TextureBuildContext *ctx)
@@ -291,6 +296,11 @@ Ogre::MaterialPtr ensureMaterial(const QString &logicalName, TextureBuildContext
         const QRect bounds = ctx->decoder.cachedBoundsOnPage(key);
         if (!tile.isNull()) {
             const QImage page = pageImageFromCachedTile(tile, bounds);
+            // Stash a copy for the geometry inspector / asset browser so it
+            // can render texture thumbnails without re-decoding from VRAM
+            // (#426). Keyed by logical material name to match
+            // `ReconstructedSubMesh::materialName`.
+            ctx->textureImages.insert(logicalName, page);
             const QString texResource = textureResourceName(ctx->captureId, logicalName);
             QString uploadErr;
             if (uploadTextureToOgre(ctx->resourceGroup, texResource, page, &uploadErr)) {
@@ -575,6 +585,7 @@ bool PS1RipMeshBuilder::attachToScene(const ReconstructedMesh &mesh, const QStri
         resultOut->entity = entity;
         resultOut->vertexCount = mesh.vertexCount;
         resultOut->triangleCount = mesh.triangleCount;
+        resultOut->textureImages = texCtx.textureImages;
     }
     SentryReporter::addBreadcrumb(
         QStringLiteral("ps1.rip.attach"),
@@ -706,6 +717,7 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
         resultOut->entity = firstEntity;
         resultOut->vertexCount = totalVerts;
         resultOut->triangleCount = totalTris;
+        resultOut->textureImages = texCtx.textureImages;
     }
     SentryReporter::addBreadcrumb(
         QStringLiteral("ps1.rip.attach"),

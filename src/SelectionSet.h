@@ -15,7 +15,12 @@ class SelectionSet : public QObject
 
 public :
     static SelectionSet* getSingleton();
+    static SelectionSet* getSingletonPtr();
     static void kill();
+    /** Connect to `Manager::sceneNodeDestroyed` when a Manager exists.
+     *  Called from `getSingleton()` and from `Manager`'s constructor so
+     *  tests that recreate SelectionSet without Manager do not boot Ogre. */
+    void tryConnectToManager();
 
 private:
     SelectionSet();
@@ -82,6 +87,11 @@ public :
 private:
     void hideBoundingBox(Ogre::SceneNode* node)  const;
     void hideAllBoundingBox()  const;
+    /** Drop any selection entries tied to `node` or its attached
+     *  entities. Connected to `Manager::sceneNodeDestroyed` so a fresh
+     *  PS1 capture (which destroys `PS1Capture_*` nodes) cannot leave
+     *  dangling pointers that crash the next `selectOne` / promote. */
+    void onSceneNodeDestroyed(Ogre::SceneNode *node);
 signals:
     void selectionChanged();
     void nodeSelectionChanged();
@@ -90,6 +100,7 @@ signals:
 
 private :
     static SelectionSet*    m_pSingleton; // the only instance of this!
+    bool m_connectedToManager = false;
     QList<Ogre::SceneNode*> mNodesSelected;
     QList<Ogre::Entity*>    mEntitiesSelected;
     QList<Ogre::SubEntity*> mSubEntitiesSelected;

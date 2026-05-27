@@ -125,6 +125,9 @@ Manager::Manager(MainWindow* parent):
     initRoot();         // Init Ogre Root
     initRenderSystem(); // Init Ogre Render System
     initSceneMgr();     // Init Ogre SceneManager
+
+    if (SelectionSet *sel = SelectionSet::getSingletonPtr())
+        sel->tryConnectToManager();
 }
 Manager::~Manager()
 {

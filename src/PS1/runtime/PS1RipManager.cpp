@@ -4,6 +4,7 @@
 #include "MeshReconstructionStats.h"
 #include "MeshReconstructor.h"
 #include "MeshTopologyHash.h"
+#include "PS1CapturedAssets.h"
 #include "PS1RipMeshBuilder.h"
 #include "PS1RipWorker.h"
 #include "Ps1CoordinateNormalizer.h"
@@ -221,6 +222,17 @@ void PS1RipManager::initializeWorkerThread()
                     QStringLiteral("ps1.rip.vram.sync"),
                     QStringLiteral("capture=%1 mode=%2")
                         .arg(captureId, psxVramMirrorModeLabel(vramMirrorMode)));
+                // Populate the captured-asset store on the GUI thread before
+                // emitting `meshBuilt` so the inspector / asset-browser UI
+                // can refresh from a fully-populated store as soon as they
+                // observe the signal (#426). `meshBuilt` is connected with
+                // the default auto-connection but the worker thread emits
+                // it through a queued connection — emitting after the store
+                // update keeps everything single-threaded from the UI's POV.
+                CapturedAssetSet assetSet = PS1CapturedAssets::buildFromCapture(
+                    captureId, snapshot, captureSet, built.textureImages);
+                if (PS1CapturedAssets *store = PS1CapturedAssets::getSingleton())
+                    store->setCaptureSet(std::move(assetSet));
                 emit meshBuilt(captureId, captureSet.capturedPartCount, captureSet.uniqueCount(),
                                captureSet.instanceCount(), built.vertexCount, built.triangleCount,
                                snapshot.matrices.size(), snapshot.cameraMatrixId,

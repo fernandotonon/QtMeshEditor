@@ -5,6 +5,8 @@
 #include "MeshReconstructor.h"
 #include "Ps1CoordinateNormalizer.h"
 
+#include <QHash>
+#include <QImage>
 #include <QString>
 
 namespace Ogre {
@@ -21,6 +23,11 @@ public:
         Ogre::Entity *entity = nullptr;
         int vertexCount = 0;
         int triangleCount = 0;
+        /** Decoded texture page (256×256 RGBA) keyed by logical material
+         *  name, populated for the inspector's Texture / Material thumbs
+         *  (#426). Only textured materials are present; mono / shaded
+         *  materials have no entry. */
+        QHash<QString, QImage> textureImages;
     };
 
     static bool attachToScene(const ReconstructedMesh &mesh, const QString &captureId,

@@ -117,6 +117,18 @@ TEST(MeshReconstructorTest, DedupesIdenticalInstances)
     EXPECT_EQ(loose.instances[0].uniqueMeshIndex, 0);
     EXPECT_EQ(loose.instances[1].uniqueMeshIndex, 0);
     EXPECT_EQ(loose.instances[2].uniqueMeshIndex, 0);
+
+    // #679 review feedback: every prim should resolve to a distinct
+    // instance via provenance. The 3 deduplicated parts share `uniqueMesh = 0`
+    // but each prim lives on its own `matrixId` so the instance ordinals
+    // must be 0/1/2 — not all 0 like the legacy material-only mapping did.
+    ASSERT_EQ(loose.primProvenance.size(), 3);
+    EXPECT_EQ(loose.primProvenance[0].uniqueMeshIndex, 0);
+    EXPECT_EQ(loose.primProvenance[1].uniqueMeshIndex, 0);
+    EXPECT_EQ(loose.primProvenance[2].uniqueMeshIndex, 0);
+    EXPECT_NE(loose.primProvenance[0].instanceIndex, loose.primProvenance[1].instanceIndex);
+    EXPECT_NE(loose.primProvenance[1].instanceIndex, loose.primProvenance[2].instanceIndex);
+    EXPECT_NE(loose.primProvenance[0].instanceIndex, loose.primProvenance[2].instanceIndex);
 }
 
 TEST(MeshReconstructorTest, KeepsPartiallyOnScreenPrimitives)

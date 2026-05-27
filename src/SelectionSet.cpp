@@ -48,12 +48,15 @@ SelectionSet* SelectionSet:: m_pSingleton = nullptr;
 
 SelectionSet* SelectionSet::getSingleton()
 {
-  if (m_pSingleton == nullptr)
-  {
-      m_pSingleton =  new SelectionSet();
-  }
+    if (m_pSingleton == nullptr)
+        m_pSingleton = new SelectionSet();
+    m_pSingleton->tryConnectToManager();
+    return m_pSingleton;
+}
 
-  return m_pSingleton;
+SelectionSet *SelectionSet::getSingletonPtr()
+{
+    return m_pSingleton;
 }
 
 void SelectionSet::kill()
@@ -69,9 +72,59 @@ void SelectionSet::kill()
 // Constructor & Destructor
 
 SelectionSet::SelectionSet()
-    :QObject(nullptr)
+    : QObject(nullptr)
 {
+}
 
+void SelectionSet::tryConnectToManager()
+{
+    if (m_connectedToManager)
+        return;
+    auto *mgr = Manager::getSingletonPtr();
+    if (!mgr)
+        return;
+    connect(mgr, &Manager::sceneNodeDestroyed, this, &SelectionSet::onSceneNodeDestroyed);
+    m_connectedToManager = true;
+}
+
+void SelectionSet::onSceneNodeDestroyed(Ogre::SceneNode *node)
+{
+    if (!node)
+        return;
+
+    bool changed = false;
+    const auto pruneNode = [&](auto &&self, Ogre::SceneNode *current) -> void {
+        if (!current)
+            return;
+
+        if (mNodesSelected.removeOne(current) > 0)
+            changed = true;
+
+        for (unsigned short i = 0; i < current->numAttachedObjects(); ++i) {
+            Ogre::MovableObject *obj = current->getAttachedObject(i);
+            if (!obj || obj->getMovableType() != "Entity")
+                continue;
+            auto *ent = static_cast<Ogre::Entity *>(obj);
+            if (mEntitiesSelected.removeOne(ent) > 0)
+                changed = true;
+            for (unsigned short s = 0; s < ent->getNumSubEntities(); ++s) {
+                if (mSubEntitiesSelected.removeOne(ent->getSubEntity(s)) > 0)
+                    changed = true;
+            }
+        }
+
+        for (Ogre::Node *child : current->getChildren())
+            self(self, static_cast<Ogre::SceneNode *>(child));
+    };
+    pruneNode(pruneNode, node);
+
+    if (!changed)
+        return;
+
+    emit nodeSelectionChanged();
+    emit entitySelectionChanged();
+    emit subEntitySelectionChanged();
+    emit selectionChanged();
 }
 
 void SelectionSet::append(Ogre::SceneNode* const& obj)
@@ -495,12 +548,48 @@ void SelectionSet::hideBoundingBox(Ogre::SceneNode* node)  const
     node->showBoundingBox(false);
 }
 
-void SelectionSet::hideAllBoundingBox()  const
+void SelectionSet::hideAllBoundingBox() const
 {
-    foreach(Ogre::SceneNode* node, mNodesSelected)
-        node->showBoundingBox(false);
-    foreach(Ogre::Entity* entity, mEntitiesSelected)
-        entity->getParentSceneNode()->showBoundingBox(false);
-    foreach(Ogre::SubEntity* subEntiy, mSubEntitiesSelected)
-        subEntiy->getParent()->getParentSceneNode()->showBoundingBox(false);
+    Manager *mgr = Manager::getSingletonPtr();
+    Ogre::SceneManager *sceneMgr = mgr ? mgr->getSceneMgr() : nullptr;
+
+    auto nodeStillLive = [&](Ogre::SceneNode *node) {
+        if (!node || !sceneMgr)
+            return false;
+        try {
+            return node->getCreator() == sceneMgr;
+        } catch (...) {
+            return false;
+        }
+    };
+
+    for (Ogre::SceneNode *node : mNodesSelected) {
+        if (nodeStillLive(node))
+            node->showBoundingBox(false);
+    }
+    for (Ogre::Entity *entity : mEntitiesSelected) {
+        if (!entity)
+            continue;
+        try {
+            if (Ogre::SceneNode *parent = entity->getParentSceneNode()) {
+                if (nodeStillLive(parent))
+                    parent->showBoundingBox(false);
+            }
+        } catch (...) {
+        }
+    }
+    for (Ogre::SubEntity *subEntity : mSubEntitiesSelected) {
+        if (!subEntity)
+            continue;
+        try {
+            Ogre::Entity *parentEnt = subEntity->getParent();
+            if (!parentEnt)
+                continue;
+            if (Ogre::SceneNode *parentNode = parentEnt->getParentSceneNode()) {
+                if (nodeStillLive(parentNode))
+                    parentNode->showBoundingBox(false);
+            }
+        } catch (...) {
+        }
+    }
 }

@@ -19,10 +19,29 @@ struct ReconstructedInstance {
     float pz = 0.0f;
 };
 
+/** Per-`PrimRecord` provenance: where this draw call landed in the
+ *  reconstructed scene (#679 / #426 review feedback). Parallel to
+ *  `CaptureSnapshot::prims` — entry `i` is the resolution for `prims[i]`.
+ *  All fields are `-1` when the prim was culled by the on-screen filter,
+ *  carried fewer than 3 / 2 verts, or did not survive dedupe (e.g. only
+ *  hit the model-mesh path that has no `PrimRecord`).
+ *
+ *  This replaces the earlier `materialName → first uniqueMesh` lookup that
+ *  collapsed every solid-color row onto a single mesh / instance — the
+ *  inspector now resolves each row to the exact submesh and scene node
+ *  the prim produced, so highlight / hide / promote target the right
+ *  sub-entity even when multiple unique meshes share a material. */
+struct PrimProvenance {
+    int uniqueMeshIndex = -1;
+    int subMeshIndex = -1;
+    int instanceIndex = -1;
+};
+
 /** Deduplicated capture output: unique meshes + instance transforms (#423). */
 struct ReconstructedCaptureSet {
     QVector<ReconstructedMesh> uniqueMeshes;
     QVector<ReconstructedInstance> instances;
+    QVector<PrimProvenance> primProvenance; // parallel to CaptureSnapshot::prims
     int capturedPartCount = 0;
 
     bool isEmpty() const { return uniqueMeshes.isEmpty(); }

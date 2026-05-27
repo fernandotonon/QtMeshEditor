@@ -282,8 +282,13 @@ QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> buildMatrixGroups(const Capt
     return groupsByMatrix;
 }
 
+/** Build the mesh for a single matrix group, recording which texture key
+ *  produced which submesh index in `texKeyToSubMesh` so the per-prim
+ *  provenance pass can resolve `prim → (matrixId, texKey) → submeshIndex`
+ *  (#679 review feedback). */
 ReconstructedMesh meshFromMatrixGroup(uint32_t matrixId,
-                                      const QHash<quint64, SubMeshAccumulator> &texGroups)
+                                      const QHash<quint64, SubMeshAccumulator> &texGroups,
+                                      QHash<quint64, int> *texKeyToSubMesh = nullptr)
 {
     ReconstructedMesh result;
     result.meshName = QStringLiteral("ps1_part_%1").arg(matrixId);
@@ -292,6 +297,10 @@ ReconstructedMesh meshFromMatrixGroup(uint32_t matrixId,
         const SubMeshAccumulator &acc = texIt.value();
         if (acc.vertices.isEmpty() || acc.indices.size() < 3)
             continue;
+
+        const int subMeshIndex = result.subMeshes.size();
+        if (texKeyToSubMesh)
+            texKeyToSubMesh->insert(texIt.key(), subMeshIndex);
 
         ReconstructedSubMesh sub;
         sub.materialName = acc.materialName;
@@ -304,18 +313,34 @@ ReconstructedMesh meshFromMatrixGroup(uint32_t matrixId,
     return result;
 }
 
-QVector<ReconstructedMesh> buildParts(const CaptureSnapshot &snapshot,
-                                      MeshReconstructionStats *statsOut,
-                                      const Ps1NormalizerSettings &settings)
-{
+struct PartsBuildResult {
     QVector<ReconstructedMesh> parts;
+    // partIndexByMatrixId[matrixId] = index into `parts` for this matrix.
+    // Matrices whose group produced no surviving submesh (every accumulator
+    // got skipped by the < 3 indices guard) are simply absent.
+    QHash<uint32_t, int> partIndexByMatrixId;
+    // subMeshIndexByTexKey[partIndex][texKey] = submeshIndex within parts[partIndex].
+    // Empty for parts contributed by `snapshot.modelMeshes` (those bypass the
+    // matrix-group path and don't carry a texKey-addressable identity).
+    QVector<QHash<quint64, int>> subMeshIndexByTexKey;
+};
+
+PartsBuildResult buildParts(const CaptureSnapshot &snapshot,
+                            MeshReconstructionStats *statsOut,
+                            const Ps1NormalizerSettings &settings)
+{
+    PartsBuildResult out;
     const QHash<uint32_t, QHash<quint64, SubMeshAccumulator>> groupsByMatrix =
         buildMatrixGroups(snapshot, statsOut, settings);
 
     for (auto matIt = groupsByMatrix.constBegin(); matIt != groupsByMatrix.constEnd(); ++matIt) {
-        ReconstructedMesh part = meshFromMatrixGroup(matIt.key(), matIt.value());
-        if (!part.isEmpty())
-            parts.append(part);
+        QHash<quint64, int> texKeyToSubMesh;
+        ReconstructedMesh part = meshFromMatrixGroup(matIt.key(), matIt.value(), &texKeyToSubMesh);
+        if (part.isEmpty())
+            continue;
+        out.partIndexByMatrixId.insert(matIt.key(), out.parts.size());
+        out.subMeshIndexByTexKey.append(texKeyToSubMesh);
+        out.parts.append(part);
     }
 
     // #674 — Model-space meshes from PsxTmdRamScanner / PsxHmdRamScanner. These bypass the
@@ -326,7 +351,8 @@ QVector<ReconstructedMesh> buildParts(const CaptureSnapshot &snapshot,
     for (const CapturedModelMesh &cap : snapshot.modelMeshes) {
         if (cap.mesh.isEmpty())
             continue;
-        parts.append(cap.mesh);
+        out.subMeshIndexByTexKey.append(QHash<quint64, int>{});
+        out.parts.append(cap.mesh);
         if (statsOut) {
             int verts = 0;
             for (const ReconstructedSubMesh &sub : cap.mesh.subMeshes) {
@@ -342,7 +368,7 @@ QVector<ReconstructedMesh> buildParts(const CaptureSnapshot &snapshot,
         }
     }
 
-    return parts;
+    return out;
 }
 
 ReconstructedMesh flattenParts(const QVector<ReconstructedMesh> &parts)
@@ -356,6 +382,56 @@ ReconstructedMesh flattenParts(const QVector<ReconstructedMesh> &parts)
         merged.triangleCount += part.triangleCount;
     }
     return merged;
+}
+
+/** Walk `snapshot.prims` in order and resolve each one to the part + submesh
+ *  it produced via the build-time `(matrixId, texKey) → (partIndex, subMeshIndex)`
+ *  map. `instanceIndex == partIndex` because the dedupe pass emits exactly one
+ *  instance per surviving part in the same order. Prims that don't survive
+ *  the on-screen filter or whose matrix group was wholly skipped leave their
+ *  default `-1` provenance — the inspector silently ignores those rows. */
+QVector<PrimProvenance> resolvePrimProvenance(const CaptureSnapshot &snapshot,
+                                              const PartsBuildResult &build,
+                                              const QVector<int> &partIndexToUnique)
+{
+    QVector<PrimProvenance> provenance(snapshot.prims.size());
+    for (int i = 0; i < snapshot.prims.size(); ++i) {
+        const PrimRecord &prim = snapshot.prims[i];
+        if (!PsxCaptureFilters::isOnScreenPrim(prim))
+            continue;
+        const bool survives =
+            ((prim.kind == PrimKind::MonoTri || prim.kind == PrimKind::ShadedTri
+              || prim.kind == PrimKind::TexturedTri) && prim.vertexCount >= 3)
+            || ((prim.kind == PrimKind::MonoQuad || prim.kind == PrimKind::ShadedQuad
+                 || prim.kind == PrimKind::TexturedQuad) && prim.vertexCount >= 4)
+            || (prim.kind == PrimKind::Sprite && prim.vertexCount >= 2);
+        if (!survives)
+            continue;
+        const auto partIt = build.partIndexByMatrixId.constFind(prim.matrixId);
+        if (partIt == build.partIndexByMatrixId.constEnd())
+            continue;
+        const int partIndex = partIt.value();
+        if (partIndex < 0 || partIndex >= build.subMeshIndexByTexKey.size())
+            continue;
+        const QHash<quint64, int> &texMap = build.subMeshIndexByTexKey.at(partIndex);
+        const quint64 texKey = MeshReconstructor::textureGroupKey(
+            prim.tpage, prim.clut, prim.semiTrans, prim.drawModeBits);
+        const auto subIt = texMap.constFind(texKey);
+        if (subIt == texMap.constEnd())
+            continue;
+        if (partIndex >= partIndexToUnique.size())
+            continue;
+        const int uniqueIndex = partIndexToUnique.at(partIndex);
+        if (uniqueIndex < 0)
+            continue;
+        provenance[i].uniqueMeshIndex = uniqueIndex;
+        provenance[i].subMeshIndex = subIt.value();
+        // Instance order is part order: `reconstructDeduped` walks `build.parts`
+        // and appends one instance per surviving part, so `partIndex` is also
+        // the index into `ReconstructedCaptureSet::instances`.
+        provenance[i].instanceIndex = partIndex;
+    }
+    return provenance;
 }
 
 } // namespace
@@ -380,7 +456,7 @@ quint64 MeshReconstructor::textureGroupKey(uint16_t tpage, uint16_t clut, uint8_
 
 ReconstructedMesh MeshReconstructor::reconstruct(const CaptureSnapshot &snapshot)
 {
-    return flattenParts(buildParts(snapshot, nullptr, Ps1NormalizerSettings{}));
+    return flattenParts(buildParts(snapshot, nullptr, Ps1NormalizerSettings{}).parts);
 }
 
 ReconstructedCaptureSet MeshReconstructor::reconstructDeduped(const CaptureSnapshot &snapshot,
@@ -402,14 +478,20 @@ ReconstructedCaptureSet MeshReconstructor::reconstructDeduped(const CaptureSnaps
                                                             MeshReconstructionStats *statsOut)
 {
     ReconstructedCaptureSet result;
-    const QVector<ReconstructedMesh> parts = buildParts(snapshot, statsOut, normalize);
-    result.capturedPartCount = parts.size();
-    if (parts.isEmpty())
+    const PartsBuildResult build = buildParts(snapshot, statsOut, normalize);
+    result.capturedPartCount = build.parts.size();
+    if (build.parts.isEmpty()) {
+        // Still emit a default-filled provenance vector so the inspector
+        // can index it 1:1 with `snapshot.prims` without checking sizes.
+        result.primProvenance.resize(snapshot.prims.size());
         return result;
+    }
 
     QHash<quint64, int> hashToUnique;
+    QVector<int> partIndexToUnique;
+    partIndexToUnique.reserve(build.parts.size());
 
-    for (const ReconstructedMesh &part : parts) {
+    for (const ReconstructedMesh &part : build.parts) {
         float cx = 0.0f;
         float cy = 0.0f;
         float cz = 0.0f;
@@ -431,7 +513,9 @@ ReconstructedCaptureSet MeshReconstructor::reconstructDeduped(const CaptureSnaps
         inst.py = cy;
         inst.pz = cz;
         result.instances.append(inst);
+        partIndexToUnique.append(uniqueIndex);
     }
 
+    result.primProvenance = resolvePrimProvenance(snapshot, build, partIndexToUnique);
     return result;
 }

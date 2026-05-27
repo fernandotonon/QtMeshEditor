@@ -1,11 +1,16 @@
 #include "PS1RipSessionWindow.h"
 #include "EmuViewport.h"
+#include "Manager.h"
+#include "PS1CapturedAssets.h"
+#include "PS1ExtractedAssetBrowser.h"
+#include "PS1GeometryInspectorPanel.h"
 #include "PS1RipGamepadBridge.h"
 #include "PS1RipInputSettingsDialog.h"
 #include "PS1RipLegalityDialog.h"
 #include "PS1RipManager.h"
 #include "Ps1CoordinateNormalizer.h"
 #include "PsxJoypadBindings.h"
+#include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "PsxJoypadState.h"
 #include "PsxVramMirrorMode.h"
@@ -15,6 +20,8 @@
 #include <QSignalBlocker>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QFocusEvent>
+#include <QShowEvent>
 #include <QDateTime>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
@@ -22,6 +29,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QImage>
 #include <QKeySequence>
 #include <QMenu>
 #include <QTimer>
@@ -38,6 +46,8 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <Ogre.h>
 
 namespace {
 constexpr auto kSettingsGroup = "ps1Rip";
@@ -80,6 +90,7 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     : QMainWindow(parent)
     , m_manager(PS1RipManager::getSingleton())
 {
+    s_lastInstance = this;
     PsxJoypadBindings::load();
 
     setWindowTitle(tr("PS1 Runtime Ripper"));
@@ -268,6 +279,7 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     addDockWidget(Qt::BottomDockWidgetArea, vramDock);
 
     createNormalizerDock();
+    createInspectorDocks();
 
     m_statusLabel = new QLabel(this);
     statusBar()->addPermanentWidget(m_statusLabel, /*stretch=*/1);
@@ -354,8 +366,31 @@ PS1RipSessionWindow::~PS1RipSessionWindow()
 {
     if (m_manager && m_manager->isSessionActive())
         m_manager->stop();
+    if (s_lastInstance == this)
+        s_lastInstance = nullptr;
     SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.viewport.close"),
                                 QStringLiteral("PS1 rip session window closed"));
+}
+
+QPointer<PS1RipSessionWindow> PS1RipSessionWindow::s_lastInstance;
+
+bool PS1RipSessionWindow::promoteUniqueMeshById(int meshIndex, const QString &assetId)
+{
+    if (auto *win = s_lastInstance.data())
+        return win->promoteUniqueMesh(meshIndex, assetId);
+    return false;
+}
+
+void PS1RipSessionWindow::focusInEvent(QFocusEvent *event)
+{
+    s_lastInstance = this;
+    QMainWindow::focusInEvent(event);
+}
+
+void PS1RipSessionWindow::showEvent(QShowEvent *event)
+{
+    s_lastInstance = this;
+    QMainWindow::showEvent(event);
 }
 
 void PS1RipSessionWindow::createNormalizerDock()
@@ -469,6 +504,432 @@ void PS1RipSessionWindow::pushNormalizerSettings()
     Ps1CoordinateNormalizer::save(qs, QString::fromLatin1(kNormalizePrefix), s);
     if (m_manager)
         m_manager->setNormalizerSettings(s);
+}
+
+void PS1RipSessionWindow::createInspectorDocks()
+{
+    PS1CapturedAssets *store = PS1CapturedAssets::getSingleton();
+
+    m_inspector.inspectorPanel = new PS1GeometryInspectorPanel(store, this);
+    m_inspector.inspectorDock = new QDockWidget(tr("Geometry Inspector"), this);
+    m_inspector.inspectorDock->setWidget(m_inspector.inspectorPanel);
+    m_inspector.inspectorDock->setMinimumHeight(220);
+    addDockWidget(Qt::BottomDockWidgetArea, m_inspector.inspectorDock);
+
+    m_inspector.browser = new PS1ExtractedAssetBrowser(store, this);
+    m_inspector.browserDock = new QDockWidget(tr("Extracted Assets"), this);
+    m_inspector.browserDock->setWidget(m_inspector.browser);
+    m_inspector.browserDock->setMinimumWidth(260);
+    addDockWidget(Qt::RightDockWidgetArea, m_inspector.browserDock);
+
+    connect(m_inspector.inspectorPanel, &PS1GeometryInspectorPanel::highlightRow, this,
+            &PS1RipSessionWindow::highlightInspectorRow);
+    connect(m_inspector.inspectorPanel, &PS1GeometryInspectorPanel::hideSubmeshRequested, this,
+            [this](int row) { setInspectorRowVisible(row, /*visible=*/false); });
+    connect(m_inspector.inspectorPanel, &PS1GeometryInspectorPanel::showSubmeshRequested, this,
+            [this](int row) { setInspectorRowVisible(row, /*visible=*/true); });
+    connect(m_inspector.inspectorPanel, &PS1GeometryInspectorPanel::promoteRowRequested, this,
+            &PS1RipSessionWindow::promoteInspectorRow);
+    connect(m_inspector.inspectorPanel, &PS1GeometryInspectorPanel::discardRowRequested, this,
+            [this](int row) {
+                // Bounds-check before indexing: a stale context-menu action
+                // dispatched after a fresh capture has wiped the rows
+                // would otherwise walk past the end of the vector
+                // (#679 review feedback).
+                if (PS1CapturedAssets *s = PS1CapturedAssets::getSingletonPtr()) {
+                    const auto &rows = s->captureSet().rows;
+                    if (row < 1 || row > rows.size())
+                        return;
+                    const bool wasDiscarded = rows.at(row - 1).discarded;
+                    discardInspectorRow(row, !wasDiscarded);
+                }
+            });
+    connect(m_inspector.browser, &PS1ExtractedAssetBrowser::instantiateMesh, this,
+            [this](int meshIndex, const QString &assetId) {
+                promoteUniqueMesh(meshIndex, assetId);
+            });
+}
+
+namespace {
+
+/** Strip the `PS1Rip_<captureId>_` prefix from a capture-scoped material
+ *  resource name to recover the logical name (`PS1Rip_tpage_…` or
+ *  `PS1Rip_color`) that keys `CapturedAssetSet::textureImages`. */
+QString logicalMaterialFromScopedName(const QString &scopedName, const QString &captureId)
+{
+    const QString prefix = QStringLiteral("PS1Rip_%1_").arg(captureId);
+    if (scopedName.startsWith(prefix))
+        return scopedName.mid(prefix.size());
+    return scopedName;
+}
+
+/** CPU upload for promoted textures — mirrors `PS1RipMeshBuilder`'s
+ *  `uploadTextureToOgre` but always lands in the default resource group so
+ *  promoted assets survive the next capture's session-group purge. */
+bool uploadPromotedTexture(const QString &resourceName, const QImage &image)
+{
+    if (image.isNull() || image.width() < 1 || image.height() < 1)
+        return false;
+
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    if (rgba.isNull())
+        return false;
+    const int tightStride = rgba.width() * 4;
+    if (rgba.bytesPerLine() != tightStride)
+        rgba = rgba.copy();
+
+    Ogre::Image ogreImage;
+    try {
+        ogreImage.loadDynamicImage(rgba.bits(), static_cast<Ogre::uint32>(rgba.width()),
+                                   static_cast<Ogre::uint32>(rgba.height()), 1, Ogre::PF_BYTE_RGBA,
+                                   false);
+    } catch (const Ogre::Exception &) {
+        return false;
+    }
+
+    const std::string texName = resourceName.toStdString();
+    Ogre::TextureManager &texMgr = Ogre::TextureManager::getSingleton();
+    if (texMgr.resourceExists(texName))
+        texMgr.remove(texName);
+
+    Ogre::TexturePtr texture = texMgr.createManual(
+        texName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, Ogre::TEX_TYPE_2D,
+        ogreImage.getWidth(), ogreImage.getHeight(), 0, ogreImage.getFormat(),
+        Ogre::TU_STATIC_WRITE_ONLY);
+    if (!texture)
+        return false;
+
+    Ogre::HardwarePixelBufferSharedPtr pixelBuffer = texture->getBuffer(0, 0);
+    if (!pixelBuffer)
+        return false;
+    pixelBuffer->blitFromMemory(ogreImage.getPixelBox());
+    texture->load();
+    return true;
+}
+
+/** Resolve a `CapturedAssetRow` to the live Ogre entity + sub-entity in the
+ *  capture preview. Returns null pointers when any link is missing so the
+ *  callers can short-circuit instead of crashing on a stale row (#679
+ *  review: row actions must be submesh-scoped, not whole-node-scoped). */
+struct InspectorRowResolution
+{
+    Ogre::SceneNode *node = nullptr;
+    Ogre::Entity *entity = nullptr;
+    Ogre::SubEntity *subEntity = nullptr;
+};
+
+InspectorRowResolution resolveInspectorRow(const CapturedAssetRow &row,
+                                           const CapturedAssetSet &set)
+{
+    InspectorRowResolution out;
+    if (row.instanceIndex < 0)
+        return out;
+    Manager *mgr = Manager::getSingletonPtr();
+    if (!mgr)
+        return out;
+    const QString nodeName = set.instanceNodeNames.value(row.instanceIndex);
+    if (nodeName.isEmpty())
+        return out;
+    out.node = mgr->getSceneNode(nodeName);
+    if (!out.node)
+        return out;
+    // A capture node owns exactly one Entity (built by `attachCaptureSetToScene`).
+    // Walk the attached-objects vector directly (the iterator helper is
+    // deprecated in Ogre 14). Type-check before casting so a ManualObject
+    // can't slip through and trigger the same `static_cast` crash that
+    // bites `Manager::getEntities` callers.
+    for (Ogre::MovableObject *obj : out.node->getAttachedObjects()) {
+        if (obj && obj->getMovableType() == "Entity") {
+            out.entity = static_cast<Ogre::Entity *>(obj);
+            break;
+        }
+    }
+    if (!out.entity)
+        return out;
+    if (row.subMeshIndex >= 0
+        && row.subMeshIndex < static_cast<int>(out.entity->getNumSubEntities()))
+        out.subEntity = out.entity->getSubEntity(static_cast<unsigned int>(row.subMeshIndex));
+    return out;
+}
+
+} // namespace
+
+void PS1RipSessionWindow::highlightInspectorRow(int rowIndex)
+{
+    if (rowIndex < 1)
+        return;
+    PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr();
+    if (!store)
+        return;
+    const CapturedAssetSet &set = store->captureSet();
+    if (rowIndex > set.rows.size())
+        return;
+    SelectionSet *sel = SelectionSet::getSingleton();
+    if (!sel)
+        return;
+    const CapturedAssetRow &row = set.rows.at(rowIndex - 1);
+    const InspectorRowResolution res = resolveInspectorRow(row, set);
+    if (res.subEntity)
+        // Sub-entity selection so the highlight is scoped to the row's
+        // specific submesh — without this, two rows that share an instance
+        // but use different materials both select the whole node and the
+        // viewport outline can't tell them apart (#679 review feedback).
+        sel->selectOne(res.subEntity);
+    else if (res.node)
+        sel->selectOne(res.node);
+}
+
+void PS1RipSessionWindow::setInspectorRowVisible(int rowIndex, bool visible)
+{
+    PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr();
+    if (!store)
+        return;
+    const CapturedAssetSet &set = store->captureSet();
+    if (rowIndex < 1 || rowIndex > set.rows.size())
+        return;
+    const CapturedAssetRow &row = set.rows.at(rowIndex - 1);
+    const InspectorRowResolution res = resolveInspectorRow(row, set);
+    if (res.subEntity) {
+        // Per-submesh hide: each draw call gets its own SubEntity, so this
+        // hides the row's specific triangle list and leaves the other
+        // submeshes of the same node visible (#679 review feedback).
+        res.subEntity->setVisible(visible);
+    } else if (res.node) {
+        // Fall back to whole-node visibility when the row didn't resolve to
+        // a specific submesh (e.g. legacy capture sets without provenance).
+        res.node->setVisible(visible, /*cascade=*/true);
+    }
+    store->setRowHidden(rowIndex, !visible);
+}
+
+void PS1RipSessionWindow::discardInspectorRow(int rowIndex, bool discarded)
+{
+    setInspectorRowVisible(rowIndex, !discarded);
+    if (PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr())
+        store->setRowDiscarded(rowIndex, discarded);
+}
+
+void PS1RipSessionWindow::promoteInspectorRow(int rowIndex)
+{
+    PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr();
+    if (!store)
+        return;
+    const CapturedAssetSet &set = store->captureSet();
+    if (rowIndex < 1 || rowIndex > set.rows.size())
+        return;
+    const CapturedAssetRow &row = set.rows.at(rowIndex - 1);
+    if (row.uniqueMeshIndex < 0)
+        return;
+    const QString meshAssetId =
+        set.uniqueMeshes.at(row.uniqueMeshIndex).meshName + QLatin1Char('_') + set.captureId;
+    // Forward the row's specific instance so the promoted entity drops at
+    // that row's matrix transform — promoting row N after the user clicks
+    // row N in the inspector previously copied the FIRST instance's
+    // transform, producing a duplicate at the wrong spot for any mesh
+    // used by more than one matrix (#679 review feedback).
+    promoteUniqueMesh(row.uniqueMeshIndex, meshAssetId, row.instanceIndex);
+}
+
+namespace {
+
+/** Walk the cloned mesh's submeshes and replace every `PS1Rip_*` capture
+ *  material reference with a freshly-named clone that mirrors the source
+ *  pass and re-uploads textures from `textureImages` (CPU path — the
+ *  previous GPU `HardwarePixelBuffer::blit` between session-group
+ *  textures crashed on double-click promote). The next `beginCaptureAttach`
+ *  purges everything matching the `PS1Rip_*` / `ps1rip_*` patterns, so
+ *  without this the promoted entity would lose its binding on the next
+ *  capture (#679 review feedback). */
+void rebindPromotedMaterials(Ogre::Mesh *clone, const QString &captureId, int promoId,
+                             const QHash<QString, QImage> &textureImages)
+{
+    if (!clone)
+        return;
+    Ogre::MaterialManager &matMgr = Ogre::MaterialManager::getSingleton();
+
+    QHash<QString, QString> textureRenames;
+    QHash<QString, QString> materialRenames;
+
+    auto promotedTextureName = [&](const QString &logicalName) -> QString {
+        return QStringLiteral("ps1imported_%1_p%2_%3")
+            .arg(captureId)
+            .arg(promoId)
+            .arg(logicalName);
+    };
+
+    auto ensurePromotedTexture = [&](const QString &logicalName) -> QString {
+        if (textureRenames.contains(logicalName))
+            return textureRenames.value(logicalName);
+        const auto imgIt = textureImages.constFind(logicalName);
+        if (imgIt == textureImages.constEnd())
+            return {};
+        const QString dstName = promotedTextureName(logicalName);
+        if (uploadPromotedTexture(dstName, imgIt.value()))
+            textureRenames.insert(logicalName, dstName);
+        return textureRenames.value(logicalName, {});
+    };
+
+    auto cloneMaterial = [&](const QString &srcName) -> QString {
+        if (!srcName.startsWith(QStringLiteral("PS1Rip_")))
+            return srcName;
+        if (materialRenames.contains(srcName))
+            return materialRenames.value(srcName);
+        const std::string srcStd = srcName.toStdString();
+        if (!matMgr.resourceExists(srcStd))
+            return srcName;
+        Ogre::MaterialPtr src = matMgr.getByName(srcStd);
+        if (!src)
+            return srcName;
+        const QString dstName = QStringLiteral("PS1Imported_%1_p%2_%3")
+                                    .arg(captureId)
+                                    .arg(promoId)
+                                    .arg(srcName);
+        const std::string dstStd = dstName.toStdString();
+        Ogre::MaterialPtr dst =
+            matMgr.resourceExists(dstStd) ? matMgr.getByName(dstStd) : src->clone(dstStd);
+        if (dst) {
+            const QString logicalName = logicalMaterialFromScopedName(srcName, captureId);
+            const QString promotedTex = ensurePromotedTexture(logicalName);
+            for (unsigned short t = 0; t < dst->getNumTechniques(); ++t) {
+                Ogre::Technique *tech = dst->getTechnique(t);
+                if (!tech)
+                    continue;
+                for (unsigned short p = 0; p < tech->getNumPasses(); ++p) {
+                    Ogre::Pass *pass = tech->getPass(p);
+                    if (!pass)
+                        continue;
+                    if (!promotedTex.isEmpty()) {
+                        pass->removeAllTextureUnitStates();
+                        Ogre::TextureUnitState *tus = pass->createTextureUnitState(promotedTex.toStdString());
+                        tus->setTextureFiltering(Ogre::TFO_NONE);
+                        tus->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
+                        pass->setVertexColourTracking(Ogre::TVC_AMBIENT | Ogre::TVC_DIFFUSE);
+                    }
+                }
+            }
+            dst->compile();
+            dst->load();
+        }
+        materialRenames.insert(srcName, dstName);
+        return dstName;
+    };
+
+    try {
+        for (unsigned short i = 0; i < clone->getNumSubMeshes(); ++i) {
+            Ogre::SubMesh *sm = clone->getSubMesh(i);
+            if (!sm)
+                continue;
+            const QString currentMat = QString::fromStdString(sm->getMaterialName());
+            const QString newMat = cloneMaterial(currentMat);
+            if (newMat != currentMat)
+                sm->setMaterialName(newMat.toStdString());
+        }
+    } catch (const Ogre::Exception &e) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.inspector.promote"),
+                                      QString::fromStdString(e.getFullDescription()),
+                                      QStringLiteral("error"));
+    }
+}
+
+} // namespace
+
+bool PS1RipSessionWindow::promoteUniqueMesh(int meshIndex, const QString &assetId, int instanceIndex)
+{
+    PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr();
+    if (!store || meshIndex < 0)
+        return false;
+    const CapturedAssetSet &set = store->captureSet();
+    if (meshIndex >= set.uniqueMeshes.size())
+        return false;
+    Manager *mgr = Manager::getSingletonPtr();
+    if (!mgr || !mgr->getSceneMgr())
+        return false;
+
+    // Find an existing capture node so we can copy its current world
+    // transform — that way the promoted entity drops where the user
+    // already sees the live preview, even after normalizer tweaks.
+    // Prefer the explicit instance the caller asked for; only fall back
+    // to the "first instance with this uniqueMesh" walk when none was
+    // supplied (asset-browser drag-and-drop case).
+    Ogre::Vector3 worldPos(0, 0, 0);
+    Ogre::Vector3 worldScale(1, 1, 1);
+    Ogre::Quaternion worldOri = Ogre::Quaternion::IDENTITY;
+    QString sourceNodeName;
+    auto tryAdoptInstance = [&](int instIdx) {
+        if (instIdx < 0 || instIdx >= set.instances.size())
+            return false;
+        if (set.instances.at(instIdx).uniqueMeshIndex != meshIndex)
+            return false;
+        const QString nodeName = set.instanceNodeNames.value(instIdx);
+        if (nodeName.isEmpty())
+            return false;
+        if (Ogre::SceneNode *src = mgr->getSceneNode(nodeName)) {
+            worldPos = src->_getDerivedPosition();
+            worldScale = src->_getDerivedScale();
+            worldOri = src->_getDerivedOrientation();
+            sourceNodeName = nodeName;
+            return true;
+        }
+        return false;
+    };
+    if (instanceIndex >= 0) {
+        if (!tryAdoptInstance(instanceIndex))
+            return false;
+    } else {
+        for (auto it = set.instanceNodeNames.constBegin();
+             it != set.instanceNodeNames.constEnd(); ++it) {
+            if (tryAdoptInstance(it.key()))
+                break;
+        }
+    }
+
+    const std::string ogreMeshName = assetId.toStdString();
+    if (!Ogre::MeshManager::getSingleton().resourceExists(ogreMeshName)) {
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("ps1.rip.inspector.promote"),
+            QStringLiteral("error mesh=%1 reason=missing-ogre-mesh").arg(assetId),
+            QStringLiteral("error"));
+        return false;
+    }
+    Ogre::MeshPtr srcMesh = Ogre::MeshManager::getSingleton().getByName(ogreMeshName);
+    if (!srcMesh)
+        return false;
+
+    // Clone the mesh under a permanent name so destroying the live capture
+    // (next Capture Frame / Stop) doesn't yank the underlying buffers.
+    const int promoId = ++m_inspector.promotionCounter;
+    const QString cloneName =
+        QStringLiteral("PS1Imported_%1_mesh%2_p%3").arg(set.captureId).arg(meshIndex).arg(promoId);
+    if (Ogre::MeshManager::getSingleton().resourceExists(cloneName.toStdString()))
+        Ogre::MeshManager::getSingleton().remove(cloneName.toStdString());
+    Ogre::MeshPtr clone = srcMesh->clone(cloneName.toStdString());
+
+    // Rebind to permanent-named material + texture clones so the next
+    // capture's purge of `PS1Rip_*` / `ps1rip_*` doesn't strip them
+    // (#679 review feedback — Codex: "Preserve promoted materials").
+    rebindPromotedMaterials(clone.get(), set.captureId, promoId, set.textureImages);
+
+    const QString nodeName =
+        QStringLiteral("PS1Imported_%1_mesh%2_n%3").arg(set.captureId).arg(meshIndex).arg(promoId);
+    Ogre::SceneNode *node = mgr->addSceneNode(nodeName);
+    if (!node)
+        return false;
+    node->setPosition(worldPos);
+    node->setScale(worldScale);
+    node->setOrientation(worldOri);
+    Ogre::Entity *entity = mgr->createEntity(node, clone);
+    if (!entity) {
+        mgr->destroySceneNode(node);
+        return false;
+    }
+
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ps1.rip.inspector.promote"),
+        QStringLiteral("ok mesh=%1 instance=%2 source=%3 node=%4")
+            .arg(meshIndex)
+            .arg(instanceIndex)
+            .arg(sourceNodeName.isEmpty() ? QStringLiteral("(none)") : sourceNodeName, nodeName));
+    return true;
 }
 
 void PS1RipSessionWindow::showSession(QWidget *parent)
