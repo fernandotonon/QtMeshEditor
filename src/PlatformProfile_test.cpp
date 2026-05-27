@@ -156,6 +156,27 @@ TEST(PlatformProfileLoaderTest, ListBuiltinIncludesExampleProfiles)
     EXPECT_TRUE(ids.contains(QStringLiteral("example-base")));
 }
 
+TEST(PlatformProfileLoaderTest, BuiltinIdMismatchIsRejected)
+{
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    writeJsonFile(temp.filePath(QStringLiteral("wrong-id.json")),
+                  QByteArray(R"({"id":"other-id","rules":{"max_vertex_count":1}})"));
+
+    const QByteArray prior = qgetenv("QTMESH_PROFILES_DIR");
+    QVERIFY(qputenv("QTMESH_PROFILES_DIR", QFileInfo(temp.path()).absoluteFilePath().toUtf8()));
+
+    const PlatformProfileLoadResult loaded =
+        PlatformProfileLoader::load(QStringLiteral("wrong-id"));
+    if (!prior.isEmpty())
+        QVERIFY(qputenv("QTMESH_PROFILES_DIR", prior));
+    else
+        qunsetenv("QTMESH_PROFILES_DIR");
+
+    EXPECT_FALSE(loaded.ok);
+    EXPECT_TRUE(loaded.error.contains(QStringLiteral("id mismatch")));
+}
+
 TEST(PlatformProfileLoaderTest, LoadByExplicitPath)
 {
     const QString dir = profilesSourceDir();
