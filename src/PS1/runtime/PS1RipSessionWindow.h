@@ -79,8 +79,9 @@ private:
     void rebuildRecentIsoMenu();
     /** Builds the right-side "Normalize" dock (capture scale, per-axis flip,
      *  perspective-correct UVs). Each control persists to QSettings under
-     *  `ps1Rip/normalize/*` and pushes the new value to PS1RipManager so the
-     *  user sees the change live without re-capturing (#424). */
+     *  the `ps1Rip/normalize/` prefix and pushes the new value to
+     *  PS1RipManager so the user sees the change live without re-capturing
+     *  (#424). */
     void createNormalizerDock();
     /** Snapshot the current dock widget values into a settings struct and
      *  forward to the manager + QSettings. */
@@ -91,14 +92,47 @@ private:
      *  `onCaptureProgress` and `onSceneCaptureProgress`. */
     void refreshCaptureStatusFooter();
 
+    /** Capture toolbar widgets bundled into one struct so the class stays
+     *  under SonarCloud's S1820 field-count threshold (#425 — without the
+     *  bundling the #425 additions would have pushed the class from 14 to
+     *  27 raw fields). Each member is owned by Qt's parent-child
+     *  hierarchy; the struct itself holds non-owning pointers. */
+    struct CaptureUi {
+        QLabel *footerLabel = nullptr;
+        QSpinBox *sceneSecondsSpin = nullptr;
+        QAction *captureSceneAct = nullptr;
+        QAction *stopCaptureAct = nullptr;
+        /** Arm Capture toggle promoted to a member so Stop Capture and
+         *  sessionStopped can keep its checked state in sync with the
+         *  backend (Codex P2 / CodeRabbit Major on #677). Without this,
+         *  clicking Stop Capture while Arm Capture was checked left the
+         *  toolbar visibly armed even though the manager had already
+         *  disarmed, so the next Capture Frame click was rejected with
+         *  "Capture is not armed". */
+        QAction *armCaptureAct = nullptr;
+    };
+
+    /** Window-scoped capture hotkeys (#425). Bundled to keep the class
+     *  under S1820. */
+    struct CaptureHotkeys {
+        QShortcut *captureFrame = nullptr;
+        QShortcut *captureScene = nullptr;
+        QShortcut *dumpVram = nullptr;
+    };
+
+    /** Last live-progress snapshot from the worker plus scene-capture
+     *  countdown mirror, bundled for footer rendering (#425). */
+    struct CaptureLiveStats {
+        qint64 triangles = 0;
+        int texPages = 0;
+        qint64 bytes = 0;
+        int sceneRemaining = 0;
+        int sceneTotal = 0;
+    };
+
     EmuViewport *m_viewport = nullptr;
     VramViewerWidget *m_vramViewer = nullptr;
     QLabel *m_statusLabel = nullptr;
-    /** Permanent right-side footer carrying the live capture-buffer stats and
-     *  scene-capture countdown (#425). Separate from `m_statusLabel` so the
-     *  primary mesh-built / session-state message isn't overwritten by every
-     *  4 Hz progress update. */
-    QLabel *m_captureFooterLabel = nullptr;
     QMenu *m_recentIsoMenu = nullptr;
     PS1RipGamepadBridge *m_gamepadBridge = nullptr;
     PS1RipManager *m_manager = nullptr;
@@ -107,30 +141,12 @@ private:
     QCheckBox *m_normalizeFlipY = nullptr;
     QCheckBox *m_normalizeFlipZ = nullptr;
     QCheckBox *m_normalizePerspectiveUV = nullptr;
-    /** Scene-capture toolbar widgets (#425). */
-    QSpinBox *m_sceneCaptureSecondsSpin = nullptr;
-    QAction *m_captureSceneAct = nullptr;
-    QAction *m_stopCaptureAct = nullptr;
-    /** Arm Capture toggle promoted to a member so Stop Capture and
-     *  sessionStopped can keep its checked state in sync with the backend
-     *  (Codex P2 / CodeRabbit Major on #677). Without this, clicking Stop
-     *  Capture while Arm Capture was checked left the toolbar visibly
-     *  armed even though the manager had already disarmed, so the next
-     *  Capture Frame click was rejected with "Capture is not armed". */
-    QAction *m_armCaptureAct = nullptr;
-    QShortcut *m_hotkeyCaptureFrame = nullptr;
-    QShortcut *m_hotkeyCaptureScene = nullptr;
-    QShortcut *m_hotkeyDumpVram = nullptr;
     qint64 m_lastFrameMs = 0;
     quint64 m_lastFrameIndex = 0;
     double m_smoothedFps = 0.0;
-    /** Last live-progress snapshot from the worker (#425). */
-    qint64 m_lastCaptureTriangles = 0;
-    int m_lastCaptureTexPages = 0;
-    qint64 m_lastCaptureBytes = 0;
-    /** Scene-capture countdown state mirrored locally for footer rendering. */
-    int m_sceneCaptureRemaining = 0;
-    int m_sceneCaptureTotal = 0;
+    CaptureUi m_captureUi;
+    CaptureHotkeys m_captureHotkeys;
+    CaptureLiveStats m_captureStats;
 };
 
 #endif // PS1RIPSESSIONWINDOW_H

@@ -154,8 +154,7 @@ void PS1RipManager::initializeWorkerThread()
                 // the completion signal even if the mesh build below fails so
                 // the UI can flip out of "scene capture in flight" state — the
                 // build error is surfaced separately via `error()`.
-                const bool wasSceneCapture = m_sceneCaptureAwaitingResult;
-                if (wasSceneCapture) {
+                if (const bool wasSceneCapture = m_sceneCaptureAwaitingResult; wasSceneCapture) {
                     m_sceneCaptureAwaitingResult = false;
                     SentryReporter::addBreadcrumb(
                         QStringLiteral("ps1.rip.capture.scene"),

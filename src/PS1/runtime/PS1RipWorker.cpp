@@ -212,9 +212,11 @@ void PS1RipWorker::runFrameTick()
     // Throttled live capture-buffer stats for the status footer (#425). Every
     // 15 frames at the ~60 Hz target ≈ 4 Hz updates — fast enough that the
     // user sees prims tick up during a scene capture, slow enough that the
-    // GUI thread isn't woken on every emulated frame.
-    if (m_captureArmed.load(std::memory_order_acquire)
-        && (fb.frameIndex % 15) == 0 && m_captureBuffer) {
+    // GUI thread isn't woken on every emulated frame. Uses default
+    // (seq_cst) ordering — these reads are far from a hot path so the
+    // tighter ordering pays for itself in simpler reasoning (SonarCloud
+    // S8417 also prefers it over an explicit acquire here).
+    if (m_captureArmed.load() && (fb.frameIndex % 15) == 0 && m_captureBuffer) {
         const QVector<PrimRecord> &prims = m_captureBuffer->prims();
         qint64 tris = 0;
         QSet<uint16_t> pages;
@@ -241,7 +243,8 @@ void PS1RipWorker::runFrameTick()
             qint64(prims.size()) * qint64(sizeof(PrimRecord))
             + qint64(m_captureBuffer->matrices().size()) * qint64(sizeof(MatrixRecord))
             + qint64(m_captureBuffer->drawModes().size()) * qint64(sizeof(DrawModeRecord));
-        emit captureProgress(qint64(prims.size()), tris, pages.size(), bytes);
+        emit captureProgress(qint64(prims.size()), tris,
+                             static_cast<int>(pages.size()), bytes);
     }
 
     if (!m_running || m_paused || !m_core)
