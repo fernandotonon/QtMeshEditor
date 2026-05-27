@@ -2758,6 +2758,9 @@ QJsonObject MCPServer::toolGenerateLods(const QJsonObject &args)
         ? MeshLodController::Algorithm::Meshopt
         : MeshLodController::Algorithm::Ogre;
 
+    SentryReporter::addBreadcrumb("ai.tool_call",
+        QString("generate_lods count=%1 algo=%2").arg(count).arg(algoStr));
+
     QString errorMsg = captureLodControllerError([&]() {
         MeshLodController::instance()->generateLods(count, reductions, algoEnum);
     });

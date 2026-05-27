@@ -145,6 +145,12 @@ void MeshLodController::generateLodsWithAlgo(int count, QVariantList reductions,
     const auto a = (algo.toLower() == QStringLiteral("meshopt"))
         ? Algorithm::Meshopt
         : Algorithm::Ogre;
+    // QML-only path (the Inspector backend dropdown) — tag the
+    // event as `ui.action` here so generateLods() can stay caller-
+    // neutral and not misclassify MCP invocations.
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Generate %1 LOD level(s) via %2 (Inspector)")
+            .arg(std::max(1, std::min(count, 4))).arg(algo.toLower()));
     generateLods(count, reductions, a);
 }
 
@@ -157,8 +163,11 @@ void MeshLodController::generateLods(int count, const QVariantList& reductions, 
     }
 
     const char* algoName = (algo == Algorithm::Meshopt) ? "meshopt" : "ogre";
-    SentryReporter::addBreadcrumb(
-        algo == Algorithm::Meshopt ? "ai.assist.lod" : "ui.action",
+    // Caller-neutral breadcrumb: this method is invoked from both the
+    // Inspector (ui.action) and MCP (ai.tool_call) paths, so picking a
+    // category here misclassifies the event. UI / MCP entry points
+    // add their own caller-specific breadcrumb before invoking us.
+    SentryReporter::addBreadcrumb("mesh.lod",
         QString("Generate %1 LOD level(s) via %2")
             .arg(std::max(1, std::min(count, 4))).arg(algoName));
 
@@ -180,12 +189,21 @@ void MeshLodController::generateLods(int count, const QVariantList& reductions, 
             // 100% if the caller didn't supply enough explicit
             // values) so the user-visible behaviour matches across
             // backends.
+            // Clamp both explicit and fallback values strictly below
+            // 1.0 — `MeshOptimizerLod::generateLods` rounds a 1.0
+            // ratio down to 0.99 internally, but mirroring that at
+            // the controller boundary means every backend sees the
+            // same contract regardless of where the values came from.
+            // count=4 with omitted reductions would otherwise produce
+            // a fourth slot of 1.0 (= drop the whole submesh), which
+            // the Ogre path treats as VRM_PROPORTIONAL "remove
+            // everything" and silently emits a one-triangle LOD.
             std::vector<float> r;
             r.reserve(count);
             for (int i = 0; i < count; ++i) {
                 const float v = (i < reductions.size())
-                    ? std::max(0.01f, std::min(1.0f, reductions[i].toFloat()))
-                    : 0.25f * (i + 1);
+                    ? std::max(0.01f, std::min(0.99f, reductions[i].toFloat()))
+                    : std::min(0.99f, 0.25f * (i + 1));
                 r.push_back(v);
             }
 
@@ -225,9 +243,13 @@ void MeshLodController::generateLods(int count, const QVariantList& reductions, 
             // ---- Ogre legacy path ----
             Ogre::LodConfig lodConfig(mesh);
             for (int i = 0; i < count; ++i) {
+                // Clamp strictly below 1.0 — see the meshopt branch
+                // above for why; Ogre's VRM_PROPORTIONAL == 1.0 means
+                // "drop every triangle" which collapses to a single
+                // degenerate face.
                 float reduction = (i < reductions.size())
-                    ? std::max(0.01f, std::min(1.0f, reductions[i].toFloat()))
-                    : 0.25f * (i + 1); // fallback: 25%, 50%, 75%, 100%
+                    ? std::max(0.01f, std::min(0.99f, reductions[i].toFloat()))
+                    : std::min(0.99f, 0.25f * (i + 1)); // fallback: 25%, 50%, 75%, 99%
                 float dist = kDistances[i];
                 lodConfig.createGeneratedLodLevel(dist, reduction, Ogre::LodLevel::VRM_PROPORTIONAL);
             }

@@ -548,9 +548,10 @@ void CLIPipeline::printUsage()
         "  anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]\n"
         "                                    Report % redundant keyframes and projected file-size savings\n"
         "  validate <file> [--json]          Validate mesh geometry (exit 1 if errors found)\n"
-        "  lod <file> --count N [--reductions r,...] [-o output]\n"
+        "  lod <file> --count N [--reductions r,...] [--algo ogre|meshopt] [-o output]\n"
         "                                    Generate N LOD levels; exports <base>_lod1.<ext> etc.\n"
-        "  lod <file> --auto [-o output]     Auto-generate LOD levels\n"
+        "                                    --algo: ogre (default) | meshopt (preserves UV seams + skin weights)\n"
+        "  lod <file> --auto [-o output]     Auto-generate LOD levels (Ogre backend)\n"
         "  lod <file> --remove [-o output]   Remove LOD levels (overwrites input if no -o)\n"
         "  lod <file> --info [--json]        Show LOD level info\n"
         "  pose <file> --animation <name> --time <t> -o <output>\n"
@@ -649,7 +650,7 @@ void CLIPipeline::printUsage()
         "  vertex-cache <file> [-o <output>] [--json]\n"
         "                                    Reorder index buffers via Forsyth's algorithm; reports\n"
         "                                    before/after ACMR. Without -o, only analyzes (read-only).\n"
-        "  decimate <file> -o <output> (--reduction <r> | --target-tris N | --target-verts N) [--json]\n"
+        "  decimate <file> -o <output> (--reduction <r> | --target-tris N | --target-verts N) [--algo ogre|meshopt] [--json]\n"
         "                                    Single-pass mesh decimation. Choose one target:\n"
         "                                    --reduction 0.5 (drop half the triangles),\n"
         "                                    --target-tris 5000, or --target-verts 2500.\n"
@@ -2318,6 +2319,7 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
     bool infoMode   = false;
     bool jsonOutput = false;
     QString algo = "ogre";      // default backend. Meshopt (#398) is opt-in via --algo meshopt.
+    bool algoSpecified = false; // whether the caller passed --algo (vs default)
     QVariantList reductions;
 
     for (int i = 1; i < argc; ++i) {
@@ -2343,6 +2345,7 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
                 return 2;
             }
             algo = val;
+            algoSpecified = true;
             continue;
         }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
@@ -2366,6 +2369,18 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
 
     if (!autoMode && !removeMode && !infoMode && lodCount <= 0) {
         err() << "Error: Specify --count N, --auto, --remove, or --info." << Qt::endl;
+        return 2;
+    }
+
+    // --algo is only meaningful for the explicit --count path. The
+    // --auto / --remove / --info modes either drive Ogre's
+    // auto-config heuristic or don't generate geometry at all, so
+    // silently ignoring the flag would let `qtmesh lod model.fbx
+    // --auto --algo meshopt` run a different backend than the
+    // caller asked for. Fail fast instead.
+    if (algoSpecified && (autoMode || removeMode || infoMode)) {
+        err() << "Error: --algo is only supported with --count N "
+                 "(--auto/--remove/--info ignore it)." << Qt::endl;
         return 2;
     }
 

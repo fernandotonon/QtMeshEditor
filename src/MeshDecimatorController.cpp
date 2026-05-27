@@ -222,8 +222,9 @@ void MeshDecimatorController::applyReductionWithAlgo(double reduction, const QSt
         entity->setMeshLodBias(1.0f, 0,
                                std::numeric_limits<unsigned short>::max());
 
-    SentryReporter::addBreadcrumb(
-        algoEnum == MeshDecimator::Algorithm::Meshopt ? "ai.assist.decimate" : "ui.action",
+    // QML-only path — always `ui.action`. MCP `decimate_mesh` tags
+    // its own `ai.tool_call` breadcrumb in MCPServer.
+    SentryReporter::addBreadcrumb("ui.action",
         QString("Decimate (in-place, r=%1, algo=%2)").arg(r, 0, 'f', 2).arg(algoName));
 
     Ogre::Entity* entity = targets.front();

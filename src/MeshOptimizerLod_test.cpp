@@ -98,7 +98,7 @@ protected:
 };
 
 TEST_F(MeshOptimizerLodTest, ReducesTriangleCount) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "GL context unavailable";
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL context unavailable";
 
     auto mesh = createSubdividedPlane("MeshOptLodTest_plane");
     ASSERT_TRUE(mesh);
@@ -120,7 +120,7 @@ TEST_F(MeshOptimizerLodTest, ReducesTriangleCount) {
 }
 
 TEST_F(MeshOptimizerLodTest, EmptyReductionsReturnsEmpty) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "GL context unavailable";
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL context unavailable";
 
     auto mesh = createSubdividedPlane("MeshOptLodTest_plane_empty");
     auto levels = MeshOptimizerLod::generateLods(mesh.get(), {});
@@ -128,7 +128,7 @@ TEST_F(MeshOptimizerLodTest, EmptyReductionsReturnsEmpty) {
 }
 
 TEST_F(MeshOptimizerLodTest, MultipleLevelsAreMonotonicallyReduced) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "GL context unavailable";
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL context unavailable";
 
     auto mesh = createSubdividedPlane("MeshOptLodTest_plane_multi");
     auto levels = MeshOptimizerLod::generateLods(mesh.get(), {0.25f, 0.5f, 0.75f});
