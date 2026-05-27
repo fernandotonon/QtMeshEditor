@@ -180,18 +180,14 @@ ExportOptimizeSubMeshReport optimizeSubMesh(Ogre::Mesh* mesh, unsigned si,
     // the array is unchanged if everything was skipped.
     writeIndices(sub->indexData, indices);
 
-    // Drop the cached `qtme.faces.<i>` n-gon binding for this submesh.
-    // The binding holds vertex indices in the PRE-optimization order;
-    // serializers (FBXExporter, Ogre .mesh path, EditableMesh
-    // round-trips) rehydrate from it in preference to indexData and
-    // would either emit the original unoptimised order OR crash with
-    // an out-of-bounds read when the new index buffer is smaller.
-    // The edit-mode entry point rebuilds the binding from the live
-    // triangle list when needed, so this is safe to erase.
-    if (sr.vertexCacheRun || sr.overdrawRun) {
-        mesh->getUserObjectBindings().eraseUserAny(
-            std::string("qtme.faces.") + std::to_string(si));
-    }
+    // The `qtme.faces.<i>` binding holds POLYGON vertex IDs (e.g.
+    // `[v0, v1, v2, v3]` for a quad). Cache + overdraw only reorder
+    // the GPU index buffer's TRIANGLE list — neither touches the
+    // vertex buffer — so the cached polygon-vertex sets remain
+    // valid and we deliberately leave the binding intact. This is
+    // what distinguishes this path from MeshDecimator: decimation
+    // collapses vertices and invalidates the binding, but reordering
+    // doesn't. Result: n-gons survive Optimize Geometry.
 
     sr.acmrAfter = ExportOptimizer::computeAcmr(indices, vdata->vertexCount);
     return sr;
