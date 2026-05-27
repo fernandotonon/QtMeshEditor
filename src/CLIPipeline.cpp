@@ -548,9 +548,10 @@ void CLIPipeline::printUsage()
         "  anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]\n"
         "                                    Report % redundant keyframes and projected file-size savings\n"
         "  validate <file> [--json]          Validate mesh geometry (exit 1 if errors found)\n"
-        "  lod <file> --count N [--reductions r,...] [-o output]\n"
+        "  lod <file> --count N [--reductions r,...] [--algo ogre|meshopt] [-o output]\n"
         "                                    Generate N LOD levels; exports <base>_lod1.<ext> etc.\n"
-        "  lod <file> --auto [-o output]     Auto-generate LOD levels\n"
+        "                                    --algo: ogre (default) | meshopt (preserves UV seams + skin weights)\n"
+        "  lod <file> --auto [-o output]     Auto-generate LOD levels (Ogre backend)\n"
         "  lod <file> --remove [-o output]   Remove LOD levels (overwrites input if no -o)\n"
         "  lod <file> --info [--json]        Show LOD level info\n"
         "  pose <file> --animation <name> --time <t> -o <output>\n"
@@ -649,7 +650,7 @@ void CLIPipeline::printUsage()
         "  vertex-cache <file> [-o <output>] [--json]\n"
         "                                    Reorder index buffers via Forsyth's algorithm; reports\n"
         "                                    before/after ACMR. Without -o, only analyzes (read-only).\n"
-        "  decimate <file> -o <output> (--reduction <r> | --target-tris N | --target-verts N) [--json]\n"
+        "  decimate <file> -o <output> (--reduction <r> | --target-tris N | --target-verts N) [--algo ogre|meshopt] [--json]\n"
         "                                    Single-pass mesh decimation. Choose one target:\n"
         "                                    --reduction 0.5 (drop half the triangles),\n"
         "                                    --target-tris 5000, or --target-verts 2500.\n"
@@ -2307,7 +2308,7 @@ int CLIPipeline::cmdValidate(int argc, char* argv[])
 
 int CLIPipeline::cmdLod(int argc, char* argv[])
 {
-    // Parse: lod <file> --count N [--reductions r,...] [-o output]
+    // Parse: lod <file> --count N [--reductions r,...] [--algo meshopt|ogre] [-o output]
     //    or: lod <file> --auto [-o output]
     //    or: lod <file> --remove [-o output]
     //    or: lod <file> --info [--json]
@@ -2317,6 +2318,8 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
     bool removeMode = false;
     bool infoMode   = false;
     bool jsonOutput = false;
+    QString algo = "ogre";      // default backend. Meshopt (#398) is opt-in via --algo meshopt.
+    bool algoSpecified = false; // whether the caller passed --algo (vs default)
     QVariantList reductions;
 
     for (int i = 1; i < argc; ++i) {
@@ -2335,6 +2338,16 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
                 reductions.append(p.trimmed().toFloat());
             continue;
         }
+        if (arg == "--algo" && i + 1 < argc) {
+            const QString val = QString(argv[++i]).toLower();
+            if (val != "meshopt" && val != "ogre") {
+                err() << "Error: --algo must be 'meshopt' or 'ogre' (got '" << val << "')." << Qt::endl;
+                return 2;
+            }
+            algo = val;
+            algoSpecified = true;
+            continue;
+        }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString(argv[++i]);
             continue;
@@ -2347,7 +2360,7 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
 
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh lod <file> --count N [--reductions r,...] [-o output]" << Qt::endl;
+        err() << "Usage: qtmesh lod <file> --count N [--reductions r,...] [--algo meshopt|ogre] [-o output]" << Qt::endl;
         err() << "       qtmesh lod <file> --auto [-o output]" << Qt::endl;
         err() << "       qtmesh lod <file> --remove [-o output]" << Qt::endl;
         err() << "       qtmesh lod <file> --info [--json]" << Qt::endl;
@@ -2356,6 +2369,18 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
 
     if (!autoMode && !removeMode && !infoMode && lodCount <= 0) {
         err() << "Error: Specify --count N, --auto, --remove, or --info." << Qt::endl;
+        return 2;
+    }
+
+    // --algo is only meaningful for the explicit --count path. The
+    // --auto / --remove / --info modes either drive Ogre's
+    // auto-config heuristic or don't generate geometry at all, so
+    // silently ignoring the flag would let `qtmesh lod model.fbx
+    // --auto --algo meshopt` run a different backend than the
+    // caller asked for. Fail fast instead.
+    if (algoSpecified && (autoMode || removeMode || infoMode)) {
+        err() << "Error: --algo is only supported with --count N "
+                 "(--auto/--remove/--info ignore it)." << Qt::endl;
         return 2;
     }
 
@@ -2442,11 +2467,17 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
     }
 
     // ---- generate (--count N or --auto) ----
+    // `--auto` always uses Ogre's auto-config path (count + distances
+    // chosen by Ogre's heuristic) — meshoptimizer is invoked only when
+    // the caller asked for explicit counts/reductions.
+    const auto algoEnum = (algo == "meshopt")
+        ? MeshLodController::Algorithm::Meshopt
+        : MeshLodController::Algorithm::Ogre;
     if (autoMode) {
         MeshLodController::instance()->generateAutoLods();
     } else {
         lodCount = std::max(1, std::min(lodCount, 4));
-        MeshLodController::instance()->generateLods(lodCount, reductions);
+        MeshLodController::instance()->generateLods(lodCount, reductions, algoEnum);
     }
 
     const unsigned int totalLods = mesh->getNumLodLevels();
@@ -2473,9 +2504,23 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
     // Export each reduced LOD level as a separate file.
     // Temporarily swap each submesh's indexData with its LOD face list,
     // export, then restore — identical to MeshLodController::doExportLods.
+    //
+    // Also temporarily clear the `qtme.faces.<i>` n-gon bindings on the
+    // mesh: when an FBX carries a cached EditableMesh ngon layer (set
+    // up by quad-migration #326), FBXExporter prefers it over
+    // SubMesh::indexData, which would silently emit the base mesh on
+    // every LOD level. Save the bindings, erase them, export, restore.
     Ogre::SceneNode* sn = entity->getParentSceneNode();
     const unsigned int numSubs = mesh->getNumSubMeshes();
     int exported = 0;
+
+    auto& userBindings = mesh->getUserObjectBindings();
+    std::vector<Ogre::Any> savedNgon(numSubs);
+    for (unsigned int s = 0; s < numSubs; ++s) {
+        const std::string key = std::string("qtme.faces.") + std::to_string(s);
+        savedNgon[s] = userBindings.getUserAny(key);
+        userBindings.eraseUserAny(key);
+    }
 
     for (unsigned int lod = 1; lod < totalLods; ++lod) {
         std::vector<Ogre::IndexData*> savedIndex(numSubs, nullptr);
@@ -2495,6 +2540,15 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
 
         for (unsigned int s = 0; s < numSubs; ++s)
             mesh->getSubMesh(s)->indexData = savedIndex[s];
+    }
+
+    // Restore the cached n-gon bindings now that all LOD exports are
+    // done — keeps the live in-memory mesh consistent with how it was
+    // loaded (matters for tests that re-use the mesh in-process).
+    for (unsigned int s = 0; s < numSubs; ++s) {
+        if (!savedNgon[s].has_value()) continue;
+        userBindings.setUserAny(
+            std::string("qtme.faces.") + std::to_string(s), savedNgon[s]);
     }
 
     if (exported == 0) {
@@ -4534,6 +4588,7 @@ struct DecimateCmdArgs {
     double reduction = -1.0;  // -1 = unset (only one of reduction / targetTris / targetVerts wins)
     int targetTris = -1;
     int targetVerts = -1;
+    QString algo = "ogre";    // "ogre" (default) or "meshopt". Same options as `qtmesh lod --algo`.
 };
 
 // Parse a numeric --target-* flag strictly: any non-numeric input (e.g. a
@@ -4586,6 +4641,15 @@ int applyDecimateArg(const QString& arg, int argc, char* argv[], int& i,
         return parseStrictInt("--target-verts",
                               QString::fromLocal8Bit(argv[i++]),
                               out.targetVerts) ? 1 : 0;
+    }
+    if (arg == "--algo" && i < argc) {
+        const QString val = QString::fromLocal8Bit(argv[i++]).toLower();
+        if (val != "ogre" && val != "meshopt") {
+            err() << "Error: --algo must be 'ogre' or 'meshopt' (got '" << val << "')." << Qt::endl;
+            return 0;
+        }
+        out.algo = val;
+        return 1;
     }
     if (!arg.startsWith("-") && out.filePath.isEmpty()) out.filePath = arg;
     return 1;
@@ -4649,7 +4713,8 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
         if (cmdArgs.filePath.isEmpty()) {
             err() << "Error: No input file specified." << Qt::endl;
             err() << "Usage: qtmesh decimate <file> -o <output> "
-                     "(--reduction <r> | --target-tris N | --target-verts N) [--json]"
+                     "(--reduction <r> | --target-tris N | --target-verts N) "
+                     "[--algo ogre|meshopt] [--json]"
                   << Qt::endl;
         }
         return 2;
@@ -4722,9 +4787,12 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
         // Still produce a no-op output file so callers can rely on the path existing.
     }
 
-    const DecimationReport report = MeshDecimator::decimateEntity(entity, reduction);
+    const auto algoEnum = (cmdArgs.algo == "meshopt")
+        ? MeshDecimator::Algorithm::Meshopt
+        : MeshDecimator::Algorithm::Ogre;
+    const DecimationReport report = MeshDecimator::decimateEntity(entity, reduction, algoEnum);
     if (!report.applied && reduction > 0.0) {
-        err() << "Error: Decimation failed (MeshLodGenerator). The mesh may not be "
+        err() << "Error: Decimation failed (" << cmdArgs.algo << "). The mesh may not be "
                  "suitable for in-place reduction (e.g. zero index data)." << Qt::endl;
         return 1;
     }

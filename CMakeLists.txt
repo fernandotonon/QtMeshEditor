@@ -282,6 +282,23 @@ if(ENABLE_PS1_RIP)
     add_subdirectory(plugins/ps1core_stub)
 endif()
 ##############################################################
+#  meshoptimizer — LOD generation, vertex-cache / overdraw /
+#  fetch optimization, vertex remap dedupe. MIT, header-light,
+#  ~200 KB. First consumer is `qtmesh lod --algo meshopt`
+#  (issue #398 under the AI-Assist epic #397). Always built —
+#  small enough that no opt-out flag is justified.
+##############################################################
+include(FetchContent)
+FetchContent_Declare(
+    meshoptimizer
+    GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+    GIT_TAG v0.21
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(meshoptimizer)
+message(STATUS "meshoptimizer enabled (LOD, vertex cache, dedupe)")
+
+##############################################################
 #  Sentry crash reporting and analytics
 ##############################################################
 option(ENABLE_SENTRY "Enable Sentry crash reporting and analytics" ON)

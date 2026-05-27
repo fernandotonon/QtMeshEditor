@@ -47,6 +47,15 @@ struct DecimationReport {
 // they're testable in any environment.
 class MeshDecimator {
 public:
+    // Backend selector. Mirrors MeshLodController::Algorithm so the
+    // Inspector / CLI / MCP can offer the same dropdown for both
+    // tools. Default `Ogre` — `Meshopt` is the meshoptimizer
+    // `simplifyWithAttributes` path (#398).
+    enum class Algorithm {
+        Ogre,
+        Meshopt,
+    };
+
     // Sentinel — slider / API caps at 95% to avoid degenerate single-triangle
     // outputs that some downstream paths (Ogre exporter, FBX) trip over.
     static constexpr double kMaxReduction = 0.95;
@@ -66,6 +75,10 @@ public:
     // any existing LOD levels (the base mesh is the thing being reduced).
     // Returns the report. `applied` flips to true on success.
     static DecimationReport decimateEntity(Ogre::Entity* entity, double reduction);
+    // Same as `decimateEntity` but lets the caller pick the backend.
+    // The 2-arg form delegates here with `Algorithm::Ogre`.
+    static DecimationReport decimateEntity(Ogre::Entity* entity, double reduction,
+                                           Algorithm algo);
 
     // Analyze-only: same arithmetic as decimateEntity but does not mutate
     // the mesh. Returns the report with `applied = false` and predicted

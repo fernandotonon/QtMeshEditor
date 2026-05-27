@@ -5,6 +5,7 @@ import PropertiesPanel 1.0
 import AnimationControl 1.0
 import EditorMode 1.0
 import MaterialEditorQML 1.0
+import ThemeManager 1.0
 
 Rectangle {
     id: root
@@ -400,7 +401,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ObjectMode,
                     MeshDecimatorController.hasSelection)
-                expanded: false
+                expanded: true
 
                 Component.onCompleted: content = decimateComponent
             }
@@ -2752,6 +2753,27 @@ Rectangle {
                 }
             }
 
+            // Backend selector (meshoptimizer vs Ogre's MeshLodGenerator).
+            // Default `meshopt`: preserves UV seams and skin weights via
+            // attribute-aware simplify. `ogre` kept for legacy round-trip.
+            // Issue #398.
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: "Backend:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    id: lodBackendCombo
+                    width: 90; height: 26
+                    model: ["ogre", "meshopt"]
+                    currentIndex: 0
+                    font.pixelSize: 11
+                }
+            }
+
             // Action buttons
             Row {
                 spacing: 6
@@ -2768,7 +2790,13 @@ Rectangle {
                         id: genMouse; anchors.fill: parent; hoverEnabled: true
                         onClicked: {
                             var reductions = lodContent.reductionValues.slice(0, lodCountSelector.value)
-                            MeshLodController.generateLods(lodCountSelector.value, reductions)
+                            // The Q_INVOKABLE 2-arg overload is what QML
+                            // sees; it defaults to Meshopt internally. To
+                            // pick the Ogre legacy backend instead, route
+                            // through the controller's `algo` getter.
+                            MeshLodController.generateLodsWithAlgo(
+                                lodCountSelector.value, reductions,
+                                lodBackendCombo.currentText)
                         }
                     }
                 }
@@ -2884,6 +2912,26 @@ Rectangle {
             padding: 8
             spacing: 6
 
+            // Force Qt Quick Controls inside this Component to inherit
+            // the dark theme. The CollapsibleSection above is set to
+            // `expanded: true` so this Component instantiates during
+            // initial QML evaluation alongside the LOD section — that
+            // alone is what stopped controls from falling back to the
+            // macOS Aqua chrome on lazy load, but the explicit palette
+            // is kept as belt-and-suspenders so future refactors that
+            // re-introduce lazy loading don't silently regress.
+            palette {
+                window: ThemeManager.panelColor
+                windowText: ThemeManager.textColor
+                base: ThemeManager.inputColor
+                text: ThemeManager.textColor
+                button: ThemeManager.headerColor
+                buttonText: ThemeManager.textColor
+                highlight: ThemeManager.highlightColor
+                highlightedText: "white"
+                mid: ThemeManager.borderColor
+            }
+
             // Slider state — 0..0.95. Default 0 = no change, so opening the
             // section doesn't already preview a reduction.
             property real reduction: 0.0
@@ -2900,7 +2948,8 @@ Rectangle {
                 id: previewDebounce
                 interval: 150
                 repeat: false
-                onTriggered: MeshDecimatorController.previewReduction(decimateContent.reduction)
+                onTriggered: MeshDecimatorController.previewReductionWithAlgo(
+                    decimateContent.reduction, decimateBackendCombo.currentText)
             }
 
             // Reset reduction back to the default when selection changes
@@ -2978,6 +3027,33 @@ Rectangle {
                 }
             }
 
+            // Backend selector — same options as the LOD section.
+            // Default `ogre`; `meshopt` exposes meshoptimizer's
+            // attribute-aware simplify for callers that need UV-seam
+            // / skin-weight preservation.
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Backend:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    id: decimateBackendCombo
+                    width: 90; height: 26
+                    model: ["ogre", "meshopt"]
+                    currentIndex: 0
+                    font.pixelSize: 11
+                    // Re-run the preview when the backend flips so the
+                    // viewport always reflects what Apply would commit.
+                    onCurrentIndexChanged: {
+                        if (decimateContent.reduction > 0.0) {
+                            previewDebounce.restart()
+                        }
+                    }
+                }
+            }
+
             // Apply / Reset row
             Row {
                 spacing: 6; width: parent.width - 16
@@ -2990,7 +3066,8 @@ Rectangle {
                     Text { anchors.centerIn: parent; text: "Apply"; color: "white"; font.pixelSize: 12 }
                     MouseArea {
                         id: applyMouse; anchors.fill: parent; hoverEnabled: true
-                        onClicked: MeshDecimatorController.applyReduction(decimateContent.reduction)
+                        onClicked: MeshDecimatorController.applyReductionWithAlgo(
+                            decimateContent.reduction, decimateBackendCombo.currentText)
                     }
                 }
 
