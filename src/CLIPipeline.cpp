@@ -3987,6 +3987,8 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     }
 
     if (listProfiles) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                    QStringLiteral("scan --list-profiles"));
         const QStringList ids = PlatformProfileLoader::listBuiltinIds();
         if (ids.isEmpty()) {
             err() << "No built-in platform profiles found (searched "
@@ -4013,6 +4015,8 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
             return 2;
         }
         projectRoot = ScanConfig::loadProjectMapFromFile(configPath);
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+            QStringLiteral("scan config=%1").arg(QFileInfo(configPath).absoluteFilePath()));
         if (!resolveIngestToken(tokenArg).isEmpty()) {
             err() << "Note: Using --config file; remote cloud rules were not fetched."
                  << " Scan JSON is still uploaded when an ingest token is set (unless --no-upload)."
@@ -4049,8 +4053,11 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
 
             if (!localAutoPath.isEmpty()) {
                 projectRoot = ScanConfig::loadProjectMapFromFile(localAutoPath);
-                if (!projectRoot.isEmpty())
+                if (!projectRoot.isEmpty()) {
+                    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                        QStringLiteral("scan config=%1").arg(QFileInfo(localAutoPath).absoluteFilePath()));
                     err() << "Note: Using local " << localAutoPath << "." << Qt::endl;
+                }
             }
         }
     }
@@ -4060,6 +4067,8 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         profileId = projectRoot.value(QStringLiteral("profile")).toString().trimmed();
 
     if (!profileId.isEmpty()) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+            QStringLiteral("scan profile=%1").arg(profileId));
         const PlatformProfileLoadResult loaded = PlatformProfileLoader::load(profileId);
         if (!loaded.ok) {
             err() << "Error: " << loaded.error << Qt::endl;

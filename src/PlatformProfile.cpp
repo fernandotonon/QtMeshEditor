@@ -58,9 +58,6 @@ void appendProfileScopes(ScanConfig& config, const QVariantMap& scopesMap, QStri
             ScanScope scope;
             scope.pathPattern = it.key();
             const QVariantMap rawRules = it.value().toMap();
-            warnUnknownRuleKeys(rawRules,
-                                QStringLiteral("profile scope '%1'").arg(scope.pathPattern),
-                                warnings);
             scope.rules = filterKnownRuleKeys(
                 rawRules,
                 QStringLiteral("profile scope '%1'").arg(scope.pathPattern),
@@ -76,9 +73,6 @@ void appendProfileScopes(ScanConfig& config, const QVariantMap& scopesMap, QStri
         ScanScope scope;
         scope.pathPattern = key;
         const QVariantMap rawRules = scopesMap.value(key).toMap();
-        warnUnknownRuleKeys(rawRules,
-                            QStringLiteral("profile scope '%1'").arg(scope.pathPattern),
-                            warnings);
         scope.rules = filterKnownRuleKeys(
             rawRules,
             QStringLiteral("profile scope '%1'").arg(scope.pathPattern),
@@ -263,6 +257,12 @@ PlatformProfileLoadResult PlatformProfileLoader::loadFile(const QString& absolut
     if (result.profile.id.isEmpty())
         result.profile.id = displayIdHint.isEmpty() ? QFileInfo(absolutePath).completeBaseName()
                                                     : displayIdHint;
+    else if (!displayIdHint.isEmpty()
+             && result.profile.id.compare(displayIdHint, Qt::CaseSensitive) != 0) {
+        result.error = QStringLiteral("Platform profile id mismatch in '%1': expected '%2', got '%3'")
+                           .arg(absolutePath, displayIdHint, result.profile.id);
+        return result;
+    }
 
     if (result.profile.id.isEmpty()) {
         result.error =
