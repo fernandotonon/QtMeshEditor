@@ -55,7 +55,8 @@ public:
                          int* outUpAxis = nullptr);
     static QString exporter(const Ogre::SceneNode *_sn);
     static int exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format,
-                        bool stripAnimations = false);
+                        bool stripAnimations = false,
+                        bool optimizeOnExport = true);
     static QString formatFileURI(const QString &_uri, const QString &_format);
     static QString exportFileDialogFilter();
     /// Multi-pattern filter for File → Import (includes PlayStation group + All files).

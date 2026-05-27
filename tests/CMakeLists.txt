@@ -114,6 +114,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDecimatorController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.cpp
@@ -249,6 +250,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.h

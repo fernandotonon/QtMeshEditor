@@ -1348,6 +1348,10 @@ QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
 {
     const QString path = args["path"].toString();
     const QString format = args["format"].toString("Ogre Mesh (*.mesh)");
+    // Issue #399: optimize on export (vertex cache + overdraw + fetch).
+    // Default ON; pass `optimize: false` to skip — useful for round-trip
+    // diffing or when downstream tooling expects the source ordering.
+    const bool optimize = args.value("optimize").toBool(true);
     if (path.isEmpty()) {
         return makeErrorResult("Error: Export path is required");
     }
@@ -1360,7 +1364,9 @@ QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
         if (!node) {
             return makeErrorResult("Error: Selected scene node is null");
         }
-        const int exportResult = MeshImporterExporter::exporter(node, path, format);
+        const int exportResult = MeshImporterExporter::exporter(node, path, format,
+                                                                 /*stripAnimations=*/false,
+                                                                 optimize);
         if (exportResult == 0) {
             return makeSuccessResult(QString("Exported mesh to: %1 (format: %2)").arg(path, format));
         }
@@ -4948,6 +4954,10 @@ QJsonArray MCPServer::buildToolsList()
             "'glTF 2.0 (*.gltf2)', 'glTF 2.0 Binary (*.glb2)', 'Assimp Binary (*.assbin)', "
             "'FBX Binary (*.fbx)', 'PlayStation TMD (*.tmd)'. "
             "Default: 'Ogre Mesh (*.mesh)'"}};
+        properties["optimize"] = QJsonObject{{"type", "boolean"}, {"description",
+            "Run vertex-cache / overdraw / vertex-fetch optimization "
+            "before writing the file (issue #399). Default true. Pass "
+            "false to preserve the source triangle order."}};
         inputSchema["properties"] = properties;
         inputSchema["required"] = QJsonArray{"path"};
 
