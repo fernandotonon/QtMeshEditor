@@ -1,5 +1,6 @@
 #include "MeshDecimatorController.h"
 #include "MeshDecimator.h"
+#include "MeshOptimizerLod.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -89,6 +90,11 @@ void MeshDecimatorController::refreshBaseline()
 // LCOV_EXCL_START — Ogre-only path
 void MeshDecimatorController::previewReduction(double reduction)
 {
+    previewReductionWithAlgo(reduction, QStringLiteral("ogre"));
+}
+
+void MeshDecimatorController::previewReductionWithAlgo(double reduction, const QString& algo)
+{
     const QList<Ogre::Entity*> targets = decimateTargets();
     if (targets.isEmpty()) {
         emit error(QStringLiteral("No mesh selected."));
@@ -108,21 +114,53 @@ void MeshDecimatorController::previewReduction(double reduction)
     // moves often, so we don't want stale LOD chains piling up.
     mesh->removeLodLevels();
 
-    Ogre::LodConfig lodConfig(mesh);
-    lodConfig.createGeneratedLodLevel(0.0f, static_cast<float>(r),
-                                      Ogre::LodLevel::VRM_PROPORTIONAL);
-    try {
-        // Use the shared Ogre singleton — MeshLodController normally owns it.
-        // getSingletonPtr() is null only in CLI/test contexts where neither
-        // controller has been instantiated; in the editor it's always set.
-        auto* gen = Ogre::MeshLodGenerator::getSingletonPtr();
-        if (!gen) {
-            emit error(QStringLiteral("Internal error: MeshLodGenerator not initialised."));
+    const bool useMeshopt = (algo.toLower() == QStringLiteral("meshopt"));
+    bool ok = false;
+
+    if (useMeshopt) {
+        // Match the apply path — same backend, so the preview shows
+        // what the user is about to commit. The result LodLevel's
+        // IndexData* lands in mLodFaceList[0]; setMeshLodBias below
+        // points the viewport at LOD 1 (slot 0).
+        std::vector<float> rv = { static_cast<float>(r) };
+        auto levels = MeshOptimizerLod::generateLods(mesh.get(), rv);
+        if (!levels.empty()) {
+            const unsigned int numSubs = mesh->getNumSubMeshes();
+            mesh->_setLodInfo(2); // base + 1 reduced
+            for (unsigned int s = 0; s < numSubs && s < levels[0].indices.size(); ++s) {
+                Ogre::SubMesh* sub = mesh->getSubMesh(s);
+                if (!sub) continue;
+                auto& faceList = sub->mLodFaceList;
+                if (!faceList.empty()) {
+                    faceList[0] = levels[0].indices[s];
+                    levels[0].indices[s] = nullptr; // ownership transferred
+                }
+            }
+            ok = true;
+        }
+    } else {
+        Ogre::LodConfig lodConfig(mesh);
+        lodConfig.createGeneratedLodLevel(0.0f, static_cast<float>(r),
+                                          Ogre::LodLevel::VRM_PROPORTIONAL);
+        try {
+            // Use the shared Ogre singleton — MeshLodController normally owns it.
+            // getSingletonPtr() is null only in CLI/test contexts where neither
+            // controller has been instantiated; in the editor it's always set.
+            auto* gen = Ogre::MeshLodGenerator::getSingletonPtr();
+            if (!gen) {
+                emit error(QStringLiteral("Internal error: MeshLodGenerator not initialised."));
+                return;
+            }
+            gen->generateLodLevels(lodConfig);
+            ok = true;
+        } catch (const Ogre::Exception& e) {
+            emit error(QString("Preview failed: %1").arg(e.what()));
             return;
         }
-        gen->generateLodLevels(lodConfig);
-    } catch (const Ogre::Exception& e) {
-        emit error(QString("Preview failed: %1").arg(e.what()));
+    }
+
+    if (!ok) {
+        emit error(QStringLiteral("Preview failed — backend produced no levels."));
         return;
     }
 

@@ -50,6 +50,10 @@ public:
     // to it. Cheap-ish but not free — debounce on the QML side so we don't
     // regenerate on every slider sample.
     Q_INVOKABLE void previewReduction(double reduction);
+    // Backend-selecting preview. `algo` is "ogre" (default) or
+    // "meshopt"; anything else falls back to "ogre". So the QML
+    // slider can show what the user is actually about to apply.
+    Q_INVOKABLE void previewReductionWithAlgo(double reduction, const QString& algo);
 
     // Drop the preview LOD; restore the base mesh.
     Q_INVOKABLE void clearPreview();

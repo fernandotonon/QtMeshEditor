@@ -5,6 +5,7 @@ import PropertiesPanel 1.0
 import AnimationControl 1.0
 import EditorMode 1.0
 import MaterialEditorQML 1.0
+import ThemeManager 1.0
 
 Rectangle {
     id: root
@@ -400,7 +401,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ObjectMode,
                     MeshDecimatorController.hasSelection)
-                expanded: false
+                expanded: true
 
                 Component.onCompleted: content = decimateComponent
             }
@@ -2911,6 +2912,26 @@ Rectangle {
             padding: 8
             spacing: 6
 
+            // Force Qt Quick Controls inside this Component to inherit
+            // the dark theme. The CollapsibleSection above is set to
+            // `expanded: true` so this Component instantiates during
+            // initial QML evaluation alongside the LOD section — that
+            // alone is what stopped controls from falling back to the
+            // macOS Aqua chrome on lazy load, but the explicit palette
+            // is kept as belt-and-suspenders so future refactors that
+            // re-introduce lazy loading don't silently regress.
+            palette {
+                window: ThemeManager.panelColor
+                windowText: ThemeManager.textColor
+                base: ThemeManager.inputColor
+                text: ThemeManager.textColor
+                button: ThemeManager.headerColor
+                buttonText: ThemeManager.textColor
+                highlight: ThemeManager.highlightColor
+                highlightedText: "white"
+                mid: ThemeManager.borderColor
+            }
+
             // Slider state — 0..0.95. Default 0 = no change, so opening the
             // section doesn't already preview a reduction.
             property real reduction: 0.0
@@ -2927,7 +2948,8 @@ Rectangle {
                 id: previewDebounce
                 interval: 150
                 repeat: false
-                onTriggered: MeshDecimatorController.previewReduction(decimateContent.reduction)
+                onTriggered: MeshDecimatorController.previewReductionWithAlgo(
+                    decimateContent.reduction, decimateBackendCombo.currentText)
             }
 
             // Reset reduction back to the default when selection changes
@@ -3022,6 +3044,13 @@ Rectangle {
                     model: ["ogre", "meshopt"]
                     currentIndex: 0
                     font.pixelSize: 11
+                    // Re-run the preview when the backend flips so the
+                    // viewport always reflects what Apply would commit.
+                    onCurrentIndexChanged: {
+                        if (decimateContent.reduction > 0.0) {
+                            previewDebounce.restart()
+                        }
+                    }
                 }
             }
 
