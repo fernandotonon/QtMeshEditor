@@ -872,7 +872,10 @@ bool PS1RipSessionWindow::promoteUniqueMesh(int meshIndex, const QString &assetI
         }
         return false;
     };
-    if (!tryAdoptInstance(instanceIndex)) {
+    if (instanceIndex >= 0) {
+        if (!tryAdoptInstance(instanceIndex))
+            return false;
+    } else {
         for (auto it = set.instanceNodeNames.constBegin();
              it != set.instanceNodeNames.constEnd(); ++it) {
             if (tryAdoptInstance(it.key()))

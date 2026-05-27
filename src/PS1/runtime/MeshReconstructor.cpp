@@ -397,6 +397,16 @@ QVector<PrimProvenance> resolvePrimProvenance(const CaptureSnapshot &snapshot,
     QVector<PrimProvenance> provenance(snapshot.prims.size());
     for (int i = 0; i < snapshot.prims.size(); ++i) {
         const PrimRecord &prim = snapshot.prims[i];
+        if (!PsxCaptureFilters::isOnScreenPrim(prim))
+            continue;
+        const bool survives =
+            ((prim.kind == PrimKind::MonoTri || prim.kind == PrimKind::ShadedTri
+              || prim.kind == PrimKind::TexturedTri) && prim.vertexCount >= 3)
+            || ((prim.kind == PrimKind::MonoQuad || prim.kind == PrimKind::ShadedQuad
+                 || prim.kind == PrimKind::TexturedQuad) && prim.vertexCount >= 4)
+            || (prim.kind == PrimKind::Sprite && prim.vertexCount >= 2);
+        if (!survives)
+            continue;
         const auto partIt = build.partIndexByMatrixId.constFind(prim.matrixId);
         if (partIt == build.partIndexByMatrixId.constEnd())
             continue;

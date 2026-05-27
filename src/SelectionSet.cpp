@@ -92,20 +92,31 @@ void SelectionSet::onSceneNodeDestroyed(Ogre::SceneNode *node)
     if (!node)
         return;
 
-    bool changed = mNodesSelected.removeOne(node) > 0;
+    bool changed = false;
+    const auto pruneNode = [&](auto &&self, Ogre::SceneNode *current) -> void {
+        if (!current)
+            return;
 
-    for (unsigned short i = 0; i < node->numAttachedObjects(); ++i) {
-        Ogre::MovableObject *obj = node->getAttachedObject(i);
-        if (!obj || obj->getMovableType() != "Entity")
-            continue;
-        auto *ent = static_cast<Ogre::Entity *>(obj);
-        if (mEntitiesSelected.removeOne(ent) > 0)
+        if (mNodesSelected.removeOne(current) > 0)
             changed = true;
-        for (unsigned short s = 0; s < ent->getNumSubEntities(); ++s) {
-            if (mSubEntitiesSelected.removeOne(ent->getSubEntity(s)) > 0)
+
+        for (unsigned short i = 0; i < current->numAttachedObjects(); ++i) {
+            Ogre::MovableObject *obj = current->getAttachedObject(i);
+            if (!obj || obj->getMovableType() != "Entity")
+                continue;
+            auto *ent = static_cast<Ogre::Entity *>(obj);
+            if (mEntitiesSelected.removeOne(ent) > 0)
                 changed = true;
+            for (unsigned short s = 0; s < ent->getNumSubEntities(); ++s) {
+                if (mSubEntitiesSelected.removeOne(ent->getSubEntity(s)) > 0)
+                    changed = true;
+            }
         }
-    }
+
+        for (Ogre::Node *child : current->getChildren())
+            self(self, static_cast<Ogre::SceneNode *>(child));
+    };
+    pruneNode(pruneNode, node);
 
     if (!changed)
         return;
