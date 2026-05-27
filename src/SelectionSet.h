@@ -15,7 +15,12 @@ class SelectionSet : public QObject
 
 public :
     static SelectionSet* getSingleton();
+    static SelectionSet* getSingletonPtr();
     static void kill();
+    /** Connect to `Manager::sceneNodeDestroyed` when a Manager exists.
+     *  Called from `getSingleton()` and from `Manager`'s constructor so
+     *  tests that recreate SelectionSet without Manager do not boot Ogre. */
+    void tryConnectToManager();
 
 private:
     SelectionSet();
@@ -95,6 +100,7 @@ signals:
 
 private :
     static SelectionSet*    m_pSingleton; // the only instance of this!
+    bool m_connectedToManager = false;
     QList<Ogre::SceneNode*> mNodesSelected;
     QList<Ogre::Entity*>    mEntitiesSelected;
     QList<Ogre::SubEntity*> mSubEntitiesSelected;

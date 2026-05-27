@@ -5,6 +5,7 @@
 
 #include <QImage>
 #include <QMainWindow>
+#include <QPointer>
 #include <QVector>
 
 class EmuViewport;
@@ -48,6 +49,8 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void focusInEvent(QFocusEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private slots:
     void pickBios();
@@ -212,7 +215,7 @@ private:
     /** Tracks the most-recently constructed session window so the static
      *  drop-event entry point can route into the right instance without
      *  walking the QWidget tree. Cleared on destruction. */
-    static PS1RipSessionWindow *s_lastInstance;
+    static QPointer<PS1RipSessionWindow> s_lastInstance;
 };
 
 #endif // PS1RIPSESSIONWINDOW_H

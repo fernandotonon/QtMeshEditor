@@ -20,6 +20,8 @@
 #include <QSignalBlocker>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QFocusEvent>
+#include <QShowEvent>
 #include <QDateTime>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
@@ -370,13 +372,25 @@ PS1RipSessionWindow::~PS1RipSessionWindow()
                                 QStringLiteral("PS1 rip session window closed"));
 }
 
-PS1RipSessionWindow *PS1RipSessionWindow::s_lastInstance = nullptr;
+QPointer<PS1RipSessionWindow> PS1RipSessionWindow::s_lastInstance;
 
 bool PS1RipSessionWindow::promoteUniqueMeshById(int meshIndex, const QString &assetId)
 {
-    if (!s_lastInstance)
-        return false;
-    return s_lastInstance->promoteUniqueMesh(meshIndex, assetId);
+    if (auto *win = s_lastInstance.data())
+        return win->promoteUniqueMesh(meshIndex, assetId);
+    return false;
+}
+
+void PS1RipSessionWindow::focusInEvent(QFocusEvent *event)
+{
+    s_lastInstance = this;
+    QMainWindow::focusInEvent(event);
+}
+
+void PS1RipSessionWindow::showEvent(QShowEvent *event)
+{
+    s_lastInstance = this;
+    QMainWindow::showEvent(event);
 }
 
 void PS1RipSessionWindow::createNormalizerDock()

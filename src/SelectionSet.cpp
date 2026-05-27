@@ -48,12 +48,15 @@ SelectionSet* SelectionSet:: m_pSingleton = nullptr;
 
 SelectionSet* SelectionSet::getSingleton()
 {
-  if (m_pSingleton == nullptr)
-  {
-      m_pSingleton =  new SelectionSet();
-  }
+    if (m_pSingleton == nullptr)
+        m_pSingleton = new SelectionSet();
+    m_pSingleton->tryConnectToManager();
+    return m_pSingleton;
+}
 
-  return m_pSingleton;
+SelectionSet *SelectionSet::getSingletonPtr()
+{
+    return m_pSingleton;
 }
 
 void SelectionSet::kill()
@@ -71,8 +74,17 @@ void SelectionSet::kill()
 SelectionSet::SelectionSet()
     : QObject(nullptr)
 {
-    connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this,
-            &SelectionSet::onSceneNodeDestroyed);
+}
+
+void SelectionSet::tryConnectToManager()
+{
+    if (m_connectedToManager)
+        return;
+    auto *mgr = Manager::getSingletonPtr();
+    if (!mgr)
+        return;
+    connect(mgr, &Manager::sceneNodeDestroyed, this, &SelectionSet::onSceneNodeDestroyed);
+    m_connectedToManager = true;
 }
 
 void SelectionSet::onSceneNodeDestroyed(Ogre::SceneNode *node)
