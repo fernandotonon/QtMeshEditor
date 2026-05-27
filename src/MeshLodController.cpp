@@ -142,7 +142,18 @@ void MeshLodController::generateLods(int count, QVariantList reductions)
 void MeshLodController::generateLodsWithAlgo(int count, QVariantList reductions,
                                              const QString& algo)
 {
-    const auto a = (algo.toLower() == QStringLiteral("meshopt"))
+    // Reject unknown algo values rather than silently falling back
+    // to Ogre — keeps wiring bugs visible (typos in QML, future
+    // backends added to the enum but not the dropdown). Matches
+    // MCPServer::toolGenerateLods which already rejects.
+    const QString normalized = algo.trimmed().toLower();
+    if (normalized != QStringLiteral("meshopt") &&
+        normalized != QStringLiteral("ogre")) {
+        emit error(QString("Invalid algo '%1' (expected 'meshopt' or 'ogre').").arg(algo));
+        return;
+    }
+
+    const auto a = (normalized == QStringLiteral("meshopt"))
         ? Algorithm::Meshopt
         : Algorithm::Ogre;
     // QML-only path (the Inspector backend dropdown) — tag the
@@ -150,7 +161,7 @@ void MeshLodController::generateLodsWithAlgo(int count, QVariantList reductions,
     // neutral and not misclassify MCP invocations.
     SentryReporter::addBreadcrumb("ui.action",
         QString("Generate %1 LOD level(s) via %2 (Inspector)")
-            .arg(std::max(1, std::min(count, 4))).arg(algo.toLower()));
+            .arg(std::max(1, std::min(count, 4))).arg(normalized));
     generateLods(count, reductions, a);
 }
 

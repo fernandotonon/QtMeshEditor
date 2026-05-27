@@ -246,6 +246,20 @@ std::vector<LodLevel> generateLods(Ogre::Mesh* mesh,
             // to a multiple of 3 (triangles).
             const size_t targetRounded = (targetIdxCount / 3) * 3;
 
+            // Skip degenerate submeshes — meshopt_simplify requires
+            // non-null indices + positions with positive counts; an
+            // empty submesh would pass null pointers and trip the
+            // library's preconditions. Emit an empty IndexData so
+            // the per-LOD slot ordering stays aligned with the base
+            // submesh layout (the per-LOD swap loop in cmdLod walks
+            // by index, not by null-check).
+            if (src.indices.empty() || src.positions.empty() ||
+                src.vertexCount == 0 || targetRounded == 0) {
+                level.indices.push_back(OGRE_NEW Ogre::IndexData());
+                level.actualReductions.push_back(0.0f);
+                continue;
+            }
+
             std::vector<uint32_t> simplified(src.indices.size());
             float resultError = 0.0f;
             size_t newIdxCount = 0;

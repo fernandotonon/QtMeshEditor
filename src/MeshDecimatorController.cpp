@@ -100,6 +100,14 @@ void MeshDecimatorController::previewReductionWithAlgo(double reduction, const Q
         emit error(QStringLiteral("No mesh selected."));
         return;
     }
+    // Reject unknown algo so typos surface instead of silently
+    // running Ogre. Matches the LOD controller wrapper.
+    const QString normalized = algo.trimmed().toLower();
+    if (normalized != QStringLiteral("meshopt") &&
+        normalized != QStringLiteral("ogre")) {
+        emit error(QString("Invalid algo '%1' (expected 'meshopt' or 'ogre').").arg(algo));
+        return;
+    }
     const double r = MeshDecimator::clampReduction(reduction);
     if (r <= 0.0) {
         clearPreview();
@@ -114,7 +122,7 @@ void MeshDecimatorController::previewReductionWithAlgo(double reduction, const Q
     // moves often, so we don't want stale LOD chains piling up.
     mesh->removeLodLevels();
 
-    const bool useMeshopt = (algo.toLower() == QStringLiteral("meshopt"));
+    const bool useMeshopt = (normalized == QStringLiteral("meshopt"));
     bool ok = false;
 
     if (useMeshopt) {
@@ -207,10 +215,18 @@ void MeshDecimatorController::applyReductionWithAlgo(double reduction, const QSt
         emit error(QStringLiteral("No mesh selected."));
         return;
     }
+    // Reject unknown algo so typos surface instead of silently
+    // running Ogre. Matches the LOD controller wrapper.
+    const QString normalized = algo.trimmed().toLower();
+    if (normalized != QStringLiteral("meshopt") &&
+        normalized != QStringLiteral("ogre")) {
+        emit error(QString("Invalid algo '%1' (expected 'meshopt' or 'ogre').").arg(algo));
+        return;
+    }
     const double r = MeshDecimator::clampReduction(reduction);
     if (r <= 0.0) return;
 
-    const auto algoEnum = (algo.toLower() == QStringLiteral("meshopt"))
+    const auto algoEnum = (normalized == QStringLiteral("meshopt"))
         ? MeshDecimator::Algorithm::Meshopt
         : MeshDecimator::Algorithm::Ogre;
     const char* algoName = (algoEnum == MeshDecimator::Algorithm::Meshopt) ? "meshopt" : "ogre";
