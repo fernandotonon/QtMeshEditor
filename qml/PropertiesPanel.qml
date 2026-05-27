@@ -2752,6 +2752,27 @@ Rectangle {
                 }
             }
 
+            // Backend selector (meshoptimizer vs Ogre's MeshLodGenerator).
+            // Default `meshopt`: preserves UV seams and skin weights via
+            // attribute-aware simplify. `ogre` kept for legacy round-trip.
+            // Issue #398.
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: "Backend:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ComboBox {
+                    id: lodBackendCombo
+                    model: ["meshopt", "ogre"]
+                    currentIndex: 0
+                    width: 120
+                    font.pixelSize: 11
+                }
+            }
+
             // Action buttons
             Row {
                 spacing: 6
@@ -2768,7 +2789,13 @@ Rectangle {
                         id: genMouse; anchors.fill: parent; hoverEnabled: true
                         onClicked: {
                             var reductions = lodContent.reductionValues.slice(0, lodCountSelector.value)
-                            MeshLodController.generateLods(lodCountSelector.value, reductions)
+                            // The Q_INVOKABLE 2-arg overload is what QML
+                            // sees; it defaults to Meshopt internally. To
+                            // pick the Ogre legacy backend instead, route
+                            // through the controller's `algo` getter.
+                            MeshLodController.generateLodsWithAlgo(
+                                lodCountSelector.value, reductions,
+                                lodBackendCombo.currentText)
                         }
                     }
                 }

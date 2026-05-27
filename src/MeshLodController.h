@@ -29,9 +29,22 @@ public:
     // Force viewport to render a specific LOD index (-1 = restore normal)
     Q_INVOKABLE void previewLod(int lodIndex);
 
+    // LOD generator backend. Exposed to QML as a string ("meshopt" |
+    // "ogre") so the Inspector dropdown can flip without C++ casts.
+    enum class Algorithm {
+        Meshopt,   // meshoptimizer's `simplify` + vertex-cache reorder. Default.
+        Ogre,      // Ogre's built-in `MeshLodGenerator`. Legacy path.
+    };
+
     // count: number of extra LOD levels (1-4)
     // reductions: list of floats 0.0-1.0 (proportion of vertices to remove per level)
+    // algo: which backend to use. Defaults to Meshopt (issue #398).
     Q_INVOKABLE void generateLods(int count, QVariantList reductions);
+    // QML-facing backend-selector variant. `algo` is "meshopt" or
+    // "ogre"; anything else falls back to meshopt with a warning.
+    Q_INVOKABLE void generateLodsWithAlgo(int count, QVariantList reductions,
+                                          const QString& algo);
+    void generateLods(int count, const QVariantList& reductions, Algorithm algo);
     Q_INVOKABLE void generateAutoLods();
     Q_INVOKABLE void removeLods();
     // Called from QML — emits exportLodsRequested so MainWindow can open the

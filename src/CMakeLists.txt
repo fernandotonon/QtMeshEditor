@@ -80,6 +80,7 @@ ThemeManager.cpp
 BatchExporter.cpp
 MaterialPresetLibrary.cpp
 MeshLodController.cpp
+MeshOptimizerLod.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
@@ -188,6 +189,7 @@ ThemeManager.h
 BatchExporter.h
 MaterialPresetLibrary.h
 MeshLodController.h
+MeshOptimizerLod.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h
@@ -474,6 +476,7 @@ Qt::Qml
 Qt::Quick
 Qt::QuickWidgets
 Qt::QuickControls2
+meshoptimizer
 )
 
 
@@ -548,7 +551,8 @@ if(BUILD_TESTS)
     ${CODEC_ASSIMP_LINK_LIB}
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
-    Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2)
+    Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
+    meshoptimizer)
 
     # Link llama.cpp for tests if enabled
     if(ENABLE_LOCAL_LLM)

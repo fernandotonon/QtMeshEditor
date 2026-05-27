@@ -2743,8 +2743,23 @@ QJsonObject MCPServer::toolGenerateLods(const QJsonObject &args)
             reductions << v.toDouble();
     }
 
+    // `algo` selects the LOD backend. Default `meshopt` (issue #398)
+    // — meshoptimizer's `simplifyWithAttributes` preserves UV seams
+    // and skin weights, which Ogre's stock `MeshLodGenerator` does
+    // not. Pass `"ogre"` to keep the legacy path for round-trip
+    // testing or when meshopt's output isn't desired.
+    QString algoStr = args.contains("algo")
+        ? args["algo"].toString().toLower() : QStringLiteral("meshopt");
+    if (algoStr != "meshopt" && algoStr != "ogre") {
+        return makeErrorResult(
+            QString("Invalid algo '%1' (expected 'meshopt' or 'ogre').").arg(algoStr));
+    }
+    const auto algoEnum = (algoStr == "meshopt")
+        ? MeshLodController::Algorithm::Meshopt
+        : MeshLodController::Algorithm::Ogre;
+
     QString errorMsg = captureLodControllerError([&]() {
-        MeshLodController::instance()->generateLods(count, reductions);
+        MeshLodController::instance()->generateLods(count, reductions, algoEnum);
     });
     if (!errorMsg.isEmpty())
         return makeErrorResult(errorMsg);
@@ -5293,10 +5308,15 @@ QJsonArray MCPServer::buildToolsList()
         props["count"] = QJsonObject{{"type", "integer"}, {"description", "Number of LOD levels to generate (1–4, default 3)."}};
         props["reductions"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "number"}}},
             {"description", "Optional array of reduction ratios per LOD level (0.0–1.0). E.g. [0.5, 0.25, 0.1]."}};
+        props["algo"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"meshopt", "ogre"}},
+            {"description",
+             "LOD backend. 'meshopt' (default, recommended) preserves UV seams and skin "
+             "weights via meshoptimizer's attribute-aware simplify. 'ogre' uses Ogre's "
+             "stock MeshLodGenerator (legacy path, kept for compatibility)."}};
         appendTool(
             "generate_lods",
             "Generate LOD (Level of Detail) levels for the selected mesh, reducing polygon count at distance. "
-            "Specify count (1–4) and optional per-level reduction ratios. "
+            "Specify count (1–4), optional per-level reduction ratios, and optional algo backend. "
             "Select a mesh first with load_mesh.",
             props
         );

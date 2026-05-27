@@ -61,6 +61,8 @@ qtmesh lod model.fbx --info                    # show LOD levels
 qtmesh lod model.fbx --info --json             # LOD info as JSON
 qtmesh lod model.fbx --count 3                 # generate 3 LODs → model_lod1.fbx, model_lod2.fbx, model_lod3.fbx
 qtmesh lod model.fbx --count 2 --reductions 0.25,0.5 -o out.fbx  # custom reductions, named output
+qtmesh lod model.fbx --count 3 --algo meshopt -o out.fbx  # meshoptimizer backend (default; preserves UV seams + skin weights)
+qtmesh lod model.fbx --count 3 --algo ogre -o out.fbx     # Ogre's MeshLodGenerator (legacy path)
 qtmesh lod model.fbx --auto                    # auto-generate LODs
 qtmesh lod model.fbx --remove -o clean.fbx     # strip LODs and save
 qtmesh material model.fbx --preset "Metallic-Roughness" -o out.fbx  # apply a built-in material preset (writes .material sidecar)
@@ -223,6 +225,12 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - Models stored in `<AppData>/sd_models/`. Supports `.safetensors`, `.ckpt`, `.gguf` formats.
 - `#ifdef ENABLE_STABLE_DIFFUSION` guards all sd.cpp includes/calls. Feature is OFF by default.
 - When both features are enabled, sd.cpp and llama.cpp share the same ggml dependency managed by CMake.
+
+### AI-Assisted Authoring (epic #397)
+
+- **MeshOptimizerLod** (`src/MeshOptimizerLod.h/cpp`, issue #398): Thin facade over `zeux/meshoptimizer` for LOD generation. Free functions, no singleton. `generateLods(mesh, reductions)` returns one `LodLevel` per requested reduction, each with one `Ogre::IndexData*` per submesh. Uses `meshopt_simplifyWithAttributes` when UV0 is present (preserves UV seams), falls back to `meshopt_simplify` otherwise. Every result is `meshopt_optimizeVertexCache`-reordered (Forsyth) so the LOD is cache-friendly out of the box. Caller takes ownership of the `IndexData*` (commit to `SubMesh::mLodFaceList` or call `destroyLevel`).
+- **MeshLodController** (`src/MeshLodController.h/cpp`): Now has `Algorithm` enum (`Meshopt` | `Ogre`) on the C++ overload `generateLods(int, const QVariantList&, Algorithm)`. QML-facing `generateLodsWithAlgo(int, QVariantList, QString)` accepts `"meshopt"` / `"ogre"` for the Inspector backend dropdown. Default is `Meshopt`. CLI: `--algo meshopt|ogre` (default `meshopt`). MCP `generate_lods` tool: `algo` param (default `meshopt`). Sentry breadcrumb category `ai.assist.lod` records the chosen backend.
+- **FBX LOD export gotcha**: `FBXExporter` prefers the cached `qtme.faces.<i>` n-gon binding (set up by quad-migration #326) over `SubMesh::indexData`. The CLI `lod` per-LOD export path in `CLIPipeline::cmdLod` temporarily erases those bindings (and restores them after) so the swapped-in LOD indices actually reach the wire. If you add another LOD-export entry point, mirror that erase/restore pair.
 
 ## Development Guidelines
 

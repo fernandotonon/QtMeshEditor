@@ -2,6 +2,7 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "MeshImporterExporter.h"
+#include "MeshOptimizerLod.h"
 #include "SentryReporter.h"
 #include <Ogre.h>
 #include <OgreSubMesh.h>
@@ -132,14 +133,32 @@ void MeshLodController::previewLod(int lodIndex)
 
 void MeshLodController::generateLods(int count, QVariantList reductions)
 {
+    // QML-facing default: meshoptimizer backend (issue #398).
+    generateLods(count, reductions, Algorithm::Meshopt);
+}
+
+void MeshLodController::generateLodsWithAlgo(int count, QVariantList reductions,
+                                             const QString& algo)
+{
+    const auto a = (algo.toLower() == QStringLiteral("ogre"))
+        ? Algorithm::Ogre
+        : Algorithm::Meshopt;
+    generateLods(count, reductions, a);
+}
+
+void MeshLodController::generateLods(int count, const QVariantList& reductions, Algorithm algo)
+{
     const QList<Ogre::Entity*> targets = lodTargetEntities();
     if (targets.isEmpty()) {
         emit error("No mesh found in selection.");
         return;
     }
 
-    SentryReporter::addBreadcrumb("ui.action",
-        QString("Generate %1 LOD level(s)").arg(std::max(1, std::min(count, 4))));
+    const char* algoName = (algo == Algorithm::Meshopt) ? "meshopt" : "ogre";
+    SentryReporter::addBreadcrumb(
+        algo == Algorithm::Meshopt ? "ai.assist.lod" : "ui.action",
+        QString("Generate %1 LOD level(s) via %2")
+            .arg(std::max(1, std::min(count, 4))).arg(algoName));
 
     count = std::max(1, std::min(count, 4));
 
@@ -153,20 +172,70 @@ void MeshLodController::generateLods(int count, QVariantList reductions)
         // Remove existing LODs before regenerating
         mesh->removeLodLevels();
 
-        Ogre::LodConfig lodConfig(mesh);
-        for (int i = 0; i < count; ++i) {
-            float reduction = (i < reductions.size())
-                ? std::max(0.01f, std::min(1.0f, reductions[i].toFloat()))
-                : 0.25f * (i + 1); // fallback: 25%, 50%, 75%, 100%
-            float dist = kDistances[i];
-            lodConfig.createGeneratedLodLevel(dist, reduction, Ogre::LodLevel::VRM_PROPORTIONAL);
-        }
+        if (algo == Algorithm::Meshopt) {
+            // Build the per-level reduction vector with the same
+            // fallback policy as the Ogre path (25% / 50% / 75% /
+            // 100% if the caller didn't supply enough explicit
+            // values) so the user-visible behaviour matches across
+            // backends.
+            std::vector<float> r;
+            r.reserve(count);
+            for (int i = 0; i < count; ++i) {
+                const float v = (i < reductions.size())
+                    ? std::max(0.01f, std::min(1.0f, reductions[i].toFloat()))
+                    : 0.25f * (i + 1);
+                r.push_back(v);
+            }
 
-        try {
-            m_generator->generateLodLevels(lodConfig);
-        } catch (const Ogre::Exception& e) {
-            emit error(QString("LOD generation failed: %1").arg(e.what()));
-            return;
+            auto levels = MeshOptimizerLod::generateLods(mesh.get(), r);
+            if (levels.empty()) {
+                emit error("Meshopt LOD generation produced no levels.");
+                return;
+            }
+
+            // Mesh-level LOD count (base + N reduced). _setLodInfo
+            // resizes the mesh-wide usage table AND each submesh's
+            // `mLodFaceList` to (numLevels - 1) slots filled with
+            // nullptr — so we assign by index below rather than
+            // push_back. Ownership of the IndexData* is transferred
+            // out of the LodLevel struct (nulled afterwards) so
+            // destroyLevel won't double-free.
+            const unsigned int numSubs = mesh->getNumSubMeshes();
+            mesh->_setLodInfo(static_cast<unsigned short>(levels.size() + 1));
+            for (size_t lod = 0; lod < levels.size(); ++lod) {
+                auto& level = levels[lod];
+                for (unsigned int s = 0; s < numSubs && s < level.indices.size(); ++s) {
+                    auto& faceList = mesh->getSubMesh(s)->mLodFaceList;
+                    if (lod < faceList.size()) {
+                        faceList[lod] = level.indices[s];
+                        level.indices[s] = nullptr;   // ownership transferred
+                    }
+                }
+                // Wire the distance metadata into the mesh itself —
+                // this is what `MeshLodController::lodLevelInfo` and
+                // Ogre's runtime LOD picker read.
+                Ogre::MeshLodUsage usage;
+                usage.userValue = kDistances[lod];
+                usage.value     = mesh->getLodStrategy()->transformUserValue(usage.userValue);
+                mesh->_setLodUsage(static_cast<unsigned short>(lod + 1), usage);
+            }
+        } else {
+            // ---- Ogre legacy path ----
+            Ogre::LodConfig lodConfig(mesh);
+            for (int i = 0; i < count; ++i) {
+                float reduction = (i < reductions.size())
+                    ? std::max(0.01f, std::min(1.0f, reductions[i].toFloat()))
+                    : 0.25f * (i + 1); // fallback: 25%, 50%, 75%, 100%
+                float dist = kDistances[i];
+                lodConfig.createGeneratedLodLevel(dist, reduction, Ogre::LodLevel::VRM_PROPORTIONAL);
+            }
+
+            try {
+                m_generator->generateLodLevels(lodConfig);
+            } catch (const Ogre::Exception& e) {
+                emit error(QString("LOD generation failed: %1").arg(e.what()));
+                return;
+            }
         }
     }
 

@@ -2307,7 +2307,7 @@ int CLIPipeline::cmdValidate(int argc, char* argv[])
 
 int CLIPipeline::cmdLod(int argc, char* argv[])
 {
-    // Parse: lod <file> --count N [--reductions r,...] [-o output]
+    // Parse: lod <file> --count N [--reductions r,...] [--algo meshopt|ogre] [-o output]
     //    or: lod <file> --auto [-o output]
     //    or: lod <file> --remove [-o output]
     //    or: lod <file> --info [--json]
@@ -2317,6 +2317,7 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
     bool removeMode = false;
     bool infoMode   = false;
     bool jsonOutput = false;
+    QString algo = "meshopt";   // default: meshoptimizer (issue #398)
     QVariantList reductions;
 
     for (int i = 1; i < argc; ++i) {
@@ -2335,6 +2336,15 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
                 reductions.append(p.trimmed().toFloat());
             continue;
         }
+        if (arg == "--algo" && i + 1 < argc) {
+            const QString val = QString(argv[++i]).toLower();
+            if (val != "meshopt" && val != "ogre") {
+                err() << "Error: --algo must be 'meshopt' or 'ogre' (got '" << val << "')." << Qt::endl;
+                return 2;
+            }
+            algo = val;
+            continue;
+        }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString(argv[++i]);
             continue;
@@ -2347,7 +2357,7 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
 
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh lod <file> --count N [--reductions r,...] [-o output]" << Qt::endl;
+        err() << "Usage: qtmesh lod <file> --count N [--reductions r,...] [--algo meshopt|ogre] [-o output]" << Qt::endl;
         err() << "       qtmesh lod <file> --auto [-o output]" << Qt::endl;
         err() << "       qtmesh lod <file> --remove [-o output]" << Qt::endl;
         err() << "       qtmesh lod <file> --info [--json]" << Qt::endl;
@@ -2442,11 +2452,17 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
     }
 
     // ---- generate (--count N or --auto) ----
+    // `--auto` always uses Ogre's auto-config path (count + distances
+    // chosen by Ogre's heuristic) — meshoptimizer is invoked only when
+    // the caller asked for explicit counts/reductions.
+    const auto algoEnum = (algo == "meshopt")
+        ? MeshLodController::Algorithm::Meshopt
+        : MeshLodController::Algorithm::Ogre;
     if (autoMode) {
         MeshLodController::instance()->generateAutoLods();
     } else {
         lodCount = std::max(1, std::min(lodCount, 4));
-        MeshLodController::instance()->generateLods(lodCount, reductions);
+        MeshLodController::instance()->generateLods(lodCount, reductions, algoEnum);
     }
 
     const unsigned int totalLods = mesh->getNumLodLevels();
@@ -2473,9 +2489,23 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
     // Export each reduced LOD level as a separate file.
     // Temporarily swap each submesh's indexData with its LOD face list,
     // export, then restore — identical to MeshLodController::doExportLods.
+    //
+    // Also temporarily clear the `qtme.faces.<i>` n-gon bindings on the
+    // mesh: when an FBX carries a cached EditableMesh ngon layer (set
+    // up by quad-migration #326), FBXExporter prefers it over
+    // SubMesh::indexData, which would silently emit the base mesh on
+    // every LOD level. Save the bindings, erase them, export, restore.
     Ogre::SceneNode* sn = entity->getParentSceneNode();
     const unsigned int numSubs = mesh->getNumSubMeshes();
     int exported = 0;
+
+    auto& userBindings = mesh->getUserObjectBindings();
+    std::vector<Ogre::Any> savedNgon(numSubs);
+    for (unsigned int s = 0; s < numSubs; ++s) {
+        const std::string key = std::string("qtme.faces.") + std::to_string(s);
+        savedNgon[s] = userBindings.getUserAny(key);
+        userBindings.eraseUserAny(key);
+    }
 
     for (unsigned int lod = 1; lod < totalLods; ++lod) {
         std::vector<Ogre::IndexData*> savedIndex(numSubs, nullptr);
@@ -2495,6 +2525,15 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
 
         for (unsigned int s = 0; s < numSubs; ++s)
             mesh->getSubMesh(s)->indexData = savedIndex[s];
+    }
+
+    // Restore the cached n-gon bindings now that all LOD exports are
+    // done — keeps the live in-memory mesh consistent with how it was
+    // loaded (matters for tests that re-use the mesh in-process).
+    for (unsigned int s = 0; s < numSubs; ++s) {
+        if (!savedNgon[s].has_value()) continue;
+        userBindings.setUserAny(
+            std::string("qtme.faces.") + std::to_string(s), savedNgon[s]);
     }
 
     if (exported == 0) {
