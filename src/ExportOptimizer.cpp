@@ -108,70 +108,6 @@ std::vector<float> readPositions(Ogre::VertexData* vdata)
     return out;
 }
 
-// Run meshopt_optimizeVertexFetchRemap + apply the remap to every
-// vertex buffer bound on `vdata` and the supplied index list. Vertex
-// buffers shared across submeshes can't be safely fetch-optimized in
-// place (a remap from one submesh would invalidate the index lists of
-// other submeshes), so the caller must only invoke this on
-// per-submesh-private vertex data — see optimizeEntity below.
-bool applyVertexFetchRemap(Ogre::VertexData* vdata, std::vector<uint32_t>& indices)
-{
-    if (!vdata || indices.empty()) return false;
-    const size_t vertCount = vdata->vertexCount;
-
-    std::vector<unsigned int> remap(vertCount);
-    const size_t newVertCount = meshopt_optimizeVertexFetchRemap(
-        remap.data(), indices.data(), indices.size(), vertCount);
-    if (newVertCount == 0) return false;
-
-    // Apply to the index buffer in place.
-    meshopt_remapIndexBuffer(indices.data(), indices.data(), indices.size(), remap.data());
-
-    // Apply to every vertex buffer source bound on the declaration —
-    // each binding gets its own remap pass since strides differ.
-    auto* binding = vdata->vertexBufferBinding;
-    const auto& bindings = binding->getBindings();
-    for (auto it = bindings.begin(); it != bindings.end(); ++it) {
-        const auto source = it->first;
-        auto vbuf = it->second;
-        if (!vbuf) continue;
-
-        const size_t stride = vbuf->getVertexSize();
-        const size_t oldBytes = vertCount * stride;
-        const size_t newBytes = newVertCount * stride;
-
-        std::vector<unsigned char> tmp(oldBytes);
-        auto* src = vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY);
-        std::memcpy(tmp.data(), src, oldBytes);
-        vbuf->unlock();
-
-        std::vector<unsigned char> out(newBytes);
-        meshopt_remapVertexBuffer(out.data(), tmp.data(), vertCount, stride, remap.data());
-
-        // Replace the buffer with one sized to the new vertex count.
-        auto newBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-            stride, newVertCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-        auto* dst = newBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD);
-        std::memcpy(dst, out.data(), newBytes);
-        newBuf->unlock();
-
-        binding->setBinding(source, newBuf);
-    }
-    vdata->vertexCount = newVertCount;
-    return true;
-}
-
-// Whether `sub` owns its vertex buffer or shares it with other
-// submeshes (which means we can't safely run vertex-fetch on it —
-// remapping the shared verts would scramble every other submesh's
-// indices).
-bool subOwnsItsVertexData(Ogre::Mesh* mesh, Ogre::SubMesh* sub)
-{
-    if (!sub || sub->useSharedVertices) return false;
-    // sub->vertexData is non-shared if we got here.
-    return mesh != nullptr;  // mesh is just for completeness
-}
-
 ExportOptimizeSubMeshReport optimizeSubMesh(Ogre::Mesh* mesh, unsigned si,
                                             OptimizeFlags flags)
 {
@@ -195,14 +131,26 @@ ExportOptimizeSubMeshReport optimizeSubMesh(Ogre::Mesh* mesh, unsigned si,
     sr.acmrBefore    = ExportOptimizer::computeAcmr(indices, vdata->vertexCount);
 
     // 1. Vertex-cache reorder (Forsyth).
+    double acmrAfterCache = sr.acmrBefore;
     if (any(flags & OptimizeFlags::VertexCache)) {
         meshopt_optimizeVertexCache(indices.data(), indices.data(),
                                     indices.size(), vdata->vertexCount);
         sr.vertexCacheRun = true;
+        acmrAfterCache = ExportOptimizer::computeAcmr(indices, vdata->vertexCount);
     }
 
     // 2. Overdraw optimization. Needs positions; skip if absent.
-    if (any(flags & OptimizeFlags::Overdraw)) {
+    // Also skip when cache didn't deliver a meaningful gain — overdraw
+    // is non-monotonic w.r.t. ACMR (threshold 1.05 deliberately allows
+    // a ~5% regression for an overdraw win), so running it on an
+    // already-optimal mesh just shuffles indices and the user can
+    // make ACMR slowly worse by clicking repeatedly. Gate it on
+    // cache delivering ≥1% improvement.
+    constexpr double kMinCacheGainForOverdraw = 0.01;
+    const double cacheGain = (sr.acmrBefore > 0.0)
+        ? (sr.acmrBefore - acmrAfterCache) / sr.acmrBefore
+        : 0.0;
+    if (any(flags & OptimizeFlags::Overdraw) && cacheGain >= kMinCacheGainForOverdraw) {
         const auto positions = readPositions(vdata);
         if (positions.size() == vdata->vertexCount * 3) {
             meshopt_optimizeOverdraw(indices.data(), indices.data(), indices.size(),
@@ -212,18 +160,38 @@ ExportOptimizeSubMeshReport optimizeSubMesh(Ogre::Mesh* mesh, unsigned si,
         }
     }
 
-    // 3. Vertex-fetch reorder. Only safe when this submesh owns its
-    // vertex data — running on shared verts would scramble the index
-    // buffers of every other submesh.
-    if (any(flags & OptimizeFlags::VertexFetch) &&
-        !sub->useSharedVertices && subOwnsItsVertexData(mesh, sub)) {
-        if (applyVertexFetchRemap(vdata, indices))
-            sr.vertexFetchRun = true;
-    }
+    // 3. Vertex-fetch reorder is intentionally NOT run from the
+    // validation flow. On skinned meshes Ogre stores bone-vertex
+    // assignments by index into the original vertex order (see
+    // SubMesh::getBoneAssignments / IndexMap). A remap that
+    // reshuffles the vertex buffer breaks those assignments and
+    // shatters the rendered mesh (verified empirically on a Mixamo
+    // character: cache + overdraw alone is clean, adding fetch
+    // produces exploded geometry). Cache + overdraw are
+    // index-only and safe — we keep those.
+    //
+    // Re-enabling fetch would require rebuilding the
+    // BoneAssignmentList for each submesh against the new vertex
+    // order, plus reconciling shared vs. per-submesh `IndexMap`
+    // entries. Deferred to a follow-up if/when there's demand.
+    (void)flags;  // VertexFetch bit is silently ignored.
 
     // Commit the reordered indices regardless of which optimizers ran;
     // the array is unchanged if everything was skipped.
     writeIndices(sub->indexData, indices);
+
+    // Drop the cached `qtme.faces.<i>` n-gon binding for this submesh.
+    // The binding holds vertex indices in the PRE-optimization order;
+    // serializers (FBXExporter, Ogre .mesh path, EditableMesh
+    // round-trips) rehydrate from it in preference to indexData and
+    // would either emit the original unoptimised order OR crash with
+    // an out-of-bounds read when the new index buffer is smaller.
+    // The edit-mode entry point rebuilds the binding from the live
+    // triangle list when needed, so this is safe to erase.
+    if (sr.vertexCacheRun || sr.overdrawRun) {
+        mesh->getUserObjectBindings().eraseUserAny(
+            std::string("qtme.faces.") + std::to_string(si));
+    }
 
     sr.acmrAfter = ExportOptimizer::computeAcmr(indices, vdata->vertexCount);
     return sr;

@@ -94,6 +94,12 @@ protected:
     void SetUp() override {
         Manager::kill();
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb required in CI)";
+        // Fixture-level prereq: every test in this suite touches Ogre
+        // hardware buffers (positions + indices) so a missing GL
+        // context must fail loudly, not pass silently. Removing the
+        // per-test guards is left to the individual TEST_F bodies
+        // for now since some are still in flight elsewhere.
+        ASSERT_TRUE(canLoadMeshFiles()) << "GL context unavailable";
     }
     void TearDown() override {
         Manager::kill();
@@ -101,8 +107,6 @@ protected:
 };
 
 TEST_F(ExportOptimizerTest, ImprovesAcmrOnScrambledIndices) {
-    ASSERT_TRUE(canLoadMeshFiles()) << "GL context unavailable";
-
     auto mesh = createScrambledGrid("ExportOpt_scrambled");
     ASSERT_TRUE(mesh);
 
@@ -144,8 +148,6 @@ TEST_F(ExportOptimizerTest, ImprovesAcmrOnScrambledIndices) {
 }
 
 TEST_F(ExportOptimizerTest, FlagsNoneIsNoOp) {
-    ASSERT_TRUE(canLoadMeshFiles()) << "GL context unavailable";
-
     auto mesh = createScrambledGrid("ExportOpt_none");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("ExportOpt_none_node");

@@ -4077,15 +4077,20 @@ Rectangle {
                 }
             }
 
-            // Optimize Vertex Cache button (Phase 6 slice C). Distinct from
-            // "Fix All" — this only mutates index ordering, never geometry.
+            // Optimize Geometry button — runs the full export-time
+            // pipeline (vertex cache + overdraw + vertex fetch) via
+            // `ExportOptimizer`. Mutates the index + vertex buffers
+            // of every selected entity but never changes the actual
+            // geometry. Issue #399.
             Rectangle {
                 width: parent.width - 16; height: 28; radius: 3
                 visible: MeshValidator.hasCacheOptimization
                 color: cacheMouse.pressed ? Qt.darker("#5090d0", 1.2)
                      : cacheMouse.containsMouse ? Qt.lighter("#5090d0", 1.2)
                      : "#5090d0"
-                Text { anchors.centerIn: parent; text: "Optimize Vertex Cache"; color: "white"; font.pixelSize: 11 }
+                Text { anchors.centerIn: parent
+                       text: "Optimize Geometry (cache + overdraw + fetch)"
+                       color: "white"; font.pixelSize: 11 }
                 MouseArea {
                     id: cacheMouse; anchors.fill: parent; hoverEnabled: true
                     onClicked: MeshValidator.optimizeVertexCache()

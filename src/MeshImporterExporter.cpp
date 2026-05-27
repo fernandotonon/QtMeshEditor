@@ -2316,7 +2316,7 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
 }
 
 int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format,
-                                    bool stripAnimations, bool optimizeOnExport)
+                                    bool stripAnimations)
 {
     if(!_sn) return -1;
 
@@ -2332,25 +2332,6 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
     // Vertex paint defers GPU upload; export reads Ogre buffers — sync first.
     EditModeController::instance()->flushPendingVertexPaintForEntity(
         const_cast<Ogre::Entity*>(e));
-
-    // Run the AI-assist export optimizer (vertex cache + overdraw +
-    // vertex fetch) BEFORE the format-specific serializer reads the
-    // buffers. Cheap (< 1 ms per Mixamo-scale submesh) and improves
-    // runtime GPU performance for any consumer of the exported asset.
-    // Issue #399, epic #397.
-    if (optimizeOnExport) {
-        auto* nonConstEntity = const_cast<Ogre::Entity*>(e);
-        const auto report = ExportOptimizer::optimizeEntity(
-            nonConstEntity, OptimizeFlags::All);
-        if (!report.empty()) {
-            SentryReporter::addBreadcrumb("ai.assist.optimize_export",
-                QString("Optimized %1 submesh(es), ACMR %2 → %3 (%4%% improvement)")
-                    .arg(report.submeshesOptimized)
-                    .arg(report.weightedAcmrBefore, 0, 'f', 3)
-                    .arg(report.weightedAcmrAfter,  0, 'f', 3)
-                    .arg(report.improvementPct(),   0, 'f', 1));
-        }
-    }
 
     if(_format=="Ogre XML (*.mesh.xml)")
     {

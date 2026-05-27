@@ -13,10 +13,11 @@ namespace Ogre {
     class SceneNode;
 }
 
-// On-export mesh optimization pipeline (issue #399, epic #397).
+// Mesh-optimization pipeline driven from the Inspector's
+// validation flow (issue #399, epic #397).
 //
-// Runs the three cheap meshoptimizer post-processing passes on each
-// submesh of an entity (or whole scene), in this order:
+// Runs two index-only meshoptimizer post-processing passes per
+// submesh:
 //
 //   1. optimizeVertexCache    — Forsyth-style reorder for the post-T&L
 //                               cache. Drops ACMR roughly 30-50%.
@@ -25,22 +26,21 @@ namespace Ogre {
 //                               a small threshold (1.05) that trades a
 //                               tiny ACMR regression for a bigger
 //                               overdraw win.
-//   3. optimizeVertexFetch    — rewrite the vertex buffer (and remap the
-//                               index buffer) so post-cache vertex
-//                               reads are sequential, improving the
-//                               GPU's pre-T&L cache hit rate.
 //
-// All three are O(n) and cost a few microseconds per submesh on
-// Mixamo-scale assets. The default is to run all three on every
-// export; the caller can disable via `OptimizeFlags::None` or
-// `MeshImporterExporter::exporter(..., optimizeOnExport=false)`.
+// Both are O(n) and cost a few microseconds per submesh on Mixamo-
+// scale assets. Vertex-fetch reorder (the third meshoptimizer pass)
+// is intentionally NOT run here — it remaps the vertex buffer, and
+// on skinned meshes Ogre's bone-vertex assignments reference the
+// original vertex order via `SubMesh::getBoneAssignments` /
+// `IndexMap`, so reshuffling shatters the mesh on first frame.
+// The `VertexFetch` flag in `OptimizeFlags` is kept for API
+// continuity but is a no-op.
 //
-// Why a new module instead of extending VertexCacheOptimizer:
-// VertexCacheOptimizer is the surface for the user-invoked
-// `qtmesh vertex-cache` / MCP `optimize_vertex_cache` analysis tools
-// and carries the legacy custom-Forsyth implementation. The on-export
-// path is a separate concern — silent, fast, runs every time — so it
-// lives in its own file to keep the responsibility boundary clear.
+// The pipeline is invoked explicitly via `MeshValidator::
+// optimizeVertexCache` (the "Optimize Geometry" button under the
+// Mesh Validation section) — there is no implicit on-export hook,
+// since silent buffer mutation during export caused crashes on
+// macOS with certain mesh shapes.
 
 enum class OptimizeFlags : uint32_t {
     None         = 0,

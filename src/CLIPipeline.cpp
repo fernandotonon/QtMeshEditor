@@ -526,11 +526,8 @@ void CLIPipeline::printUsage()
         "\n"
         "Commands:\n"
         "  info <file> [--json]              Show mesh information\n"
-        "  fix <file> [-o <output>] [flags] [--no-optimize]\n"
-        "                                    Fix/optimize a mesh (overwrites input if no -o)\n"
-        "                                    --no-optimize: skip vertex-cache/overdraw/fetch passes on export\n"
-        "  convert <file> -o <output> [--no-optimize]\n"
-        "                                    Convert between 3D formats (--no-optimize to skip cache passes)\n"
+        "  fix <file> [-o <output>] [flags]   Fix/optimize a mesh (overwrites input if no -o)\n"
+        "  convert <file> -o <output>        Convert between 3D formats\n"
         "  anim <file> --list [--json]       List animations\n"
         "  anim <file> --rename <old> <new> [-o <output>]\n"
         "                                    Rename an animation (overwrites input if no -o)\n"
@@ -552,10 +549,9 @@ void CLIPipeline::printUsage()
         "  anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]\n"
         "                                    Report % redundant keyframes and projected file-size savings\n"
         "  validate <file> [--json]          Validate mesh geometry (exit 1 if errors found)\n"
-        "  lod <file> --count N [--reductions r,...] [--algo ogre|meshopt] [--no-optimize] [-o output]\n"
+        "  lod <file> --count N [--reductions r,...] [--algo ogre|meshopt] [-o output]\n"
         "                                    Generate N LOD levels; exports <base>_lod1.<ext> etc.\n"
         "                                    --algo: ogre (default) | meshopt (preserves UV seams + skin weights)\n"
-        "                                    --no-optimize: skip vertex-cache/overdraw/fetch optimization on export\n"
         "  lod <file> --auto [-o output]     Auto-generate LOD levels (Ogre backend)\n"
         "  lod <file> --remove [-o output]   Remove LOD levels (overwrites input if no -o)\n"
         "  lod <file> --info [--json]        Show LOD level info\n"
@@ -1364,9 +1360,8 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
 
 int CLIPipeline::cmdConvert(int argc, char* argv[])
 {
-    // Parse: convert <file> -o <output> [--format fmt] [--no-optimize]
+    // Parse: convert <file> -o <output> [--format fmt]
     QString inputPath, outputPath, format;
-    bool optimizeOnExport = true; // default ON; disable with --no-optimize
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -1379,10 +1374,6 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
             format = QString(argv[++i]);
             continue;
         }
-        if (arg == "--no-optimize") {
-            optimizeOnExport = false;
-            continue;
-        }
         if (!arg.startsWith("-") && inputPath.isEmpty()) {
             inputPath = arg;
             continue;
@@ -1391,7 +1382,7 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
 
     if (inputPath.isEmpty() || outputPath.isEmpty()) {
         err() << "Error: Missing required arguments." << Qt::endl;
-        err() << "Usage: qtmesh convert <file> -o <output> [--format fmt] [--no-optimize]" << Qt::endl;
+        err() << "Usage: qtmesh convert <file> -o <output> [--format fmt]" << Qt::endl;
         return 2;
     }
 
@@ -1422,9 +1413,7 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
     QFileInfo outFi(outputPath);
     QString absOutput = outFi.absoluteFilePath();
 
-    int result = MeshImporterExporter::exporter(node, absOutput, fmt,
-                                                 /*stripAnimations=*/false,
-                                                 optimizeOnExport);
+    int result = MeshImporterExporter::exporter(node, absOutput, fmt);
     if (result != 0) {
         SentryReporter::captureMessage(QString("CLI convert: export failed (.%1 -> .%2)").arg(fi.suffix(), QFileInfo(outputPath).suffix()), "error");
         err() << "Error: Export failed." << Qt::endl;
@@ -1438,11 +1427,10 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
 
 int CLIPipeline::cmdFix(int argc, char* argv[])
 {
-    // Parse: fix <file> -o <output> [flags] [--no-optimize]
+    // Parse: fix <file> -o <output> [flags]
     QString inputPath, outputPath;
     FixOptions opts;
     bool allFlag = false;
-    bool optimizeOnExport = true;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -1454,7 +1442,6 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
         if (arg == "--remove-degenerates") { opts.removeDegenerates = true; continue; }
         if (arg == "--merge-materials") { opts.mergeMaterials = true; continue; }
         if (arg == "--all") { allFlag = true; continue; }
-        if (arg == "--no-optimize") { optimizeOnExport = false; continue; }
         if (!arg.startsWith("-") && inputPath.isEmpty()) {
             inputPath = arg;
             continue;
@@ -1463,7 +1450,7 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
 
     if (inputPath.isEmpty()) {
         err() << "Error: Missing required arguments." << Qt::endl;
-        err() << "Usage: qtmesh fix <file> [-o <output>] [--remove-degenerates] [--merge-materials] [--all] [--no-optimize]" << Qt::endl;
+        err() << "Usage: qtmesh fix <file> [-o <output>] [--remove-degenerates] [--merge-materials] [--all]" << Qt::endl;
         return 2;
     }
 
@@ -1548,9 +1535,7 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
     auto* node = entities.first()->getParentSceneNode();
     QString fmt = formatForExtension(outputPath);
 
-    int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), fmt,
-                                                 /*stripAnimations=*/false,
-                                                 optimizeOnExport);
+    int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), fmt);
     if (result != 0) {
         SentryReporter::captureMessage(QString("CLI fix: export failed (.%1 -> .%2)").arg(fi.suffix(), outFi.suffix()), "error");
         err() << "Error: Export failed." << Qt::endl;
@@ -2379,7 +2364,6 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
     bool jsonOutput = false;
     QString algo = "ogre";      // default backend. Meshopt (#398) is opt-in via --algo meshopt.
     bool algoSpecified = false; // whether the caller passed --algo (vs default)
-    bool optimizeOnExport = true; // default ON; disable with --no-optimize (#399)
     QVariantList reductions;
 
     for (int i = 1; i < argc; ++i) {
@@ -2389,7 +2373,6 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
         if (arg == "--remove") { removeMode = true; continue; }
         if (arg == "--info")   { infoMode   = true; continue; }
         if (arg == "--json")   { jsonOutput = true; continue; }
-        if (arg == "--no-optimize") { optimizeOnExport = false; continue; }
         if (arg == "--count" && i + 1 < argc) {
             lodCount = QString(argv[++i]).toInt();
             continue;
@@ -2421,7 +2404,7 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
 
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh lod <file> --count N [--reductions r,...] [--algo meshopt|ogre] [--no-optimize] [-o output]" << Qt::endl;
+        err() << "Usage: qtmesh lod <file> --count N [--reductions r,...] [--algo meshopt|ogre] [-o output]" << Qt::endl;
         err() << "       qtmesh lod <file> --auto [-o output]" << Qt::endl;
         err() << "       qtmesh lod <file> --remove [-o output]" << Qt::endl;
         err() << "       qtmesh lod <file> --info [--json]" << Qt::endl;
@@ -2516,9 +2499,7 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
         auto* node = entity->getParentSceneNode();
 
         if (MeshImporterExporter::exporter(node, outFi.absoluteFilePath(),
-                                           formatForExtension(outPath),
-                                           /*stripAnimations=*/false,
-                                           optimizeOnExport) != 0) {
+                                           formatForExtension(outPath)) != 0) {
             SentryReporter::captureMessage(
                 QString("CLI lod: remove export failed (.%1)").arg(outFi.suffix()), "error");
             err() << "Error: Export failed." << Qt::endl;
@@ -2598,8 +2579,7 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
         const QString outPath = QDir(outDir).filePath(
             QString("%1_lod%2.%3").arg(outBaseName).arg(lod).arg(outSuffix));
         if (MeshImporterExporter::exporter(sn, outPath, formatForExtension(outPath),
-                                           /*stripAnimations=*/true,
-                                           optimizeOnExport) == 0)
+                                           /*stripAnimations=*/true) == 0)
             ++exported;
 
         for (unsigned int s = 0; s < numSubs; ++s)
