@@ -164,12 +164,12 @@ TEST(PlatformProfileLoaderTest, BuiltinIdMismatchIsRejected)
                   QByteArray(R"({"id":"other-id","rules":{"max_vertex_count":1}})"));
 
     const QByteArray prior = qgetenv("QTMESH_PROFILES_DIR");
-    QVERIFY(qputenv("QTMESH_PROFILES_DIR", QFileInfo(temp.path()).absoluteFilePath().toUtf8()));
+    ASSERT_TRUE(qputenv("QTMESH_PROFILES_DIR", QFileInfo(temp.path()).absoluteFilePath().toUtf8()));
 
     const PlatformProfileLoadResult loaded =
         PlatformProfileLoader::load(QStringLiteral("wrong-id"));
     if (!prior.isEmpty())
-        QVERIFY(qputenv("QTMESH_PROFILES_DIR", prior));
+        ASSERT_TRUE(qputenv("QTMESH_PROFILES_DIR", prior));
     else
         qunsetenv("QTMESH_PROFILES_DIR");
 
