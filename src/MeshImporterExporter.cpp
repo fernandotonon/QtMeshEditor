@@ -164,72 +164,79 @@ QString MeshImporterExporter::exportTextureName(const QString& originalName)
     return fi.completeBaseName() + ".png";
 }
 
-void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, const QFileInfo& file)
+namespace {
+
+// Returns true when `tex` is safe to feed to `Ogre::Texture::convertToImage`.
+// Guards against the failure modes that caused the #681 SIGSEGV:
+//   1. `_getTexturePtr()` returns a null TexturePtr (TUS references a
+//      texture that was never loaded — e.g. a .mesh sidecar with a
+//      missing texture file).
+//   2. `isLoaded()` is false (some imports defer GPU upload until first
+//      render; convertToImage then reads a null buffer and crashes).
+//      We trigger an explicit `load()` first and bail if it fails.
+//   3. Zero-size textures from placeholder / generated TUS.
+//   4. Non-2D textures — the exporter's image writer only handles 2D.
+bool isTextureSerializable(const Ogre::TexturePtr& tex)
 {
-    for (const auto &technique : material->getTechniques())
-    {
-        for (const auto &pass : technique->getPasses())
-        {
-            for (const auto &tus : pass->getTextureUnitStates())
-            {
+    if (!tex) return false;
+    if (tex->getTextureType() != Ogre::TEX_TYPE_2D) return false;
+    if (!tex->isLoaded()) {
+        try { tex->load(); }
+        catch (const Ogre::Exception&) { return false; }
+        if (!tex->isLoaded()) return false;
+    }
+    return tex->getWidth() != 0 && tex->getHeight() != 0;
+}
+
+// Write a single texture as an image file next to `file`. Logs the
+// error to Ogre's LogManager if Ogre or stdlib throws; never lets an
+// exception escape the export pipeline (one bad texture must not
+// abort the rest of the export).
+void saveTextureAsImage(const Ogre::TexturePtr& tex, const QFileInfo& file)
+{
+    try {
+        Ogre::Image img;
+        tex->convertToImage(img, true);
+        const QString saveName = MeshImporterExporter::exportTextureName(
+            QString::fromStdString(tex->getName()));
+        const std::string outPath = (file.path() + "/" + saveName).toStdString();
+        // `Ogre::Image::save` returns void; failures throw and land
+        // in the catch arms below.
+        img.save(outPath);
+    } catch (const Ogre::Exception& ex) {
+        Ogre::LogManager::getSingleton().logError(
+            std::string("Failed to save texture '") + tex->getName() + "': " + ex.what());
+    } catch (const std::exception& ex) {
+        Ogre::LogManager::getSingleton().logError(
+            std::string("Failed to save texture '") + tex->getName() + "': " + ex.what());
+    }
+}
+
+// Yield every CONTENT_NAMED texture referenced by a material into the
+// given functor. Flattens the technique → pass → TUS triple-loop so
+// the call site stays at one level of nesting.
+template <typename Fn>
+void forEachNamedTexture(const Ogre::MaterialPtr& material, Fn&& fn)
+{
+    for (const auto& technique : material->getTechniques()) {
+        for (const auto& pass : technique->getPasses()) {
+            for (const auto& tus : pass->getTextureUnitStates()) {
                 if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
                     continue;
-
-                Ogre::TexturePtr tex = tus->_getTexturePtr();
-                // Guards for #681 GUI-export SIGSEGV (Ogre::Texture::
-                // convertToImage + 116). Several failure modes have
-                // been observed on materials walked from GUI-loaded
-                // entities:
-                //   1. `_getTexturePtr()` returns a null TexturePtr
-                //      when the TUS is referenced but the underlying
-                //      texture was never loaded (e.g. material loaded
-                //      from a .mesh sidecar without the texture file
-                //      on disk).
-                //   2. `tex->isLoaded()` is false — convertToImage
-                //      reads from `mBuffer` which is null until the
-                //      texture is GPU-resident.
-                //   3. The texture has zero size (width/height = 0)
-                //      from a placeholder / generated TUS.
-                if (!tex) continue;
-                if (tex->getTextureType() != Ogre::TEX_TYPE_2D) continue;
-                if (!tex->isLoaded()) {
-                    // Trigger a load before reading; some imports defer
-                    // until first render. If load fails just skip —
-                    // the sidecar .material still has the texture name.
-                    try { tex->load(); }
-                    catch (const Ogre::Exception&) { continue; }
-                    if (!tex->isLoaded()) continue;
-                }
-                if (tex->getWidth() == 0 || tex->getHeight() == 0) continue;
-
-
-                try {
-                    Ogre::Image img;
-                    tex->convertToImage(img, true);
-                    const QString saveName = exportTextureName(QString::fromStdString(tex->getName()));
-                    const std::string outPath = (file.path() + "/" + saveName).toStdString();
-                    // Ogre::Image::save returns void on failure (it
-                    // throws); the bool-return idiom CodeRabbit
-                    // suggested doesn't apply to this overload. The
-                    // throw is caught below and logged — keep the
-                    // call as-is to preserve that behaviour.
-                    img.save(outPath);
-                } catch (const Ogre::Exception& ex) {
-                    Ogre::LogManager::getSingleton().logError(
-                        std::string("Failed to save texture '") + tex->getName()
-                        + "': " + ex.what());
-                } catch (const std::exception& ex) {
-                    Ogre::LogManager::getSingleton().logError(
-                        std::string("Failed to save texture '") + tex->getName()
-                        + "': " + ex.what());
-                } catch (...) {
-                    Ogre::LogManager::getSingleton().logError(
-                        std::string("Failed to save texture '") + tex->getName()
-                        + "' (unknown exception)");
-                }
+                fn(tus->_getTexturePtr());
             }
         }
     }
+}
+
+} // namespace
+
+void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, const QFileInfo& file)
+{
+    forEachNamedTexture(material, [&](const Ogre::TexturePtr& tex) {
+        if (isTextureSerializable(tex))
+            saveTextureAsImage(tex, file);
+    });
 }
 
 // Convert Ogre matrix to Assimp matrix
@@ -3475,13 +3482,10 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
 
         delete scene;
         reportProgress(100, QStringLiteral("Done."));
-    } catch (std::exception& ex) {
+    } catch (const std::exception& ex) {
         auto msg = QString("Scene export failed: %1").arg(ex.what());
         Ogre::LogManager::getSingleton().logError(msg.toStdString());
         SentryReporter::captureMessage(msg, "error");
-        return -1;
-    } catch (...) {
-        Ogre::LogManager::getSingleton().logError("Scene export failed with unknown exception");
         return -1;
     }
 
