@@ -76,6 +76,26 @@ AnimationControlController::AnimationControlController()
     m_pollTimer->start(16);
 }
 
+void AnimationControlController::suspendPollTimer()
+{
+    if (m_pollTimer && m_pollTimer->isActive()) {
+        SentryReporter::addBreadcrumb(
+            "ui.action", "Animation poll timer suspended (export safety)");
+        m_pollTimer->stop();
+        m_pollSuspended = true;
+    }
+}
+
+void AnimationControlController::resumePollTimer()
+{
+    if (m_pollSuspended && m_pollTimer) {
+        SentryReporter::addBreadcrumb(
+            "ui.action", "Animation poll timer resumed");
+        m_pollTimer->start(16);
+        m_pollSuspended = false;
+    }
+}
+
 // ── Theme colors ──────────────────────────────────────────────────────────────
 
 QColor AnimationControlController::panelColor() const

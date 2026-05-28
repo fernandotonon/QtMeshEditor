@@ -340,6 +340,17 @@ private:
     AnimationControlController();
     ~AnimationControlController() override = default;
 
+public:
+    // Suspend / resume the 60fps animation-position poll timer. Used
+    // by long-running ops that open a nested event loop (e.g. the
+    // File → Export Selected file dialog) so the poll timer doesn't
+    // fire mid-export and advance the skeleton's animation state
+    // while MeshSerializer / Assimp::Exporter is walking it. See
+    // #681 export-crash repro.
+    Q_INVOKABLE void suspendPollTimer();
+    Q_INVOKABLE void resumePollTimer();
+
+private:
     void setAnimationFrame(int ms);
     void refreshBoneList();
     void refreshSliderTicks();
@@ -349,6 +360,7 @@ private:
     static AnimationControlController* m_pSingleton;
 
     QTimer* m_pollTimer = nullptr;
+    bool    m_pollSuspended = false;
 
     Ogre::Entity*             m_selectedEntity   = nullptr;
     Ogre::SkeletonInstance*   m_selectedSkeleton = nullptr;

@@ -3144,6 +3144,26 @@ void MainWindow::on_actionExport_Selected_triggered()
     SentryReporter::addBreadcrumb("ui.action", "Export selected mesh");
     auto txn = SentryReporter::startTransaction("ui.export", "file.export");
 
+    // Stop EVERY timer that could mutate the mesh / skeleton state
+    // while a nested event loop is open (QFileDialog) OR while the
+    // serializer walks the buffers. Qt fires queued timers inside
+    // nested event loops, so without these pauses:
+    //   * `MainWindow::m_pTimer` keeps calling renderOneFrame() — the
+    //     animation state advances mid-export, leaving the SkeletonInstance
+    //     pointers stale to whatever the serializer is reading.
+    //   * `AnimationControlController::m_pollTimer` (60fps) calls
+    //     `setAnimationFrame()`, which mutates AnimationState's
+    //     time position and re-applies skeleton transforms — same race.
+    //
+    // FBX / PS1 exporters happened to survive because they snapshot
+    // their inputs into temp buffers up front; Ogre's MeshSerializer
+    // and Assimp's exporters walk the live mesh in place and crash.
+    //
+    // See #681 export-crash repro.
+    const bool wasRendering = m_pTimer && m_pTimer->isActive();
+    if (wasRendering) m_pTimer->stop();
+    AnimationControlController::instance()->suspendPollTimer();
+
     try {
         const auto* sel = SelectionSet::getSingleton();
 
@@ -3151,7 +3171,7 @@ void MainWindow::on_actionExport_Selected_triggered()
         {
             foreach(Ogre::SceneNode* node, sel->getNodesSelectionList())
             {
-                QString exportedPath = MeshImporterExporter::exporter(node);
+                QString exportedPath = MeshImporterExporter::exporter(node, this);
                 if (!exportedPath.isEmpty())
                     addToRecentFiles(exportedPath);
             }
@@ -3162,15 +3182,19 @@ void MainWindow::on_actionExport_Selected_triggered()
             {
                 auto* node = entity->getParentSceneNode();
                 if (!node) continue;
-                QString exportedPath = MeshImporterExporter::exporter(node);
+                QString exportedPath = MeshImporterExporter::exporter(node, this);
                 if (!exportedPath.isEmpty())
                     addToRecentFiles(exportedPath);
             }
         }
     } catch (...) {
+        AnimationControlController::instance()->resumePollTimer();
+        if (wasRendering) m_pTimer->start();
         SentryReporter::finishTransaction(txn);
         throw;
     }
+    AnimationControlController::instance()->resumePollTimer();
+    if (wasRendering) m_pTimer->start();
     SentryReporter::finishTransaction(txn);
 }
 // LCOV_EXCL_STOP
