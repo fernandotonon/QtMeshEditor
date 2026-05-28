@@ -131,6 +131,13 @@ struct ScanConfig {
     static ScanConfig fromVariantMap(const QVariantMap& map);
     static ScanConfig fromJson(const QJsonObject& obj);
 
+    /// Load qtmesh.yml / qtmesh.json project file as a QVariantMap (empty on failure).
+    static QVariantMap loadProjectMapFromFile(const QString& path);
+
+    /// Merge project config (`scan`, `rules`, `scopes`, `fix`, `report`) onto @p config.
+    /// Does not read `profile:` — apply a platform profile before calling this.
+    static void applyProjectConfig(ScanConfig& config, const QVariantMap& root);
+
     /// Return a copy with scope overrides applied for the given relative path.
     /// Scopes are matched in order; later scopes override earlier ones.
     ScanConfig withScopeOverrides(const QString& relativePath) const;

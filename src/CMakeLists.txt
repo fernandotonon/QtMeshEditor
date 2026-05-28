@@ -111,6 +111,7 @@ WelcomeScreenController.cpp
 WelcomeDialog.cpp
 ScanConfig.cpp
 ScanEngine.cpp
+PlatformProfile.cpp
 QtMeshCloudClient.cpp
 AssetBrowserController.cpp
 MaterialPreviewRenderer.cpp
@@ -214,6 +215,7 @@ WelcomeScreenController.h
 WelcomeDialog.h
 ScanConfig.h
 ScanEngine.h
+PlatformProfile.h
 QtMeshCloudClient.h
 AssetBrowserController.h
 MaterialPreviewRenderer.h
@@ -443,7 +445,10 @@ add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/media
         $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/media
-    COMMENT "Copying media/ next to QtMeshEditor (materials + RTSS)"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/profiles
+        $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/profiles
+    COMMENT "Copying media/ and profiles/ next to QtMeshEditor"
 )
 
 ##############################################################
@@ -602,7 +607,10 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/media/Main
             $<TARGET_FILE_DIR:UnitTests>/media/Main
-        COMMENT "Copying RTSS shader resources to test binary directory"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/profiles
+            $<TARGET_FILE_DIR:UnitTests>/profiles
+        COMMENT "Copying RTSS shader resources and platform profiles to test binary directory"
     )
 endif()
 

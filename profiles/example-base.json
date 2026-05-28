@@ -1,0 +1,12 @@
+{
+  "id": "example-base",
+  "displayName": "Example Base",
+  "description": "Parent profile for inheritance tests.",
+  "rules": {
+    "max_vertex_count": 20000,
+    "require_textures_exist": true
+  },
+  "metadata": {
+    "category": "example"
+  }
+}

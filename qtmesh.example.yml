@@ -16,6 +16,9 @@
 
 version: 1
 
+# Optional built-in platform profile (bundled with QtMesh — no local profiles/ folder required):
+# profile: example-minimal
+
 scan:
   roots:
     - assets/

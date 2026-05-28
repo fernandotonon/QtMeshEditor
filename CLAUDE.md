@@ -68,6 +68,8 @@ qtmesh lod model.fbx --remove -o clean.fbx     # strip LODs and save
 qtmesh material model.fbx --preset "Metallic-Roughness" -o out.fbx  # apply a built-in material preset (writes .material sidecar)
 qtmesh material --list-presets                 # list built-in preset names (incl. PBR templates)
 qtmesh scan ./assets                           # scan directory for asset issues
+qtmesh scan ./assets --profile example-minimal # built-in platform validation preset
+qtmesh scan ./assets --list-profiles           # list bundled profile ids
 qtmesh scan ./assets --config qtmesh.yml       # use YAML config file
 qtmesh scan ./assets --json                    # JSON output
 qtmesh scan ./assets --report report.json      # write JSON report to file
