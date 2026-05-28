@@ -579,6 +579,7 @@ void CLIPipeline::printUsage()
         "  material --list-presets         List the built-in preset names\n"
         "\n"
         "Scan options:\n"
+        "  --target <id>             Alias for --profile (CI-friendly). Built-in targets include: example-minimal, example-base\n"
         "  --profile <id>            Built-in platform profile (e.g. example-minimal) or path to .json\n"
         "  --list-profiles           List built-in platform profile ids and exit\n"
         "  --config <file>           Config file (default: qtmesh.yml, qtmesh.json)\n"
@@ -3774,6 +3775,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     QString scanRoot;
     QString configPath;
     QString profileIdArg;
+    QString targetIdArg;
     bool listProfiles = false;
     QString tokenArg;
     bool strictUpload = false;
@@ -3877,7 +3879,10 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (arg == "--no-upload") { noUpload = true; continue; }
         if (arg == "--list-profiles") { listProfiles = true; continue; }
         QString value;
-        ParseValueResult parseResult = parseValueArg(arg, "--profile", i, value);
+        ParseValueResult parseResult = parseValueArg(arg, "--target", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { targetIdArg = value; continue; }
+        parseResult = parseValueArg(arg, "--profile", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
         if (parseResult == ParseValueResult::Matched) { profileIdArg = value; continue; }
         parseResult = parseValueArg(arg, "--config", i, value);
@@ -4054,6 +4059,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     // 4) CLI flags (below)
     ScanConfig config = ScanConfig::defaults();
     QVariantMap projectRoot;
+    QString activeProfileId;
 
     if (!configPath.isEmpty()) {
         if (!QFileInfo::exists(configPath)) {
@@ -4109,6 +4115,15 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     }
 
     QString profileId = profileIdArg.trimmed();
+    const QString targetId = targetIdArg.trimmed();
+    if (!targetId.isEmpty()) {
+        if (!profileId.isEmpty() && profileId != targetId) {
+            err() << "Error: --target and --profile both provided with different values ("
+                  << targetId << " vs " << profileId << ")" << Qt::endl;
+            return 2;
+        }
+        profileId = targetId;
+    }
     if (profileId.isEmpty())
         profileId = projectRoot.value(QStringLiteral("profile")).toString().trimmed();
 
@@ -4123,6 +4138,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         for (const QString& w : loaded.warnings)
             err() << "Warning: " << w << Qt::endl;
         applyPlatformProfile(config, loaded.profile);
+        activeProfileId = loaded.profile.id;
         err() << "Note: Using platform profile '" << loaded.profile.id << "'." << Qt::endl;
         SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
             QStringLiteral("platform profile=%1").arg(loaded.profile.id));
@@ -4292,12 +4308,16 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         }
     }
 
-    const QJsonObject reportJson = ScanEngine::scanReportToJsonObject(result);
+    QJsonObject reportJson = ScanEngine::scanReportToJsonObject(result);
+    if (!activeProfileId.isEmpty())
+        reportJson.insert(QStringLiteral("profile"), activeProfileId);
 
     // Output to terminal
     if (jsonOutput) {
         cliWrite(QString::fromUtf8(QJsonDocument(reportJson).toJson(QJsonDocument::Indented)) + "\n");
     } else {
+        if (!activeProfileId.isEmpty())
+            cliWrite(QStringLiteral("Profile: %1\n").arg(activeProfileId));
         cliWrite(formatScanSummary(result, colorizeTextOutput));
     }
 
@@ -4315,7 +4335,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         QFile f(sarifPath);
         QDir().mkpath(QFileInfo(sarifPath).path());
         if (f.open(QIODevice::WriteOnly | QIODevice::Text))
-            f.write(ScanEngine::formatSarif(result).toUtf8());
+            f.write(ScanEngine::formatSarif(result, activeProfileId).toUtf8());
         else
             err() << "Warning: Could not write SARIF report to " << sarifPath << Qt::endl;
     }
@@ -4326,7 +4346,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         QDir().mkpath(QFileInfo(config.reportOutput).path());
         if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
             if (config.reportFormat == "text")
-                f.write(ScanEngine::formatText(result, config, false).toUtf8());
+                f.write(ScanEngine::formatText(result, config, false, activeProfileId).toUtf8());
             else
                 f.write(QJsonDocument(reportJson).toJson(QJsonDocument::Indented));
         }
@@ -4335,7 +4355,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         QFile f(config.sarifOutput);
         QDir().mkpath(QFileInfo(config.sarifOutput).path());
         if (f.open(QIODevice::WriteOnly | QIODevice::Text))
-            f.write(ScanEngine::formatSarif(result).toUtf8());
+            f.write(ScanEngine::formatSarif(result, activeProfileId).toUtf8());
     }
 
     bool uploadOk = true;

@@ -1917,11 +1917,15 @@ static QString colorizeToken(const QString& text, const char* ansiColor, bool en
     return QStringLiteral("\x1b[%1m%2\x1b[0m").arg(QString::fromLatin1(ansiColor), text);
 }
 
-QString ScanEngine::formatText(const ScanResult& result, const ScanConfig& config, bool colorize)
+QString ScanEngine::formatText(const ScanResult& result, const ScanConfig& config, bool colorize,
+                               const QString& activeProfileId)
 {
     Q_UNUSED(config);
     QString out;
     QTextStream s(&out);
+
+    if (!activeProfileId.isEmpty())
+        s << "Profile: " << activeProfileId << "\n\n";
 
     // Per-asset output
     for (const auto& asset : result.assets) {
@@ -2174,7 +2178,7 @@ QString ScanEngine::formatJson(const ScanResult& result)
 // SARIF formatter (Static Analysis Results Interchange Format 2.1.0)
 // ---------------------------------------------------------------------------
 
-QString ScanEngine::formatSarif(const ScanResult& result)
+QString ScanEngine::formatSarif(const ScanResult& result, const QString& activeProfileId)
 {
     // Build rule definitions from unique rule IDs
     QMap<QString, QString> ruleDescriptions;
@@ -2275,6 +2279,11 @@ QString ScanEngine::formatSarif(const ScanResult& result)
 
     QJsonObject run;
     run["tool"] = tool;
+    if (!activeProfileId.isEmpty()) {
+        QJsonObject props;
+        props["profile"] = activeProfileId;
+        run["properties"] = props;
+    }
     run["results"] = resultsArr;
     QString sarifStart, sarifEnd;
     scanReportUtcTimes(result, &sarifStart, &sarifEnd);
