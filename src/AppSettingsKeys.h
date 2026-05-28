@@ -65,6 +65,36 @@ inline const QString& palette()
     return k;
 }
 
+inline const QString& cloudToken()
+{
+    static const QString k(QStringLiteral("Cloud/token"));
+    return k;
+}
+
+inline const QString& cloudTokenExpiresAt()
+{
+    static const QString k(QStringLiteral("Cloud/tokenExpiresAt"));
+    return k;
+}
+
+inline const QString& cloudUserName()
+{
+    static const QString k(QStringLiteral("Cloud/userName"));
+    return k;
+}
+
+inline const QString& cloudUserEmail()
+{
+    static const QString k(QStringLiteral("Cloud/userEmail"));
+    return k;
+}
+
+inline const QString& cloudUserSlug()
+{
+    static const QString k(QStringLiteral("Cloud/userSlug"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H

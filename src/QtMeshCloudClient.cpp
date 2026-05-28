@@ -60,6 +60,11 @@ bool parseJsonObjectBody(const QByteArray& body, QJsonObject& out, QString& erro
     return true;
 }
 
+QString jsonErrorCode(const QJsonObject& root)
+{
+    return root.value(QStringLiteral("error")).toString();
+}
+
 QString pathLeaf(const QString& path)
 {
     const QString name = QFileInfo(path).fileName();
@@ -278,6 +283,235 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::uploadScanReport(const QStrin
     out.errorString = QStringLiteral("exhausted retries");
     SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
         QStringLiteral("QtMesh Cloud uploadScan: exhausted retries"), QStringLiteral("warning"));
+    return out;
+}
+
+QtMeshCloudClient::DeviceCodeResult QtMeshCloudClient::requestDeviceCode(const QString& clientName,
+                                                                         int timeoutMs)
+{
+    DeviceCodeResult out;
+    const QString trimmedClientName = clientName.trimmed();
+    if (trimmedClientName.isEmpty()) {
+        out.errorString = QStringLiteral("client name is required");
+        return out;
+    }
+
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/oauth/device/code"));
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QJsonObject body;
+    body.insert(QStringLiteral("clientName"), trimmedClientName);
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+    req.setTransferTimeout(timeoutMs);
+    const QByteArray payload = QJsonDocument(body).toJson(QJsonDocument::Compact);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+        QStringLiteral("QtMesh Cloud device code: start"));
+
+    QNetworkReply* reply = nam.post(req, payload);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.responseBodySnippet = trimSnippet(responseBody);
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+            QStringLiteral("QtMesh Cloud device code: failure HTTP %1").arg(out.httpStatus),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    QJsonObject root;
+    if (!parseJsonObjectBody(responseBody, root, out.errorString))
+        return out;
+
+    out.deviceCode = root.value(QStringLiteral("device_code")).toString();
+    out.userCode = root.value(QStringLiteral("user_code")).toString();
+    out.verificationUri = root.value(QStringLiteral("verification_uri")).toString();
+    out.verificationUriComplete = root.value(QStringLiteral("verification_uri_complete")).toString();
+    out.expiresInSeconds = root.value(QStringLiteral("expires_in")).toInt(0);
+    out.intervalSeconds = root.value(QStringLiteral("interval")).toInt(5);
+    out.ok = !out.deviceCode.isEmpty() && !out.userCode.isEmpty() && !out.verificationUriComplete.isEmpty();
+    if (!out.ok)
+        out.errorString = QStringLiteral("response missing device_code, user_code, or verification_uri_complete");
+    else
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+            QStringLiteral("QtMesh Cloud device code: ok"));
+    return out;
+}
+
+QtMeshCloudClient::DeviceTokenResult QtMeshCloudClient::pollDeviceToken(const QString& deviceCode,
+                                                                        int timeoutMs)
+{
+    DeviceTokenResult out;
+    if (deviceCode.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("device code is required");
+        return out;
+    }
+
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/oauth/device/token"));
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QJsonObject body;
+    body.insert(QStringLiteral("device_code"), deviceCode.trimmed());
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+    req.setTransferTimeout(timeoutMs);
+    const QByteArray payload = QJsonDocument(body).toJson(QJsonDocument::Compact);
+
+    QNetworkReply* reply = nam.post(req, payload);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    QJsonObject root;
+    QString parseError;
+    const bool parsed = parseJsonObjectBody(responseBody, root, parseError);
+    if (parsed) {
+        out.errorCode = jsonErrorCode(root);
+        out.intervalSeconds = root.value(QStringLiteral("interval")).toInt(5);
+    }
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.responseBodySnippet = trimSnippet(responseBody);
+        out.errorString = !out.errorCode.isEmpty()
+            ? out.errorCode
+            : (nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus));
+        if (out.errorCode.isEmpty() && !out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        return out;
+    }
+
+    if (!parsed) {
+        out.errorString = parseError;
+        return out;
+    }
+
+    out.token = root.value(QStringLiteral("token")).toString();
+    out.expiresAt = static_cast<qint64>(root.value(QStringLiteral("expiresAt")).toDouble(0));
+    out.user = root.value(QStringLiteral("user")).toObject();
+    out.ok = !out.token.isEmpty() && !out.user.isEmpty();
+    if (!out.ok)
+        out.errorString = QStringLiteral("response missing token or user");
+    else
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+            QStringLiteral("QtMesh Cloud device token: ok"));
+    return out;
+}
+
+QtMeshCloudClient::CurrentUserResult QtMeshCloudClient::fetchCurrentUser(const QString& bearerToken,
+                                                                         int timeoutMs)
+{
+    CurrentUserResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/auth/me"));
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+    req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
+    req.setTransferTimeout(timeoutMs);
+
+    QNetworkReply* reply = nam.get(req);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.responseBodySnippet = trimSnippet(responseBody);
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        return out;
+    }
+
+    QJsonObject root;
+    if (!parseJsonObjectBody(responseBody, root, out.errorString))
+        return out;
+    out.user = root.value(QStringLiteral("user")).toObject();
+    out.ok = !out.user.isEmpty();
+    if (!out.ok)
+        out.errorString = QStringLiteral("response missing user");
+    return out;
+}
+
+QtMeshCloudClient::UploadResult QtMeshCloudClient::logout(const QString& bearerToken, int timeoutMs)
+{
+    UploadResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/auth/logout"));
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req = authorizedJsonRequest(url, bearerToken, timeoutMs);
+
+    QNetworkReply* reply = nam.post(req, QByteArrayLiteral("{}"));
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    out.responseBodySnippet = trimSnippet(responseBody);
+    out.ok = nerr == QNetworkReply::NoError && out.httpStatus >= 200 && out.httpStatus < 300;
+    if (!out.ok) {
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+    }
     return out;
 }
 

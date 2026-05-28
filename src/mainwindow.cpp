@@ -5,6 +5,7 @@
 #include <QSettings>
 #include <QApplication>
 #include <QLibraryInfo>
+#include <QEventLoop>
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -15,6 +16,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QClipboard>
+#include <QDesktopServices>
 #include <QQmlApplicationEngine>
 #include <QQmlEngine>
 #include <QJSEngine>
@@ -32,6 +35,7 @@
 #include <QPushButton>
 #include "mainwindow.h"
 #include "AppConsoleLog.h"
+#include "AppSettingsKeys.h"
 #include "ui_mainwindow.h"
 #include "OgreWidget.h"
 #include "QtInputManager.h"
@@ -80,6 +84,7 @@
 #include "VATBakerController.h"
 #include "MorphAnimationManager.h"
 #include "EditorModeController.h"
+#include "QtMeshCloudClient.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -95,6 +100,7 @@
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QFontDatabase>
+#include <QTimer>
 #include <functional>
 
 namespace {
@@ -120,6 +126,29 @@ void registerEditorModeQmlSingletons()
             return EditorModeController::qmlInstance(engine, nullptr);
         });
     registered = true;
+}
+
+QString storedCloudDisplayName()
+{
+    QSettings settings;
+    QString display = settings.value(AppSettingsKeys::cloudUserName()).toString().trimmed();
+    if (display.isEmpty())
+        display = settings.value(AppSettingsKeys::cloudUserSlug()).toString().trimmed();
+    if (display.isEmpty())
+        display = settings.value(AppSettingsKeys::cloudUserEmail()).toString().trimmed();
+    return display;
+}
+
+void waitWithEvents(int milliseconds, QProgressDialog* progress)
+{
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    if (progress)
+        QObject::connect(progress, &QProgressDialog::canceled, &loop, &QEventLoop::quit);
+    timer.start(qMax(0, milliseconds));
+    loop.exec();
 }
 
 } // namespace
@@ -2110,6 +2139,22 @@ void MainWindow::initToolBar()
         m_viewCubeController->setActiveWidget(mDockWidgetList.first()->getOgreWidget());
     m_viewCubeController->setVisible(true);
 
+    QMenu* cloudMenu = menuBar()->addMenu(tr("&Cloud"));
+    cloudMenu->setObjectName(QStringLiteral("menuCloud"));
+    m_cloudSignInAction = cloudMenu->addAction(tr("Sign in to QtMesh Cloud..."));
+    m_cloudSignInAction->setObjectName(QStringLiteral("actionQtMeshCloudSignIn"));
+    connect(m_cloudSignInAction, &QAction::triggered, this, &MainWindow::signInToQtMeshCloud);
+    m_cloudSignOutAction = cloudMenu->addAction(tr("Sign out"));
+    m_cloudSignOutAction->setObjectName(QStringLiteral("actionQtMeshCloudSignOut"));
+    connect(m_cloudSignOutAction, &QAction::triggered, this, &MainWindow::signOutOfQtMeshCloud);
+    cloudMenu->addSeparator();
+    m_cloudOpenDashboardAction = cloudMenu->addAction(tr("Open My Projects"));
+    m_cloudOpenDashboardAction->setObjectName(QStringLiteral("actionQtMeshCloudOpenProjects"));
+    connect(m_cloudOpenDashboardAction, &QAction::triggered, this, []() {
+        QDesktopServices::openUrl(QUrl(QStringLiteral(QTMESH_CLOUD_WEB_URL)));
+    });
+    updateCloudAuthActions();
+
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
     aiMenu->setObjectName("menuAI");
@@ -2221,6 +2266,144 @@ const QPalette &MainWindow::darkPalette()
     darkPalette->setColor(QPalette::Disabled, QPalette::Button, QColor(100, 100, 100));
 
     return (*darkPalette);
+}
+
+void MainWindow::updateCloudAuthActions()
+{
+    QSettings settings;
+    const bool signedIn = !settings.value(AppSettingsKeys::cloudToken()).toString().isEmpty();
+    const QString display = storedCloudDisplayName();
+    if (m_cloudSignInAction) {
+        m_cloudSignInAction->setEnabled(!signedIn);
+        m_cloudSignInAction->setText(signedIn && !display.isEmpty()
+            ? tr("Signed in as %1").arg(display)
+            : tr("Sign in to QtMesh Cloud..."));
+    }
+    if (m_cloudSignOutAction)
+        m_cloudSignOutAction->setEnabled(signedIn);
+    if (m_cloudOpenDashboardAction)
+        m_cloudOpenDashboardAction->setEnabled(signedIn);
+}
+
+void MainWindow::signInToQtMeshCloud()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+                                  QStringLiteral("QtMesh Cloud sign-in started"));
+
+    const auto code = QtMeshCloudClient::requestDeviceCode();
+    if (!code.ok) {
+        QMessageBox::warning(this, tr("QtMesh Cloud Sign In"),
+                             tr("Could not start sign in.\n\n%1").arg(code.errorString));
+        return;
+    }
+
+    QDialog prompt(this);
+    prompt.setWindowTitle(tr("Sign in to QtMesh Cloud"));
+    auto* layout = new QVBoxLayout(&prompt);
+    auto* label = new QLabel(
+        tr("A browser window will open for QtMesh Cloud sign in.\n\nCode: %1").arg(code.userCode),
+        &prompt);
+    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(label);
+
+    auto* buttons = new QHBoxLayout();
+    auto* copyButton = new QPushButton(tr("Copy Code"), &prompt);
+    auto* openButton = new QPushButton(tr("Open Browser"), &prompt);
+    auto* cancelButton = new QPushButton(tr("Cancel"), &prompt);
+    buttons->addWidget(copyButton);
+    buttons->addStretch();
+    buttons->addWidget(cancelButton);
+    buttons->addWidget(openButton);
+    layout->addLayout(buttons);
+    connect(copyButton, &QPushButton::clicked, this, [userCode = code.userCode]() {
+        if (QApplication::clipboard())
+            QApplication::clipboard()->setText(userCode);
+    });
+    connect(cancelButton, &QPushButton::clicked, &prompt, &QDialog::reject);
+    connect(openButton, &QPushButton::clicked, &prompt, &QDialog::accept);
+    openButton->setDefault(true);
+    prompt.resize(420, prompt.sizeHint().height());
+    if (prompt.exec() != QDialog::Accepted)
+        return;
+
+    QDesktopServices::openUrl(QUrl(code.verificationUriComplete));
+
+    QProgressDialog progress(tr("Waiting for browser approval..."), tr("Cancel"), 0, 0, this);
+    progress.setWindowTitle(tr("QtMesh Cloud Sign In"));
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.show();
+
+    int intervalMs = qMax(1, code.intervalSeconds) * 1000;
+    const int maxAttempts = qMax(1, code.expiresInSeconds / qMax(1, code.intervalSeconds) + 2);
+    for (int attempt = 0; attempt < maxAttempts && !progress.wasCanceled(); ++attempt) {
+        const auto token = QtMeshCloudClient::pollDeviceToken(code.deviceCode);
+        if (token.ok) {
+            QSettings settings;
+            settings.setValue(AppSettingsKeys::cloudToken(), token.token);
+            settings.setValue(AppSettingsKeys::cloudTokenExpiresAt(), token.expiresAt);
+            settings.setValue(AppSettingsKeys::cloudUserName(), token.user.value(QStringLiteral("name")).toString());
+            settings.setValue(AppSettingsKeys::cloudUserEmail(), token.user.value(QStringLiteral("email")).toString());
+            settings.setValue(AppSettingsKeys::cloudUserSlug(), token.user.value(QStringLiteral("slug")).toString());
+            settings.sync();
+            updateCloudAuthActions();
+            progress.close();
+            QMessageBox::information(this, tr("QtMesh Cloud Sign In"),
+                                     tr("Signed in to QtMesh Cloud as %1.")
+                                         .arg(storedCloudDisplayName()));
+            SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+                                          QStringLiteral("QtMesh Cloud sign-in completed"));
+            return;
+        }
+
+        if (token.errorCode == QStringLiteral("authorization_pending")) {
+            progress.setLabelText(tr("Waiting for browser approval...\nCode: %1").arg(code.userCode));
+        } else if (token.errorCode == QStringLiteral("slow_down")) {
+            intervalMs = qMax(intervalMs + 2000, qMax(1, token.intervalSeconds) * 1000);
+            progress.setLabelText(tr("Waiting for browser approval...\nCode: %1").arg(code.userCode));
+        } else if (token.errorCode == QStringLiteral("access_denied")) {
+            progress.close();
+            QMessageBox::warning(this, tr("QtMesh Cloud Sign In"),
+                                 tr("Sign in was denied in the browser."));
+            return;
+        } else if (token.errorCode == QStringLiteral("expired_token")) {
+            progress.close();
+            QMessageBox::warning(this, tr("QtMesh Cloud Sign In"),
+                                 tr("The sign-in code expired. Start sign in again."));
+            return;
+        } else {
+            progress.close();
+            QMessageBox::warning(this, tr("QtMesh Cloud Sign In"),
+                                 tr("Sign in failed.\n\n%1").arg(token.errorString));
+            return;
+        }
+
+        waitWithEvents(intervalMs, &progress);
+    }
+
+    if (!progress.wasCanceled()) {
+        QMessageBox::warning(this, tr("QtMesh Cloud Sign In"),
+                             tr("The sign-in request expired. Start sign in again."));
+    }
+}
+
+void MainWindow::signOutOfQtMeshCloud()
+{
+    QSettings settings;
+    const QString token = settings.value(AppSettingsKeys::cloudToken()).toString();
+    if (!token.isEmpty())
+        QtMeshCloudClient::logout(token, /*timeoutMs=*/10000);
+
+    settings.remove(AppSettingsKeys::cloudToken());
+    settings.remove(AppSettingsKeys::cloudTokenExpiresAt());
+    settings.remove(AppSettingsKeys::cloudUserName());
+    settings.remove(AppSettingsKeys::cloudUserEmail());
+    settings.remove(AppSettingsKeys::cloudUserSlug());
+    settings.sync();
+    updateCloudAuthActions();
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+                                  QStringLiteral("QtMesh Cloud signed out"));
+    QMessageBox::information(this, tr("QtMesh Cloud"), tr("Signed out of QtMesh Cloud."));
 }
 
 void MainWindow::setPlaying(bool playing)
