@@ -19,6 +19,7 @@
 #include "DrawCallAnalyzer.h"
 #include "VertexCacheOptimizer.h"
 #include "ExportOptimizer.h"
+#include "UvUnwrap.h"
 #include "MeshDecimator.h"
 #include "EditableMesh.h"
 #include "TexturePaintBuffer.h"
@@ -706,6 +707,14 @@ void CLIPipeline::printUsage()
         "                                    reference shaders for Godot / Unity / Unreal / Blender\n"
         "                                    consume the output unmodified. Drop-in shader templates\n"
         "                                    for Godot/Unity/Unreal live at `tools/vat-shaders/`.\n"
+        "  uv <file> --unwrap [--resolution N] [--padding P] [--channel C] [--no-backup] -o <out>\n"
+        "                                    Auto UV-unwrap via xatlas (used by Blender / Godot). Writes\n"
+        "                                    non-overlapping UVs into the chosen channel (default 0) and\n"
+        "                                    exports. The original UVs on the target channel are kept on\n"
+        "                                    UV{C+1} unless --no-backup is set. Skin weights survive the\n"
+        "                                    seam-split remap.\n"
+        "  uv <file> --info [--json]         Report current UV channels + UV0 bounding-box coverage per\n"
+        "                                    submesh without mutating the mesh.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -1247,6 +1256,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "optimize") rc = cmdOptimize(argc, argv);
     else if (cmd == "bake-vertex-colors") rc = cmdBakeVertexColors(argc, argv);
     else if (cmd == "vat") rc = cmdVat(argc, argv);
+    else if (cmd == "uv") rc = cmdUv(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
     else if (cmd == "nodeanim") rc = cmdNodeAnim(argc, argv);
 
@@ -6610,6 +6620,116 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                 "  shaders:  drop-in Godot/Unity/Unreal templates at tools/vat-shaders/\n"
                 "            (re-run with `--include-shaders all` to copy them next to the bake)\n"));
         }
+    }
+    return 0;
+}
+
+int CLIPipeline::cmdUv(int argc, char* argv[])
+{
+    // Parse: uv <file> --unwrap [--resolution N] [--padding P] [--channel C] [--no-backup] -o out
+    //   or: uv <file> --info [--json]
+    QString inputPath, outputPath;
+    bool unwrap = false, infoMode = false, jsonOutput = false;
+    int resolution = 1024, padding = 4, channel = 0;
+    bool preserveBackup = true;
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == "uv" || arg == "--cli") continue;
+        if (arg == "--unwrap") { unwrap = true; continue; }
+        if (arg == "--info")   { infoMode = true; continue; }
+        if (arg == "--json")   { jsonOutput = true; continue; }
+        if (arg == "--no-backup") { preserveBackup = false; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--resolution" && i + 1 < argc) {
+            resolution = QString::fromLocal8Bit(argv[++i]).toInt(); continue;
+        }
+        if (arg == "--padding" && i + 1 < argc) {
+            padding = QString::fromLocal8Bit(argv[++i]).toInt(); continue;
+        }
+        if (arg == "--channel" && i + 1 < argc) {
+            channel = QString::fromLocal8Bit(argv[++i]).toInt(); continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) {
+            inputPath = arg; continue;
+        }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh uv <file> --unwrap [--resolution N] [--padding P] [--channel C] [--no-backup] -o <out>" << Qt::endl;
+        err() << "       qtmesh uv <file> --info [--json]" << Qt::endl;
+        return 2;
+    }
+    if (!unwrap && !infoMode) {
+        err() << "Error: specify --unwrap or --info." << Qt::endl;
+        return 2;
+    }
+    if (unwrap && outputPath.isEmpty()) {
+        err() << "Error: --unwrap requires -o <output>." << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: file not found: " << inputPath << Qt::endl; return 1;
+    }
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cli.uv"),
+        QString("uv .%1 mode=%2").arg(fi.suffix(), unwrap ? "unwrap" : "info"));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        err() << "Error: failed to load " << inputPath << Qt::endl; return 1;
+    }
+    Ogre::Entity* entity = entities.first();
+
+    if (infoMode) {
+        const auto info = UvUnwrap::infoForEntity(entity);
+        if (jsonOutput) {
+            cliWrite(QString::fromUtf8(
+                QJsonDocument(UvUnwrap::infoToJson(fi.fileName(), info))
+                    .toJson(QJsonDocument::Indented)) + "\n");
+        } else {
+            cliWrite(UvUnwrap::infoToText(fi.fileName(), info));
+        }
+        return 0;
+    }
+
+    // --unwrap path
+    UvUnwrapOptions opts;
+    opts.resolution = std::max(64, resolution);
+    opts.padding    = std::max(0, padding);
+    opts.channel    = std::max(0, channel);
+    opts.preserveOriginalAsBackup = preserveBackup;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.uv_unwrap"),
+        QString("Unwrap %1 (res=%2 pad=%3 ch=%4)")
+            .arg(fi.fileName()).arg(opts.resolution).arg(opts.padding).arg(opts.channel));
+
+    const auto report = UvUnwrap::unwrapEntity(entity, opts);
+    if (!report.applied) {
+        err() << "Error: UV unwrap failed — " << report.error << Qt::endl;
+        return 1;
+    }
+
+    auto* node = entity->getParentSceneNode();
+    const QString fmt = formatForExtension(outputPath);
+    if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed." << Qt::endl;
+        return 1;
+    }
+
+    if (jsonOutput) {
+        cliWrite(QString::fromUtf8(
+            QJsonDocument(UvUnwrap::reportToJson(report)).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        cliWrite(UvUnwrap::reportToText(report)
+                 + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
     return 0;
 }

@@ -82,6 +82,7 @@ MaterialPresetLibrary.cpp
 MeshLodController.cpp
 MeshOptimizerLod.cpp
 ExportOptimizer.cpp
+UvUnwrap.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
@@ -193,6 +194,7 @@ MaterialPresetLibrary.h
 MeshLodController.h
 MeshOptimizerLod.h
 ExportOptimizer.h
+UvUnwrap.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h
@@ -484,6 +486,7 @@ Qt::Quick
 Qt::QuickWidgets
 Qt::QuickControls2
 meshoptimizer
+xatlas
 )
 
 
@@ -559,7 +562,7 @@ if(BUILD_TESTS)
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
-    meshoptimizer)
+    meshoptimizer xatlas)
 
     # Link llama.cpp for tests if enabled
     if(ENABLE_LOCAL_LLM)
