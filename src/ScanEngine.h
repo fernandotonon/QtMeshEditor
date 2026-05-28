@@ -149,7 +149,8 @@ public:
 
     // --- Formatters ---
 
-    static QString formatText(const ScanResult& result, const ScanConfig& config, bool colorize = false);
+    static QString formatText(const ScanResult& result, const ScanConfig& config, bool colorize = false,
+                              const QString& activeProfileId = QString());
     /// Canonical JSON object for `--json`, report files, and QtMesh Cloud upload (identical schema).
     static QJsonObject scanReportToJsonObject(const ScanResult& result);
 
@@ -159,7 +160,7 @@ public:
     /// UTC ISO-8601 timestamps for reports (`scanStartedUtc` / `scanCompletedUtc`); missing values use `scanCompletedUtc` or current UTC.
     static void scanReportUtcTimes(const ScanResult& result, QString* scanStartedUtc, QString* scanCompletedUtc);
     static QString formatJson(const ScanResult& result);
-    static QString formatSarif(const ScanResult& result);
+    static QString formatSarif(const ScanResult& result, const QString& activeProfileId = QString());
 
     // --- Helpers (public for testing) ---
 

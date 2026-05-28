@@ -2606,7 +2606,8 @@ TEST(CLIPipelineCmdScan, WritesJsonAndSarifReports)
     QByteArray configBa = configPath.toUtf8();
     QByteArray reportBa = reportPath.toUtf8();
     QByteArray sarifBa = sarifPath.toUtf8();
-    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--config", configBa.constData(),
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--target", "example-minimal",
+                   "--config", configBa.constData(),
                    "--json", "--report", reportBa.constData(), "--sarif", sarifBa.constData(),
                    "--fail-on", "never"});
 
@@ -2621,6 +2622,7 @@ TEST(CLIPipelineCmdScan, WritesJsonAndSarifReports)
     EXPECT_TRUE(reportContent.contains("\"assets\""));
     EXPECT_TRUE(reportContent.contains("\"scanStartedUtc\""));
     EXPECT_TRUE(reportContent.contains("\"scanCompletedUtc\""));
+    EXPECT_TRUE(reportContent.contains("\"profile\": \"example-minimal\""));
 
     QFile sarifFile(sarifPath);
     ASSERT_TRUE(sarifFile.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -2629,6 +2631,13 @@ TEST(CLIPipelineCmdScan, WritesJsonAndSarifReports)
     EXPECT_TRUE(sarifContent.contains("qtmesh scan"));
     EXPECT_TRUE(sarifContent.contains("\"startTimeUtc\""));
     EXPECT_TRUE(sarifContent.contains("\"endTimeUtc\""));
+    EXPECT_TRUE(sarifContent.contains("\"profile\": \"example-minimal\""));
+}
+
+TEST(CLIPipelineCmdScanError, UnknownTargetReturns2)
+{
+    TestArgv args({"qtmesh", "scan", "--target", "no-such-target"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
 }
 
 TEST(CLIPipelineCmdScan, ReportAndSarifAreWrittenWithFailOnNever)
