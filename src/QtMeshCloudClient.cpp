@@ -1,6 +1,7 @@
 #include "QtMeshCloudClient.h"
 #include "SentryReporter.h"
 
+#include <QCoreApplication>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
@@ -483,15 +484,19 @@ QtMeshCloudClient::FileUploadResult QtMeshCloudClient::uploadFileContent(
         out.errorString = QStringLiteral("upload target is incomplete");
         return out;
     }
+    if (QCoreApplication::instance()
+        && QThread::currentThread() == QCoreApplication::instance()->thread()) {
+        out.errorString = QStringLiteral("uploadFileContent must run on a worker thread");
+        return out;
+    }
 
     QFile file(localPath);
     if (!file.open(QIODevice::ReadOnly)) {
         out.errorString = QStringLiteral("could not open file: %1").arg(pathLeaf(localPath));
         return out;
     }
-    const QByteArray payload = file.readAll();
-    file.close();
-    if (target.sizeBytes > 0 && payload.size() != target.sizeBytes) {
+    const qint64 fileSize = file.size();
+    if (target.sizeBytes > 0 && fileSize != target.sizeBytes) {
         out.errorString = QStringLiteral("file size changed before upload: %1").arg(pathLeaf(localPath));
         return out;
     }
@@ -505,7 +510,7 @@ QtMeshCloudClient::FileUploadResult QtMeshCloudClient::uploadFileContent(
     QNetworkAccessManager nam;
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
-    req.setHeader(QNetworkRequest::ContentLengthHeader, payload.size());
+    req.setHeader(QNetworkRequest::ContentLengthHeader, fileSize);
     if (!target.mimeType.isEmpty())
         req.setHeader(QNetworkRequest::ContentTypeHeader, target.mimeType);
     req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
@@ -513,9 +518,9 @@ QtMeshCloudClient::FileUploadResult QtMeshCloudClient::uploadFileContent(
 
     SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
         QStringLiteral("QtMesh Cloud uploadFileContent: start fileId=%1 bytes=%2")
-            .arg(target.fileId, QString::number(payload.size())));
+            .arg(target.fileId, QString::number(fileSize)));
 
-    QNetworkReply* reply = nam.put(req, payload);
+    QNetworkReply* reply = nam.put(req, &file);
     QEventLoop loop;
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     loop.exec();
@@ -540,9 +545,9 @@ QtMeshCloudClient::FileUploadResult QtMeshCloudClient::uploadFileContent(
     QJsonObject root;
     QString parseError;
     if (parseJsonObjectBody(responseBody, root, parseError))
-        out.sizeBytes = static_cast<qint64>(root.value(QStringLiteral("sizeBytes")).toDouble(payload.size()));
+        out.sizeBytes = static_cast<qint64>(root.value(QStringLiteral("sizeBytes")).toDouble(fileSize));
     else
-        out.sizeBytes = payload.size();
+        out.sizeBytes = fileSize;
     out.ok = true;
     SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
         QStringLiteral("QtMesh Cloud uploadFileContent: ok fileId=%1").arg(target.fileId));
