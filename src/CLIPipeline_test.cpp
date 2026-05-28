@@ -2608,7 +2608,7 @@ TEST(CLIPipelineCmdScan, WritesJsonAndSarifReports)
     QByteArray sarifBa = sarifPath.toUtf8();
     TestArgv args({"qtmesh", "scan", rootBa.constData(), "--target", "example-minimal",
                    "--config", configBa.constData(),
-                   "--json", "--report", reportBa.constData(), "--sarif", sarifBa.constData(),
+                   "--report", reportBa.constData(), "--sarif", sarifBa.constData(),
                    "--fail-on", "never"});
 
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
