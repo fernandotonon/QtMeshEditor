@@ -81,6 +81,7 @@ BatchExporter.cpp
 MaterialPresetLibrary.cpp
 MeshLodController.cpp
 MeshOptimizerLod.cpp
+ExportOptimizer.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
@@ -190,6 +191,7 @@ BatchExporter.h
 MaterialPresetLibrary.h
 MeshLodController.h
 MeshOptimizerLod.h
+ExportOptimizer.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h

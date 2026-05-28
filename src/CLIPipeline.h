@@ -26,6 +26,18 @@ struct MeshInfo {
     QList<AnimInfo> animations;
     Ogre::Vector3 bbMin = Ogre::Vector3::ZERO;
     Ogre::Vector3 bbMax = Ogre::Vector3::ZERO;
+
+    // Per-submesh ACMR (Average Cache Miss Ratio, 32-entry post-T&L
+    // cache, meshoptimizer convention). Useful for downstream tooling
+    // to decide whether `qtmesh convert` would benefit from re-export
+    // with the optimizer enabled. Empty list when the submesh's index
+    // count is zero. Indexed by submesh index. Issue #399.
+    struct SubmeshAcmr {
+        int    submeshIndex   = 0;
+        int    triangleCount  = 0;
+        double acmr           = 0.0;
+    };
+    QList<SubmeshAcmr> submeshAcmr;
 };
 
 struct FixOptions {

@@ -56,6 +56,7 @@ THE SOFTWARE.
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
+#include "ExportOptimizer.h"
 #include "RTShaderHelper.h"
 #include "Assimp/Importer.h"
 #include "Assimp/MaterialProcessor.h"

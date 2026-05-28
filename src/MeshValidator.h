@@ -66,6 +66,11 @@ private:
     bool m_pendingValidate = false;
     bool m_cacheOptimizationAvailable = false;
     Ogre::Root* m_registeredRoot = nullptr; // which Root we are listening on
+    // Persists the last "Optimize Geometry" outcome so the
+    // validation list keeps showing it after the auto-revalidate
+    // wipes m_issues. Cleared on selection change (the result no
+    // longer applies to the now-active entity).
+    QVariantMap m_lastOptimizeResult;
 };
 
 #endif // MESHVALIDATOR_H

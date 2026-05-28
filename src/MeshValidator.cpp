@@ -6,6 +6,7 @@
 #include "DrawCallAnalyzer.h"
 #include "MemoryEstimator.h"
 #include "VertexCacheOptimizer.h"
+#include "ExportOptimizer.h"
 #include <Ogre.h>
 #include <assimp/postprocess.h>
 #include <cmath>
@@ -57,6 +58,10 @@ MeshValidator::MeshValidator() : QObject(nullptr)
         m_issues.clear();
         m_validated = false;
         m_cacheOptimizationAvailable = false;
+        // The previous Optimize Geometry result was about the
+        // previously-selected entity — drop it so it doesn't leak
+        // into the new selection's report.
+        m_lastOptimizeResult.clear();
         if (m_pendingValidate) {
             m_pendingValidate = false;
             emit validatingChanged();
@@ -406,8 +411,14 @@ void MeshValidator::doValidate()
         cacheReport.weightedAcmrAfter  /= cacheReport.totalTriangles;
 
         const double improvementPct = cacheReport.improvement();
-        const bool meaningfulGain = improvementPct >= 1.0;
-        // Round to 1 dp to avoid surfacing 0.4% as a "fix me" call to action.
+        // 5% threshold: below this the gain isn't worth surfacing as a
+        // call-to-action — the overdraw pass non-monotonically shuffles
+        // around ±1-2% so anything in the ~5% range would let the user
+        // make ACMR drift slightly worse by clicking repeatedly. The
+        // overdraw pass inside ExportOptimizer is also gated to skip
+        // when cache delivers < 1% improvement, so a sub-5% mesh runs
+        // neither pass on click.
+        const bool meaningfulGain = improvementPct >= 5.0;
 
         QVariantMap issue;
         if (meaningfulGain) {
@@ -415,7 +426,7 @@ void MeshValidator::doValidate()
             issue["type"] = "info";
             issue["description"] =
                 QString("Vertex cache: ACMR %1 → %2 (%3% improvement available — "
-                        "click \"Optimize Vertex Cache\" below)")
+                        "click \"Optimize Geometry\" below to also run overdraw + fetch passes)")
                     .arg(QString::number(cacheReport.weightedAcmrBefore, 'f', 3),
                          QString::number(cacheReport.weightedAcmrAfter,  'f', 3),
                          QString::number(improvementPct, 'f', 1));
@@ -450,6 +461,15 @@ void MeshValidator::doValidate()
         issue["count"] = 0;
         issue["fixable"] = false;
         m_issues.append(issue);
+    }
+
+    // Surface the last "Optimize Geometry" outcome at the top of
+    // the report so the user can see the click actually did
+    // something (the geometry is visually identical, so without
+    // this row the only feedback is the toast that disappears).
+    // Cleared on selection change so it doesn't leak between meshes.
+    if (!m_lastOptimizeResult.isEmpty()) {
+        m_issues.prepend(m_lastOptimizeResult);
     }
 
     m_validated = true;
@@ -513,18 +533,25 @@ void MeshValidator::optimizeVertexCache()
         return;
     }
 
-    SentryReporter::addBreadcrumb("ui.action", "Optimize vertex cache (Forsyth, in place)");
+    // Issue #399 (AI-Assist epic #397): run the full export-time
+    // optimizer pipeline here — vertex cache + overdraw + vertex
+    // fetch — rather than the legacy Forsyth-only path. The user
+    // explicitly opted out of "optimize on export" being silent, so
+    // this is the surface where the optimizations actually mutate.
+    SentryReporter::addBreadcrumb("ai.assist.optimize_export",
+        "Optimize geometry (cache + overdraw + fetch, in place)");
 
-    VertexCacheReport aggregate;
+    ExportOptimizeReport aggregate;
     for (Ogre::Entity* entity : targets) {
-        const VertexCacheReport partial =
-            VertexCacheOptimizer::analyzeEntity(entity, /*rewrite=*/true);
-        for (const SubMeshCacheReport& sr : partial.submeshes) {
+        const auto partial =
+            ExportOptimizer::optimizeEntity(entity, OptimizeFlags::All);
+        for (const auto& sr : partial.submeshes) {
             aggregate.submeshes.append(sr);
-            aggregate.totalTriangles += sr.triangleCount;
-            aggregate.weightedAcmrBefore += sr.acmrBefore * sr.triangleCount;
-            aggregate.weightedAcmrAfter  += sr.acmrAfter  * sr.triangleCount;
-            if (sr.reordered) ++aggregate.totalReordered;
+            aggregate.totalTriangles      += sr.triangleCount;
+            aggregate.weightedAcmrBefore  += sr.acmrBefore * sr.triangleCount;
+            aggregate.weightedAcmrAfter   += sr.acmrAfter  * sr.triangleCount;
+            if (sr.vertexCacheRun || sr.overdrawRun || sr.vertexFetchRun)
+                ++aggregate.submeshesOptimized;
         }
     }
     if (aggregate.totalTriangles > 0) {
@@ -532,14 +559,36 @@ void MeshValidator::optimizeVertexCache()
         aggregate.weightedAcmrAfter  /= aggregate.totalTriangles;
     }
 
-    if (aggregate.totalReordered == 0) {
-        emit fixApplied("Vertex cache was already optimal — no submeshes were reordered.");
+    // Persist a result row so the validation list shows what just
+    // happened. Without this the only feedback is the transient
+    // `fixApplied` signal (no QML consumer) — users couldn't tell
+    // the click did anything because the geometry is visually
+    // identical. doValidate() prepends m_lastOptimizeResult before
+    // running the rest of the checks.
+    m_lastOptimizeResult.clear();
+    if (aggregate.submeshesOptimized == 0) {
+        m_lastOptimizeResult["type"]        = "ok";
+        m_lastOptimizeResult["description"] =
+            QString("Optimize Geometry: already optimal — no submeshes were reordered.");
+        m_lastOptimizeResult["fixable"]     = false;
+        m_lastOptimizeResult["count"]       = 0;
+        emit fixApplied("Geometry already optimal — no submeshes were reordered.");
     } else {
-        emit fixApplied(QString("Reordered %1 submesh(es). ACMR %2 → %3 (%4% improvement).")
-                            .arg(aggregate.totalReordered)
+        m_lastOptimizeResult["type"]        = "ok";
+        m_lastOptimizeResult["description"] =
+            QString("Optimize Geometry: reordered %1 submesh(es) — ACMR %2 → %3 "
+                    "(%4%% improvement, cache + overdraw passes)")
+                .arg(aggregate.submeshesOptimized)
+                .arg(QString::number(aggregate.weightedAcmrBefore, 'f', 3),
+                     QString::number(aggregate.weightedAcmrAfter,  'f', 3),
+                     QString::number(aggregate.improvementPct(), 'f', 1));
+        m_lastOptimizeResult["fixable"]     = false;
+        m_lastOptimizeResult["count"]       = 0;
+        emit fixApplied(QString("Optimized %1 submesh(es). ACMR %2 → %3 (%4% improvement).")
+                            .arg(aggregate.submeshesOptimized)
                             .arg(QString::number(aggregate.weightedAcmrBefore, 'f', 3),
                                  QString::number(aggregate.weightedAcmrAfter,  'f', 3),
-                                 QString::number(aggregate.improvement(), 'f', 1)));
+                                 QString::number(aggregate.improvementPct(), 'f', 1)));
     }
 
     // Refresh the checklist — the row should flip to "already optimal".

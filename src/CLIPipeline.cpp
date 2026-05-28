@@ -17,6 +17,7 @@
 #include "MemoryEstimator.h"
 #include "DrawCallAnalyzer.h"
 #include "VertexCacheOptimizer.h"
+#include "ExportOptimizer.h"
 #include "MeshDecimator.h"
 #include "EditableMesh.h"
 #include "TexturePaintBuffer.h"
@@ -915,7 +916,10 @@ MeshInfo CLIPipeline::extractMeshInfo(const Ogre::Entity* entity, const QString&
 
     info.submeshes = mesh->getNumSubMeshes();
 
-    // Count vertices
+    // Count vertices + per-submesh ACMR (issue #399). ACMR uses
+    // ExportOptimizer::computeAcmr which routes through
+    // meshopt_analyzeVertexCache with the 32-entry cache size that
+    // matches `qtmesh vertex-cache` output.
     if (mesh->sharedVertexData)
         info.vertices += mesh->sharedVertexData->vertexCount;
     for (unsigned int i = 0; i < info.submeshes; ++i) {
@@ -924,6 +928,33 @@ MeshInfo CLIPipeline::extractMeshInfo(const Ogre::Entity* entity, const QString&
             info.vertices += sub->vertexData->vertexCount;
         if (sub->indexData)
             info.triangles += sub->indexData->indexCount / 3;
+
+        // Compute ACMR for this submesh. Skipped on zero-index buffers.
+        if (sub->indexData && sub->indexData->indexCount > 0) {
+            const auto* vdata = sub->useSharedVertices ? mesh->sharedVertexData : sub->vertexData;
+            if (vdata) {
+                auto indices = [&]() {
+                    std::vector<uint32_t> out(sub->indexData->indexCount);
+                    auto ibuf = sub->indexData->indexBuffer;
+                    auto* src = static_cast<unsigned char*>(
+                        ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                    src += sub->indexData->indexStart * ibuf->getIndexSize();
+                    if (ibuf->getType() == Ogre::HardwareIndexBuffer::IT_16BIT) {
+                        const auto* p = reinterpret_cast<const uint16_t*>(src);
+                        for (size_t k = 0; k < out.size(); ++k) out[k] = p[k];
+                    } else {
+                        std::memcpy(out.data(), src, out.size() * sizeof(uint32_t));
+                    }
+                    ibuf->unlock();
+                    return out;
+                }();
+                MeshInfo::SubmeshAcmr sa;
+                sa.submeshIndex  = static_cast<int>(i);
+                sa.triangleCount = static_cast<int>(sub->indexData->indexCount / 3);
+                sa.acmr          = ExportOptimizer::computeAcmr(indices, vdata->vertexCount);
+                info.submeshAcmr.append(sa);
+            }
+        }
     }
 
     // Materials
@@ -1060,6 +1091,19 @@ QString CLIPipeline::formatMeshInfoJson(const MeshInfo& info)
     obj["vertices"] = static_cast<int>(info.vertices);
     obj["triangles"] = static_cast<int>(info.triangles);
     obj["submeshes"] = static_cast<int>(info.submeshes);
+
+    // Per-submesh ACMR — empty submeshes are omitted. Issue #399.
+    if (!info.submeshAcmr.isEmpty()) {
+        QJsonArray acmrArr;
+        for (const auto& sa : info.submeshAcmr) {
+            QJsonObject so;
+            so["submeshIndex"]   = sa.submeshIndex;
+            so["triangleCount"]  = sa.triangleCount;
+            so["acmr"]           = sa.acmr;
+            acmrArr.append(so);
+        }
+        obj["submeshAcmr"] = acmrArr;
+    }
 
     QJsonArray mats;
     for (const auto& m : info.materials) mats.append(m);
