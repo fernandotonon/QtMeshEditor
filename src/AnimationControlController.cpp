@@ -76,6 +76,24 @@ AnimationControlController::AnimationControlController()
     m_pollTimer->start(16);
 }
 
+void AnimationControlController::suspendPollTimer()
+{
+    if (m_pollTimer && m_pollTimer->isActive()) {
+        fprintf(stderr, "[anim] suspendPollTimer\n"); fflush(stderr);
+        m_pollTimer->stop();
+        m_pollSuspended = true;
+    }
+}
+
+void AnimationControlController::resumePollTimer()
+{
+    if (m_pollSuspended && m_pollTimer) {
+        fprintf(stderr, "[anim] resumePollTimer\n"); fflush(stderr);
+        m_pollTimer->start(16);
+        m_pollSuspended = false;
+    }
+}
+
 // ── Theme colors ──────────────────────────────────────────────────────────────
 
 QColor AnimationControlController::panelColor() const

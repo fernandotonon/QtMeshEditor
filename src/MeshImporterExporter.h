@@ -53,7 +53,11 @@ public:
     static void importer(const QStringList &_uriList, unsigned int additionalFlags = 0,
                          QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons = nullptr,
                          int* outUpAxis = nullptr);
-    static QString exporter(const Ogre::SceneNode *_sn);
+    // `parent` is the QWidget to anchor the file dialog to. macOS Qt
+    // crashes the GL context when a modal QFileDialog is opened with
+    // `parent=nullptr` from inside an active Ogre render loop —
+    // passing the MainWindow keeps the modal cycle deterministic.
+    static QString exporter(const Ogre::SceneNode *_sn, QWidget* parent = nullptr);
     static int exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format,
                         bool stripAnimations = false);
     static QString formatFileURI(const QString &_uri, const QString &_format);

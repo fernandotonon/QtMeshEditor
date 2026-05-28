@@ -58,6 +58,11 @@ THE SOFTWARE.
 #include "SentryReporter.h"
 #include "ExportOptimizer.h"
 #include "RTShaderHelper.h"
+
+// Debug trace helper for #681 export-crash repro. Writes to a
+// dedicated file because stderr is consumed by MCP mode and the
+// macOS .app bundle's launchd wrapper. Synchronous-flushed so we
+// see the last line before SIGSEGV. Remove once fixed.
 #include "Assimp/Importer.h"
 #include "Assimp/MaterialProcessor.h"
 #include "Assimp/MeshProcessor.h"
@@ -171,17 +176,50 @@ void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, con
                     continue;
 
                 Ogre::TexturePtr tex = tus->_getTexturePtr();
-                if (tex->getTextureType() == Ogre::TEX_TYPE_2D)
-                {
+                // Guards for #681 GUI-export SIGSEGV (Ogre::Texture::
+                // convertToImage + 116). Several failure modes have
+                // been observed on materials walked from GUI-loaded
+                // entities:
+                //   1. `_getTexturePtr()` returns a null TexturePtr
+                //      when the TUS is referenced but the underlying
+                //      texture was never loaded (e.g. material loaded
+                //      from a .mesh sidecar without the texture file
+                //      on disk).
+                //   2. `tex->isLoaded()` is false — convertToImage
+                //      reads from `mBuffer` which is null until the
+                //      texture is GPU-resident.
+                //   3. The texture has zero size (width/height = 0)
+                //      from a placeholder / generated TUS.
+                if (!tex) continue;
+                if (tex->getTextureType() != Ogre::TEX_TYPE_2D) continue;
+                if (!tex->isLoaded()) {
+                    // Trigger a load before reading; some imports defer
+                    // until first render. If load fails just skip —
+                    // the sidecar .material still has the texture name.
+                    try { tex->load(); }
+                    catch (const Ogre::Exception&) { continue; }
+                    if (!tex->isLoaded()) continue;
+                }
+                if (tex->getWidth() == 0 || tex->getHeight() == 0) continue;
+
+
+                try {
                     Ogre::Image img;
                     tex->convertToImage(img, true);
                     QString saveName = exportTextureName(QString::fromStdString(tex->getName()));
-                    try {
-                        img.save((file.path() + "/" + saveName).toStdString());
-                    } catch (Ogre::Exception& ex) {
-                        Ogre::LogManager::getSingleton().logError(
-                            "Failed to save texture '" + saveName.toStdString() + "': " + ex.what());
-                    }
+                    img.save((file.path() + "/" + saveName).toStdString());
+                } catch (const Ogre::Exception& ex) {
+                    Ogre::LogManager::getSingleton().logError(
+                        std::string("Failed to save texture '") + tex->getName()
+                        + "': " + ex.what());
+                } catch (const std::exception& ex) {
+                    Ogre::LogManager::getSingleton().logError(
+                        std::string("Failed to save texture '") + tex->getName()
+                        + "': " + ex.what());
+                } catch (...) {
+                    Ogre::LogManager::getSingleton().logError(
+                        std::string("Failed to save texture '") + tex->getName()
+                        + "' (unknown exception)");
                 }
             }
         }
@@ -2294,18 +2332,18 @@ QString MeshImporterExporter::importFileDialogFilter()
     return importFileDialogFilterFromExtensionList(Manager::getSingleton()->getValidFileExtention());
 }
 
-QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
+QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* parent)
 {
     if(!_sn)
     {
-        QMessageBox::warning(nullptr,"No object","Which object are you trying to export?",QMessageBox::Ok);
+        QMessageBox::warning(parent,"No object","Which object are you trying to export?",QMessageBox::Ok);
         return QString();
     }
 
     QString filter = "Ogre Mesh (*.mesh)";
-    QString fileName = QFileDialog::getSaveFileName(nullptr, QObject::tr("Export Mesh"),
-                                                     _sn->getName().data(),
-                                                     exportFileDialogFilter(),&filter,
+    QString fileName = QFileDialog::getSaveFileName(parent, QObject::tr("Export Mesh"),
+                                                    _sn->getName().data(),
+                                                    exportFileDialogFilter(),&filter,
                                                     QFileDialog::DontUseNativeDialog);
     if(fileName.isEmpty()) return QString();
 
@@ -2318,16 +2356,19 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
 int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format,
                                     bool stripAnimations)
 {
-    if(!_sn) return -1;
+    // [trace #681 export-crash] Tag every step so we can see how far
+    // the GUI export gets before SIGSEGV. Remove once the root cause
+    // is fixed and the regression tests cover it.
 
-    if(_uri.isEmpty()) return -1;
+
 
     QFileInfo file;
     file.setFile(_uri);
 
-    if(!Manager::getSingleton()->getSceneMgr()->hasEntity(_sn->getName())) return -1;
+    if(!Manager::getSingleton()->getSceneMgr()->hasEntity(_sn->getName())) {
+        return -1;
+    }
     const Ogre::Entity *e = Manager::getSingleton()->getSceneMgr()->getEntity(_sn->getName());
-    if(!e) return -1;
 
     // Vertex paint defers GPU upload; export reads Ogre buffers — sync first.
     EditModeController::instance()->flushPendingVertexPaintForEntity(
