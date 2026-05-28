@@ -52,10 +52,12 @@ verify_no_stale_pins() {
       fi
     done <<< "${refs}"
 
-    # `image-tag: "X.Y.Z"` pins. Floating tags (`latest`, `v1`) and
-    # backtick-wrapped examples are skipped by the regex.
+    # `image-tag: "X.Y.Z"` pins. Floating tags (`latest`, `v1`) are
+    # ignored by the literal regex; backtick-wrapped inline examples
+    # are excluded via the Perl negative-lookbehind below. (BSD grep
+    # has no lookaround support, so we drop to perl for this scan.)
     local imgtags
-    imgtags="$(grep -ohE 'image-tag:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "$f" 2>/dev/null | sort -u || true)"
+    imgtags="$(perl -nle 'print $& while /(?<!`)image-tag:\s*"\d+\.\d+\.\d+"(?!`)/g' "$f" 2>/dev/null | sort -u || true)"
     while IFS= read -r r; do
       [[ -z "${r}" ]] && continue
       if [[ "${r}" != *"\"${VERSION}\""* ]]; then
@@ -76,9 +78,11 @@ apply_perl_replace() {
   # Also pin the Docker `image-tag: "X.Y.Z"` examples that sit next to
   # the action ref — CodeRabbit (PR #693) flagged the mismatch between
   # ref bump and stale `image-tag`. Floating tags (`latest`, `v1`) and
-  # tags inside backticks are left alone.
+  # backtick-wrapped inline examples are left alone via the lookarounds
+  # (`(?<!\`)` / `(?!\`)`) — the previous version of this regex
+  # silently rewrote backticked snippets, which CodeRabbit caught.
   QTMESH_DOC_VERSION="${VERSION}" perl -i -pe \
-    'BEGIN { $v = $ENV{QTMESH_DOC_VERSION}; } s/(image-tag:\s*")(\d+\.\d+\.\d+)(")/$1 . $v . $3/ge' \
+    'BEGIN { $v = $ENV{QTMESH_DOC_VERSION}; } s/(?<!`)(image-tag:\s*")(\d+\.\d+\.\d+)(")(?!`)/$1 . $v . $3/ge' \
     "$f"
 }
 
@@ -92,7 +96,10 @@ if [[ "${CHECK}" -eq 1 ]]; then
 fi
 
 for f in "${DOC_FILES[@]}"; do
-  if [[ -f "$f" ]] && grep -qE 'fernandotonon/QtMeshEditor@[0-9]+\.[0-9]+\.[0-9]+' "$f"; then
+  # Run the replacer when the file has either kind of pin — earlier
+  # versions only matched the action-ref form, so a file containing
+  # only `image-tag: "X.Y.Z"` was silently left stale.
+  if [[ -f "$f" ]] && grep -qE 'fernandotonon/QtMeshEditor@[0-9]+\.[0-9]+\.[0-9]+|image-tag:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "$f"; then
     apply_perl_replace "$f"
   fi
 done
