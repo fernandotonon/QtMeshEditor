@@ -2,6 +2,9 @@
 #include "SentryReporter.h"
 
 #include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -24,6 +27,42 @@ QString trimSnippet(const QByteArray& body, int maxLen = 512)
 bool httpStatusRetryable(int code)
 {
     return code == 408 || code == 429 || code == 500 || code == 502 || code == 503 || code == 504;
+}
+
+QNetworkRequest authorizedJsonRequest(const QUrl& url, const QString& bearerToken, int timeoutMs)
+{
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+    req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
+    req.setTransferTimeout(timeoutMs);
+    return req;
+}
+
+QString ownerProjectPath(const QString& ownerSlug, const QString& projectSlug, const QString& suffix)
+{
+    return QStringLiteral("/v1/u/%1/p/%2/%3")
+        .arg(QString::fromUtf8(QUrl::toPercentEncoding(ownerSlug)),
+             QString::fromUtf8(QUrl::toPercentEncoding(projectSlug)),
+             suffix);
+}
+
+bool parseJsonObjectBody(const QByteArray& body, QJsonObject& out, QString& error)
+{
+    QJsonParseError perr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(body, &perr);
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        error = QStringLiteral("invalid JSON: %1").arg(perr.errorString());
+        return false;
+    }
+    out = doc.object();
+    return true;
+}
+
+QString pathLeaf(const QString& path)
+{
+    const QString name = QFileInfo(path).fileName();
+    return name.isEmpty() ? path : name;
 }
 
 } // namespace
@@ -238,5 +277,413 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::uploadScanReport(const QStrin
     out.errorString = QStringLiteral("exhausted retries");
     SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
         QStringLiteral("QtMesh Cloud uploadScan: exhausted retries"), QStringLiteral("warning"));
+    return out;
+}
+
+QtMeshCloudClient::ProjectResult QtMeshCloudClient::createProject(const QString& bearerToken,
+                                                                  const QString& name,
+                                                                  const QString& slug,
+                                                                  const QString& description,
+                                                                  int timeoutMs)
+{
+    ProjectResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    if (name.trimmed().isEmpty() || slug.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("project name and slug are required");
+        return out;
+    }
+
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/projects"));
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QJsonObject body;
+    body.insert(QStringLiteral("name"), name.trimmed());
+    body.insert(QStringLiteral("slug"), slug.trimmed().toLower());
+    if (!description.trimmed().isEmpty())
+        body.insert(QStringLiteral("description"), description.trimmed());
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req = authorizedJsonRequest(url, bearerToken, timeoutMs);
+    const QByteArray payload = QJsonDocument(body).toJson(QJsonDocument::Compact);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+        QStringLiteral("QtMesh Cloud createProject: start slug=%1").arg(slug.trimmed().toLower()));
+
+    QNetworkReply* reply = nam.post(req, payload);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.responseBodySnippet = trimSnippet(responseBody);
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+            QStringLiteral("QtMesh Cloud createProject: failure HTTP %1").arg(out.httpStatus),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    QJsonObject root;
+    if (!parseJsonObjectBody(responseBody, root, out.errorString))
+        return out;
+    const QJsonObject project = root.value(QStringLiteral("project")).toObject();
+    out.projectId = project.value(QStringLiteral("id")).toString();
+    out.ownerSlug = project.value(QStringLiteral("ownerSlug")).toString();
+    out.projectSlug = project.value(QStringLiteral("slug")).toString(slug.trimmed().toLower());
+    if (!out.ownerSlug.isEmpty() && !out.projectSlug.isEmpty()) {
+        out.projectUrl = QStringLiteral("https://qtmesh.dev/%1/%2")
+            .arg(QString::fromUtf8(QUrl::toPercentEncoding(out.ownerSlug)),
+                 QString::fromUtf8(QUrl::toPercentEncoding(out.projectSlug)));
+    }
+    out.ok = !out.projectId.isEmpty() && !out.ownerSlug.isEmpty() && !out.projectSlug.isEmpty();
+    if (!out.ok)
+        out.errorString = QStringLiteral("response missing project id, ownerSlug, or slug");
+    else
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+            QStringLiteral("QtMesh Cloud createProject: ok"));
+    return out;
+}
+
+QtMeshCloudClient::UploadUrlsResult QtMeshCloudClient::requestUploadUrls(
+    const QString& bearerToken,
+    const QString& ownerSlug,
+    const QString& projectSlug,
+    const QList<AssetFileDescriptor>& files,
+    int timeoutMs)
+{
+    UploadUrlsResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    if (ownerSlug.isEmpty() || projectSlug.isEmpty()) {
+        out.errorString = QStringLiteral("owner and project slugs are required");
+        return out;
+    }
+    if (files.isEmpty()) {
+        out.errorString = QStringLiteral("at least one file is required");
+        return out;
+    }
+
+    QJsonArray fileArray;
+    for (const AssetFileDescriptor& file : files) {
+        const QFileInfo info(file.path);
+        const qint64 size = file.sizeBytes >= 0 ? file.sizeBytes : info.size();
+        if (size <= 0) {
+            out.errorString = QStringLiteral("file size must be greater than zero: %1").arg(pathLeaf(file.path));
+            return out;
+        }
+
+        QJsonObject f;
+        f.insert(QStringLiteral("name"), file.uploadName.isEmpty() ? pathLeaf(file.path) : file.uploadName);
+        f.insert(QStringLiteral("sizeBytes"), size);
+        if (!file.role.isEmpty())
+            f.insert(QStringLiteral("role"), file.role);
+        if (!file.mimeType.isEmpty())
+            f.insert(QStringLiteral("mimeType"), file.mimeType);
+        fileArray.append(f);
+    }
+
+    QJsonObject body;
+    body.insert(QStringLiteral("files"), fileArray);
+
+    const QString path = ownerProjectPath(ownerSlug, projectSlug, QStringLiteral("files/upload-urls"));
+    const QUrl url(apiBaseUrl() + path);
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req = authorizedJsonRequest(url, bearerToken, timeoutMs);
+    const QByteArray payload = QJsonDocument(body).toJson(QJsonDocument::Compact);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+        QStringLiteral("QtMesh Cloud requestUploadUrls: start files=%1").arg(files.size()));
+
+    QNetworkReply* reply = nam.post(req, payload);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.responseBodySnippet = trimSnippet(responseBody);
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+            QStringLiteral("QtMesh Cloud requestUploadUrls: failure HTTP %1").arg(out.httpStatus),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    QJsonObject root;
+    if (!parseJsonObjectBody(responseBody, root, out.errorString))
+        return out;
+    out.uploadMethod = root.value(QStringLiteral("uploadMethod")).toString(QStringLiteral("PUT"));
+    out.expiresAt = static_cast<qint64>(root.value(QStringLiteral("expiresAt")).toDouble(0));
+    const QJsonArray uploads = root.value(QStringLiteral("uploads")).toArray();
+    for (const QJsonValue& value : uploads) {
+        const QJsonObject u = value.toObject();
+        UploadTarget target;
+        target.fileId = u.value(QStringLiteral("id")).toString();
+        target.uploadUrl = u.value(QStringLiteral("uploadUrl")).toString();
+        target.sanitizedName = u.value(QStringLiteral("sanitizedName")).toString();
+        target.role = u.value(QStringLiteral("role")).toString();
+        target.extension = u.value(QStringLiteral("extension")).toString();
+        target.mimeType = u.value(QStringLiteral("mimeType")).toString();
+        target.sizeBytes = static_cast<qint64>(u.value(QStringLiteral("sizeBytes")).toDouble(0));
+        target.expiresAt = static_cast<qint64>(u.value(QStringLiteral("expiresAt")).toDouble(out.expiresAt));
+        if (!target.fileId.isEmpty() && !target.uploadUrl.isEmpty())
+            out.uploads.append(target);
+    }
+
+    out.ok = out.uploads.size() == files.size();
+    if (!out.ok)
+        out.errorString = QStringLiteral("response upload count did not match request");
+    else
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+            QStringLiteral("QtMesh Cloud requestUploadUrls: ok files=%1").arg(out.uploads.size()));
+    return out;
+}
+
+QtMeshCloudClient::FileUploadResult QtMeshCloudClient::uploadFileContent(
+    const QString& bearerToken,
+    const UploadTarget& target,
+    const QString& localPath,
+    int timeoutMs)
+{
+    FileUploadResult out;
+    out.fileId = target.fileId;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    if (target.uploadUrl.isEmpty() || target.fileId.isEmpty()) {
+        out.errorString = QStringLiteral("upload target is incomplete");
+        return out;
+    }
+
+    QFile file(localPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        out.errorString = QStringLiteral("could not open file: %1").arg(pathLeaf(localPath));
+        return out;
+    }
+    const QByteArray payload = file.readAll();
+    file.close();
+    if (target.sizeBytes > 0 && payload.size() != target.sizeBytes) {
+        out.errorString = QStringLiteral("file size changed before upload: %1").arg(pathLeaf(localPath));
+        return out;
+    }
+
+    const QUrl url(target.uploadUrl);
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid upload URL");
+        return out;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+    req.setHeader(QNetworkRequest::ContentLengthHeader, payload.size());
+    if (!target.mimeType.isEmpty())
+        req.setHeader(QNetworkRequest::ContentTypeHeader, target.mimeType);
+    req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
+    req.setTransferTimeout(timeoutMs);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+        QStringLiteral("QtMesh Cloud uploadFileContent: start fileId=%1 bytes=%2")
+            .arg(target.fileId, QString::number(payload.size())));
+
+    QNetworkReply* reply = nam.put(req, payload);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.responseBodySnippet = trimSnippet(responseBody);
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+            QStringLiteral("QtMesh Cloud uploadFileContent: failure HTTP %1").arg(out.httpStatus),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    QJsonObject root;
+    QString parseError;
+    if (parseJsonObjectBody(responseBody, root, parseError))
+        out.sizeBytes = static_cast<qint64>(root.value(QStringLiteral("sizeBytes")).toDouble(payload.size()));
+    else
+        out.sizeBytes = payload.size();
+    out.ok = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+        QStringLiteral("QtMesh Cloud uploadFileContent: ok fileId=%1").arg(target.fileId));
+    return out;
+}
+
+QtMeshCloudClient::CompleteUploadResult QtMeshCloudClient::completeUpload(
+    const QString& bearerToken,
+    const QString& ownerSlug,
+    const QString& projectSlug,
+    const QStringList& fileIds,
+    const QString& mainFileId,
+    int timeoutMs)
+{
+    CompleteUploadResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    if (ownerSlug.isEmpty() || projectSlug.isEmpty() || fileIds.isEmpty()) {
+        out.errorString = QStringLiteral("owner slug, project slug, and fileIds are required");
+        return out;
+    }
+
+    QJsonArray ids;
+    for (const QString& id : fileIds)
+        ids.append(id);
+    QJsonObject body;
+    body.insert(QStringLiteral("fileIds"), ids);
+    if (!mainFileId.isEmpty())
+        body.insert(QStringLiteral("mainFileId"), mainFileId);
+
+    const QString path = ownerProjectPath(ownerSlug, projectSlug, QStringLiteral("files/complete"));
+    const QUrl url(apiBaseUrl() + path);
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req = authorizedJsonRequest(url, bearerToken, timeoutMs);
+    const QByteArray payload = QJsonDocument(body).toJson(QJsonDocument::Compact);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+        QStringLiteral("QtMesh Cloud completeUpload: start files=%1").arg(fileIds.size()));
+
+    QNetworkReply* reply = nam.post(req, payload);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.responseBodySnippet = trimSnippet(responseBody);
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+            QStringLiteral("QtMesh Cloud completeUpload: failure HTTP %1").arg(out.httpStatus),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    QJsonObject root;
+    if (!parseJsonObjectBody(responseBody, root, out.errorString))
+        return out;
+    out.scanStatus = root.value(QStringLiteral("scanStatus")).toString();
+    const QJsonArray files = root.value(QStringLiteral("files")).toArray();
+    for (const QJsonValue& value : files) {
+        const QString id = value.toObject().value(QStringLiteral("id")).toString();
+        if (!id.isEmpty())
+            out.fileIds.append(id);
+    }
+    out.ok = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+        QStringLiteral("QtMesh Cloud completeUpload: ok files=%1").arg(out.fileIds.size()));
+    return out;
+}
+
+QtMeshCloudClient::ManifestResult QtMeshCloudClient::fetchProjectManifest(const QString& bearerToken,
+                                                                          const QString& ownerSlug,
+                                                                          const QString& projectSlug,
+                                                                          int timeoutMs)
+{
+    ManifestResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    if (ownerSlug.isEmpty() || projectSlug.isEmpty()) {
+        out.errorString = QStringLiteral("owner and project slugs are required");
+        return out;
+    }
+
+    const QString path = ownerProjectPath(ownerSlug, projectSlug, QStringLiteral("manifest"));
+    const QUrl url(apiBaseUrl() + path);
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+    req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
+    req.setTransferTimeout(timeoutMs);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+        QStringLiteral("QtMesh Cloud fetchProjectManifest: start"));
+
+    QNetworkReply* reply = nam.get(req);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.responseBodySnippet = trimSnippet(responseBody);
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+            QStringLiteral("QtMesh Cloud fetchProjectManifest: failure HTTP %1").arg(out.httpStatus),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    if (!parseJsonObjectBody(responseBody, out.manifest, out.errorString))
+        return out;
+    out.ok = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+        QStringLiteral("QtMesh Cloud fetchProjectManifest: ok"));
     return out;
 }
