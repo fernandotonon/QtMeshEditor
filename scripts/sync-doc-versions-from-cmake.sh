@@ -40,11 +40,10 @@ verify_no_stale_pins() {
   local bad=0
   for f in "${DOC_FILES[@]}"; do
     [[ -f "$f" ]] || continue
+
+    # Action-ref pins.
     local refs
     refs="$(grep -ohE 'fernandotonon/QtMeshEditor@[0-9]+\.[0-9]+\.[0-9]+' "$f" 2>/dev/null | sort -u || true)"
-    if [[ -z "${refs}" ]]; then
-      continue
-    fi
     while IFS= read -r r; do
       [[ -z "${r}" ]] && continue
       if [[ "${r}" != "${EXPECTED}" ]]; then
@@ -52,6 +51,18 @@ verify_no_stale_pins() {
         bad=1
       fi
     done <<< "${refs}"
+
+    # `image-tag: "X.Y.Z"` pins. Floating tags (`latest`, `v1`) and
+    # backtick-wrapped examples are skipped by the regex.
+    local imgtags
+    imgtags="$(grep -ohE 'image-tag:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "$f" 2>/dev/null | sort -u || true)"
+    while IFS= read -r r; do
+      [[ -z "${r}" ]] && continue
+      if [[ "${r}" != *"\"${VERSION}\""* ]]; then
+        echo "sync-doc-versions-from-cmake: ${f} contains pinned ${r} (expected image-tag: \"${VERSION}\")" >&2
+        bad=1
+      fi
+    done <<< "${imgtags}"
   done
   return "${bad}"
 }
@@ -61,6 +72,13 @@ apply_perl_replace() {
   # Build replacement with q{} + concat so Perl never parses @3 in 3.0.0 as an array.
   QTMESH_DOC_VERSION="${VERSION}" perl -i -pe \
     'BEGIN { $v = $ENV{QTMESH_DOC_VERSION}; } s/fernandotonon\/QtMeshEditor@\d+\.\d+\.\d+/q{fernandotonon\/QtMeshEditor@} . $v/ge' \
+    "$f"
+  # Also pin the Docker `image-tag: "X.Y.Z"` examples that sit next to
+  # the action ref — CodeRabbit (PR #693) flagged the mismatch between
+  # ref bump and stale `image-tag`. Floating tags (`latest`, `v1`) and
+  # tags inside backticks are left alone.
+  QTMESH_DOC_VERSION="${VERSION}" perl -i -pe \
+    'BEGIN { $v = $ENV{QTMESH_DOC_VERSION}; } s/(image-tag:\s*")(\d+\.\d+\.\d+)(")/$1 . $v . $3/ge' \
     "$f"
 }
 

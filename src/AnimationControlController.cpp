@@ -79,7 +79,8 @@ AnimationControlController::AnimationControlController()
 void AnimationControlController::suspendPollTimer()
 {
     if (m_pollTimer && m_pollTimer->isActive()) {
-        fprintf(stderr, "[anim] suspendPollTimer\n"); fflush(stderr);
+        SentryReporter::addBreadcrumb(
+            "ui.action", "Animation poll timer suspended (export safety)");
         m_pollTimer->stop();
         m_pollSuspended = true;
     }
@@ -88,7 +89,8 @@ void AnimationControlController::suspendPollTimer()
 void AnimationControlController::resumePollTimer()
 {
     if (m_pollSuspended && m_pollTimer) {
-        fprintf(stderr, "[anim] resumePollTimer\n"); fflush(stderr);
+        SentryReporter::addBreadcrumb(
+            "ui.action", "Animation poll timer resumed");
         m_pollTimer->start(16);
         m_pollSuspended = false;
     }

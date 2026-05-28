@@ -206,8 +206,14 @@ void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, con
                 try {
                     Ogre::Image img;
                     tex->convertToImage(img, true);
-                    QString saveName = exportTextureName(QString::fromStdString(tex->getName()));
-                    img.save((file.path() + "/" + saveName).toStdString());
+                    const QString saveName = exportTextureName(QString::fromStdString(tex->getName()));
+                    const std::string outPath = (file.path() + "/" + saveName).toStdString();
+                    // Ogre::Image::save returns void on failure (it
+                    // throws); the bool-return idiom CodeRabbit
+                    // suggested doesn't apply to this overload. The
+                    // throw is caught below and logged — keep the
+                    // call as-is to preserve that behaviour.
+                    img.save(outPath);
                 } catch (const Ogre::Exception& ex) {
                     Ogre::LogManager::getSingleton().logError(
                         std::string("Failed to save texture '") + tex->getName()
@@ -2356,11 +2362,8 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* pare
 int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format,
                                     bool stripAnimations)
 {
-    // [trace #681 export-crash] Tag every step so we can see how far
-    // the GUI export gets before SIGSEGV. Remove once the root cause
-    // is fixed and the regression tests cover it.
-
-
+    if (!_sn) return -1;
+    if (_uri.isEmpty()) return -1;
 
     QFileInfo file;
     file.setFile(_uri);
@@ -2369,6 +2372,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         return -1;
     }
     const Ogre::Entity *e = Manager::getSingleton()->getSceneMgr()->getEntity(_sn->getName());
+    if (!e) return -1;
 
     // Vertex paint defers GPU upload; export reads Ogre buffers — sync first.
     EditModeController::instance()->flushPendingVertexPaintForEntity(
