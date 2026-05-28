@@ -1,5 +1,6 @@
 #include "ScanConfig.h"
 #include "ScanEngine.h"
+#include "SentryReporter.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/importerdesc.h>
@@ -391,23 +392,37 @@ ScanConfig ScanConfig::defaults()
 
 QVariantMap ScanConfig::loadProjectMapFromFile(const QString& path)
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("scan config open_attempt=%1").arg(path));
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                      QStringLiteral("scan config open_failed=%1").arg(path),
+                                      QStringLiteral("warning"));
         QTextStream(stderr) << "Warning: Cannot open config file: " << path << Qt::endl;
         return {};
     }
 
     const QString content = QString::fromUtf8(file.readAll());
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("scan config parse_attempt=%1").arg(path));
 
     if (path.endsWith(QStringLiteral(".json"), Qt::CaseInsensitive)) {
         QJsonDocument doc = QJsonDocument::fromJson(content.toUtf8());
         if (doc.isNull() || !doc.isObject()) {
+            SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                          QStringLiteral("scan config parse_failed=%1").arg(path),
+                                          QStringLiteral("warning"));
             QTextStream(stderr) << "Warning: Invalid JSON in config file: " << path << Qt::endl;
             return {};
         }
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                      QStringLiteral("scan config parse_success=%1 (json)").arg(path));
         return doc.object().toVariantMap();
     }
 
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("scan config parse_success=%1 (yaml)").arg(path));
     return parseSimpleYaml(content);
 }
 

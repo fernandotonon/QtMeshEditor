@@ -1,4 +1,5 @@
 #include "PlatformProfile.h"
+#include "SentryReporter.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -145,7 +146,11 @@ QStringList PlatformProfileLoader::knownRuleKeys()
 
 QString PlatformProfileLoader::builtinProfilesDirectory()
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("platform profiles: builtin dir probe"));
     for (const QString& dir : candidateBuiltinProfileDirectories()) {
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                      QStringLiteral("platform profiles: try dir=%1").arg(dir));
         if (QDir(dir).exists())
             return QDir(dir).absolutePath();
     }
@@ -154,16 +159,25 @@ QString PlatformProfileLoader::builtinProfilesDirectory()
 
 QStringList PlatformProfileLoader::listBuiltinIds()
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("platform profiles: listBuiltinIds"));
     QStringList ids;
     const QString dirPath = builtinProfilesDirectory();
-    if (dirPath.isEmpty())
+    if (dirPath.isEmpty()) {
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                      QStringLiteral("platform profiles: listBuiltinIds no dir"),
+                                      QStringLiteral("warning"));
         return ids;
+    }
 
     const QFileInfoList entries =
         QDir(dirPath).entryInfoList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
     for (const QFileInfo& fi : entries)
         ids.append(fi.completeBaseName());
     ids.sort(Qt::CaseInsensitive);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("platform profiles: found %1 ids in %2")
+                                      .arg(ids.size()).arg(dirPath));
     return ids;
 }
 
@@ -355,12 +369,25 @@ PlatformProfileLoadResult PlatformProfileLoader::loadResolved(const QString& pat
 
 PlatformProfileLoadResult PlatformProfileLoader::load(const QString& pathOrId)
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("platform profile load requested: %1").arg(pathOrId));
     QStringList visitChain;
-    return loadResolved(pathOrId, visitChain, {});
+    PlatformProfileLoadResult res = loadResolved(pathOrId, visitChain, {});
+    if (res.ok) {
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                      QStringLiteral("platform profile loaded: %1").arg(res.profile.id));
+    } else {
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                      QStringLiteral("platform profile load failed: %1").arg(res.error),
+                                      QStringLiteral("warning"));
+    }
+    return res;
 }
 
 void applyPlatformProfile(ScanConfig& config, const PlatformProfile& profile)
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("platform profile applied: %1").arg(profile.id));
     QStringList warnings;
     config.applyRuleOverrides(filterKnownRuleKeys(
         profile.rules,

@@ -3987,9 +3987,11 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     }
 
     if (listProfiles) {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                    QStringLiteral("scan --list-profiles"));
         const QStringList ids = PlatformProfileLoader::listBuiltinIds();
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                    QStringLiteral("scan --list-profiles count=%1 dir=%2")
+                                        .arg(ids.size())
+                                        .arg(PlatformProfileLoader::builtinProfilesDirectory()));
         if (ids.isEmpty()) {
             err() << "No built-in platform profiles found (searched "
                  << PlatformProfileLoader::builtinProfilesDirectory() << ")." << Qt::endl;
