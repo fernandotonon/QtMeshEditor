@@ -13,6 +13,9 @@
 #endif
 #include <windows.h>
 #include <wincred.h>
+#ifndef CRED_PERSIST_LOCAL_USER
+#define CRED_PERSIST_LOCAL_USER 2
+#endif
 #endif
 
 #ifdef Q_OS_MACOS
@@ -20,15 +23,10 @@
 #endif
 
 #if defined(Q_OS_LINUX) && defined(HAVE_LIBSECRET)
-extern "C" {
-#include <libsecret/secret.h>
-}
+#include "CloudCredentialStore_linux.h"
 #endif
 
 namespace {
-
-constexpr char kCredentialLabel[] = "QtMesh Cloud session";
-constexpr char kCredentialAccount[] = "default";
 
 QByteArray sessionToPayload(const CloudSession& session)
 {
@@ -142,19 +140,7 @@ bool storeSecretBytes(const QByteArray& payload)
     return CredWriteW(&cred, 0) != FALSE;
 
 #elif defined(Q_OS_LINUX) && defined(HAVE_LIBSECRET)
-    static const SecretSchema schema = {
-        "org.qtmesheditor.cloud",
-        SECRET_SCHEMA_NONE,
-        {{"session", SECRET_SCHEMA_ATTRIBUTE_STRING, 0}, {nullptr, 0}},
-    };
-
-    GError* error = nullptr;
-    const gboolean ok = secret_password_store_sync(
-        &schema, SECRET_COLLECTION_DEFAULT, kCredentialLabel, payload.constData(), nullptr, &error,
-        "session", kCredentialAccount, nullptr);
-    if (error)
-        g_error_free(error);
-    return ok != FALSE;
+    return qtmesh_cloud_secret_store(payload.constData()) != 0;
 
 #else
     return writeFallbackFile(payload);
@@ -198,23 +184,11 @@ QByteArray loadSecretBytes()
     return payload;
 
 #elif defined(Q_OS_LINUX) && defined(HAVE_LIBSECRET)
-    static const SecretSchema schema = {
-        "org.qtmesheditor.cloud",
-        SECRET_SCHEMA_NONE,
-        {{"session", SECRET_SCHEMA_ATTRIBUTE_STRING, 0}, {nullptr, 0}},
-    };
-
-    GError* error = nullptr;
-    gchar* password = secret_password_lookup_sync(
-        &schema, nullptr, &error, "session", kCredentialAccount, nullptr);
-    if (error) {
-        g_error_free(error);
+    char* raw = qtmesh_cloud_secret_load();
+    if (!raw)
         return {};
-    }
-    if (!password)
-        return {};
-    const QByteArray payload = QByteArray(password);
-    secret_password_free(password);
+    const QByteArray payload(raw);
+    qtmesh_cloud_secret_free(raw);
     return payload;
 
 #else
@@ -241,15 +215,7 @@ void deleteSecretBytes()
     CredDeleteW(L"QtMeshEditor/QtMeshCloud", CRED_TYPE_GENERIC, 0);
 
 #elif defined(Q_OS_LINUX) && defined(HAVE_LIBSECRET)
-    static const SecretSchema schema = {
-        "org.qtmesheditor.cloud",
-        SECRET_SCHEMA_NONE,
-        {{"session", SECRET_SCHEMA_ATTRIBUTE_STRING, 0}, {nullptr, 0}},
-    };
-    GError* error = nullptr;
-    secret_password_clear_sync(&schema, nullptr, &error, "session", kCredentialAccount, nullptr);
-    if (error)
-        g_error_free(error);
+    qtmesh_cloud_secret_delete();
 
 #else
     removeFallbackFile();
