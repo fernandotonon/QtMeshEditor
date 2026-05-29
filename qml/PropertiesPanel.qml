@@ -3572,6 +3572,43 @@ Rectangle {
                 }
             }
 
+            // Issue #400: Auto UV unwrap via xatlas. Operates on the
+            // currently selected entity (not disk files), so the
+            // button disables itself when nothing is selected.
+            Rectangle {
+                width: Math.min(parent.width - 16, uvLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                opacity: UvUnwrapController.hasSelection ? 1.0 : 0.45
+                color: uvMa.containsMouse && UvUnwrapController.hasSelection
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: uvLabel
+                    anchors.centerIn: parent
+                    text: "Auto UV Unwrap…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: uvMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: UvUnwrapController.hasSelection
+                    cursorShape: UvUnwrapController.hasSelection
+                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                    onClicked: root.openUvUnwrapDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: UvUnwrapController.hasSelection
+                        ? "Generate non-overlapping UVs for the selected mesh via xatlas. Skin weights survive the seam splits."
+                        : "Select a mesh first."
+                }
+            }
+
             // Slice I: Material Preview Environment — interactive
             // preview of the currently-selected material on Sphere/Cube
             // shapes. Drag horizontally on the thumbnail to rotate the
@@ -3768,26 +3805,45 @@ Rectangle {
         }
     }
 
-    // Phase 6 slice E: Texture Atlas dialog — same Loader pattern.
+    // Phase 6 slice E: Texture Atlas dialog. Eagerly loaded (`active:
+    // true`) so the top-level Window object exists at startup. The
+    // lazy `active: false` pattern works for the sibling Pack Texture
+    // Channels and Generate Normal Map dialogs but reliably fails to
+    // show the atlas dialog on macOS — probably the larger preview
+    // Image + nested Apply-Atlas Loader hitting a Qt 6 modal-during-
+    // GL-render-loop edge case (same family as the decimate-section
+    // ComboBox rendering bug solved by eager-loading). Pre-created
+    // Windows are hidden by default, so this just shifts the cost to
+    // startup instead of first click.
     Loader {
         id: textureAtlasLoader
-        active: false
+        active: true
         anchors.centerIn: parent
         source: "qrc:/MaterialEditorQML/TextureAtlasDialog.qml"
-        onLoaded: if (item && item.open) item.open()
     }
 
     function openTextureAtlasDialog() {
-        if (!textureAtlasLoader.active) {
-            textureAtlasLoader.active = true
-        } else if (textureAtlasLoader.item) {
+        if (textureAtlasLoader.item)
             textureAtlasLoader.item.open()
-        }
     }
 
     // Phase 6 slice E2: Apply Atlas dialog is launched from inside the
     // Pack Atlas dialog (Atlas → "Apply to Mesh…") to avoid taking up
     // toolbar space for a niche follow-up tool.
+
+    // Issue #400: xatlas auto UV unwrap dialog. Eagerly loaded (same
+    // reason as TextureAtlasDialog — the lazy `active: false`
+    // pattern is flaky for top-level Window dialogs on macOS).
+    Loader {
+        id: uvUnwrapLoader
+        active: true
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/UvUnwrapDialog.qml"
+    }
+    function openUvUnwrapDialog() {
+        if (uvUnwrapLoader.item)
+            uvUnwrapLoader.item.open()
+    }
 
     // ---- Material Presets Content ----
     Component {

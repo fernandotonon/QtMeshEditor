@@ -71,8 +71,42 @@ public:
     // commit them in place. Returns a report with atlas stats.
     // Idempotent w.r.t. bone assignments — they're rebuilt against
     // the new vertex IDs.
+    //
+    // WARNING: this mutates the entity's mesh buffers in-place and
+    // is intended for headless callers (`qtmesh uv --unwrap`) that
+    // load → unwrap → export → exit without ever rendering the
+    // post-unwrap state. For GUI / live-render contexts, use
+    // `unwrapEntityToFile` instead — it preserves the on-screen
+    // mesh by snapshotting / restoring the entity's buffers around
+    // the export call.
     static UvUnwrapReport unwrapEntity(Ogre::Entity* entity,
                                        const UvUnwrapOptions& opts = {});
+
+    // Same as `unwrapEntity` but does NOT delete the original
+    // VertexData / IndexData pointers on the submeshes — leaks them
+    // intentionally so an outer caller (`unwrapEntityToFile`) can
+    // hold a snapshot of those pointers and restore them after the
+    // export. Internal use only.
+    static UvUnwrapReport unwrapEntityKeepingOriginals(Ogre::Entity* entity,
+                                                       const UvUnwrapOptions& opts = {});
+
+    // Unwrap a copy of the entity's mesh, export it to `outputPath`,
+    // and restore the entity's original buffers. The on-screen
+    // entity is bit-identical before and after — only the file on
+    // disk reflects the unwrap. GUI workflows must use this entry
+    // point: live skinned meshes can't survive in-place vertex-data
+    // mutation (the active SkeletonInstance caches the hardware
+    // blend buffer and rendering picks up stale state on first
+    // frame after the swap).
+    //
+    // `outputPath` must be a writable path. The extension determines
+    // the format via the same mapping `MeshImporterExporter` uses
+    // for CLI exports (`.mesh`, `.gltf`, `.glb`, `.fbx`, `.obj`,
+    // etc.). Returns the report with `applied=false` and a populated
+    // `error` field on any failure (including export failure).
+    static UvUnwrapReport unwrapEntityToFile(Ogre::Entity* entity,
+                                             const QString& outputPath,
+                                             const UvUnwrapOptions& opts = {});
 
     // Report current UV channels per submesh without mutating.
     // Used by `qtmesh uv --info`. Returns one entry per submesh.

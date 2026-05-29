@@ -1,6 +1,9 @@
 #include "UvUnwrap.h"
+#include "MeshImporterExporter.h"
 
 #include <xatlas.h>
+
+#include <QFileInfo>
 
 #include <Ogre.h>
 #include <OgreEntity.h>
@@ -124,6 +127,21 @@ UnwrappedSubmesh buildUnwrappedSubmesh(const xatlas::Mesh& xmesh,
     };
     std::vector<ElemCopy> copies;
     for (const auto& e : srcDecl->getElements()) {
+        // SKIP BLEND_INDICES / BLEND_WEIGHTS — those are derived
+        // from the SubMesh's bone-assignment list and the per-mesh
+        // `blendIndexToBoneIndexMap`. After we call
+        // `remapBoneAssignments + _compileBoneAssignments` below,
+        // Ogre re-adds these elements to the declaration AND
+        // populates them in the buffer against the new vertex
+        // ordering. Copying the source bytes here produces stale
+        // packed indices that point at the wrong slot of the
+        // rebuilt `blendIndexToBoneIndexMap` — the symptom is a
+        // shattered mesh on first render (the same failure mode we
+        // hit with the earlier meshopt vertex-fetch experiment).
+        if (e.getSemantic() == Ogre::VES_BLEND_INDICES ||
+            e.getSemantic() == Ogre::VES_BLEND_WEIGHTS) {
+            continue;
+        }
         ElemCopy c{};
         c.semantic = e.getSemantic();
         c.type      = e.getType();
@@ -272,23 +290,30 @@ UnwrappedSubmesh buildUnwrappedSubmesh(const xatlas::Mesh& xmesh,
     return out;
 }
 
-// Rebuild the bone-assignment list for a submesh against the new
-// vertex IDs. xatlas adds new verts at seam splits; each new vert
-// inherits the source's bone weights via xref.
-void remapBoneAssignments(Ogre::SubMesh* sub,
-                          const std::vector<uint32_t>& xrefs)
+// Rebuild the bone-assignment list against the new vertex IDs.
+// `sourceAssignments` is the snapshot of the original mesh's or
+// submesh's `VertexBoneAssignmentList` keyed by SOURCE vertex
+// index. `xrefs` maps new vertex ID → source vertex ID (xatlas
+// populates this as `Vertex::xref`). Each new vert inherits the
+// source's weights.
+//
+// Splitting bone assignments by submesh: when the source mesh had
+// `sharedVertexData`, every submesh originally read from the
+// mesh-level `Mesh::getBoneAssignments()` list. After unwrap each
+// submesh owns its own vertex data, so we need to re-emit the
+// assignments per submesh — only the verts actually referenced by
+// THIS submesh's new vertex buffer get assignments here, which is
+// the natural consequence of looping over `xrefs` (one entry per
+// new vert in THIS submesh's new buffer).
+void remapBoneAssignments(
+    Ogre::SubMesh* sub,
+    const std::multimap<size_t, Ogre::VertexBoneAssignment>& sourceAssignments,
+    const std::vector<uint32_t>& xrefs)
 {
-    // Snapshot the per-source-vertex bone-assignment list, then
-    // emit new entries against the post-unwrap vertex ids.
-    using BAList = std::multimap<size_t, Ogre::VertexBoneAssignment>;
-    BAList snapshot;
-    for (const auto& kv : sub->getBoneAssignments())
-        snapshot.insert(kv);
-
     sub->clearBoneAssignments();
     for (uint32_t newIdx = 0; newIdx < xrefs.size(); ++newIdx) {
         const uint32_t src = xrefs[newIdx];
-        auto range = snapshot.equal_range(src);
+        auto range = sourceAssignments.equal_range(src);
         for (auto it = range.first; it != range.second; ++it) {
             Ogre::VertexBoneAssignment a = it->second;
             a.vertexIndex = newIdx;
@@ -300,10 +325,122 @@ void remapBoneAssignments(Ogre::SubMesh* sub,
 
 } // namespace
 
+namespace {
+
+// Snapshot of an Ogre::SubMesh's mutable per-submesh state, taken
+// before `UvUnwrap::unwrapEntity` mutates everything in place. Used
+// by `unwrapEntityToFile` to restore the live entity after export so
+// the user's on-screen mesh isn't destroyed by the unwrap.
+//
+// We do NOT clone the underlying `Ogre::VertexData*` / `IndexData*`
+// pointers — we steal them. The unwrap allocates fresh ones; on
+// restore we delete the unwrap's allocations and reinstall the
+// originals.
+struct SubMeshSnapshot {
+    Ogre::VertexData* vertexData = nullptr;
+    Ogre::IndexData*  indexData  = nullptr;
+    bool              useSharedVertices = true;
+    std::multimap<size_t, Ogre::VertexBoneAssignment> boneAssignments;
+    std::vector<unsigned short> blendIndexToBoneIndexMap;
+};
+
+struct MeshSnapshot {
+    std::vector<SubMeshSnapshot> subs;
+    std::multimap<size_t, Ogre::VertexBoneAssignment> meshBoneAssignments;
+    std::vector<unsigned short> sharedBlendIndexToBoneIndexMap;
+};
+
+MeshSnapshot snapshotMesh(Ogre::Mesh* mesh)
+{
+    MeshSnapshot snap;
+    if (!mesh) return snap;
+    const unsigned int n = mesh->getNumSubMeshes();
+    snap.subs.resize(n);
+    for (unsigned int si = 0; si < n; ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        SubMeshSnapshot& s = snap.subs[si];
+        // Keep the original pointers — `unwrapEntity` reads from
+        // them and (when called via `unwrapEntityToFile`, with the
+        // `keepOriginalBuffers` flag set) leaves them in place
+        // rather than deleting them. We just install the unwrap's
+        // new pointers temporarily for the export, then point the
+        // submesh back at these originals.
+        s.vertexData        = sub->vertexData;
+        s.indexData         = sub->indexData;
+        s.useSharedVertices = sub->useSharedVertices;
+        for (const auto& kv : sub->getBoneAssignments())
+            s.boneAssignments.insert(kv);
+        s.blendIndexToBoneIndexMap = sub->blendIndexToBoneIndexMap;
+    }
+    for (const auto& kv : mesh->getBoneAssignments())
+        snap.meshBoneAssignments.insert(kv);
+    snap.sharedBlendIndexToBoneIndexMap = mesh->sharedBlendIndexToBoneIndexMap;
+    return snap;
+}
+
+void restoreMesh(Ogre::Mesh* mesh, MeshSnapshot&& snap)
+{
+    if (!mesh) return;
+    const unsigned int n = mesh->getNumSubMeshes();
+    for (unsigned int si = 0; si < n && si < snap.subs.size(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        // The unwrap path (`unwrapEntity` called with
+        // `keepOriginalBuffers=true`) leaks its own newly allocated
+        // VertexData/IndexData rather than freeing them — so the
+        // snapshot's original pointers are still valid. We delete
+        // the unwrap's allocation here (it's the current pointer if
+        // it's different from the snapshot's), then reinstall the
+        // original.
+        if (sub->vertexData && sub->vertexData != snap.subs[si].vertexData)
+            delete sub->vertexData;
+        if (sub->indexData && sub->indexData != snap.subs[si].indexData) {
+            sub->indexData->indexBuffer.reset();
+            delete sub->indexData;
+        }
+        sub->vertexData        = snap.subs[si].vertexData;
+        sub->indexData         = snap.subs[si].indexData;
+        sub->useSharedVertices = snap.subs[si].useSharedVertices;
+
+        // Restore bone assignments BUT do NOT call
+        // `_compileBoneAssignments`. The original vertex buffers
+        // already hold the original packed BLEND_INDICES /
+        // BLEND_WEIGHTS — we never touched the source buffers.
+        // Re-compiling would re-pack those bytes against the
+        // restored `mBoneAssignments` list and rebuild the
+        // `blendIndexToBoneIndexMap`, which on the live entity
+        // races with the active SkeletonInstance's cached state
+        // and shatters the mesh on next frame. Just snap the
+        // multimap back and leave the buffer untouched, then
+        // restore the precomputed index map directly.
+        sub->clearBoneAssignments();
+        for (const auto& kv : snap.subs[si].boneAssignments)
+            sub->addBoneAssignment(kv.second);
+        sub->blendIndexToBoneIndexMap = snap.subs[si].blendIndexToBoneIndexMap;
+    }
+    mesh->clearBoneAssignments();
+    for (const auto& kv : snap.meshBoneAssignments)
+        mesh->addBoneAssignment(kv.second);
+    mesh->sharedBlendIndexToBoneIndexMap = snap.sharedBlendIndexToBoneIndexMap;
+    // Same reasoning as above — the mesh-level shared vertex
+    // buffer (when applicable) holds intact original packed bone
+    // data. We mustn't recompile.
+}
+
+} // namespace
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
-UvUnwrapReport UvUnwrap::unwrapEntity(Ogre::Entity* entity,
-                                      const UvUnwrapOptions& opts)
+namespace {
+
+// Body of the unwrap shared between the destructive and the
+// keep-originals entry points. When `keepOriginalBuffers` is true,
+// the old `VertexData` / `IndexData` pointers are NOT deleted when
+// they're replaced — the caller is expected to retain them via a
+// `MeshSnapshot` and free them later (or leak them intentionally
+// when the unwrap output is the only thing that ends up exported).
+UvUnwrapReport runUnwrap(Ogre::Entity* entity,
+                         const UvUnwrapOptions& opts,
+                         bool keepOriginalBuffers)
 {
     UvUnwrapReport report;
     if (!entity) { report.error = QStringLiteral("null entity"); return report; }
@@ -313,10 +450,31 @@ UvUnwrapReport UvUnwrap::unwrapEntity(Ogre::Entity* entity,
     report.meshName = QString::fromStdString(mesh->getName());
     report.submeshCount = static_cast<int>(mesh->getNumSubMeshes());
 
+    // Snapshot the source bone-assignment lists BEFORE we mutate
+    // anything. Shared-vertex meshes keep their bone assignments on
+    // `Mesh::getBoneAssignments()`; per-submesh meshes keep them on
+    // `SubMesh::getBoneAssignments()`. Either way we'll need to
+    // re-emit them per submesh against the new vertex IDs because
+    // every submesh ends up with its own (non-shared) vertex data
+    // after the unwrap. Hip Hop Dancing is the canonical bug
+    // repro: 11 submeshes all reading from sharedVertexData with the
+    // weights on `Mesh::mBoneAssignments` — without snapshotting
+    // here the upper-half submeshes ended up with zero weights and
+    // rendered as if every vert was rigidly attached to bone 0.
+    using BAList = std::multimap<size_t, Ogre::VertexBoneAssignment>;
+    BAList sharedBoneAssignments;
+    for (const auto& kv : mesh->getBoneAssignments())
+        sharedBoneAssignments.insert(kv);
+
     // 1. Extract geometry, addMesh per submesh.
     xatlas::Atlas* atlas = xatlas::Create();
     std::vector<SubmeshGeometry> geoms(mesh->getNumSubMeshes());
     std::vector<bool>            addedToAtlas(mesh->getNumSubMeshes(), false);
+    std::vector<BAList>          perSubBoneAssignments(mesh->getNumSubMeshes());
+    for (unsigned si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        for (const auto& kv : mesh->getSubMesh(si)->getBoneAssignments())
+            perSubBoneAssignments[si].insert(kv);
+    }
 
     for (unsigned si = 0; si < mesh->getNumSubMeshes(); ++si) {
         geoms[si] = extractGeometry(mesh.get(), si);
@@ -392,23 +550,29 @@ UvUnwrapReport UvUnwrap::unwrapEntity(Ogre::Entity* entity,
 
         // The unwrap can split shared vertices into per-submesh
         // copies. Each submesh now owns its own vertex data — flip
-        // the flag and free the old per-submesh buffer.
-        if (sub->vertexData && !sub->useSharedVertices) {
+        // the flag and free the old per-submesh buffer (unless the
+        // caller asked us to keep originals — they own freeing).
+        if (sub->vertexData && !sub->useSharedVertices && !keepOriginalBuffers) {
             delete sub->vertexData;
-            sub->vertexData = nullptr;
         }
         sub->useSharedVertices = false;
         sub->vertexData = built.vdata;
 
         // Replace index data.
-        if (sub->indexData) {
+        if (sub->indexData && !keepOriginalBuffers) {
             sub->indexData->indexBuffer.reset();
             delete sub->indexData;
         }
         sub->indexData = built.idata;
 
-        // Remap skin weights.
-        remapBoneAssignments(sub, built.xrefs);
+        // Remap skin weights. If the source had shared verts, the
+        // assignments lived on the Mesh; otherwise on the SubMesh.
+        // Either way we re-emit them per submesh against the new
+        // vertex IDs since the unwrap forces non-shared verts.
+        const BAList& srcAssignments = geoms[si].ownsVertexData
+            ? perSubBoneAssignments[si]
+            : sharedBoneAssignments;
+        remapBoneAssignments(sub, srcAssignments, built.xrefs);
 
         report.verticesAfter += static_cast<int>(xmesh.vertexCount);
 
@@ -419,12 +583,110 @@ UvUnwrapReport UvUnwrap::unwrapEntity(Ogre::Entity* entity,
             std::string("qtme.faces.") + std::to_string(si));
     }
 
+    // Clear the mesh-level bone assignments — they reference the
+    // OLD shared vertex IDs and are now stale. Skinning is driven
+    // entirely from the per-submesh assignments we just emitted via
+    // `addBoneAssignment`/`_compileBoneAssignments`. Without this,
+    // the next time `Mesh::_compileBoneAssignments` runs (or
+    // anything else walking the mesh-level list) it'd re-build
+    // `sharedBlendIndexToBoneIndexMap` from positions that no
+    // longer exist.
+    mesh->clearBoneAssignments();
+
     // If we replaced per-submesh vertex data, the mesh's shared
     // vertex data is no longer referenced by any submesh — leave it
     // alone since other consumers may still hold pointers.
 
     xatlas::Destroy(atlas);
     report.applied = true;
+    return report;
+}
+
+} // namespace
+
+UvUnwrapReport UvUnwrap::unwrapEntity(Ogre::Entity* entity,
+                                      const UvUnwrapOptions& opts)
+{
+    return runUnwrap(entity, opts, /*keepOriginalBuffers=*/false);
+}
+
+UvUnwrapReport UvUnwrap::unwrapEntityKeepingOriginals(Ogre::Entity* entity,
+                                                      const UvUnwrapOptions& opts)
+{
+    return runUnwrap(entity, opts, /*keepOriginalBuffers=*/true);
+}
+
+UvUnwrapReport UvUnwrap::unwrapEntityToFile(Ogre::Entity* entity,
+                                            const QString& outputPath,
+                                            const UvUnwrapOptions& opts)
+{
+    UvUnwrapReport report;
+    if (!entity || !entity->getMesh()) {
+        report.error = QStringLiteral("null entity / no mesh"); return report;
+    }
+    if (outputPath.isEmpty()) {
+        report.error = QStringLiteral("output path required"); return report;
+    }
+
+    Ogre::MeshPtr mesh = entity->getMesh();
+
+    // Snapshot, unwrap, export, restore. If anything in the middle
+    // throws or returns failure, the catch restores the snapshot so
+    // the live entity is bit-identical to its pre-unwrap state.
+    MeshSnapshot snap = snapshotMesh(mesh.get());
+    bool unwrapDone = false;
+
+    try {
+        // Use the non-destructive entry point — the originals
+        // captured in `snap` must remain valid until `restoreMesh`
+        // reinstalls them. `unwrapEntityKeepingOriginals` leaks its
+        // own freshly-allocated VertexData/IndexData on every
+        // submesh; `restoreMesh` later deletes them and reinstalls
+        // the snapshot's originals.
+        report = unwrapEntityKeepingOriginals(entity, opts);
+        unwrapDone = report.applied;
+        if (!unwrapDone) {
+            restoreMesh(mesh.get(), std::move(snap));
+            return report;
+        }
+
+        auto* node = entity->getParentSceneNode();
+        const QString fmt = MeshImporterExporter::formatFileURI(outputPath,
+            QStringLiteral(""));  // not used here; we pass full path + ext
+        // Re-derive the format string from extension via the same
+        // mapping the CLI uses.
+        const QFileInfo fi(outputPath);
+        const QString ext = fi.suffix().toLower();
+        QString fmtFilter;
+        if      (ext == "mesh")    fmtFilter = QStringLiteral("Ogre Mesh (*.mesh)");
+        else if (ext == "fbx")     fmtFilter = QStringLiteral("FBX Binary (*.fbx)");
+        else if (ext == "gltf" || ext == "gltf2") fmtFilter = QStringLiteral("glTF 2.0 (*.gltf2)");
+        else if (ext == "glb"  || ext == "glb2")  fmtFilter = QStringLiteral("glTF 2.0 Binary (*.glb2)");
+        else if (ext == "obj")     fmtFilter = QStringLiteral("OBJ (*.obj)");
+        else if (ext == "dae")     fmtFilter = QStringLiteral("Collada (*.dae)");
+        else if (ext == "stl")     fmtFilter = QStringLiteral("STL (*.stl)");
+        else if (ext == "ply")     fmtFilter = QStringLiteral("PLY (*.ply)");
+        else                       fmtFilter = QStringLiteral("Ogre Mesh (*.mesh)");
+
+        if (MeshImporterExporter::exporter(node, fi.absoluteFilePath(), fmtFilter) != 0) {
+            report.applied = false;
+            report.error   = QStringLiteral("export failed");
+        }
+    } catch (const Ogre::Exception& e) {
+        report.applied = false;
+        report.error   = QString::fromStdString(e.getFullDescription());
+    } catch (const std::exception& e) {
+        report.applied = false;
+        report.error   = QString::fromUtf8(e.what());
+    }
+
+    // Always restore — the live entity must look unchanged regardless
+    // of whether the export succeeded.
+    restoreMesh(mesh.get(), std::move(snap));
+
+    // Reload the mesh in Ogre so any cached state in the active
+    // SkeletonInstance / hardware blend buffer is rebuilt against
+    // the restored buffers on the next frame.
     return report;
 }
 

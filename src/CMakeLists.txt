@@ -83,6 +83,7 @@ MeshLodController.cpp
 MeshOptimizerLod.cpp
 ExportOptimizer.cpp
 UvUnwrap.cpp
+UvUnwrapController.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
@@ -195,6 +196,7 @@ MeshLodController.h
 MeshOptimizerLod.h
 ExportOptimizer.h
 UvUnwrap.h
+UvUnwrapController.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h
