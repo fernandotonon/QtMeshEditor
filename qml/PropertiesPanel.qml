@@ -3805,44 +3805,43 @@ Rectangle {
         }
     }
 
-    // Phase 6 slice E: Texture Atlas dialog. Eagerly loaded (`active:
-    // true`) so the top-level Window object exists at startup. The
-    // lazy `active: false` pattern works for the sibling Pack Texture
-    // Channels and Generate Normal Map dialogs but reliably fails to
-    // show the atlas dialog on macOS — probably the larger preview
-    // Image + nested Apply-Atlas Loader hitting a Qt 6 modal-during-
-    // GL-render-loop edge case (same family as the decimate-section
-    // ComboBox rendering bug solved by eager-loading). Pre-created
-    // Windows are hidden by default, so this just shifts the cost to
-    // startup instead of first click.
+    // Phase 6 slice E: Texture Atlas dialog. Same lazy-load pattern
+    // as TextureChannelPackerDialog / NormalMapGeneratorDialog above.
     Loader {
         id: textureAtlasLoader
-        active: true
+        active: false
         anchors.centerIn: parent
         source: "qrc:/MaterialEditorQML/TextureAtlasDialog.qml"
+        onLoaded: if (item && item.open) item.open()
     }
 
     function openTextureAtlasDialog() {
-        if (textureAtlasLoader.item)
+        if (!textureAtlasLoader.active) {
+            textureAtlasLoader.active = true
+        } else if (textureAtlasLoader.item) {
             textureAtlasLoader.item.open()
+        }
     }
 
     // Phase 6 slice E2: Apply Atlas dialog is launched from inside the
     // Pack Atlas dialog (Atlas → "Apply to Mesh…") to avoid taking up
     // toolbar space for a niche follow-up tool.
 
-    // Issue #400: xatlas auto UV unwrap dialog. Eagerly loaded (same
-    // reason as TextureAtlasDialog — the lazy `active: false`
-    // pattern is flaky for top-level Window dialogs on macOS).
+    // Issue #400: xatlas auto UV unwrap dialog. Same lazy-load pattern
+    // as TextureAtlasDialog / TextureChannelPackerDialog above.
     Loader {
         id: uvUnwrapLoader
-        active: true
+        active: false
         anchors.centerIn: parent
         source: "qrc:/MaterialEditorQML/UvUnwrapDialog.qml"
+        onLoaded: if (item && item.open) item.open()
     }
     function openUvUnwrapDialog() {
-        if (uvUnwrapLoader.item)
+        if (!uvUnwrapLoader.active) {
+            uvUnwrapLoader.active = true
+        } else if (uvUnwrapLoader.item) {
             uvUnwrapLoader.item.open()
+        }
     }
 
     // ---- Material Presets Content ----
