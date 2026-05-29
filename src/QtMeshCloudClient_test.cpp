@@ -136,6 +136,34 @@ TEST(QtMeshCloudClientUploadScan, MissingTokenReturnsErrorImmediately)
     EXPECT_TRUE(result.errorString.contains("missing bearer token", Qt::CaseInsensitive));
 }
 
+TEST(QtMeshCloudClientDeviceCode, MissingClientNameReturnsErrorImmediately)
+{
+    auto result = QtMeshCloudClient::requestDeviceCode(QString(), /*timeoutMs=*/100);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.errorString.contains("client name", Qt::CaseInsensitive));
+}
+
+TEST(QtMeshCloudClientDeviceToken, MissingDeviceCodeReturnsErrorImmediately)
+{
+    auto result = QtMeshCloudClient::pollDeviceToken(QString(), /*timeoutMs=*/100);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.errorString.contains("device code", Qt::CaseInsensitive));
+}
+
+TEST(QtMeshCloudClientCurrentUser, MissingTokenReturnsErrorImmediately)
+{
+    auto result = QtMeshCloudClient::fetchCurrentUser(QString(), /*timeoutMs=*/100);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.errorString.contains("missing bearer token", Qt::CaseInsensitive));
+}
+
+TEST(QtMeshCloudClientLogout, MissingTokenReturnsErrorImmediately)
+{
+    auto result = QtMeshCloudClient::logout(QString(), /*timeoutMs=*/100);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.errorString.contains("missing bearer token", Qt::CaseInsensitive));
+}
+
 TEST(QtMeshCloudClientCreateProject, MissingTokenReturnsErrorImmediately)
 {
     auto result = QtMeshCloudClient::createProject(QString(), QStringLiteral("Project"), QStringLiteral("project"),

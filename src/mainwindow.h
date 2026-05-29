@@ -119,6 +119,8 @@ private slots:
 
     void showAIModelSettings();
     void showMCPSettings();
+    void signInToQtMeshCloud();
+    void signOutOfQtMeshCloud();
     bool startMCPServer(int port);
     void stopMCPServer();
 
@@ -187,6 +189,9 @@ private:
     QToolBar* m_modeBarShell = nullptr;
     QToolBar* m_topBarStretch = nullptr;
     QQuickWidget* m_modeBar = nullptr;
+    QAction* m_cloudSignInAction = nullptr;
+    QAction* m_cloudSignOutAction = nullptr;
+    QAction* m_cloudOpenDashboardAction = nullptr;
 
     /// View menu entries for bottom tabbed docks — checked state follows user
     /// preference, not QDockWidget::isVisible() (inactive tabs would otherwise
@@ -217,6 +222,7 @@ private:
     void showBottomToolDock(QDockWidget* dock);
     void tabifyBottomToolDocks();
     void updateToolRailForMode();
+    void updateCloudAuthActions();
 };
 
 #endif // MAINWINDOW_H

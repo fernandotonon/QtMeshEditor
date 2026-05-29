@@ -37,6 +37,52 @@ public:
     static UploadResult uploadScanReport(const QString& bearerToken, const QJsonObject& reportJson,
                                          int timeoutMs = 120000);
 
+    struct DeviceCodeResult {
+        bool ok = false;
+        int httpStatus = 0;
+        QString errorString;
+        QString responseBodySnippet;
+        QString deviceCode;
+        QString userCode;
+        QString verificationUri;
+        QString verificationUriComplete;
+        int expiresInSeconds = 0;
+        int intervalSeconds = 5;
+    };
+
+    /// POST /v1/oauth/device/code — starts browser-based login for desktop clients.
+    static DeviceCodeResult requestDeviceCode(const QString& clientName = QStringLiteral("QtMeshEditor"),
+                                              int timeoutMs = 30000);
+
+    struct DeviceTokenResult {
+        bool ok = false;
+        int httpStatus = 0;
+        QString errorString;
+        QString responseBodySnippet;
+        QString errorCode;
+        QString token;
+        qint64 expiresAt = 0;
+        QJsonObject user;
+        int intervalSeconds = 5;
+    };
+
+    /// POST /v1/oauth/device/token — polls until the browser approval grants a session token.
+    static DeviceTokenResult pollDeviceToken(const QString& deviceCode, int timeoutMs = 30000);
+
+    struct CurrentUserResult {
+        bool ok = false;
+        int httpStatus = 0;
+        QString errorString;
+        QString responseBodySnippet;
+        QJsonObject user;
+    };
+
+    /// GET /v1/auth/me — validates a stored session token and returns the current user.
+    static CurrentUserResult fetchCurrentUser(const QString& bearerToken, int timeoutMs = 30000);
+
+    /// POST /v1/auth/logout — best-effort session invalidation.
+    static UploadResult logout(const QString& bearerToken, int timeoutMs = 30000);
+
     struct ProjectResult {
         bool ok = false;
         int httpStatus = 0;

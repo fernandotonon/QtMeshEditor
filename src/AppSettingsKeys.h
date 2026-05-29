@@ -65,6 +65,39 @@ inline const QString& palette()
     return k;
 }
 
+/** @brief Legacy QSettings key — use CloudCredentialStore; migrated on startup. */
+inline const QString& cloudToken()
+{
+    static const QString k(QStringLiteral("Cloud/token"));
+    return k;
+}
+
+/** @brief Legacy QSettings key — use CloudCredentialStore; migrated on startup. */
+inline const QString& cloudTokenExpiresAt()
+{
+    static const QString k(QStringLiteral("Cloud/tokenExpiresAt"));
+    return k;
+}
+
+inline const QString& cloudUserName()
+{
+    static const QString k(QStringLiteral("Cloud/userName"));
+    return k;
+}
+
+/** @brief Display-only email; stored in CloudCredentialStore with the bearer token. */
+inline const QString& cloudUserEmail()
+{
+    static const QString k(QStringLiteral("Cloud/userEmail"));
+    return k;
+}
+
+inline const QString& cloudUserSlug()
+{
+    static const QString k(QStringLiteral("Cloud/userSlug"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H
