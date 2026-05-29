@@ -64,6 +64,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CLIPipeline.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudClient.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudCredentialStore.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudUploadPlanner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewCube/ViewCubeController.cpp
