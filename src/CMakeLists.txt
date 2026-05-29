@@ -500,7 +500,7 @@ meshoptimizer
 )
 
 if(APPLE)
-    target_link_libraries(${CMAKE_PROJECT_NAME} "-framework" Security)
+    target_link_libraries(${CMAKE_PROJECT_NAME} "-framework Security")
 elseif(WIN32)
     target_link_libraries(${CMAKE_PROJECT_NAME} advapi32)
 elseif(QTMESH_LIBSECRET_FOUND)
@@ -585,7 +585,7 @@ if(BUILD_TESTS)
     meshoptimizer)
 
     if(APPLE)
-        target_link_libraries(UnitTests "-framework" Security)
+        target_link_libraries(UnitTests "-framework Security")
     elseif(WIN32)
         target_link_libraries(UnitTests advapi32)
     elseif(QTMESH_LIBSECRET_FOUND)

@@ -12,6 +12,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <wincred.h>
 #endif
 
 #ifdef Q_OS_MACOS
@@ -19,7 +20,9 @@
 #endif
 
 #if defined(Q_OS_LINUX) && defined(HAVE_LIBSECRET)
+extern "C" {
 #include <libsecret/secret.h>
+}
 #endif
 
 namespace {
@@ -142,13 +145,13 @@ bool storeSecretBytes(const QByteArray& payload)
     static const SecretSchema schema = {
         "org.qtmesheditor.cloud",
         SECRET_SCHEMA_NONE,
-        {{"session", SECRET_SCHEMA_STRING, 0}, {nullptr, 0}},
+        {{"session", SECRET_SCHEMA_ATTRIBUTE_STRING, 0}, {nullptr, 0}},
     };
 
     GError* error = nullptr;
     const gboolean ok = secret_password_store_sync(
-        &schema, SECRET_COLLECTION_DEFAULT, kCredentialLabel, payload.constData(),
-        "session", kCredentialAccount, nullptr, &error);
+        &schema, SECRET_COLLECTION_DEFAULT, kCredentialLabel, payload.constData(), nullptr, &error,
+        "session", kCredentialAccount, nullptr);
     if (error)
         g_error_free(error);
     return ok != FALSE;
@@ -198,12 +201,12 @@ QByteArray loadSecretBytes()
     static const SecretSchema schema = {
         "org.qtmesheditor.cloud",
         SECRET_SCHEMA_NONE,
-        {{"session", SECRET_SCHEMA_STRING, 0}, {nullptr, 0}},
+        {{"session", SECRET_SCHEMA_ATTRIBUTE_STRING, 0}, {nullptr, 0}},
     };
 
     GError* error = nullptr;
     gchar* password = secret_password_lookup_sync(
-        &schema, nullptr, "session", kCredentialAccount, nullptr, &error);
+        &schema, nullptr, &error, "session", kCredentialAccount, nullptr);
     if (error) {
         g_error_free(error);
         return {};
@@ -241,9 +244,12 @@ void deleteSecretBytes()
     static const SecretSchema schema = {
         "org.qtmesheditor.cloud",
         SECRET_SCHEMA_NONE,
-        {{"session", SECRET_SCHEMA_STRING, 0}, {nullptr, 0}},
+        {{"session", SECRET_SCHEMA_ATTRIBUTE_STRING, 0}, {nullptr, 0}},
     };
-    secret_password_clear_sync(&schema, nullptr, "session", kCredentialAccount, nullptr, nullptr);
+    GError* error = nullptr;
+    secret_password_clear_sync(&schema, nullptr, &error, "session", kCredentialAccount, nullptr);
+    if (error)
+        g_error_free(error);
 
 #else
     removeFallbackFile();
