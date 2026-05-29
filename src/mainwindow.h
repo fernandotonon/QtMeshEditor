@@ -121,6 +121,7 @@ private slots:
     void showMCPSettings();
     void signInToQtMeshCloud();
     void signOutOfQtMeshCloud();
+    void uploadFilesToQtMeshCloud();
     bool startMCPServer(int port);
     void stopMCPServer();
 
@@ -191,6 +192,7 @@ private:
     QQuickWidget* m_modeBar = nullptr;
     QAction* m_cloudSignInAction = nullptr;
     QAction* m_cloudSignOutAction = nullptr;
+    QAction* m_cloudUploadFilesAction = nullptr;
     QAction* m_cloudOpenDashboardAction = nullptr;
 
     /// View menu entries for bottom tabbed docks — checked state follows user

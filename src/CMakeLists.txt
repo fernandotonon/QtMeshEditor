@@ -114,6 +114,7 @@ ScanEngine.cpp
 PlatformProfile.cpp
 QtMeshCloudClient.cpp
 CloudCredentialStore.cpp
+CloudUploadPlanner.cpp
 AssetBrowserController.cpp
 MaterialPreviewRenderer.cpp
 ModelTurntableRenderer.cpp
@@ -219,6 +220,7 @@ ScanEngine.h
 PlatformProfile.h
 QtMeshCloudClient.h
 CloudCredentialStore.h
+CloudUploadPlanner.h
 AssetBrowserController.h
 MaterialPreviewRenderer.h
 ModelTurntableRenderer.h

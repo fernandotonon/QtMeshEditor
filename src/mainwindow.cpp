@@ -1,4 +1,7 @@
 #include <QMessageBox>
+#include <QFileDialog>
+#include <QInputDialog>
+#include <QLineEdit>
 #ifndef Q_OS_WIN
 #include <unistd.h>
 #endif
@@ -28,6 +31,7 @@
 #include "UpdateVersion.h"
 #include <QDialog>
 #include <QProgressDialog>
+#include <QThread>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -37,6 +41,7 @@
 #include "AppConsoleLog.h"
 #include "AppSettingsKeys.h"
 #include "CloudCredentialStore.h"
+#include "CloudUploadPlanner.h"
 #include "ui_mainwindow.h"
 #include "OgreWidget.h"
 #include "QtInputManager.h"
@@ -102,7 +107,9 @@
 #include <QScrollBar>
 #include <QFontDatabase>
 #include <QTimer>
+#include <QDateTime>
 #include <functional>
+#include <atomic>
 
 namespace {
 
@@ -151,6 +158,14 @@ void waitWithEvents(int milliseconds, QProgressDialog* progress)
     timer.start(qMax(0, milliseconds));
     loop.exec();
 }
+
+struct CloudUploadWorkerOutcome {
+    bool ok = false;
+    bool canceled = false;
+    QString errorString;
+    QString scanStatus;
+    QStringList fileIds;
+};
 
 } // namespace
 
@@ -2149,6 +2164,9 @@ void MainWindow::initToolBar()
     m_cloudSignOutAction->setObjectName(QStringLiteral("actionQtMeshCloudSignOut"));
     connect(m_cloudSignOutAction, &QAction::triggered, this, &MainWindow::signOutOfQtMeshCloud);
     cloudMenu->addSeparator();
+    m_cloudUploadFilesAction = cloudMenu->addAction(tr("Upload Files..."));
+    m_cloudUploadFilesAction->setObjectName(QStringLiteral("actionQtMeshCloudUploadFiles"));
+    connect(m_cloudUploadFilesAction, &QAction::triggered, this, &MainWindow::uploadFilesToQtMeshCloud);
     m_cloudOpenDashboardAction = cloudMenu->addAction(tr("Open My Projects"));
     m_cloudOpenDashboardAction->setObjectName(QStringLiteral("actionQtMeshCloudOpenProjects"));
     connect(m_cloudOpenDashboardAction, &QAction::triggered, this, []() {
@@ -2283,6 +2301,8 @@ void MainWindow::updateCloudAuthActions()
     }
     if (m_cloudSignOutAction)
         m_cloudSignOutAction->setEnabled(signedIn);
+    if (m_cloudUploadFilesAction)
+        m_cloudUploadFilesAction->setEnabled(true);
     if (m_cloudOpenDashboardAction)
         m_cloudOpenDashboardAction->setEnabled(signedIn);
 }
@@ -2419,6 +2439,195 @@ void MainWindow::signOutOfQtMeshCloud()
     SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
                                   QStringLiteral("QtMesh Cloud signed out"));
     QMessageBox::information(this, tr("QtMesh Cloud"), tr("Signed out of QtMesh Cloud."));
+}
+
+void MainWindow::uploadFilesToQtMeshCloud()
+{
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
+    if (!CloudCredentialStore::hasSession()) {
+        const int choice = QMessageBox::question(
+            this,
+            tr("QtMesh Cloud Upload"),
+            tr("Sign in to QtMesh Cloud before uploading files?"));
+        if (choice != QMessageBox::Yes)
+            return;
+        signInToQtMeshCloud();
+        if (!CloudCredentialStore::hasSession())
+            return;
+    }
+
+    const QStringList paths = QFileDialog::getOpenFileNames(
+        this,
+        tr("Upload Files to QtMesh Cloud"),
+        QString(),
+        tr("3D Assets (*.mesh *.obj *.fbx *.gltf *.glb *.dae *.collada *.stl *.tmd *.tim *.rsd *.ply *.mat *.mtl *.material *.skeleton *.skel *.anim *.animation *.png *.jpg *.jpeg *.tga *.bmp *.dds *.tif *.tiff *.json *.xml *.yml *.yaml);;All Files (*)"),
+        nullptr,
+        QFileDialog::DontUseNativeDialog | QFileDialog::HideNameFilterDetails);
+    if (paths.isEmpty())
+        return;
+
+    const QFileInfo firstFile(paths.first());
+    QString defaultName = paths.size() == 1
+        ? firstFile.completeBaseName()
+        : QFileInfo(firstFile.absolutePath()).fileName();
+    if (defaultName.trimmed().isEmpty())
+        defaultName = tr("QtMesh Project");
+
+    bool accepted = false;
+    const QString projectName = QInputDialog::getText(
+        this,
+        tr("QtMesh Cloud Upload"),
+        tr("Project name:"),
+        QLineEdit::Normal,
+        defaultName,
+        &accepted).trimmed();
+    if (!accepted || projectName.isEmpty())
+        return;
+
+    const QString token = CloudCredentialStore::loadSession().token;
+    if (token.isEmpty()) {
+        QMessageBox::warning(this, tr("QtMesh Cloud Upload"), tr("The saved QtMesh Cloud session is empty. Sign in again."));
+        updateCloudAuthActions();
+        return;
+    }
+
+    QProgressDialog progress(tr("Creating cloud project..."), tr("Cancel"), 0, paths.size() + 3, this);
+    progress.setWindowTitle(tr("QtMesh Cloud Upload"));
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setValue(0);
+    progress.show();
+
+    QString slug = CloudUploadPlanner::makeProjectSlug(projectName);
+    auto project = QtMeshCloudClient::createProject(token, projectName, slug);
+    if (!project.ok && project.httpStatus == 409) {
+        slug = QStringLiteral("%1-%2")
+            .arg(slug, QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMddhhmmss")));
+        project = QtMeshCloudClient::createProject(token, projectName, slug);
+    }
+    progress.setValue(1);
+    if (progress.wasCanceled())
+        return;
+    if (!project.ok) {
+        QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
+                             tr("Could not create the cloud project.\n\n%1").arg(project.errorString));
+        return;
+    }
+
+    const auto descriptors = CloudUploadPlanner::buildAssetFileDescriptors(paths);
+    progress.setLabelText(tr("Requesting upload URLs..."));
+    auto uploadUrls = QtMeshCloudClient::requestUploadUrls(
+        token,
+        project.ownerSlug,
+        project.projectSlug,
+        descriptors);
+    progress.setValue(2);
+    if (progress.wasCanceled())
+        return;
+    if (!uploadUrls.ok) {
+        QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
+                             tr("Could not prepare file uploads.\n\n%1").arg(uploadUrls.errorString));
+        return;
+    }
+
+    std::atomic_bool canceled{false};
+    connect(&progress, &QProgressDialog::canceled, this, [&canceled]() {
+        canceled.store(true);
+    });
+
+    CloudUploadWorkerOutcome outcome;
+    const QString ownerSlug = project.ownerSlug;
+    const QString projectSlug = project.projectSlug;
+    const auto uploads = uploadUrls.uploads;
+    QThread* worker = QThread::create([token, ownerSlug, projectSlug, descriptors, uploads, &progress, &outcome, &canceled]() {
+        QStringList uploadedFileIds;
+        QString mainFileId;
+        for (int i = 0; i < uploads.size(); ++i) {
+            if (canceled.load()) {
+                outcome.canceled = true;
+                return;
+            }
+
+            const QString label = QObject::tr("Uploading %1...").arg(descriptors.at(i).uploadName);
+            QMetaObject::invokeMethod(&progress, [label, i, &progress]() {
+                progress.setLabelText(label);
+                progress.setValue(i + 2);
+            }, Qt::QueuedConnection);
+
+            const auto result = QtMeshCloudClient::uploadFileContent(
+                token,
+                uploads.at(i),
+                descriptors.at(i).path);
+            if (!result.ok) {
+                outcome.errorString = result.errorString;
+                return;
+            }
+            uploadedFileIds.append(uploads.at(i).fileId);
+            if (mainFileId.isEmpty())
+                mainFileId = uploads.at(i).fileId;
+        }
+
+        if (canceled.load()) {
+            outcome.canceled = true;
+            return;
+        }
+
+        QMetaObject::invokeMethod(&progress, [&progress, uploads]() {
+            progress.setLabelText(QObject::tr("Finalizing upload..."));
+            progress.setValue(uploads.size() + 2);
+        }, Qt::QueuedConnection);
+
+        const auto completed = QtMeshCloudClient::completeUpload(
+            token,
+            ownerSlug,
+            projectSlug,
+            uploadedFileIds,
+            mainFileId);
+        if (!completed.ok) {
+            outcome.errorString = completed.errorString;
+            return;
+        }
+        outcome.ok = true;
+        outcome.scanStatus = completed.scanStatus;
+        outcome.fileIds = completed.fileIds;
+    });
+
+    QEventLoop loop;
+    connect(worker, &QThread::finished, &loop, &QEventLoop::quit);
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+    loop.exec();
+
+    progress.setValue(paths.size() + 3);
+    progress.close();
+
+    if (outcome.canceled || canceled.load())
+        return;
+    if (!outcome.ok) {
+        QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
+                             tr("Upload failed.\n\n%1").arg(outcome.errorString));
+        return;
+    }
+
+    statusBar()->showMessage(
+        tr("Uploaded %1 file(s) to QtMesh Cloud.").arg(outcome.fileIds.isEmpty() ? paths.size() : outcome.fileIds.size()),
+        5000);
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+                                  QStringLiteral("QtMesh Cloud project upload completed"));
+
+    QMessageBox done(this);
+    done.setIcon(QMessageBox::Information);
+    done.setWindowTitle(tr("QtMesh Cloud Upload"));
+    done.setText(tr("Uploaded %1 file(s) to QtMesh Cloud.").arg(outcome.fileIds.isEmpty() ? paths.size() : outcome.fileIds.size()));
+    if (!outcome.scanStatus.isEmpty())
+        done.setInformativeText(tr("Scan status: %1").arg(outcome.scanStatus));
+    QPushButton* openProjectButton = nullptr;
+    if (!project.projectUrl.isEmpty())
+        openProjectButton = done.addButton(tr("Open Project"), QMessageBox::AcceptRole);
+    done.addButton(QMessageBox::Ok);
+    done.exec();
+    if (openProjectButton && done.clickedButton() == openProjectButton)
+        QDesktopServices::openUrl(QUrl(project.projectUrl));
 }
 
 void MainWindow::setPlaying(bool playing)
