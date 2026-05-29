@@ -1433,10 +1433,27 @@ QJsonObject MCPServer::toolRetopologize(const QJsonObject &args)
     if (args.contains("shape_tol_deg"))   opts.shapeToleranceDeg  = args["shape_tol_deg"].toDouble(65.0);
     if (args.contains("max_aspect_ratio"))opts.maxAspectRatio     = args["max_aspect_ratio"].toDouble(6.0);
 
+    // Validate option ranges up front so caller bugs surface as
+    // clear usage errors rather than silent no-ops / confusing
+    // output from the algorithm.
+    if (opts.targetFaces != -1 && opts.targetFaces <= 0)
+        return makeErrorResult("Error: 'target_faces' must be -1 (unlimited) or a positive integer.");
+    if (opts.maxAngleDeg < 0.0 || opts.maxAngleDeg > 180.0)
+        return makeErrorResult("Error: 'max_angle_deg' must be in [0, 180].");
+    if (opts.shapeToleranceDeg < 0.0 || opts.shapeToleranceDeg > 90.0)
+        return makeErrorResult("Error: 'shape_tol_deg' must be in [0, 90].");
+    if (opts.maxAspectRatio < 1.0)
+        return makeErrorResult("Error: 'max_aspect_ratio' must be >= 1.");
+
+    // Use the resolved selection (matches `hasSelectedEntities()`
+    // above) so valid node / sub-entity selections aren't rejected
+    // by the raw-entity-count path.
     SelectionSet* sel = SelectionSet::getSingleton();
-    if (!sel || sel->getEntitiesCount() == 0)
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                              : QList<Ogre::Entity*>{};
+    if (resolved.isEmpty())
         return makeErrorResult("No selected entity.");
-    Ogre::Entity* entity = sel->getEntity(0);
+    Ogre::Entity* entity = resolved.first();
     if (!entity) return makeErrorResult("Selected entity is null.");
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.retopo"),

@@ -73,7 +73,7 @@ double interiorAngleDeg(const Vec3& a, const Vec3& b, const Vec3& c)
     const Vec3 ba = (a - b).normalized();
     const Vec3 bc = (c - b).normalized();
     const double d = std::clamp(ba.dot(bc), -1.0, 1.0);
-    return std::acos(d) * 180.0 / M_PI;
+    return std::acos(d) * 180.0 / Ogre::Math::PI;
 }
 
 // ─── Edge → adjacent triangle lookup ────────────────────────────────────────
@@ -108,25 +108,57 @@ struct CandidatePair {
     bool operator<(const CandidatePair& o) const { return score > o.score; }
 };
 
-// Given two triangles sharing the edge (sharedA, sharedB), find the
-// non-shared vertex of each triangle and emit the quad winding so the
-// quad goes (opposingA, sharedA, opposingB, sharedB) — i.e. opposite
-// corners of the diagonal we just removed.
+// Given two triangles sharing an edge whose endpoints are `e0` and
+// `e1` (undirected — `EdgeKey::make` returns `(min, max)`), find the
+// non-shared "opposing" vertex of each triangle and emit a quad
+// winding that preserves the source triangles' winding orientation.
+//
+// Convention: walk `tri0` in its own (CCW) order. If it goes through
+// the shared edge in the direction `e0 → e1`, then walking the quad
+// `[opposing0, e0, opposing1, e1]` (with `tri1` providing
+// `opposing1`) winds CCW. Otherwise the directed edge is `e1 → e0`
+// and the correct winding is `[opposing0, e1, opposing1, e0]`.
+//
+// This matters because the n-gon fan-triangulation in
+// `triangulateFaces` builds `[v0, v_i, v_{i+1}]`; if the winding is
+// flipped the resulting triangle normals are opposite the source
+// triangles' normals — every retopologized quad would render with
+// inverted normals (broken backface culling + lighting). Codex
+// review caught this on the merged commit; see GitHub PR #697.
 bool buildQuadWinding(const unsigned int* tri0,
                       const unsigned int* tri1,
-                      unsigned int sharedA, unsigned int sharedB,
+                      unsigned int e0, unsigned int e1,
                       unsigned int outQuad[4])
 {
     unsigned int opposing0 = ~0u, opposing1 = ~0u;
     for (int i = 0; i < 3; ++i) {
-        if (tri0[i] != sharedA && tri0[i] != sharedB) opposing0 = tri0[i];
-        if (tri1[i] != sharedA && tri1[i] != sharedB) opposing1 = tri1[i];
+        if (tri0[i] != e0 && tri0[i] != e1) opposing0 = tri0[i];
+        if (tri1[i] != e0 && tri1[i] != e1) opposing1 = tri1[i];
     }
     if (opposing0 == ~0u || opposing1 == ~0u) return false;
+
+    // Determine tri0's direction over the shared edge. If `tri0`
+    // contains the directed edge `e0 → e1` (i.e. `e1` immediately
+    // follows `e0` in winding order), then the quad winding starting
+    // from `opposing0` should pass through `e0` first, then
+    // `opposing1`, then `e1`.
+    bool sharedGoesE0toE1 = false;
+    for (int i = 0; i < 3; ++i) {
+        if (tri0[i] == e0 && tri0[(i + 1) % 3] == e1) {
+            sharedGoesE0toE1 = true;
+            break;
+        }
+    }
     outQuad[0] = opposing0;
-    outQuad[1] = sharedA;
-    outQuad[2] = opposing1;
-    outQuad[3] = sharedB;
+    if (sharedGoesE0toE1) {
+        outQuad[1] = e0;
+        outQuad[2] = opposing1;
+        outQuad[3] = e1;
+    } else {
+        outQuad[1] = e1;
+        outQuad[2] = opposing1;
+        outQuad[3] = e0;
+    }
     return true;
 }
 
@@ -140,7 +172,7 @@ double scoreCandidate(const float* positions,
 {
     // 1. Coplanarity check via normal angle.
     const double cosNormals = std::clamp(n0.dot(n1), -1.0, 1.0);
-    const double angleDeg = std::acos(cosNormals) * 180.0 / M_PI;
+    const double angleDeg = std::acos(cosNormals) * 180.0 / Ogre::Math::PI;
     if (angleDeg > opts.maxAngleDeg) return -1.0;
 
     const Vec3 p0 = Vec3::from(positions, quad[0]);
@@ -221,11 +253,28 @@ void retopologizeSubmesh(EditableSubMesh& sub,
         indices.push_back(t.indices[2]);
     }
 
-    // Run the pure-data pairing.
+    // Run the pure-data pairing. `globalRemainingTargetCount` is the
+    // remaining *reduction budget* (number of pair operations we can
+    // still spend across all submeshes), or -1 when unlimited.
+    //
+    // Convert that into a per-submesh `targetFaces` for the
+    // `retopologizeMesh` pure-data call. With unlimited budget we
+    // pass through `opts.targetFaces` unchanged (it'll be -1 too,
+    // signalling "no limit"). With a constrained budget, the
+    // per-submesh limit is `trianglesBefore - allowedReduction`,
+    // floored at `ceil(trianglesBefore / 2)` (every tri paired).
     std::vector<std::vector<unsigned int>> faces;
     QuadRetopoOptions perSub = opts;
-    if (opts.targetFaces > 0)
-        perSub.targetFaces = globalRemainingTargetCount;
+    if (globalRemainingTargetCount >= 0) {
+        const int floorFaces = (report.trianglesBefore + 1) / 2;
+        const int desiredFaces = report.trianglesBefore - globalRemainingTargetCount;
+        perSub.targetFaces = std::max(floorFaces, desiredFaces);
+    } else {
+        // Unlimited budget — the caller didn't set a target.
+        // `retopologizeMesh` treats `targetFaces <= 0` as "pair
+        // every viable candidate", which is what we want here.
+        perSub.targetFaces = -1;
+    }
 
     QuadRetopo::retopologizeMesh(positions.data(),
                                  static_cast<int>(sub.vertices.size()),
@@ -233,11 +282,10 @@ void retopologizeSubmesh(EditableSubMesh& sub,
                                  static_cast<int>(sub.triangles.size()),
                                  perSub, faces);
 
-    // Decrement the global target by what we used here. The retopo
-    // returned `faces.size()` faces; if the caller asked for a budget,
-    // we've consumed (originalTris - facesNow) units of pair budget
-    // and can stop pairing in later submeshes if we've hit the target.
-    if (opts.targetFaces > 0) {
+    // Decrement the global reduction budget by what we used. Each
+    // pair op reduces face count by 1, so `(trianglesBefore -
+    // facesNow)` units were consumed.
+    if (globalRemainingTargetCount >= 0) {
         const int reductionHere = report.trianglesBefore - static_cast<int>(faces.size());
         globalRemainingTargetCount = std::max(0,
             globalRemainingTargetCount - reductionHere);
@@ -332,41 +380,39 @@ QuadRetopoReport QuadRetopo::retopologizeMesh(const float* positions,
     std::sort(candidates.begin(), candidates.end());
 
     // 4. Greedy pair-up: claim each triangle at most once. Stop early
-    // if the caller specified a target face count and we've reached it.
+    // if the caller specified a target face count and we've reached
+    // it. Each winning pair stores its already-validated quad winding
+    // directly so the emit pass below is O(pairs.size()), not
+    // O(candidates × pairs).
     std::vector<char> claimed(triangleCount, 0);
-    std::vector<std::pair<int, int>> pairs;  // (triA, triB) → produces a quad
+    struct WinningPair {
+        int triA, triB;
+        unsigned int quad[4];
+    };
+    std::vector<WinningPair> pairs;
+    pairs.reserve(candidates.size());
     int facesNow = triangleCount;
     for (const auto& c : candidates) {
         if (opts.targetFaces > 0 && facesNow <= opts.targetFaces) break;
         if (claimed[c.triA] || claimed[c.triB]) continue;
         claimed[c.triA] = 1;
         claimed[c.triB] = 1;
-        pairs.emplace_back(c.triA, c.triB);
+        WinningPair wp;
+        wp.triA = c.triA;
+        wp.triB = c.triB;
+        wp.quad[0] = c.quad[0];
+        wp.quad[1] = c.quad[1];
+        wp.quad[2] = c.quad[2];
+        wp.quad[3] = c.quad[3];
+        pairs.push_back(wp);
         --facesNow;  // 2 tris → 1 quad
     }
 
-    // 5. Emit faces. Walk the candidate list again in best-score
-    // order so the quad windings match what scoreCandidate validated.
+    // 5. Emit winning quads (in score order — preserved by the order
+    // we accepted them above).
     outFaces.reserve(triangleCount - pairs.size());
-    std::vector<char> emitted(triangleCount, 0);
-    for (const auto& c : candidates) {
-        if (!claimed[c.triA] || !claimed[c.triB]) continue;
-        if (emitted[c.triA] || emitted[c.triB]) continue;
-        // Check this is one of the *winning* pairs (not just a
-        // candidate that happens to involve already-claimed tris).
-        bool isPair = false;
-        for (const auto& p : pairs) {
-            if ((p.first == c.triA && p.second == c.triB) ||
-                (p.first == c.triB && p.second == c.triA)) {
-                isPair = true;
-                break;
-            }
-        }
-        if (!isPair) continue;
-        outFaces.push_back({ c.quad[0], c.quad[1], c.quad[2], c.quad[3] });
-        emitted[c.triA] = 1;
-        emitted[c.triB] = 1;
-    }
+    for (const auto& p : pairs)
+        outFaces.push_back({ p.quad[0], p.quad[1], p.quad[2], p.quad[3] });
 
     // 6. Emit unpaired triangles.
     for (int t = 0; t < triangleCount; ++t) {
@@ -407,8 +453,20 @@ QuadRetopoReport QuadRetopo::retopologize(Ogre::Entity* entity,
         return report;
     }
 
-    int remainingTarget = opts.targetFaces;
     auto& subs = em.subMeshes();
+
+    // `opts.targetFaces` is a *total* (across-all-submeshes) target.
+    // Convert it into a global reduction budget: each pair op drops
+    // the total face count by one (2 tris → 1 quad), so we have
+    // (totalTris - targetFaces) pair operations to spend across all
+    // submeshes. `retopologizeSubmesh` consumes from this counter and
+    // also writes back the per-submesh face limit it actually used.
+    int totalTris = 0;
+    for (const auto& s : subs)
+        totalTris += static_cast<int>(s.triangles.size());
+    int remainingTarget = (opts.targetFaces > 0)
+        ? std::max(0, totalTris - opts.targetFaces)
+        : -1;  // -1 = unlimited budget (signalled by `opts.targetFaces <= 0`)
 
     for (size_t si = 0; si < subs.size(); ++si) {
         QuadRetopoSubmeshReport sub;

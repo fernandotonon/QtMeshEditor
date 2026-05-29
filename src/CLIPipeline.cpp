@@ -716,6 +716,12 @@ void CLIPipeline::printUsage()
         "                                    seam-split remap.\n"
         "  uv <file> --info [--json]         Report current UV channels + UV0 bounding-box coverage per\n"
         "                                    submesh without mutating the mesh.\n"
+        "  retopo <file> [--target-faces N] [--max-angle DEG] [--shape-tol DEG] [--max-aspect R] -o <out> [--json]\n"
+        "                                    Quad-dominant retopology via triangle pairing. Pairs adjacent\n"
+        "                                    triangles into convex quads where coplanarity + shape + aspect-ratio\n"
+        "                                    gates pass. Writes quads via the n-gon binding so the FBX / glTF\n"
+        "                                    exporter round-trips them. No new vertices are introduced — UVs\n"
+        "                                    and skin weights survive unchanged.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -6755,16 +6761,40 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
             outputPath = QString::fromLocal8Bit(argv[++i]); continue;
         }
         if (arg == "--target-faces" && i + 1 < argc) {
-            targetFaces = QString::fromLocal8Bit(argv[++i]).toInt(); continue;
+            bool ok = false;
+            const int v = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || v <= 0) {
+                err() << "Error: --target-faces must be a positive integer." << Qt::endl;
+                return 2;
+            }
+            targetFaces = v; continue;
         }
         if (arg == "--max-angle" && i + 1 < argc) {
-            maxAngleDeg = QString::fromLocal8Bit(argv[++i]).toDouble(); continue;
+            bool ok = false;
+            const double v = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
+            if (!ok || v < 0.0 || v > 180.0) {
+                err() << "Error: --max-angle must be a number in [0, 180]." << Qt::endl;
+                return 2;
+            }
+            maxAngleDeg = v; continue;
         }
         if (arg == "--shape-tol" && i + 1 < argc) {
-            shapeToleranceDeg = QString::fromLocal8Bit(argv[++i]).toDouble(); continue;
+            bool ok = false;
+            const double v = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
+            if (!ok || v < 0.0 || v > 90.0) {
+                err() << "Error: --shape-tol must be a number in [0, 90]." << Qt::endl;
+                return 2;
+            }
+            shapeToleranceDeg = v; continue;
         }
         if (arg == "--max-aspect" && i + 1 < argc) {
-            maxAspectRatio = QString::fromLocal8Bit(argv[++i]).toDouble(); continue;
+            bool ok = false;
+            const double v = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
+            if (!ok || v < 1.0) {
+                err() << "Error: --max-aspect must be a number >= 1." << Qt::endl;
+                return 2;
+            }
+            maxAspectRatio = v; continue;
         }
         if (!arg.startsWith("-") && inputPath.isEmpty()) {
             inputPath = arg; continue;
@@ -6797,6 +6827,13 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
     auto& entities = Manager::getSingleton()->getEntities();
     if (entities.isEmpty()) {
         err() << "Error: failed to load " << inputPath << Qt::endl; return 1;
+    }
+    if (entities.size() > 1) {
+        err() << "Error: " << inputPath
+              << " contains multiple mesh entities. `qtmesh retopo` "
+                 "currently supports one entity per file."
+              << Qt::endl;
+        return 1;
     }
     Ogre::Entity* entity = entities.first();
 

@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <vector>
 
 // Unit tests for the triangle-pairing quad retopology (issue #401).
@@ -52,6 +53,46 @@ TEST(QuadRetopoTest, PairsTwoCoplanarRightTrianglesIntoOneQuad)
     EXPECT_EQ(report.totalTrianglesAfterRetopo, 0);
     ASSERT_EQ(faces.size(), 1u);
     EXPECT_EQ(faces[0].size(), 4u);
+}
+
+TEST(QuadRetopoTest, EmittedQuadPreservesSourceTriangleWinding)
+{
+    // Regression test for Codex P1 review on PR #697: the original
+    // implementation used sorted edge endpoints `EdgeKey::make`
+    // when emitting quad windings, which inverted the quad's
+    // orientation for normally-wound input. Verify the emitted
+    // quad winds CCW when both source tris wind CCW.
+    //
+    // Source tris (both CCW from +Z view):
+    //   v0(0,0) - v1(1,0) - v2(1,1)   and
+    //   v0(0,0) - v2(1,1) - v3(0,1)
+    // Cross-product of any two consecutive emitted-quad edges
+    // should give +Z (positive Z component).
+    QuadRetopoOptions opts;
+    std::vector<std::vector<unsigned int>> faces;
+    auto report = QuadRetopo::retopologizeMesh(
+        kSquarePositions.data(), 4,
+        kSquareTriangles.data(), 2,
+        opts, faces);
+    ASSERT_TRUE(report.applied);
+    ASSERT_EQ(faces.size(), 1u);
+    ASSERT_EQ(faces[0].size(), 4u);
+
+    // For the emitted quad [a, b, c, d] (vertex indices), compute
+    // the cross product (b - a) x (c - a). Its z component should
+    // be positive for CCW winding when viewed from +Z.
+    const float* p = kSquarePositions.data();
+    auto vert = [&](unsigned int idx) {
+        return std::array<float, 3>{ p[3 * idx + 0], p[3 * idx + 1], p[3 * idx + 2] };
+    };
+    const auto a = vert(faces[0][0]);
+    const auto b = vert(faces[0][1]);
+    const auto c = vert(faces[0][2]);
+    const float bax = b[0] - a[0], bay = b[1] - a[1];
+    const float cax = c[0] - a[0], cay = c[1] - a[1];
+    const float crossZ = bax * cay - bay * cax;
+    EXPECT_GT(crossZ, 0.0f)
+        << "Emitted quad winding is flipped relative to source triangles.";
 }
 
 TEST(QuadRetopoTest, RejectsNonCoplanarTrianglesByDefault)

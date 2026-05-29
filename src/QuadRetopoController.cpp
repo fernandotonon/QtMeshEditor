@@ -51,14 +51,18 @@ QVariantMap QuadRetopoController::retopologizeSelected(int targetFaces,
 
     auto* sel = SelectionSet::getSingleton();
     if (!sel) {
-        emit error(QStringLiteral("No selection set."));
+        const auto msg = QStringLiteral("No selection set.");
+        emit error(msg);
         result["applied"] = false;
+        result["error"]   = msg;
         return result;
     }
     const auto entities = sel->getResolvedEntities();
     if (entities.isEmpty()) {
-        emit error(QStringLiteral("No mesh selected."));
+        const auto msg = QStringLiteral("No mesh selected.");
+        emit error(msg);
         result["applied"] = false;
+        result["error"]   = msg;
         return result;
     }
     Ogre::Entity* entity = entities.first();
