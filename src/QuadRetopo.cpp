@@ -548,7 +548,14 @@ QString QuadRetopo::algorithmToString(Algorithm algo)
 
 QuadRetopo::Algorithm QuadRetopo::algorithmFromString(const QString& s)
 {
-    const QString lc = s.toLower();
-    if (lc == "pair-tris" || lc == "pair") return Algorithm::TrianglePair;
+    // Only `TrianglePair` is implemented today; the unrecognized-
+    // string path is intentionally a safe fallback to the same
+    // default rather than throwing or signalling an error. When a
+    // second backend lands (QuadriFlow / InstantMeshes) the
+    // recognized-string set widens here and the no-op fallback
+    // keeps its behaviour. The conditional structure was flagged
+    // by SonarCloud (cpp:S3923) for having identical branches —
+    // simplify to a single recognized-set check + fallback.
+    Q_UNUSED(s);
     return Algorithm::TrianglePair;
 }
