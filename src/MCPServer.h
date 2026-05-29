@@ -140,6 +140,11 @@ private:
     QJsonObject toolListTextures(const QJsonObject &args);
     QJsonObject toolSetTexture(const QJsonObject &args);
     QJsonObject toolExportMesh(const QJsonObject &args);
+    /// xatlas-backed automatic UV unwrap on the currently selected
+    /// entity (issue #400). Writes non-overlapping UVs into the
+    /// chosen channel (default 0). Skin weights survive the seam
+    /// splits via xref remap.
+    QJsonObject toolAutoUvUnwrap(const QJsonObject &args);
     QJsonObject toolGetSceneInfo(const QJsonObject &args);
     QJsonObject toolTakeScreenshot(const QJsonObject &args);
     QJsonObject toolCreatePrimitive(const QJsonObject &args);

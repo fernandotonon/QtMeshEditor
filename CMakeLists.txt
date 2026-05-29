@@ -299,6 +299,26 @@ FetchContent_MakeAvailable(meshoptimizer)
 message(STATUS "meshoptimizer enabled (LOD, vertex cache, dedupe)")
 
 ##############################################################
+#  xatlas — automatic UV unwrapping. MIT, single .h + .cpp,
+#  used by Blender and Godot. Consumer: `qtmesh uv --unwrap`
+#  (issue #400 under the AI-Assist epic #397).
+##############################################################
+FetchContent_Declare(
+    xatlas
+    GIT_REPOSITORY https://github.com/jpcy/xatlas.git
+    GIT_TAG f700c7790aaa030e794b52ba7791a05c085faf0c  # latest master as of 2025-05; no tagged release upstream
+    GIT_SHALLOW FALSE
+)
+FetchContent_MakeAvailable(xatlas)
+# xatlas ships with no CMake config — wrap its `source/xatlas/xatlas.{h,cpp}` ourselves.
+if(NOT TARGET xatlas)
+    add_library(xatlas STATIC ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp)
+    target_include_directories(xatlas PUBLIC ${xatlas_SOURCE_DIR}/source/xatlas)
+    set_target_properties(xatlas PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+message(STATUS "xatlas enabled (auto UV unwrap)")
+
+##############################################################
 #  Sentry crash reporting and analytics
 ##############################################################
 option(ENABLE_SENTRY "Enable Sentry crash reporting and analytics" ON)

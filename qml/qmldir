@@ -7,6 +7,7 @@ TextureChannelPackerDialog 1.0 TextureChannelPackerDialog.qml
 NormalMapGeneratorDialog 1.0 NormalMapGeneratorDialog.qml
 TextureAtlasDialog 1.0 TextureAtlasDialog.qml
 ApplyAtlasDialog 1.0 ApplyAtlasDialog.qml
+UvUnwrapDialog 1.0 UvUnwrapDialog.qml
 MaterialListModal 1.0 MaterialListModal.qml
 ThemedButton 1.0 ThemedButton.qml
 ThemedCheckBox 1.0 ThemedCheckBox.qml

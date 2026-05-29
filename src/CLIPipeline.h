@@ -139,6 +139,13 @@ public:
     /// positions only.
     static int cmdVat(int argc, char* argv[]);
 
+    /// xatlas-backed automatic UV unwrap. `qtmesh uv mesh.fbx
+    /// --unwrap [--resolution N] [--padding P] [--channel C] -o
+    /// out.fbx` writes non-overlapping UVs into the chosen channel
+    /// (default 0) and exports. `--info [--json]` reports current
+    /// UV channels without mutating. Issue #400.
+    static int cmdUv(int argc, char* argv[]);
+
     /// List the morph targets / blend shapes on a mesh file. Slice A1
     /// surfaces a `--list` mode only; subsequent slices add `--set`,
     /// `--add`, `--delete` once the in-memory authoring path lands.

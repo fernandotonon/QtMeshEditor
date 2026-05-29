@@ -26,6 +26,7 @@
 #include "DrawCallAnalyzer.h"
 #include "VertexCacheOptimizer.h"
 #include "MeshDecimator.h"
+#include "UvUnwrap.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -548,6 +549,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("list_textures"), &MCPServer::toolListTextures},
         {QStringLiteral("set_texture"), &MCPServer::toolSetTexture},
         {QStringLiteral("export_mesh"), &MCPServer::toolExportMesh},
+        {QStringLiteral("auto_uv_unwrap"), &MCPServer::toolAutoUvUnwrap},
         {QStringLiteral("get_scene_info"), &MCPServer::toolGetSceneInfo},
         {QStringLiteral("take_screenshot"), &MCPServer::toolTakeScreenshot},
         {QStringLiteral("create_primitive"), &MCPServer::toolCreatePrimitive},
@@ -1370,6 +1372,48 @@ QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
         return makeErrorResult(QStringLiteral("Ogre error: %1")
             .arg(QString::fromStdString(e.getFullDescription())));
     }
+}
+
+QJsonObject MCPServer::toolAutoUvUnwrap(const QJsonObject &args)
+{
+    // Issue #400: xatlas-backed auto UV unwrap on the currently
+    // selected entity. Skin weights survive via xref remap.
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    UvUnwrapOptions opts;
+    if (args.contains("resolution")) opts.resolution = args["resolution"].toInt(1024);
+    if (args.contains("padding"))    opts.padding    = args["padding"].toInt(4);
+    if (args.contains("channel"))    opts.channel    = args["channel"].toInt(0);
+    if (args.contains("preserve_original"))
+        opts.preserveOriginalAsBackup = args["preserve_original"].toBool(true);
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel || sel->getEntitiesCount() == 0)
+        return makeErrorResult("No selected entity.");
+    Ogre::Entity* entity = sel->getEntity(0);
+    if (!entity) return makeErrorResult("Selected entity is null.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.uv_unwrap"),
+        QStringLiteral("auto_uv_unwrap entity=%1 res=%2 pad=%3 ch=%4")
+            .arg(QString::fromStdString(entity->getName()))
+            .arg(opts.resolution).arg(opts.padding).arg(opts.channel));
+
+    UvUnwrapReport report;
+    try {
+        report = UvUnwrap::unwrapEntity(entity, opts);
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
+
+    if (!report.applied) {
+        return makeErrorResult(QStringLiteral("UV unwrap failed: %1").arg(report.error));
+    }
+
+    QJsonObject result = makeSuccessResult(UvUnwrap::reportToText(report));
+    result["unwrap"] = UvUnwrap::reportToJson(report);
+    return result;
 }
 
 QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
@@ -5409,6 +5453,29 @@ QJsonArray MCPServer::buildToolsList()
             "Pass `rewrite: true` to actually reorder the index buffers (analysis-only otherwise). "
             "The response includes a human-readable summary in 'content' and a structured "
             "'vertexCache' object with per-submesh ACMR plus totals for machine consumers.",
+            props
+        );
+    }
+
+    // auto_uv_unwrap
+    {
+        QJsonObject props;
+        props["resolution"] = QJsonObject{{"type", "integer"},
+            {"description", "Atlas resolution in texels (xatlas hint). Default 1024."}};
+        props["padding"] = QJsonObject{{"type", "integer"},
+            {"description", "Texels of padding around each chart. Default 4 (safe up to MIP level 2)."}};
+        props["channel"] = QJsonObject{{"type", "integer"},
+            {"description", "UV channel to write the unwrap into. Default 0 (overwrites UV0). "
+                            "Pass 1 to keep UV0 and write a lightmap UV into UV1."}};
+        props["preserve_original"] = QJsonObject{{"type", "boolean"},
+            {"description", "When true (default), the original UV channel that's about to be "
+                            "overwritten is preserved on UV{channel+1}."}};
+        appendTool(
+            "auto_uv_unwrap",
+            "Auto UV-unwrap the selected entity via xatlas (the library Blender / Godot use). "
+            "Splits vertices along chart seams and writes non-overlapping UVs. Skin weights "
+            "survive the seam splits via xref remap. Response includes a structured 'unwrap' "
+            "object with atlas size, chart count, vertex count before / after, and utilization.",
             props
         );
     }
