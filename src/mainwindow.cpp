@@ -36,6 +36,7 @@
 #include "mainwindow.h"
 #include "AppConsoleLog.h"
 #include "AppSettingsKeys.h"
+#include "CloudCredentialStore.h"
 #include "ui_mainwindow.h"
 #include "OgreWidget.h"
 #include "QtInputManager.h"
@@ -135,7 +136,7 @@ QString storedCloudDisplayName()
     if (display.isEmpty())
         display = settings.value(AppSettingsKeys::cloudUserSlug()).toString().trimmed();
     if (display.isEmpty())
-        display = settings.value(AppSettingsKeys::cloudUserEmail()).toString().trimmed();
+        display = CloudCredentialStore::loadSession().email.trimmed();
     return display;
 }
 
@@ -2271,7 +2272,8 @@ const QPalette &MainWindow::darkPalette()
 void MainWindow::updateCloudAuthActions()
 {
     QSettings settings;
-    const bool signedIn = !settings.value(AppSettingsKeys::cloudToken()).toString().isEmpty();
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
+    const bool signedIn = CloudCredentialStore::hasSession();
     const QString display = storedCloudDisplayName();
     if (m_cloudSignInAction) {
         m_cloudSignInAction->setEnabled(!signedIn);
@@ -2339,12 +2341,23 @@ void MainWindow::signInToQtMeshCloud()
     for (int attempt = 0; attempt < maxAttempts && !progress.wasCanceled(); ++attempt) {
         const auto token = QtMeshCloudClient::pollDeviceToken(code.deviceCode);
         if (token.ok) {
+            CloudSession session;
+            session.token = token.token;
+            session.expiresAt = token.expiresAt;
+            session.email = token.user.value(QStringLiteral("email")).toString();
+            if (!CloudCredentialStore::saveSession(session)) {
+                progress.close();
+                QMessageBox::warning(this, tr("QtMesh Cloud Sign In"),
+                                     tr("Signed in, but the session could not be saved securely."));
+                return;
+            }
+
             QSettings settings;
-            settings.setValue(AppSettingsKeys::cloudToken(), token.token);
-            settings.setValue(AppSettingsKeys::cloudTokenExpiresAt(), token.expiresAt);
             settings.setValue(AppSettingsKeys::cloudUserName(), token.user.value(QStringLiteral("name")).toString());
-            settings.setValue(AppSettingsKeys::cloudUserEmail(), token.user.value(QStringLiteral("email")).toString());
             settings.setValue(AppSettingsKeys::cloudUserSlug(), token.user.value(QStringLiteral("slug")).toString());
+            settings.remove(AppSettingsKeys::cloudToken());
+            settings.remove(AppSettingsKeys::cloudTokenExpiresAt());
+            settings.remove(AppSettingsKeys::cloudUserEmail());
             settings.sync();
             updateCloudAuthActions();
             progress.close();
@@ -2389,11 +2402,13 @@ void MainWindow::signInToQtMeshCloud()
 
 void MainWindow::signOutOfQtMeshCloud()
 {
-    QSettings settings;
-    const QString token = settings.value(AppSettingsKeys::cloudToken()).toString();
+    const QString token = CloudCredentialStore::loadSession().token;
     if (!token.isEmpty())
         QtMeshCloudClient::logout(token, /*timeoutMs=*/10000);
 
+    CloudCredentialStore::clearSession();
+
+    QSettings settings;
     settings.remove(AppSettingsKeys::cloudToken());
     settings.remove(AppSettingsKeys::cloudTokenExpiresAt());
     settings.remove(AppSettingsKeys::cloudUserName());

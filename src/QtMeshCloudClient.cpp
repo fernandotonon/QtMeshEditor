@@ -402,9 +402,12 @@ QtMeshCloudClient::DeviceTokenResult QtMeshCloudClient::pollDeviceToken(const QS
 
     if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
         out.responseBodySnippet = trimSnippet(responseBody);
-        out.errorString = !out.errorCode.isEmpty()
-            ? out.errorCode
-            : (nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus));
+        if (!out.errorCode.isEmpty())
+            out.errorString = out.errorCode;
+        else if (nerr != QNetworkReply::NoError)
+            out.errorString = transportErr;
+        else
+            out.errorString = QStringLiteral("HTTP %1").arg(out.httpStatus);
         if (out.errorCode.isEmpty() && !out.responseBodySnippet.isEmpty())
             out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
         return out;
@@ -448,6 +451,9 @@ QtMeshCloudClient::CurrentUserResult QtMeshCloudClient::fetchCurrentUser(const Q
     req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
     req.setTransferTimeout(timeoutMs);
 
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+        QStringLiteral("QtMesh Cloud fetchCurrentUser: start"));
+
     QNetworkReply* reply = nam.get(req);
     QEventLoop loop;
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
@@ -464,16 +470,30 @@ QtMeshCloudClient::CurrentUserResult QtMeshCloudClient::fetchCurrentUser(const Q
         out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
         if (!out.responseBodySnippet.isEmpty())
             out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+            QStringLiteral("QtMesh Cloud fetchCurrentUser: failure %1").arg(out.errorString),
+            QStringLiteral("warning"));
         return out;
     }
 
     QJsonObject root;
-    if (!parseJsonObjectBody(responseBody, root, out.errorString))
+    if (!parseJsonObjectBody(responseBody, root, out.errorString)) {
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+            QStringLiteral("QtMesh Cloud fetchCurrentUser: failure %1").arg(out.errorString),
+            QStringLiteral("warning"));
         return out;
+    }
     out.user = root.value(QStringLiteral("user")).toObject();
     out.ok = !out.user.isEmpty();
-    if (!out.ok)
+    if (!out.ok) {
         out.errorString = QStringLiteral("response missing user");
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+            QStringLiteral("QtMesh Cloud fetchCurrentUser: failure %1").arg(out.errorString),
+            QStringLiteral("warning"));
+        return out;
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+        QStringLiteral("QtMesh Cloud fetchCurrentUser: ok"));
     return out;
 }
 
@@ -494,6 +514,9 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::logout(const QString& bearerT
     QNetworkAccessManager nam;
     QNetworkRequest req = authorizedJsonRequest(url, bearerToken, timeoutMs);
 
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+        QStringLiteral("QtMesh Cloud logout: start"));
+
     QNetworkReply* reply = nam.post(req, QByteArrayLiteral("{}"));
     QEventLoop loop;
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
@@ -511,6 +534,12 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::logout(const QString& bearerT
         out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
         if (!out.responseBodySnippet.isEmpty())
             out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+            QStringLiteral("QtMesh Cloud logout: failure %1").arg(out.errorString),
+            QStringLiteral("warning"));
+    } else {
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+            QStringLiteral("QtMesh Cloud logout: ok"));
     }
     return out;
 }
