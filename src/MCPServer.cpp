@@ -27,6 +27,7 @@
 #include "VertexCacheOptimizer.h"
 #include "MeshDecimator.h"
 #include "UvUnwrap.h"
+#include "QuadRetopo.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -550,6 +551,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("set_texture"), &MCPServer::toolSetTexture},
         {QStringLiteral("export_mesh"), &MCPServer::toolExportMesh},
         {QStringLiteral("auto_uv_unwrap"), &MCPServer::toolAutoUvUnwrap},
+        {QStringLiteral("retopologize"),   &MCPServer::toolRetopologize},
         {QStringLiteral("get_scene_info"), &MCPServer::toolGetSceneInfo},
         {QStringLiteral("take_screenshot"), &MCPServer::toolTakeScreenshot},
         {QStringLiteral("create_primitive"), &MCPServer::toolCreatePrimitive},
@@ -1413,6 +1415,49 @@ QJsonObject MCPServer::toolAutoUvUnwrap(const QJsonObject &args)
 
     QJsonObject result = makeSuccessResult(UvUnwrap::reportToText(report));
     result["unwrap"] = UvUnwrap::reportToJson(report);
+    return result;
+}
+
+QJsonObject MCPServer::toolRetopologize(const QJsonObject &args)
+{
+    // Issue #401: triangle-pairing quad retopology. Operates on the
+    // currently selected entity. The mesh is rewritten in place;
+    // exporters round-trip the new quads via the qtme.faces.<i>
+    // n-gon binding.
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    QuadRetopoOptions opts;
+    if (args.contains("target_faces"))    opts.targetFaces        = args["target_faces"].toInt(-1);
+    if (args.contains("max_angle_deg"))   opts.maxAngleDeg        = args["max_angle_deg"].toDouble(25.0);
+    if (args.contains("shape_tol_deg"))   opts.shapeToleranceDeg  = args["shape_tol_deg"].toDouble(65.0);
+    if (args.contains("max_aspect_ratio"))opts.maxAspectRatio     = args["max_aspect_ratio"].toDouble(6.0);
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel || sel->getEntitiesCount() == 0)
+        return makeErrorResult("No selected entity.");
+    Ogre::Entity* entity = sel->getEntity(0);
+    if (!entity) return makeErrorResult("Selected entity is null.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.retopo"),
+        QStringLiteral("retopologize entity=%1 target=%2 maxAngle=%3")
+            .arg(QString::fromStdString(entity->getName()))
+            .arg(opts.targetFaces).arg(opts.maxAngleDeg));
+
+    QuadRetopoReport report;
+    try {
+        report = QuadRetopo::retopologize(entity, opts);
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
+
+    if (!report.applied) {
+        return makeErrorResult(QStringLiteral("Quad retopology failed: %1").arg(report.error));
+    }
+
+    QJsonObject result = makeSuccessResult(QuadRetopo::reportToText(report));
+    result["retopo"] = QuadRetopo::reportToJson(report);
     return result;
 }
 
@@ -5476,6 +5521,36 @@ QJsonArray MCPServer::buildToolsList()
             "Splits vertices along chart seams and writes non-overlapping UVs. Skin weights "
             "survive the seam splits via xref remap. Response includes a structured 'unwrap' "
             "object with atlas size, chart count, vertex count before / after, and utilization.",
+            props
+        );
+    }
+
+    // retopologize
+    {
+        QJsonObject props;
+        props["target_faces"] = QJsonObject{{"type", "integer"},
+            {"description",
+             "Target face count. Triangle-pairing has a hard lower bound of ~50% of the "
+             "input triangle count (every triangle paired). Set to -1 (default) to pair "
+             "every viable candidate."}};
+        props["max_angle_deg"] = QJsonObject{{"type", "number"},
+            {"description",
+             "Maximum angle (degrees) between two adjacent triangle normals for them to "
+             "be considered for pairing. Lower = more curvature-preserving. Default 25."}};
+        props["shape_tol_deg"] = QJsonObject{{"type", "number"},
+            {"description",
+             "Maximum deviation (degrees) of each interior quad angle from 90. Default 65."}};
+        props["max_aspect_ratio"] = QJsonObject{{"type", "number"},
+            {"description",
+             "Maximum aspect ratio (longest edge / shortest edge) of an accepted quad. "
+             "Default 6."}};
+        appendTool(
+            "retopologize",
+            "Quad-dominant retopology of the selected mesh via triangle pairing. "
+            "Walks every interior edge whose two adjacent faces are triangles and scores "
+            "the merge by coplanarity + quad shape + aspect ratio; takes the best pairs "
+            "greedily. Output faces are committed via the qtme.faces.<i> n-gon binding so "
+            "FBX and glTF exporters round-trip the new quads. Issue #401.",
             props
         );
     }

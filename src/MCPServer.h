@@ -145,6 +145,11 @@ private:
     /// chosen channel (default 0). Skin weights survive the seam
     /// splits via xref remap.
     QJsonObject toolAutoUvUnwrap(const QJsonObject &args);
+    /// Issue #401: triangle-pairing quad retopology on the
+    /// currently selected entity. Pairs adjacent triangles into
+    /// convex quads when coplanarity + shape + aspect ratio gates
+    /// pass. Output is committed via the n-gon binding.
+    QJsonObject toolRetopologize(const QJsonObject &args);
     QJsonObject toolGetSceneInfo(const QJsonObject &args);
     QJsonObject toolTakeScreenshot(const QJsonObject &args);
     QJsonObject toolCreatePrimitive(const QJsonObject &args);

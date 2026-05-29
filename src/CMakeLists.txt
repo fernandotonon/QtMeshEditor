@@ -84,6 +84,8 @@ MeshOptimizerLod.cpp
 ExportOptimizer.cpp
 UvUnwrap.cpp
 UvUnwrapController.cpp
+QuadRetopo.cpp
+QuadRetopoController.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
@@ -198,6 +200,8 @@ MeshOptimizerLod.h
 ExportOptimizer.h
 UvUnwrap.h
 UvUnwrapController.h
+QuadRetopo.h
+QuadRetopoController.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h

@@ -3609,6 +3609,43 @@ Rectangle {
                 }
             }
 
+            // Issue #401: Quad retopology via triangle pairing.
+            // Operates on the currently selected entity, mutates the
+            // mesh in place via the qtme.faces.<i> n-gon binding.
+            Rectangle {
+                width: Math.min(parent.width - 16, retopoLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                opacity: QuadRetopoController.hasSelection ? 1.0 : 0.45
+                color: retopoMa.containsMouse && QuadRetopoController.hasSelection
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: retopoLabel
+                    anchors.centerIn: parent
+                    text: "Quad Retopology…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: retopoMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: QuadRetopoController.hasSelection
+                    cursorShape: QuadRetopoController.hasSelection
+                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                    onClicked: root.openQuadRetopoDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: QuadRetopoController.hasSelection
+                        ? "Pair adjacent triangles into quad-dominant topology. Skin weights survive (no new vertices)."
+                        : "Select a mesh first."
+                }
+            }
+
             // Slice I: Material Preview Environment — interactive
             // preview of the currently-selected material on Sphere/Cube
             // shapes. Drag horizontally on the thumbnail to rotate the
@@ -3841,6 +3878,23 @@ Rectangle {
             uvUnwrapLoader.active = true
         } else if (uvUnwrapLoader.item) {
             uvUnwrapLoader.item.open()
+        }
+    }
+
+    // Issue #401: triangle-pairing quad retopology dialog. Same
+    // lazy-load idiom as UvUnwrapDialog.
+    Loader {
+        id: quadRetopoLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/QuadRetopoDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+    function openQuadRetopoDialog() {
+        if (!quadRetopoLoader.active) {
+            quadRetopoLoader.active = true
+        } else if (quadRetopoLoader.item) {
+            quadRetopoLoader.item.open()
         }
     }
 

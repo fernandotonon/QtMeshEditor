@@ -146,6 +146,13 @@ public:
     /// UV channels without mutating. Issue #400.
     static int cmdUv(int argc, char* argv[]);
 
+    /// Quad retopology via triangle pairing. Walks every interior edge
+    /// whose two adjacent faces are triangles and scores the merge by
+    /// coplanarity + quad shape + aspect ratio; takes the best pairs
+    /// greedily. Output is committed via the n-gon binding so quads
+    /// round-trip through the FBX / glTF exporter. Issue #401.
+    static int cmdRetopo(int argc, char* argv[]);
+
     /// List the morph targets / blend shapes on a mesh file. Slice A1
     /// surfaces a `--list` mode only; subsequent slices add `--set`,
     /// `--add`, `--delete` once the in-memory authoring path lands.
