@@ -10,6 +10,7 @@
     <file alias="TextureAtlasDialog.qml">../qml/TextureAtlasDialog.qml</file>
     <file alias="ApplyAtlasDialog.qml">../qml/ApplyAtlasDialog.qml</file>
     <file alias="UvUnwrapDialog.qml">../qml/UvUnwrapDialog.qml</file>
+    <file alias="QuadRetopoDialog.qml">../qml/QuadRetopoDialog.qml</file>
     <file alias="qmldir">../qml/qmldir</file>
     <file alias="ThemedButton.qml">../qml/ThemedButton.qml</file>
     <file alias="ThemedCheckBox.qml">../qml/ThemedCheckBox.qml</file>

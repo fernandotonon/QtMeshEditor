@@ -174,6 +174,11 @@ qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilatio
 qtmesh uv model.fbx --unwrap -o unwrapped.glb               # overwrite UV0
 qtmesh uv model.fbx --unwrap --channel 1 -o lightmap.glb    # keep UV0, write UV1 (lightmap workflow)
 qtmesh uv model.fbx --info --json                           # report UV channels + coverage
+
+# Quad retopology (triangle-pairing — no new deps)
+qtmesh retopo model.fbx -o quads.glb                        # pair every viable triangle into quads
+qtmesh retopo model.fbx --target-faces 5000 -o lo.glb       # stop early once near target face count
+qtmesh retopo model.fbx --max-angle 15 -o conservative.glb  # tighter coplanarity gate
 ```
 
 ---

@@ -20,6 +20,7 @@
 #include "VertexCacheOptimizer.h"
 #include "ExportOptimizer.h"
 #include "UvUnwrap.h"
+#include "QuadRetopo.h"
 #include "MeshDecimator.h"
 #include "EditableMesh.h"
 #include "TexturePaintBuffer.h"
@@ -715,6 +716,12 @@ void CLIPipeline::printUsage()
         "                                    seam-split remap.\n"
         "  uv <file> --info [--json]         Report current UV channels + UV0 bounding-box coverage per\n"
         "                                    submesh without mutating the mesh.\n"
+        "  retopo <file> [--target-faces N] [--max-angle DEG] [--shape-tol DEG] [--max-aspect R] -o <out> [--json]\n"
+        "                                    Quad-dominant retopology via triangle pairing. Pairs adjacent\n"
+        "                                    triangles into convex quads where coplanarity + shape + aspect-ratio\n"
+        "                                    gates pass. Writes quads via the n-gon binding so the FBX / glTF\n"
+        "                                    exporter round-trips them. No new vertices are introduced — UVs\n"
+        "                                    and skin weights survive unchanged.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -1257,6 +1264,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "bake-vertex-colors") rc = cmdBakeVertexColors(argc, argv);
     else if (cmd == "vat") rc = cmdVat(argc, argv);
     else if (cmd == "uv") rc = cmdUv(argc, argv);
+    else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
     else if (cmd == "nodeanim") rc = cmdNodeAnim(argc, argv);
 
@@ -6729,6 +6737,130 @@ int CLIPipeline::cmdUv(int argc, char* argv[])
             QJsonDocument(UvUnwrap::reportToJson(report)).toJson(QJsonDocument::Indented)) + "\n");
     } else {
         cliWrite(UvUnwrap::reportToText(report)
+                 + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
+    }
+    return 0;
+}
+
+int CLIPipeline::cmdRetopo(int argc, char* argv[])
+{
+    // Parse: retopo <file> [--target-faces N] [--max-angle DEG]
+    //        [--shape-tol DEG] [--max-aspect R] -o <out> [--json]
+    QString inputPath, outputPath;
+    bool jsonOutput = false;
+    int targetFaces = -1;
+    double maxAngleDeg = 25.0;
+    double shapeToleranceDeg = 65.0;
+    double maxAspectRatio = 6.0;
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == "retopo" || arg == "--cli") continue;
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--target-faces" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || v <= 0) {
+                err() << "Error: --target-faces must be a positive integer." << Qt::endl;
+                return 2;
+            }
+            targetFaces = v; continue;
+        }
+        if (arg == "--max-angle" && i + 1 < argc) {
+            bool ok = false;
+            const double v = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
+            if (!ok || v < 0.0 || v > 180.0) {
+                err() << "Error: --max-angle must be a number in [0, 180]." << Qt::endl;
+                return 2;
+            }
+            maxAngleDeg = v; continue;
+        }
+        if (arg == "--shape-tol" && i + 1 < argc) {
+            bool ok = false;
+            const double v = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
+            if (!ok || v < 0.0 || v > 90.0) {
+                err() << "Error: --shape-tol must be a number in [0, 90]." << Qt::endl;
+                return 2;
+            }
+            shapeToleranceDeg = v; continue;
+        }
+        if (arg == "--max-aspect" && i + 1 < argc) {
+            bool ok = false;
+            const double v = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
+            if (!ok || v < 1.0) {
+                err() << "Error: --max-aspect must be a number >= 1." << Qt::endl;
+                return 2;
+            }
+            maxAspectRatio = v; continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) {
+            inputPath = arg; continue;
+        }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh retopo <file> [--target-faces N] "
+                 "[--max-angle DEG] [--shape-tol DEG] [--max-aspect R] -o <out> [--json]"
+              << Qt::endl;
+        return 2;
+    }
+    if (outputPath.isEmpty()) {
+        err() << "Error: -o <output> required." << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: file not found: " << inputPath << Qt::endl; return 1;
+    }
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.retopo"),
+        QString("retopo .%1 target=%2 maxAngle=%3")
+            .arg(fi.suffix()).arg(targetFaces).arg(maxAngleDeg));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        err() << "Error: failed to load " << inputPath << Qt::endl; return 1;
+    }
+    if (entities.size() > 1) {
+        err() << "Error: " << inputPath
+              << " contains multiple mesh entities. `qtmesh retopo` "
+                 "currently supports one entity per file."
+              << Qt::endl;
+        return 1;
+    }
+    Ogre::Entity* entity = entities.first();
+
+    QuadRetopoOptions opts;
+    opts.targetFaces        = targetFaces;
+    opts.maxAngleDeg        = maxAngleDeg;
+    opts.shapeToleranceDeg  = shapeToleranceDeg;
+    opts.maxAspectRatio     = maxAspectRatio;
+
+    const auto report = QuadRetopo::retopologize(entity, opts);
+    if (!report.applied) {
+        err() << "Error: retopology failed — " << report.error << Qt::endl;
+        return 1;
+    }
+
+    auto* node = entity->getParentSceneNode();
+    const QString fmt = formatForExtension(outputPath);
+    if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed." << Qt::endl;
+        return 1;
+    }
+
+    if (jsonOutput) {
+        cliWrite(QString::fromUtf8(
+            QJsonDocument(QuadRetopo::reportToJson(report)).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        cliWrite(QuadRetopo::reportToText(report)
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
     return 0;
