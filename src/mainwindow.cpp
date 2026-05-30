@@ -81,6 +81,7 @@
 #include "MeshValidator.h"
 #include "UvUnwrapController.h"
 #include "QuadRetopoController.h"
+#include "SkinWeightsController.h"
 #include "MaterialPresetLibrary.h"
 #include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
@@ -395,6 +396,7 @@ MainWindow::~MainWindow()
         MeshLodController::kill();
         UvUnwrapController::kill();
         QuadRetopoController::kill();
+        SkinWeightsController::kill();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
         MaterialPreviewRenderer::kill();
@@ -562,6 +564,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "QuadRetopoController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return QuadRetopoController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<SkinWeightsController>(
+            "PropertiesPanel", 1, 0, "SkinWeightsController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return SkinWeightsController::qmlInstance(engine, nullptr);
             });
         // Open the LOD export directory picker from MainWindow so the dialog has a
         // proper parent widget — QFileDialog invoked from a QML context doesn't

@@ -1469,6 +1469,45 @@ Rectangle {
                 }
             }
 
+            // Issue #402: Compute skin weights via inverse-distance.
+            // Lives in Edit Mode because it's a mesh-topology / rig
+            // setup operation (assigns each vertex to the K nearest
+            // bones), and it only makes sense on a skinned mesh —
+            // the button disables itself otherwise.
+            Rectangle {
+                width: Math.min(parent.width - 16, skinLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                opacity: SkinWeightsController.hasSkinnedSelection ? 1.0 : 0.45
+                color: skinMa.containsMouse && SkinWeightsController.hasSkinnedSelection
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: skinLabel
+                    anchors.centerIn: parent
+                    text: "Compute Skin Weights…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: skinMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: SkinWeightsController.hasSkinnedSelection
+                    cursorShape: SkinWeightsController.hasSkinnedSelection
+                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                    onClicked: root.openSkinWeightsDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: SkinWeightsController.hasSkinnedSelection
+                        ? "Compute per-vertex bone weights via inverse-distance to bone segments. Mesh must have a skeleton."
+                        : "Select a skinned mesh (with a skeleton) first."
+                }
+            }
+
             // Separator
             Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor }
 
@@ -3899,6 +3938,23 @@ Rectangle {
             quadRetopoLoader.active = true
         } else if (quadRetopoLoader.item) {
             quadRetopoLoader.item.open()
+        }
+    }
+
+    // Issue #402: inverse-distance skin weights dialog. Same lazy-
+    // load idiom as the sibling dialogs.
+    Loader {
+        id: skinWeightsLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/SkinWeightsDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+    function openSkinWeightsDialog() {
+        if (!skinWeightsLoader.active) {
+            skinWeightsLoader.active = true
+        } else if (skinWeightsLoader.item) {
+            skinWeightsLoader.item.open()
         }
     }
 
