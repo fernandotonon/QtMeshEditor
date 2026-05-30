@@ -169,6 +169,11 @@ qtmesh lod model.fbx --auto
 
 # Bake vertex colors → texture (with UV-seam dilation)
 qtmesh bake-vertex-colors model.fbx -o color_map.png --resolution 1024 --dilation 4
+
+# Auto UV unwrap (xatlas — same library Blender/Godot use)
+qtmesh uv model.fbx --unwrap -o unwrapped.glb               # overwrite UV0
+qtmesh uv model.fbx --unwrap --channel 1 -o lightmap.glb    # keep UV0, write UV1 (lightmap workflow)
+qtmesh uv model.fbx --info --json                           # report UV channels + coverage
 ```
 
 ---

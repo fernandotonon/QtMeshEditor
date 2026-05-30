@@ -28,6 +28,7 @@ const NAV = [
     { id: 'cmd-decimate', label: 'decimate' },
     { id: 'cmd-atlas', label: 'atlas' },
     { id: 'cmd-optimize', label: 'optimize' },
+    { id: 'cmd-uv', label: 'uv' },
   ]},
   { section: 'Scan Reference', items: [
     { id: 'scan-config', label: 'Configuration (qtmesh.yml)' },
@@ -922,6 +923,146 @@ Mesh Optimization
               <Code>target_tris</Code>, <Code>target_verts</Code>, <Code>simplify_*_tol</Code>).
               Response carries per-stage <Code>applied</Code>/<Code>summary</Code>/<Code>details</Code>
               plus <Code>inputBytes</Code>/<Code>outputBytes</Code>/<Code>bytesDelta</Code>.
+            </p>
+          </CmdSection>
+
+          <CmdSection id="cmd-uv" name="uv" description={<>Automatic UV unwrap via <a href="https://github.com/jpcy/xatlas" className={s.link}>xatlas</a> — the MIT library Blender and Godot use under the hood. Segments the mesh into <em>charts</em> (groups of connected faces with low distortion), parameterizes each chart to 2D, and packs them into a single rectangular atlas. Useful for lightmap baking (write to UV1), texture baking on photogrammetry / sculpted / procedural meshes that ship without UVs, repairing degenerate authored UVs, and atlasing assets so they can share a single texture binding (combine with <a href="#cmd-atlas" className={s.link}>qtmesh atlas</a>). Skin weights and other vertex attributes survive the seam-split remap.</>}
+            synopsis={`qtmesh uv <file> --info [--json]
+qtmesh uv <file> --unwrap -o <out>
+qtmesh uv <file> --unwrap --channel 1 -o lightmap.glb
+qtmesh uv <file> --unwrap --resolution 2048 --padding 4 -o out.glb`}
+            options={[
+              ['--info', 'Report current UV channels and UV0 bounding-box coverage per submesh. Does not modify the mesh. Pair with --json for machine-readable output.'],
+              ['--unwrap', 'Generate a non-overlapping atlas of UVs and write them into the target channel.'],
+              ['-o <output>', 'Output mesh file (required with --unwrap). Extension determines format: .glb / .gltf / .fbx / .mesh / .obj / .dae / .stl / .ply.'],
+              ['--resolution N', 'Atlas size hint (default 1024). xatlas estimates texels-per-world-unit to roughly match this.'],
+              ['--padding P', 'Texels of padding around each chart (default 4 — safe up to MIP level 2). Prevents MIP-mapped sampling from bleeding across chart boundaries.'],
+              ['--channel C', 'UV channel index to write into (default 0). Channel 0 overwrites the primary UV; 1+ keeps UV0 and writes into a higher channel (lightmap workflow).'],
+              ['--no-backup', 'Disable preserving the previous UV channel on UV{C+1} when overwriting. Default behavior preserves it so artistic UVs aren\'t lost.'],
+              ['--json', 'Emit the report as JSON instead of text.'],
+            ]}
+            examples={[
+              'qtmesh uv character.fbx --info --json',
+              'qtmesh uv photogrammetry_scan.obj --unwrap -o scan_with_uvs.glb',
+              'qtmesh uv level_geometry.fbx --unwrap --channel 1 --resolution 2048 -o level_lightmap.glb',
+              'qtmesh uv prop.glb --unwrap --resolution 512 --padding 2 -o prop_atlased.glb',
+            ]}
+          >
+            <h3 className={s.subsection}>What is this useful for?</h3>
+            <p className={s.para}>
+              UV unwrap solves a specific problem: <strong>you have a 3D model whose
+              UVs are missing, broken, or unsuitable for a particular workflow, and
+              you need clean non-overlapping UVs without doing the unwrap by hand
+              in Blender/Maya.</strong> Common reasons to reach for it:
+            </p>
+            <ul className={s.list}>
+              <li>
+                <strong>Lightmap baking (the most common reason).</strong> Real-time
+                engines (Unreal, Unity, Godot) bake static lighting into a texture
+                per object. That bake <em>requires</em> every triangle to occupy
+                its own unique patch of UV space — no overlaps, no mirroring —
+                because two triangles sharing a UV pixel would receive conflicting
+                light values. Almost no artist-authored UV0 satisfies this.
+                Workflow: <Code>--unwrap --channel 1</Code> → engine uses UV0 for
+                diffuse, UV1 for the lightmap.
+              </li>
+              <li>
+                <strong>Texture / AO / curvature baking.</strong> Bakers write pixels
+                into UV space — they need non-overlapping UVs to know which
+                triangle owns each pixel. Mirrored or overlapping authored UVs
+                (common for symmetric characters) make AO bake as garbage.
+              </li>
+              <li>
+                <strong>Imported assets with no UVs at all.</strong> Photogrammetry
+                meshes, ZBrush sculpts, raw CAD / STL / PLY files, procedurally
+                generated geometry. None of these have usable UVs out of the box;
+                unwrap gives you a starting point so you can texture them at all.
+              </li>
+              <li>
+                <strong>Broken UVs.</strong> FBX / glTF that came through a sketchy
+                pipeline (3D scanners, game-rip tools, old DAE exports) where UVs
+                are degenerate, all collapsed into one corner, or completely
+                scrambled.
+              </li>
+              <li>
+                <strong>Texture atlasing.</strong> Combining many small textures into
+                one big atlas for draw-call reduction (paired with{' '}
+                <a href="#cmd-atlas" className={s.link}>qtmesh atlas</a>). Each tile
+                needs its own UV region; unwrapping first guarantees that.
+              </li>
+              <li>
+                <strong>Mesh decimation cleanup.</strong> After heavy decimation, the
+                surviving UV islands may have ugly distortion or seams that no
+                longer make sense. Re-unwrapping gives clean topology-aware UVs for
+                the decimated result.
+              </li>
+              <li>
+                <strong>Quick texturing for prototypes.</strong> You just authored a
+                primitive or CSG shape in the editor and want to slap a texture on
+                it — auto-unwrap → texture → done.
+              </li>
+            </ul>
+            <p className={s.para}>
+              <strong>When NOT to use it.</strong> If an artist hand-painted onto
+              specific UV islands of UV0 (most game character diffuse maps),
+              auto-unwrap will discard their layout — the existing texture will
+              sample from random atlas tiles. For that case either unwrap into
+              UV1 (<Code>--channel 1</Code>, default <Code>--no-backup</Code> is off
+              so UV0 is preserved untouched), or bake a new texture against the
+              new UVs, or do the unwrap by hand in Blender where you can mark
+              seams manually.
+            </p>
+
+            <h3 className={s.subsection}>Example output</h3>
+            <CodeBlock>{`UV Unwrap
+=========
+Mesh:          Rumba Dancing
+Submeshes:     11
+Vertices:      5828 → 8423  (+2595 from seam splits)
+Triangles:     10220
+Atlas:         1246x1239
+Charts:        329
+Utilization:   75.7%
+Wrote: rumba_unwrapped.glb`}</CodeBlock>
+            <p className={s.para}>
+              <strong>Vertex count grows.</strong> xatlas splits vertices along chart
+              seams so each chart has its own copy of the seam edge with its own
+              UV — this is unavoidable (without splits the chart boundaries would
+              share UVs, defeating the point). The seam-split factor is typically
+              1.3x–1.5x for character meshes.
+            </p>
+            <p className={s.para}>
+              <strong>Utilization</strong> reports the fraction of the atlas image
+              that's covered by actual UV-space charts (the rest is padding +
+              dead area between charts). 70–80% is normal; xatlas's packer is
+              deterministic shelf bin-pack, not optimal.
+            </p>
+
+            <h3 className={s.subsection}>GUI workflow</h3>
+            <p className={s.para}>
+              Select a mesh entity, switch to <strong>Material Mode</strong>, click{' '}
+              <Code>Auto UV Unwrap…</Code> in the Mode Tools section, pick output
+              path + resolution / padding / channel, then click{' '}
+              <Code>Export Unwrapped</Code>. The result is written to a new file
+              — your on-screen mesh is left untouched. Open the exported file
+              to view the result alongside the original.
+            </p>
+            <p className={s.para}>
+              Why "export to file" instead of "apply in place"? Live skinned
+              meshes can't survive in-place vertex-data mutation while rendering:
+              the active SkeletonInstance caches the hardware blend buffer and
+              picks up stale state on the first frame after the swap. The dialog
+              snapshots the entity, runs the unwrap, exports, then restores the
+              live entity bit-identical to its pre-unwrap state.
+            </p>
+
+            <h3 className={s.subsection}>MCP</h3>
+            <p className={s.para}>
+              The <Code>auto_uv_unwrap</Code> tool takes <Code>file</Code> +{' '}
+              <Code>output</Code> plus <Code>resolution</Code> / <Code>padding</Code>{' '}
+              / <Code>channel</Code> / <Code>preserve_original</Code>. Returns a
+              structured <Code>unwrap</Code> object with atlas size, chart count,
+              vert count before/after, and utilization.
             </p>
           </CmdSection>
 

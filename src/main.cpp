@@ -92,7 +92,7 @@ int main(int argc, char *argv[])
                         || arg == "analyze" || arg == "vertex-cache"
                         || arg == "decimate" || arg == "atlas" || arg == "atlas-apply"
                         || arg == "optimize" || arg == "bake-vertex-colors"
-                        || arg == "vat" || arg == "morph" || arg == "nodeanim")
+                        || arg == "vat" || arg == "uv" || arg == "morph" || arg == "nodeanim")
                     cliMode = true;
                 break;  // first non-flag arg determines mode
             }

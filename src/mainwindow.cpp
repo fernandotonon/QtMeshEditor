@@ -79,6 +79,7 @@
 #include "MeshLodController.h"
 #include "MeshDecimatorController.h"
 #include "MeshValidator.h"
+#include "UvUnwrapController.h"
 #include "MaterialPresetLibrary.h"
 #include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
@@ -391,6 +392,7 @@ MainWindow::~MainWindow()
         AnimationControlController::kill();
         CurveEditModel::kill();
         MeshLodController::kill();
+        UvUnwrapController::kill();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
         MaterialPreviewRenderer::kill();
@@ -548,6 +550,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "MeshDecimatorController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MeshDecimatorController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<UvUnwrapController>(
+            "PropertiesPanel", 1, 0, "UvUnwrapController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return UvUnwrapController::qmlInstance(engine, nullptr);
             });
         // Open the LOD export directory picker from MainWindow so the dialog has a
         // proper parent widget — QFileDialog invoked from a QML context doesn't

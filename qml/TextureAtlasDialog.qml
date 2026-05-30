@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
 import MaterialEditorQML 1.0
@@ -439,14 +440,14 @@ Window {
                     label: "Apply to Mesh…"
                     Layout.preferredWidth: 120
                     onClicked: dialog.openApplyAtlasDialog()
-                    ToolTip.visible: applyBtnMa.containsMouse
-                    ToolTip.delay: 500
-                    ToolTip.text: "Consume the manifest above and apply it to a mesh: remap UV0 + rebind the diffuse texture."
                     MouseArea {
                         id: applyBtnMa
                         anchors.fill: parent
                         hoverEnabled: true
                         acceptedButtons: Qt.NoButton // tooltip-only; the InspectorButton's own MouseArea handles clicks
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: "Consume the manifest above and apply it to a mesh: remap UV0 + rebind the diffuse texture."
                     }
                 }
                 InspectorButton {

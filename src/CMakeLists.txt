@@ -82,6 +82,8 @@ MaterialPresetLibrary.cpp
 MeshLodController.cpp
 MeshOptimizerLod.cpp
 ExportOptimizer.cpp
+UvUnwrap.cpp
+UvUnwrapController.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
@@ -195,6 +197,8 @@ MaterialPresetLibrary.h
 MeshLodController.h
 MeshOptimizerLod.h
 ExportOptimizer.h
+UvUnwrap.h
+UvUnwrapController.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h
@@ -499,6 +503,7 @@ Qt::Quick
 Qt::QuickWidgets
 Qt::QuickControls2
 meshoptimizer
+xatlas
 )
 
 if(APPLE)
@@ -585,7 +590,7 @@ if(BUILD_TESTS)
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
-    meshoptimizer)
+    meshoptimizer xatlas)
 
     if(APPLE)
         target_link_libraries(UnitTests "-framework Security")
