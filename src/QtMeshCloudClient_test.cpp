@@ -180,6 +180,13 @@ TEST(QtMeshCloudClientCreateProject, MissingNameOrSlugReturnsErrorImmediately)
     EXPECT_TRUE(result.errorString.contains("name and slug", Qt::CaseInsensitive));
 }
 
+TEST(QtMeshCloudClientFetchProjects, MissingTokenReturnsErrorImmediately)
+{
+    auto result = QtMeshCloudClient::fetchProjects(QString(), /*timeoutMs=*/100);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.errorString.contains("missing bearer token", Qt::CaseInsensitive));
+}
+
 TEST(QtMeshCloudClientRequestUploadUrls, MissingTokenReturnsErrorImmediately)
 {
     QList<QtMeshCloudClient::AssetFileDescriptor> files;
@@ -206,7 +213,8 @@ TEST(QtMeshCloudClientUploadFileContent, IncompleteTargetReturnsErrorImmediately
 {
     QtMeshCloudClient::UploadTarget target;
     auto result = QtMeshCloudClient::uploadFileContent(QStringLiteral("token"), target,
-                                                       QStringLiteral("model.obj"), /*timeoutMs=*/100);
+                                                       QStringLiteral("model.obj"), nullptr,
+                                                       /*timeoutMs=*/100);
     EXPECT_FALSE(result.ok);
     EXPECT_TRUE(result.errorString.contains("upload target", Qt::CaseInsensitive));
 }

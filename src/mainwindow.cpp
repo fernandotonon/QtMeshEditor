@@ -2466,24 +2466,6 @@ void MainWindow::uploadFilesToQtMeshCloud()
     if (paths.isEmpty())
         return;
 
-    const QFileInfo firstFile(paths.first());
-    QString defaultName = paths.size() == 1
-        ? firstFile.completeBaseName()
-        : QFileInfo(firstFile.absolutePath()).fileName();
-    if (defaultName.trimmed().isEmpty())
-        defaultName = tr("QtMesh Project");
-
-    bool accepted = false;
-    const QString projectName = QInputDialog::getText(
-        this,
-        tr("QtMesh Cloud Upload"),
-        tr("Project name:"),
-        QLineEdit::Normal,
-        defaultName,
-        &accepted).trimmed();
-    if (!accepted || projectName.isEmpty())
-        return;
-
     const QString token = CloudCredentialStore::loadSession().token;
     if (token.isEmpty()) {
         QMessageBox::warning(this, tr("QtMesh Cloud Upload"), tr("The saved QtMesh Cloud session is empty. Sign in again."));
@@ -2491,28 +2473,131 @@ void MainWindow::uploadFilesToQtMeshCloud()
         return;
     }
 
-    QProgressDialog progress(tr("Creating cloud project..."), tr("Cancel"), 0, paths.size() + 3, this);
+    const QFileInfo firstFile(paths.first());
+    QString defaultProjectName = paths.size() == 1
+        ? firstFile.completeBaseName()
+        : QFileInfo(firstFile.absolutePath()).fileName();
+    if (defaultProjectName.trimmed().isEmpty())
+        defaultProjectName = tr("QtMesh Project");
+
+    QProgressDialog loadProjectsProgress(tr("Loading cloud projects..."), tr("Cancel"), 0, 0, this);
+    loadProjectsProgress.setWindowTitle(tr("QtMesh Cloud Upload"));
+    loadProjectsProgress.setWindowModality(Qt::WindowModal);
+    loadProjectsProgress.setMinimumDuration(0);
+    loadProjectsProgress.show();
+    const auto projectList = QtMeshCloudClient::fetchProjects(token);
+    loadProjectsProgress.close();
+    if (!projectList.ok) {
+        QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
+                             tr("Could not load your cloud projects.\n\n%1").arg(projectList.errorString));
+        return;
+    }
+
+    QtMeshCloudClient::ProjectResult project;
+    bool createNewProject = projectList.projects.isEmpty();
+
+    if (!createNewProject) {
+        QDialog picker(this);
+        picker.setWindowTitle(tr("QtMesh Cloud Upload"));
+        auto* layout = new QVBoxLayout(&picker);
+        auto* label = new QLabel(tr("Select a project to upload files to:"), &picker);
+        layout->addWidget(label);
+
+        auto* list = new QListWidget(&picker);
+        list->setSelectionMode(QAbstractItemView::SingleSelection);
+        for (const auto& summary : projectList.projects) {
+            const QString title = summary.name.isEmpty() ? summary.projectSlug : summary.name;
+            const QString subtitle = QStringLiteral("%1/%2").arg(summary.ownerSlug, summary.projectSlug);
+            auto* item = new QListWidgetItem(
+                subtitle == title ? title : QStringLiteral("%1\n%2").arg(title, subtitle),
+                list);
+            item->setData(Qt::UserRole, summary.id);
+            item->setData(Qt::UserRole + 1, summary.ownerSlug);
+            item->setData(Qt::UserRole + 2, summary.projectSlug);
+            item->setData(Qt::UserRole + 3, summary.projectUrl);
+            item->setToolTip(subtitle);
+        }
+        list->setCurrentRow(0);
+        layout->addWidget(list);
+
+        auto* buttons = new QHBoxLayout();
+        auto* newProjectButton = new QPushButton(tr("New Project..."), &picker);
+        auto* uploadButton = new QPushButton(tr("Upload"), &picker);
+        auto* cancelButton = new QPushButton(tr("Cancel"), &picker);
+        buttons->addWidget(newProjectButton);
+        buttons->addStretch();
+        buttons->addWidget(cancelButton);
+        buttons->addWidget(uploadButton);
+        layout->addLayout(buttons);
+        uploadButton->setDefault(true);
+
+        connect(cancelButton, &QPushButton::clicked, &picker, &QDialog::reject);
+        connect(newProjectButton, &QPushButton::clicked, &picker, [&createNewProject, &picker]() {
+            createNewProject = true;
+            picker.accept();
+        });
+        connect(uploadButton, &QPushButton::clicked, &picker, &QDialog::accept);
+        connect(list, &QListWidget::itemDoubleClicked, &picker, &QDialog::accept);
+        picker.resize(480, 320);
+
+        if (picker.exec() != QDialog::Accepted)
+            return;
+
+        if (!createNewProject) {
+            const QListWidgetItem* item = list->currentItem();
+            if (!item) {
+                QMessageBox::warning(this, tr("QtMesh Cloud Upload"), tr("Select a project to upload to."));
+                return;
+            }
+            project.ok = true;
+            project.projectId = item->data(Qt::UserRole).toString();
+            project.ownerSlug = item->data(Qt::UserRole + 1).toString();
+            project.projectSlug = item->data(Qt::UserRole + 2).toString();
+            project.projectUrl = item->data(Qt::UserRole + 3).toString();
+        }
+    }
+
+    if (createNewProject) {
+        bool accepted = false;
+        const QString projectName = QInputDialog::getText(
+            this,
+            tr("QtMesh Cloud Upload"),
+            tr("Project name:"),
+            QLineEdit::Normal,
+            defaultProjectName,
+            &accepted).trimmed();
+        if (!accepted || projectName.isEmpty())
+            return;
+
+        QProgressDialog createProgress(tr("Creating cloud project..."), tr("Cancel"), 0, 0, this);
+        createProgress.setWindowTitle(tr("QtMesh Cloud Upload"));
+        createProgress.setWindowModality(Qt::WindowModal);
+        createProgress.setMinimumDuration(0);
+        createProgress.show();
+
+        QString slug = CloudUploadPlanner::makeProjectSlug(projectName);
+        project = QtMeshCloudClient::createProject(token, projectName, slug);
+        if (!project.ok && project.httpStatus == 409) {
+            slug = CloudUploadPlanner::makeProjectSlug(
+                QStringLiteral("%1-%2")
+                    .arg(projectName,
+                         QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMddhhmmss"))));
+            project = QtMeshCloudClient::createProject(token, projectName, slug);
+        }
+        createProgress.close();
+        if (!project.ok) {
+            QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
+                                 tr("Could not create the cloud project.\n\n%1").arg(project.errorString));
+            return;
+        }
+    }
+
+    QProgressDialog progress(tr("Preparing upload..."), tr("Cancel"), 0, paths.size() + 2, this);
     progress.setWindowTitle(tr("QtMesh Cloud Upload"));
     progress.setWindowModality(Qt::WindowModal);
     progress.setMinimumDuration(0);
     progress.setValue(0);
     progress.show();
-
-    QString slug = CloudUploadPlanner::makeProjectSlug(projectName);
-    auto project = QtMeshCloudClient::createProject(token, projectName, slug);
-    if (!project.ok && project.httpStatus == 409) {
-        slug = QStringLiteral("%1-%2")
-            .arg(slug, QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMddhhmmss")));
-        project = QtMeshCloudClient::createProject(token, projectName, slug);
-    }
-    progress.setValue(1);
-    if (progress.wasCanceled())
-        return;
-    if (!project.ok) {
-        QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
-                             tr("Could not create the cloud project.\n\n%1").arg(project.errorString));
-        return;
-    }
 
     const auto descriptors = CloudUploadPlanner::buildAssetFileDescriptors(paths);
     progress.setLabelText(tr("Requesting upload URLs..."));
@@ -2521,7 +2606,7 @@ void MainWindow::uploadFilesToQtMeshCloud()
         project.ownerSlug,
         project.projectSlug,
         descriptors);
-    progress.setValue(2);
+    progress.setValue(1);
     if (progress.wasCanceled())
         return;
     if (!uploadUrls.ok) {
@@ -2542,6 +2627,7 @@ void MainWindow::uploadFilesToQtMeshCloud()
     QThread* worker = QThread::create([token, ownerSlug, projectSlug, descriptors, uploads, &progress, &outcome, &canceled]() {
         QStringList uploadedFileIds;
         QString mainFileId;
+        QString fallbackMainFileId;
         for (int i = 0; i < uploads.size(); ++i) {
             if (canceled.load()) {
                 outcome.canceled = true;
@@ -2551,21 +2637,30 @@ void MainWindow::uploadFilesToQtMeshCloud()
             const QString label = QObject::tr("Uploading %1...").arg(descriptors.at(i).uploadName);
             QMetaObject::invokeMethod(&progress, [label, i, &progress]() {
                 progress.setLabelText(label);
-                progress.setValue(i + 2);
+                progress.setValue(i + 1);
             }, Qt::QueuedConnection);
 
             const auto result = QtMeshCloudClient::uploadFileContent(
                 token,
                 uploads.at(i),
-                descriptors.at(i).path);
+                descriptors.at(i).path,
+                &canceled);
+            if (result.canceled) {
+                outcome.canceled = true;
+                return;
+            }
             if (!result.ok) {
                 outcome.errorString = result.errorString;
                 return;
             }
             uploadedFileIds.append(uploads.at(i).fileId);
-            if (mainFileId.isEmpty())
+            if (fallbackMainFileId.isEmpty())
+                fallbackMainFileId = uploads.at(i).fileId;
+            if (mainFileId.isEmpty() && descriptors.at(i).role == QLatin1String("model"))
                 mainFileId = uploads.at(i).fileId;
         }
+        if (mainFileId.isEmpty())
+            mainFileId = fallbackMainFileId;
 
         if (canceled.load()) {
             outcome.canceled = true;
@@ -2574,7 +2669,7 @@ void MainWindow::uploadFilesToQtMeshCloud()
 
         QMetaObject::invokeMethod(&progress, [&progress, uploads]() {
             progress.setLabelText(QObject::tr("Finalizing upload..."));
-            progress.setValue(uploads.size() + 2);
+            progress.setValue(uploads.size() + 1);
         }, Qt::QueuedConnection);
 
         const auto completed = QtMeshCloudClient::completeUpload(
@@ -2598,7 +2693,7 @@ void MainWindow::uploadFilesToQtMeshCloud()
     worker->start();
     loop.exec();
 
-    progress.setValue(paths.size() + 3);
+    progress.setValue(paths.size() + 2);
     progress.close();
 
     if (outcome.canceled || canceled.load())

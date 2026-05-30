@@ -5,6 +5,8 @@
 #include <QStringList>
 #include <QJsonObject>
 
+#include <atomic>
+
 /// HTTP client for QtMesh Cloud ingest API (remote rules + scan upload).
 class QtMeshCloudClient {
 public:
@@ -94,6 +96,25 @@ public:
         QString projectUrl;
     };
 
+    struct ProjectSummary {
+        QString id;
+        QString ownerSlug;
+        QString projectSlug;
+        QString name;
+        QString projectUrl;
+    };
+
+    struct ProjectsListResult {
+        bool ok = false;
+        int httpStatus = 0;
+        QString errorString;
+        QString responseBodySnippet;
+        QList<ProjectSummary> projects;
+    };
+
+    /// GET /v1/projects — lists cloud projects the authenticated user can access.
+    static ProjectsListResult fetchProjects(const QString& bearerToken, int timeoutMs = 30000);
+
     /// POST /v1/projects — creates a private cloud project owned by the authenticated user.
     static ProjectResult createProject(const QString& bearerToken,
                                        const QString& name,
@@ -139,6 +160,7 @@ public:
 
     struct FileUploadResult {
         bool ok = false;
+        bool canceled = false;
         int httpStatus = 0;
         QString errorString;
         QString responseBodySnippet;
@@ -150,6 +172,7 @@ public:
     static FileUploadResult uploadFileContent(const QString& bearerToken,
                                               const UploadTarget& target,
                                               const QString& localPath,
+                                              const std::atomic_bool* canceled = nullptr,
                                               int timeoutMs = 120000);
 
     struct CompleteUploadResult {

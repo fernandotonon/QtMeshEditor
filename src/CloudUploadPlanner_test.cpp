@@ -21,6 +21,16 @@ TEST(CloudUploadPlanner, TruncatesSlugWithoutTrailingDash)
     EXPECT_FALSE(slug.endsWith(QLatin1Char('-')));
 }
 
+TEST(CloudUploadPlanner, CollisionSuffixStaysWithinLimit)
+{
+    const QString longName = QStringLiteral(
+        "abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz");
+    const QString retrySlug = CloudUploadPlanner::makeProjectSlug(
+        QStringLiteral("%1-%2").arg(longName, QStringLiteral("20260529140530")));
+    EXPECT_LE(retrySlug.size(), 64);
+    EXPECT_FALSE(retrySlug.endsWith(QLatin1Char('-')));
+}
+
 TEST(CloudUploadPlanner, InfersKnownAssetRoles)
 {
     EXPECT_EQ(CloudUploadPlanner::inferAssetRole(QStringLiteral("model.FBX")), QStringLiteral("model"));
