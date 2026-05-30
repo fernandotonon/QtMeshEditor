@@ -595,7 +595,16 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
     if (!parseJsonObjectBody(responseBody, root, out.errorString))
         return out;
 
-    const QJsonArray projects = root.value(QStringLiteral("projects")).toArray();
+    const QJsonValue projectsValue = root.value(QStringLiteral("projects"));
+    if (!projectsValue.isArray()) {
+        out.errorString = QStringLiteral("response missing \"projects\" array");
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+            QStringLiteral("QtMesh Cloud fetchProjects: malformed response"),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    const QJsonArray projects = projectsValue.toArray();
     for (const QJsonValue& value : projects) {
         const QJsonObject project = value.toObject();
         ProjectSummary summary;
