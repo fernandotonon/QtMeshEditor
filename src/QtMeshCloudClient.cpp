@@ -11,6 +11,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QThread>
+#include <QTimer>
 #include <QUrl>
 
 namespace {
@@ -544,6 +545,88 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::logout(const QString& bearerT
     return out;
 }
 
+QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QString& bearerToken,
+                                                                       int timeoutMs)
+{
+    ProjectsListResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/projects"));
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+    req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
+    req.setTransferTimeout(timeoutMs);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+        QStringLiteral("QtMesh Cloud fetchProjects: start"));
+
+    QNetworkReply* reply = nam.get(req);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.responseBodySnippet = trimSnippet(responseBody);
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+            QStringLiteral("QtMesh Cloud fetchProjects: failure HTTP %1").arg(out.httpStatus),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    QJsonObject root;
+    if (!parseJsonObjectBody(responseBody, root, out.errorString))
+        return out;
+
+    const QJsonValue projectsValue = root.value(QStringLiteral("projects"));
+    if (!projectsValue.isArray()) {
+        out.errorString = QStringLiteral("response missing \"projects\" array");
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+            QStringLiteral("QtMesh Cloud fetchProjects: malformed response"),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    const QJsonArray projects = projectsValue.toArray();
+    for (const QJsonValue& value : projects) {
+        const QJsonObject project = value.toObject();
+        ProjectSummary summary;
+        summary.id = project.value(QStringLiteral("id")).toString();
+        summary.ownerSlug = project.value(QStringLiteral("ownerSlug")).toString();
+        summary.projectSlug = project.value(QStringLiteral("slug")).toString();
+        summary.name = project.value(QStringLiteral("name")).toString();
+        if (!summary.ownerSlug.isEmpty() && !summary.projectSlug.isEmpty()) {
+            summary.projectUrl = QStringLiteral("https://qtmesh.dev/%1/%2")
+                .arg(QString::fromUtf8(QUrl::toPercentEncoding(summary.ownerSlug)),
+                     QString::fromUtf8(QUrl::toPercentEncoding(summary.projectSlug)));
+        }
+        if (!summary.id.isEmpty() && !summary.ownerSlug.isEmpty() && !summary.projectSlug.isEmpty())
+            out.projects.append(summary);
+    }
+
+    out.ok = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+        QStringLiteral("QtMesh Cloud fetchProjects: ok count=%1").arg(out.projects.size()));
+    return out;
+}
+
 QtMeshCloudClient::ProjectResult QtMeshCloudClient::createProject(const QString& bearerToken,
                                                                   const QString& name,
                                                                   const QString& slug,
@@ -735,6 +818,7 @@ QtMeshCloudClient::FileUploadResult QtMeshCloudClient::uploadFileContent(
     const QString& bearerToken,
     const UploadTarget& target,
     const QString& localPath,
+    const std::atomic_bool* canceled,
     int timeoutMs)
 {
     FileUploadResult out;
@@ -750,6 +834,11 @@ QtMeshCloudClient::FileUploadResult QtMeshCloudClient::uploadFileContent(
     if (QCoreApplication::instance()
         && QThread::currentThread() == QCoreApplication::instance()->thread()) {
         out.errorString = QStringLiteral("uploadFileContent must run on a worker thread");
+        return out;
+    }
+    if (canceled && canceled->load()) {
+        out.canceled = true;
+        out.errorString = QStringLiteral("upload canceled");
         return out;
     }
 
@@ -785,14 +874,31 @@ QtMeshCloudClient::FileUploadResult QtMeshCloudClient::uploadFileContent(
 
     QNetworkReply* reply = nam.put(req, &file);
     QEventLoop loop;
+    QTimer cancelPoll;
+    if (canceled) {
+        cancelPoll.setInterval(100);
+        QObject::connect(&cancelPoll, &QTimer::timeout, &loop, [&]() {
+            if (canceled->load())
+                reply->abort();
+        });
+        cancelPoll.start();
+    }
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     loop.exec();
+    if (canceled)
+        cancelPoll.stop();
 
     out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const QByteArray responseBody = reply->readAll();
     const auto nerr = reply->error();
     const QString transportErr = reply->errorString();
     reply->deleteLater();
+
+    if (canceled && canceled->load()) {
+        out.canceled = true;
+        out.errorString = QStringLiteral("upload canceled");
+        return out;
+    }
 
     if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
         out.responseBodySnippet = trimSnippet(responseBody);
