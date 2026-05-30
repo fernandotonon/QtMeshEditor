@@ -39,6 +39,55 @@ Window {
         dialog.show()
         dialog.raise()
         dialog.requestActivate()
+        keyCapture.forceActiveFocus()
+    }
+
+    // Pulled out of the button's onClicked so the same flow runs
+    // whether triggered by mouse OR by Enter/Return at the Window
+    // level (keyboard accessibility for the modal dialog — see
+    // CodeRabbit review on PR #697).
+    function runRetopo() {
+        if (QuadRetopoController.busy) return
+        if (!QuadRetopoController.hasSelection) return
+        const r = QuadRetopoController.retopologizeSelected(
+            dialog.targetFaces,
+            dialog.maxAngleDeg,
+            dialog.shapeToleranceDeg,
+            dialog.maxAspectRatio)
+        if (r && r.applied) {
+            const dom = Math.round((r.quadDominance || 0) * 1000) / 10
+            dialog.lastStatus =
+                "Done: " + r.totalTrianglesBefore + " tris → "
+                + r.totalFacesAfter + " faces ("
+                + r.totalQuadsAfter + " quads, "
+                + r.totalTrianglesAfter + " tris, "
+                + dom + "% quad dominance)"
+            dialog.lastWasError = false
+        } else {
+            dialog.lastStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
+            dialog.lastWasError = true
+        }
+    }
+
+    // Window-level key handler — invisible Item that owns active
+    // focus when the dialog opens. Enter / Return runs the retopo,
+    // Escape closes the dialog. Without this, keyboard users
+    // couldn't drive the modal at all because InspectorButton
+    // doesn't accept tab focus (it's a Rectangle + MouseArea, not
+    // a QtQuick.Controls.Button).
+    Item {
+        id: keyCapture
+        anchors.fill: parent
+        focus: true
+        Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Escape) {
+                dialog.close()
+                event.accepted = true
+            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                dialog.runRetopo()
+                event.accepted = true
+            }
+        }
     }
 
     // ── Inline Inspector primitives ─────────────────────────────────
@@ -236,26 +285,7 @@ Window {
                 Layout.preferredWidth: 160
                 buttonEnabled: !QuadRetopoController.busy
                     && QuadRetopoController.hasSelection
-                onClicked: {
-                    const r = QuadRetopoController.retopologizeSelected(
-                        dialog.targetFaces,
-                        dialog.maxAngleDeg,
-                        dialog.shapeToleranceDeg,
-                        dialog.maxAspectRatio)
-                    if (r && r.applied) {
-                        const dom = Math.round((r.quadDominance || 0) * 1000) / 10
-                        dialog.lastStatus =
-                            "Done: " + r.totalTrianglesBefore + " tris → "
-                            + r.totalFacesAfter + " faces ("
-                            + r.totalQuadsAfter + " quads, "
-                            + r.totalTrianglesAfter + " tris, "
-                            + dom + "% quad dominance)"
-                        dialog.lastWasError = false
-                    } else {
-                        dialog.lastStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
-                        dialog.lastWasError = true
-                    }
-                }
+                onClicked: dialog.runRetopo()
             }
         }
     }

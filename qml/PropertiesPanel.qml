@@ -1431,6 +1431,47 @@ Rectangle {
             // Separator
             Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor }
 
+            // Issue #401: Quad retopology via triangle pairing. Lives
+            // in Edit Mode since this is a topology operation (turns
+            // pairs of triangles into quads via the n-gon binding) —
+            // not a material/texture operation.
+            Rectangle {
+                width: Math.min(parent.width - 16, retopoLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                opacity: QuadRetopoController.hasSelection ? 1.0 : 0.45
+                color: retopoMa.containsMouse && QuadRetopoController.hasSelection
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: retopoLabel
+                    anchors.centerIn: parent
+                    text: "Quad Retopology…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: retopoMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: QuadRetopoController.hasSelection
+                    cursorShape: QuadRetopoController.hasSelection
+                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                    onClicked: root.openQuadRetopoDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: QuadRetopoController.hasSelection
+                        ? "Pair adjacent triangles into quad-dominant topology. Skin weights survive (no new vertices)."
+                        : "Select a mesh first."
+                }
+            }
+
+            // Separator
+            Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor }
+
             // Mesh validation warnings
             Text {
                 width: parent.width - 16
@@ -3605,43 +3646,6 @@ Rectangle {
                     ToolTip.delay: 500
                     ToolTip.text: UvUnwrapController.hasSelection
                         ? "Generate non-overlapping UVs for the selected mesh via xatlas. Skin weights survive the seam splits."
-                        : "Select a mesh first."
-                }
-            }
-
-            // Issue #401: Quad retopology via triangle pairing.
-            // Operates on the currently selected entity, mutates the
-            // mesh in place via the qtme.faces.<i> n-gon binding.
-            Rectangle {
-                width: Math.min(parent.width - 16, retopoLabel.implicitWidth + 16)
-                height: 26
-                radius: 3
-                opacity: QuadRetopoController.hasSelection ? 1.0 : 0.45
-                color: retopoMa.containsMouse && QuadRetopoController.hasSelection
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
-
-                Text {
-                    id: retopoLabel
-                    anchors.centerIn: parent
-                    text: "Quad Retopology…"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                MouseArea {
-                    id: retopoMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    enabled: QuadRetopoController.hasSelection
-                    cursorShape: QuadRetopoController.hasSelection
-                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-                    onClicked: root.openQuadRetopoDialog()
-                    ToolTip.visible: containsMouse
-                    ToolTip.delay: 500
-                    ToolTip.text: QuadRetopoController.hasSelection
-                        ? "Pair adjacent triangles into quad-dominant topology. Skin weights survive (no new vertices)."
                         : "Select a mesh first."
                 }
             }
