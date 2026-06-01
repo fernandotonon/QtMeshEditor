@@ -73,6 +73,7 @@ commands/MorphCommands.cpp
 commands/NodeAnimCommands.cpp
 commands/PoseLibraryCommands.cpp
 commands/SkeletonResolver.cpp
+commands/ComputeSkinWeightsCommand.cpp
 BoneDragRelease.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp
@@ -86,6 +87,8 @@ UvUnwrap.cpp
 UvUnwrapController.cpp
 QuadRetopo.cpp
 QuadRetopoController.cpp
+SkinWeights.cpp
+SkinWeightsController.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
@@ -203,6 +206,8 @@ UvUnwrap.h
 UvUnwrapController.h
 QuadRetopo.h
 QuadRetopoController.h
+SkinWeights.h
+SkinWeightsController.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h

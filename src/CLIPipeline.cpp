@@ -21,6 +21,7 @@
 #include "ExportOptimizer.h"
 #include "UvUnwrap.h"
 #include "QuadRetopo.h"
+#include "SkinWeights.h"
 #include "MeshDecimator.h"
 #include "EditableMesh.h"
 #include "TexturePaintBuffer.h"
@@ -722,6 +723,11 @@ void CLIPipeline::printUsage()
         "                                    gates pass. Writes quads via the n-gon binding so the FBX / glTF\n"
         "                                    exporter round-trips them. No new vertices are introduced — UVs\n"
         "                                    and skin weights survive unchanged.\n"
+        "  skin <file> [--max-influences N] [--falloff F] [--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]\n"
+        "                                    Compute skin weights via inverse-distance heuristic (closest-point-on-\n"
+        "                                    bone smooth bind). Mesh must have a skeleton attached. Bones with no\n"
+        "                                    existing weights can be filtered with --skip-unweighted. --merge\n"
+        "                                    keeps existing weights instead of replacing them.\n"
         "  morph <file> --list [--json]      List morph targets / blend shapes on a mesh. (Set/add/delete\n"
         "                                    land in follow-up slices once authoring is in place.)\n"
         "  nodeanim <file> --list [--json]   List node-animation clips on a scene (props, doors, machinery,\n"
@@ -1265,6 +1271,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "vat") rc = cmdVat(argc, argv);
     else if (cmd == "uv") rc = cmdUv(argc, argv);
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
+    else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
     else if (cmd == "nodeanim") rc = cmdNodeAnim(argc, argv);
 
@@ -6861,6 +6868,136 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
             QJsonDocument(QuadRetopo::reportToJson(report)).toJson(QJsonDocument::Indented)) + "\n");
     } else {
         cliWrite(QuadRetopo::reportToText(report)
+                 + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
+    }
+    return 0;
+}
+
+int CLIPipeline::cmdSkin(int argc, char* argv[])
+{
+    // Parse: skin <file> [--max-influences N] [--falloff F]
+    //        [--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]
+    QString inputPath, outputPath;
+    bool jsonOutput = false;
+    int  maxInfluences = 4;
+    double falloff = 4.0;
+    double maxDistance = 0.5;
+    bool skipUnweighted = false;
+    bool replaceExisting = true;
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == "skin" || arg == "--cli") continue;
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if (arg == "--skip-unweighted") { skipUnweighted = true; continue; }
+        if (arg == "--merge") { replaceExisting = false; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--max-influences" && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || v < 1 || v > 8) {
+                err() << "Error: --max-influences must be in [1, 8]." << Qt::endl;
+                return 2;
+            }
+            maxInfluences = v; continue;
+        }
+        if (arg == "--falloff" && i + 1 < argc) {
+            bool ok = false;
+            const double v = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
+            if (!ok || v < 0.5 || v > 16.0) {
+                err() << "Error: --falloff must be in [0.5, 16]." << Qt::endl;
+                return 2;
+            }
+            falloff = v; continue;
+        }
+        if (arg == "--max-distance" && i + 1 < argc) {
+            bool ok = false;
+            const double v = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
+            if (!ok || v < 0.0 || v > 10.0) {
+                err() << "Error: --max-distance must be in [0, 10]." << Qt::endl;
+                return 2;
+            }
+            maxDistance = v; continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) {
+            inputPath = arg; continue;
+        }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh skin <file> [--max-influences N] [--falloff F] "
+                 "[--max-distance D] [--skip-unweighted] [--merge] -o <out> [--json]"
+              << Qt::endl;
+        return 2;
+    }
+    if (outputPath.isEmpty()) {
+        err() << "Error: -o <output> required." << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: file not found: " << inputPath << Qt::endl; return 1;
+    }
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin_weights"),
+        QString("skin .%1 maxInf=%2 falloff=%3")
+            .arg(fi.suffix()).arg(maxInfluences).arg(falloff));
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QString("Importing %1").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    // Filter to real Ogre::Entity objects — Manager::getEntities()
+    // can include helper ManualObjects, which would make a
+    // single-entity file look multi-entity (and cast wrong).
+    QList<Ogre::Entity*> meshEntities;
+    for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
+        if (e && e->getMovableType() == "Entity")
+            meshEntities.push_back(e);
+    }
+    if (meshEntities.isEmpty()) {
+        err() << "Error: failed to load " << inputPath << Qt::endl; return 1;
+    }
+    if (meshEntities.size() > 1) {
+        err() << "Error: " << inputPath
+              << " contains multiple mesh entities. `qtmesh skin` "
+                 "currently supports one entity per file."
+              << Qt::endl;
+        return 1;
+    }
+    Ogre::Entity* entity = meshEntities.first();
+
+    SkinWeightsOptions opts;
+    opts.maxInfluencesPerVertex = maxInfluences;
+    opts.falloff                = falloff;
+    opts.maxInfluenceDistance   = maxDistance;
+    opts.skipUnweightedBones    = skipUnweighted;
+    opts.replaceExisting        = replaceExisting;
+
+    const auto report = SkinWeights::computeAndApply(entity, opts);
+    if (!report.applied) {
+        err() << "Error: skin weights failed — " << report.error << Qt::endl;
+        return 1;
+    }
+
+    auto* node = entity->getParentSceneNode();
+    const QString fmt = formatForExtension(outputPath);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QString("Exporting %1").arg(QFileInfo(outputPath).absoluteFilePath()));
+    if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed." << Qt::endl;
+        return 1;
+    }
+
+    if (jsonOutput) {
+        cliWrite(QString::fromUtf8(
+            QJsonDocument(SkinWeights::reportToJson(report)).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        cliWrite(SkinWeights::reportToText(report)
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
     return 0;

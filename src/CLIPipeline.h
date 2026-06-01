@@ -153,6 +153,10 @@ public:
     /// round-trip through the FBX / glTF exporter. Issue #401.
     static int cmdRetopo(int argc, char* argv[]);
 
+    /// Compute skin weights for a mesh + skeleton via inverse-
+    /// distance heuristic. Issue #402.
+    static int cmdSkin(int argc, char* argv[]);
+
     /// List the morph targets / blend shapes on a mesh file. Slice A1
     /// surfaces a `--list` mode only; subsequent slices add `--set`,
     /// `--add`, `--delete` once the in-memory authoring path lands.

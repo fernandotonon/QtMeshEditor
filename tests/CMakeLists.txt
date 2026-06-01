@@ -106,6 +106,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/NodeAnimCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PoseLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/PoseLibraryCommands.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
@@ -118,6 +119,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrapController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopoController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeights.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrap.cpp

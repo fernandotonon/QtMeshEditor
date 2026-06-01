@@ -28,6 +28,7 @@
 #include "MeshDecimator.h"
 #include "UvUnwrap.h"
 #include "QuadRetopo.h"
+#include "SkinWeights.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -550,8 +551,9 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("list_textures"), &MCPServer::toolListTextures},
         {QStringLiteral("set_texture"), &MCPServer::toolSetTexture},
         {QStringLiteral("export_mesh"), &MCPServer::toolExportMesh},
-        {QStringLiteral("auto_uv_unwrap"), &MCPServer::toolAutoUvUnwrap},
-        {QStringLiteral("retopologize"),   &MCPServer::toolRetopologize},
+        {QStringLiteral("auto_uv_unwrap"),       &MCPServer::toolAutoUvUnwrap},
+        {QStringLiteral("retopologize"),         &MCPServer::toolRetopologize},
+        {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
         {QStringLiteral("get_scene_info"), &MCPServer::toolGetSceneInfo},
         {QStringLiteral("take_screenshot"), &MCPServer::toolTakeScreenshot},
         {QStringLiteral("create_primitive"), &MCPServer::toolCreatePrimitive},
@@ -1475,6 +1477,78 @@ QJsonObject MCPServer::toolRetopologize(const QJsonObject &args)
 
     QJsonObject result = makeSuccessResult(QuadRetopo::reportToText(report));
     result["retopo"] = QuadRetopo::reportToJson(report);
+    return result;
+}
+
+QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
+{
+    // Issue #402: inverse-distance skin weights for the currently
+    // selected entity. The entity's mesh must have a skeleton.
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    // Validate argument TYPES before reading. Qt's
+    // QJsonValue::toInt/toDouble/toBool silently return the default
+    // when the JSON type doesn't match (e.g. "falloff": "4" as a
+    // string, or "replace_existing": "false"), which would apply
+    // unintended settings instead of surfacing a usage error.
+    if (args.contains("max_influences") && !args["max_influences"].isDouble())
+        return makeErrorResult("Error: 'max_influences' must be a number.");
+    if (args.contains("falloff") && !args["falloff"].isDouble())
+        return makeErrorResult("Error: 'falloff' must be a number.");
+    if (args.contains("max_distance") && !args["max_distance"].isDouble())
+        return makeErrorResult("Error: 'max_distance' must be a number.");
+    if (args.contains("skip_unweighted") && !args["skip_unweighted"].isBool())
+        return makeErrorResult("Error: 'skip_unweighted' must be a boolean.");
+    if (args.contains("replace_existing") && !args["replace_existing"].isBool())
+        return makeErrorResult("Error: 'replace_existing' must be a boolean.");
+
+    SkinWeightsOptions opts;
+    if (args.contains("max_influences"))
+        opts.maxInfluencesPerVertex = args["max_influences"].toInt(4);
+    if (args.contains("falloff"))
+        opts.falloff = args["falloff"].toDouble(4.0);
+    if (args.contains("max_distance"))
+        opts.maxInfluenceDistance = args["max_distance"].toDouble(0.5);
+    if (args.contains("skip_unweighted"))
+        opts.skipUnweightedBones = args["skip_unweighted"].toBool(false);
+    if (args.contains("replace_existing"))
+        opts.replaceExisting = args["replace_existing"].toBool(true);
+
+    if (opts.maxInfluencesPerVertex < 1 || opts.maxInfluencesPerVertex > 8)
+        return makeErrorResult("Error: 'max_influences' must be in [1, 8].");
+    if (opts.falloff < 0.5 || opts.falloff > 16.0)
+        return makeErrorResult("Error: 'falloff' must be in [0.5, 16].");
+    if (opts.maxInfluenceDistance < 0.0 || opts.maxInfluenceDistance > 10.0)
+        return makeErrorResult("Error: 'max_distance' must be in [0, 10].");
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                              : QList<Ogre::Entity*>{};
+    if (resolved.isEmpty())
+        return makeErrorResult("No selected entity.");
+    Ogre::Entity* entity = resolved.first();
+    if (!entity) return makeErrorResult("Selected entity is null.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin_weights"),
+        QStringLiteral("compute_skin_weights entity=%1 maxInf=%2 falloff=%3")
+            .arg(QString::fromStdString(entity->getName()))
+            .arg(opts.maxInfluencesPerVertex).arg(opts.falloff));
+
+    SkinWeightsReport report;
+    try {
+        report = SkinWeights::computeAndApply(entity, opts);
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
+
+    if (!report.applied) {
+        return makeErrorResult(QStringLiteral("Skin weights failed: %1").arg(report.error));
+    }
+
+    QJsonObject result = makeSuccessResult(SkinWeights::reportToText(report));
+    result["skin"] = SkinWeights::reportToJson(report);
     return result;
 }
 
@@ -5538,6 +5612,39 @@ QJsonArray MCPServer::buildToolsList()
             "Splits vertices along chart seams and writes non-overlapping UVs. Skin weights "
             "survive the seam splits via xref remap. Response includes a structured 'unwrap' "
             "object with atlas size, chart count, vertex count before / after, and utilization.",
+            props
+        );
+    }
+
+    // compute_skin_weights
+    {
+        QJsonObject props;
+        props["max_influences"] = QJsonObject{{"type", "integer"},
+            {"description",
+             "Max bones each vertex is influenced by (hardware skinning convention 4). "
+             "Range [1, 8]. Default 4."}};
+        props["falloff"] = QJsonObject{{"type", "number"},
+            {"description",
+             "Inverse-distance exponent. Higher = sharper bind (more like rigid). "
+             "Range [0.5, 16]. Default 4.0."}};
+        props["max_distance"] = QJsonObject{{"type", "number"},
+            {"description",
+             "Bones farther than this fraction of the mesh diagonal are excluded. "
+             "Range [0, 10] (0 disables). Default 0.5."}};
+        props["skip_unweighted"] = QJsonObject{{"type", "boolean"},
+            {"description",
+             "When true, bones with no existing vertex assignments are filtered out "
+             "(useful for Mixamo helper bones). Default false."}};
+        props["replace_existing"] = QJsonObject{{"type", "boolean"},
+            {"description",
+             "When true (default), overwrite existing bone assignments. When false, "
+             "merge — keep existing weights and add new ones for unweighted vertices."}};
+        appendTool(
+            "compute_skin_weights",
+            "Compute and apply skin weights for the currently selected mesh against "
+            "its attached skeleton. Uses an inverse-distance heuristic (closest-point-"
+            "on-bone smooth bind) — the same approach Maya / 3dsMax use as their "
+            "default. The mesh must have a skeleton attached. Issue #402.",
             props
         );
     }

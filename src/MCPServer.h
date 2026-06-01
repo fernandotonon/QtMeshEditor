@@ -150,6 +150,9 @@ private:
     /// convex quads when coplanarity + shape + aspect ratio gates
     /// pass. Output is committed via the n-gon binding.
     QJsonObject toolRetopologize(const QJsonObject &args);
+    /// Issue #402: compute skin weights via inverse-distance
+    /// heuristic. Mesh must have a skeleton attached.
+    QJsonObject toolComputeSkinWeights(const QJsonObject &args);
     QJsonObject toolGetSceneInfo(const QJsonObject &args);
     QJsonObject toolTakeScreenshot(const QJsonObject &args);
     QJsonObject toolCreatePrimitive(const QJsonObject &args);
