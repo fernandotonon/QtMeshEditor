@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <QJsonObject>
+#include <QJsonArray>
+
 #include <vector>
 #include <cmath>
 
@@ -164,4 +167,181 @@ TEST(SkinWeightsTest, AlgorithmStringRoundTrip)
               SkinWeights::Algorithm::InverseDistance);
     EXPECT_EQ(SkinWeights::algorithmFromString("unknown-fallback"),
               SkinWeights::Algorithm::InverseDistance);
+}
+
+// ─── Edge cases ──────────────────────────────────────────────────────────────
+
+TEST(SkinWeightsTest, SingleBoneGetsFullWeight)
+{
+    // One bone, several verts — every vertex should be 100% bone 0.
+    std::vector<SkinWeights::BoneSegment> oneBone = {
+        { 0.0, 0.0, 0.0, 0.0, 3.0, 0.0 },
+    };
+    SkinWeightsOptions opts;
+    opts.maxInfluenceDistance = 0;  // no cap
+    std::vector<SkinWeights::VertexWeights> w;
+    ASSERT_TRUE(SkinWeights::computeWeights(
+        kBarPositions.data(), 4, oneBone, opts, w));
+    for (const auto& vw : w) {
+        ASSERT_EQ(vw.count, 1);
+        EXPECT_EQ(vw.boneIndices[0], 0);
+        EXPECT_NEAR(vw.weights[0], 1.0, 1e-9);
+    }
+}
+
+TEST(SkinWeightsTest, LeafBonePointDistanceWorks)
+{
+    // A bone with head == tail degenerates to point distance. Verify
+    // the vertex closest to the point gets the dominant weight.
+    std::vector<SkinWeights::BoneSegment> bones = {
+        { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },   // point at origin (leaf)
+        { 0.0, 3.0, 0.0, 0.0, 3.0, 0.0 },   // point at y=3 (leaf)
+    };
+    SkinWeightsOptions opts;
+    opts.maxInfluencesPerVertex = 2;
+    opts.maxInfluenceDistance   = 0;
+    std::vector<SkinWeights::VertexWeights> w;
+    ASSERT_TRUE(SkinWeights::computeWeights(
+        kBarPositions.data(), 4, bones, opts, w));
+    // Vertex 0 (y=0) closest to bone 0; vertex 3 (y=3) closest to bone 1.
+    EXPECT_EQ(w[0].boneIndices[0], 0);
+    EXPECT_EQ(w[3].boneIndices[0], 1);
+}
+
+TEST(SkinWeightsTest, VertexExactlyOnBoneDoesNotDivideByZero)
+{
+    // Vertex 0 sits exactly on bone 0's head. The eps in the
+    // inverse-distance formula must keep the weight finite and
+    // normalized — not NaN/Inf.
+    std::vector<SkinWeights::VertexWeights> w;
+    SkinWeightsOptions opts;
+    opts.maxInfluenceDistance = 0;
+    ASSERT_TRUE(SkinWeights::computeWeights(
+        kBarPositions.data(), 4, kTwoBones, opts, w));
+    for (const auto& vw : w) {
+        for (int i = 0; i < vw.count; ++i) {
+            EXPECT_TRUE(std::isfinite(vw.weights[i]))
+                << "weight is NaN/Inf — eps guard failed";
+        }
+    }
+}
+
+TEST(SkinWeightsTest, VertexOutsideAllRadiiPinsToBoneZero)
+{
+    // A lone vertex far from every bone, with a tight distance cap,
+    // should fall through to the "pin to bone 0, weight 1.0"
+    // fallback rather than ending up with zero influences (which
+    // would leave it static while the rig animates).
+    std::vector<float> farVert = { 1000.0f, 1000.0f, 1000.0f };
+    SkinWeightsOptions opts;
+    opts.maxInfluenceDistance = 0.01;  // tiny cap → excludes the bar bones
+    std::vector<SkinWeights::VertexWeights> w;
+    ASSERT_TRUE(SkinWeights::computeWeights(
+        farVert.data(), 1, kTwoBones, opts, w));
+    ASSERT_EQ(w.size(), 1u);
+    EXPECT_EQ(w[0].count, 1);
+    EXPECT_EQ(w[0].boneIndices[0], 0);
+    EXPECT_NEAR(w[0].weights[0], 1.0, 1e-9);
+}
+
+TEST(SkinWeightsTest, MaxInfluencesClampedToUpperBound)
+{
+    // Request more than the hard cap of 8 — should be clamped, not
+    // overflow the fixed-size VertexWeights arrays.
+    std::vector<SkinWeights::BoneSegment> bones;
+    for (int i = 0; i < 12; ++i) {
+        const double y = i * 0.25;
+        bones.push_back({ 0, y, 0, 0, y + 0.1, 0 });
+    }
+    SkinWeightsOptions opts;
+    opts.maxInfluencesPerVertex = 999;  // absurd — must clamp to 8
+    opts.maxInfluenceDistance   = 0;
+    std::vector<SkinWeights::VertexWeights> w;
+    ASSERT_TRUE(SkinWeights::computeWeights(
+        kBarPositions.data(), 4, bones, opts, w));
+    for (const auto& vw : w)
+        EXPECT_LE(vw.count, 8) << "influence count exceeded the hard cap of 8";
+}
+
+// ─── Report serialization ────────────────────────────────────────────────────
+
+TEST(SkinWeightsTest, ReportToJsonRoundTrip)
+{
+    SkinWeightsReport report;
+    report.meshName               = QStringLiteral("Hero");
+    report.skeletonName           = QStringLiteral("Hero.skeleton");
+    report.totalBones             = 30;
+    report.totalVerticesProcessed = 1200;
+    report.totalAssignmentsBefore = 0;
+    report.totalAssignmentsAfter  = 4800;
+    report.applied                = true;
+
+    SkinWeightsSubmeshReport sub;
+    sub.submeshIndex              = 0;
+    sub.verticesProcessed         = 1200;
+    sub.boneAssignmentsBefore     = 0;
+    sub.boneAssignmentsAfter      = 4800;
+    sub.verticesWithMaxInfluences = 1100;
+    report.submeshes.push_back(sub);
+
+    const auto json = SkinWeights::reportToJson(report);
+    EXPECT_EQ(json["meshName"].toString(), QStringLiteral("Hero"));
+    EXPECT_EQ(json["skeletonName"].toString(), QStringLiteral("Hero.skeleton"));
+    EXPECT_EQ(json["totalBones"].toInt(), 30);
+    EXPECT_EQ(json["totalVerticesProcessed"].toInt(), 1200);
+    EXPECT_EQ(json["totalAssignmentsAfter"].toInt(), 4800);
+    EXPECT_TRUE(json["applied"].toBool());
+    ASSERT_TRUE(json["submeshes"].isArray());
+    const auto subs = json["submeshes"].toArray();
+    ASSERT_EQ(subs.size(), 1);
+    EXPECT_EQ(subs[0].toObject()["verticesWithMaxInfluences"].toInt(), 1100);
+}
+
+TEST(SkinWeightsTest, ReportToJsonIncludesErrorOnFailure)
+{
+    SkinWeightsReport report;
+    report.applied = false;
+    report.error   = QStringLiteral("mesh has no skeleton attached");
+    const auto json = SkinWeights::reportToJson(report);
+    EXPECT_FALSE(json["applied"].toBool());
+    EXPECT_EQ(json["error"].toString(),
+              QStringLiteral("mesh has no skeleton attached"));
+}
+
+TEST(SkinWeightsTest, ReportToTextContainsKeyFields)
+{
+    SkinWeightsReport report;
+    report.meshName               = QStringLiteral("Hero");
+    report.skeletonName           = QStringLiteral("Hero.skeleton");
+    report.totalBones             = 30;
+    report.totalVerticesProcessed = 1200;
+    report.totalAssignmentsBefore = 100;
+    report.totalAssignmentsAfter  = 4800;
+    report.applied                = true;
+
+    const QString txt = SkinWeights::reportToText(report);
+    EXPECT_TRUE(txt.contains("Hero"));
+    EXPECT_TRUE(txt.contains("Hero.skeleton"));
+    EXPECT_TRUE(txt.contains("30"));
+    EXPECT_TRUE(txt.contains("1200"));
+    EXPECT_TRUE(txt.contains("100"));
+    EXPECT_TRUE(txt.contains("4800"));
+}
+
+TEST(SkinWeightsTest, FalloffClampedFromBelow)
+{
+    // A falloff below the 0.5 floor must not throw or produce
+    // garbage — computeWeights clamps it internally. Verify the
+    // result is still a valid normalized weight set.
+    SkinWeightsOptions opts;
+    opts.falloff = 0.0;  // below floor
+    opts.maxInfluenceDistance = 0;
+    std::vector<SkinWeights::VertexWeights> w;
+    ASSERT_TRUE(SkinWeights::computeWeights(
+        kBarPositions.data(), 4, kTwoBones, opts, w));
+    for (const auto& vw : w) {
+        double sum = 0.0;
+        for (int i = 0; i < vw.count; ++i) sum += vw.weights[i];
+        EXPECT_NEAR(sum, 1.0, 1e-6);
+    }
 }
