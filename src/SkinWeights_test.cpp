@@ -136,14 +136,18 @@ TEST(SkinWeightsTest, FalloffSharpensTheBind)
     optsLow.maxInfluencesPerVertex = 2;
     optsLow.falloff = 1.0;
     optsLow.maxInfluenceDistance = 0;
-    SkinWeights::computeWeights(kBarPositions.data(), 4, kTwoBones, optsLow, low);
+    ASSERT_TRUE(SkinWeights::computeWeights(
+        kBarPositions.data(), 4, kTwoBones, optsLow, low));
 
     SkinWeightsOptions optsHigh = optsLow;
     optsHigh.falloff = 8.0;
-    SkinWeights::computeWeights(kBarPositions.data(), 4, kTwoBones, optsHigh, high);
+    ASSERT_TRUE(SkinWeights::computeWeights(
+        kBarPositions.data(), 4, kTwoBones, optsHigh, high));
 
     // Vertex 1 sits at y=1 — equidistant-ish from both bones.
     // High falloff should drive its primary weight higher.
+    ASSERT_GE(low.size(), 2u);
+    ASSERT_GE(high.size(), 2u);
     ASSERT_GE(low[1].count, 1);
     ASSERT_GE(high[1].count, 1);
     EXPECT_GE(high[1].weights[0], low[1].weights[0])

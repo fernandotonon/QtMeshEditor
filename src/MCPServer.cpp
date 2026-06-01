@@ -1487,6 +1487,22 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
     if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
+    // Validate argument TYPES before reading. Qt's
+    // QJsonValue::toInt/toDouble/toBool silently return the default
+    // when the JSON type doesn't match (e.g. "falloff": "4" as a
+    // string, or "replace_existing": "false"), which would apply
+    // unintended settings instead of surfacing a usage error.
+    if (args.contains("max_influences") && !args["max_influences"].isDouble())
+        return makeErrorResult("Error: 'max_influences' must be a number.");
+    if (args.contains("falloff") && !args["falloff"].isDouble())
+        return makeErrorResult("Error: 'falloff' must be a number.");
+    if (args.contains("max_distance") && !args["max_distance"].isDouble())
+        return makeErrorResult("Error: 'max_distance' must be a number.");
+    if (args.contains("skip_unweighted") && !args["skip_unweighted"].isBool())
+        return makeErrorResult("Error: 'skip_unweighted' must be a boolean.");
+    if (args.contains("replace_existing") && !args["replace_existing"].isBool())
+        return makeErrorResult("Error: 'replace_existing' must be a boolean.");
+
     SkinWeightsOptions opts;
     if (args.contains("max_influences"))
         opts.maxInfluencesPerVertex = args["max_influences"].toInt(4);

@@ -6947,20 +6947,29 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.skin_weights"),
         QString("skin .%1 maxInf=%2 falloff=%3")
             .arg(fi.suffix()).arg(maxInfluences).arg(falloff));
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QString("Importing %1").arg(fi.absoluteFilePath()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
-    auto& entities = Manager::getSingleton()->getEntities();
-    if (entities.isEmpty()) {
+    // Filter to real Ogre::Entity objects — Manager::getEntities()
+    // can include helper ManualObjects, which would make a
+    // single-entity file look multi-entity (and cast wrong).
+    QList<Ogre::Entity*> meshEntities;
+    for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
+        if (e && e->getMovableType() == "Entity")
+            meshEntities.push_back(e);
+    }
+    if (meshEntities.isEmpty()) {
         err() << "Error: failed to load " << inputPath << Qt::endl; return 1;
     }
-    if (entities.size() > 1) {
+    if (meshEntities.size() > 1) {
         err() << "Error: " << inputPath
               << " contains multiple mesh entities. `qtmesh skin` "
                  "currently supports one entity per file."
               << Qt::endl;
         return 1;
     }
-    Ogre::Entity* entity = entities.first();
+    Ogre::Entity* entity = meshEntities.first();
 
     SkinWeightsOptions opts;
     opts.maxInfluencesPerVertex = maxInfluences;
@@ -6977,6 +6986,8 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
 
     auto* node = entity->getParentSceneNode();
     const QString fmt = formatForExtension(outputPath);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QString("Exporting %1").arg(QFileInfo(outputPath).absoluteFilePath()));
     if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
         err() << "Error: export failed." << Qt::endl;
         return 1;

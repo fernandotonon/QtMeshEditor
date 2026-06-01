@@ -83,13 +83,23 @@ Window {
         property string label: ""
         property bool buttonEnabled: true
         signal clicked()
+        // Keyboard accessibility: tabbable + Enter/Space activates.
+        activeFocusOnTab: buttonEnabled
+        Accessible.role: Accessible.Button
+        Accessible.name: btn.label
+        Keys.onSpacePressed: if (buttonEnabled) btn.clicked()
+        Keys.onReturnPressed: if (buttonEnabled) btn.clicked()
+        Keys.onEnterPressed: if (buttonEnabled) btn.clicked()
         height: 26
         radius: 3
         color: btnMa.containsMouse && buttonEnabled
             ? PropertiesPanelController.highlightColor
             : PropertiesPanelController.headerColor
-        border.color: PropertiesPanelController.borderColor
-        border.width: 1
+        // A subtle focus ring so keyboard users can see where they are.
+        border.color: btn.activeFocus
+            ? PropertiesPanelController.highlightColor
+            : PropertiesPanelController.borderColor
+        border.width: btn.activeFocus ? 2 : 1
         opacity: buttonEnabled ? 1.0 : 0.45
         Text {
             anchors.centerIn: parent
@@ -147,9 +157,18 @@ Window {
     }
 
     component InspectorCheckbox: Rectangle {
+        id: cb
         property string label: ""
         property bool checked: false
         signal toggled()
+        // Keyboard accessibility: tabbable + Enter/Space toggles.
+        activeFocusOnTab: true
+        Accessible.role: Accessible.CheckBox
+        Accessible.name: cb.label
+        Accessible.checked: cb.checked
+        Keys.onSpacePressed: cb.toggled()
+        Keys.onReturnPressed: cb.toggled()
+        Keys.onEnterPressed: cb.toggled()
         height: 16
         width: parent ? parent.width : 200
         color: "transparent"
@@ -159,21 +178,24 @@ Window {
                 width: 14; height: 14
                 radius: 2
                 color: PropertiesPanelController.inputColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
+                // Focus ring on the box itself when the checkbox has focus.
+                border.color: cb.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: cb.activeFocus ? 2 : 1
                 Text {
                     anchors.centerIn: parent
-                    text: parent.parent.parent.checked ? "✓" : ""
+                    text: cb.checked ? "✓" : ""
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 11
                 }
             }
-            InspectorLabel { text: parent.parent.label }
+            InspectorLabel { text: cb.label }
         }
         MouseArea {
             anchors.fill: parent
             cursorShape: Qt.PointingHandCursor
-            onClicked: parent.toggled()
+            onClicked: cb.toggled()
         }
     }
 

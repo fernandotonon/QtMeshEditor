@@ -95,7 +95,7 @@ qtmesh uv model.fbx --unwrap -o unwrapped.glb  # xatlas auto-UV unwrap (#400). N
 qtmesh uv model.fbx --unwrap --channel 1 --resolution 2048 -o lightmap.glb  # write into UV1 (lightmap workflow)
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `scan`, `material`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`, `uv`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `scan`, `material`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`, `uv`, `retopo`, `skin`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 

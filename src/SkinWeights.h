@@ -65,7 +65,9 @@ struct SkinWeightsOptions {
     // Skip bones with zero existing vertex weights when reading
     // back results? Mixamo skeletons ship dozens of helper bones
     // (twist bones, IK targets) that aren't actually skinned.
-    // When true, those bones are ignored. Default true.
+    // When true, those bones are ignored. Default false (consider
+    // every bone) — set true on Mixamo-style rigs to avoid spurious
+    // weight on helper bones.
     bool skipUnweightedBones = false;
 
     // When true (default), existing bone assignments are REPLACED.

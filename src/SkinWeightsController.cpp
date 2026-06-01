@@ -72,6 +72,18 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
         return result;
     }
     Ogre::Entity* entity = entities.first();
+    // `getResolvedEntities()` may return a stale / null first entry
+    // (e.g. selection resolved against an entity that was just
+    // destroyed). `hasSkinnedSelection()` already treats it as
+    // nullable; guard here too so we return a user-facing error
+    // instead of crashing on `entity->getName()` / computeAndApply.
+    if (!entity || !entity->getMesh()) {
+        const auto msg = QStringLiteral("Selected entity is no longer valid.");
+        emit error(msg);
+        result["applied"] = false;
+        result["error"]   = msg;
+        return result;
+    }
 
     SkinWeightsOptions opts;
     opts.maxInfluencesPerVertex = maxInfluencesPerVertex;
@@ -112,12 +124,20 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
     result["totalVerticesProcessed"] = report.totalVerticesProcessed;
     result["totalAssignmentsBefore"] = report.totalAssignmentsBefore;
     result["totalAssignmentsAfter"]  = report.totalAssignmentsAfter;
-    if (!report.error.isEmpty()) result["error"] = report.error;
 
-    if (report.applied) emit weightsApplied(result);
-    else                emit error(report.error.isEmpty()
-                                    ? QStringLiteral("Skin weights failed")
-                                    : report.error);
+    if (report.applied) {
+        emit weightsApplied(result);
+    } else {
+        // Always populate `error` in the result map, not just when
+        // the report carries one — otherwise SkinWeightsDialog's
+        // synchronous return path overwrites the emitted message
+        // with "unknown error".
+        const QString msg = report.error.isEmpty()
+            ? QStringLiteral("Skin weights failed")
+            : report.error;
+        result["error"] = msg;
+        emit error(msg);
+    }
 
     return result;
 }
