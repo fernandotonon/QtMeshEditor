@@ -98,6 +98,7 @@
 #include <QQuickWidget>
 #include <QQmlContext>
 #include <QToolButton>
+#include <QStyle>
 #include <QMenu>
 #include <QWidgetAction>
 #include <QSlider>
@@ -1981,6 +1982,8 @@ void MainWindow::initToolBar()
             this, refreshTopoButtons);
     connect(EditorModeController::instance(), &EditorModeController::modeChanged,
             this, &MainWindow::updateToolRailForMode);
+
+    setupCloudAccountStatusControl();
     updateToolRailForMode();
 
     connect(pAddCube,       SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createCube()));
@@ -2176,25 +2179,6 @@ void MainWindow::initToolBar()
         m_viewCubeController->setActiveWidget(mDockWidgetList.first()->getOgreWidget());
     m_viewCubeController->setVisible(true);
 
-    QMenu* cloudMenu = menuBar()->addMenu(tr("&Cloud"));
-    cloudMenu->setObjectName(QStringLiteral("menuCloud"));
-    m_cloudSignInAction = cloudMenu->addAction(tr("Sign in to QtMesh Cloud..."));
-    m_cloudSignInAction->setObjectName(QStringLiteral("actionQtMeshCloudSignIn"));
-    connect(m_cloudSignInAction, &QAction::triggered, this, &MainWindow::signInToQtMeshCloud);
-    m_cloudSignOutAction = cloudMenu->addAction(tr("Sign out"));
-    m_cloudSignOutAction->setObjectName(QStringLiteral("actionQtMeshCloudSignOut"));
-    connect(m_cloudSignOutAction, &QAction::triggered, this, &MainWindow::signOutOfQtMeshCloud);
-    cloudMenu->addSeparator();
-    m_cloudUploadFilesAction = cloudMenu->addAction(tr("Upload Files..."));
-    m_cloudUploadFilesAction->setObjectName(QStringLiteral("actionQtMeshCloudUploadFiles"));
-    connect(m_cloudUploadFilesAction, &QAction::triggered, this, &MainWindow::uploadFilesToQtMeshCloud);
-    m_cloudOpenDashboardAction = cloudMenu->addAction(tr("Open My Projects"));
-    m_cloudOpenDashboardAction->setObjectName(QStringLiteral("actionQtMeshCloudOpenProjects"));
-    connect(m_cloudOpenDashboardAction, &QAction::triggered, this, []() {
-        QDesktopServices::openUrl(QUrl(QStringLiteral(QTMESH_CLOUD_WEB_URL)));
-    });
-    updateCloudAuthActions();
-
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
     aiMenu->setObjectName("menuAI");
@@ -2308,20 +2292,103 @@ const QPalette &MainWindow::darkPalette()
     return (*darkPalette);
 }
 
+void MainWindow::setupCloudAccountStatusControl()
+{
+    m_cloudAccountMenu = new QMenu(this);
+    m_cloudAccountMenu->setObjectName(QStringLiteral("menuCloud"));
+
+    m_cloudAccountInfoAction = m_cloudAccountMenu->addAction(tr("Signed in"));
+    m_cloudAccountInfoAction->setObjectName(QStringLiteral("actionQtMeshCloudAccountInfo"));
+    m_cloudAccountInfoAction->setEnabled(false);
+    m_cloudAccountInfoSeparator = m_cloudAccountMenu->addSeparator();
+
+    m_cloudSignInAction = m_cloudAccountMenu->addAction(tr("Sign in to QtMesh Cloud..."));
+    m_cloudSignInAction->setObjectName(QStringLiteral("actionQtMeshCloudSignIn"));
+    connect(m_cloudSignInAction, &QAction::triggered, this, &MainWindow::signInToQtMeshCloud);
+
+    m_cloudSignOutAction = m_cloudAccountMenu->addAction(tr("Sign out"));
+    m_cloudSignOutAction->setObjectName(QStringLiteral("actionQtMeshCloudSignOut"));
+    connect(m_cloudSignOutAction, &QAction::triggered, this, &MainWindow::signOutOfQtMeshCloud);
+
+    m_cloudAccountMenu->addSeparator();
+
+    m_cloudUploadFilesAction = m_cloudAccountMenu->addAction(tr("Upload Files..."));
+    m_cloudUploadFilesAction->setObjectName(QStringLiteral("actionQtMeshCloudUploadFiles"));
+    connect(m_cloudUploadFilesAction, &QAction::triggered, this, &MainWindow::uploadFilesToQtMeshCloud);
+
+    m_cloudOpenDashboardAction = m_cloudAccountMenu->addAction(tr("Open My Projects"));
+    m_cloudOpenDashboardAction->setObjectName(QStringLiteral("actionQtMeshCloudOpenProjects"));
+    connect(m_cloudOpenDashboardAction, &QAction::triggered, this, []() {
+        QDesktopServices::openUrl(QUrl(QStringLiteral(QTMESH_CLOUD_WEB_URL)));
+    });
+
+    connect(m_cloudAccountMenu, &QMenu::aboutToShow, this, &MainWindow::updateCloudAuthActions);
+
+    // Push the account control to the bottom of the left objects toolbar (VS Code-style).
+    QWidget* toolbarStretch = new QWidget(ui->objectsToolbar);
+    toolbarStretch->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Expanding);
+    toolbarStretch->setMinimumSize(0, 0);
+    QAction* stretchAction = ui->objectsToolbar->addWidget(toolbarStretch);
+    stretchAction->setObjectName(QStringLiteral("modeAnyObjectsToolbarStretch"));
+
+    m_cloudAccountButton = new QToolButton(ui->objectsToolbar);
+    m_cloudAccountButton->setObjectName(QStringLiteral("cloudAccountButton"));
+    m_cloudAccountButton->setAutoRaise(true);
+    m_cloudAccountButton->setPopupMode(QToolButton::InstantPopup);
+    m_cloudAccountButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    m_cloudAccountButton->setMenu(m_cloudAccountMenu);
+
+    QIcon cloudIcon = QIcon::fromTheme(QStringLiteral("internet-services"));
+    if (cloudIcon.isNull())
+        cloudIcon = style()->standardIcon(QStyle::SP_DriveNetIcon);
+    m_cloudAccountButton->setIcon(cloudIcon);
+    m_cloudAccountButton->setStyleSheet(
+        QStringLiteral("QToolButton { padding: 4px; border: none; }"
+                       "QToolButton:hover { background: palette(midlight); }"
+                       "QToolButton:pressed { background: palette(mid); }"));
+
+    QAction* cloudAction = ui->objectsToolbar->addWidget(m_cloudAccountButton);
+    cloudAction->setObjectName(QStringLiteral("modeAnyCloudAccountAction"));
+    updateCloudAuthActions();
+}
+
 void MainWindow::updateCloudAuthActions()
 {
     QSettings settings;
     CloudCredentialStore::migrateLegacySettingsIfNeeded();
     const bool signedIn = CloudCredentialStore::hasSession();
     const QString display = storedCloudDisplayName();
-    if (m_cloudSignInAction) {
-        m_cloudSignInAction->setEnabled(!signedIn);
-        m_cloudSignInAction->setText(signedIn && !display.isEmpty()
-            ? tr("Signed in as %1").arg(display)
-            : tr("Sign in to QtMesh Cloud..."));
+
+    if (m_cloudAccountButton) {
+        if (signedIn && !display.isEmpty()) {
+            m_cloudAccountButton->setToolTip(
+                tr("Signed in as %1. Click for QtMesh Cloud account options.").arg(display));
+        } else {
+            m_cloudAccountButton->setToolTip(tr("QtMesh Cloud — click to sign in"));
+        }
     }
-    if (m_cloudSignOutAction)
+
+    if (m_cloudAccountInfoAction) {
+        if (signedIn) {
+            m_cloudAccountInfoAction->setText(display.isEmpty()
+                ? tr("Signed in")
+                : tr("Signed in as %1").arg(display));
+            m_cloudAccountInfoAction->setVisible(true);
+        } else {
+            m_cloudAccountInfoAction->setVisible(false);
+        }
+    }
+    if (m_cloudAccountInfoSeparator)
+        m_cloudAccountInfoSeparator->setVisible(signedIn);
+
+    if (m_cloudSignInAction) {
+        m_cloudSignInAction->setVisible(!signedIn);
+        m_cloudSignInAction->setEnabled(!signedIn);
+    }
+    if (m_cloudSignOutAction) {
+        m_cloudSignOutAction->setVisible(signedIn);
         m_cloudSignOutAction->setEnabled(signedIn);
+    }
     if (m_cloudUploadFilesAction)
         m_cloudUploadFilesAction->setEnabled(true);
     if (m_cloudOpenDashboardAction)

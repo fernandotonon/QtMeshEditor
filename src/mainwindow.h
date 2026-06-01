@@ -26,6 +26,7 @@ class QPlainTextEdit;
 class QLabel;
 class QToolBar;
 class QAction;
+class QToolButton;
 class OgreWidget;
 
 namespace Ui {
@@ -190,6 +191,10 @@ private:
     QToolBar* m_modeBarShell = nullptr;
     QToolBar* m_topBarStretch = nullptr;
     QQuickWidget* m_modeBar = nullptr;
+    QToolButton* m_cloudAccountButton = nullptr;
+    QMenu* m_cloudAccountMenu = nullptr;
+    QAction* m_cloudAccountInfoAction = nullptr;
+    QAction* m_cloudAccountInfoSeparator = nullptr;
     QAction* m_cloudSignInAction = nullptr;
     QAction* m_cloudSignOutAction = nullptr;
     QAction* m_cloudUploadFilesAction = nullptr;
@@ -224,6 +229,7 @@ private:
     void showBottomToolDock(QDockWidget* dock);
     void tabifyBottomToolDocks();
     void updateToolRailForMode();
+    void setupCloudAccountStatusControl();
     void updateCloudAuthActions();
 };
 
