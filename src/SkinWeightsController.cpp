@@ -2,6 +2,8 @@
 #include "SkinWeights.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
+#include "UndoManager.h"
+#include "commands/ComputeSkinWeightsCommand.h"
 
 #include <Ogre.h>
 #include <OgreEntity.h>
@@ -84,6 +86,16 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
         result["error"]   = msg;
         return result;
     }
+    // Pre-check the skeleton here so a skeleton-less mesh fails
+    // cleanly WITHOUT leaving a no-op entry on the undo stack
+    // (QUndoStack::push runs the command's redo() unconditionally).
+    if (!entity->getMesh()->getSkeleton()) {
+        const auto msg = QStringLiteral("Mesh has no skeleton attached.");
+        emit error(msg);
+        result["applied"] = false;
+        result["error"]   = msg;
+        return result;
+    }
 
     SkinWeightsOptions opts;
     opts.maxInfluencesPerVertex = maxInfluencesPerVertex;
@@ -103,7 +115,16 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
 
     SkinWeightsReport report;
     try {
-        report = SkinWeights::computeAndApply(entity, opts);
+        // Run through an undo command so the auto-skin can be
+        // reverted with Ctrl+Z. The command snapshots the pre-skin
+        // bone assignments, runs `computeAndApply` on its first
+        // redo, and restores the snapshot on undo. We construct it,
+        // push it (which executes redo() synchronously), then read
+        // the report it captured.
+        auto* cmd = new ComputeSkinWeightsCommand(
+            entity->getName(), opts);
+        UndoManager::getSingleton()->push(cmd);
+        report = cmd->report();
     } catch (const Ogre::Exception& e) {
         m_busy = false;
         emit busyChanged();

@@ -73,6 +73,7 @@ commands/MorphCommands.cpp
 commands/NodeAnimCommands.cpp
 commands/PoseLibraryCommands.cpp
 commands/SkeletonResolver.cpp
+commands/ComputeSkinWeightsCommand.cpp
 BoneDragRelease.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp

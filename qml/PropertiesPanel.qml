@@ -301,6 +301,22 @@ Rectangle {
                 Component.onCompleted: content = animationModeToolsComponent
             }
 
+            // ---- Skinning (Animation mode) ----
+            // Issue #402: auto skin weights. Surfaced in Animation
+            // Mode because skinning governs how the mesh deforms
+            // under animation — it's a rigging step, not a mesh-topology
+            // edit. Only meaningful on a skinned (skeleton-bearing)
+            // mesh; the button inside disables itself otherwise.
+            CollapsibleSection {
+                title: "Skinning"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.AnimationMode,
+                    PropertiesPanelController.hasAnimations)
+                expanded: false
+
+                Component.onCompleted: content = skinningToolsComponent
+            }
+
             // ---- Texture Paint (Material mode) ----
             // (Brush color/radius/strength/falloff live on the toolbar
             //  paint-brush popup. The Inspector panel keeps only the
@@ -1092,6 +1108,64 @@ Rectangle {
         }
     }
 
+    // ---- Skinning Tools Content (Animation mode) ----
+    // Issue #402: auto skin weights. The "Compute Skin Weights…"
+    // button opens the dialog; it disables on static meshes
+    // (no skeleton). The operation is undoable (Ctrl+Z).
+    Component {
+        id: skinningToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Auto-generate per-vertex bone weights for the selected "
+                    + "skinned mesh (inverse-distance smooth bind). Undoable."
+            }
+
+            Rectangle {
+                width: Math.min(parent.width - 16, skinLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                opacity: SkinWeightsController.hasSkinnedSelection ? 1.0 : 0.45
+                color: skinMa.containsMouse && SkinWeightsController.hasSkinnedSelection
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: skinLabel
+                    anchors.centerIn: parent
+                    text: "Compute Skin Weights…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: skinMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: SkinWeightsController.hasSkinnedSelection
+                    cursorShape: SkinWeightsController.hasSkinnedSelection
+                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                    onClicked: root.openSkinWeightsDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: SkinWeightsController.hasSkinnedSelection
+                        ? "Compute per-vertex bone weights via inverse-distance to bone segments. Mesh must have a skeleton."
+                        : "Select a skinned mesh (with a skeleton) first."
+                }
+            }
+        }
+    }
+
     // ---- Edit Mode Tools Content ----
     Component {
         id: editModeToolsComponent
@@ -1466,45 +1540,6 @@ Rectangle {
                     ToolTip.text: QuadRetopoController.hasSelection
                         ? "Pair adjacent triangles into quad-dominant topology. Skin weights survive (no new vertices)."
                         : "Select a mesh first."
-                }
-            }
-
-            // Issue #402: Compute skin weights via inverse-distance.
-            // Lives in Edit Mode because it's a mesh-topology / rig
-            // setup operation (assigns each vertex to the K nearest
-            // bones), and it only makes sense on a skinned mesh —
-            // the button disables itself otherwise.
-            Rectangle {
-                width: Math.min(parent.width - 16, skinLabel.implicitWidth + 16)
-                height: 26
-                radius: 3
-                opacity: SkinWeightsController.hasSkinnedSelection ? 1.0 : 0.45
-                color: skinMa.containsMouse && SkinWeightsController.hasSkinnedSelection
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
-
-                Text {
-                    id: skinLabel
-                    anchors.centerIn: parent
-                    text: "Compute Skin Weights…"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                MouseArea {
-                    id: skinMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    enabled: SkinWeightsController.hasSkinnedSelection
-                    cursorShape: SkinWeightsController.hasSkinnedSelection
-                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-                    onClicked: root.openSkinWeightsDialog()
-                    ToolTip.visible: containsMouse
-                    ToolTip.delay: 500
-                    ToolTip.text: SkinWeightsController.hasSkinnedSelection
-                        ? "Compute per-vertex bone weights via inverse-distance to bone segments. Mesh must have a skeleton."
-                        : "Select a skinned mesh (with a skeleton) first."
                 }
             }
 
