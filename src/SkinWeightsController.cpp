@@ -57,6 +57,13 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
 {
     QVariantMap result;
 
+    // Breadcrumb the UI action up front so failed attempts (no
+    // selection, no skeleton, etc.) still reach Sentry — the
+    // per-operation `ai.assist.skin_weights` breadcrumb below is
+    // only emitted once we've passed validation.
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Compute Skin Weights requested"));
+
     auto* sel = SelectionSet::getSingleton();
     if (!sel) {
         const auto msg = QStringLiteral("No selection set.");

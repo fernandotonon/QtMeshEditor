@@ -305,13 +305,15 @@ Rectangle {
             // Issue #402: auto skin weights. Surfaced in Animation
             // Mode because skinning governs how the mesh deforms
             // under animation — it's a rigging step, not a mesh-topology
-            // edit. Only meaningful on a skinned (skeleton-bearing)
-            // mesh; the button inside disables itself otherwise.
+            // edit. Gated on having a *skinned* selection (a skeleton),
+            // NOT on hasAnimations — a skeleton-bearing mesh with no
+            // clips yet still needs skinning, and that's exactly the
+            // case where you'd want to author weights before animating.
             CollapsibleSection {
                 title: "Skinning"
-                sectionVisible: root.modeToolSectionVisible(
-                    EditorModeController.AnimationMode,
-                    PropertiesPanelController.hasAnimations)
+                sectionVisible: root.currentTab === root.modeToolsTab
+                    && root.modeToolMatches(EditorModeController.AnimationMode)
+                    && SkinWeightsController.hasSkinnedSelection
                 expanded: false
 
                 Component.onCompleted: content = skinningToolsComponent
@@ -1131,6 +1133,7 @@ Rectangle {
             }
 
             Rectangle {
+                id: skinBtn
                 width: Math.min(parent.width - 16, skinLabel.implicitWidth + 16)
                 height: 26
                 radius: 3
@@ -1138,8 +1141,19 @@ Rectangle {
                 color: skinMa.containsMouse && SkinWeightsController.hasSkinnedSelection
                     ? PropertiesPanelController.highlightColor
                     : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
+                // Keyboard accessibility: tab focus + Enter/Space opens
+                // the dialog, with a focus-ring border so keyboard users
+                // can see where they are.
+                activeFocusOnTab: SkinWeightsController.hasSkinnedSelection
+                Accessible.role: Accessible.Button
+                Accessible.name: "Compute Skin Weights"
+                Keys.onSpacePressed: if (SkinWeightsController.hasSkinnedSelection) root.openSkinWeightsDialog()
+                Keys.onReturnPressed: if (SkinWeightsController.hasSkinnedSelection) root.openSkinWeightsDialog()
+                Keys.onEnterPressed: if (SkinWeightsController.hasSkinnedSelection) root.openSkinWeightsDialog()
+                border.color: skinBtn.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: skinBtn.activeFocus ? 2 : 1
 
                 Text {
                     id: skinLabel

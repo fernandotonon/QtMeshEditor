@@ -20,6 +20,12 @@ Ogre::Entity* ComputeSkinWeightsCommand::resolveEntity() const
 {
     Manager* mgr = Manager::getSingletonPtr();
     if (!mgr) return nullptr;
+    // Manager::getEntities() already filters to real Ogre::Entity
+    // objects at collection time (collectEntitiesRecursive only
+    // appends attached objects whose getMovableType() == "Entity"),
+    // so every element here is a genuine Entity — the
+    // getMovableType() re-check below is a belt-and-suspenders
+    // guard, not load-bearing.
     for (Ogre::Entity* e : mgr->getEntities()) {
         if (e && e->getMovableType() == "Entity"
             && e->getName() == mEntityName)
