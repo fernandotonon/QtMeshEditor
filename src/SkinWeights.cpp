@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <vector>
 
@@ -245,87 +246,168 @@ SkinWeightsReport applyToEntity(Ogre::Entity* entity,
         return report;
     }
 
-    // Process each submesh independently — each has its own vertex
-    // data unless it uses sharedVertices.
-    const unsigned short numSubs = mesh->getNumSubMeshes();
-    for (unsigned short si = 0; si < numSubs; ++si) {
-        Ogre::SubMesh* sub = mesh->getSubMesh(si);
-        if (!sub) continue;
+    const size_t maxK = static_cast<size_t>(
+        std::clamp(opts.maxInfluencesPerVertex, 1, 8));
 
-        SkinWeightsSubmeshReport subReport;
-        subReport.submeshIndex = si;
-
-        // Snapshot current bone assignment count.
-        subReport.boneAssignmentsBefore =
-            static_cast<int>(sub->getBoneAssignments().size());
-
-        // Locate the vertex data and the POSITION element.
-        Ogre::VertexData* vd = sub->useSharedVertices ? mesh->sharedVertexData
-                                                       : sub->vertexData;
-        if (!vd) continue;
+    // Helper: read tight xyz floats out of a VertexData's POSITION
+    // element. Returns false if the buffer is unusable.
+    auto extractPositions = [](Ogre::VertexData* vd,
+                               std::vector<float>& out) -> bool {
         const auto* posElem = vd->vertexDeclaration->findElementBySemantic(
             Ogre::VES_POSITION);
-        if (!posElem) continue;
+        if (!posElem) return false;
         auto vbuf = vd->vertexBufferBinding->getBuffer(posElem->getSource());
-        if (!vbuf || vd->vertexCount == 0) continue;
-
-        // Lock the position buffer read-only and collect tight
-        // xyz floats. Mesh-local space matches the skeleton's
-        // bind-pose world space for the same entity, so no
-        // transformation is needed here.
-        std::vector<float> positions(static_cast<size_t>(vd->vertexCount) * 3);
+        if (!vbuf || vd->vertexCount == 0) return false;
+        out.resize(static_cast<size_t>(vd->vertexCount) * 3);
         const size_t stride = vbuf->getVertexSize();
         auto* base = static_cast<unsigned char*>(
             vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
         for (size_t i = 0; i < vd->vertexCount; ++i) {
             float* p = nullptr;
             posElem->baseVertexPointerToElement(base + i * stride, &p);
-            positions[3 * i + 0] = p[0];
-            positions[3 * i + 1] = p[1];
-            positions[3 * i + 2] = p[2];
+            out[3 * i + 0] = p[0];
+            out[3 * i + 1] = p[1];
+            out[3 * i + 2] = p[2];
         }
         vbuf->unlock();
+        return true;
+    };
 
-        // Run the pure-data weight computation.
+    // Helper: compute + commit weights against one assignment owner
+    // (either an Ogre::SubMesh* or the Ogre::Mesh* for shared
+    // vertices). `getList` / `clear` / `add` / `compile` are the
+    // four operations that differ between the two owners; everything
+    // else is shared. `mesh-local space` matches the skeleton's
+    // bind-pose world space for the same entity, so no transform is
+    // applied to the positions here.
+    auto computeAndCommit =
+        [&](Ogre::VertexData* vd,
+            const Ogre::Mesh::VertexBoneAssignmentList& existing,
+            const std::function<void()>& clearFn,
+            const std::function<void(const Ogre::VertexBoneAssignment&)>& addFn,
+            const std::function<void()>& compileFn,
+            SkinWeightsSubmeshReport& subReport) -> bool
+    {
+        std::vector<float> positions;
+        if (!extractPositions(vd, positions)) return false;
+
         std::vector<SkinWeights::VertexWeights> weights;
         SkinWeights::computeWeights(positions.data(),
                                      static_cast<int>(vd->vertexCount),
                                      bones, opts, weights);
 
+        // Merge mode (`replaceExisting=false`): keep existing
+        // weights and only fill vertices that have NONE. Build the
+        // set of already-weighted vertex indices from the existing
+        // assignment list BEFORE we touch anything. In replace mode
+        // we clear the list outright.
+        std::vector<char> alreadyWeighted;
         if (opts.replaceExisting) {
-            sub->clearBoneAssignments();
+            clearFn();
+        } else {
+            alreadyWeighted.assign(weights.size(), 0);
+            for (const auto& kv : existing) {
+                if (kv.second.vertexIndex < alreadyWeighted.size())
+                    alreadyWeighted[kv.second.vertexIndex] = 1;
+            }
         }
 
-        // Emit the new bone assignments.
-        const size_t maxK = static_cast<size_t>(
-            std::clamp(opts.maxInfluencesPerVertex, 1, 8));
         for (size_t v = 0; v < weights.size(); ++v) {
+            // In merge mode, skip vertices that already had weights —
+            // don't append a second normalized set on top of theirs.
+            if (!opts.replaceExisting && v < alreadyWeighted.size()
+                && alreadyWeighted[v])
+                continue;
             const auto& vw = weights[v];
-            if (vw.count == maxK) ++subReport.verticesWithMaxInfluences;
+            if (static_cast<size_t>(vw.count) == maxK)
+                ++subReport.verticesWithMaxInfluences;
             for (int k = 0; k < vw.count; ++k) {
                 Ogre::VertexBoneAssignment vba;
                 vba.vertexIndex = static_cast<unsigned int>(v);
                 vba.boneIndex   = boneIdxToHandle[vw.boneIndices[k]];
                 vba.weight      = static_cast<float>(vw.weights[k]);
-                sub->addBoneAssignment(vba);
+                addFn(vba);
             }
         }
-
-        // _compileBoneAssignments packs BLEND_INDICES /
-        // BLEND_WEIGHTS into the vertex buffer and rebuilds
-        // blendIndexToBoneIndexMap.
-        sub->_compileBoneAssignments();
-
+        compileFn();
         subReport.verticesProcessed = static_cast<int>(weights.size());
-        subReport.boneAssignmentsAfter =
-            static_cast<int>(sub->getBoneAssignments().size());
+        return true;
+    };
 
-        report.submeshes.push_back(subReport);
-        report.totalVerticesProcessed += subReport.verticesProcessed;
-        report.totalAssignmentsBefore += subReport.boneAssignmentsBefore;
-        report.totalAssignmentsAfter  += subReport.boneAssignmentsAfter;
+    // Process the shared vertex data once (if any submesh uses it).
+    // Ogre stores shared-vertex bone assignments on the Mesh, not
+    // the SubMesh — the FBX/glTF exporters read
+    // `Mesh::getBoneAssignments()` for shared geometry, so routing
+    // them to the submesh list would leave the export with stale /
+    // missing weights (Codex review on PR #699).
+    bool anySharedProcessed = false;
+    if (mesh->sharedVertexData) {
+        bool anySubUsesShared = false;
+        for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+            if (mesh->getSubMesh(si) && mesh->getSubMesh(si)->useSharedVertices) {
+                anySubUsesShared = true;
+                break;
+            }
+        }
+        if (anySubUsesShared) {
+            SkinWeightsSubmeshReport subReport;
+            subReport.submeshIndex = -1;   // -1 == mesh-level shared data
+            subReport.boneAssignmentsBefore =
+                static_cast<int>(mesh->getBoneAssignments().size());
+            const auto existingShared = mesh->getBoneAssignments();
+            if (computeAndCommit(
+                    mesh->sharedVertexData,
+                    existingShared,
+                    [&]() { mesh->clearBoneAssignments(); },
+                    [&](const Ogre::VertexBoneAssignment& vba) {
+                        mesh->addBoneAssignment(vba);
+                    },
+                    [&]() { mesh->_compileBoneAssignments(); },
+                    subReport)) {
+                subReport.boneAssignmentsAfter =
+                    static_cast<int>(mesh->getBoneAssignments().size());
+                report.submeshes.push_back(subReport);
+                report.totalVerticesProcessed += subReport.verticesProcessed;
+                report.totalAssignmentsBefore += subReport.boneAssignmentsBefore;
+                report.totalAssignmentsAfter  += subReport.boneAssignmentsAfter;
+                anySharedProcessed = true;
+            }
+        }
     }
 
+    // Process every submesh that owns its own (non-shared) vertex
+    // data.
+    const unsigned short numSubs = mesh->getNumSubMeshes();
+    for (unsigned short si = 0; si < numSubs; ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (!sub) continue;
+        if (sub->useSharedVertices) continue;  // handled above
+        if (!sub->vertexData) continue;
+
+        SkinWeightsSubmeshReport subReport;
+        subReport.submeshIndex = si;
+        subReport.boneAssignmentsBefore =
+            static_cast<int>(sub->getBoneAssignments().size());
+        const auto existingSub = sub->getBoneAssignments();
+        if (computeAndCommit(
+                sub->vertexData,
+                existingSub,
+                [&]() { sub->clearBoneAssignments(); },
+                [&](const Ogre::VertexBoneAssignment& vba) {
+                    sub->addBoneAssignment(vba);
+                },
+                [&]() { sub->_compileBoneAssignments(); },
+                subReport)) {
+            subReport.boneAssignmentsAfter =
+                static_cast<int>(sub->getBoneAssignments().size());
+            report.submeshes.push_back(subReport);
+            report.totalVerticesProcessed += subReport.verticesProcessed;
+            report.totalAssignmentsBefore += subReport.boneAssignmentsBefore;
+            report.totalAssignmentsAfter  += subReport.boneAssignmentsAfter;
+        }
+    }
+
+    Q_UNUSED(anySharedProcessed);
     report.applied = true;
     return report;
 }
