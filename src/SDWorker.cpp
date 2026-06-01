@@ -172,7 +172,21 @@ void SDWorker::recreateContext()
     params.model_path = pathUtf8.constData();
     params.n_threads = m_settings.threads > 0 ? m_settings.threads : QThread::idealThreadCount();
     if (params.n_threads > 16) params.n_threads = 16;
-    params.vae_decode_only = true;
+
+    // Issue #403: load the ControlNet model into the context when a
+    // path is configured. `controlNetUtf8` must outlive new_sd_ctx.
+    // ControlNet needs the full VAE (encode + decode), so
+    // vae_decode_only must be false in that case; otherwise keep the
+    // decode-only optimization that halves VAE memory for plain
+    // txt2img.
+    QByteArray controlNetUtf8;
+    if (!m_settings.controlNetPath.isEmpty()) {
+        controlNetUtf8 = m_settings.controlNetPath.toUtf8();
+        params.control_net_path = controlNetUtf8.constData();
+        params.vae_decode_only = false;
+    } else {
+        params.vae_decode_only = true;
+    }
 
     m_ctx = new_sd_ctx(&params);
     if (!m_ctx) {
@@ -183,6 +197,14 @@ void SDWorker::recreateContext()
 #endif
 
 void SDWorker::generateTexture(const QString &prompt, const QString &outputPath)
+{
+    // Plain txt2img — no control image.
+    generateTextureControlled(prompt, QImage(), outputPath);
+}
+
+void SDWorker::generateTextureControlled(const QString &prompt,
+                                         const QImage &controlImage,
+                                         const QString &outputPath)
 {
 #ifdef ENABLE_STABLE_DIFFUSION
     if (!isModelLoaded()) {
@@ -238,6 +260,31 @@ void SDWorker::generateTexture(const QString &prompt, const QString &outputPath)
         img_params.sample_params.guidance.txt_cfg = m_settings.cfgScale;
         img_params.seed = m_settings.seed;
         img_params.sample_params.sample_method = static_cast<enum sample_method_t>(m_settings.sampleMethod);
+
+        // Issue #403: ControlNet depth conditioning. When a control
+        // image was supplied and the context was built with a
+        // ControlNet model, attach the (resized to generation res,
+        // RGB8) depth map as the control image. `controlBytes` must
+        // outlive generate_image, so it's declared in this scope.
+        QImage controlRgb;
+        QByteArray controlBytes;
+        if (!controlImage.isNull() && !m_settings.controlNetPath.isEmpty()) {
+            controlRgb = controlImage
+                .scaled(m_settings.width, m_settings.height,
+                        Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                .convertToFormat(QImage::Format_RGB888);
+            controlBytes = QByteArray(
+                reinterpret_cast<const char*>(controlRgb.constBits()),
+                static_cast<int>(controlRgb.sizeInBytes()));
+            img_params.control_image.data =
+                reinterpret_cast<uint8_t*>(controlBytes.data());
+            img_params.control_image.width   = controlRgb.width();
+            img_params.control_image.height  = controlRgb.height();
+            img_params.control_image.channel = 3;
+            img_params.control_strength = m_settings.controlStrength;
+            qDebug() << "SDWorker: depth ControlNet active, strength"
+                     << m_settings.controlStrength;
+        }
 
         result = generate_image(m_ctx, &img_params);
     } catch (const std::exception &e) {
@@ -295,6 +342,7 @@ void SDWorker::generateTexture(const QString &prompt, const QString &outputPath)
     // LCOV_EXCL_STOP
 #else
     Q_UNUSED(prompt);
+    Q_UNUSED(controlImage);
     Q_UNUSED(outputPath);
     emit generationError("Stable Diffusion support is not enabled");
 #endif

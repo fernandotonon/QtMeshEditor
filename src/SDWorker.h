@@ -5,6 +5,7 @@
 #include <QThread>
 #include <QString>
 #include <QMutex>
+#include <QImage>
 #include <atomic>
 
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -21,6 +22,15 @@ struct SDSettings {
     int sampleMethod = 0; // 0 = Euler A
     int threads = 0; // 0 = auto
     int gpuLayers = 99;
+
+    // Mesh-aware texture generation (issue #403). When
+    // `controlNetPath` is non-empty AND a control image is supplied
+    // to `generateTextureControlled`, sd.cpp conditions generation
+    // on that image (a rendered depth map) so the result follows
+    // the mesh's silhouette + form. Empty path → plain txt2img
+    // (the existing behavior).
+    QString controlNetPath;       // path to the ControlNet model file
+    float controlStrength = 0.9f; // 0..1, how strongly the depth map steers generation
 };
 
 class SDWorker : public QObject
@@ -44,6 +54,14 @@ public:
 
 public slots:
     void generateTexture(const QString &prompt, const QString &outputPath);
+
+    // Issue #403: depth-conditioned generation. `controlImage` is a
+    // rendered depth map (RGB8, any size — resized to the generation
+    // resolution). When empty, behaves exactly like generateTexture.
+    // Uses `m_settings.controlNetPath` / `controlStrength`.
+    void generateTextureControlled(const QString &prompt,
+                                   const QImage &controlImage,
+                                   const QString &outputPath);
 
 signals:
     void modelLoaded(const QString &modelPath);
