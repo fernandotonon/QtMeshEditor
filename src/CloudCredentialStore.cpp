@@ -1,7 +1,10 @@
 #include "CloudCredentialStore.h"
 #include "AppSettingsKeys.h"
 
+#include <QCoreApplication>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSettings>
@@ -27,6 +30,13 @@
 #endif
 
 namespace {
+
+constexpr auto kTestOrganizationName = "QtMeshEditorTests";
+
+bool useIsolatedTestStorage()
+{
+    return QCoreApplication::organizationName() == QLatin1StringView(kTestOrganizationName);
+}
 
 QByteArray sessionToPayload(const CloudSession& session)
 {
@@ -65,6 +75,13 @@ QString fallbackFilePath()
 bool writeFallbackFile(const QByteArray& payload)
 {
     const QString path = fallbackFilePath();
+    if (path.isEmpty())
+        return false;
+
+    const QFileInfo info(path);
+    if (QDir dir = info.dir(); !dir.exists() && !dir.mkpath(QStringLiteral(".")))
+        return false;
+
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return false;
@@ -90,6 +107,7 @@ void removeFallbackFile()
 
 bool storeSecretBytes(const QByteArray& payload)
 {
+    if (!useIsolatedTestStorage()) {
 #if defined(Q_OS_MACOS)
     const QByteArray service = QByteArrayLiteral("QtMeshEditor");
     const QByteArray account = QByteArrayLiteral("QtMeshCloud");
@@ -140,15 +158,15 @@ bool storeSecretBytes(const QByteArray& payload)
     return CredWriteW(&cred, 0) != FALSE;
 
 #elif defined(Q_OS_LINUX) && defined(HAVE_LIBSECRET)
-    return qtmesh_cloud_secret_store(payload.constData()) != 0;
-
-#else
-    return writeFallbackFile(payload);
+        return qtmesh_cloud_secret_store(payload.constData()) != 0;
 #endif
+    }
+    return writeFallbackFile(payload);
 }
 
 QByteArray loadSecretBytes()
 {
+    if (!useIsolatedTestStorage()) {
 #if defined(Q_OS_MACOS)
     const QByteArray service = QByteArrayLiteral("QtMeshEditor");
     const QByteArray account = QByteArrayLiteral("QtMeshCloud");
@@ -184,20 +202,20 @@ QByteArray loadSecretBytes()
     return payload;
 
 #elif defined(Q_OS_LINUX) && defined(HAVE_LIBSECRET)
-    char* raw = qtmesh_cloud_secret_load();
-    if (!raw)
-        return {};
-    const QByteArray payload(raw);
-    qtmesh_cloud_secret_free(raw);
-    return payload;
-
-#else
-    return readFallbackFile();
+        char* raw = qtmesh_cloud_secret_load();
+        if (!raw)
+            return {};
+        const QByteArray payload(raw);
+        qtmesh_cloud_secret_free(raw);
+        return payload;
 #endif
+    }
+    return readFallbackFile();
 }
 
 void deleteSecretBytes()
 {
+    if (!useIsolatedTestStorage()) {
 #if defined(Q_OS_MACOS)
     const QByteArray service = QByteArrayLiteral("QtMeshEditor");
     const QByteArray account = QByteArrayLiteral("QtMeshCloud");
@@ -215,11 +233,10 @@ void deleteSecretBytes()
     CredDeleteW(L"QtMeshEditor/QtMeshCloud", CRED_TYPE_GENERIC, 0);
 
 #elif defined(Q_OS_LINUX) && defined(HAVE_LIBSECRET)
-    qtmesh_cloud_secret_delete();
-
-#else
-    removeFallbackFile();
+        qtmesh_cloud_secret_delete();
 #endif
+    }
+    removeFallbackFile();
 }
 
 } // namespace

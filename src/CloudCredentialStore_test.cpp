@@ -6,10 +6,32 @@
 #include <QCoreApplication>
 #include <QSettings>
 
-TEST(CloudCredentialStoreTest, RoundTripAndClear)
-{
-    CloudCredentialStore::clearSession();
+class CloudCredentialStoreTest : public ::testing::Test {
+protected:
+    QString previousOrganizationName;
+    QString previousApplicationName;
 
+    void SetUp() override
+    {
+        previousOrganizationName = QCoreApplication::organizationName();
+        previousApplicationName = QCoreApplication::applicationName();
+        QCoreApplication::setOrganizationName(QStringLiteral("QtMeshEditorTests"));
+        QCoreApplication::setApplicationName(QStringLiteral("CloudCredentialStoreTest"));
+        QSettings().clear();
+        CloudCredentialStore::clearSession();
+    }
+
+    void TearDown() override
+    {
+        CloudCredentialStore::clearSession();
+        QSettings().clear();
+        QCoreApplication::setOrganizationName(previousOrganizationName);
+        QCoreApplication::setApplicationName(previousApplicationName);
+    }
+};
+
+TEST_F(CloudCredentialStoreTest, RoundTripAndClear)
+{
     CloudSession session;
     session.token = QStringLiteral("test-token");
     session.expiresAt = 1234567890;
@@ -26,10 +48,8 @@ TEST(CloudCredentialStoreTest, RoundTripAndClear)
     EXPECT_FALSE(CloudCredentialStore::hasSession());
 }
 
-TEST(CloudCredentialStoreTest, MigratesLegacyPlaintextSettings)
+TEST_F(CloudCredentialStoreTest, MigratesLegacyPlaintextSettings)
 {
-    CloudCredentialStore::clearSession();
-
     QSettings settings;
     settings.setValue(AppSettingsKeys::cloudToken(), QStringLiteral("legacy-token"));
     settings.setValue(AppSettingsKeys::cloudTokenExpiresAt(), 42);
@@ -43,7 +63,6 @@ TEST(CloudCredentialStoreTest, MigratesLegacyPlaintextSettings)
     EXPECT_EQ(loaded.expiresAt, 42);
     EXPECT_EQ(loaded.email, QStringLiteral("legacy@example.com"));
     EXPECT_TRUE(settings.value(AppSettingsKeys::cloudToken()).toString().isEmpty());
+    EXPECT_TRUE(settings.value(AppSettingsKeys::cloudTokenExpiresAt()).toString().isEmpty());
     EXPECT_TRUE(settings.value(AppSettingsKeys::cloudUserEmail()).toString().isEmpty());
-
-    CloudCredentialStore::clearSession();
 }

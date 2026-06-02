@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaObject>
@@ -37,6 +38,8 @@
 #include "EditorModeController.h"
 #include "MeshInfoOverlay.h"
 #include "MeshValidator.h"
+#include "CloudCredentialStore.h"
+#include "AppSettingsKeys.h"
 #include "TestHelpers.h"
 #include "EditorViewport.h"
 #include "ViewportSettingsKeys.h"
@@ -84,6 +87,11 @@ protected:
     void TearDown() override {
         delete window;
         window = nullptr;
+        CloudCredentialStore::clearSession();
+        QSettings settings;
+        settings.remove(AppSettingsKeys::cloudUserName());
+        settings.remove(AppSettingsKeys::cloudUserSlug());
+        settings.remove(AppSettingsKeys::cloudUserEmail());
         // Tests below switch the editor mode (Animation/Material/etc). Reset
         // the singleton so subsequent test cases see a fresh ObjectMode
         // controller — otherwise stale state leaks into m_editModeLabel and
@@ -350,6 +358,91 @@ TEST_F(MainWindowTest, ContextualToolRailAiChatPrecedesAddPrimitive)
     EXPECT_GE(aiIdx, 0);
     EXPECT_GE(primIdx, 0);
     EXPECT_LT(aiIdx, primIdx) << "Open AI Chat should appear before Add Primitive on the rail";
+}
+
+TEST_F(MainWindowTest, CloudAccountControlLivesAtBottomOfObjectsToolbar)
+{
+    QAction* stretch = findActionByObjectName(QStringLiteral("modeAnyObjectsToolbarStretch"));
+    QAction* cloud = findActionByObjectName(QStringLiteral("modeAnyCloudAccountAction"));
+    ASSERT_NE(stretch, nullptr);
+    ASSERT_NE(cloud, nullptr);
+
+    const QList<QAction*> actions = window->ui->objectsToolbar->actions();
+    const int stretchIdx = actions.indexOf(stretch);
+    const int cloudIdx = actions.indexOf(cloud);
+    EXPECT_GE(stretchIdx, 0);
+    EXPECT_GE(cloudIdx, 0);
+    EXPECT_LT(stretchIdx, cloudIdx);
+    EXPECT_EQ(cloudIdx, actions.size() - 1) << "Cloud account should be the last rail item";
+
+    auto* cloudWidget = window->ui->objectsToolbar->widgetForAction(cloud);
+    ASSERT_NE(cloudWidget, nullptr);
+    auto* cloudButton = cloudWidget->findChild<QToolButton*>(QStringLiteral("cloudAccountButton"));
+    ASSERT_NE(cloudButton, nullptr);
+    ASSERT_NE(window->findChild<QMenu*>(QStringLiteral("menuCloud")), nullptr);
+}
+
+TEST_F(MainWindowTest, CloudAccountMenuShowsSignedInHeader)
+{
+    CloudSession session;
+    session.token = QStringLiteral("test-token");
+    session.email = QStringLiteral("dev@example.com");
+    ASSERT_TRUE(CloudCredentialStore::saveSession(session));
+    QSettings().setValue(AppSettingsKeys::cloudUserName(), QStringLiteral("Dev User"));
+
+    window->updateCloudAuthActions();
+    app->processEvents();
+
+    auto* headerName = window->findChild<QLabel*>(QStringLiteral("cloudAccountMenuHeaderName"));
+    QAction* signIn = findActionByObjectName(QStringLiteral("actionQtMeshCloudSignIn"));
+    QAction* signOut = findActionByObjectName(QStringLiteral("actionQtMeshCloudSignOut"));
+    ASSERT_NE(headerName, nullptr);
+    ASSERT_NE(signIn, nullptr);
+    ASSERT_NE(signOut, nullptr);
+    EXPECT_EQ(headerName->text(), QStringLiteral("Dev User"));
+    auto* headerSubtitle = window->findChild<QLabel*>(QStringLiteral("cloudAccountMenuHeaderSubtitle"));
+    ASSERT_NE(headerSubtitle, nullptr);
+    EXPECT_EQ(headerSubtitle->text(), QStringLiteral("Signed in to QtMesh Cloud"));
+    EXPECT_FALSE(signIn->isVisible());
+    EXPECT_TRUE(signOut->isVisible());
+
+    CloudCredentialStore::clearSession();
+    QSettings().remove(AppSettingsKeys::cloudUserName());
+    window->updateCloudAuthActions();
+    app->processEvents();
+    EXPECT_TRUE(signIn->isVisible());
+    EXPECT_FALSE(signOut->isVisible());
+}
+
+TEST_F(MainWindowTest, CloudAccountControlVisibleInEveryEditorMode)
+{
+    QAction* cloud = findActionByObjectName(QStringLiteral("modeAnyCloudAccountAction"));
+    ASSERT_NE(cloud, nullptr);
+    auto* modeController = EditorModeController::instance();
+    const QList<int> modes = {
+        EditorModeController::ObjectMode,
+        EditorModeController::EditMode,
+        EditorModeController::AnimationMode,
+        EditorModeController::MaterialMode,
+        EditorModeController::ValidationMode,
+    };
+    for (int mode : modes) {
+        modeController->requestMode(mode);
+        app->processEvents();
+        EXPECT_TRUE(cloud->isVisible()) << "mode index " << mode;
+    }
+}
+
+TEST_F(MainWindowTest, CloudMenuIsNotOnMenuBar)
+{
+    bool cloudTopLevel = false;
+    for (QAction* action : window->menuBar()->actions()) {
+        if (action->menu() && action->menu()->objectName() == QStringLiteral("menuCloud")) {
+            cloudTopLevel = true;
+            break;
+        }
+    }
+    EXPECT_FALSE(cloudTopLevel);
 }
 
 TEST_F(MainWindowTest, ContextualToolRailKeepsSharedMenuActionsReachable)
