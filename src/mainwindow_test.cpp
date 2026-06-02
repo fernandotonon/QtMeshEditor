@@ -384,7 +384,6 @@ TEST_F(MainWindowTest, CloudAccountControlLivesAtBottomOfObjectsToolbar)
 
 TEST_F(MainWindowTest, CloudAccountMenuShowsSignedInHeader)
 {
-    CloudCredentialStore::clearSession();
     CloudSession session;
     session.token = QStringLiteral("test-token");
     session.email = QStringLiteral("dev@example.com");
@@ -401,10 +400,14 @@ TEST_F(MainWindowTest, CloudAccountMenuShowsSignedInHeader)
     ASSERT_NE(signIn, nullptr);
     ASSERT_NE(signOut, nullptr);
     EXPECT_EQ(headerName->text(), QStringLiteral("Dev User"));
+    auto* headerSubtitle = window->findChild<QLabel*>(QStringLiteral("cloudAccountMenuHeaderSubtitle"));
+    ASSERT_NE(headerSubtitle, nullptr);
+    EXPECT_EQ(headerSubtitle->text(), QStringLiteral("Signed in to QtMesh Cloud"));
     EXPECT_FALSE(signIn->isVisible());
     EXPECT_TRUE(signOut->isVisible());
 
     CloudCredentialStore::clearSession();
+    QSettings().remove(AppSettingsKeys::cloudUserName());
     window->updateCloudAuthActions();
     app->processEvents();
     EXPECT_TRUE(signIn->isVisible());

@@ -1,7 +1,10 @@
 #include "CloudCredentialStore.h"
 #include "AppSettingsKeys.h"
 
+#include <QCoreApplication>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSettings>
@@ -27,6 +30,13 @@
 #endif
 
 namespace {
+
+constexpr auto kTestOrganizationName = "QtMeshEditorTests";
+
+bool useIsolatedTestStorage()
+{
+    return QCoreApplication::organizationName() == QLatin1StringView(kTestOrganizationName);
+}
 
 QByteArray sessionToPayload(const CloudSession& session)
 {
@@ -65,6 +75,14 @@ QString fallbackFilePath()
 bool writeFallbackFile(const QByteArray& payload)
 {
     const QString path = fallbackFilePath();
+    if (path.isEmpty())
+        return false;
+
+    const QFileInfo info(path);
+    QDir dir = info.dir();
+    if (!dir.exists() && !dir.mkpath(QStringLiteral(".")))
+        return false;
+
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return false;
@@ -90,6 +108,9 @@ void removeFallbackFile()
 
 bool storeSecretBytes(const QByteArray& payload)
 {
+    if (useIsolatedTestStorage())
+        return writeFallbackFile(payload);
+
 #if defined(Q_OS_MACOS)
     const QByteArray service = QByteArrayLiteral("QtMeshEditor");
     const QByteArray account = QByteArrayLiteral("QtMeshCloud");
@@ -149,6 +170,9 @@ bool storeSecretBytes(const QByteArray& payload)
 
 QByteArray loadSecretBytes()
 {
+    if (useIsolatedTestStorage())
+        return readFallbackFile();
+
 #if defined(Q_OS_MACOS)
     const QByteArray service = QByteArrayLiteral("QtMeshEditor");
     const QByteArray account = QByteArrayLiteral("QtMeshCloud");
@@ -198,6 +222,11 @@ QByteArray loadSecretBytes()
 
 void deleteSecretBytes()
 {
+    if (useIsolatedTestStorage()) {
+        removeFallbackFile();
+        return;
+    }
+
 #if defined(Q_OS_MACOS)
     const QByteArray service = QByteArrayLiteral("QtMeshEditor");
     const QByteArray account = QByteArrayLiteral("QtMeshCloud");

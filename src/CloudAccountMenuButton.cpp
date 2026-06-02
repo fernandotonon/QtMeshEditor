@@ -260,6 +260,7 @@ void CloudAccountMenuButton::updateHeader(const QString& displayName, bool signe
 
     if (showHeader) {
         m_headerNameLabel->setText(displayName);
+        m_headerSubtitleLabel->setText(tr("Signed in to QtMesh Cloud"));
 
         // Ensure the header is actually present in the menu, otherwise the menu can
         // end up drawing stale pixels behind items when we toggle auth state while
