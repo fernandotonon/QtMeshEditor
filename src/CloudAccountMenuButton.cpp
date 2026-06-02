@@ -106,7 +106,7 @@ protected:
     }
 
 private:
-    void paintStatusBadge(QPainter& painter)
+    void paintStatusBadge(QPainter& painter) const
     {
         const int badgeD = 7;
         const QRect badge(rect().right() - badgeD - 1,
@@ -135,7 +135,7 @@ QString CloudAccountMenuButton::initialsFromDisplayName(const QString& displayNa
     if (parts.isEmpty())
         return QString();
 
-    auto firstChar = [](const QString& word) -> QChar {
+    auto firstChar = [](const QString& word) {
         for (const QChar ch : word) {
             if (ch.isLetter())
                 return ch.toUpper();
@@ -256,9 +256,7 @@ void CloudAccountMenuButton::buildMenu()
 
 void CloudAccountMenuButton::updateHeader(const QString& displayName, bool signedIn)
 {
-    const bool showHeader = signedIn && !displayName.isEmpty();
-
-    if (showHeader) {
+    if (const bool showHeader = signedIn && !displayName.isEmpty(); showHeader) {
         m_headerNameLabel->setText(displayName);
         m_headerSubtitleLabel->setText(tr("Signed in to QtMesh Cloud"));
 

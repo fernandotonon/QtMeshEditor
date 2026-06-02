@@ -2326,7 +2326,7 @@ void MainWindow::setupCloudAccountStatusControl()
     });
 
     // Push the account control to the bottom of the left objects toolbar (VS Code-style).
-    QWidget* toolbarStretch = new QWidget(ui->objectsToolbar);
+    auto* toolbarStretch = new QWidget(ui->objectsToolbar);
     toolbarStretch->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Expanding);
     toolbarStretch->setMinimumSize(0, 0);
     QAction* stretchAction = ui->objectsToolbar->addWidget(toolbarStretch);
