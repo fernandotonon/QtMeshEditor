@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaObject>
@@ -374,13 +375,14 @@ TEST_F(MainWindowTest, CloudAccountControlLivesAtBottomOfObjectsToolbar)
     EXPECT_LT(stretchIdx, cloudIdx);
     EXPECT_EQ(cloudIdx, actions.size() - 1) << "Cloud account should be the last rail item";
 
-    auto* cloudButton = qobject_cast<QToolButton*>(window->ui->objectsToolbar->widgetForAction(cloud));
+    auto* cloudWidget = window->ui->objectsToolbar->widgetForAction(cloud);
+    ASSERT_NE(cloudWidget, nullptr);
+    auto* cloudButton = cloudWidget->findChild<QToolButton*>(QStringLiteral("cloudAccountButton"));
     ASSERT_NE(cloudButton, nullptr);
-    EXPECT_EQ(cloudButton->objectName(), QStringLiteral("cloudAccountButton"));
     ASSERT_NE(window->findChild<QMenu*>(QStringLiteral("menuCloud")), nullptr);
 }
 
-TEST_F(MainWindowTest, CloudAccountMenuShowsConnectedUserAsDisabledRow)
+TEST_F(MainWindowTest, CloudAccountMenuShowsSignedInHeader)
 {
     CloudCredentialStore::clearSession();
     CloudSession session;
@@ -392,22 +394,19 @@ TEST_F(MainWindowTest, CloudAccountMenuShowsConnectedUserAsDisabledRow)
     window->updateCloudAuthActions();
     app->processEvents();
 
-    QAction* info = findActionByObjectName(QStringLiteral("actionQtMeshCloudAccountInfo"));
+    auto* headerName = window->findChild<QLabel*>(QStringLiteral("cloudAccountMenuHeaderName"));
     QAction* signIn = findActionByObjectName(QStringLiteral("actionQtMeshCloudSignIn"));
     QAction* signOut = findActionByObjectName(QStringLiteral("actionQtMeshCloudSignOut"));
-    ASSERT_NE(info, nullptr);
+    ASSERT_NE(headerName, nullptr);
     ASSERT_NE(signIn, nullptr);
     ASSERT_NE(signOut, nullptr);
-    EXPECT_TRUE(info->isVisible());
-    EXPECT_FALSE(info->isEnabled());
-    EXPECT_EQ(info->text(), QStringLiteral("Signed in as Dev User"));
+    EXPECT_EQ(headerName->text(), QStringLiteral("Dev User"));
     EXPECT_FALSE(signIn->isVisible());
     EXPECT_TRUE(signOut->isVisible());
 
     CloudCredentialStore::clearSession();
     window->updateCloudAuthActions();
     app->processEvents();
-    EXPECT_FALSE(info->isVisible());
     EXPECT_TRUE(signIn->isVisible());
     EXPECT_FALSE(signOut->isVisible());
 }

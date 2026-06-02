@@ -122,6 +122,7 @@ PlatformProfile.cpp
 QtMeshCloudClient.cpp
 CloudCredentialStore.cpp
 CloudUploadPlanner.cpp
+CloudAccountMenuButton.cpp
 AssetBrowserController.cpp
 MaterialPreviewRenderer.cpp
 ModelTurntableRenderer.cpp
