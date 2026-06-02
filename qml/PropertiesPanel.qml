@@ -3751,6 +3751,46 @@ Rectangle {
                 }
             }
 
+            // Issue #403: mesh-aware (depth-conditioned) texture
+            // generation. Renders the selected mesh's depth map and
+            // feeds it to sd.cpp as a ControlNet conditioning image,
+            // then applies the result to the active material diffuse.
+            // Only meaningful in SD-enabled builds; the controller's
+            // generateForSelected returns a clear message otherwise.
+            Rectangle {
+                width: Math.min(parent.width - 16, meshTexLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                opacity: MeshTextureController.hasSelection ? 1.0 : 0.45
+                color: meshTexMa.containsMouse && MeshTextureController.hasSelection
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    id: meshTexLabel
+                    anchors.centerIn: parent
+                    text: "Generate Texture from Mesh…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: meshTexMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: MeshTextureController.hasSelection
+                    cursorShape: MeshTextureController.hasSelection
+                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                    onClicked: root.openMeshTextureDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: MeshTextureController.hasSelection
+                        ? "Generate a texture conditioned on the mesh's depth map (ControlNet) and apply it to the active material."
+                        : "Select a mesh first."
+                }
+            }
+
             // Slice I: Material Preview Environment — interactive
             // preview of the currently-selected material on Sphere/Cube
             // shapes. Drag horizontally on the thumbnail to rotate the
@@ -3983,6 +4023,23 @@ Rectangle {
             uvUnwrapLoader.active = true
         } else if (uvUnwrapLoader.item) {
             uvUnwrapLoader.item.open()
+        }
+    }
+
+    // Issue #403: mesh-aware texture generation dialog. Same lazy-
+    // load idiom as the sibling AI-Assist dialogs.
+    Loader {
+        id: meshTextureLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/MeshTextureDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+    function openMeshTextureDialog() {
+        if (!meshTextureLoader.active) {
+            meshTextureLoader.active = true
+        } else if (meshTextureLoader.item) {
+            meshTextureLoader.item.open()
         }
     }
 

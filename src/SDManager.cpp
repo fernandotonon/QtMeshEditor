@@ -413,6 +413,52 @@ void SDManager::generateTexture(const QString &prompt, int width, int height, co
     // LCOV_EXCL_STOP
 }
 
+void SDManager::generateMeshTexture(const QString &prompt,
+                                    const QImage &controlImage,
+                                    const QString &controlNetPath,
+                                    float controlStrength,
+                                    const QString &outputFileName)
+{
+    if (!isModelLoaded()) {
+        emit generationError("No SD model loaded. Please load a model first.");
+        return;
+    }
+
+    // LCOV_EXCL_START — requires a loaded SD model + worker
+    QString outputPath;
+    if (!outputFileName.isEmpty()) {
+        QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        QDir outputDir(QDir(dataPath).filePath("generated_textures"));
+        if (!outputDir.exists()) outputDir.mkpath(".");
+        QString fileName = QFileInfo(outputFileName.trimmed()).fileName();
+        if (!fileName.endsWith(".png", Qt::CaseInsensitive) &&
+            !fileName.endsWith(".jpg", Qt::CaseInsensitive)) {
+            fileName.replace(QRegularExpression(R"(\.\w+$)"), "");
+            fileName += ".png";
+        }
+        outputPath = outputDir.filePath(fileName);
+    } else {
+        outputPath = generateOutputPath();
+    }
+
+    QString enhancedPrompt = enhanceTexturePrompt(prompt);
+
+    SDSettings genSettings = m_settings;
+    if (genSettings.negativePrompt.isEmpty() ||
+        genSettings.negativePrompt == "blurry, low quality, distorted, simple, cartoon") {
+        genSettings.negativePrompt = getTextureNegativePrompt();
+    }
+    genSettings.controlNetPath  = controlNetPath;
+    genSettings.controlStrength = controlStrength;
+
+    QMetaObject::invokeMethod(m_worker,
+        [this, enhancedPrompt, controlImage, outputPath, genSettings]() {
+            m_worker->setSettings(genSettings);
+            m_worker->generateTextureControlled(enhancedPrompt, controlImage, outputPath);
+        }, Qt::QueuedConnection);
+    // LCOV_EXCL_STOP
+}
+
 // LCOV_EXCL_START — requires sd.cpp worker
 void SDManager::stopGeneration()
 {

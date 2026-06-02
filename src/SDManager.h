@@ -105,6 +105,18 @@ public slots:
 
     Q_INVOKABLE void generateTexture(const QString &prompt, int width = 0, int height = 0, const QString &outputFileName = QString());
     // img2img disabled — crashes on macOS Metal. Edits use txt2img with combined prompt.
+
+    // Issue #403: mesh-aware (depth-conditioned) generation. Same
+    // flow as generateTexture but conditions on `controlImage` (a
+    // rendered depth map) via a ControlNet model at `controlNetPath`.
+    // When controlImage is null or controlNetPath empty, behaves
+    // like a plain generateTexture. `controlStrength` is 0..1.
+    void generateMeshTexture(const QString &prompt,
+                             const QImage &controlImage,
+                             const QString &controlNetPath,
+                             float controlStrength,
+                             const QString &outputFileName = QString());
+
     Q_INVOKABLE void stopGeneration();
     Q_INVOKABLE void tryAutoLoadModel();
 

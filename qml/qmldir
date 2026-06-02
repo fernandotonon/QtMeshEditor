@@ -10,6 +10,7 @@ ApplyAtlasDialog 1.0 ApplyAtlasDialog.qml
 UvUnwrapDialog 1.0 UvUnwrapDialog.qml
 QuadRetopoDialog 1.0 QuadRetopoDialog.qml
 SkinWeightsDialog 1.0 SkinWeightsDialog.qml
+MeshTextureDialog 1.0 MeshTextureDialog.qml
 MaterialListModal 1.0 MaterialListModal.qml
 ThemedButton 1.0 ThemedButton.qml
 ThemedCheckBox 1.0 ThemedCheckBox.qml
