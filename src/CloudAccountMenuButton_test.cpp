@@ -3,10 +3,13 @@
 #include "AppSettingsKeys.h"
 #include "CloudCredentialStore.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QLabel>
+#include <QMenu>
 #include <QSettings>
+#include <QWidgetAction>
 #include <gtest/gtest.h>
 
 class CloudAccountMenuButtonTest : public ::testing::Test {
@@ -61,12 +64,25 @@ TEST_F(CloudAccountMenuButtonTest, SignedOutButtonRepaintsWithoutCrash)
     button.repaint();
     QApplication::processEvents();
 
-    auto* subtitle = button.findChild<QLabel*>(QStringLiteral("cloudAccountMenuHeaderSubtitle"));
+    auto* subtitle = button.findChild<QLabel*>(QStringLiteral("cloudAccountMenuHeaderSubtitle"),
+                                               Qt::FindChildrenRecursively);
     ASSERT_NE(subtitle, nullptr);
     EXPECT_EQ(subtitle->text(), QStringLiteral("Signed in to QtMesh Cloud"));
 
     CloudCredentialStore::clearSession();
+    QSettings().remove(AppSettingsKeys::cloudUserName());
     button.refresh();
     button.repaint();
     QApplication::processEvents();
+
+    bool headerListedInMenu = false;
+    for (QAction* action : button.menu()->actions()) {
+        auto* widgetAction = qobject_cast<QWidgetAction*>(action);
+        if (!widgetAction)
+            continue;
+        QWidget* widget = widgetAction->defaultWidget();
+        if (widget && widget->objectName() == QStringLiteral("cloudAccountMenuHeader"))
+            headerListedInMenu = true;
+    }
+    EXPECT_FALSE(headerListedInMenu);
 }

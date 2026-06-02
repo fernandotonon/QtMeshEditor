@@ -63,5 +63,6 @@ TEST_F(CloudCredentialStoreTest, MigratesLegacyPlaintextSettings)
     EXPECT_EQ(loaded.expiresAt, 42);
     EXPECT_EQ(loaded.email, QStringLiteral("legacy@example.com"));
     EXPECT_TRUE(settings.value(AppSettingsKeys::cloudToken()).toString().isEmpty());
+    EXPECT_TRUE(settings.value(AppSettingsKeys::cloudTokenExpiresAt()).toString().isEmpty());
     EXPECT_TRUE(settings.value(AppSettingsKeys::cloudUserEmail()).toString().isEmpty());
 }
