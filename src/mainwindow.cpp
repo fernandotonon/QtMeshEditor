@@ -2304,25 +2304,46 @@ void MainWindow::setupCloudAccountStatusControl()
 
     m_cloudSignInAction = m_cloudAccountMenu->addAction(tr("Sign in to QtMesh Cloud..."));
     m_cloudSignInAction->setObjectName(QStringLiteral("actionQtMeshCloudSignIn"));
-    connect(m_cloudSignInAction, &QAction::triggered, this, &MainWindow::signInToQtMeshCloud);
+    connect(m_cloudSignInAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Sign in"));
+        signInToQtMeshCloud();
+    });
 
     m_cloudSignOutAction = m_cloudAccountMenu->addAction(tr("Sign out"));
     m_cloudSignOutAction->setObjectName(QStringLiteral("actionQtMeshCloudSignOut"));
-    connect(m_cloudSignOutAction, &QAction::triggered, this, &MainWindow::signOutOfQtMeshCloud);
+    connect(m_cloudSignOutAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Sign out"));
+        signOutOfQtMeshCloud();
+    });
 
     m_cloudAccountMenu->addSeparator();
 
     m_cloudUploadFilesAction = m_cloudAccountMenu->addAction(tr("Upload Files..."));
     m_cloudUploadFilesAction->setObjectName(QStringLiteral("actionQtMeshCloudUploadFiles"));
-    connect(m_cloudUploadFilesAction, &QAction::triggered, this, &MainWindow::uploadFilesToQtMeshCloud);
+    connect(m_cloudUploadFilesAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Upload Files"));
+        uploadFilesToQtMeshCloud();
+    });
 
     m_cloudOpenDashboardAction = m_cloudAccountMenu->addAction(tr("Open My Projects"));
     m_cloudOpenDashboardAction->setObjectName(QStringLiteral("actionQtMeshCloudOpenProjects"));
-    connect(m_cloudOpenDashboardAction, &QAction::triggered, this, []() {
-        QDesktopServices::openUrl(QUrl(QStringLiteral(QTMESH_CLOUD_WEB_URL)));
+    connect(m_cloudOpenDashboardAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Open My Projects"));
+        if (!QDesktopServices::openUrl(QUrl(QStringLiteral(QTMESH_CLOUD_WEB_URL)))) {
+            QMessageBox::warning(this, tr("QtMesh Cloud"),
+                                 tr("Could not open QtMesh Cloud in your browser."));
+        }
     });
 
-    connect(m_cloudAccountMenu, &QMenu::aboutToShow, this, &MainWindow::updateCloudAuthActions);
+    connect(m_cloudAccountMenu, &QMenu::aboutToShow, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar menu opened"));
+        updateCloudAuthActions();
+    });
 
     // Push the account control to the bottom of the left objects toolbar (VS Code-style).
     QWidget* toolbarStretch = new QWidget(ui->objectsToolbar);

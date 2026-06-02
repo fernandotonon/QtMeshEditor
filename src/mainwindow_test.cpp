@@ -86,6 +86,11 @@ protected:
     void TearDown() override {
         delete window;
         window = nullptr;
+        CloudCredentialStore::clearSession();
+        QSettings settings;
+        settings.remove(AppSettingsKeys::cloudUserName());
+        settings.remove(AppSettingsKeys::cloudUserSlug());
+        settings.remove(AppSettingsKeys::cloudUserEmail());
         // Tests below switch the editor mode (Animation/Material/etc). Reset
         // the singleton so subsequent test cases see a fresh ObjectMode
         // controller — otherwise stale state leaks into m_editModeLabel and
