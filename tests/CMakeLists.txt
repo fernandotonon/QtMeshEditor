@@ -503,6 +503,13 @@ if(BUILD_TESTS)
             "${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialEditorQML_perf_test.cpp"
         )
     endif()
+
+    # Cloud account toolbar widget tests
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudAccountMenuButton_test.cpp")
+        create_test_executable(CloudAccountMenuButton_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudAccountMenuButton_test.cpp"
+        )
+    endif()
     
     # 4. QML Component Test Runner (existing) - special handling for CI
     create_test_executable_no_autotest(MaterialEditorQML_qml_test_runner
@@ -538,6 +545,10 @@ if(BUILD_TESTS)
     
     if(TARGET MaterialEditorQML_perf_test)
         gtest_discover_tests(MaterialEditorQML_perf_test DISCOVERY_MODE PRE_TEST)
+    endif()
+
+    if(TARGET CloudAccountMenuButton_test)
+        gtest_discover_tests(CloudAccountMenuButton_test DISCOVERY_MODE PRE_TEST)
     endif()
     
     if(TARGET MaterialEditorQML_qml_test_runner)

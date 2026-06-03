@@ -2,6 +2,7 @@
 
 #include "AppSettingsKeys.h"
 #include "CloudCredentialStore.h"
+#include "SentryReporter.h"
 
 #include <QAction>
 #include <QHBoxLayout>
@@ -177,7 +178,11 @@ CloudAccountMenuButton::CloudAccountMenuButton(QWidget* parent)
     m_button->setMenu(m_menu);
     layout->addWidget(m_button);
 
-    connect(m_menu, &QMenu::aboutToShow, this, &CloudAccountMenuButton::refresh);
+    connect(m_menu, &QMenu::aboutToShow, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar menu opened"));
+        refresh();
+    });
 
     refresh();
 }
@@ -237,21 +242,37 @@ void CloudAccountMenuButton::buildMenu()
 
     m_openProjectsAction = m_menu->addAction(tr("Open My Projects"));
     m_openProjectsAction->setObjectName(QStringLiteral("actionQtMeshCloudOpenProjects"));
-    connect(m_openProjectsAction, &QAction::triggered, this, &CloudAccountMenuButton::openProjectsRequested);
+    connect(m_openProjectsAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Open My Projects"));
+        emit openProjectsRequested();
+    });
 
     m_uploadAction = m_menu->addAction(tr("Upload Files..."));
     m_uploadAction->setObjectName(QStringLiteral("actionQtMeshCloudUploadFiles"));
-    connect(m_uploadAction, &QAction::triggered, this, &CloudAccountMenuButton::uploadFilesRequested);
+    connect(m_uploadAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Upload Files"));
+        emit uploadFilesRequested();
+    });
 
     m_mainSeparator = m_menu->addSeparator();
 
     m_signOutAction = m_menu->addAction(tr("Sign out"));
     m_signOutAction->setObjectName(QStringLiteral("actionQtMeshCloudSignOut"));
-    connect(m_signOutAction, &QAction::triggered, this, &CloudAccountMenuButton::signOutRequested);
+    connect(m_signOutAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Sign out"));
+        emit signOutRequested();
+    });
 
     m_signInAction = m_menu->addAction(tr("Sign in to QtMesh Cloud"));
     m_signInAction->setObjectName(QStringLiteral("actionQtMeshCloudSignIn"));
-    connect(m_signInAction, &QAction::triggered, this, &CloudAccountMenuButton::signInRequested);
+    connect(m_signInAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Sign in"));
+        emit signInRequested();
+    });
 }
 
 void CloudAccountMenuButton::updateHeader(const QString& displayName, bool signedIn)
