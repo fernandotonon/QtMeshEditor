@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QLabel>
 #include <QMenu>
+#include <QObject>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QToolButton>
@@ -235,16 +236,9 @@ TEST_F(CloudAccountMenuButtonTest, MenuEmitsOpenProjectsRequested)
     ASSERT_NE(openProjects, nullptr);
     ASSERT_TRUE(openProjects->isEnabled());
 
-    int openProjectsSignalCount = 0;
-    QMetaObject::Connection conn = connect(
-        &button, &CloudAccountMenuButton::openProjectsRequested, this,
-        [&openProjectsSignalCount]() { ++openProjectsSignalCount; });
-
-    QSignalSpy actionSpy(openProjects, &QAction::triggered);
+    QSignalSpy spy(&button, &CloudAccountMenuButton::openProjectsRequested);
     openProjects->trigger();
-    EXPECT_EQ(actionSpy.count(), 1);
-    EXPECT_EQ(openProjectsSignalCount, 1);
-    disconnect(conn);
+    EXPECT_EQ(spy.count(), 1);
 }
 
 TEST_F(CloudAccountMenuButtonTest, AboutToShowRefreshesSignedInState)
@@ -279,6 +273,11 @@ TEST_F(CloudAccountMenuButtonTest, SignedOutButtonRepaintsWithoutCrash)
     button.refresh();
     button.toolButton()->repaint();
     QApplication::processEvents();
+
+    auto* subtitle = button.findChild<QLabel*>(QStringLiteral("cloudAccountMenuHeaderSubtitle"),
+                                               Qt::FindChildrenRecursively);
+    ASSERT_NE(subtitle, nullptr);
+    EXPECT_EQ(subtitle->text(), QStringLiteral("Signed in to QtMesh Cloud"));
 
     CloudCredentialStore::clearSession();
     QSettings().remove(AppSettingsKeys::cloudUserName());

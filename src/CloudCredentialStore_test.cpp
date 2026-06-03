@@ -4,7 +4,9 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
 
@@ -73,6 +75,10 @@ TEST_F(CloudCredentialStoreTest, LoadSessionReturnsEmptyForCorruptFile)
 {
     const QString path = sessionFilePath();
     ASSERT_FALSE(path.isEmpty());
+
+    const QFileInfo info(path);
+    if (QDir dir = info.dir(); !dir.exists())
+        ASSERT_TRUE(dir.mkpath(QStringLiteral(".")));
 
     QFile file(path);
     ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));

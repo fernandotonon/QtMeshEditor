@@ -2297,32 +2297,17 @@ void MainWindow::setupCloudAccountStatusControl()
 {
     m_cloudAccountControl = new CloudAccountMenuButton(this);
 
-    connect(m_cloudAccountControl, &CloudAccountMenuButton::signInRequested, this, [this]() {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("Cloud toolbar: Sign in"));
-        signInToQtMeshCloud();
-    });
-    connect(m_cloudAccountControl, &CloudAccountMenuButton::signOutRequested, this, [this]() {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("Cloud toolbar: Sign out"));
-        signOutOfQtMeshCloud();
-    });
-    connect(m_cloudAccountControl, &CloudAccountMenuButton::uploadFilesRequested, this, [this]() {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("Cloud toolbar: Upload Files"));
-        uploadFilesToQtMeshCloud();
-    });
+    connect(m_cloudAccountControl, &CloudAccountMenuButton::signInRequested, this,
+            &MainWindow::signInToQtMeshCloud);
+    connect(m_cloudAccountControl, &CloudAccountMenuButton::signOutRequested, this,
+            &MainWindow::signOutOfQtMeshCloud);
+    connect(m_cloudAccountControl, &CloudAccountMenuButton::uploadFilesRequested, this,
+            &MainWindow::uploadFilesToQtMeshCloud);
     connect(m_cloudAccountControl, &CloudAccountMenuButton::openProjectsRequested, this, [this]() {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("Cloud toolbar: Open My Projects"));
         if (!QDesktopServices::openUrl(QUrl(QStringLiteral(QTMESH_CLOUD_WEB_URL)))) {
             QMessageBox::warning(this, tr("QtMesh Cloud"),
                                  tr("Could not open QtMesh Cloud in your browser."));
         }
-    });
-    connect(m_cloudAccountControl->menu(), &QMenu::aboutToShow, this, []() {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("Cloud toolbar menu opened"));
     });
 
     // Push the account control to the bottom of the left objects toolbar (VS Code-style).
@@ -2413,6 +2398,8 @@ void MainWindow::signInToQtMeshCloud()
 
     const auto failSignIn = [&](const QString& message) {
         pollTimer.stop();
+        if (!prompt.isVisible())
+            return;
         QMessageBox::warning(this, tr("QtMesh Cloud Sign In"), message);
         prompt.reject();
     };
@@ -2458,15 +2445,23 @@ void MainWindow::signInToQtMeshCloud()
     };
 
     connect(copyButton, &QPushButton::clicked, this, [userCode = code.userCode]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud sign-in: Copy Code"));
         if (QApplication::clipboard())
             QApplication::clipboard()->setText(userCode);
     });
     connect(cancelButton, &QPushButton::clicked, &prompt, [&pollTimer, &prompt]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud sign-in: Cancel"));
         pollTimer.stop();
         prompt.reject();
     });
     connect(openButton, &QPushButton::clicked, &prompt, [this, statusLabel, verificationUri = code.verificationUriComplete]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud sign-in: Open Browser"));
         if (!QDesktopServices::openUrl(QUrl(verificationUri))) {
+            SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                          QStringLiteral("Cloud sign-in: Open Browser failed"));
             QMessageBox::warning(this, tr("QtMesh Cloud"),
                                  tr("Could not open QtMesh Cloud in your browser."));
             return;
@@ -2479,7 +2474,7 @@ void MainWindow::signInToQtMeshCloud()
     prompt.resize(420, prompt.sizeHint().height());
 
     pollTimer.start(intervalMs);
-    pollOnce();
+    QTimer::singleShot(0, &prompt, pollOnce);
     prompt.exec();
     pollTimer.stop();
 
