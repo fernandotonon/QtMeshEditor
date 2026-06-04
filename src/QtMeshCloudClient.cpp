@@ -1,4 +1,5 @@
 #include "QtMeshCloudClient.h"
+#include "FeedbackDiagnostics.h"
 #include "SentryReporter.h"
 
 #include <QCoreApplication>
@@ -7,9 +8,11 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLocale>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QSysInfo>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
@@ -1059,5 +1062,211 @@ QtMeshCloudClient::ManifestResult QtMeshCloudClient::fetchProjectManifest(const 
     out.ok = true;
     SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
         QStringLiteral("QtMesh Cloud fetchProjectManifest: ok"));
+    return out;
+}
+
+QString QtMeshCloudClient::normalizeFeedbackType(const QString& type)
+{
+    const QString trimmed = type.trimmed();
+    if (trimmed == QStringLiteral("feature"))
+        return QStringLiteral("feature_request");
+    return trimmed;
+}
+
+QJsonObject QtMeshCloudClient::buildFeedbackPayload(const FeedbackSubmission& submission)
+{
+    QJsonObject body;
+    body.insert(QStringLiteral("type"), normalizeFeedbackType(submission.type));
+    if (!submission.rating.trimmed().isEmpty())
+        body.insert(QStringLiteral("rating"), submission.rating.trimmed());
+    body.insert(QStringLiteral("message"), submission.message.trimmed());
+
+    const QString appVersion = QCoreApplication::applicationVersion();
+    body.insert(QStringLiteral("appVersion"), appVersion.isEmpty() ? QStringLiteral("unknown") : appVersion);
+    body.insert(QStringLiteral("osName"), QSysInfo::productType());
+    body.insert(QStringLiteral("osVersion"), QSysInfo::productVersion());
+    body.insert(QStringLiteral("architecture"), QSysInfo::currentCpuArchitecture());
+    body.insert(QStringLiteral("locale"), QLocale::system().name());
+    body.insert(QStringLiteral("editorSessionId"), FeedbackDiagnostics::editorSessionId());
+
+    if (!submission.relatedOperation.trimmed().isEmpty())
+        body.insert(QStringLiteral("relatedOperation"), submission.relatedOperation.trimmed());
+    if (!submission.relatedFormat.trimmed().isEmpty())
+        body.insert(QStringLiteral("relatedFormat"), submission.relatedFormat.trimmed());
+
+    body.insert(QStringLiteral("includeDiagnostics"), submission.includeDiagnostics);
+    body.insert(QStringLiteral("contactAllowed"), submission.contactAllowed);
+
+    if (submission.includeDiagnostics) {
+        QJsonObject diagnostics = submission.diagnosticsJson;
+        if (diagnostics.isEmpty())
+            diagnostics = FeedbackDiagnostics::collectDiagnostics(true);
+        const QString diagnosticsString = FeedbackDiagnostics::diagnosticsJsonString(diagnostics);
+        if (!diagnosticsString.isEmpty()) {
+            QJsonParseError parseError{};
+            const QJsonDocument doc = QJsonDocument::fromJson(diagnosticsString.toUtf8(), &parseError);
+            if (parseError.error == QJsonParseError::NoError && doc.isObject())
+                body.insert(QStringLiteral("diagnosticsJson"), doc.object());
+            else
+                body.insert(QStringLiteral("diagnosticsJson"), diagnosticsString);
+        } else {
+            body.insert(QStringLiteral("diagnosticsJson"), QJsonObject());
+        }
+    }
+
+    return body;
+}
+
+QString QtMeshCloudClient::friendlyFeedbackError(int httpStatus,
+                                                 const QString& errorCode,
+                                                 const QString& fallback)
+{
+    if (httpStatus == 401 || errorCode == QStringLiteral("unauthorized")
+        || fallback.contains(QStringLiteral("Unauthorized"), Qt::CaseInsensitive))
+        return QStringLiteral("Your QtMesh Cloud session expired. Sign in again and retry.");
+    if (httpStatus == 413 || errorCode == QStringLiteral("payload_too_large")
+        || fallback.contains(QStringLiteral("Payload too large"), Qt::CaseInsensitive)
+        || fallback.contains(QStringLiteral("too large"), Qt::CaseInsensitive))
+        return QStringLiteral("Your feedback is too large. Shorten the message or turn off diagnostics.");
+    if (httpStatus == 429 || errorCode == QStringLiteral("rate_limited")
+        || fallback.contains(QStringLiteral("Too many feedback"), Qt::CaseInsensitive))
+        return QStringLiteral("Too many feedback submissions. Please wait a few minutes and try again.");
+    if (httpStatus == 400 || errorCode == QStringLiteral("validation_error")) {
+        if (fallback.contains(QStringLiteral("Invalid feedback type"), Qt::CaseInsensitive))
+            return QStringLiteral("This feedback category is not supported. Choose another type and try again.");
+        if (fallback.contains(QStringLiteral("Invalid rating"), Qt::CaseInsensitive))
+            return QStringLiteral("The selected rating is not supported. Choose another rating and try again.");
+        if (fallback.contains(QStringLiteral("Invalid related operation"), Qt::CaseInsensitive))
+            return QStringLiteral("The related workflow value was not accepted. Clear it and try again.");
+        if (fallback.contains(QStringLiteral("Message is required"), Qt::CaseInsensitive))
+            return QStringLiteral("Enter a message before sending feedback.");
+        if (fallback.contains(QStringLiteral("Invalid JSON"), Qt::CaseInsensitive))
+            return QStringLiteral("The feedback payload could not be sent. Try again or send it on the website.");
+        if (!fallback.isEmpty())
+            return QStringLiteral("The server could not accept this feedback: %1").arg(fallback);
+        return QStringLiteral("The feedback could not be accepted. Check the message and try again.");
+    }
+    if (!fallback.isEmpty())
+        return fallback;
+    if (httpStatus > 0)
+        return QStringLiteral("Could not send feedback (HTTP %1).").arg(httpStatus);
+    return QStringLiteral("Could not send feedback. Check your connection and try again.");
+}
+
+QtMeshCloudClient::FeedbackResult QtMeshCloudClient::submitFeedback(const QString& bearerToken,
+                                                                    const FeedbackSubmission& submission,
+                                                                    int timeoutMs)
+{
+    FeedbackResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        out.userMessage = friendlyFeedbackError(401, QStringLiteral("unauthorized"), out.errorString);
+        return out;
+    }
+    if (submission.type.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("feedback type is required");
+        out.userMessage = friendlyFeedbackError(400, QStringLiteral("validation_error"), out.errorString);
+        return out;
+    }
+    const QString normalizedType = normalizeFeedbackType(submission.type);
+    if (!normalizedType.isEmpty()
+        && normalizedType != QStringLiteral("bug")
+        && normalizedType != QStringLiteral("feature_request")
+        && normalizedType != QStringLiteral("general")
+        && normalizedType != QStringLiteral("import_problem")
+        && normalizedType != QStringLiteral("export_problem")) {
+        out.errorString = QStringLiteral("unsupported feedback type: %1").arg(submission.type);
+        out.userMessage = friendlyFeedbackError(400, QStringLiteral("validation_error"),
+                                                QStringLiteral("Invalid feedback type"));
+        return out;
+    }
+    if (submission.message.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("message is required");
+        out.userMessage = friendlyFeedbackError(400, QStringLiteral("validation_error"), out.errorString);
+        return out;
+    }
+    if (submission.message.size() > kFeedbackMaxMessageLength) {
+        out.errorString = QStringLiteral("message exceeds maximum length");
+        out.userMessage = friendlyFeedbackError(413, QStringLiteral("payload_too_large"), out.errorString);
+        return out;
+    }
+
+    const QUrl url(apiBaseUrl() + QString(kFeedbackApiPath));
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        out.userMessage = out.errorString;
+        return out;
+    }
+
+    const QJsonObject body = buildFeedbackPayload(submission);
+    const QByteArray payload = QJsonDocument(body).toJson(QJsonDocument::Compact);
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req = authorizedJsonRequest(url, bearerToken, timeoutMs);
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.feedback"),
+                                  QStringLiteral("QtMesh Cloud submitFeedback: start type=%1")
+                                      .arg(submission.type));
+
+    QNetworkReply* reply = nam.post(req, payload);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    out.responseBodySnippet = trimSnippet(responseBody);
+
+    QJsonObject root;
+    QString parseError;
+    const bool parsed = parseJsonObjectBody(responseBody, root, parseError);
+    const QString errorCode = parsed ? jsonErrorCode(root) : QString();
+    const QString apiErrorText = parsed ? root.value(QStringLiteral("error")).toString() : QString();
+
+    // POST /v1/feedback — success is HTTP 201 with { ok, id, status, createdAt }.
+    if (nerr == QNetworkReply::NoError && out.httpStatus == 201 && parsed) {
+        out.id = root.value(QStringLiteral("id")).toString();
+        out.status = root.value(QStringLiteral("status")).toString();
+        const QJsonValue createdAtVal = root.value(QStringLiteral("createdAt"));
+        if (createdAtVal.isDouble())
+            out.createdAt = QString::number(static_cast<qint64>(createdAtVal.toDouble()));
+        else
+            out.createdAt = createdAtVal.toString();
+        const bool okFlag = root.contains(QStringLiteral("ok")) ? root.value(QStringLiteral("ok")).toBool()
+                                                                : true;
+        if (okFlag && !out.id.isEmpty()) {
+            out.ok = true;
+            SentryReporter::addBreadcrumb(QStringLiteral("cloud.feedback"),
+                                          QStringLiteral("QtMesh Cloud submitFeedback: ok id=%1 HTTP %2")
+                                              .arg(out.id)
+                                              .arg(out.httpStatus));
+            return out;
+        }
+    }
+
+    QString errMsg;
+    if (nerr != QNetworkReply::NoError)
+        errMsg = transportErr;
+    else if (!apiErrorText.isEmpty())
+        errMsg = apiErrorText;
+    else
+        errMsg = QStringLiteral("HTTP %1").arg(out.httpStatus);
+    if (!errorCode.isEmpty() && errorCode != apiErrorText)
+        errMsg = errorCode;
+    if (!out.responseBodySnippet.isEmpty() && !errMsg.contains(out.responseBodySnippet))
+        errMsg += QStringLiteral(" — ") + out.responseBodySnippet;
+
+    out.errorString = errMsg;
+    out.userMessage = friendlyFeedbackError(out.httpStatus, errorCode, errMsg);
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.feedback"),
+                                  QStringLiteral("QtMesh Cloud submitFeedback: failure HTTP %1 %2")
+                                      .arg(out.httpStatus)
+                                      .arg(errMsg),
+                                  QStringLiteral("warning"));
     return out;
 }

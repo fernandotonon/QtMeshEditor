@@ -205,6 +205,47 @@ public:
                                                const QString& ownerSlug,
                                                const QString& projectSlug,
                                                int timeoutMs = 30000);
+
+    struct FeedbackSubmission {
+        QString type;
+        QString rating;
+        QString message;
+        QString relatedOperation;
+        QString relatedFormat;
+        bool includeDiagnostics = false;
+        QJsonObject diagnosticsJson;
+        bool contactAllowed = false;
+    };
+
+    struct FeedbackResult {
+        bool ok = false;
+        int httpStatus = 0;
+        QString errorString;
+        QString userMessage;
+        QString responseBodySnippet;
+        QString id;
+        QString status;
+        QString createdAt;
+    };
+
+    static constexpr int kFeedbackMaxMessageLength = 4000;
+    static constexpr QLatin1StringView kFeedbackApiPath{"/v1/feedback"};
+
+    /// Normalize editor/API type strings (e.g. legacy `feature` → `feature_request`).
+    static QString normalizeFeedbackType(const QString& type);
+
+    /// Build POST /v1/feedback JSON body (also used by unit tests).
+    static QJsonObject buildFeedbackPayload(const FeedbackSubmission& submission);
+
+    /// Map API / transport failures to user-facing copy.
+    static QString friendlyFeedbackError(int httpStatus,
+                                         const QString& errorCode,
+                                         const QString& fallback);
+
+    /// POST /v1/feedback — authenticated in-app feedback (#701).
+    static FeedbackResult submitFeedback(const QString& bearerToken,
+                                         const FeedbackSubmission& submission,
+                                         int timeoutMs = 30000);
 };
 
 #endif

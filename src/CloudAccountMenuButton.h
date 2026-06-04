@@ -32,6 +32,7 @@ signals:
     void signOutRequested();
     void uploadFilesRequested();
     void openProjectsRequested();
+    void feedbackRequested();
 
 private:
     class AvatarButton;
@@ -51,6 +52,7 @@ private:
     QAction* m_signInAction = nullptr;
     QAction* m_signOutAction = nullptr;
     QAction* m_uploadAction = nullptr;
+    QAction* m_feedbackAction = nullptr;
     QAction* m_openProjectsAction = nullptr;
 };
 

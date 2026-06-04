@@ -41,6 +41,8 @@
 #include "AppConsoleLog.h"
 #include "AppSettingsKeys.h"
 #include "CloudAccountMenuButton.h"
+#include "FeedbackDialog.h"
+#include "FeedbackReportHelper.h"
 #include "CloudCredentialStore.h"
 #include "CloudUploadPlanner.h"
 #include "ui_mainwindow.h"
@@ -202,6 +204,10 @@ MainWindow::MainWindow(QWidget *parent) :
     manager->CreateEmptyScene();
 
     initToolBar();
+
+    FeedbackReportHelper::setOpenFeedbackHandler([this](const FeedbackPrefill& prefill) {
+        showSendFeedbackDialog(prefill);
+    });
 
     // Recent Files submenu in File menu
     m_recentFilesMenu = new QMenu(tr("Recent Files"), this); // NOSONAR — Qt parent manages lifetime
@@ -2231,6 +2237,15 @@ void MainWindow::initToolBar()
         widget->show();
     });
 
+    // Send Feedback (#701)
+    QAction* sendFeedbackAction = ui->menuHelp->addAction(tr("Send Feedback..."));
+    sendFeedbackAction->setObjectName(QStringLiteral("actionSendFeedback"));
+    connect(sendFeedbackAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Help > Send Feedback"));
+        showSendFeedbackDialog({});
+    });
+
     // Crash reporting toggle in Help menu
     ui->menuHelp->addSeparator();
     QAction* crashReportAction = ui->menuHelp->addAction(tr("Send Crash Reports"));
@@ -2309,6 +2324,9 @@ void MainWindow::setupCloudAccountStatusControl()
                                  tr("Could not open QtMesh Cloud in your browser."));
         }
     });
+    connect(m_cloudAccountControl, &CloudAccountMenuButton::feedbackRequested, this, [this]() {
+        showSendFeedbackDialog({});
+    });
 
     // Push the account control to the bottom of the left objects toolbar (VS Code-style).
     auto* toolbarStretch = new QWidget(ui->objectsToolbar);
@@ -2326,6 +2344,27 @@ void MainWindow::updateCloudAuthActions()
 {
     if (m_cloudAccountControl)
         m_cloudAccountControl->refresh();
+}
+
+void MainWindow::showSendFeedbackDialog(const FeedbackPrefill& prefill)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Send Feedback dialog opened"));
+
+    FeedbackDialog dialog(this);
+    dialog.applyPrefill(prefill);
+
+    const auto refreshAccount = [&dialog]() {
+        dialog.setSignedInAccountLabel(storedCloudDisplayName(), CloudCredentialStore::hasSession());
+    };
+    refreshAccount();
+
+    dialog.signInRequested = [this, refreshAccount]() {
+        signInToQtMeshCloud();
+        refreshAccount();
+    };
+
+    dialog.exec();
 }
 
 void MainWindow::signInToQtMeshCloud()
@@ -3662,7 +3701,14 @@ void MainWindow::on_actionOpen_Scene_triggered()
 
     auto txn = SentryReporter::startTransaction("ui.import", "scene.import");
     try {
-        MeshImporterExporter::sceneImporter(fileName);
+        if (!MeshImporterExporter::sceneImporter(fileName)) {
+            FeedbackReportHelper::showFailureWithReportOption(
+                this, tr("Open Scene"), tr("Could not import scene file."),
+                FeedbackReportHelper::importFailurePrefill(
+                    QFileInfo(fileName).suffix(), tr("Could not import scene file.")));
+            SentryReporter::finishTransaction(txn);
+            return;
+        }
     } catch (...) {
         SentryReporter::finishTransaction(txn);
         throw;
@@ -3697,8 +3743,13 @@ void MainWindow::on_actionSave_Scene_triggered()
                 progressDialog.setValue(progress);
                 QApplication::processEvents();
             });
-        if (result != 0)
-            QMessageBox::warning(this, tr("Save Scene"), tr("Failed to save scene."));
+        if (result != 0) {
+            FeedbackReportHelper::showFailureWithReportOption(
+                this, tr("Save Scene"), tr("Failed to save scene."),
+                FeedbackReportHelper::exportFailurePrefill(
+                    QFileInfo(fileName).suffix(), tr("Failed to save scene."),
+                    QString::number(result)));
+        }
     } catch (...) {
         SentryReporter::finishTransaction(txn);
         throw;

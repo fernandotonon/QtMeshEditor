@@ -1,4 +1,5 @@
 #include "SentryReporter.h"
+#include "FeedbackDiagnostics.h"
 #include "AppSettingsKeys.h"
 #include <QSettings>
 #include <QMessageBox>
@@ -104,6 +105,8 @@ void SentryReporter::setTag(const QString &key, const QString &value)
 void SentryReporter::addBreadcrumb(const QString &category, const QString &message,
                                    const QString &level)
 {
+    FeedbackDiagnostics::recordRecentEvent(category, message);
+
 #ifdef ENABLE_SENTRY
     if (!s_initialized) return;
 
