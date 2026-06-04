@@ -56,13 +56,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Scan media/ via Docker (ghcr.io/fernandotonon/qtmesh:latest)
+      # Published :latest may lag behind Dockerfile/runtime deps (e.g. libsecret).
+      # Build from this repo's Dockerfile + the latest release .deb to validate the image.
+      - name: Build qtmesh Docker image for asset scan
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -E '^[[:space:]]*project\([[:space:]]*QtMeshEditor[[:space:]]+VERSION' CMakeLists.txt \
+            | sed -E 's/.*VERSION[[:space:]]+([0-9.]+).*/\1/')"
+          DEB_URL="https://github.com/fernandotonon/QtMeshEditor/releases/download/${VERSION}/qtmesheditor_amd64.deb"
+          if ! curl -fsSL -o qtmesheditor.deb "$DEB_URL"; then
+            echo "::notice::No release .deb for ${VERSION}; using 3.4.0 package for Docker scan build."
+            curl -fsSL -o qtmesheditor.deb \
+              "https://github.com/fernandotonon/QtMeshEditor/releases/download/3.4.0/qtmesheditor_amd64.deb"
+          fi
+          docker build -t ghcr.io/fernandotonon/qtmesh:ci-scan -f Dockerfile --build-arg VERSION="${VERSION}" .
+
+      - name: Scan media/ via Docker (ci-scan image)
         run: |
           set +e
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
-            ghcr.io/fernandotonon/qtmesh:latest \
+            ghcr.io/fernandotonon/qtmesh:ci-scan \
             scan --config /workspace/qtmesh.yml --json > qtmesh-scan-report.json
           scan_exit=$?
           set -e
@@ -130,6 +145,7 @@ jobs:
           command: scan
           input-file: .
           options: --config /workspace/qtmesh.yml
+          image-tag: ci-scan
 
 ####################################################################
 # Windows Deploy
