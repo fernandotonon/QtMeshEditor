@@ -14,6 +14,8 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QImage>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
@@ -899,6 +901,62 @@ TEST(ScanEngineTest, FormatJson_Structure)
     EXPECT_EQ(fromObj, json);
 }
 
+TEST(ScanEngineTest, FormatJson_IncludesAssetInspectExtensionFields)
+{
+    ScanResult result;
+    AssetInfo asset;
+    asset.relativePath = QStringLiteral("hero.fbx");
+    asset.format = QStringLiteral("fbx");
+    asset.triangleCount = 1200;
+    asset.submeshCount = 3;
+    asset.maxTrianglesPerMesh = 800;
+    asset.estimatedDrawCalls = 3;
+    asset.lodMeshCount = 1;
+    asset.probedTextureMaxDimension = 512;
+    asset.estimatedTextureVramBytes = 524288;
+    asset.maxTextureDimension = 512;
+
+    MeshStats meshRow;
+    meshRow.name = QStringLiteral("body");
+    meshRow.vertexCount = 400;
+    meshRow.triangleCount = 800;
+    meshRow.submeshCount = 2;
+    asset.meshStats.append(meshRow);
+
+    TextureRefStats texRow;
+    texRow.path = QStringLiteral("albedo.png");
+    texRow.width = 512;
+    texRow.height = 256;
+    texRow.fileSizeBytes = 65536;
+    texRow.format = QStringLiteral("png");
+    asset.textureStats.append(texRow);
+
+    result.assets.append(asset);
+
+    const QJsonObject root = ScanEngine::scanReportToJsonObject(result);
+    ASSERT_TRUE(root.contains(QStringLiteral("assets")));
+    const QJsonArray assets = root[QStringLiteral("assets")].toArray();
+    ASSERT_EQ(assets.size(), 1);
+    const QJsonObject ao = assets.at(0).toObject();
+    EXPECT_EQ(ao[QStringLiteral("triangleCount")].toInt(), 1200);
+    EXPECT_EQ(ao[QStringLiteral("submeshCount")].toInt(), 3);
+    EXPECT_EQ(ao[QStringLiteral("maxTrianglesPerMesh")].toInt(), 800);
+    EXPECT_EQ(ao[QStringLiteral("estimatedDrawCalls")].toInt(), 3);
+    EXPECT_EQ(ao[QStringLiteral("lodMeshCount")].toInt(), 1);
+    EXPECT_EQ(ao[QStringLiteral("probedTextureMaxDimension")].toInt(), 512);
+    EXPECT_EQ(ao[QStringLiteral("estimatedTextureVramBytes")].toVariant().toLongLong(), 524288);
+
+    ASSERT_TRUE(ao.contains(QStringLiteral("meshStats")));
+    const QJsonArray meshes = ao[QStringLiteral("meshStats")].toArray();
+    ASSERT_EQ(meshes.size(), 1);
+    EXPECT_EQ(meshes.at(0).toObject()[QStringLiteral("name")].toString(), QStringLiteral("body"));
+
+    ASSERT_TRUE(ao.contains(QStringLiteral("textureStats")));
+    const QJsonArray textures = ao[QStringLiteral("textureStats")].toArray();
+    ASSERT_EQ(textures.size(), 1);
+    EXPECT_EQ(textures.at(0).toObject()[QStringLiteral("path")].toString(), QStringLiteral("albedo.png"));
+}
+
 TEST(ScanEngineTest, FormatJson_IncludesAnimationsBonesAndLoadError)
 {
     ScanResult result;
@@ -1699,6 +1757,79 @@ TEST(ScanEngineTest, InspectAsset_ObjParsesGeometryAndTextureReferences)
     EXPECT_GE(info.textureRefCount, 1u);
     EXPECT_TRUE(info.texturePaths.contains("texture.png"));
     EXPECT_FALSE(info.hasEmbeddedTextures);
+    EXPECT_EQ(info.triangleCount, info.faceCount);
+    EXPECT_GE(info.submeshCount, 1u);
+    EXPECT_EQ(info.maxTrianglesPerMesh, info.triangleCount);
+    EXPECT_FALSE(info.meshStats.isEmpty());
+    EXPECT_GE(info.estimatedDrawCalls, 1u);
+    EXPECT_TRUE(info.textureStats.isEmpty());
+    EXPECT_EQ(info.probedTextureMaxDimension, 0);
+}
+
+TEST(ScanEngineTest, InspectAsset_TextureProbePopulatesStatsWhenEnabled)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString texPath = QDir(tmpDir.path()).filePath("albedo.png");
+    {
+        QImage img(4, 8, QImage::Format_RGB32);
+        img.fill(Qt::red);
+        ASSERT_TRUE(img.save(texPath));
+    }
+
+    QFile mtl(QDir(tmpDir.path()).filePath("mesh.mtl"));
+    ASSERT_TRUE(mtl.open(QIODevice::WriteOnly | QIODevice::Text));
+    mtl.write("newmtl m\nmap_Kd albedo.png\n");
+    mtl.close();
+
+    QFile obj(QDir(tmpDir.path()).filePath("mesh.obj"));
+    ASSERT_TRUE(obj.open(QIODevice::WriteOnly | QIODevice::Text));
+    obj.write(
+        "mtllib mesh.mtl\n"
+        "usemtl m\n"
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+        "f 1 2 3\n");
+    obj.close();
+
+    AssetInspectOptions opts;
+    opts.probeTextureFiles = true;
+    const AssetInfo info = ScanEngine::inspectAsset(obj.fileName(), tmpDir.path(), opts);
+    ASSERT_FALSE(info.loadError);
+    ASSERT_FALSE(info.textureStats.isEmpty());
+    EXPECT_FALSE(info.textureStats.first().missing);
+    EXPECT_EQ(info.textureStats.first().width, 4);
+    EXPECT_EQ(info.textureStats.first().height, 8);
+    EXPECT_EQ(info.probedTextureMaxDimension, 8);
+    EXPECT_GE(info.estimatedTextureVramBytes, 4 * 8 * 4);
+    EXPECT_GE(info.maxTextureDimension, 8);
+}
+
+TEST(ScanEngineTest, InspectAsset_TextureProbeSkippedByDefault)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString texPath = QDir(tmpDir.path()).filePath("albedo.png");
+    {
+        QImage img(2, 2, QImage::Format_RGB32);
+        img.fill(Qt::blue);
+        ASSERT_TRUE(img.save(texPath));
+    }
+
+    QFile mtl(QDir(tmpDir.path()).filePath("mesh.mtl"));
+    ASSERT_TRUE(mtl.open(QIODevice::WriteOnly | QIODevice::Text));
+    mtl.write("newmtl m\nmap_Kd albedo.png\n");
+    mtl.close();
+
+    const QString objPath = writeMinimalObj(tmpDir.path(), "mesh.obj");
+    ASSERT_FALSE(objPath.isEmpty());
+
+    const AssetInfo info = ScanEngine::inspectAsset(objPath, tmpDir.path());
+    ASSERT_FALSE(info.loadError);
+    EXPECT_TRUE(info.textureStats.isEmpty());
+    EXPECT_EQ(info.probedTextureMaxDimension, 0);
+    EXPECT_EQ(info.estimatedTextureVramBytes, 0);
 }
 
 TEST(ScanEngineTest, InspectAsset_AnimatedFixtureCollectsAnimationMetadata)

@@ -396,6 +396,12 @@ void applyPlatformProfile(ScanConfig& config, const PlatformProfile& profile)
     if (!profile.scopes.isEmpty())
         appendProfileScopes(config, profile.scopes, &warnings);
 
+    const QVariantMap meta = profile.metadata;
+    if (meta.value(QStringLiteral("inspect_textures")).toBool()
+        || meta.value(QStringLiteral("inspectTextures")).toBool()) {
+        config.probeTextureFiles = true;
+    }
+
     for (const QString& w : warnings) {
         QTextStream(stderr) << "Warning: " << w << Qt::endl;
     }

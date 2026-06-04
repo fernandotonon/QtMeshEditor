@@ -187,3 +187,27 @@ TEST(PlatformProfileLoaderTest, LoadByExplicitPath)
     ASSERT_TRUE(loaded.ok) << loaded.error.toStdString();
     EXPECT_EQ(loaded.profile.id, QStringLiteral("example-base"));
 }
+
+TEST(ApplyPlatformProfileTest, MetadataInspectTexturesEnablesProbe)
+{
+    ScanConfig config = ScanConfig::defaults();
+    EXPECT_FALSE(config.probeTextureFiles);
+
+    PlatformProfile profile;
+    profile.id = QStringLiteral("test-inspect");
+    profile.metadata.insert(QStringLiteral("inspect_textures"), true);
+    applyPlatformProfile(config, profile);
+    EXPECT_TRUE(config.probeTextureFiles);
+}
+
+TEST(PlatformProfileLoaderTest, BuiltinExampleTextureInspectProfileEnablesProbe)
+{
+    const PlatformProfileLoadResult loaded =
+        PlatformProfileLoader::load(QStringLiteral("example-texture-inspect"));
+    ASSERT_TRUE(loaded.ok) << loaded.error.toStdString();
+    EXPECT_TRUE(loaded.profile.metadata.value(QStringLiteral("inspect_textures")).toBool());
+
+    ScanConfig config = ScanConfig::defaults();
+    applyPlatformProfile(config, loaded.profile);
+    EXPECT_TRUE(config.probeTextureFiles);
+}

@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -51,6 +52,190 @@
 #include <vector>
 
 namespace {
+
+static bool meshNameLooksLikeLod(const QString& name)
+{
+    static const QRegularExpression re(
+        QStringLiteral(R"((?:^|[_\-.])(?:lod|level_of_detail)(?:[_\-.]?\d*)?$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    return re.match(name).hasMatch();
+}
+
+static void syncTriangleDerivedFields(AssetInfo& info)
+{
+    info.triangleCount = info.faceCount;
+}
+
+static void finalizeMeshStatsAggregates(AssetInfo& info)
+{
+    info.submeshCount = 0;
+    info.maxTrianglesPerMesh = 0;
+    for (const MeshStats& ms : info.meshStats) {
+        info.submeshCount += ms.submeshCount;
+        info.maxTrianglesPerMesh = std::max(info.maxTrianglesPerMesh, ms.triangleCount);
+    }
+}
+
+static void appendMeshStat(AssetInfo& info, const MeshStats& row)
+{
+    if (info.meshStats.size() >= AssetInfo::kMaxMeshStatsEntries)
+        return;
+    info.meshStats.append(row);
+}
+
+static void fillMeshStatsFromAssimpScene(const aiScene* scene, AssetInfo& info)
+{
+    if (!scene)
+        return;
+    info.lodMeshCount = 0;
+    for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
+        const aiMesh* m = scene->mMeshes[i];
+        if (!m)
+            continue;
+        const QString name = QString::fromUtf8(m->mName.C_Str());
+        if (meshNameLooksLikeLod(name))
+            info.lodMeshCount++;
+
+        MeshStats row;
+        row.name = name.isEmpty() ? QStringLiteral("mesh_%1").arg(i) : name;
+        row.vertexCount = m->mNumVertices;
+        row.triangleCount = m->mNumFaces;
+        row.submeshCount = 1;
+        appendMeshStat(info, row);
+    }
+    finalizeMeshStatsAggregates(info);
+    info.estimatedDrawCalls = scene->mNumMeshes;
+}
+
+static void fillMeshStatsFromOgreMesh(const Ogre::MeshPtr& mesh, const QString& meshLabel,
+                                    AssetInfo& info)
+{
+    if (!mesh)
+        return;
+    MeshStats row;
+    row.name = meshLabel.isEmpty() ? QString::fromStdString(mesh->getName()) : meshLabel;
+    row.submeshCount = mesh->getNumSubMeshes();
+    const bool hasShared = mesh->sharedVertexData != nullptr;
+    if (hasShared && mesh->sharedVertexData)
+        row.vertexCount = mesh->sharedVertexData->vertexCount;
+
+    for (unsigned s = 0; s < mesh->getNumSubMeshes(); ++s) {
+        const Ogre::SubMesh* sm = mesh->getSubMesh(s);
+        if (!sm || !sm->indexData)
+            continue;
+        row.triangleCount += sm->indexData->indexCount / 3;
+        if (!hasShared) {
+            if (sm->vertexData)
+                row.vertexCount += sm->vertexData->vertexCount;
+        } else if (!sm->useSharedVertices && sm->vertexData) {
+            row.vertexCount += sm->vertexData->vertexCount;
+        }
+    }
+    if (meshNameLooksLikeLod(row.name))
+        info.lodMeshCount++;
+    appendMeshStat(info, row);
+    finalizeMeshStatsAggregates(info);
+}
+
+static void fillMeshStatsFromOgreEntities(const QList<Ogre::Entity*>& entities, AssetInfo& info)
+{
+    info.meshStats.clear();
+    info.lodMeshCount = 0;
+    unsigned int drawCalls = 0;
+    for (const Ogre::Entity* entity : entities) {
+        if (!entity)
+            continue;
+        drawCalls += entity->getNumSubEntities();
+        const Ogre::MeshPtr mesh = entity->getMesh();
+        if (!mesh)
+            continue;
+        fillMeshStatsFromOgreMesh(mesh, QString::fromStdString(entity->getName()), info);
+    }
+    info.estimatedDrawCalls = drawCalls;
+    if (info.meshStats.isEmpty())
+        finalizeMeshStatsAggregates(info);
+}
+
+static QString resolveTexturePath(const QString& assetFilePath, const QString& textureRef)
+{
+    if (textureRef.isEmpty())
+        return {};
+    const QFileInfo refFi(textureRef);
+    if (refFi.isAbsolute())
+        return refFi.absoluteFilePath();
+    const QFileInfo assetFi(assetFilePath);
+    const QString besideAsset = QDir(assetFi.absolutePath()).filePath(textureRef);
+    if (QFileInfo::exists(besideAsset))
+        return QFileInfo(besideAsset).absoluteFilePath();
+    return refFi.filePath();
+}
+
+static void probeReferencedTextures(AssetInfo& info, const AssetInspectOptions& options)
+{
+    if (!options.probeTextureFiles)
+        return;
+
+    info.textureStats.clear();
+    info.probedTextureMaxDimension = 0;
+    info.estimatedTextureVramBytes = 0;
+
+    std::set<QString> seen;
+    for (const QString& ref : info.texturePaths) {
+        if (ref.isEmpty() || seen.count(ref) != 0)
+            continue;
+        seen.insert(ref);
+        if (info.textureStats.size() >= AssetInfo::kMaxTextureStatsEntries)
+            break;
+
+        TextureRefStats ts;
+        ts.path = ref;
+        ts.resolvedPath = resolveTexturePath(info.filePath, ref);
+        const QFileInfo fi(ts.resolvedPath);
+        if (!fi.exists() || !fi.isFile()) {
+            ts.missing = true;
+            info.textureStats.append(ts);
+            continue;
+        }
+
+        ts.fileSizeBytes = fi.size();
+        ts.format = fi.suffix().toLower();
+
+        QImageReader reader(ts.resolvedPath);
+        const QSize dim = reader.size();
+        if (dim.isValid() && dim.width() > 0 && dim.height() > 0) {
+            ts.width = dim.width();
+            ts.height = dim.height();
+            const int maxDim = std::max(ts.width, ts.height);
+            info.probedTextureMaxDimension = std::max(info.probedTextureMaxDimension, maxDim);
+            // Estimate only: assumes uncompressed RGBA8 per texel (actual GPU format may differ).
+            info.estimatedTextureVramBytes += static_cast<qint64>(ts.width) * ts.height * 4;
+        }
+
+        info.textureStats.append(ts);
+    }
+
+    if (info.probedTextureMaxDimension > 0)
+        info.maxTextureDimension = std::max(info.maxTextureDimension, info.probedTextureMaxDimension);
+}
+
+static void copyAssetInspectExtensionFields(AssetInfo& dst, const AssetInfo& src)
+{
+    dst.triangleCount = src.triangleCount;
+    dst.submeshCount = src.submeshCount;
+    dst.maxTrianglesPerMesh = src.maxTrianglesPerMesh;
+    dst.meshStats = src.meshStats;
+    dst.textureStats = src.textureStats;
+    dst.probedTextureMaxDimension = src.probedTextureMaxDimension;
+    dst.estimatedTextureVramBytes = src.estimatedTextureVramBytes;
+    dst.estimatedDrawCalls = src.estimatedDrawCalls;
+    dst.lodMeshCount = src.lodMeshCount;
+}
+
+static void finalizeAssetInspect(AssetInfo& info, const AssetInspectOptions& options)
+{
+    syncTriangleDerivedFields(info);
+    probeReferencedTextures(info, options);
+}
 
 bool ensureOgreHeadlessQuiet()
 {
@@ -240,6 +425,11 @@ static void fillAssetInfoFromOgreMesh(AssetInfo& info, const Ogre::MeshPtr& mesh
                 info.materialNames.append(QString::fromStdString(mat));
         }
     }
+
+    info.meshStats.clear();
+    fillMeshStatsFromOgreMesh(mesh, {}, info);
+    syncTriangleDerivedFields(info);
+    info.estimatedDrawCalls = info.submeshCount;
 }
 
 #ifdef QTMESH_UNIT_TESTS
@@ -797,6 +987,9 @@ static bool fillAssetInfoFromAssimpFallback(const QString& filePath, AssetInfo& 
         mat->Get(AI_MATKEY_NAME, n);
         info.materialNames.append(QString::fromUtf8(n.C_Str()));
     }
+
+    fillMeshStatsFromAssimpScene(scene, info);
+    syncTriangleDerivedFields(info);
     return true;
 }
 
@@ -881,6 +1074,9 @@ static bool inspectAssetViaOgre(const QString& filePath, AssetInfo& info,
     info.zeroWeightBoneNames  = zeroWeightBonesForEntities(entities);
     info.overlappingUvsRatio  = overlappingUvsRatioForEntities(entities);
     info.nonManifoldEdgesRatio = nonManifoldEdgesRatioForEntities(entities);
+
+    fillMeshStatsFromOgreEntities(entities, info);
+    syncTriangleDerivedFields(info);
 
     clearOgreSceneForScanImport();
     return true;
@@ -1043,7 +1239,8 @@ bool ScanEngine::isAssimpResultLoadFailure(const aiScene* scene, const char* ass
     return false;
 }
 
-AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanRoot)
+AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanRoot,
+                                   const AssetInspectOptions& options)
 {
     AssetInfo info;
     info.filePath = filePath;
@@ -1081,11 +1278,13 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         if (gext == QLatin1String("tmd")) {
             loadAndFillOgreInspect(
                 info, [geomPath](const std::string& mn) { return PS1TMD::importTmd(geomPath, mn); }, &detailErr);
+            finalizeAssetInspect(info, options);
             return info;
         }
         if (gext == QLatin1String("ply") && PS1PLY::isPsyqPlyFile(geomPath)) {
             loadAndFillOgreInspect(
                 info, [geomPath](const std::string& mn) { return PS1PLY::importPsyqPly(geomPath, mn); }, &detailErr);
+            finalizeAssetInspect(info, options);
             return info;
         }
         if (gext == QLatin1String("rsd")) {
@@ -1093,7 +1292,7 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
             info.errorMessage = QStringLiteral("RSD references another RSD as geometry (not supported for scan)");
             return info;
         }
-        AssetInfo inner = ScanEngine::inspectAsset(geomPath, QFileInfo(geomPath).absolutePath());
+        AssetInfo inner = ScanEngine::inspectAsset(geomPath, QFileInfo(geomPath).absolutePath(), options);
         info.loadError = inner.loadError;
         info.errorMessage = inner.errorMessage;
         info.meshCount = inner.meshCount;
@@ -1122,6 +1321,7 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         info.zeroWeightBoneNames = inner.zeroWeightBoneNames;
         info.overlappingUvsRatio = inner.overlappingUvsRatio;
         info.nonManifoldEdgesRatio = inner.nonManifoldEdgesRatio;
+        copyAssetInspectExtensionFields(info, inner);
         info.filePath = filePath;
         info.relativePath = QDir(scanRoot).relativeFilePath(filePath);
         info.format = extLower;
@@ -1133,6 +1333,7 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         QString detailErr;
         loadAndFillOgreInspect(
             info, [filePath](const std::string& mn) { return PS1TMD::importTmd(filePath, mn); }, &detailErr);
+        finalizeAssetInspect(info, options);
         return info;
     }
 
@@ -1140,6 +1341,7 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         QString detailErr;
         loadAndFillOgreInspect(
             info, [filePath](const std::string& mn) { return PS1PLY::importPsyqPly(filePath, mn); }, &detailErr);
+        finalizeAssetInspect(info, options);
         return info;
     }
 
@@ -1162,6 +1364,7 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         return info;
     }
 
+    finalizeAssetInspect(info, options);
     return info;
 }
 
@@ -1805,7 +2008,9 @@ void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, A
                             .arg(savedBytes / 1024)
                             .arg(QString::number(sizePct, 'f', 1));
             f.fixed = true;
-            asset = inspectAsset(asset.filePath, scanRoot);
+            AssetInspectOptions inspectOpts;
+            inspectOpts.probeTextureFiles = config.probeTextureFiles;
+            asset = inspectAsset(asset.filePath, scanRoot, inspectOpts);
         }
     }
 }
@@ -1840,8 +2045,11 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
             QString("Scan start: %1").arg(scanRoot));
         QStringList files = enumerateFiles(config, scanRoot);
 
+        AssetInspectOptions inspectOpts;
+        inspectOpts.probeTextureFiles = config.probeTextureFiles;
+
         for (const auto& filePath : files) {
-            AssetInfo asset = inspectAsset(filePath, scanRoot);
+            AssetInfo asset = inspectAsset(filePath, scanRoot, inspectOpts);
             if (asset.loadError)
                 SentryReporter::addBreadcrumb("file.import",
                     QString("Load error: %1 — %2").arg(asset.relativePath, asset.errorMessage));
@@ -2058,6 +2266,15 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
         ao["materialCount"]  = static_cast<int>(asset.materialCount);
         ao["vertexCount"]    = static_cast<int>(asset.vertexCount);
         ao["faceCount"]      = static_cast<int>(asset.faceCount);
+        ao["triangleCount"]  = static_cast<int>(asset.triangleCount);
+        if (asset.submeshCount > 0)
+            ao["submeshCount"] = static_cast<int>(asset.submeshCount);
+        if (asset.maxTrianglesPerMesh > 0)
+            ao["maxTrianglesPerMesh"] = static_cast<int>(asset.maxTrianglesPerMesh);
+        if (asset.estimatedDrawCalls > 0)
+            ao["estimatedDrawCalls"] = static_cast<int>(asset.estimatedDrawCalls);
+        if (asset.lodMeshCount > 0)
+            ao["lodMeshCount"] = static_cast<int>(asset.lodMeshCount);
         ao["animationCount"] = static_cast<int>(asset.animationCount);
         ao["hasSkeleton"]    = asset.hasSkeleton;
         ao["boneCount"]      = static_cast<int>(asset.boneCount);
@@ -2094,6 +2311,43 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
         // so the JSON stays compact for assets the rule doesn't fire on.
         if (asset.maxTextureDimension > 0)
             ao["maxTextureDimension"] = asset.maxTextureDimension;
+        if (asset.probedTextureMaxDimension > 0)
+            ao["probedTextureMaxDimension"] = asset.probedTextureMaxDimension;
+        if (asset.estimatedTextureVramBytes > 0)
+            ao["estimatedTextureVramBytes"] = asset.estimatedTextureVramBytes;
+        if (!asset.meshStats.isEmpty()) {
+            QJsonArray meshes;
+            for (const MeshStats& ms : asset.meshStats) {
+                QJsonObject mo;
+                mo["name"] = ms.name;
+                mo["vertexCount"] = static_cast<int>(ms.vertexCount);
+                mo["triangleCount"] = static_cast<int>(ms.triangleCount);
+                mo["submeshCount"] = static_cast<int>(ms.submeshCount);
+                meshes.append(mo);
+            }
+            ao["meshStats"] = meshes;
+        }
+        if (!asset.textureStats.isEmpty()) {
+            QJsonArray textures;
+            for (const TextureRefStats& ts : asset.textureStats) {
+                QJsonObject to;
+                to["path"] = ts.path;
+                if (!ts.resolvedPath.isEmpty())
+                    to["resolvedPath"] = ts.resolvedPath;
+                if (ts.width > 0)
+                    to["width"] = ts.width;
+                if (ts.height > 0)
+                    to["height"] = ts.height;
+                if (ts.fileSizeBytes >= 0)
+                    to["fileSizeBytes"] = ts.fileSizeBytes;
+                if (!ts.format.isEmpty())
+                    to["format"] = ts.format;
+                if (ts.missing)
+                    to["missing"] = true;
+                textures.append(to);
+            }
+            ao["textureStats"] = textures;
+        }
         if (asset.minUvChannelCount > 0)
             ao["minUvChannelCount"]   = asset.minUvChannelCount;
         if (!asset.zeroWeightBoneNames.isEmpty()) {
