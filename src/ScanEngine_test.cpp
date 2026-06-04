@@ -1822,11 +1822,18 @@ TEST(ScanEngineTest, InspectAsset_TextureProbeSkippedByDefault)
     mtl.write("newmtl m\nmap_Kd albedo.png\n");
     mtl.close();
 
-    const QString objPath = writeMinimalObj(tmpDir.path(), "mesh.obj");
-    ASSERT_FALSE(objPath.isEmpty());
+    QFile obj(QDir(tmpDir.path()).filePath("mesh.obj"));
+    ASSERT_TRUE(obj.open(QIODevice::WriteOnly | QIODevice::Text));
+    obj.write(
+        "mtllib mesh.mtl\n"
+        "usemtl m\n"
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+        "f 1 2 3\n");
+    obj.close();
 
-    const AssetInfo info = ScanEngine::inspectAsset(objPath, tmpDir.path());
+    const AssetInfo info = ScanEngine::inspectAsset(obj.fileName(), tmpDir.path());
     ASSERT_FALSE(info.loadError);
+    EXPECT_GE(info.textureRefCount, 1u);
     EXPECT_TRUE(info.textureStats.isEmpty());
     EXPECT_EQ(info.probedTextureMaxDimension, 0);
     EXPECT_EQ(info.estimatedTextureVramBytes, 0);
