@@ -10,6 +10,7 @@
 #include <QNetworkAccessManager>
 
 #include "TransformOperator.h"
+#include "FeedbackPrefill.h"
 
 class LLMSettingsWidget;
 class MCPServer;
@@ -124,6 +125,7 @@ private slots:
     void signInToQtMeshCloud();
     void signOutOfQtMeshCloud();
     void uploadFilesToQtMeshCloud();
+    void showSendFeedbackDialog(const FeedbackPrefill& prefill = FeedbackPrefill{});
     bool startMCPServer(int port);
     void stopMCPServer();
 

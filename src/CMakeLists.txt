@@ -123,6 +123,9 @@ QtMeshCloudClient.cpp
 CloudCredentialStore.cpp
 CloudUploadPlanner.cpp
 CloudAccountMenuButton.cpp
+FeedbackDiagnostics.cpp
+FeedbackDialog.cpp
+FeedbackReportHelper.cpp
 AssetBrowserController.cpp
 MaterialPreviewRenderer.cpp
 ModelTurntableRenderer.cpp
@@ -235,6 +238,10 @@ PlatformProfile.h
 QtMeshCloudClient.h
 CloudCredentialStore.h
 CloudUploadPlanner.h
+FeedbackPrefill.h
+FeedbackDiagnostics.h
+FeedbackDialog.h
+FeedbackReportHelper.h
 AssetBrowserController.h
 MaterialPreviewRenderer.h
 ModelTurntableRenderer.h

@@ -256,6 +256,14 @@ void CloudAccountMenuButton::buildMenu()
         emit uploadFilesRequested();
     });
 
+    m_feedbackAction = m_menu->addAction(tr("Send Feedback..."));
+    m_feedbackAction->setObjectName(QStringLiteral("actionQtMeshCloudSendFeedback"));
+    connect(m_feedbackAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Send Feedback"));
+        emit feedbackRequested();
+    });
+
     m_mainSeparator = m_menu->addSeparator();
 
     m_signOutAction = m_menu->addAction(tr("Sign out"));

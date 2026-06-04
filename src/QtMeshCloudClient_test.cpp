@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 #include <QJsonObject>
 #include "QtMeshCloudClient.h"
+#include "FeedbackDiagnostics.h"
 
 TEST(QtMeshCloudClientValidate, AcceptsMinimalValid)
 {
@@ -233,4 +234,102 @@ TEST(QtMeshCloudClientFetchManifest, MissingOwnerReturnsErrorImmediately)
                                                          QStringLiteral("project"), /*timeoutMs=*/100);
     EXPECT_FALSE(result.ok);
     EXPECT_TRUE(result.errorString.contains("owner", Qt::CaseInsensitive));
+}
+
+TEST(QtMeshCloudClientFeedbackPayload, IncludesRequiredFields)
+{
+    QtMeshCloudClient::FeedbackSubmission submission;
+    submission.type = QStringLiteral("feature_request");
+    submission.rating = QStringLiteral("great");
+    submission.message = QStringLiteral("Test message");
+    submission.relatedOperation = QStringLiteral("import");
+    submission.relatedFormat = QStringLiteral("fbx");
+    submission.includeDiagnostics = false;
+    submission.contactAllowed = true;
+
+    const QJsonObject body = QtMeshCloudClient::buildFeedbackPayload(submission);
+    EXPECT_EQ(body.value(QStringLiteral("type")).toString(), QStringLiteral("feature_request"));
+    EXPECT_EQ(body.value(QStringLiteral("rating")).toString(), QStringLiteral("great"));
+    EXPECT_EQ(body.value(QStringLiteral("message")).toString(), QStringLiteral("Test message"));
+    EXPECT_EQ(body.value(QStringLiteral("relatedOperation")).toString(), QStringLiteral("import"));
+    EXPECT_EQ(body.value(QStringLiteral("relatedFormat")).toString(), QStringLiteral("fbx"));
+    EXPECT_FALSE(body.value(QStringLiteral("includeDiagnostics")).toBool());
+    EXPECT_TRUE(body.value(QStringLiteral("contactAllowed")).toBool());
+    EXPECT_TRUE(body.contains(QStringLiteral("appVersion")));
+    EXPECT_TRUE(body.contains(QStringLiteral("editorSessionId")));
+    EXPECT_FALSE(body.contains(QStringLiteral("diagnosticsJson")));
+}
+
+TEST(QtMeshCloudClientFeedbackPayload, OmitsDiagnosticsWhenNotRequested)
+{
+    QtMeshCloudClient::FeedbackSubmission submission;
+    submission.type = QStringLiteral("general");
+    submission.message = QStringLiteral("Hello");
+    submission.includeDiagnostics = false;
+
+    const QJsonObject body = QtMeshCloudClient::buildFeedbackPayload(submission);
+    EXPECT_FALSE(body.contains(QStringLiteral("diagnosticsJson")));
+}
+
+TEST(QtMeshCloudClientFeedbackPayload, IncludesDiagnosticsWhenRequested)
+{
+    FeedbackDiagnostics::resetForTests();
+    QtMeshCloudClient::FeedbackSubmission submission;
+    submission.type = QStringLiteral("general");
+    submission.message = QStringLiteral("Hello");
+    submission.includeDiagnostics = true;
+
+    const QJsonObject body = QtMeshCloudClient::buildFeedbackPayload(submission);
+    EXPECT_TRUE(body.value(QStringLiteral("includeDiagnostics")).toBool());
+    EXPECT_TRUE(body.contains(QStringLiteral("diagnosticsJson")));
+    EXPECT_TRUE(body.value(QStringLiteral("diagnosticsJson")).isObject());
+    FeedbackDiagnostics::resetForTests();
+}
+
+TEST(QtMeshCloudClientFeedbackPayload, UsesV1FeedbackApiPath)
+{
+    EXPECT_EQ(QString(QtMeshCloudClient::kFeedbackApiPath), QStringLiteral("/v1/feedback"));
+}
+
+TEST(QtMeshCloudClientSubmitFeedback, MissingTokenReturnsErrorImmediately)
+{
+    QtMeshCloudClient::FeedbackSubmission submission;
+    submission.type = QStringLiteral("bug");
+    submission.message = QStringLiteral("Something failed");
+    auto result = QtMeshCloudClient::submitFeedback(QString(), submission, /*timeoutMs=*/100);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.userMessage.contains(QStringLiteral("Sign in"), Qt::CaseInsensitive)
+                || result.userMessage.contains(QStringLiteral("session"), Qt::CaseInsensitive));
+}
+
+TEST(QtMeshCloudClientSubmitFeedback, MissingMessageReturnsValidationError)
+{
+    QtMeshCloudClient::FeedbackSubmission submission;
+    submission.type = QStringLiteral("bug");
+    auto result = QtMeshCloudClient::submitFeedback(QStringLiteral("token"), submission, /*timeoutMs=*/100);
+    EXPECT_FALSE(result.ok);
+    EXPECT_FALSE(result.userMessage.isEmpty());
+}
+
+TEST(QtMeshCloudClientFeedbackPayload, NormalizesLegacyFeatureType)
+{
+    QtMeshCloudClient::FeedbackSubmission submission;
+    submission.type = QStringLiteral("feature");
+    submission.message = QStringLiteral("Hello");
+    const QJsonObject body = QtMeshCloudClient::buildFeedbackPayload(submission);
+    EXPECT_EQ(body.value(QStringLiteral("type")).toString(), QStringLiteral("feature_request"));
+}
+
+TEST(QtMeshCloudClientFriendlyFeedbackError, MapsHttpStatuses)
+{
+    EXPECT_TRUE(QtMeshCloudClient::friendlyFeedbackError(404, QString(), QString())
+                    .contains(QStringLiteral("HTTP 404"), Qt::CaseInsensitive));
+    EXPECT_TRUE(QtMeshCloudClient::friendlyFeedbackError(429, QString(), QString())
+                    .contains(QStringLiteral("Too many"), Qt::CaseInsensitive));
+    EXPECT_TRUE(QtMeshCloudClient::friendlyFeedbackError(400, QString(), QStringLiteral("Message is required"))
+                    .contains(QStringLiteral("Enter a message"), Qt::CaseInsensitive));
+    EXPECT_TRUE(QtMeshCloudClient::friendlyFeedbackError(413, QString(), QString())
+                    .contains(QStringLiteral("too large"), Qt::CaseInsensitive));
+    EXPECT_TRUE(QtMeshCloudClient::friendlyFeedbackError(401, QString(), QString())
+                    .contains(QStringLiteral("Sign in"), Qt::CaseInsensitive));
 }

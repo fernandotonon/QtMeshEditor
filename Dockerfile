@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcb-icccm4 libxcb-keysyms1 libxcb-render-util0 \
     libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0 \
     libfontconfig1 libfreetype6 \
+    libsecret-1-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install the .deb (skip declared Qt package deps — libs are bundled)

@@ -27,6 +27,7 @@ THE SOFTWARE.
 */
 
 #include "MeshImporterExporter.h"
+#include "FeedbackReportHelper.h"
 #include <assimp/Importer.hpp>
 #include <assimp/Exporter.hpp>
 #include <assimp/postprocess.h>
@@ -165,6 +166,15 @@ QString MeshImporterExporter::exportTextureName(const QString& originalName)
 }
 
 namespace {
+
+void showImportProblem(const QString& title,
+                       const QString& text,
+                       const QString& format,
+                       const QString& errorMessage = QString())
+{
+    FeedbackReportHelper::showFailureWithReportOption(
+        nullptr, title, text, FeedbackReportHelper::importFailurePrefill(format, errorMessage));
+}
 
 // Returns true when `tex` is safe to feed to `Ogre::Texture::convertToImage`.
 // Guards against the failure modes that caused the #681 SIGSEGV:
@@ -1785,11 +1795,11 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 const std::string meshName = (file.baseName() + QStringLiteral("_tmd")).toStdString();
                 Ogre::MeshPtr mesh = PS1TMD::importTmd(file.filePath(), meshName);
                 if (!mesh) {
-                    QMessageBox::warning(
-                        nullptr,
+                    showImportProblem(
                         QStringLiteral("PlayStation TMD"),
                         QStringLiteral("Could not import %1 — invalid file or unsupported primitive types.")
-                            .arg(file.fileName()));
+                            .arg(file.fileName()),
+                        QStringLiteral("tmd"));
                     continue;
                 }
 
@@ -1806,10 +1816,11 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 PS1RSD::RsdDescriptor rsd;
                 QString err;
                 if (!PS1RSD::parseRsdFile(file.filePath(), rsd, &err)) {
-                    QMessageBox::warning(
-                        nullptr,
+                    showImportProblem(
                         QStringLiteral("PlayStation RSD"),
-                        QStringLiteral("Could not parse %1: %2").arg(file.fileName(), err));
+                        QStringLiteral("Could not parse %1: %2").arg(file.fileName(), err),
+                        QStringLiteral("rsd"),
+                        err);
                     continue;
                 }
 
@@ -1955,10 +1966,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 const QString geomRel = rsd.plyPath;
                 const QString geomPath = resolve(geomRel);
                 if (geomPath.isEmpty() || !QFileInfo::exists(geomPath)) {
-                    QMessageBox::warning(
-                        nullptr,
+                    showImportProblem(
                         QStringLiteral("PlayStation RSD"),
-                        QStringLiteral("RSD does not reference an existing geometry file (PLY=...)."));
+                        QStringLiteral("RSD does not reference an existing geometry file (PLY=...)."),
+                        QStringLiteral("rsd"));
                     continue;
                 }
 
@@ -2047,10 +2058,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 }
 
                 if (!mesh) {
-                    QMessageBox::warning(
-                        nullptr,
+                    showImportProblem(
                         QStringLiteral("PlayStation RSD"),
-                        QStringLiteral("Could not import geometry referenced by %1").arg(file.fileName()));
+                        QStringLiteral("Could not import geometry referenced by %1").arg(file.fileName()),
+                        QStringLiteral("rsd"));
                     continue;
                 }
 
@@ -2146,12 +2157,12 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 const std::string meshName = (file.baseName() + QStringLiteral("_psyq_ply")).toStdString();
                 Ogre::MeshPtr mesh = PS1PLY::importPsyqPly(file.filePath(), meshName);
                 if (!mesh) {
-                    QMessageBox::warning(
-                        nullptr,
+                    showImportProblem(
                         QStringLiteral("PlayStation PLY"),
                         QStringLiteral("Could not import %1 — invalid Psy-Q PLY (expected @PLY header and "
                                        "face lines from the Psy-Q / RSD toolchain, not Stanford PLY).")
-                            .arg(file.fileName()));
+                            .arg(file.fileName()),
+                        QStringLiteral("ply"));
                     continue;
                 }
 
@@ -2234,12 +2245,12 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                             outAnimOnlySkeletons->append(skel);
                     } else if (!file.suffix().compare(QStringLiteral("ply"), Qt::CaseInsensitive)) {
                         // Was not routed through PS1PLY (e.g. missing @PLY header) and Assimp failed.
-                        QMessageBox::warning(
-                            nullptr,
+                        showImportProblem(
                             QStringLiteral("Import PLY"),
                             QStringLiteral("Could not import %1. PlayStation Psy-Q PLY uses an @PLY header; "
                                            "Stanford PLY must start with \"ply\".")
-                                .arg(file.fileName()));
+                                .arg(file.fileName()),
+                            QStringLiteral("ply"));
                     }
                     continue;
                 }
@@ -2915,6 +2926,11 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                     .arg(formatId).arg(result).arg(exporter.GetErrorString());
                 Ogre::LogManager::getSingleton().logError(msg.toStdString());
                 SentryReporter::captureMessage(msg, "error");
+                FeedbackReportHelper::showFailureWithReportOption(
+                    nullptr,
+                    QObject::tr("Export failed"),
+                    msg,
+                    FeedbackReportHelper::exportFailurePrefill(_format, msg, QString::number(result)));
             }
             else
             {
