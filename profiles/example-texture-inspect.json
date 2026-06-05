@@ -1,0 +1,10 @@
+{
+  "id": "example-texture-inspect",
+  "displayName": "Example Texture Inspect",
+  "description": "Enables filesystem texture probing during scan (issue #364).",
+  "extends": "example-base",
+  "metadata": {
+    "inspect_textures": true,
+    "category": "example"
+  }
+}

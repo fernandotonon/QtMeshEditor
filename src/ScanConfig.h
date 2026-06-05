@@ -103,6 +103,9 @@ struct ScanConfig {
     // input; 1% is the conservative starting point.
     double detectNonManifoldEdgesPct = 0.0;
 
+    // inspect (issue #364) — enabled via platform profile metadata `inspect_textures: true`
+    bool probeTextureFiles = false;
+
     // scoped rules — path-specific overrides
     QList<ScanScope> scopes;
 

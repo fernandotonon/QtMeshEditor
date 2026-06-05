@@ -32,6 +32,31 @@ struct Finding {
     qint64 keysRemoved = 0;
 };
 
+/// Per-mesh geometry summary (issue #364). Only the first kMaxMeshStatsEntries meshes are stored.
+struct MeshStats {
+    QString name;
+    unsigned int vertexCount = 0;
+    unsigned int triangleCount = 0;
+    unsigned int submeshCount = 0;
+};
+
+/// Filesystem probe of one external texture reference (issue #364).
+struct TextureRefStats {
+    QString path;              // path as referenced in the asset
+    QString resolvedPath;      // absolute path when found on disk
+    int width = 0;
+    int height = 0;
+    qint64 fileSizeBytes = -1;
+    QString format;            // lowercase extension without dot
+    bool missing = false;
+};
+
+/// Options for inspectAsset (issue #364). Heavy texture probing is opt-in via profile metadata.
+struct AssetInspectOptions {
+    /// When true, stat() referenced texture files and read dimensions via QImageReader headers.
+    bool probeTextureFiles = false;
+};
+
 struct AssetInfo {
     QString filePath;       // absolute
     QString relativePath;   // relative to scan root
@@ -43,6 +68,14 @@ struct AssetInfo {
     unsigned int animationCount = 0;
     unsigned int vertexCount = 0;
     unsigned int faceCount = 0;
+    /// Triangulated triangle count (same as faceCount after Assimp triangulation / Ogre indices).
+    unsigned int triangleCount = 0;
+    /// Total submeshes across all meshes/entities in the asset.
+    unsigned int submeshCount = 0;
+    /// Largest triangle count among individual meshes/entities.
+    unsigned int maxTrianglesPerMesh = 0;
+    /// Capped per-mesh breakdown (see kMaxMeshStatsEntries).
+    QList<MeshStats> meshStats;
     unsigned int boneCount = 0;
     unsigned int textureRefCount = 0;
     bool hasSkeleton = false;
@@ -73,6 +106,16 @@ struct AssetInfo {
     // Maximum dimension (max(width, height)) of any texture bound through
     // any SubEntity's material. 0 when the asset has no bound textures.
     int maxTextureDimension = 0;
+    /// Per-texture filesystem probe (issue #364); filled when AssetInspectOptions::probeTextureFiles.
+    QList<TextureRefStats> textureStats;
+    /// Max(width,height) from textureStats probe (0 when not probed or no files found).
+    int probedTextureMaxDimension = 0;
+    /// Rough VRAM estimate from probed textures: sum(width*height*4) per file (RGBA32 heuristic).
+    qint64 estimatedTextureVramBytes = 0;
+    /// Draw-call proxy: Ogre SubEntity count or Assimp mesh count (one batch per submesh/mesh).
+    unsigned int estimatedDrawCalls = 0;
+    /// Meshes whose names look like LOD variants (_lod, LOD1, etc.).
+    unsigned int lodMeshCount = 0;
     // Per-submesh minimum UV-set count. Number of VES_TEXTURE_COORDINATES
     // elements in the vertex declaration of the *least*-equipped submesh.
     // 0 when no submeshes carry UVs at all (or the asset has no entities).
@@ -92,6 +135,11 @@ struct AssetInfo {
 
     bool loadError = false;
     QString errorMessage;
+
+    /// Maximum meshStats entries stored per asset (issue #364).
+    static constexpr int kMaxMeshStatsEntries = 16;
+    /// Maximum textureStats entries stored per asset.
+    static constexpr int kMaxTextureStatsEntries = 32;
 };
 
 struct ScanResult {
@@ -131,7 +179,10 @@ public:
 
     /// Inspect a single asset file (Assimp for most formats; PlayStation TMD / Psy-Q PLY / RSD
     /// use the same Ogre importers as the editor, with a headless render target when needed).
-    static AssetInfo inspectAsset(const QString& filePath, const QString& scanRoot);
+    /// Texture filesystem probes run only when @p options.probeTextureFiles is true (e.g. from
+    /// platform profile metadata `inspect_textures: true`).
+    static AssetInfo inspectAsset(const QString& filePath, const QString& scanRoot,
+                                  const AssetInspectOptions& options = {});
 
     /// After `Assimp::Importer::ReadFile`, whether the result would make `inspectAsset` set
     /// `loadError` (e.g. null scene, or no mesh and no animations). A scene may have
