@@ -1443,6 +1443,33 @@ QString ScanEngine::convertNameToCase(const QString& fileName, const QString& co
 // Rule evaluation
 // ---------------------------------------------------------------------------
 
+namespace {
+
+bool isPowerOfTwoDimension(int value)
+{
+    return value > 0 && (value & (value - 1)) == 0;
+}
+
+int effectiveTextureMaxDimension(const AssetInfo& asset)
+{
+    return std::max(asset.maxTextureDimension, asset.probedTextureMaxDimension);
+}
+
+bool textureFormatMatchesList(const QString& format, const QStringList& patterns)
+{
+    if (format.isEmpty())
+        return false;
+    for (const QString& pattern : patterns) {
+        if (pattern.isEmpty())
+            continue;
+        if (format.compare(pattern, Qt::CaseInsensitive) == 0)
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
 QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfig& globalConfig)
 {
     // Apply scoped rule overrides for this asset's path
@@ -1524,6 +1551,42 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
                          QString("%1 vertices is below minimum of %2")
                              .arg(asset.vertexCount).arg(config.minVertexCount)});
 
+    // ---- max_triangle_count / max_triangles_per_mesh ---- (issue #365)
+    if (config.maxTriangleCount > 0
+        && static_cast<int>(asset.triangleCount) > config.maxTriangleCount) {
+        findings.append({asset.relativePath, "max_triangle_count", Severity::Error,
+                         QString("%1 triangles exceeds limit of %2")
+                             .arg(asset.triangleCount).arg(config.maxTriangleCount)});
+    }
+    if (config.maxTrianglesPerMesh > 0
+        && static_cast<int>(asset.maxTrianglesPerMesh) > config.maxTrianglesPerMesh) {
+        findings.append({asset.relativePath, "max_triangles_per_mesh", Severity::Error,
+                         QString("Largest mesh has %1 triangles (limit %2)")
+                             .arg(asset.maxTrianglesPerMesh).arg(config.maxTrianglesPerMesh)});
+    }
+
+    // ---- max_bones ----
+    if (config.maxBoneCount > 0 && static_cast<int>(asset.boneCount) > config.maxBoneCount) {
+        findings.append({asset.relativePath, "max_bones", Severity::Error,
+                         QString("%1 bones exceeds limit of %2")
+                             .arg(asset.boneCount).arg(config.maxBoneCount)});
+    }
+
+    // ---- max_submesh_count / max_draw_calls ---- (draw-call proxies)
+    if (config.maxSubmeshCount > 0
+        && static_cast<int>(asset.submeshCount) > config.maxSubmeshCount) {
+        findings.append({asset.relativePath, "max_submesh_count", Severity::Warning,
+                         QString("%1 submeshes exceeds limit of %2 — merge materials or "
+                                 "combine meshes to cut draw calls")
+                             .arg(asset.submeshCount).arg(config.maxSubmeshCount)});
+    }
+    if (config.maxDrawCalls > 0
+        && static_cast<int>(asset.estimatedDrawCalls) > config.maxDrawCalls) {
+        findings.append({asset.relativePath, "max_draw_calls", Severity::Warning,
+                         QString("Estimated %1 draw calls exceeds limit of %2")
+                             .arg(asset.estimatedDrawCalls).arg(config.maxDrawCalls)});
+    }
+
     // ---- max_acmr ---- (Phase 6 slice C / C2)
     //
     // ACMR is measured on the same Ogre index buffer the editor's in-app
@@ -1568,14 +1631,75 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
         }
     }
 
-    // ---- max_texture_resolution ---- (Phase 6 slice C4)
-    if (config.maxTextureResolution > 0
-        && asset.maxTextureDimension > config.maxTextureResolution) {
-        findings.append({asset.relativePath, "max_texture_resolution", Severity::Warning,
-            QString("Largest texture is %1px on its longest edge — exceeds limit of %2px. "
-                    "Downscale or pack with `qtmesh pack-textures` to reduce VRAM cost.")
-                .arg(asset.maxTextureDimension)
-                .arg(config.maxTextureResolution)});
+    // ---- max_texture_resolution / max_texture_dimension ---- (Phase 6 slice C4 + #365)
+    if (config.maxTextureResolution > 0) {
+        const int texMax = effectiveTextureMaxDimension(asset);
+        if (texMax > config.maxTextureResolution) {
+            findings.append({asset.relativePath, "max_texture_resolution", Severity::Warning,
+                QString("Largest texture is %1px on its longest edge — exceeds limit of %2px. "
+                        "Downscale or pack with `qtmesh pack-textures` to reduce VRAM cost.")
+                    .arg(texMax)
+                    .arg(config.maxTextureResolution)});
+        }
+    }
+
+    // ---- texture_not_power_of_two / texture format allow-list ---- (#365)
+    // Requires inspect_textures / probeTextureFiles so textureStats carry dimensions.
+    if (!asset.textureStats.isEmpty()) {
+        if (config.requireTexturePowerOfTwo) {
+            QStringList offenders;
+            for (const TextureRefStats& ts : asset.textureStats) {
+                if (ts.missing || ts.width <= 0 || ts.height <= 0)
+                    continue;
+                if (!isPowerOfTwoDimension(ts.width) || !isPowerOfTwoDimension(ts.height))
+                    offenders.append(QStringLiteral("%1 (%2×%3)")
+                                         .arg(ts.path)
+                                         .arg(ts.width)
+                                         .arg(ts.height));
+            }
+            if (!offenders.isEmpty()) {
+                const QStringList sample = offenders.mid(0, 3);
+                const QString suffix = offenders.size() > sample.size()
+                    ? QStringLiteral(" …+%1 more").arg(offenders.size() - sample.size())
+                    : QString();
+                findings.append({asset.relativePath, "texture_not_power_of_two", Severity::Warning,
+                    QString("Non power-of-two texture dimensions: %1%2. "
+                            "Resize to POT (e.g. 256, 512) for older GPU paths.")
+                        .arg(sample.join(QStringLiteral(", ")))
+                        .arg(suffix)});
+            }
+        }
+
+        if (!config.allowedTextureFormats.isEmpty()) {
+            QStringList offenders;
+            for (const TextureRefStats& ts : asset.textureStats) {
+                if (ts.missing || ts.format.isEmpty())
+                    continue;
+                if (!textureFormatMatchesList(ts.format, config.allowedTextureFormats))
+                    offenders.append(QStringLiteral("%1 (.%2)")
+                                         .arg(ts.path, ts.format));
+            }
+            if (!offenders.isEmpty()) {
+                findings.append({asset.relativePath, "texture_format_disallowed", Severity::Warning,
+                    QString("Texture format not in allow-list [%1]: %2")
+                        .arg(config.allowedTextureFormats.join(QStringLiteral(", ")),
+                             offenders.mid(0, 3).join(QStringLiteral(", ")))});
+            }
+        } else if (!config.disallowedTextureFormats.isEmpty()) {
+            QStringList offenders;
+            for (const TextureRefStats& ts : asset.textureStats) {
+                if (ts.missing || ts.format.isEmpty())
+                    continue;
+                if (textureFormatMatchesList(ts.format, config.disallowedTextureFormats))
+                    offenders.append(QStringLiteral("%1 (.%2)")
+                                         .arg(ts.path, ts.format));
+            }
+            if (!offenders.isEmpty()) {
+                findings.append({asset.relativePath, "texture_format_disallowed", Severity::Warning,
+                    QString("Disallowed texture format(s): %1")
+                        .arg(offenders.mid(0, 3).join(QStringLiteral(", ")))});
+            }
+        }
     }
 
     // ---- require_uv_channels ----
@@ -2467,6 +2591,14 @@ QString ScanEngine::formatSarif(const ScanResult& result, const QString& activeP
     ruleDescriptions["detect_zero_weight_bones"]  = "Skeleton has bones with no vertex weights (Mixamo bloat)";
     ruleDescriptions["detect_overlapping_uvs_pct"]    = "Triangles share overlapping UV0 regions (lightmap-unsafe)";
     ruleDescriptions["detect_non_manifold_edges_pct"] = "Mesh has non-manifold edges (booleans / printing will fail)";
+    ruleDescriptions["max_triangle_count"]            = "Asset exceeds maximum triangle count";
+    ruleDescriptions["max_triangles_per_mesh"]        = "Single mesh exceeds maximum triangle count";
+    ruleDescriptions["max_bones"]                   = "Skeleton exceeds maximum bone count";
+    ruleDescriptions["max_submesh_count"]           = "Asset exceeds maximum submesh count (draw-call proxy)";
+    ruleDescriptions["max_draw_calls"]                = "Estimated draw-call count exceeds limit";
+    ruleDescriptions["max_texture_dimension"]       = "Texture exceeds maximum dimension (alias of max_texture_resolution)";
+    ruleDescriptions["texture_not_power_of_two"]    = "Referenced texture dimensions are not power-of-two";
+    ruleDescriptions["texture_format_disallowed"]   = "Referenced texture uses a disallowed or non-allow-listed format";
 
     // Collect unique rules used in findings
     QSet<QString> usedRules;

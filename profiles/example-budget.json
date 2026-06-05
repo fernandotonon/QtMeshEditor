@@ -1,0 +1,19 @@
+{
+  "id": "example-budget",
+  "displayName": "Example Budget",
+  "description": "Sample retro-style triangle, bone, texture, and draw-call budgets (issue #365).",
+  "extends": "example-texture-inspect",
+  "rules": {
+    "max_triangle_count": 50000,
+    "max_triangles_per_mesh": 20000,
+    "max_bones": 64,
+    "max_submesh_count": 8,
+    "max_draw_calls": 16,
+    "max_texture_dimension": 512,
+    "texture_not_power_of_two": true,
+    "allowed_texture_formats": ["png", "jpg"]
+  },
+  "metadata": {
+    "category": "example"
+  }
+}
