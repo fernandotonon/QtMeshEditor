@@ -101,6 +101,11 @@ QStringList candidateBuiltinProfileDirectories()
         dirs.append(QDir(appDir).filePath(QStringLiteral("../share/qtmesh/profiles")));
     }
 
+#ifdef Q_OS_LINUX
+    // Linux .deb/Docker layout: /usr/share/qtmesheditor/{qtmesheditor,profiles}
+    dirs.append(QStringLiteral("/usr/share/qtmesheditor/profiles"));
+#endif
+
     return dirs;
 }
 

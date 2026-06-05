@@ -1,0 +1,24 @@
+{
+  "id": "n64",
+  "displayName": "Nintendo 64 (validation)",
+  "description": "Validation-only lint preset for N64-class pipelines. Warns on triangle, bone, submesh, draw-call, and texture budgets typical of N64 homebrew and preservation ports. Does not emit ROM-ready geometry or guarantee microcode compliance — defaults are tunable starting points, not certification.",
+  "rules": {
+    "max_triangle_count": 12000,
+    "max_triangles_per_mesh": 4000,
+    "max_vertex_count": 12000,
+    "max_bones": 32,
+    "max_submesh_count": 6,
+    "max_material_count": 8,
+    "max_draw_calls": 12,
+    "max_texture_dimension": 256,
+    "texture_not_power_of_two": true,
+    "allowed_texture_formats": ["png", "jpg"],
+    "require_uv_channels": 1
+  },
+  "metadata": {
+    "inspect_textures": true,
+    "category": "retro",
+    "platform": "n64",
+    "scope": "validation"
+  }
+}

@@ -767,6 +767,7 @@ jobs:
             mkdir -p ./pack-deb/usr/share/qtmesheditor/
             mkdir -p ./pack-deb/usr/share/qtmesheditor/cfg/
             mkdir -p ./pack-deb/usr/share/qtmesheditor/media/
+            mkdir -p ./pack-deb/usr/share/qtmesheditor/profiles/
             mkdir -p ./pack-deb/usr/share/qtmesheditor/platforms/
             mkdir -p ./pack-deb/usr/lib/qtmesheditor/
             mkdir -p ./pack-deb/usr/share/doc/qtmesheditor/
@@ -794,6 +795,7 @@ jobs:
             rm -f ./pack-deb/usr/share/qtmesheditor/media/models/"Twist Dance.fbx"
             rm -f ./pack-deb/usr/share/qtmesheditor/media/models/"Rumba Dancing.fbx"
             rm -f ./pack-deb/usr/share/qtmesheditor/media/models/"Hip Hop Dancing.fbx"
+            cp -R ./bin/profiles ./pack-deb/usr/share/qtmesheditor/
             cp -R ./bin/platforms/ ./pack-deb/usr/share/qtmesheditor/
             if [ -d ./bin/tls ]; then
               cp -R ./bin/tls/ ./pack-deb/usr/share/qtmesheditor/tls/
@@ -1800,6 +1802,7 @@ jobs:
             sudo rm -f ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media/models/"Rumba Dancing.fbx"
             sudo rm -f ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media/models/"Hip Hop Dancing.fbx"
             sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
+            sudo cp -R ${{github.workspace}}/bin/profiles ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/profiles
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
             sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
 
