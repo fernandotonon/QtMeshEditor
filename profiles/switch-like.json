@@ -1,0 +1,32 @@
+{
+  "id": "switch-like",
+  "displayName": "Switch-class (source validation)",
+  "description": "Validation-only preset for handheld/console-class GPU and CPU heuristics aligned with Nintendo Switch–style glTF/FBX source asset prep. Warns on triangle, material, texture, bone, and animation budgets — not certifiable TRC limits. Export via engine cooked pipelines, not proprietary SDK mesh formats.",
+  "rules": {
+    "allowed_formats": ["fbx", "glb", "gltf", "vrm", "obj"],
+    "max_triangle_count": 80000,
+    "max_triangles_per_mesh": 40000,
+    "max_vertex_count": 80000,
+    "max_bones": 128,
+    "max_submesh_count": 16,
+    "max_material_count": 16,
+    "max_draw_calls": 32,
+    "max_texture_dimension": 2048,
+    "max_anim_keyframes": 30000,
+    "max_anim_duration": 300,
+    "redundant_keyframes_pct": 30,
+    "max_acmr": 1.0,
+    "detect_zero_weight_bones": true,
+    "texture_not_power_of_two": true,
+    "allowed_texture_formats": ["png", "jpg", "webp"],
+    "require_uv_channels": 1
+  },
+  "metadata": {
+    "inspect_textures": true,
+    "category": "modern",
+    "platform": "switch-like",
+    "scope": "validation",
+    "engineHints": ["unreal", "unity", "godot"],
+    "todoRules": ["require_lod"]
+  }
+}

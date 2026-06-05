@@ -16,8 +16,10 @@
 
 version: 1
 
-# Optional built-in platform profile (bundled with QtMesh — no local profiles/ folder required):
-# profile: example-minimal
+# Optional built-in platform profile (bundled with QtMesh — no local profiles/ folder required).
+# Profiles validate glTF/FBX source budgets; they do not export engine/cooked platform formats.
+# Examples: modern-console, switch-like, steamdeck, mobile-low, webgl, vr, ps1, n64
+# profile: mobile-low
 
 scan:
   roots:
