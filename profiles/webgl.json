@@ -1,0 +1,32 @@
+{
+  "id": "webgl",
+  "displayName": "WebGL / WebGPU (source validation)",
+  "description": "Validation-only preset for browser 3D pipelines (WebGL/WebGPU). Caps triangles, draw calls, texture dimensions, and animation keyframes on glTF/FBX source assets. Does not emit web-ready bundles — validate source, then export via your web engine toolchain.",
+  "rules": {
+    "allowed_formats": ["fbx", "glb", "gltf", "obj"],
+    "max_triangle_count": 40000,
+    "max_triangles_per_mesh": 20000,
+    "max_vertex_count": 40000,
+    "max_bones": 96,
+    "max_submesh_count": 12,
+    "max_material_count": 12,
+    "max_draw_calls": 24,
+    "max_texture_dimension": 2048,
+    "max_anim_keyframes": 20000,
+    "max_anim_duration": 240,
+    "redundant_keyframes_pct": 35,
+    "max_acmr": 0.95,
+    "detect_zero_weight_bones": true,
+    "texture_not_power_of_two": true,
+    "allowed_texture_formats": ["png", "jpg", "webp"],
+    "require_uv_channels": 1
+  },
+  "metadata": {
+    "inspect_textures": true,
+    "category": "modern",
+    "platform": "webgl",
+    "scope": "validation",
+    "engineHints": ["unity", "godot", "custom"],
+    "todoRules": ["require_lod"]
+  }
+}

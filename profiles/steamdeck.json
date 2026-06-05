@@ -1,0 +1,32 @@
+{
+  "id": "steamdeck",
+  "displayName": "Steam Deck (source validation)",
+  "description": "Validation-only preset for Steam Deck / handheld-PC class performance heuristics on glTF/FBX source assets. Higher budgets than switch-like but still warns on draw calls, texture size, and animation bloat. Does not produce cooked builds — validation for engine import only.",
+  "rules": {
+    "allowed_formats": ["fbx", "glb", "gltf", "obj"],
+    "max_triangle_count": 150000,
+    "max_triangles_per_mesh": 75000,
+    "max_vertex_count": 150000,
+    "max_bones": 200,
+    "max_submesh_count": 24,
+    "max_material_count": 24,
+    "max_draw_calls": 64,
+    "max_texture_dimension": 4096,
+    "max_anim_keyframes": 50000,
+    "max_anim_duration": 450,
+    "redundant_keyframes_pct": 28,
+    "max_acmr": 1.1,
+    "detect_zero_weight_bones": true,
+    "texture_not_power_of_two": true,
+    "allowed_texture_formats": ["png", "jpg", "webp", "tga"],
+    "require_uv_channels": 1
+  },
+  "metadata": {
+    "inspect_textures": true,
+    "category": "modern",
+    "platform": "steamdeck",
+    "scope": "validation",
+    "engineHints": ["unreal", "unity", "godot", "custom"],
+    "todoRules": ["require_lod"]
+  }
+}

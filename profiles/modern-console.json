@@ -1,0 +1,32 @@
+{
+  "id": "modern-console",
+  "displayName": "Modern Console (source validation)",
+  "description": "Validation-only preset for PS5/Xbox/Series-class source assets (glTF/FBX). Conservative AAA triangle, material, texture, bone, and animation budgets for engine import pipelines. Does not export cooked platform binaries — tune per title and ship via Unreal/Unity/Godot/custom cook steps. require_lod rule is planned once LOD scan rules land.",
+  "rules": {
+    "allowed_formats": ["fbx", "glb", "gltf", "obj"],
+    "max_triangle_count": 250000,
+    "max_triangles_per_mesh": 120000,
+    "max_vertex_count": 250000,
+    "max_bones": 256,
+    "max_submesh_count": 32,
+    "max_material_count": 32,
+    "max_draw_calls": 128,
+    "max_texture_dimension": 4096,
+    "max_anim_keyframes": 80000,
+    "max_anim_duration": 600,
+    "redundant_keyframes_pct": 25,
+    "max_acmr": 1.2,
+    "detect_zero_weight_bones": true,
+    "texture_not_power_of_two": true,
+    "allowed_texture_formats": ["png", "jpg", "webp", "tga"],
+    "require_uv_channels": 1
+  },
+  "metadata": {
+    "inspect_textures": true,
+    "category": "modern",
+    "platform": "modern-console",
+    "scope": "validation",
+    "engineHints": ["unreal", "unity", "godot", "custom"],
+    "todoRules": ["require_lod"]
+  }
+}

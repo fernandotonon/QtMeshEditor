@@ -1,0 +1,32 @@
+{
+  "id": "mobile-low",
+  "displayName": "Mobile Low-end (source validation)",
+  "description": "Validation-only preset for low-end mobile GPU/CPU source asset budgets. Tight triangle, material, texture, and bone limits for glTF/FBX prep before Unity/Unreal/Godot mobile cooks. Warnings only — not a substitute for on-device profiling.",
+  "rules": {
+    "allowed_formats": ["fbx", "glb", "gltf", "obj"],
+    "max_triangle_count": 25000,
+    "max_triangles_per_mesh": 12000,
+    "max_vertex_count": 25000,
+    "max_bones": 64,
+    "max_submesh_count": 8,
+    "max_material_count": 8,
+    "max_draw_calls": 16,
+    "max_texture_dimension": 1024,
+    "max_anim_keyframes": 12000,
+    "max_anim_duration": 180,
+    "redundant_keyframes_pct": 35,
+    "max_acmr": 0.9,
+    "detect_zero_weight_bones": true,
+    "texture_not_power_of_two": true,
+    "allowed_texture_formats": ["png", "jpg", "webp"],
+    "require_uv_channels": 1
+  },
+  "metadata": {
+    "inspect_textures": true,
+    "category": "modern",
+    "platform": "mobile-low",
+    "scope": "validation",
+    "engineHints": ["unity", "godot", "unreal"],
+    "todoRules": ["require_lod"]
+  }
+}
