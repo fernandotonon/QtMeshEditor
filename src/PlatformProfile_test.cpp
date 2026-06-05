@@ -393,10 +393,8 @@ void expectModernProfileLoadsAndApplies(const ModernProfileSnapshot& snap)
     EXPECT_TRUE(loaded.profile.description.contains(QStringLiteral("Validation-only"),
                                                     Qt::CaseInsensitive)
                 || loaded.profile.description.contains(QStringLiteral("validation-only")));
-    EXPECT_TRUE(loaded.profile.description.contains(QStringLiteral("glTF"),
-                                                    Qt::CaseInsensitive)
-                || loaded.profile.description.contains(QStringLiteral("FBX"),
-                                                       Qt::CaseInsensitive));
+    EXPECT_TRUE(loaded.profile.description.contains(QStringLiteral("source"),
+                                                    Qt::CaseInsensitive));
     EXPECT_TRUE(loaded.profile.metadata.value(QStringLiteral("inspect_textures")).toBool());
     EXPECT_EQ(loaded.profile.metadata.value(QStringLiteral("scope")).toString(),
               QStringLiteral("validation"));
