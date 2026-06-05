@@ -503,6 +503,15 @@ TEST(ScanConfigApplyOverridesTest, ApplyRuleOverridesAffectsAllFields)
     r["detect_zero_weight_bones"]    = true;
     r["detect_overlapping_uvs_pct"]  = 2.0;
     r["detect_non_manifold_edges_pct"] = 0.5;
+    r["max_triangle_count"]            = 12000;
+    r["max_triangles_per_mesh"]        = 8000;
+    r["max_bones"]                     = 64;
+    r["max_submesh_count"]             = 8;
+    r["max_draw_calls"]                = 16;
+    r["texture_not_power_of_two"]      = true;
+    r["allowed_texture_formats"]       = QStringList{QStringLiteral("png")};
+    r["disallowed_texture_formats"]    = QStringList{QStringLiteral("tga")};
+    r["max_texture_dimension"]         = 1024;
 
     cfg.applyRuleOverrides(r);
     EXPECT_DOUBLE_EQ(cfg.maxFileSizeMb, 99.0);
@@ -532,11 +541,20 @@ TEST(ScanConfigApplyOverridesTest, ApplyRuleOverridesAffectsAllFields)
     EXPECT_DOUBLE_EQ(cfg.redundantKeyframesTranslationTol, 1e-2);
     EXPECT_DOUBLE_EQ(cfg.redundantKeyframesRotationDegTol, 0.5);
     EXPECT_DOUBLE_EQ(cfg.redundantKeyframesScaleTol, 1e-2);
-    EXPECT_EQ(cfg.maxTextureResolution, 2048);
     EXPECT_EQ(cfg.requireUvChannels, 1);
     EXPECT_TRUE(cfg.detectZeroWeightBones);
     EXPECT_DOUBLE_EQ(cfg.detectOverlappingUvsPct, 2.0);
     EXPECT_DOUBLE_EQ(cfg.detectNonManifoldEdgesPct, 0.5);
+    EXPECT_EQ(cfg.maxTriangleCount, 12000);
+    EXPECT_EQ(cfg.maxTrianglesPerMesh, 8000);
+    EXPECT_EQ(cfg.maxBoneCount, 64);
+    EXPECT_EQ(cfg.maxSubmeshCount, 8);
+    EXPECT_EQ(cfg.maxDrawCalls, 16);
+    EXPECT_TRUE(cfg.requireTexturePowerOfTwo);
+    EXPECT_EQ(cfg.allowedTextureFormats, (QStringList{QStringLiteral("png")}));
+    EXPECT_EQ(cfg.disallowedTextureFormats, (QStringList{QStringLiteral("tga")}));
+    // max_texture_dimension alias overrides max_texture_resolution when both are set.
+    EXPECT_EQ(cfg.maxTextureResolution, 1024);
 }
 
 TEST(ScanConfigApplyOverridesTest, ApplyRuleOverridesIgnoresUnknownKeys)

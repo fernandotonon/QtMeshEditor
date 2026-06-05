@@ -760,6 +760,195 @@ TEST(ScanEngineTest, EvaluateRules_C4Rules_AllDisabledByDefault)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Issue #365 — budget rule evaluator tests
+// ---------------------------------------------------------------------------
+
+static bool hasRule(const QList<Finding>& findings, const QString& ruleId)
+{
+    for (const auto& f : findings)
+        if (f.rule == ruleId)
+            return true;
+    return false;
+}
+
+TEST(ScanEngineTest, EvaluateRules_MaxTriangleCount)
+{
+    AssetInfo asset;
+    asset.relativePath = "hero.fbx";
+    asset.triangleCount = 5000;
+
+    ScanConfig config = ScanConfig::defaults();
+    config.maxTriangleCount = 4000;
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_TRUE(hasRule(findings, QStringLiteral("max_triangle_count")));
+}
+
+TEST(ScanEngineTest, EvaluateRules_MaxTrianglesPerMesh)
+{
+    AssetInfo asset;
+    asset.relativePath = "hero.fbx";
+    asset.maxTrianglesPerMesh = 3000;
+
+    ScanConfig config = ScanConfig::defaults();
+    config.maxTrianglesPerMesh = 2000;
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_TRUE(hasRule(findings, QStringLiteral("max_triangles_per_mesh")));
+}
+
+TEST(ScanEngineTest, EvaluateRules_MaxBones)
+{
+    AssetInfo asset;
+    asset.relativePath = "rig.fbx";
+    asset.boneCount = 120;
+
+    ScanConfig config = ScanConfig::defaults();
+    config.maxBoneCount = 64;
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_TRUE(hasRule(findings, QStringLiteral("max_bones")));
+}
+
+TEST(ScanEngineTest, EvaluateRules_MaxSubmeshCount)
+{
+    AssetInfo asset;
+    asset.relativePath = "props.fbx";
+    asset.submeshCount = 12;
+
+    ScanConfig config = ScanConfig::defaults();
+    config.maxSubmeshCount = 8;
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_TRUE(hasRule(findings, QStringLiteral("max_submesh_count")));
+}
+
+TEST(ScanEngineTest, EvaluateRules_MaxDrawCalls)
+{
+    AssetInfo asset;
+    asset.relativePath = "scene.fbx";
+    asset.estimatedDrawCalls = 40;
+
+    ScanConfig config = ScanConfig::defaults();
+    config.maxDrawCalls = 16;
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_TRUE(hasRule(findings, QStringLiteral("max_draw_calls")));
+}
+
+TEST(ScanEngineTest, EvaluateRules_MaxTextureResolutionUsesProbedDimension)
+{
+    AssetInfo asset;
+    asset.relativePath = "tex.fbx";
+    asset.maxTextureDimension = 512;
+    asset.probedTextureMaxDimension = 4096;
+
+    ScanConfig config = ScanConfig::defaults();
+    config.maxTextureResolution = 2048;
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_TRUE(hasRule(findings, QStringLiteral("max_texture_resolution")));
+}
+
+TEST(ScanEngineTest, EvaluateRules_TextureNotPowerOfTwo)
+{
+    AssetInfo asset;
+    asset.relativePath = "retro.fbx";
+
+    TextureRefStats bad;
+    bad.path = QStringLiteral("albedo.png");
+    bad.width = 300;
+    bad.height = 256;
+    bad.format = QStringLiteral("png");
+    asset.textureStats.append(bad);
+
+    ScanConfig config = ScanConfig::defaults();
+    config.requireTexturePowerOfTwo = true;
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_TRUE(hasRule(findings, QStringLiteral("texture_not_power_of_two")));
+}
+
+TEST(ScanEngineTest, EvaluateRules_TextureFormatDisallowed)
+{
+    AssetInfo asset;
+    asset.relativePath = "retro.fbx";
+
+    TextureRefStats tga;
+    tga.path = QStringLiteral("diffuse.tga");
+    tga.format = QStringLiteral("tga");
+    asset.textureStats.append(tga);
+
+    ScanConfig config = ScanConfig::defaults();
+    config.disallowedTextureFormats = {QStringLiteral("tga")};
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_TRUE(hasRule(findings, QStringLiteral("texture_format_disallowed")));
+}
+
+TEST(ScanEngineTest, EvaluateRules_AllowedTextureFormats)
+{
+    AssetInfo asset;
+    asset.relativePath = "retro.fbx";
+
+    TextureRefStats bmp;
+    bmp.path = QStringLiteral("mask.bmp");
+    bmp.format = QStringLiteral("bmp");
+    asset.textureStats.append(bmp);
+
+    ScanConfig config = ScanConfig::defaults();
+    config.allowedTextureFormats = {QStringLiteral("png"), QStringLiteral("jpg")};
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_TRUE(hasRule(findings, QStringLiteral("texture_format_disallowed")));
+}
+
+TEST(ScanEngineTest, EvaluateRules_BudgetRulesDisabledByDefault)
+{
+    AssetInfo asset;
+    asset.relativePath = "heavy.fbx";
+    asset.triangleCount = 999999;
+    asset.maxTrianglesPerMesh = 500000;
+    asset.boneCount = 500;
+    asset.submeshCount = 200;
+    asset.estimatedDrawCalls = 200;
+    asset.probedTextureMaxDimension = 8192;
+
+    TextureRefStats odd;
+    odd.path = QStringLiteral("x.png");
+    odd.width = 300;
+    odd.height = 300;
+    odd.format = QStringLiteral("bmp");
+    asset.textureStats.append(odd);
+
+    const auto findings = ScanEngine::evaluateRules(asset, ScanConfig::defaults());
+    for (const auto& f : findings) {
+        EXPECT_NE(f.rule, QStringLiteral("max_triangle_count"));
+        EXPECT_NE(f.rule, QStringLiteral("max_triangles_per_mesh"));
+        EXPECT_NE(f.rule, QStringLiteral("max_bones"));
+        EXPECT_NE(f.rule, QStringLiteral("max_submesh_count"));
+        EXPECT_NE(f.rule, QStringLiteral("max_draw_calls"));
+        EXPECT_NE(f.rule, QStringLiteral("texture_not_power_of_two"));
+        EXPECT_NE(f.rule, QStringLiteral("texture_format_disallowed"));
+    }
+}
+
+TEST(ScanEngineTest, FormatSarif_IncludesBudgetRuleDescriptions)
+{
+    ScanResult result;
+    Finding f;
+    f.file = QStringLiteral("hero.fbx");
+    f.rule = QStringLiteral("max_triangle_count");
+    f.severity = Severity::Error;
+    f.message = QStringLiteral("too many triangles");
+    result.findings.append(f);
+
+    const QString sarif = ScanEngine::formatSarif(result);
+    EXPECT_TRUE(sarif.contains(QStringLiteral("max_triangle_count")));
+    EXPECT_TRUE(sarif.contains(QStringLiteral("maximum triangle count")));
+}
+
 TEST(ScanEngineTest, EvaluateRules_MissingMaterials)
 {
     AssetInfo asset;

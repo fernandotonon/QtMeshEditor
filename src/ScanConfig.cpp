@@ -289,6 +289,26 @@ void ScanConfig::applyRuleOverrides(const QVariantMap& r)
         detectOverlappingUvsPct = r["detect_overlapping_uvs_pct"].toDouble();
     if (r.contains("detect_non_manifold_edges_pct"))
         detectNonManifoldEdgesPct = r["detect_non_manifold_edges_pct"].toDouble();
+    // Budget rules (#365)
+    if (r.contains("max_triangle_count"))
+        maxTriangleCount = r["max_triangle_count"].toInt();
+    if (r.contains("max_triangles_per_mesh"))
+        maxTrianglesPerMesh = r["max_triangles_per_mesh"].toInt();
+    if (r.contains("max_bones"))
+        maxBoneCount = r["max_bones"].toInt();
+    if (r.contains("max_submesh_count"))
+        maxSubmeshCount = r["max_submesh_count"].toInt();
+    if (r.contains("max_draw_calls"))
+        maxDrawCalls = r["max_draw_calls"].toInt();
+    if (r.contains("texture_not_power_of_two"))
+        requireTexturePowerOfTwo = r["texture_not_power_of_two"].toBool();
+    if (r.contains("allowed_texture_formats"))
+        allowedTextureFormats = r["allowed_texture_formats"].toStringList();
+    if (r.contains("disallowed_texture_formats"))
+        disallowedTextureFormats = r["disallowed_texture_formats"].toStringList();
+    // Alias for max_texture_resolution (issue #365 naming)
+    if (r.contains("max_texture_dimension"))
+        maxTextureResolution = r["max_texture_dimension"].toInt();
 }
 
 ScanConfig ScanConfig::withScopeOverrides(const QString& relativePath) const
@@ -452,50 +472,9 @@ void ScanConfig::applyProjectConfig(ScanConfig& config, const QVariantMap& root)
     }
 
     // rules section
-    QVariantMap rules = root.value("rules").toMap();
-    if (!rules.isEmpty()) {
-        if (rules.contains("allowed_formats"))
-            config.allowedFormats = rules.value("allowed_formats").toStringList();
-        if (rules.contains("forbidden_extensions"))
-            config.forbiddenExtensions = rules.value("forbidden_extensions").toStringList();
-        config.maxFileSizeMb         = rules.value("max_file_size_mb",         config.maxFileSizeMb).toDouble();
-        config.minFileSizeMb         = rules.value("min_file_size_mb",         config.minFileSizeMb).toDouble();
-        config.maxMeshCount          = rules.value("max_mesh_count",           config.maxMeshCount).toInt();
-        config.minMeshCount          = rules.value("min_mesh_count",           config.minMeshCount).toInt();
-        config.maxMaterialCount      = rules.value("max_material_count",       config.maxMaterialCount).toInt();
-        config.minMaterialCount      = rules.value("min_material_count",       config.minMaterialCount).toInt();
-        config.maxVertexCount        = rules.value("max_vertex_count",         config.maxVertexCount).toInt();
-        config.minVertexCount        = rules.value("min_vertex_count",         config.minVertexCount).toInt();
-        config.maxAcmr               = rules.value("max_acmr",                 config.maxAcmr).toDouble();
-        config.requireSkeleton       = rules.value("require_skeleton",         config.requireSkeleton).toBool();
-        config.requireAnimations     = rules.value("require_animations",       config.requireAnimations).toBool();
-        config.allowEmbeddedTextures = rules.value("allow_embedded_textures",  config.allowEmbeddedTextures).toBool();
-        config.requireTexturesExist  = rules.value("require_textures_exist",   config.requireTexturesExist).toBool();
-        config.allowMissingMaterials = rules.value("allow_missing_materials",  config.allowMissingMaterials).toBool();
-        config.fileNameCase          = rules.value("file_name_case",           config.fileNameCase).toString();
-        config.maxAnimKeyframes      = rules.value("max_anim_keyframes",       config.maxAnimKeyframes).toInt();
-        config.minAnimKeyframes      = rules.value("min_anim_keyframes",       config.minAnimKeyframes).toInt();
-        config.maxAnimDuration       = rules.value("max_anim_duration",        config.maxAnimDuration).toDouble();
-        config.minAnimDuration       = rules.value("min_anim_duration",        config.minAnimDuration).toDouble();
-        if (rules.contains("require_animation_names"))
-            config.requireAnimationNames = rules.value("require_animation_names").toStringList();
-        if (rules.contains("require_bone_names"))
-            config.requireBoneNames = rules.value("require_bone_names").toStringList();
-        config.redundantKeyframesPctThreshold = rules.value(
-            "redundant_keyframes_pct", config.redundantKeyframesPctThreshold).toDouble();
-        config.redundantKeyframesTranslationTol = rules.value(
-            "redundant_keyframes_translation_tol", config.redundantKeyframesTranslationTol).toDouble();
-        config.redundantKeyframesRotationDegTol = rules.value(
-            "redundant_keyframes_rotation_deg_tol", config.redundantKeyframesRotationDegTol).toDouble();
-        config.redundantKeyframesScaleTol = rules.value(
-            "redundant_keyframes_scale_tol", config.redundantKeyframesScaleTol).toDouble();
-        // C4 quality rules
-        config.maxTextureResolution    = rules.value("max_texture_resolution",    config.maxTextureResolution).toInt();
-        config.requireUvChannels       = rules.value("require_uv_channels",       config.requireUvChannels).toInt();
-        config.detectZeroWeightBones   = rules.value("detect_zero_weight_bones",  config.detectZeroWeightBones).toBool();
-        config.detectOverlappingUvsPct = rules.value("detect_overlapping_uvs_pct",  config.detectOverlappingUvsPct).toDouble();
-        config.detectNonManifoldEdgesPct = rules.value("detect_non_manifold_edges_pct", config.detectNonManifoldEdgesPct).toDouble();
-    }
+    const QVariantMap rules = root.value("rules").toMap();
+    if (!rules.isEmpty())
+        config.applyRuleOverrides(rules);
 
     // scopes section — map of path patterns to rule override maps
     // Use _order key (if present) to preserve YAML declaration order,

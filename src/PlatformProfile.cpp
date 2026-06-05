@@ -141,6 +141,15 @@ QStringList PlatformProfileLoader::knownRuleKeys()
         QStringLiteral("detect_zero_weight_bones"),
         QStringLiteral("detect_overlapping_uvs_pct"),
         QStringLiteral("detect_non_manifold_edges_pct"),
+        QStringLiteral("max_triangle_count"),
+        QStringLiteral("max_triangles_per_mesh"),
+        QStringLiteral("max_bones"),
+        QStringLiteral("max_submesh_count"),
+        QStringLiteral("max_draw_calls"),
+        QStringLiteral("max_texture_dimension"),
+        QStringLiteral("texture_not_power_of_two"),
+        QStringLiteral("allowed_texture_formats"),
+        QStringLiteral("disallowed_texture_formats"),
     };
 }
 

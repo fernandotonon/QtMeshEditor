@@ -106,6 +106,16 @@ struct ScanConfig {
     // inspect (issue #364) — enabled via platform profile metadata `inspect_textures: true`
     bool probeTextureFiles = false;
 
+    // Budget rules (issue #365) — retro / platform profile triangle, bone, texture, draw-call limits.
+    int maxTriangleCount = 0;         // 0 = disabled; file-level tri count
+    int maxTrianglesPerMesh = 0;      // 0 = disabled; worst single mesh/entity
+    int maxBoneCount = 0;             // 0 = disabled
+    int maxSubmeshCount = 0;          // 0 = disabled; draw-call proxy (material splits)
+    int maxDrawCalls = 0;             // 0 = disabled; estimated SubEntity draw calls
+    bool requireTexturePowerOfTwo = false;
+    QStringList allowedTextureFormats;    // empty = any (e.g. png, jpg)
+    QStringList disallowedTextureFormats; // e.g. tga, bmp — checked when textureStats populated
+
     // scoped rules — path-specific overrides
     QList<ScanScope> scopes;
 

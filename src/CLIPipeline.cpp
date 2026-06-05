@@ -603,6 +603,11 @@ void CLIPipeline::printUsage()
         "  --min-materials <n>       Override min_material_count (0 = no limit)\n"
         "  --max-vertices <n>        Override max_vertex_count (0 = no limit)\n"
         "  --min-vertices <n>        Override min_vertex_count (0 = no limit)\n"
+        "  --max-triangles <n>       Override max_triangle_count (0 = no limit)\n"
+        "  --max-triangles-per-mesh <n>  Override max_triangles_per_mesh (0 = no limit)\n"
+        "  --max-bones <n>           Override max_bones (0 = no limit)\n"
+        "  --max-submeshes <n>       Override max_submesh_count (0 = no limit)\n"
+        "  --max-draw-calls <n>      Override max_draw_calls (0 = no limit)\n"
         "  --max-acmr <n>            Override max_acmr (0 = no limit, e.g. 1.5)\n"
         "  --require-skeleton / --no-require-skeleton\n"
         "                            Override require_skeleton\n"
@@ -622,8 +627,17 @@ void CLIPipeline::printUsage()
         "  --require-animation-names <list> Required animation names/patterns CSV\n"
         "  --require-bone-names <list> Required bone names/patterns CSV\n"
         "\n"
-        "  Quality rules (config only — set in qtmesh.yml):\n"
+        "  Quality / budget rules (config or --target profile — set in qtmesh.yml):\n"
+        "    max_triangle_count: <n>           File-level triangle budget\n"
+        "    max_triangles_per_mesh: <n>       Per-mesh triangle ceiling\n"
+        "    max_bones: <n>                    Skeleton bone budget\n"
+        "    max_submesh_count: <n>            Submesh / material-split ceiling\n"
+        "    max_draw_calls: <n>               Estimated draw-call ceiling\n"
         "    max_texture_resolution: <px>      Largest texture edge ceiling (e.g. 2048)\n"
+        "    max_texture_dimension: <px>       Alias for max_texture_resolution\n"
+        "    texture_not_power_of_two: true     Warn on non-POT textures (needs inspect_textures)\n"
+        "    allowed_texture_formats: [png,jpg]  Texture extension allow-list\n"
+        "    disallowed_texture_formats: [tga]   Blocklisted texture extensions\n"
         "    require_uv_channels: <n>          Min UV sets per submesh (1=any, 2=lightmap)\n"
         "    detect_zero_weight_bones: true    Flag Mixamo-style unused bones (info)\n"
         "    detect_overlapping_uvs_pct: <n>   Warn at >= n% overlapping UV0 AABBs\n"
@@ -3826,6 +3840,11 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
 
     int maxVerticesOverride = -1;
     int minVerticesOverride = -1;
+    int maxTrianglesOverride = -1;
+    int maxTrianglesPerMeshOverride = -1;
+    int maxBonesOverride = -1;
+    int maxSubmeshesOverride = -1;
+    int maxDrawCallsOverride = -1;
     double maxAcmrOverride = -1.0;
     int maxMeshesOverride = -1;
     int minMeshesOverride = -1;
@@ -3983,6 +4002,36 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (parseResult == ParseValueResult::Error) return 2;
         if (parseResult == ParseValueResult::Matched) {
             if (!parseNonNegativeDouble("--max-acmr", value, maxAcmrOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-triangles", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--max-triangles", value, maxTrianglesOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-triangles-per-mesh", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--max-triangles-per-mesh", value, maxTrianglesPerMeshOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-bones", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--max-bones", value, maxBonesOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-submeshes", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--max-submeshes", value, maxSubmeshesOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-draw-calls", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--max-draw-calls", value, maxDrawCallsOverride)) return 2;
             continue;
         }
         parseResult = parseValueArg(arg, "--max-meshes", i, value);
@@ -4201,6 +4250,11 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (minMaterialsOverride >= 0) config.minMaterialCount = minMaterialsOverride;
     if (maxVerticesOverride >= 0) config.maxVertexCount = maxVerticesOverride;
     if (minVerticesOverride >= 0) config.minVertexCount = minVerticesOverride;
+    if (maxTrianglesOverride >= 0) config.maxTriangleCount = maxTrianglesOverride;
+    if (maxTrianglesPerMeshOverride >= 0) config.maxTrianglesPerMesh = maxTrianglesPerMeshOverride;
+    if (maxBonesOverride >= 0) config.maxBoneCount = maxBonesOverride;
+    if (maxSubmeshesOverride >= 0) config.maxSubmeshCount = maxSubmeshesOverride;
+    if (maxDrawCallsOverride >= 0) config.maxDrawCalls = maxDrawCallsOverride;
     if (maxAcmrOverride >= 0.0)   config.maxAcmr        = maxAcmrOverride;
     if (maxAnimKeyframesOverride >= 0) config.maxAnimKeyframes = maxAnimKeyframesOverride;
     if (minAnimKeyframesOverride >= 0) config.minAnimKeyframes = minAnimKeyframesOverride;
@@ -4241,6 +4295,11 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (minMaterialsOverride >= 0)             cliRuleOverrides["min_material_count"] = config.minMaterialCount;
     if (maxVerticesOverride >= 0)              cliRuleOverrides["max_vertex_count"] = config.maxVertexCount;
     if (minVerticesOverride >= 0)              cliRuleOverrides["min_vertex_count"] = config.minVertexCount;
+    if (maxTrianglesOverride >= 0)             cliRuleOverrides["max_triangle_count"] = config.maxTriangleCount;
+    if (maxTrianglesPerMeshOverride >= 0)      cliRuleOverrides["max_triangles_per_mesh"] = config.maxTrianglesPerMesh;
+    if (maxBonesOverride >= 0)                 cliRuleOverrides["max_bones"] = config.maxBoneCount;
+    if (maxSubmeshesOverride >= 0)            cliRuleOverrides["max_submesh_count"] = config.maxSubmeshCount;
+    if (maxDrawCallsOverride >= 0)             cliRuleOverrides["max_draw_calls"] = config.maxDrawCalls;
     if (maxAnimKeyframesOverride >= 0)         cliRuleOverrides["max_anim_keyframes"] = config.maxAnimKeyframes;
     if (minAnimKeyframesOverride >= 0)         cliRuleOverrides["min_anim_keyframes"] = config.minAnimKeyframes;
     if (maxAnimDurationOverride >= 0.0)        cliRuleOverrides["max_anim_duration"] = config.maxAnimDuration;

@@ -200,6 +200,23 @@ TEST(ApplyPlatformProfileTest, MetadataInspectTexturesEnablesProbe)
     EXPECT_TRUE(config.probeTextureFiles);
 }
 
+TEST(PlatformProfileLoaderTest, BuiltinExampleBudgetProfileLoadsRules)
+{
+    const PlatformProfileLoadResult loaded =
+        PlatformProfileLoader::load(QStringLiteral("example-budget"));
+    ASSERT_TRUE(loaded.ok) << loaded.error.toStdString();
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_triangle_count")).toInt(), 50000);
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_bones")).toInt(), 64);
+    EXPECT_TRUE(loaded.profile.metadata.value(QStringLiteral("inspect_textures")).toBool());
+
+    ScanConfig config = ScanConfig::defaults();
+    applyPlatformProfile(config, loaded.profile);
+    EXPECT_EQ(config.maxTriangleCount, 50000);
+    EXPECT_EQ(config.maxBoneCount, 64);
+    EXPECT_TRUE(config.probeTextureFiles);
+    EXPECT_TRUE(config.requireTexturePowerOfTwo);
+}
+
 TEST(PlatformProfileLoaderTest, BuiltinExampleTextureInspectProfileEnablesProbe)
 {
     const PlatformProfileLoadResult loaded =
