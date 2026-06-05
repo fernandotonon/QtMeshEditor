@@ -156,6 +156,16 @@ TEST(PlatformProfileLoaderTest, ListBuiltinIncludesExampleProfiles)
     EXPECT_TRUE(ids.contains(QStringLiteral("example-base")));
 }
 
+TEST(PlatformProfileLoaderTest, ListBuiltinIncludesRetroProfiles)
+{
+    const QStringList ids = PlatformProfileLoader::listBuiltinIds();
+    ASSERT_FALSE(ids.isEmpty());
+    EXPECT_TRUE(ids.contains(QStringLiteral("ps1")));
+    EXPECT_TRUE(ids.contains(QStringLiteral("n64")));
+    EXPECT_TRUE(ids.contains(QStringLiteral("nds")));
+    EXPECT_TRUE(ids.contains(QStringLiteral("dreamcast")));
+}
+
 TEST(PlatformProfileLoaderTest, BuiltinIdMismatchIsRejected)
 {
     QTemporaryDir temp;
@@ -240,4 +250,103 @@ TEST(PlatformProfileLoaderTest, BuiltinExampleTextureInspectProfileEnablesProbe)
     ScanConfig config = ScanConfig::defaults();
     applyPlatformProfile(config, loaded.profile);
     EXPECT_TRUE(config.probeTextureFiles);
+}
+
+namespace {
+
+struct RetroProfileSnapshot {
+    const char* id;
+    int maxTriangleCount;
+    int maxTrianglesPerMesh;
+    int maxVertexCount;
+    int maxBones;
+    int maxSubmeshCount;
+    int maxMaterialCount;
+    int maxDrawCalls;
+    int maxTextureResolution;
+    const char* const* allowedTextureFormats;
+    int allowedTextureFormatCount;
+};
+
+void expectRetroProfileLoadsAndApplies(const RetroProfileSnapshot& snap)
+{
+    const QString id = QString::fromLatin1(snap.id);
+    const PlatformProfileLoadResult loaded = PlatformProfileLoader::load(id);
+    ASSERT_TRUE(loaded.ok) << snap.id << ": " << loaded.error.toStdString();
+    EXPECT_EQ(loaded.profile.id, id);
+    EXPECT_FALSE(loaded.profile.description.isEmpty());
+    EXPECT_TRUE(loaded.profile.description.contains(QStringLiteral("Validation-only"),
+                                                    Qt::CaseInsensitive)
+                || loaded.profile.description.contains(QStringLiteral("validation-only")));
+    EXPECT_TRUE(loaded.profile.metadata.value(QStringLiteral("inspect_textures")).toBool());
+    EXPECT_EQ(loaded.profile.metadata.value(QStringLiteral("scope")).toString(),
+              QStringLiteral("validation"));
+
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_triangle_count")).toInt(),
+              snap.maxTriangleCount);
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_triangles_per_mesh")).toInt(),
+              snap.maxTrianglesPerMesh);
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_vertex_count")).toInt(),
+              snap.maxVertexCount);
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_bones")).toInt(), snap.maxBones);
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_submesh_count")).toInt(),
+              snap.maxSubmeshCount);
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_material_count")).toInt(),
+              snap.maxMaterialCount);
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_draw_calls")).toInt(),
+              snap.maxDrawCalls);
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_texture_dimension")).toInt(),
+              snap.maxTextureResolution);
+    EXPECT_TRUE(loaded.profile.rules.value(QStringLiteral("texture_not_power_of_two")).toBool());
+
+    QStringList expectedFormats;
+    for (int i = 0; i < snap.allowedTextureFormatCount; ++i)
+        expectedFormats.append(QString::fromLatin1(snap.allowedTextureFormats[i]));
+    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("allowed_texture_formats")).toStringList(),
+              expectedFormats);
+
+    ScanConfig config = ScanConfig::defaults();
+    applyPlatformProfile(config, loaded.profile);
+    EXPECT_EQ(config.maxTriangleCount, snap.maxTriangleCount);
+    EXPECT_EQ(config.maxTrianglesPerMesh, snap.maxTrianglesPerMesh);
+    EXPECT_EQ(config.maxVertexCount, snap.maxVertexCount);
+    EXPECT_EQ(config.maxBoneCount, snap.maxBones);
+    EXPECT_EQ(config.maxSubmeshCount, snap.maxSubmeshCount);
+    EXPECT_EQ(config.maxMaterialCount, snap.maxMaterialCount);
+    EXPECT_EQ(config.maxDrawCalls, snap.maxDrawCalls);
+    EXPECT_EQ(config.maxTextureResolution, snap.maxTextureResolution);
+    EXPECT_TRUE(config.probeTextureFiles);
+    EXPECT_TRUE(config.requireTexturePowerOfTwo);
+    EXPECT_EQ(config.allowedTextureFormats, expectedFormats);
+    EXPECT_EQ(config.requireUvChannels, 1);
+}
+
+} // namespace
+
+TEST(PlatformProfileLoaderTest, BuiltinPs1ProfileLoadsRules)
+{
+    static const char* kFormats[] = {"png", "jpg"};
+    expectRetroProfileLoadsAndApplies(
+        { "ps1", 5000, 2000, 5000, 16, 4, 4, 8, 256, kFormats, 2 });
+}
+
+TEST(PlatformProfileLoaderTest, BuiltinN64ProfileLoadsRules)
+{
+    static const char* kFormats[] = {"png", "jpg"};
+    expectRetroProfileLoadsAndApplies(
+        { "n64", 12000, 4000, 12000, 32, 6, 8, 12, 256, kFormats, 2 });
+}
+
+TEST(PlatformProfileLoaderTest, BuiltinNdsProfileLoadsRules)
+{
+    static const char* kFormats[] = {"png", "jpg"};
+    expectRetroProfileLoadsAndApplies(
+        { "nds", 4000, 2000, 4000, 16, 4, 4, 8, 256, kFormats, 2 });
+}
+
+TEST(PlatformProfileLoaderTest, BuiltinDreamcastProfileLoadsRules)
+{
+    static const char* kFormats[] = {"png", "jpg", "pvr"};
+    expectRetroProfileLoadsAndApplies(
+        { "dreamcast", 15000, 8000, 15000, 64, 8, 12, 16, 512, kFormats, 3 });
 }

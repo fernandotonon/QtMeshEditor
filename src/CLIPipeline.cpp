@@ -582,7 +582,7 @@ void CLIPipeline::printUsage()
         "  material --list-presets         List the built-in preset names\n"
         "\n"
         "Scan options:\n"
-        "  --target <id>             Alias for --profile (CI-friendly). Built-in targets include: example-minimal, example-base\n"
+        "  --target <id>             Alias for --profile (CI-friendly). Built-in targets include: ps1, n64, nds, dreamcast, example-minimal\n"
         "  --profile <id>            Built-in platform profile (e.g. example-minimal) or path to .json\n"
         "  --list-profiles           List built-in platform profile ids and exit\n"
         "  --config <file>           Config file (default: qtmesh.yml, qtmesh.json)\n"
