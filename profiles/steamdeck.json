@@ -3,7 +3,7 @@
   "displayName": "Steam Deck (source validation)",
   "description": "Validation-only preset for Steam Deck / handheld-PC class performance heuristics on glTF/FBX source assets. Higher budgets than switch-like but still warns on draw calls, texture size, and animation bloat. Does not produce cooked builds — validation for engine import only.",
   "rules": {
-    "allowed_formats": ["fbx", "glb", "gltf", "obj"],
+    "allowed_formats": ["fbx", "glb", "gltf", "vrm", "obj"],
     "max_triangle_count": 150000,
     "max_triangles_per_mesh": 75000,
     "max_vertex_count": 150000,

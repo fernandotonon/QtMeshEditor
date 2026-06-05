@@ -3,7 +3,7 @@
   "displayName": "Mobile Low-end (source validation)",
   "description": "Validation-only preset for low-end mobile GPU/CPU source asset budgets. Tight triangle, material, texture, and bone limits for glTF/FBX prep before Unity/Unreal/Godot mobile cooks. Warnings only — not a substitute for on-device profiling.",
   "rules": {
-    "allowed_formats": ["fbx", "glb", "gltf", "obj"],
+    "allowed_formats": ["fbx", "glb", "gltf", "vrm", "obj"],
     "max_triangle_count": 25000,
     "max_triangles_per_mesh": 12000,
     "max_vertex_count": 25000,

@@ -3,7 +3,7 @@
   "displayName": "WebGL / WebGPU (source validation)",
   "description": "Validation-only preset for browser 3D pipelines (WebGL/WebGPU). Caps triangles, draw calls, texture dimensions, and animation keyframes on glTF/FBX source assets. Does not emit web-ready bundles — validate source, then export via your web engine toolchain.",
   "rules": {
-    "allowed_formats": ["fbx", "glb", "gltf", "obj"],
+    "allowed_formats": ["fbx", "glb", "gltf", "vrm", "obj"],
     "max_triangle_count": 40000,
     "max_triangles_per_mesh": 20000,
     "max_vertex_count": 40000,

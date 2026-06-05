@@ -3,7 +3,7 @@
   "displayName": "VR (source validation)",
   "description": "Validation-only preset for VR source assets where stereo rendering and frame-time budgets demand lean geometry, materials, and textures. glTF/FBX preparation checks only — export via engine VR cook pipelines, not platform SDK mesh formats.",
   "rules": {
-    "allowed_formats": ["fbx", "glb", "gltf", "obj"],
+    "allowed_formats": ["fbx", "glb", "gltf", "vrm", "obj"],
     "max_triangle_count": 70000,
     "max_triangles_per_mesh": 35000,
     "max_vertex_count": 70000,

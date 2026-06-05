@@ -452,7 +452,8 @@ void expectModernProfileLoadsAndApplies(const ModernProfileSnapshot& snap)
     EXPECT_TRUE(config.detectZeroWeightBones);
     EXPECT_EQ(config.allowedFormats,
               (QStringList{QStringLiteral("fbx"), QStringLiteral("glb"),
-                           QStringLiteral("gltf"), QStringLiteral("obj")}));
+                           QStringLiteral("gltf"), QStringLiteral("vrm"),
+                           QStringLiteral("obj")}));
 }
 
 } // namespace
