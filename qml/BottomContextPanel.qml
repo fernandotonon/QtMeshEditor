@@ -213,13 +213,12 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: 18
 
+                SummaryText { label: "Profile"; value: AssetScanController.selectedProfileId.length > 0 ? AssetScanController.selectedProfileId : "None" }
+                SummaryText { label: "Asset Root"; value: root.rootFolderName() }
+                SummaryText { label: "Folder Scan"; value: AssetScanController.scanning ? "Running" : (AssetScanController.hasResults ? (AssetScanController.summaryErrors + " err / " + AssetScanController.summaryWarnings + " warn") : "Not run") }
                 SummaryText { label: "Selection"; value: MeshValidator.hasSelection ? PropertiesPanelController.selectionName : "None" }
-                SummaryText { label: "Findings"; value: root.issueSummary() }
-                SummaryText { label: "Suggestions"; value: root.suggestionSummary() }
-                SummaryText { label: "Fixable"
-                              value: (MeshValidator.hasFixableIssues
-                                      || MeshValidator.hasCacheOptimization) ? "Yes" : "No" }
-                SummaryText { label: "Status"; value: MeshValidator.validating ? "Running" : (MeshValidator.validated ? "Ready" : "Idle") }
+                SummaryText { label: "Mesh Findings"; value: root.issueSummary() }
+                SummaryText { label: "Mesh Status"; value: MeshValidator.validating ? "Running" : (MeshValidator.validated ? "Ready" : "Idle") }
                 Item { Layout.fillWidth: true }
             }
         }

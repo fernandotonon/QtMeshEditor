@@ -76,4 +76,19 @@ private:
 /// Merge profile rules and scopes onto @p config (does not reset scan/fix/report).
 void applyPlatformProfile(ScanConfig& config, const PlatformProfile& profile);
 
+/**
+ * Shared scan-config builder for CLI and GUI (issue #370).
+ * Applies ScanConfig::defaults() plus an optional platform profile (CLI precedence steps 1–2).
+ * Project config and CLI flag overrides remain the caller's responsibility.
+ */
+struct PlatformProfileScanSetup {
+    bool ok = false;
+    QString error;
+    QString profileId;
+    QStringList warnings;
+    ScanConfig config;
+};
+
+PlatformProfileScanSetup buildScanConfigWithPlatformProfile(const QString& profileIdOrEmpty);
+
 #endif // PLATFORMPROFILE_H

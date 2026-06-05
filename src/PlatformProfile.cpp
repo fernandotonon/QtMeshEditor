@@ -398,6 +398,30 @@ PlatformProfileLoadResult PlatformProfileLoader::load(const QString& pathOrId)
     return res;
 }
 
+PlatformProfileScanSetup buildScanConfigWithPlatformProfile(const QString& profileIdOrEmpty)
+{
+    PlatformProfileScanSetup out;
+    out.config = ScanConfig::defaults();
+
+    const QString id = profileIdOrEmpty.trimmed();
+    if (id.isEmpty()) {
+        out.ok = true;
+        return out;
+    }
+
+    const PlatformProfileLoadResult loaded = PlatformProfileLoader::load(id);
+    if (!loaded.ok) {
+        out.error = loaded.error;
+        return out;
+    }
+
+    out.warnings = loaded.warnings;
+    applyPlatformProfile(out.config, loaded.profile);
+    out.profileId = loaded.profile.id;
+    out.ok = true;
+    return out;
+}
+
 void applyPlatformProfile(ScanConfig& config, const PlatformProfile& profile)
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),

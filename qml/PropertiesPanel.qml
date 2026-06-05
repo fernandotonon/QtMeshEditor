@@ -6,6 +6,7 @@ import AnimationControl 1.0
 import EditorMode 1.0
 import MaterialEditorQML 1.0
 import ThemeManager 1.0
+import AssetBrowser 1.0
 
 Rectangle {
     id: root
@@ -444,6 +445,17 @@ Rectangle {
                 expanded: false
 
                 Component.onCompleted: content = materialPresetsComponent
+            }
+
+            // ---- Asset Folder Scan (platform profile) ----
+            CollapsibleSection {
+                title: "Asset Folder Scan"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ValidationMode,
+                    true)
+                expanded: true
+
+                Component.onCompleted: content = assetScanComponent
             }
 
             // ---- Mesh Validation ----
@@ -2299,6 +2311,7 @@ Rectangle {
                     objectName: "workspaceAssetBrowserButton"
                     visible: root.showAllModeTools
                         || EditorModeController.currentMode === EditorModeController.MaterialMode
+                        || EditorModeController.currentMode === EditorModeController.ValidationMode
                     text: "Asset Browser"
                     onClicked: root.revealBottomTool("assetBrowser")
                 }
@@ -4210,6 +4223,179 @@ Rectangle {
                     target: MaterialPresetLibrary
                     function onPresetApplied(name) {
                         presetFeedback.text = "Applied: " + name
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Asset Folder Scan (Validation mode) ----
+    Component {
+        id: assetScanComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: PropertiesPanelController.textColor
+                opacity: 0.75
+                text: "Scan the Asset Browser folder with the same rules as "
+                    + "qtmesh scan --target. Uses a separate process so your open scene is untouched."
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: "Profile:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 44
+                }
+                ThemedComboBox {
+                    id: profileCombo
+                    width: parent.width - 50
+                    model: AssetScanController.profileLabels
+                    onActivated: function(index) {
+                        if (index >= 0 && index < AssetScanController.profileIds.length)
+                            AssetScanController.selectedProfileId = AssetScanController.profileIds[index]
+                    }
+                    ToolTip.visible: hovered && AssetScanController.profileDescription.length > 0
+                    ToolTip.text: AssetScanController.profileDescription
+                    ToolTip.delay: 400
+
+                    Connections {
+                        target: AssetScanController
+                        function onSelectedProfileIdChanged() {
+                            const idx = AssetScanController.profileIds.indexOf(AssetScanController.selectedProfileId)
+                            if (idx >= 0)
+                                profileCombo.currentIndex = idx
+                        }
+                    }
+                    Component.onCompleted: {
+                        const idx = AssetScanController.profileIds.indexOf(AssetScanController.selectedProfileId)
+                        if (idx >= 0)
+                            currentIndex = idx
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: AssetScanController.profileDescription.length > 0
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: PropertiesPanelController.textColor
+                opacity: 0.7
+                text: AssetScanController.profileDescription
+            }
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: PropertiesPanelController.textColor
+                opacity: 0.85
+                text: "Folder: " + AssetBrowserController.rootPath
+            }
+
+            Rectangle {
+                width: parent.width - 16; height: 28; radius: 3
+                color: scanMouse.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                     : scanMouse.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                     : PropertiesPanelController.highlightColor
+                opacity: AssetScanController.scanning ? 0.55 : 1.0
+                Text {
+                    anchors.centerIn: parent
+                    text: AssetScanController.scanning ? "Scanning\u2026" : "Scan Asset Folder"
+                    color: "white"
+                    font.pixelSize: 12
+                }
+                MouseArea {
+                    id: scanMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: !AssetScanController.scanning
+                    onClicked: AssetScanController.scanFolder(AssetBrowserController.rootPath)
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: AssetScanController.scanning
+                text: "Running qtmesh scan in background\u2026"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.italic: true
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: AssetScanController.hasResults && !AssetScanController.scanning
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: PropertiesPanelController.textColor
+                text: "Scanned " + AssetScanController.summaryScanned
+                    + " \u2022 passed " + AssetScanController.summaryPassed
+                    + " \u2022 warnings " + AssetScanController.summaryWarnings
+                    + " \u2022 errors " + AssetScanController.summaryErrors
+            }
+
+            Column {
+                width: parent.width - 16
+                spacing: 3
+                visible: AssetScanController.hasResults && AssetScanController.findings.length > 0
+
+                Repeater {
+                    model: AssetScanController.findings
+
+                    Row {
+                        spacing: 6
+                        width: parent.width
+
+                        Text {
+                            text: modelData.severity === "error" ? "\u2718" : "\u26A0"
+                            color: modelData.severity === "error" ? "#e05050" : "#e0a030"
+                            font.pixelSize: 13
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            text: (modelData.file ? modelData.file + ": " : "") + modelData.message
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                            wrapMode: Text.Wrap
+                            width: parent.width - 24
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+                }
+            }
+
+            Text {
+                id: assetScanFeedback
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: "#c06060"
+                text: ""
+
+                Connections {
+                    target: AssetScanController
+                    function onError(msg) {
+                        assetScanFeedback.color = "#c06060"
+                        assetScanFeedback.text = msg
+                    }
+                    function onScanFinished(ok, message) {
+                        if (ok) {
+                            assetScanFeedback.color = "#60c060"
+                            assetScanFeedback.text = message
+                        }
                     }
                 }
             }
