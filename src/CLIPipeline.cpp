@@ -4295,6 +4295,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (minMaterialsOverride >= 0)             cliRuleOverrides["min_material_count"] = config.minMaterialCount;
     if (maxVerticesOverride >= 0)              cliRuleOverrides["max_vertex_count"] = config.maxVertexCount;
     if (minVerticesOverride >= 0)              cliRuleOverrides["min_vertex_count"] = config.minVertexCount;
+    if (maxAcmrOverride >= 0.0)                cliRuleOverrides["max_acmr"] = config.maxAcmr;
     if (maxTrianglesOverride >= 0)             cliRuleOverrides["max_triangle_count"] = config.maxTriangleCount;
     if (maxTrianglesPerMeshOverride >= 0)      cliRuleOverrides["max_triangles_per_mesh"] = config.maxTrianglesPerMesh;
     if (maxBonesOverride >= 0)                 cliRuleOverrides["max_bones"] = config.maxBoneCount;

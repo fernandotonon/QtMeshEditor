@@ -306,8 +306,8 @@ void ScanConfig::applyRuleOverrides(const QVariantMap& r)
         allowedTextureFormats = r["allowed_texture_formats"].toStringList();
     if (r.contains("disallowed_texture_formats"))
         disallowedTextureFormats = r["disallowed_texture_formats"].toStringList();
-    // Alias for max_texture_resolution (issue #365 naming)
-    if (r.contains("max_texture_dimension"))
+    // Alias for max_texture_resolution (issue #365 naming); canonical key wins when both present.
+    if (r.contains("max_texture_dimension") && !r.contains("max_texture_resolution"))
         maxTextureResolution = r["max_texture_dimension"].toInt();
 }
 

@@ -553,7 +553,16 @@ TEST(ScanConfigApplyOverridesTest, ApplyRuleOverridesAffectsAllFields)
     EXPECT_TRUE(cfg.requireTexturePowerOfTwo);
     EXPECT_EQ(cfg.allowedTextureFormats, (QStringList{QStringLiteral("png")}));
     EXPECT_EQ(cfg.disallowedTextureFormats, (QStringList{QStringLiteral("tga")}));
-    // max_texture_dimension alias overrides max_texture_resolution when both are set.
+    // Canonical max_texture_resolution wins when both keys are in the same override set.
+    EXPECT_EQ(cfg.maxTextureResolution, 2048);
+}
+
+TEST(ScanConfigApplyOverridesTest, MaxTextureDimensionAliasUsedWhenCanonicalAbsent)
+{
+    ScanConfig cfg = ScanConfig::defaults();
+    QVariantMap r;
+    r["max_texture_dimension"] = 1024;
+    cfg.applyRuleOverrides(r);
     EXPECT_EQ(cfg.maxTextureResolution, 1024);
 }
 
