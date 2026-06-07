@@ -110,6 +110,24 @@ void SDManager::populateRecommendedModels()
         6938081905,
         false
     });
+
+    // Issue #403: ControlNet depth model for mesh-aware texture
+    // generation. NOT a base model — it pairs WITH SD 1.5 as the
+    // conditioning network. Selected via the "Generate Texture from
+    // Mesh…" dialog's ControlNet field, not the base-model dropdown.
+    // lllyasviel's converted fp16 safetensors (the sd.cpp-compatible
+    // single-file format).
+    {
+        SDModelInfo cn;
+        cn.name        = "ControlNet Depth (SD 1.5)";
+        cn.fileName    = "control_v11f1p_sd15_depth_fp16.safetensors";
+        cn.url         = "https://huggingface.co/comfyanonymous/ControlNet-v1-1_fp16_safetensors/resolve/main/control_v11f1p_sd15_depth_fp16.safetensors";
+        cn.description = "Depth ControlNet for mesh-aware texture generation. Pairs with SD 1.5 (not SDXL). ~723MB";
+        cn.size        = 722601104;
+        cn.isDownloaded = false;
+        cn.kind        = QStringLiteral("controlnet");
+        m_recommendedModels.append(cn);
+    }
 }
 
 bool SDManager::isModelLoaded() const
@@ -332,7 +350,22 @@ void SDManager::scanForModels()
     filters << "*.safetensors" << "*.ckpt" << "*.gguf";
     QFileInfoList files = modelsDir.entryInfoList(filters, QDir::Files);
 
+    // Collect ControlNet filenames so they don't show up as base
+    // models (they can't be loaded as a generation context). Use
+    // both the known recommended-list filenames and a name heuristic
+    // ("controlnet" / "control_v" — the lllyasviel naming).
+    QStringList controlNetFiles;
+    for (const SDModelInfo &info : m_recommendedModels)
+        if (info.kind == QStringLiteral("controlnet"))
+            controlNetFiles << info.fileName;
+
     for (const QFileInfo &file : files) {
+        const QString lower = file.fileName().toLower();
+        const bool isControlNet =
+            controlNetFiles.contains(file.fileName())
+            || lower.contains("controlnet")
+            || lower.startsWith("control_v");
+        if (isControlNet) continue;  // not a base model
         m_availableModels.append(file.completeBaseName());
     }
 

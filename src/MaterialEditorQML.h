@@ -525,6 +525,24 @@ public slots:
     Q_INVOKABLE void generateTextureFromPrompt(const QString &prompt, int width = 0, int height = 0);
     Q_INVOKABLE void stopTextureGeneration();
 
+    // Issue #403: mesh-aware texture generation. Same as
+    // generateTextureFromPrompt but renders the selected entity's
+    // depth map and conditions generation on it via a ControlNet
+    // depth model (auto-discovered in the sd_models dir; falls back
+    // to plain txt2img if none found). `controlStrength` is 0..1.
+    // The result is applied to the active material's diffuse slot by
+    // the existing SD-complete path.
+    Q_INVOKABLE void generateMeshTextureFromPrompt(const QString &prompt,
+                                                   int width = 0, int height = 0,
+                                                   double controlStrength = 0.9);
+    // True when a skinned/static mesh is selected — drives the
+    // "use selected mesh" checkbox enabled state.
+    Q_INVOKABLE bool hasSelectedMesh() const;
+    // Path to an auto-discovered ControlNet depth model in the
+    // sd_models directory, or empty if none is downloaded. Lets the
+    // UI show whether depth conditioning will actually engage.
+    Q_INVOKABLE QString discoveredControlNetDepthPath() const;
+
     // Undo/Redo functionality
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();

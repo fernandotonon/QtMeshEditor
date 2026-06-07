@@ -18,6 +18,12 @@ struct SDModelInfo {
     QString description;
     qint64 size;
     bool isDownloaded;
+    // "base" = a full SD model loadable as the generation context.
+    // "controlnet" = a ControlNet conditioning model (issue #403),
+    // NOT loadable as a base model — used only via the mesh-texture
+    // dialog's ControlNet field. Defaults to "base" so existing
+    // entries are unaffected.
+    QString kind = QStringLiteral("base");
 
     QVariantMap toVariantMap() const {
         return {
@@ -26,7 +32,8 @@ struct SDModelInfo {
             {"url", url},
             {"description", description},
             {"size", size},
-            {"isDownloaded", isDownloaded}
+            {"isDownloaded", isDownloaded},
+            {"kind", kind}
         };
     }
 };

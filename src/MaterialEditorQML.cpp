@@ -3,6 +3,12 @@
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "LLMManager.h"
+#include "SelectionSet.h"
+#include "MeshDepthRenderer.h"
+#include <OgreEntity.h>
+#include <OgreMesh.h>
+#include <QDir>
+#include <QFileInfo>
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
@@ -3692,6 +3698,102 @@ void MaterialEditorQML::generateTextureFromPrompt(const QString &prompt, int wid
 #else
     Q_UNUSED(width);
     Q_UNUSED(height);
+    emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
+#endif
+}
+
+bool MaterialEditorQML::hasSelectedMesh() const
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    const auto entities = sel->getResolvedEntities();
+    return !entities.isEmpty() && entities.first() && entities.first()->getMesh();
+}
+
+QString MaterialEditorQML::discoveredControlNetDepthPath() const
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager* sdManager = SDManager::instance();
+    if (!sdManager) return QString();
+    // Scan the models directory for a ControlNet depth file
+    // (recommended filename, or the lllyasviel naming heuristic).
+    const QString dir = sdManager->modelsDirectory();
+    QDir d(dir);
+    const QStringList files = d.entryList(
+        QStringList() << "*.safetensors" << "*.ckpt", QDir::Files);
+    for (const QString& f : files) {
+        const QString lower = f.toLower();
+        if ((lower.contains("control") && lower.contains("depth")))
+            return d.filePath(f);
+    }
+    return QString();
+#else
+    return QString();
+#endif
+}
+
+void MaterialEditorQML::generateMeshTextureFromPrompt(const QString &prompt,
+                                                      int width, int height,
+                                                      double controlStrength)
+{
+    if (prompt.isEmpty()) {
+        emit sdGenerationError("Please enter a texture prompt");
+        return;
+    }
+
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager *sdManager = SDManager::instance();
+    if (!sdManager->isModelLoaded()) {
+        emit sdGenerationError("No SD model loaded. Please download and load a model from AI Settings.");
+        return;
+    }
+
+    auto* sel = SelectionSet::getSingleton();
+    const auto entities = sel ? sel->getResolvedEntities() : QList<Ogre::Entity*>{};
+    if (entities.isEmpty() || !entities.first() || !entities.first()->getMesh()) {
+        emit sdGenerationError("No mesh selected. Select a mesh to condition on its shape.");
+        return;
+    }
+    Ogre::Entity* entity = entities.first();
+
+    // LCOV_EXCL_START — requires a loaded SD model + a mesh
+    const int genW = width  > 0 ? width  : 512;
+    const int genH = height > 0 ? height : 512;
+
+    // Render the depth map at the generation resolution (square; the
+    // depth renderer frames the entity to fill the view).
+    QString depthErr;
+    const int depthSize = std::max(genW, genH);
+    const QImage depth = MeshDepthRenderer::renderDepthMap(entity, depthSize, &depthErr);
+    if (depth.isNull()) {
+        emit sdGenerationError(QStringLiteral("Depth render failed: %1").arg(depthErr));
+        return;
+    }
+
+    const QString controlNetPath = discoveredControlNetDepthPath();
+    if (controlNetPath.isEmpty()) {
+        // No ControlNet model — degrade to plain txt2img but tell the
+        // user why the result won't follow the mesh shape.
+        emit sdGenerationError(
+            "No ControlNet depth model found in the models folder — "
+            "generating without mesh conditioning. Download "
+            "\"ControlNet Depth (SD 1.5)\" in AI Settings for shape-aware results.");
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mesh_texture"),
+        QStringLiteral("entity=%1 controlNet=%2 strength=%3 size=%4")
+            .arg(QString::fromStdString(entity->getName()))
+            .arg(controlNetPath.isEmpty() ? QStringLiteral("(none)")
+                                          : QFileInfo(controlNetPath).fileName())
+            .arg(controlStrength).arg(depthSize));
+
+    m_sdGenerationProgress = 0.0f;
+    emit sdGenerationProgressChanged();
+    sdManager->generateMeshTexture(prompt, depth, controlNetPath,
+                                   static_cast<float>(std::clamp(controlStrength, 0.0, 1.0)));
+    // LCOV_EXCL_STOP
+#else
+    Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(controlStrength);
     emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
 #endif
 }
