@@ -38,54 +38,53 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\bin\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\bin\{#MyAppExeName}"
 
 [Registry]
-; Animatable / common interchange formats (Alternate handler)
-Root: HKCU; Subkey: "Software\Classes\.fbx"; ValueType: string; ValueName: ""; ValueData: "QtMeshEditor.Model.fbx"; Tasks: fileassoc; Flags: uninsdeletevalue
+; Open With only — do not replace the user's default ProgID for each extension.
+Root: HKCU; Subkey: "Software\Classes\.fbx\OpenWithProgids"; ValueType: string; ValueName: "QtMeshEditor.Model.fbx"; ValueData: ""; Tasks: fileassoc; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.fbx"; ValueType: string; ValueName: ""; ValueData: "FBX 3D Model"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.fbx\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.fbx\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-Root: HKCU; Subkey: "Software\Classes\.glb"; ValueType: string; ValueName: ""; ValueData: "QtMeshEditor.Model.glb"; Tasks: fileassoc; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.glb\OpenWithProgids"; ValueType: string; ValueName: "QtMeshEditor.Model.glb"; ValueData: ""; Tasks: fileassoc; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.glb"; ValueType: string; ValueName: ""; ValueData: "glTF Binary Model"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.glb\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.glb\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-Root: HKCU; Subkey: "Software\Classes\.gltf"; ValueType: string; ValueName: ""; ValueData: "QtMeshEditor.Model.gltf"; Tasks: fileassoc; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.gltf\OpenWithProgids"; ValueType: string; ValueName: "QtMeshEditor.Model.gltf"; ValueData: ""; Tasks: fileassoc; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.gltf"; ValueType: string; ValueName: ""; ValueData: "glTF Model"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.gltf\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.gltf\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-Root: HKCU; Subkey: "Software\Classes\.obj"; ValueType: string; ValueName: ""; ValueData: "QtMeshEditor.Model.obj"; Tasks: fileassoc; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.obj\OpenWithProgids"; ValueType: string; ValueName: "QtMeshEditor.Model.obj"; ValueData: ""; Tasks: fileassoc; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.obj"; ValueType: string; ValueName: ""; ValueData: "Wavefront OBJ Model"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.obj\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.obj\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-Root: HKCU; Subkey: "Software\Classes\.dae"; ValueType: string; ValueName: ""; ValueData: "QtMeshEditor.Model.dae"; Tasks: fileassoc; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.dae\OpenWithProgids"; ValueType: string; ValueName: "QtMeshEditor.Model.dae"; ValueData: ""; Tasks: fileassoc; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.dae"; ValueType: string; ValueName: ""; ValueData: "Collada Model"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.dae\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.dae\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-Root: HKCU; Subkey: "Software\Classes\.stl"; ValueType: string; ValueName: ""; ValueData: "QtMeshEditor.Model.stl"; Tasks: fileassoc; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.stl\OpenWithProgids"; ValueType: string; ValueName: "QtMeshEditor.Model.stl"; ValueData: ""; Tasks: fileassoc; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.stl"; ValueType: string; ValueName: ""; ValueData: "STL Model"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.stl\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.stl\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-Root: HKCU; Subkey: "Software\Classes\.ply"; ValueType: string; ValueName: ""; ValueData: "QtMeshEditor.Model.ply"; Tasks: fileassoc; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.ply\OpenWithProgids"; ValueType: string; ValueName: "QtMeshEditor.Model.ply"; ValueData: ""; Tasks: fileassoc; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.ply"; ValueType: string; ValueName: ""; ValueData: "PLY Model"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.ply\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.ply\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-; Native / PS1 formats (Owner)
-Root: HKCU; Subkey: "Software\Classes\.mesh"; ValueType: string; ValueName: ""; ValueData: "QtMeshEditor.Model.mesh"; Tasks: fileassoc; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.mesh\OpenWithProgids"; ValueType: string; ValueName: "QtMeshEditor.Model.mesh"; ValueData: ""; Tasks: fileassoc; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.mesh"; ValueType: string; ValueName: ""; ValueData: "Ogre Mesh"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.mesh\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.mesh\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-Root: HKCU; Subkey: "Software\Classes\.rsd"; ValueType: string; ValueName: ""; ValueData: "QtMeshEditor.Model.rsd"; Tasks: fileassoc; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.rsd\OpenWithProgids"; ValueType: string; ValueName: "QtMeshEditor.Model.rsd"; ValueData: ""; Tasks: fileassoc; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.rsd"; ValueType: string; ValueName: ""; ValueData: "PlayStation RSD Mesh"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.rsd\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.rsd\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-Root: HKCU; Subkey: "Software\Classes\.tmd"; ValueType: string; ValueName: ""; ValueData: "QtMeshEditor.Model.tmd"; Tasks: fileassoc; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.tmd\OpenWithProgids"; ValueType: string; ValueName: "QtMeshEditor.Model.tmd"; ValueData: ""; Tasks: fileassoc; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.tmd"; ValueType: string; ValueName: ""; ValueData: "PlayStation TMD Mesh"; Tasks: fileassoc; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.tmd\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.tmd\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc

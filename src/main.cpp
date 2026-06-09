@@ -233,6 +233,13 @@ int main(int argc, char *argv[])
         return 0;
     launchHandler.startSingleInstanceServer();
 
+    // Buffer OS file requests until MainWindow exists (welcome dialog is modal).
+    QStringList queuedLaunchPaths = launchPaths;
+    QObject::connect(&launchHandler, &AppLaunchHandler::filesRequested, &a,
+                     [&queuedLaunchPaths](const QStringList& paths) {
+                         queuedLaunchPaths.append(paths);
+                     });
+
     // Show welcome dialog before creating MainWindow (skip when OS opened a file)
     QString welcomeOpenFile;
     bool welcomeNewScene = false;
@@ -254,12 +261,13 @@ int main(int argc, char *argv[])
         MainWindow w;
         w.show();
 
+        QObject::disconnect(&launchHandler, &AppLaunchHandler::filesRequested, nullptr, nullptr);
         QObject::connect(&launchHandler, &AppLaunchHandler::filesRequested, &w,
                          &MainWindow::openLaunchFiles);
 
-        if (!launchPaths.isEmpty()) {
-            QTimer::singleShot(0, &w, [&w, launchPaths]() {
-                w.openLaunchFiles(launchPaths);
+        if (!queuedLaunchPaths.isEmpty()) {
+            QTimer::singleShot(0, &w, [&w, queuedLaunchPaths]() {
+                w.openLaunchFiles(queuedLaunchPaths);
             });
         } else if (!welcomeOpenFile.isEmpty()) {
             QTimer::singleShot(0, &w, [&w, welcomeOpenFile]() {

@@ -184,8 +184,11 @@ void AppLaunchHandler::handleIncomingPaths(const QStringList& paths)
             continue;
         accepted.append(info.absoluteFilePath());
     }
-    if (!accepted.isEmpty())
+    if (!accepted.isEmpty()) {
+        SentryReporter::addBreadcrumb(QStringLiteral("app.launch.file_open"),
+            QStringLiteral("Received %1 file(s) via launch handler").arg(accepted.size()));
         emit filesRequested(accepted);
+    }
 }
 
 bool AppLaunchHandler::eventFilter(QObject* watched, QEvent* event)
@@ -194,6 +197,8 @@ bool AppLaunchHandler::eventFilter(QObject* watched, QEvent* event)
         auto* openEvent = static_cast<QFileOpenEvent*>(event);
         const QString path = openEvent->file();
         if (!path.isEmpty() && isImportableMeshPath(path)) {
+            SentryReporter::addBreadcrumb(QStringLiteral("app.launch.file_open"),
+                QStringLiteral("macOS FileOpen: %1").arg(QFileInfo(path).fileName()));
             handleIncomingPaths({QFileInfo(path).absoluteFilePath()});
             return true;
         }

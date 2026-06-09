@@ -9,7 +9,7 @@ FAIL=0
 check_contains() {
   local file="$1"
   local needle="$2"
-  if ! grep -q "$needle" "$file"; then
+  if ! grep -Fq -- "$needle" "$file"; then
     echo "verify-file-associations: missing '$needle' in $file" >&2
     FAIL=1
   fi
@@ -32,8 +32,9 @@ check_contains "$MIME" "application/x-ogre-mesh"
 check_contains "$MIME" "application/vnd.ms-fbx"
 
 echo "=== Windows packaging ==="
+check_contains "$ROOT/packaging/windows/QtMeshEditor.iss" "OpenWithProgids"
 check_contains "$ROOT/packaging/windows/QtMeshEditor.iss" "QtMeshEditor.Model.fbx"
-check_contains "$ROOT/scripts/register-windows-file-associations.ps1" ".fbx"
+check_contains "$ROOT/scripts/register-windows-file-associations.ps1" "OpenWithProgids"
 
 echo "=== Qt launch handler ==="
 check_contains "$ROOT/src/AppLaunchHandler.h" "kServerName"

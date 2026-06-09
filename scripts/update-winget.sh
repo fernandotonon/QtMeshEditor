@@ -24,7 +24,7 @@ echo "=== Updating WinGet manifest for ${PKG_ID} v${VERSION} ==="
 
 # Compute SHA256
 echo "Downloading and computing SHA256..."
-SHA256=$(curl -sL "${ZIP_URL}" | shasum -a 256 | cut -d' ' -f1 | tr 'a-f' 'A-F')
+SHA256=$(curl -fsSL "${ZIP_URL}" | shasum -a 256 | cut -d' ' -f1 | tr 'a-f' 'A-F')
 if [ -z "${SHA256}" ]; then
     echo "ERROR: Failed to compute SHA256. Is the release published?"
     exit 1

@@ -503,11 +503,16 @@ jobs:
       shell: powershell
       run: |
         choco install innosetup -y --no-progress
+        $isccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+        if (-not (Test-Path $isccPath)) {
+          Write-Error "Inno Setup installation failed or ISCC.exe not found at $isccPath"
+          exit 1
+        }
         $version = "${{ github.ref_name }}".TrimStart("v")
         $iss = Get-Content "${{github.workspace}}/packaging/windows/QtMeshEditor.iss" -Raw
         $iss = $iss.Replace("@PROJECT_VERSION@", $version)
         Set-Content -Path "${{github.workspace}}/packaging/windows/QtMeshEditor.build.iss" -Value $iss
-        & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "${{github.workspace}}/packaging/windows/QtMeshEditor.build.iss"
+        & $isccPath "${{github.workspace}}/packaging/windows/QtMeshEditor.build.iss"
 
     - name: Smoke-test CLI from zip
       if: github.event_name == 'release' && github.event.action == 'published'

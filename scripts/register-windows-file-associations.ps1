@@ -1,4 +1,5 @@
 # Register QtMeshEditor as a per-user "Open with" handler for common 3D formats.
+# Does not change the user's default app for each extension.
 # Usage (from extracted zip or installed bin folder):
 #   pwsh -File scripts/register-windows-file-associations.ps1
 #   pwsh -File scripts/register-windows-file-associations.ps1 -BinDir "C:\path\to\bin"
@@ -30,15 +31,16 @@ foreach ($entry in $extensions.GetEnumerator()) {
     $ext = $entry.Key
     $label = $entry.Value
     $progId = "QtMeshEditor.Model$($ext.Replace('.', ''))"
-    New-Item -Path "HKCU:\Software\Classes\$ext" -Force | Out-Null
-    Set-ItemProperty -Path "HKCU:\Software\Classes\$ext" -Name "(default)" -Value $progId
+    $openWithKey = "HKCU:\Software\Classes\$ext\OpenWithProgids"
+    New-Item -Path $openWithKey -Force | Out-Null
+    New-ItemProperty -Path $openWithKey -Name $progId -PropertyType String -Value "" -Force | Out-Null
     New-Item -Path "HKCU:\Software\Classes\$progId" -Force | Out-Null
     Set-ItemProperty -Path "HKCU:\Software\Classes\$progId" -Name "(default)" -Value $label
     New-Item -Path "HKCU:\Software\Classes\$progId\DefaultIcon" -Force | Out-Null
     Set-ItemProperty -Path "HKCU:\Software\Classes\$progId\DefaultIcon" -Name "(default)" -Value "$exe,0"
     New-Item -Path "HKCU:\Software\Classes\$progId\shell\open\command" -Force | Out-Null
     Set-ItemProperty -Path "HKCU:\Software\Classes\$progId\shell\open\command" -Name "(default)" -Value "`"$exe`" `"%1`""
-    Write-Host "Registered $ext -> $progId"
+    Write-Host "Registered $ext in OpenWithProgids -> $progId"
 }
 
 Write-Host "Done. QtMeshEditor should appear in Explorer 'Open with' for registered extensions."

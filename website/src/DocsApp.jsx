@@ -214,22 +214,27 @@ cmake --build build --target QtMeshEditor -j4
               Launching with a file path loads it in the GUI; if the app is already running, the existing
               window is focused and the new file is imported (single-instance).
             </p>
-            <h3 className={s.subsection}>Supported extensions</h3>
+            <h3 className={s.subsection}>App import support</h3>
             <p className={s.para}>
-              <Code>.fbx</Code>, <Code>.glb</Code>, <Code>.gltf</Code>, <Code>.obj</Code>, <Code>.dae</Code>,
-              <Code>.stl</Code>, <Code>.ply</Code>, <Code>.vrm</Code>, <Code>.3ds</Code>, QtMesh-native
-              <Code>.mesh</Code>, PS1 <Code>.rsd</Code>/<Code>.tmd</Code>, and saved scenes
-              <Code>.scene.glb</Code>/<Code>.scene.gltf</Code>.
+              The editor can import many formats via drag-and-drop or <Code>QtMeshEditor path/to/model.ext</Code>,
+              including <Code>.vrm</Code>, <Code>.3ds</Code>, and additional Assimp types beyond the OS registration
+              sets below.
             </p>
-            <h3 className={s.subsection}>Per platform</h3>
+            <h3 className={s.subsection}>Registered Open With handlers</h3>
             <ul className={s.para} style={{ paddingLeft: '1.4rem' }}>
-              <li><strong>macOS</strong> — <Code>Info.plist</Code> declares <Code>CFBundleDocumentTypes</Code>;
-                  Homebrew cask runs <Code>lsregister</Code> after install so Finder sees handlers immediately.</li>
-              <li><strong>Windows</strong> — Inno Setup installer (release) registers per-user handlers under
-                  <Code>HKCU</Code>. Portable ZIP includes
-                  <Code>bin/scripts/register-windows-file-associations.ps1</Code> for manual registration.</li>
-              <li><strong>Linux</strong> — <Code>.desktop</Code> + XDG MIME package in the <Code>.deb</Code> and Snap;
-                  postinstall runs <Code>update-mime-database</Code> and <Code>update-desktop-database</Code>.</li>
+              <li><strong>macOS</strong> — <Code>.fbx</Code>, <Code>.glb</Code>/<Code>.gltf</Code>, <Code>.obj</Code>,
+                  <Code>.dae</Code>, <Code>.stl</Code>, <Code>.ply</Code>, <Code>.vrm</Code>, <Code>.3ds</Code>,
+                  <Code>.scene.glb</Code>/<Code>.scene.gltf</Code>, <Code>.mesh</Code>, <Code>.rsd</Code>, <Code>.tmd</Code>
+                  via <Code>CFBundleDocumentTypes</Code>; Homebrew cask runs <Code>lsregister</Code> after install.</li>
+              <li><strong>Windows</strong> — <Code>.fbx</Code>, <Code>.glb</Code>, <Code>.gltf</Code>, <Code>.obj</Code>,
+                  <Code>.dae</Code>, <Code>.stl</Code>, <Code>.ply</Code>, <Code>.mesh</Code>, <Code>.rsd</Code>, <Code>.tmd</Code>
+                  added to <Code>OpenWithProgids</Code> (not default-app takeover). Inno Setup installer on release;
+                  portable ZIP includes <Code>bin/scripts/register-windows-file-associations.ps1</Code>.</li>
+              <li><strong>Linux</strong> — <Code>.fbx</Code>, <Code>.glb</Code>/<Code>.gltf</Code>, <Code>.obj</Code>,
+                  <Code>.dae</Code>, <Code>.stl</Code>, <Code>.ply</Code>, <Code>.mesh</Code>, <Code>.rsd</Code>, <Code>.tmd</Code>,
+                  <Code>.scene.glb</Code>/<Code>.scene.gltf</Code> via <Code>.desktop</Code> + XDG MIME in
+                  <Code>.deb</Code> and Snap; postinstall runs <Code>update-mime-database</Code> and
+                  <Code>update-desktop-database</Code>.</li>
             </ul>
             <p className={s.para}>
               CLI mode is unchanged: <Code>qtmesh info model.fbx</Code> still runs headless. Only
