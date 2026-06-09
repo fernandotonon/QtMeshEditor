@@ -6,9 +6,13 @@
 #include "SelectionSet.h"
 #include "MeshDepthRenderer.h"
 #include <OgreEntity.h>
+#include <OgreSubEntity.h>
 #include <OgreMesh.h>
+#include <OgreTechnique.h>
 #include <QDir>
 #include <QFileInfo>
+#include <QTextStream>
+#include <set>
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
@@ -3787,6 +3791,11 @@ void MaterialEditorQML::generateMeshTextureFromPrompt(const QString &prompt,
                                           : QFileInfo(controlNetPath).fileName())
             .arg(controlStrength).arg(depthSize));
 
+    // Remember the target so onSDGenerationCompleted binds the
+    // result to THIS entity's diffuse TUS (not the editor's current
+    // pass, which may not be the rendered material).
+    m_sdMeshTextureEntity = QString::fromStdString(entity->getName());
+
     m_sdGenerationProgress = 0.0f;
     emit sdGenerationProgressChanged();
     sdManager->generateMeshTexture(prompt, depth, controlNetPath,
@@ -3825,6 +3834,124 @@ void MaterialEditorQML::onSDGenerationProgress()
     emit sdGenerationProgressChanged();
 }
 
+void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
+                                                    const QString& textureFileName)
+{
+    auto dbg = [](const QString& m) {
+        QFile f(QStringLiteral("/tmp/qtmesh_meshtex.log"));
+        if (f.open(QIODevice::Append | QIODevice::Text)) {
+            QTextStream s(&f); s << m << "\n";
+        }
+    };
+    dbg(QStringLiteral("applyTextureToEntityDiffuse entity=%1 tex=%2")
+        .arg(entityName, textureFileName));
+
+    if (!isOgreAvailable()) { dbg("  no ogre"); return; }
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) { dbg("  no manager"); return; }
+
+    // Resolve the entity by name (filtered list is all real Entities).
+    Ogre::Entity* entity = nullptr;
+    for (Ogre::Entity* e : mgr->getEntities()) {
+        if (e && e->getMovableType() == "Entity"
+            && e->getName() == entityName.toStdString()) {
+            entity = e;
+            break;
+        }
+    }
+    if (!entity) { dbg("  entity not found"); return; }
+
+    const Ogre::String texName = textureFileName.toStdString();
+    dbg(QStringLiteral("  entity found, subEntities=%1")
+        .arg(entity->getNumSubEntities()));
+
+    // Explicitly create the texture resource from the file before
+    // binding it. `setTextureName` alone defers loading to render
+    // time, and if a texture of that name isn't already in the
+    // manager (it isn't — fresh PNG) the FFP silently keeps the old
+    // binding. Loading the Image into TextureManager here guarantees
+    // the resource exists and is GPU-uploadable by name.
+    const Ogre::String group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+    try {
+        if (!Ogre::TextureManager::getSingleton().getByName(texName, group)) {
+            Ogre::Image image;
+            image.load(texName, group);   // resolves via the registered location
+            Ogre::TextureManager::getSingleton().loadImage(texName, group, image);
+            dbg(QStringLiteral("  loaded texture into manager OK"));
+        } else {
+            dbg(QStringLiteral("  texture already in manager"));
+        }
+    } catch (const std::exception& e) {
+        dbg(QStringLiteral("  texture load FAILED: %1").arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        dbg(QStringLiteral("  texture load FAILED (unknown)"));
+    }
+
+    // Bind the generated texture to the diffuse/albedo TUS of every
+    // sub-entity's material — same approach as ApplyAtlas::
+    // retargetDiffuseTus: prefer a TUS named "diffuse_map"/"albedo",
+    // else the first textured TUS, else create one. Then re-wire the
+    // FFP/RTSS PBR slots and recompile so the new binding renders
+    // (without the recompile the FFP path keeps the cached binding).
+    std::set<Ogre::Material*> recompiled;
+    for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i) {
+        Ogre::SubEntity* sub = entity->getSubEntity(i);
+        if (!sub) continue;
+        const Ogre::MaterialPtr mat = sub->getMaterial();
+        if (!mat || mat->getNumTechniques() == 0) continue;
+        Ogre::Technique* tech = mat->getTechnique(0);
+        if (!tech || tech->getNumPasses() == 0) continue;
+        Ogre::Pass* pass = tech->getPass(0);
+
+        Ogre::TextureUnitState* target = nullptr;
+        for (unsigned short t = 0; t < pass->getNumTextureUnitStates(); ++t) {
+            Ogre::TextureUnitState* tus = pass->getTextureUnitState(t);
+            const auto n = tus->getName();
+            if (n == "diffuse_map" || n == "albedo") { target = tus; break; }
+        }
+        if (!target) {
+            for (unsigned short t = 0; t < pass->getNumTextureUnitStates(); ++t) {
+                Ogre::TextureUnitState* tus = pass->getTextureUnitState(t);
+                if (!tus->getTextureName().empty()) { target = tus; break; }
+            }
+        }
+        bool created = false;
+        if (!target) { target = pass->createTextureUnitState(); created = true; }
+        const Ogre::String prevTex = target->getTextureName();
+        target->setTextureName(texName);
+        dbg(QStringLiteral("  sub %1 mat=%2 tus=%3 created=%4 prevTex=%5 -> %6")
+            .arg(i)
+            .arg(QString::fromStdString(mat->getName()))
+            .arg(QString::fromStdString(target->getName()))
+            .arg(created)
+            .arg(QString::fromStdString(prevTex))
+            .arg(textureFileName));
+
+        if (recompiled.insert(mat.get()).second) {
+            try {
+                RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+            } catch (...) {}
+            mat->compile();
+            mat->reload();
+            // Verify the binding survived the recompile/reload.
+            Ogre::String afterTex;
+            if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
+                auto* p = mat->getTechnique(0)->getPass(0);
+                for (unsigned short t = 0; t < p->getNumTextureUnitStates(); ++t) {
+                    const auto nm = p->getTextureUnitState(t)->getName();
+                    if (nm == "diffuse_map" || nm == "albedo"
+                        || !p->getTextureUnitState(t)->getTextureName().empty()) {
+                        afterTex = p->getTextureUnitState(t)->getTextureName();
+                        break;
+                    }
+                }
+            }
+            dbg(QStringLiteral("  after compile/reload, diffuse tex=%1")
+                .arg(QString::fromStdString(afterTex)));
+        }
+    }
+}
+
 void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
 {
     m_sdGenerationProgress = 1.0f;
@@ -3834,6 +3961,29 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
     QFileInfo fileInfo(outputPath);
     QString dirPath = fileInfo.absolutePath();
     QString fileName = fileInfo.fileName();
+
+    // Issue #403: if this was a mesh-aware generation, bind the
+    // result to the selected entity's diffuse TUS directly (the
+    // editor's "current pass" may not be the rendered material, which
+    // is why the mesh otherwise rendered untextured). Register the
+    // resource location first so Ogre can load the file by name.
+    if (!m_sdMeshTextureEntity.isEmpty()) {
+        const QString targetEntity = m_sdMeshTextureEntity;
+        m_sdMeshTextureEntity.clear();
+        if (isOgreAvailable() && Ogre::Root::getSingletonPtr()) {
+            try {
+                auto &rgm = Ogre::ResourceGroupManager::getSingleton();
+                rgm.addResourceLocation(dirPath.toStdString(), "FileSystem",
+                                        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                rgm.initialiseResourceGroup(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            } catch (...) {}
+            applyTextureToEntityDiffuse(targetEntity, fileName);
+        }
+        m_textureName = fileName;
+        emit textureNameChanged();
+        emit sdTextureGenerated(outputPath);
+        return;
+    }
 
     // Helper lambda to emit deferred material completion if SD was triggered by LLM
     auto emitDeferredCompletion = [this]() {

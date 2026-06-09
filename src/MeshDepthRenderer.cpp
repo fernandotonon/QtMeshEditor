@@ -1,9 +1,11 @@
 #include "MeshDepthRenderer.h"
 
 #include "Manager.h"
+#include "GlobalDefinitions.h"
 
 #include <OgreCamera.h>
 #include <OgreEntity.h>
+#include <OgreMovableObject.h>
 #include <OgreHardwarePixelBuffer.h>
 #include <OgreMaterialManager.h>
 #include <OgreRoot.h>
@@ -101,6 +103,12 @@ bool ensureRenderTarget(int size, QString* errorOut)
         vp->setOverlaysEnabled(false);
         vp->setShadowsEnabled(false);
         vp->setSkiesEnabled(false);
+        // Render only scene geometry — exclude the editor grid,
+        // bounding boxes, gizmos, and other GUI overlays (which live
+        // on GUI_VISIBILITY_FLAGS). Without this the depth map picks
+        // up the grid + selection bbox and the ControlNet conditions
+        // on those lines.
+        vp->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
     }
     return true;
 }
@@ -145,7 +153,11 @@ QImage MeshDepthRenderer::renderDepthMap(Ogre::Entity* entity, int size,
     // Distance so the sphere fits in the 45° vertical FOV.
     const Ogre::Real fovY = st.camera->getFOVy().valueRadians();
     const Ogre::Real dist = radius / std::sin(fovY * 0.5f) * 1.15f;  // 15% margin
-    const Ogre::Vector3 camPos = center + Ogre::Vector3(0, 0, dist);
+    // Place the camera on the -Z side: imported characters (Mixamo et
+    // al.) face -Z, which is also the side the default editor camera
+    // looks at. Capturing from +Z gave the model's BACK; -Z gives the
+    // front.
+    const Ogre::Vector3 camPos = center + Ogre::Vector3(0, 0, -dist);
     st.cameraNode->setPosition(camPos);
     // Ogre 14: orient the node, not the camera. Look from camPos
     // toward the entity center.
@@ -165,6 +177,49 @@ QImage MeshDepthRenderer::renderDepthMap(Ogre::Entity* entity, int size,
                0.0f, dist - radius, dist + radius);
     sm->setAmbientLight(Ogre::ColourValue::White);
 
+    // Hide everything that isn't the target mesh, so the depth map is
+    // a clean silhouette. The viewport visibility mask does NOT cover
+    // these:
+    //   - The editor grid ("GridLine_node") renders at the default
+    //     mask, and
+    //   - showBoundingBox() is a scene-manager debug-draw pass that
+    //     ignores viewport masks entirely.
+    // So we hide them explicitly and restore afterwards.
+    //
+    // We also hide every OTHER entity's parent node and turn its
+    // bounding box off, then re-show on restore — the depth map
+    // should contain only the target.
+    Ogre::SceneNode* gridNode = nullptr;
+    bool gridWasVisible = false;
+    if (Manager::getSingletonPtr()
+        && Manager::getSingleton()->hasSceneNode("GridLine_node")) {
+        gridNode = Manager::getSingleton()->getSceneNode("GridLine_node");
+        if (gridNode) {
+            gridWasVisible = gridNode->getAttachedObject(0)
+                ? gridNode->getAttachedObject(0)->getVisible() : true;
+            gridNode->setVisible(false);
+        }
+    }
+
+    // Turn off the target entity's bounding box for the capture
+    // (it's on by default when selected). Remember to restore.
+    Ogre::SceneNode* targetNode = entity->getParentSceneNode();
+    if (targetNode) targetNode->showBoundingBox(false);
+
+    // Hide other entities entirely.
+    std::vector<Ogre::SceneNode*> hiddenNodes;
+    if (Manager::getSingletonPtr()) {
+        for (Ogre::Entity* other : Manager::getSingleton()->getEntities()) {
+            if (!other || other == entity) continue;
+            if (other->getMovableType() != "Entity") continue;
+            Ogre::SceneNode* n = other->getParentSceneNode();
+            if (n && n->getAttachedObject(0) && n->getAttachedObject(0)->getVisible()) {
+                n->setVisible(false);
+                hiddenNodes.push_back(n);
+            }
+        }
+    }
+
     // Swap the entity's materials to the flat white depth material,
     // remembering the originals so we can restore them.
     Ogre::MaterialPtr depthMat = ensureDepthMaterial();
@@ -180,11 +235,14 @@ QImage MeshDepthRenderer::renderDepthMap(Ogre::Entity* entity, int size,
     st.renderTarget->update();
     QImage rgba = readRenderTarget(size);
 
-    // Restore entity materials + scene fog/ambient.
+    // Restore entity materials + scene fog/ambient + hidden nodes.
     for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i)
         entity->getSubEntity(i)->setMaterialName(savedMaterials[i]);
     sm->setFog(savedFogMode, savedFogColour, 0.0f, savedFogStart, savedFogEnd);
     sm->setAmbientLight(savedAmbient);
+    if (gridNode) gridNode->setVisible(gridWasVisible);
+    if (targetNode) targetNode->showBoundingBox(true);
+    for (Ogre::SceneNode* n : hiddenNodes) n->setVisible(true);
 
     // Collapse to grayscale (the channels are equal already, but be
     // explicit so downstream code can rely on it).

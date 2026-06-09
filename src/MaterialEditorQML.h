@@ -770,6 +770,17 @@ private:
     bool m_sdPendingForMaterial = false; // True when SD is generating a texture triggered by LLM
     QString m_pendingMaterialScript; // Deferred material script waiting for SD
 
+    // Issue #403: when a mesh-aware (depth-conditioned) generation is
+    // in flight, the result must be bound to the SELECTED ENTITY's
+    // diffuse TUS — not the Material Editor's "current pass", which
+    // may not be the rendered material. Holds the target entity name;
+    // empty when the completion should use the normal current-pass
+    // apply path. `applyTextureToEntityDiffuse` does the entity-based
+    // bind (same approach as ApplyAtlas::retargetDiffuseTus).
+    QString m_sdMeshTextureEntity;
+    void applyTextureToEntityDiffuse(const QString& entityName,
+                                     const QString& textureFileName);
+
     // Undo/Redo stacks
     QStringList m_undoStack;
     QStringList m_redoStack;
