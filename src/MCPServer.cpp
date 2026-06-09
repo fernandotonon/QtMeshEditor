@@ -29,6 +29,10 @@
 #include "UvUnwrap.h"
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
+#include "MeshDepthRenderer.h"
+#ifdef ENABLE_STABLE_DIFFUSION
+#include "SDManager.h"
+#endif
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -554,6 +558,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("auto_uv_unwrap"),       &MCPServer::toolAutoUvUnwrap},
         {QStringLiteral("retopologize"),         &MCPServer::toolRetopologize},
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
+        {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("get_scene_info"), &MCPServer::toolGetSceneInfo},
         {QStringLiteral("take_screenshot"), &MCPServer::toolTakeScreenshot},
         {QStringLiteral("create_primitive"), &MCPServer::toolCreatePrimitive},
@@ -1550,6 +1555,88 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
     QJsonObject result = makeSuccessResult(SkinWeights::reportToText(report));
     result["skin"] = SkinWeights::reportToJson(report);
     return result;
+}
+
+QJsonObject MCPServer::toolGenerateMeshTexture(const QJsonObject &args)
+{
+#ifndef ENABLE_STABLE_DIFFUSION
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "This build was compiled without AI texture generation "
+        "(rebuild with -DENABLE_STABLE_DIFFUSION=ON).");
+#else
+    const QString prompt = args.value("prompt").toString();
+    if (prompt.trimmed().isEmpty())
+        return makeErrorResult("'prompt' is required.");
+
+    const int width  = args.contains("width")  ? args["width"].toInt(512)  : 512;
+    const int height = args.contains("height") ? args["height"].toInt(512) : 512;
+    double strength  = args.contains("controlnet_strength")
+        ? args["controlnet_strength"].toDouble(0.9) : 0.9;
+    strength = std::clamp(strength, 0.0, 1.0);
+
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Use select_entity / load_mesh first.");
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                              : QList<Ogre::Entity*>{};
+    if (resolved.isEmpty() || !resolved.first() || !resolved.first()->getMesh())
+        return makeErrorResult("Selected entity is not a valid mesh.");
+    Ogre::Entity* entity = resolved.first();
+
+    SDManager* sd = SDManager::instance();
+    if (!sd || !sd->isModelLoaded())
+        return makeErrorResult("No SD base model loaded. Load one from AI Settings first.");
+
+    // Render the depth map (we're already on the main thread — MCP
+    // tools run on the main thread via QSocketNotifier).
+    QString depthErr;
+    const int depthSize = std::max(width, height);
+    const QImage depth = MeshDepthRenderer::renderDepthMap(entity, depthSize, &depthErr);
+    if (depth.isNull())
+        return makeErrorResult(QStringLiteral("Depth render failed: %1").arg(depthErr));
+
+    // Resolve / honor an explicit controlnet model path, else
+    // auto-discover one in the models dir.
+    QString controlNetPath = args.value("controlnet_path").toString();
+    if (controlNetPath.isEmpty()) {
+        QDir d(sd->modelsDirectory());
+        const QStringList files = d.entryList(
+            QStringList() << "*.safetensors" << "*.ckpt", QDir::Files);
+        for (const QString& f : files) {
+            const QString lower = f.toLower();
+            if (lower.contains("control") && lower.contains("depth")) {
+                controlNetPath = d.filePath(f);
+                break;
+            }
+        }
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mesh_texture"),
+        QStringLiteral("MCP entity=%1 controlNet=%2 strength=%3 size=%4")
+            .arg(QString::fromStdString(entity->getName()))
+            .arg(controlNetPath.isEmpty() ? QStringLiteral("(none)")
+                                          : QFileInfo(controlNetPath).fileName())
+            .arg(strength).arg(depthSize));
+
+    sd->generateMeshTexture(prompt, depth, controlNetPath,
+                            static_cast<float>(strength), QString());
+
+    QJsonObject result = makeSuccessResult(QStringLiteral(
+        "Mesh-aware texture generation started for '%1'%2. "
+        "Generation runs asynchronously; the result is applied to the "
+        "active material's diffuse slot when complete.")
+        .arg(QString::fromStdString(entity->getName()))
+        .arg(controlNetPath.isEmpty()
+             ? QStringLiteral(" (no ControlNet depth model found — unconditioned txt2img)")
+             : QStringLiteral(" (depth-conditioned via %1)")
+                 .arg(QFileInfo(controlNetPath).fileName())));
+    result["controlNetUsed"]  = !controlNetPath.isEmpty();
+    result["depthSize"]       = depthSize;
+    result["controlStrength"] = strength;
+    return result;
+#endif
 }
 
 QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
@@ -5646,6 +5733,41 @@ QJsonArray MCPServer::buildToolsList()
             "on-bone smooth bind) — the same approach Maya / 3dsMax use as their "
             "default. The mesh must have a skeleton attached. Issue #402.",
             props
+        );
+    }
+
+    // generate_mesh_texture
+    {
+        QJsonObject props;
+        props["prompt"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Text prompt for the texture. Note: conditioning covers the WHOLE mesh "
+             "(the depth map is the full silhouette), so the prompt should describe the "
+             "whole surface, e.g. 'character wearing blue denim jeans and a red shirt'."}};
+        props["controlnet_strength"] = QJsonObject{{"type", "number"},
+            {"description",
+             "How strongly the mesh depth map steers generation, 0..1. Default 0.9. "
+             "Lower = freer interpretation, higher = tighter shape adherence."}};
+        props["width"]  = QJsonObject{{"type", "integer"},
+            {"description", "Generation width (default 512)."}};
+        props["height"] = QJsonObject{{"type", "integer"},
+            {"description", "Generation height (default 512)."}};
+        props["controlnet_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Optional explicit path to a ControlNet depth model. If omitted, a "
+             "depth ControlNet is auto-discovered in the SD models folder; if none "
+             "is found, generation falls back to plain (unconditioned) txt2img."}};
+        appendTool(
+            "generate_mesh_texture",
+            "Mesh-aware texture generation (issue #403). Renders the selected mesh's "
+            "depth map and conditions sd.cpp on it via a ControlNet depth model so the "
+            "generated texture follows the mesh shape, then applies the result to the "
+            "active material's diffuse slot. Requires a loaded base SD model (SD 1.5 "
+            "for the depth ControlNet) and a selected mesh. Asynchronous — returns "
+            "immediately; the texture appears when generation finishes. The whole mesh "
+            "is conditioned at once, so a single prompt covers the entire surface.",
+            props,
+            QJsonArray{"prompt"}
         );
     }
 
