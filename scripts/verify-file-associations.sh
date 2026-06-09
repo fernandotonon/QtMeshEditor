@@ -35,6 +35,7 @@ echo "=== Windows packaging ==="
 check_contains "$ROOT/packaging/windows/QtMeshEditor.iss" "OpenWithProgids"
 check_contains "$ROOT/packaging/windows/QtMeshEditor.iss" "QtMeshEditor.Model.fbx"
 check_contains "$ROOT/scripts/register-windows-file-associations.ps1" "OpenWithProgids"
+check_contains "$ROOT/scripts/register-windows-file-associations.ps1" "QtMeshEditor.Model."
 
 echo "=== Qt launch handler ==="
 check_contains "$ROOT/src/AppLaunchHandler.h" "kServerName"

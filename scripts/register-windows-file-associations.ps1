@@ -5,10 +5,27 @@
 #   pwsh -File scripts/register-windows-file-associations.ps1 -BinDir "C:\path\to\bin"
 
 param(
-    [string]$BinDir = (Join-Path $PSScriptRoot "..\bin")
+    [string]$BinDir
 )
 
 $ErrorActionPreference = "Stop"
+
+function Resolve-QtMeshEditorBinDir {
+    param([string]$Requested)
+    if ($Requested) { return $Requested }
+
+    $portableBin = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..") -ErrorAction SilentlyContinue).Path
+    $repoBin     = Join-Path $PSScriptRoot "..\bin"
+    if ($portableBin -and (Test-Path (Join-Path $portableBin "QtMeshEditor.exe"))) {
+        return $portableBin
+    }
+    if (Test-Path (Join-Path $repoBin "QtMeshEditor.exe")) {
+        return (Resolve-Path -LiteralPath $repoBin).Path
+    }
+    return $repoBin
+}
+
+$BinDir = Resolve-QtMeshEditorBinDir -Requested $BinDir
 $exe = Join-Path $BinDir "QtMeshEditor.exe"
 if (-not (Test-Path $exe)) {
     Write-Error "QtMeshEditor.exe not found at $exe"
@@ -30,7 +47,7 @@ $extensions = @{
 foreach ($entry in $extensions.GetEnumerator()) {
     $ext = $entry.Key
     $label = $entry.Value
-    $progId = "QtMeshEditor.Model$($ext.Replace('.', ''))"
+    $progId = "QtMeshEditor.Model.$($ext.TrimStart('.'))"
     $openWithKey = "HKCU:\Software\Classes\$ext\OpenWithProgids"
     New-Item -Path $openWithKey -Force | Out-Null
     New-ItemProperty -Path $openWithKey -Name $progId -PropertyType String -Value "" -Force | Out-Null

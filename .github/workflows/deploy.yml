@@ -2098,13 +2098,13 @@ jobs:
 
         # Ensure Finder picks up CFBundleDocumentTypes after install (#664).
         if ! grep -q 'lsregister' "$CASK_FILE"; then
-          cat >> "$CASK_FILE" <<'RUBY'
-
-  postflight do
-    system_command "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
-      args: ["-f", "-R", "#{appdir}/QtMeshEditor.app"]
-  end
-RUBY
+          {
+            echo ''
+            echo '  postflight do'
+            echo '    system_command "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",'
+            echo '      args: ["-f", "-R", "#{appdir}/QtMeshEditor.app"]'
+            echo '  end'
+          } >> "$CASK_FILE"
         fi
 
         echo "Updated cask file:"
