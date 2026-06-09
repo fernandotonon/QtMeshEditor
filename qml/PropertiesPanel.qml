@@ -4315,10 +4315,14 @@ Rectangle {
                     width: 60
                     height: 24
                     radius: 3
-                    color: folderBrowseMouse.containsMouse
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "Browse asset folder"
+                    color: folderBrowseMouse.containsMouse || activeFocus
                         ? Qt.lighter(PropertiesPanelController.inputColor, 1.3)
                         : PropertiesPanelController.inputColor
-                    border.color: PropertiesPanelController.borderColor
+                    border.color: activeFocus ? PropertiesPanelController.highlightColor
+                                              : PropertiesPanelController.borderColor
                     border.width: 1
                     Text {
                         anchors.centerIn: parent
@@ -4332,15 +4336,22 @@ Rectangle {
                         hoverEnabled: true
                         onClicked: AssetBrowserController.browseForDirectory()
                     }
+                    Keys.onSpacePressed: folderBrowseMouse.clicked(null)
+                    Keys.onReturnPressed: folderBrowseMouse.clicked(null)
+                    Keys.onEnterPressed: folderBrowseMouse.clicked(null)
                 }
             }
 
             Rectangle {
                 width: parent.width - 16; height: 24; radius: 3
-                color: browserMouse.containsMouse
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: "Open Asset Browser panel"
+                color: browserMouse.containsMouse || activeFocus
                     ? Qt.lighter(PropertiesPanelController.controlBgColor, 1.08)
                     : PropertiesPanelController.controlBgColor
-                border.color: PropertiesPanelController.borderColor
+                border.color: activeFocus ? PropertiesPanelController.highlightColor
+                                          : PropertiesPanelController.borderColor
                 border.width: 1
                 Text {
                     anchors.centerIn: parent
@@ -4354,13 +4365,20 @@ Rectangle {
                     hoverEnabled: true
                     onClicked: root.revealBottomTool("assetBrowser")
                 }
+                Keys.onSpacePressed: browserMouse.clicked(null)
+                Keys.onReturnPressed: browserMouse.clicked(null)
+                Keys.onEnterPressed: browserMouse.clicked(null)
             }
 
             Rectangle {
                 width: parent.width - 16; height: 28; radius: 3
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: "Scan asset folder"
                 color: scanMouse.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
-                     : scanMouse.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
-                     : PropertiesPanelController.highlightColor
+                     : (scanMouse.containsMouse || activeFocus)
+                       ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                       : PropertiesPanelController.highlightColor
                 opacity: AssetScanController.scanning ? 0.55 : 1.0
                 Text {
                     anchors.centerIn: parent
@@ -4375,6 +4393,9 @@ Rectangle {
                     enabled: !AssetScanController.scanning
                     onClicked: AssetScanController.scanFolder(AssetBrowserController.rootPath)
                 }
+                Keys.onSpacePressed: if (!AssetScanController.scanning) scanMouse.clicked(null)
+                Keys.onReturnPressed: if (!AssetScanController.scanning) scanMouse.clicked(null)
+                Keys.onEnterPressed: if (!AssetScanController.scanning) scanMouse.clicked(null)
             }
 
             Text {
@@ -4401,7 +4422,9 @@ Rectangle {
             Column {
                 width: parent.width - 16
                 spacing: 3
-                visible: AssetScanController.hasResults && AssetScanController.findings.length > 0
+                visible: AssetScanController.hasResults
+                    && !AssetScanController.scanning
+                    && AssetScanController.findings.length > 0
 
                 Repeater {
                     model: AssetScanController.findings
@@ -4443,10 +4466,8 @@ Rectangle {
                         assetScanFeedback.text = msg
                     }
                     function onScanFinished(ok, message) {
-                        if (ok) {
-                            assetScanFeedback.color = "#60c060"
-                            assetScanFeedback.text = message
-                        }
+                        assetScanFeedback.color = ok ? "#60c060" : "#c06060"
+                        assetScanFeedback.text = message
                     }
                 }
             }

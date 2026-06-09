@@ -287,7 +287,14 @@ static ScanSubprocessOutcome runScanSubprocessSync(const QString& rootPath, cons
         outcome.message = QStringLiteral("Could not start scan process: %1").arg(process.errorString());
         return outcome;
     }
-    process.waitForFinished(-1);
+    constexpr int kScanTimeoutMs = 10 * 60 * 1000;
+    if (!process.waitForFinished(kScanTimeoutMs)) {
+        process.kill();
+        process.waitForFinished(5000);
+        outcome.message = QStringLiteral("Scan process timed out after %1s")
+                              .arg(kScanTimeoutMs / 1000);
+        return outcome;
+    }
 
     outcome.jsonBytes = process.readAllStandardOutput();
     const QByteArray stderrBytes = process.readAllStandardError();
@@ -336,8 +343,10 @@ void AssetScanController::scanFolder(const QString& rootPath)
         return;
     }
 
+    const QString rootName = QFileInfo(absRoot).fileName();
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-        QStringLiteral("asset scan start profile=%1 root=%2").arg(m_selectedProfileId, absRoot));
+        QStringLiteral("asset scan start profile=%1 rootName=%2")
+            .arg(m_selectedProfileId, rootName.isEmpty() ? QStringLiteral("<root>") : rootName));
 
     setScanning(true);
     m_hasResults = false;
@@ -362,3 +371,15 @@ void AssetScanController::scanFolder(const QString& rootPath)
 
     worker->start();
 }
+
+#ifdef QTMESH_UNIT_TESTS
+void AssetScanController::ingestScanReportJsonForTest(const QByteArray& jsonBytes)
+{
+    applyScanReport(jsonBytes);
+}
+
+QString AssetScanController::sanitizeProfileLabelForTest(const QString& displayName, const QString& id)
+{
+    return sanitizeProfileLabel(displayName, id);
+}
+#endif

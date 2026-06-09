@@ -54,6 +54,12 @@ public:
                                     int* scanned, int* passed, int* warnings, int* errors,
                                     QVariantList* findings, QString* errorOut);
 
+#ifdef QTMESH_UNIT_TESTS
+    /// Test seam for applyScanReport (summary/findings properties).
+    void ingestScanReportJsonForTest(const QByteArray& jsonBytes);
+    static QString sanitizeProfileLabelForTest(const QString& displayName, const QString& id);
+#endif
+
 private:
     explicit AssetScanController(QObject* parent = nullptr);
     ~AssetScanController() override = default;
