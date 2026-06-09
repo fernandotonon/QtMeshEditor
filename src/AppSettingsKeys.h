@@ -98,6 +98,20 @@ inline const QString& cloudUserSlug()
     return k;
 }
 
+/** @brief Last platform profile id used for Validation-mode asset folder scan (issue #370). */
+inline const QString& validationPlatformProfileId()
+{
+    static const QString k(QStringLiteral("Validation/platformProfileId"));
+    return k;
+}
+
+/** @brief Bumped when Validation profile picker defaults or migration rules change. */
+inline const QString& validationPlatformProfilePickerVersion()
+{
+    static const QString k(QStringLiteral("Validation/platformProfilePickerVersion"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H

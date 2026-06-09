@@ -138,6 +138,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanEngine.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PlatformProfile.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AssetBrowserController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AssetScanController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelTurntableRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.cpp
@@ -275,6 +276,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanConfig.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanEngine.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AssetBrowserController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AssetScanController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelTurntableRenderer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.h

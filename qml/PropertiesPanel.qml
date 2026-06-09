@@ -6,6 +6,7 @@ import AnimationControl 1.0
 import EditorMode 1.0
 import MaterialEditorQML 1.0
 import ThemeManager 1.0
+import AssetBrowser 1.0
 
 Rectangle {
     id: root
@@ -444,6 +445,17 @@ Rectangle {
                 expanded: false
 
                 Component.onCompleted: content = materialPresetsComponent
+            }
+
+            // ---- Asset Folder Scan (platform profile) ----
+            CollapsibleSection {
+                title: "Asset Folder Scan"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ValidationMode,
+                    true)
+                expanded: false
+
+                Component.onCompleted: content = assetScanComponent
             }
 
             // ---- Mesh Validation ----
@@ -2299,6 +2311,7 @@ Rectangle {
                     objectName: "workspaceAssetBrowserButton"
                     visible: root.showAllModeTools
                         || EditorModeController.currentMode === EditorModeController.MaterialMode
+                        || EditorModeController.currentMode === EditorModeController.ValidationMode
                     text: "Asset Browser"
                     onClicked: root.revealBottomTool("assetBrowser")
                 }
@@ -4210,6 +4223,251 @@ Rectangle {
                     target: MaterialPresetLibrary
                     function onPresetApplied(name) {
                         presetFeedback.text = "Applied: " + name
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Asset Folder Scan (Validation mode) ----
+    Component {
+        id: assetScanComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: PropertiesPanelController.textColor
+                opacity: 0.75
+                text: "Pick an assets folder below (or open Asset Browser \u2192 Browse\u2026). "
+                    + "Scan uses the same rules as qtmesh scan --target in a separate process."
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: "Profile:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 44
+                }
+                ThemedComboBox {
+                    id: profileCombo
+                    width: parent.width - 50
+                    model: AssetScanController.profileLabels
+                    currentIndex: {
+                        const idx = AssetScanController.profileIds.indexOf(AssetScanController.selectedProfileId)
+                        return idx >= 0 ? idx : 0
+                    }
+                    onActivated: function(index) {
+                        if (index >= 0 && index < AssetScanController.profileIds.length)
+                            AssetScanController.selectedProfileId = AssetScanController.profileIds[index]
+                    }
+                    ToolTip.visible: hovered && AssetScanController.profileDescription.length > 0
+                    ToolTip.text: AssetScanController.profileDescription
+                    ToolTip.delay: 400
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: AssetScanController.profileDescription.length > 0
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: PropertiesPanelController.textColor
+                opacity: 0.7
+                text: AssetScanController.profileDescription
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+
+                Rectangle {
+                    width: parent.width - 66
+                    height: 24
+                    radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    clip: true
+
+                    Text {
+                        anchors.fill: parent
+                        anchors.leftMargin: 6
+                        anchors.rightMargin: 6
+                        verticalAlignment: Text.AlignVCenter
+                        text: AssetBrowserController.rootPath
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        elide: Text.ElideLeft
+                    }
+                }
+
+                Rectangle {
+                    width: 60
+                    height: 24
+                    radius: 3
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.Button
+                    Accessible.name: "Browse asset folder"
+                    color: folderBrowseMouse.containsMouse || activeFocus
+                        ? Qt.lighter(PropertiesPanelController.inputColor, 1.3)
+                        : PropertiesPanelController.inputColor
+                    border.color: activeFocus ? PropertiesPanelController.highlightColor
+                                              : PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Browse\u2026"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: folderBrowseMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: AssetBrowserController.browseForDirectory()
+                    }
+                    Keys.onSpacePressed: folderBrowseMouse.clicked(null)
+                    Keys.onReturnPressed: folderBrowseMouse.clicked(null)
+                    Keys.onEnterPressed: folderBrowseMouse.clicked(null)
+                }
+            }
+
+            Rectangle {
+                width: parent.width - 16; height: 24; radius: 3
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: "Open Asset Browser panel"
+                color: browserMouse.containsMouse || activeFocus
+                    ? Qt.lighter(PropertiesPanelController.controlBgColor, 1.08)
+                    : PropertiesPanelController.controlBgColor
+                border.color: activeFocus ? PropertiesPanelController.highlightColor
+                                          : PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    anchors.centerIn: parent
+                    text: "Open Asset Browser panel"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                }
+                MouseArea {
+                    id: browserMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: root.revealBottomTool("assetBrowser")
+                }
+                Keys.onSpacePressed: browserMouse.clicked(null)
+                Keys.onReturnPressed: browserMouse.clicked(null)
+                Keys.onEnterPressed: browserMouse.clicked(null)
+            }
+
+            Rectangle {
+                width: parent.width - 16; height: 28; radius: 3
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: "Scan asset folder"
+                color: scanMouse.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                     : (scanMouse.containsMouse || activeFocus)
+                       ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                       : PropertiesPanelController.highlightColor
+                opacity: AssetScanController.scanning ? 0.55 : 1.0
+                Text {
+                    anchors.centerIn: parent
+                    text: AssetScanController.scanning ? "Scanning\u2026" : "Scan Asset Folder"
+                    color: "white"
+                    font.pixelSize: 12
+                }
+                MouseArea {
+                    id: scanMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: !AssetScanController.scanning
+                    onClicked: AssetScanController.scanFolder(AssetBrowserController.rootPath)
+                }
+                Keys.onSpacePressed: if (!AssetScanController.scanning) scanMouse.clicked(null)
+                Keys.onReturnPressed: if (!AssetScanController.scanning) scanMouse.clicked(null)
+                Keys.onEnterPressed: if (!AssetScanController.scanning) scanMouse.clicked(null)
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: AssetScanController.scanning
+                text: "Running qtmesh scan in background\u2026"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.italic: true
+            }
+
+            Text {
+                width: parent.width - 16
+                visible: AssetScanController.hasResults && !AssetScanController.scanning
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: PropertiesPanelController.textColor
+                text: "Scanned " + AssetScanController.summaryScanned
+                    + " \u2022 passed " + AssetScanController.summaryPassed
+                    + " \u2022 warnings " + AssetScanController.summaryWarnings
+                    + " \u2022 errors " + AssetScanController.summaryErrors
+            }
+
+            Column {
+                width: parent.width - 16
+                spacing: 3
+                visible: AssetScanController.hasResults
+                    && !AssetScanController.scanning
+                    && AssetScanController.findings.length > 0
+
+                Repeater {
+                    model: AssetScanController.findings
+
+                    Row {
+                        spacing: 6
+                        width: parent.width
+
+                        Text {
+                            text: modelData.severity === "error" ? "\u2718" : "\u26A0"
+                            color: modelData.severity === "error" ? "#e05050" : "#e0a030"
+                            font.pixelSize: 13
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            text: (modelData.file ? modelData.file + ": " : "") + modelData.message
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                            wrapMode: Text.Wrap
+                            width: parent.width - 24
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+                }
+            }
+
+            Text {
+                id: assetScanFeedback
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: "#c06060"
+                text: ""
+
+                Connections {
+                    target: AssetScanController
+                    function onError(msg) {
+                        assetScanFeedback.color = "#c06060"
+                        assetScanFeedback.text = msg
+                    }
+                    function onScanFinished(ok, message) {
+                        assetScanFeedback.color = ok ? "#60c060" : "#c06060"
+                        assetScanFeedback.text = message
                     }
                 }
             }

@@ -4206,18 +4206,18 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (!profileId.isEmpty()) {
         SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
             QStringLiteral("scan profile=%1").arg(profileId));
-        const PlatformProfileLoadResult loaded = PlatformProfileLoader::load(profileId);
-        if (!loaded.ok) {
-            err() << "Error: " << loaded.error << Qt::endl;
+        const PlatformProfileScanSetup setup = buildScanConfigWithPlatformProfile(profileId);
+        if (!setup.ok) {
+            err() << "Error: " << setup.error << Qt::endl;
             return 2;
         }
-        for (const QString& w : loaded.warnings)
+        for (const QString& w : setup.warnings)
             err() << "Warning: " << w << Qt::endl;
-        applyPlatformProfile(config, loaded.profile);
-        activeProfileId = loaded.profile.id;
-        err() << "Note: Using platform profile '" << loaded.profile.id << "'." << Qt::endl;
+        config = setup.config;
+        activeProfileId = setup.profileId;
+        err() << "Note: Using platform profile '" << setup.profileId << "'." << Qt::endl;
         SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
-            QStringLiteral("platform profile=%1").arg(loaded.profile.id));
+            QStringLiteral("platform profile=%1").arg(setup.profileId));
     }
 
     if (!projectRoot.isEmpty())

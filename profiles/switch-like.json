@@ -1,6 +1,6 @@
 {
   "id": "switch-like",
-  "displayName": "Switch-class (source validation)",
+  "displayName": "Switch-class",
   "description": "Validation-only preset for handheld/console-class GPU and CPU heuristics aligned with Nintendo Switch–style glTF/FBX source asset prep. Warns on triangle, material, texture, bone, and animation budgets — not certifiable TRC limits. Export via engine cooked pipelines, not proprietary SDK mesh formats.",
   "rules": {
     "allowed_formats": ["fbx", "glb", "gltf", "vrm", "obj"],

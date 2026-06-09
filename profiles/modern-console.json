@@ -1,6 +1,6 @@
 {
   "id": "modern-console",
-  "displayName": "Modern Console (source validation)",
+  "displayName": "Modern Console",
   "description": "Validation-only preset for PS5/Xbox/Series-class source assets (glTF/FBX). Conservative AAA triangle, material, texture, bone, and animation budgets for engine import pipelines. Does not export cooked platform binaries — tune per title and ship via Unreal/Unity/Godot/custom cook steps. require_lod rule is planned once LOD scan rules land.",
   "rules": {
     "allowed_formats": ["fbx", "glb", "gltf", "vrm", "obj"],

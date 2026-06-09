@@ -1,6 +1,6 @@
 {
   "id": "webgl",
-  "displayName": "WebGL / WebGPU (source validation)",
+  "displayName": "WebGL / WebGPU",
   "description": "Validation-only preset for browser 3D pipelines (WebGL/WebGPU). Caps triangles, draw calls, texture dimensions, and animation keyframes on glTF/FBX source assets. Does not emit web-ready bundles — validate source, then export via your web engine toolchain.",
   "rules": {
     "allowed_formats": ["fbx", "glb", "gltf", "vrm", "obj"],

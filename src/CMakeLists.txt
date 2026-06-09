@@ -127,6 +127,7 @@ FeedbackDiagnostics.cpp
 FeedbackDialog.cpp
 FeedbackReportHelper.cpp
 AssetBrowserController.cpp
+AssetScanController.cpp
 MaterialPreviewRenderer.cpp
 ModelTurntableRenderer.cpp
 EditableMesh.cpp
@@ -243,6 +244,7 @@ FeedbackDiagnostics.h
 FeedbackDialog.h
 FeedbackReportHelper.h
 AssetBrowserController.h
+AssetScanController.h
 MaterialPreviewRenderer.h
 ModelTurntableRenderer.h
 EditableMesh.h

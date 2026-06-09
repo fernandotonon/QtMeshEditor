@@ -1,6 +1,6 @@
 {
   "id": "dreamcast",
-  "displayName": "Sega Dreamcast (validation)",
+  "displayName": "Sega Dreamcast",
   "description": "Validation-only lint preset for Dreamcast-class workflows. PVR-oriented texture format allow-list placeholder (png/jpg/pvr) with triangle, bone, and draw-call budgets aligned with common homebrew targets. Does not export PVR-ready assets or guarantee KallistiOS/Hektic compliance — model export remains engine-specific.",
   "rules": {
     "max_triangle_count": 15000,

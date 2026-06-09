@@ -82,6 +82,7 @@
 #include "MeshLodController.h"
 #include "MeshDecimatorController.h"
 #include "MeshValidator.h"
+#include "AssetScanController.h"
 #include "UvUnwrapController.h"
 #include "QuadRetopoController.h"
 #include "SkinWeightsController.h"
@@ -596,6 +597,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<MeshValidator>("PropertiesPanel", 1, 0, "MeshValidator",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MeshValidator::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<AssetScanController>("PropertiesPanel", 1, 0, "AssetScanController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AssetScanController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<MaterialPresetLibrary>("PropertiesPanel", 1, 0, "MaterialPresetLibrary",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
