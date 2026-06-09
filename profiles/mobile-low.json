@@ -1,6 +1,6 @@
 {
   "id": "mobile-low",
-  "displayName": "Mobile Low-end (source validation)",
+  "displayName": "Mobile Low-end",
   "description": "Validation-only preset for low-end mobile GPU/CPU source asset budgets. Tight triangle, material, texture, and bone limits for glTF/FBX prep before Unity/Unreal/Godot mobile cooks. Warnings only — not a substitute for on-device profiling.",
   "rules": {
     "allowed_formats": ["fbx", "glb", "gltf", "vrm", "obj"],

@@ -1,6 +1,6 @@
 {
   "id": "ps1",
-  "displayName": "PlayStation 1 (validation)",
+  "displayName": "PlayStation 1",
   "description": "Validation-only lint preset for PS1-class homebrew and demake workflows. Applies conservative triangle, material, bone, and texture budgets plus power-of-two texture warnings. Does not export TIM/CLUT or guarantee hardware compliance — tune limits per title. TIM import is future work.",
   "rules": {
     "max_triangle_count": 5000,

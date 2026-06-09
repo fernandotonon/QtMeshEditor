@@ -1,6 +1,6 @@
 {
   "id": "n64",
-  "displayName": "Nintendo 64 (validation)",
+  "displayName": "Nintendo 64",
   "description": "Validation-only lint preset for N64-class pipelines. Warns on triangle, bone, submesh, draw-call, and texture budgets typical of N64 homebrew and preservation ports. Does not emit ROM-ready geometry or guarantee microcode compliance — defaults are tunable starting points, not certification.",
   "rules": {
     "max_triangle_count": 12000,

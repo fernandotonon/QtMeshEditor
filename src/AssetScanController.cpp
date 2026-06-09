@@ -11,11 +11,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QThread>
 #include <memory>
 
 namespace {
+
+constexpr int kProfilePickerSettingsVersion = 2;
 
 QString defaultValidationProfileId()
 {
@@ -26,6 +29,30 @@ bool isUiExcludedProfileId(const QString& id)
 {
     // Example/CI profiles stay on disk for tests and CLI, but are hidden from the GUI picker.
     return id.startsWith(QStringLiteral("example-"));
+}
+
+QString sanitizeProfileLabel(const QString& displayName, const QString& id)
+{
+    QString label = displayName.trimmed();
+    if (label.isEmpty())
+        label = id;
+
+    static const QRegularExpression suffixRe(
+        QStringLiteral(R"(\s*\((?:source\s+)?validation\)\s*$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    label.remove(suffixRe);
+    return label.trimmed();
+}
+
+void sortUiProfiles(QStringList& ids, QStringList& labels)
+{
+    const int defaultIdx = ids.indexOf(defaultValidationProfileId());
+    if (defaultIdx > 0) {
+        const QString defaultId = ids.takeAt(defaultIdx);
+        const QString defaultLabel = labels.takeAt(defaultIdx);
+        ids.prepend(defaultId);
+        labels.prepend(defaultLabel);
+    }
 }
 
 } // namespace
@@ -58,7 +85,17 @@ AssetScanController::AssetScanController(QObject* parent)
     reloadProfiles();
 
     QSettings settings;
-    const QString saved = settings.value(AppSettingsKeys::validationPlatformProfileId()).toString();
+    const int pickerVersion =
+        settings.value(AppSettingsKeys::validationPlatformProfilePickerVersion(), 0).toInt();
+    QString saved = settings.value(AppSettingsKeys::validationPlatformProfileId()).toString();
+
+    // One-time migration: older builds could persist an unintended first-launch profile.
+    if (pickerVersion < kProfilePickerSettingsVersion) {
+        saved.clear();
+        settings.setValue(AppSettingsKeys::validationPlatformProfilePickerVersion(),
+                          kProfilePickerSettingsVersion);
+    }
+
     if (!saved.isEmpty() && !isUiExcludedProfileId(saved) && m_profileIds.contains(saved))
         setSelectedProfileId(saved);
     else if (m_profileIds.contains(defaultValidationProfileId()))
@@ -80,10 +117,10 @@ void AssetScanController::reloadProfiles()
         if (!loaded.ok)
             continue;
         m_profileIds.append(loaded.profile.id);
-        const QString label = loaded.profile.displayName.trimmed();
-        m_profileLabels.append(label.isEmpty() ? loaded.profile.id : label);
+        m_profileLabels.append(sanitizeProfileLabel(loaded.profile.displayName, loaded.profile.id));
     }
 
+    sortUiProfiles(m_profileIds, m_profileLabels);
     emit profilesChanged();
 }
 

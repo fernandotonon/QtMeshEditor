@@ -4262,6 +4262,10 @@ Rectangle {
                     id: profileCombo
                     width: parent.width - 50
                     model: AssetScanController.profileLabels
+                    currentIndex: {
+                        const idx = AssetScanController.profileIds.indexOf(AssetScanController.selectedProfileId)
+                        return idx >= 0 ? idx : 0
+                    }
                     onActivated: function(index) {
                         if (index >= 0 && index < AssetScanController.profileIds.length)
                             AssetScanController.selectedProfileId = AssetScanController.profileIds[index]
@@ -4269,20 +4273,6 @@ Rectangle {
                     ToolTip.visible: hovered && AssetScanController.profileDescription.length > 0
                     ToolTip.text: AssetScanController.profileDescription
                     ToolTip.delay: 400
-
-                    Connections {
-                        target: AssetScanController
-                        function onSelectedProfileIdChanged() {
-                            const idx = AssetScanController.profileIds.indexOf(AssetScanController.selectedProfileId)
-                            if (idx >= 0)
-                                profileCombo.currentIndex = idx
-                        }
-                    }
-                    Component.onCompleted: {
-                        const idx = AssetScanController.profileIds.indexOf(AssetScanController.selectedProfileId)
-                        if (idx >= 0)
-                            currentIndex = idx
-                    }
                 }
             }
 

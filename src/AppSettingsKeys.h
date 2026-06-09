@@ -105,6 +105,13 @@ inline const QString& validationPlatformProfileId()
     return k;
 }
 
+/** @brief Bumped when Validation profile picker defaults or migration rules change. */
+inline const QString& validationPlatformProfilePickerVersion()
+{
+    static const QString k(QStringLiteral("Validation/platformProfilePickerVersion"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H

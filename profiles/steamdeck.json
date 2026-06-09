@@ -1,6 +1,6 @@
 {
   "id": "steamdeck",
-  "displayName": "Steam Deck (source validation)",
+  "displayName": "Steam Deck",
   "description": "Validation-only preset for Steam Deck / handheld-PC class performance heuristics on glTF/FBX source assets. Higher budgets than switch-like but still warns on draw calls, texture size, and animation bloat. Does not produce cooked builds — validation for engine import only.",
   "rules": {
     "allowed_formats": ["fbx", "glb", "gltf", "vrm", "obj"],

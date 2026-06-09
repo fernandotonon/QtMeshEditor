@@ -1,6 +1,6 @@
 {
   "id": "nds",
-  "displayName": "Nintendo DS (validation)",
+  "displayName": "Nintendo DS",
   "description": "Validation-only lint preset for NDS-class demake and homebrew checks. Tight polygon and texture budgets with palette/texture size warnings suited to dual-screen handheld targets. Does not export NSBMD/NSBTX or validate proprietary SDK output — NSBMD/NSBTX feasibility is separate research.",
   "rules": {
     "max_triangle_count": 4000,

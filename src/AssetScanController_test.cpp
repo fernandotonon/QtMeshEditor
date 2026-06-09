@@ -80,6 +80,22 @@ TEST(AssetScanControllerTest, UiProfileList_ExcludesExampleProfilesAndDefaultsMo
     EXPECT_FALSE(ids.contains(QStringLiteral("example-texture-inspect")));
     EXPECT_TRUE(ids.contains(QStringLiteral("modern-console")));
     EXPECT_EQ(controller->selectedProfileId(), QStringLiteral("modern-console"));
+    EXPECT_EQ(controller->profileLabels().first(), QStringLiteral("Modern Console"));
+    EXPECT_FALSE(controller->profileLabels().first().contains(QStringLiteral("validation")));
+
+    AssetScanController::kill();
+}
+
+TEST(AssetScanControllerTest, PickerVersionMigration_ResetsStaleSavedProfileToModernConsole)
+{
+    AssetScanController::kill();
+    QSettings settings;
+    settings.setValue(AppSettingsKeys::validationPlatformProfileId(), QStringLiteral("ps1"));
+    settings.setValue(AppSettingsKeys::validationPlatformProfilePickerVersion(), 1);
+
+    auto* controller = AssetScanController::instance();
+    EXPECT_EQ(controller->selectedProfileId(), QStringLiteral("modern-console"));
+    EXPECT_EQ(settings.value(AppSettingsKeys::validationPlatformProfilePickerVersion()).toInt(), 2);
 
     AssetScanController::kill();
 }
