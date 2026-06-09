@@ -453,7 +453,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ValidationMode,
                     true)
-                expanded: true
+                expanded: false
 
                 Component.onCompleted: content = assetScanComponent
             }
