@@ -29,6 +29,7 @@
 #include "SentryReporter.h"
 #include "CLIPipeline.h"
 #include "AppConsoleLog.h"
+#include "AppLaunchHandler.h"
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -66,39 +67,7 @@ int main(int argc, char *argv[])
 #endif
 
     // CLI pipeline mode detection — check before creating QApplication
-    {
-        bool cliMode = false;
-        QString execName = QFileInfo(QString(argv[0])).fileName().toLower();
-        if (execName.startsWith("qtmesh") && !execName.contains("editor")) {
-            cliMode = true;
-        }
-        for (int i = 1; i < argc; ++i) {
-            QString arg(argv[i]);
-            if (arg == "--cli" || arg == "--help" || arg == "-h" ||
-                arg == "--version" || arg == "-v") {
-                cliMode = true;
-                break;
-            }
-        }
-        if (!cliMode) {
-            for (int i = 1; i < argc; ++i) {
-                QString arg(argv[i]);
-                if (arg.startsWith("-"))
-                    continue;  // skip flags like --verbose
-                if (arg == "info" || arg == "fix" || arg == "convert" || arg == "anim"
-                        || arg == "validate" || arg == "lod" || arg == "pose" || arg == "turntable"
-                        || arg == "scan" || arg == "material" || arg == "pack-textures"
-                        || arg == "normal-from-height" || arg == "memory"
-                        || arg == "analyze" || arg == "vertex-cache"
-                        || arg == "decimate" || arg == "atlas" || arg == "atlas-apply"
-                        || arg == "optimize" || arg == "bake-vertex-colors"
-                        || arg == "vat" || arg == "uv" || arg == "retopo"
-                        || arg == "skin" || arg == "morph" || arg == "nodeanim")
-                    cliMode = true;
-                break;  // first non-flag arg determines mode
-            }
-        }
-        if (cliMode) {
+    if (AppLaunchHandler::isCliInvocation(argc, argv)) {
 #ifdef Q_OS_WIN
             // QtMeshEditor.exe is a WIN32 GUI subsystem executable — it has no
             // console by default. Reattach to the parent console (PowerShell/cmd)
@@ -111,8 +80,7 @@ int main(int argc, char *argv[])
                 freopen("CONOUT$", "w", stderr);
             }
 #endif
-            return CLIPipeline::run(argc, argv);
-        }
+        return CLIPipeline::run(argc, argv);
     }
 
     // Check for MCP server mode before creating QApplication
@@ -259,10 +227,16 @@ int main(int argc, char *argv[])
             return ThemeManager::qmlInstance(engine, scriptEngine);
         });
 
-    // Show welcome dialog before creating MainWindow
+    const QStringList launchPaths = AppLaunchHandler::collectGuiLaunchPaths(a.arguments());
+    AppLaunchHandler launchHandler;
+    if (!launchPaths.isEmpty() && launchHandler.tryForwardToRunningInstance(launchPaths))
+        return 0;
+    launchHandler.startSingleInstanceServer();
+
+    // Show welcome dialog before creating MainWindow (skip when OS opened a file)
     QString welcomeOpenFile;
     bool welcomeNewScene = false;
-    if (WelcomeDialog::shouldShow()) {
+    if (launchPaths.isEmpty() && WelcomeDialog::shouldShow()) {
         WelcomeDialog welcome;
         welcome.exec();
         if (welcome.userAction() == WelcomeDialog::OpenFile ||
@@ -280,8 +254,14 @@ int main(int argc, char *argv[])
         MainWindow w;
         w.show();
 
-        // Act on welcome dialog choice
-        if (!welcomeOpenFile.isEmpty()) {
+        QObject::connect(&launchHandler, &AppLaunchHandler::filesRequested, &w,
+                         &MainWindow::openLaunchFiles);
+
+        if (!launchPaths.isEmpty()) {
+            QTimer::singleShot(0, &w, [&w, launchPaths]() {
+                w.openLaunchFiles(launchPaths);
+            });
+        } else if (!welcomeOpenFile.isEmpty()) {
             QTimer::singleShot(0, &w, [&w, welcomeOpenFile]() {
                 w.loadFile(welcomeOpenFile);
             });

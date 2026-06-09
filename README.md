@@ -3,6 +3,8 @@
 
 Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D assets with GUI + CLI + CI/CD support.
 
+**Open 3D files from your OS** — after install, double-click `.fbx`, `.glb`, `.gltf`, `.obj`, `.dae`, `.stl`, `.ply`, `.mesh`, and PS1 `.rsd`/`.tmd` in Finder, Explorer, or your Linux file manager (or use **Open With**). QtMeshEditor loads the model in the running window; a second launch focuses the existing instance instead of spawning another process. Portable Windows ZIP users can run `bin/scripts/register-windows-file-associations.ps1` to register handlers without admin rights.
+
 [![GitHub stars](https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/fernandotonon/QtMeshEditor/stargazers) Star if you like it!
 
 [![Github All Releases](https://img.shields.io/github/downloads/fernandotonon/QtMeshEditor/total.svg)]()

@@ -42,5 +42,186 @@
 
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>FBX 3D Model</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>fbx</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>glTF 2.0 Model</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>gltf</string>
+				<string>glb</string>
+				<string>gltf2</string>
+				<string>glb2</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Wavefront OBJ Model</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>obj</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Collada Model</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>dae</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>STL Model</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>stl</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>PLY Model</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>ply</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>VRM Avatar</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>vrm</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>3D Studio Model</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>3ds</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>QtMesh Scene</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>scene.glb</string>
+				<string>scene.gltf</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Ogre Mesh</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array><string>com.qtmesheditor.mesh</string></array>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>mesh</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>PlayStation RSD Mesh</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array><string>com.qtmesheditor.ps1-rsd</string></array>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>rsd</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>PlayStation TMD Mesh</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array><string>com.qtmesheditor.ps1-tmd</string></array>
+			<key>CFBundleTypeExtensions</key>
+			<array><string>tmd</string></array>
+		</dict>
+	</array>
+
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.qtmesheditor.mesh</string>
+			<key>UTTypeDescription</key>
+			<string>Ogre Mesh</string>
+			<key>UTTypeConformsTo</key>
+			<array><string>public.3d-content</string></array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array><string>mesh</string></array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.qtmesheditor.ps1-rsd</string>
+			<key>UTTypeDescription</key>
+			<string>PlayStation RSD Mesh</string>
+			<key>UTTypeConformsTo</key>
+			<array><string>public.3d-content</string></array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array><string>rsd</string></array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.qtmesheditor.ps1-tmd</string>
+			<key>UTTypeDescription</key>
+			<string>PlayStation TMD Mesh</string>
+			<key>UTTypeConformsTo</key>
+			<array><string>public.3d-content</string></array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array><string>tmd</string></array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>

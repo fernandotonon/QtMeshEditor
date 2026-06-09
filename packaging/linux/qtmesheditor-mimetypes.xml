@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-ogre-mesh">
+    <comment>Ogre mesh</comment>
+    <glob pattern="*.mesh"/>
+  </mime-type>
+  <mime-type type="application/x-ps1-rsd">
+    <comment>PlayStation RSD mesh</comment>
+    <glob pattern="*.rsd"/>
+  </mime-type>
+  <mime-type type="application/x-ps1-tmd">
+    <comment>PlayStation TMD mesh</comment>
+    <glob pattern="*.tmd"/>
+  </mime-type>
+  <mime-type type="application/x-qtmesheditor-scene">
+    <comment>QtMeshEditor scene</comment>
+    <glob pattern="*.scene.glb"/>
+    <glob pattern="*.scene.gltf"/>
+  </mime-type>
+  <mime-type type="application/vnd.ms-fbx">
+    <comment>Autodesk FBX model</comment>
+    <glob pattern="*.fbx"/>
+  </mime-type>
+  <mime-type type="model/vnd.ply">
+    <comment>PLY model</comment>
+    <glob pattern="*.ply"/>
+  </mime-type>
+</mime-info>

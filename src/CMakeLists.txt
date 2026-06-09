@@ -5,6 +5,7 @@
 set(SRC_FILES
 about.cpp
 AppConsoleLog.cpp
+AppLaunchHandler.cpp
 AnimationBlender.cpp
 AnimationControlController.cpp
 CurveEditModel.cpp
@@ -146,6 +147,7 @@ GlobalDefinitions.h
 Euler.h
 about.h
 AppConsoleLog.h
+AppLaunchHandler.h
 AppSettingsKeys.h
 mainwindow.h
 Manager.h

@@ -90,6 +90,17 @@ NestedInstallerFiles:
     PortableCommandAlias: qtmesheditor
   - RelativeFilePath: bin\\qtmesh.exe
     PortableCommandAlias: qtmesh
+FileExtensions:
+  - fbx
+  - glb
+  - gltf
+  - obj
+  - dae
+  - stl
+  - ply
+  - mesh
+  - rsd
+  - tmd
 Installers:
   - Architecture: x64
     InstallerUrl: ${ZIP_URL}
