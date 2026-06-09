@@ -4244,8 +4244,8 @@ Rectangle {
                 font.pixelSize: 10
                 color: PropertiesPanelController.textColor
                 opacity: 0.75
-                text: "Scan the Asset Browser folder with the same rules as "
-                    + "qtmesh scan --target. Uses a separate process so your open scene is untouched."
+                text: "Pick an assets folder below (or open Asset Browser \u2192 Browse\u2026). "
+                    + "Scan uses the same rules as qtmesh scan --target in a separate process."
             }
 
             Row {
@@ -4296,13 +4296,74 @@ Rectangle {
                 text: AssetScanController.profileDescription
             }
 
-            Text {
+            Row {
+                spacing: 6
                 width: parent.width - 16
-                wrapMode: Text.Wrap
-                font.pixelSize: 10
-                color: PropertiesPanelController.textColor
-                opacity: 0.85
-                text: "Folder: " + AssetBrowserController.rootPath
+
+                Rectangle {
+                    width: parent.width - 66
+                    height: 24
+                    radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    clip: true
+
+                    Text {
+                        anchors.fill: parent
+                        anchors.leftMargin: 6
+                        anchors.rightMargin: 6
+                        verticalAlignment: Text.AlignVCenter
+                        text: AssetBrowserController.rootPath
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        elide: Text.ElideLeft
+                    }
+                }
+
+                Rectangle {
+                    width: 60
+                    height: 24
+                    radius: 3
+                    color: folderBrowseMouse.containsMouse
+                        ? Qt.lighter(PropertiesPanelController.inputColor, 1.3)
+                        : PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Browse\u2026"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: folderBrowseMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: AssetBrowserController.browseForDirectory()
+                    }
+                }
+            }
+
+            Rectangle {
+                width: parent.width - 16; height: 24; radius: 3
+                color: browserMouse.containsMouse
+                    ? Qt.lighter(PropertiesPanelController.controlBgColor, 1.08)
+                    : PropertiesPanelController.controlBgColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    anchors.centerIn: parent
+                    text: "Open Asset Browser panel"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                }
+                MouseArea {
+                    id: browserMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: root.revealBottomTool("assetBrowser")
+                }
             }
 
             Rectangle {

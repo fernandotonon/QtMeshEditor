@@ -66,6 +66,24 @@ TEST(AssetScanControllerTest, SelectedProfileId_PersistsInQSettings)
     AssetScanController::kill();
 }
 
+TEST(AssetScanControllerTest, UiProfileList_ExcludesExampleProfilesAndDefaultsModernConsole)
+{
+    AssetScanController::kill();
+    QSettings settings;
+    settings.remove(AppSettingsKeys::validationPlatformProfileId());
+
+    auto* controller = AssetScanController::instance();
+    const QStringList ids = controller->profileIds();
+    ASSERT_FALSE(ids.isEmpty());
+    EXPECT_FALSE(ids.contains(QStringLiteral("example-minimal")));
+    EXPECT_FALSE(ids.contains(QStringLiteral("example-base")));
+    EXPECT_FALSE(ids.contains(QStringLiteral("example-texture-inspect")));
+    EXPECT_TRUE(ids.contains(QStringLiteral("modern-console")));
+    EXPECT_EQ(controller->selectedProfileId(), QStringLiteral("modern-console"));
+
+    AssetScanController::kill();
+}
+
 TEST(PlatformProfileScanSetupTest, BuildScanConfigWithPlatformProfile_MatchesLoader)
 {
     const QStringList ids = PlatformProfileLoader::listBuiltinIds();

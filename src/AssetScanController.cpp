@@ -15,6 +15,21 @@
 #include <QThread>
 #include <memory>
 
+namespace {
+
+QString defaultValidationProfileId()
+{
+    return QStringLiteral("modern-console");
+}
+
+bool isUiExcludedProfileId(const QString& id)
+{
+    // Example/CI profiles stay on disk for tests and CLI, but are hidden from the GUI picker.
+    return id.startsWith(QStringLiteral("example-"));
+}
+
+} // namespace
+
 AssetScanController* AssetScanController::m_pSingleton = nullptr;
 
 AssetScanController* AssetScanController::instance()
@@ -44,8 +59,10 @@ AssetScanController::AssetScanController(QObject* parent)
 
     QSettings settings;
     const QString saved = settings.value(AppSettingsKeys::validationPlatformProfileId()).toString();
-    if (!saved.isEmpty() && m_profileIds.contains(saved))
+    if (!saved.isEmpty() && !isUiExcludedProfileId(saved) && m_profileIds.contains(saved))
         setSelectedProfileId(saved);
+    else if (m_profileIds.contains(defaultValidationProfileId()))
+        setSelectedProfileId(defaultValidationProfileId());
     else if (!m_profileIds.isEmpty())
         setSelectedProfileId(m_profileIds.first());
 }
@@ -57,6 +74,8 @@ void AssetScanController::reloadProfiles()
 
     const QStringList ids = PlatformProfileLoader::listBuiltinIds();
     for (const QString& id : ids) {
+        if (isUiExcludedProfileId(id))
+            continue;
         const PlatformProfileLoadResult loaded = PlatformProfileLoader::load(id);
         if (!loaded.ok)
             continue;
