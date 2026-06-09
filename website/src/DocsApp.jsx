@@ -32,6 +32,7 @@ const NAV = [
   ]},
   { section: 'Scan Reference', items: [
     { id: 'scan-config', label: 'Configuration (qtmesh.yml)' },
+    { id: 'scan-profiles', label: 'Platform Profiles' },
     { id: 'scan-rules', label: 'Rules Reference' },
     { id: 'scan-scopes', label: 'Scoped Validation' },
     { id: 'scan-output', label: 'Output Formats' },
@@ -460,6 +461,9 @@ qtmesh turntable <file> -o frame_%02d.png [--frames N] [--axis y|x|z]`}
             synopsis={`qtmesh scan [path] [options]`}
             options={[
               ['--config <file>', 'Config file path (default: qtmesh.yml, qtmesh.yaml, qtmesh.json)'],
+              ['--target <id>', 'Built-in platform profile id (alias for --profile; CI-friendly)'],
+              ['--profile <id>', 'Built-in profile id (e.g. modern-console) or path to a custom .json profile'],
+              ['--list-profiles', 'List bundled platform profile ids and exit'],
               ['--json', 'Output results as JSON'],
               ['--report <file>', 'Write JSON report to file'],
               ['--sarif <file>', 'Write SARIF report to file (for GitHub Code Scanning)'],
@@ -494,6 +498,8 @@ qtmesh turntable <file> -o frame_%02d.png [--frames N] [--axis y|x|z]`}
             ]}
             examples={[
               'qtmesh scan ./assets',
+              'qtmesh scan ./assets --target modern-console --fail-on warning',
+              'qtmesh scan ./assets --list-profiles',
               'qtmesh scan ./assets --config qtmesh.yml --fail-on warning',
               'qtmesh scan ./assets --json --report report.json',
               'qtmesh scan ./assets --fix --dry-run',
@@ -506,6 +512,8 @@ qtmesh turntable <file> -o frame_%02d.png [--frames N] [--axis y|x|z]`}
             <p className={s.para}>
               Most value flags accept both styles: <Code>--flag value</Code> and <Code>--flag=value</Code>.
               CLI overrides are applied after loading <Code>qtmesh.yml</Code>/<Code>qtmesh.yaml</Code>/<Code>qtmesh.json</Code> for quick one-off validation checks.
+              Bundled <a href="#scan-profiles" className={s.link}>platform profiles</a> apply preset budgets via
+              <Code>--target</Code> / <Code>--profile</Code> or <Code>profile:</Code> in YAML.
             </p>
             <h3 className={s.subsection}>Example Output</h3>
             <CodeBlock>{`  OK    models/player.fbx
@@ -1077,6 +1085,9 @@ Wrote: rumba_unwrapped.glb`}</CodeBlock>
             <h3 className={s.subsection}>Full Schema</h3>
             <CodeBlock lang="yaml">{`version: 1
 
+# Optional built-in platform profile (see Platform Profiles below)
+# profile: modern-console
+
 scan:
   roots:                        # Directories to scan (default: current dir)
     - assets/
@@ -1167,6 +1178,88 @@ report:
   output: .qtmesh/scan-report.json
   sarif_output: .qtmesh/scan-report.sarif
   fail_on: error                # info | warning | error | never`}</CodeBlock>
+          </section>
+
+          <section className={s.section} id="scan-profiles">
+            <h2 className={s.sectionTitle}>Platform Profiles</h2>
+            <p className={s.para}>
+              Platform profiles are bundled JSON presets that apply conservative triangle, material,
+              texture, bone, and animation budgets tuned for a target class of hardware or engine
+              pipeline. They validate <strong>source</strong> assets (FBX, glTF, OBJ, VRM) before
+              you import into Unreal, Unity, Godot, or a retro toolchain — they do <em>not</em> export
+              cooked platform binaries, ROM-ready geometry, or proprietary SDK formats.
+            </p>
+            <p className={s.para}>
+              Precedence: scanner defaults → platform profile → project <Code>qtmesh.yml</Code> →
+              CLI flags. Set a profile in YAML with <Code>profile: &lt;id&gt;</Code>, or pass
+              <Code>--target &lt;id&gt;</Code> / <Code>--profile &lt;id&gt;</Code> on the command line
+              (CLI wins). List bundled ids with <Code>qtmesh scan --list-profiles</Code>.
+              Custom profiles can be any <Code>.json</Code> file on disk — pass the path to
+              <Code>--profile</Code>.
+            </p>
+
+            <h3 className={s.subsection}>In the editor (Validation mode)</h3>
+            <p className={s.para}>
+              Switch to <strong>Validation</strong> mode in the workspace toolbar, then expand
+              <strong> Asset Folder Scan</strong> in the Inspector. Pick a platform profile from the
+              dropdown (default: <strong>Modern Console</strong>), choose an assets folder with
+              <strong> Browse…</strong>, and run <strong>Scan Folder</strong>. Results appear inline
+              with the same rule severities as CLI scan. Example-only profiles used by unit tests
+              (<Code>example-*</Code>) are hidden in the GUI but still available from the CLI.
+            </p>
+
+            <h3 className={s.subsection}>Bundled profiles</h3>
+            <p className={s.para}>
+              Profiles ship in the <Code>profiles/</Code> directory next to the app binary. Key
+              budget columns below are starting points — tune per title and combine with
+              <Code>scopes</Code> in <Code>qtmesh.yml</Code> for path-specific overrides.
+            </p>
+            <table className={s.table}>
+              <thead>
+                <tr>
+                  <th>Id</th>
+                  <th>Name</th>
+                  <th>Category</th>
+                  <th>Max tris</th>
+                  <th>Max texture</th>
+                  <th>Materials</th>
+                  <th>Draw calls</th>
+                  <th>Bones</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td><Code>modern-console</Code></td><td>Modern Console</td><td>Modern</td><td>250k</td><td>4096 px</td><td>32</td><td>128</td><td>256</td></tr>
+                <tr><td><Code>switch-like</Code></td><td>Switch-class</td><td>Modern</td><td>80k</td><td>2048 px</td><td>16</td><td>32</td><td>128</td></tr>
+                <tr><td><Code>steamdeck</Code></td><td>Steam Deck</td><td>Modern</td><td>150k</td><td>4096 px</td><td>24</td><td>64</td><td>200</td></tr>
+                <tr><td><Code>mobile-low</Code></td><td>Mobile Low-end</td><td>Modern</td><td>25k</td><td>1024 px</td><td>8</td><td>16</td><td>64</td></tr>
+                <tr><td><Code>webgl</Code></td><td>WebGL / WebGPU</td><td>Modern</td><td>40k</td><td>2048 px</td><td>12</td><td>24</td><td>96</td></tr>
+                <tr><td><Code>vr</Code></td><td>VR</td><td>Modern</td><td>70k</td><td>2048 px</td><td>12</td><td>20</td><td>96</td></tr>
+                <tr><td><Code>ps1</Code></td><td>PlayStation 1</td><td>Retro</td><td>5k</td><td>256 px</td><td>4</td><td>8</td><td>16</td></tr>
+                <tr><td><Code>n64</Code></td><td>Nintendo 64</td><td>Retro</td><td>12k</td><td>256 px</td><td>8</td><td>12</td><td>32</td></tr>
+                <tr><td><Code>nds</Code></td><td>Nintendo DS</td><td>Retro</td><td>4k</td><td>256 px</td><td>4</td><td>8</td><td>16</td></tr>
+                <tr><td><Code>dreamcast</Code></td><td>Sega Dreamcast</td><td>Retro</td><td>15k</td><td>512 px</td><td>12</td><td>16</td><td>64</td></tr>
+              </tbody>
+            </table>
+            <p className={s.para}>
+              Modern profiles also enable texture inspection (<Code>inspect_textures</Code> metadata),
+              power-of-two texture warnings, allowed texture format lists, ACMR ceilings, redundant
+              keyframe detection, and zero-weight bone reporting where applicable. Retro profiles
+              focus on tight geometry and texture budgets suited to demake and homebrew workflows.
+            </p>
+
+            <h3 className={s.subsection}>Examples</h3>
+            <CodeBlock>{`# List bundled profile ids
+qtmesh scan --list-profiles
+
+# Scan with a handheld-class budget
+qtmesh scan ./assets --target switch-like --fail-on warning
+
+# Pin profile in project config (CLI --target/--profile overrides this)
+# qtmesh.yml:
+profile: mobile-low
+
+# Custom profile JSON on disk
+qtmesh scan ./assets --profile ./ci/my-studio-profile.json`}</CodeBlock>
           </section>
 
           <section className={s.section} id="scan-rules">
