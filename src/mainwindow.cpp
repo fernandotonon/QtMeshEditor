@@ -3631,6 +3631,22 @@ void MainWindow::loadFile(const QString& filePath)
         mUriList.append(filePath);
 }
 
+void MainWindow::openLaunchFiles(const QStringList& paths)
+{
+    if (paths.isEmpty())
+        return;
+
+    show();
+    raise();
+    activateWindow();
+
+    for (const QString& path : paths) {
+        SentryReporter::addBreadcrumb(QStringLiteral("app.launch.file_open"),
+                                      QFileInfo(path).fileName());
+        loadFile(path);
+    }
+}
+
 void MainWindow::importMeshs(const QStringList &_uriList)
 {
     auto txn = SentryReporter::startTransaction("ui.import", "file.import");

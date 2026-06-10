@@ -63,6 +63,8 @@ public:
     virtual ~MainWindow();
     void importMeshs(const QStringList &_uriList);
     void loadFile(const QString& filePath);
+    /// Focus the window and queue one or more OS launch paths for import.
+    void openLaunchFiles(const QStringList& paths);
     void setMCPServer(MCPServer* server);
 
     /// Recreate Ogre render windows (e.g. after MSAA samples change in Preferences).

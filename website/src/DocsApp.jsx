@@ -5,6 +5,7 @@ import useQtmeshActionRef from './hooks/useQtmeshActionRef';
 const NAV = [
   { section: 'Getting Started', items: [
     { id: 'installation', label: 'Installation' },
+    { id: 'file-associations', label: 'Open 3D Files' },
     { id: 'quick-start', label: 'Quick Start' },
     { id: 'playstation-rsd-ply', label: 'PlayStation RSD / Psy-Q PLY' },
   ]},
@@ -203,6 +204,42 @@ cd QtMeshEditor
 cmake . -B build -DCMAKE_PREFIX_PATH="/path/to/Qt;/path/to/ogre/SDK"
 cmake --build build --target QtMeshEditor -j4
 # The 'qtmesh' symlink is created automatically`}</CodeBlock>
+          </section>
+
+          <section className={s.section} id="file-associations">
+            <h2 className={s.sectionTitle}>Open 3D Files from the OS</h2>
+            <p className={s.para}>
+              QtMeshEditor registers as a document handler on macOS, Windows, and Linux. After install,
+              double-click supported models or use your file manager&apos;s <strong>Open With</strong> menu.
+              Launching with a file path loads it in the GUI; if the app is already running, the existing
+              window is focused and the new file is imported (single-instance).
+            </p>
+            <h3 className={s.subsection}>App import support</h3>
+            <p className={s.para}>
+              The editor can import many formats via drag-and-drop or <Code>QtMeshEditor path/to/model.ext</Code>,
+              including <Code>.vrm</Code>, <Code>.3ds</Code>, and additional Assimp types beyond the OS registration
+              sets below.
+            </p>
+            <h3 className={s.subsection}>Registered Open With handlers</h3>
+            <ul className={s.para} style={{ paddingLeft: '1.4rem' }}>
+              <li><strong>macOS</strong> — <Code>.fbx</Code>, <Code>.glb</Code>/<Code>.gltf</Code>, <Code>.obj</Code>,
+                  <Code>.dae</Code>, <Code>.stl</Code>, <Code>.ply</Code>, <Code>.vrm</Code>, <Code>.3ds</Code>,
+                  <Code>.scene.glb</Code>/<Code>.scene.gltf</Code>, <Code>.mesh</Code>, <Code>.rsd</Code>, <Code>.tmd</Code>
+                  via <Code>CFBundleDocumentTypes</Code>; Homebrew cask runs <Code>lsregister</Code> after install.</li>
+              <li><strong>Windows</strong> — <Code>.fbx</Code>, <Code>.glb</Code>, <Code>.gltf</Code>, <Code>.obj</Code>,
+                  <Code>.dae</Code>, <Code>.stl</Code>, <Code>.ply</Code>, <Code>.mesh</Code>, <Code>.rsd</Code>, <Code>.tmd</Code>
+                  added to <Code>OpenWithProgids</Code> (not default-app takeover). Inno Setup installer on release;
+                  portable ZIP includes <Code>bin/scripts/register-windows-file-associations.ps1</Code>.</li>
+              <li><strong>Linux</strong> — <Code>.fbx</Code>, <Code>.glb</Code>/<Code>.gltf</Code>, <Code>.obj</Code>,
+                  <Code>.dae</Code>, <Code>.stl</Code>, <Code>.ply</Code>, <Code>.mesh</Code>, <Code>.rsd</Code>, <Code>.tmd</Code>,
+                  <Code>.scene.glb</Code>/<Code>.scene.gltf</Code> via <Code>.desktop</Code> + XDG MIME in
+                  <Code>.deb</Code> and Snap; postinstall runs <Code>update-mime-database</Code> and
+                  <Code>update-desktop-database</Code>.</li>
+            </ul>
+            <p className={s.para}>
+              CLI mode is unchanged: <Code>qtmesh info model.fbx</Code> still runs headless. Only
+              <Code>QtMeshEditor model.fbx</Code> (or OS open-with) enters GUI-with-file mode.
+            </p>
           </section>
 
           <section className={s.section} id="quick-start">

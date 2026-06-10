@@ -43,6 +43,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Pinned GitHub Action refs match CMakeLists.txt
         run: ./scripts/sync-doc-versions-from-cmake.sh --check
+      - name: File association packaging files present
+        run: chmod +x ./scripts/verify-file-associations.sh && ./scripts/verify-file-associations.sh
 
 ####################################################################
 # Asset Scan (runs first, before all builds)
@@ -485,10 +487,32 @@ jobs:
         name: QtMeshEditor-${{github.ref_name}}-bin-Windows
         path: ${{github.workspace}}/bin
 
+    - name: Bundle Windows file-association helper
+      run: |
+        New-Item -ItemType Directory -Force -Path "${{github.workspace}}/bin/scripts" | Out-Null
+        Copy-Item "${{github.workspace}}/scripts/register-windows-file-associations.ps1" "${{github.workspace}}/bin/scripts/"
+      shell: powershell
+
     - name: Compress File
       if: github.event_name == 'release' && github.event.action == 'published'
       run: Compress-Archive ${{github.workspace}}/bin QtMeshEditor-${{github.ref_name}}-bin-Windows.zip
       shell: powershell
+
+    - name: Build Windows installer (Inno Setup)
+      if: github.event_name == 'release' && github.event.action == 'published'
+      shell: powershell
+      run: |
+        choco install innosetup -y --no-progress
+        $isccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+        if (-not (Test-Path $isccPath)) {
+          Write-Error "Inno Setup installation failed or ISCC.exe not found at $isccPath"
+          exit 1
+        }
+        $version = "${{ github.ref_name }}".TrimStart("v")
+        $iss = Get-Content "${{github.workspace}}/packaging/windows/QtMeshEditor.iss" -Raw
+        $iss = $iss.Replace("@PROJECT_VERSION@", $version)
+        Set-Content -Path "${{github.workspace}}/packaging/windows/QtMeshEditor.build.iss" -Value $iss
+        & $isccPath "${{github.workspace}}/packaging/windows/QtMeshEditor.build.iss"
 
     - name: Smoke-test CLI from zip
       if: github.event_name == 'release' && github.event.action == 'published'
@@ -524,6 +548,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
           file: QtMeshEditor-${{github.ref_name}}-bin-Windows.zip
+          update_latest_release: true
+          overwrite: false
+          verbose: true
+
+    - name: Upload Windows installer to release
+      if: github.event_name == 'release' && github.event.action == 'published'
+      uses: xresloader/upload-to-github-release@main
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+          file: QtMeshEditor-${{github.ref_name}}-setup-Windows.exe
           update_latest_release: true
           overwrite: false
           verbose: true
@@ -771,8 +806,14 @@ jobs:
             mkdir -p ./pack-deb/usr/share/qtmesheditor/platforms/
             mkdir -p ./pack-deb/usr/lib/qtmesheditor/
             mkdir -p ./pack-deb/usr/share/doc/qtmesheditor/
+            mkdir -p ./pack-deb/usr/share/applications/
+            mkdir -p ./pack-deb/usr/share/mime/packages/
             mkdir ./pack-deb/DEBIAN/
             cp ./bin/DEBIAN-control ./pack-deb/DEBIAN/control
+            cp ./packaging/linux/qtmesheditor.desktop ./pack-deb/usr/share/applications/
+            cp ./packaging/linux/qtmesheditor-mimetypes.xml ./pack-deb/usr/share/mime/packages/
+            cp ./packaging/linux/DEBIAN-postinst ./pack-deb/DEBIAN/postinst
+            chmod 755 ./pack-deb/DEBIAN/postinst
             cp ./bin/QtMeshEditor ./pack-deb/usr/share/qtmesheditor/qtmesheditor
 
             # Create proper launcher script
@@ -2054,6 +2095,17 @@ jobs:
         # must be preserved. sed only touches the matching lines.
         sed -i "s/version '.*'/version '$VERSION'/" "$CASK_FILE"
         sed -i "s/sha256 '.*'/sha256 '$SHA256'/" "$CASK_FILE"
+
+        # Ensure Finder picks up CFBundleDocumentTypes after install (#664).
+        if ! grep -q 'lsregister' "$CASK_FILE"; then
+          {
+            echo ''
+            echo '  postflight do'
+            echo '    system_command "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",'
+            echo '      args: ["-f", "-R", "#{appdir}/QtMeshEditor.app"]'
+            echo '  end'
+          } >> "$CASK_FILE"
+        fi
 
         echo "Updated cask file:"
         cat "$CASK_FILE"
