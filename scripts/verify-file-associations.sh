@@ -37,6 +37,9 @@ check_contains "$ROOT/packaging/windows/QtMeshEditor.iss" "QtMeshEditor.Model.fb
 check_contains "$ROOT/scripts/register-windows-file-associations.ps1" "OpenWithProgids"
 check_contains "$ROOT/scripts/register-windows-file-associations.ps1" "QtMeshEditor.Model."
 
+echo "=== Snap runtime deps ==="
+check_contains "$ROOT/snap/snapcraft.yaml" "libsecret-1-0"
+
 echo "=== Qt launch handler ==="
 check_contains "$ROOT/src/AppLaunchHandler.h" "kServerName"
 check_contains "$ROOT/src/main.cpp" "AppLaunchHandler"

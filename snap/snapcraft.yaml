@@ -160,6 +160,8 @@ parts:
       - zlib1g
       - libicu74
       - libdbus-1-3
+      # QtMesh Cloud session storage (CloudCredentialStore); .deb Depends but snap must bundle.
+      - libsecret-1-0
       - libsm6
       - libice6
       # Fonts
