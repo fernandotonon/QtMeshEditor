@@ -1912,6 +1912,52 @@ QString MaterialEditorQML::getTexturePreviewPath() const
     return "";
 }
 
+bool MaterialEditorQML::exportCurrentTexture(const QString& destPath)
+{
+    if (destPath.isEmpty()) {
+        emit errorOccurred(tr("No export path chosen."));
+        return false;
+    }
+    // Resolve the on-disk source via the same logic the preview uses.
+    QString src = getTexturePreviewPath();
+    if (src.startsWith("file://"))
+        src = QUrl(src).toLocalFile();
+    if (src.isEmpty() || !QFileInfo::exists(src)) {
+        // Fall back: dump the GPU texture to the chosen path.
+        if (isOgreAvailable() && !m_textureName.isEmpty()) {
+            try {
+                auto texPtr = Ogre::TextureManager::getSingleton()
+                    .getByName(m_textureName.toStdString());
+                if (texPtr) {
+                    Ogre::Image img;
+                    texPtr->convertToImage(img, true);
+                    img.save(destPath.toStdString());
+                    if (QFileInfo::exists(destPath)) return true;
+                }
+            } catch (...) {}
+        }
+        emit errorOccurred(tr("Could not locate the current texture to export."));
+        return false;
+    }
+    QFile::remove(destPath);
+    if (!QFile::copy(src, destPath)) {
+        emit errorOccurred(tr("Failed to write %1").arg(destPath));
+        return false;
+    }
+    return true;
+}
+
+QString MaterialEditorQML::chooseTextureExportPath()
+{
+    QString suggested = m_textureName.isEmpty()
+        ? QStringLiteral("texture.png") : m_textureName;
+    if (!suggested.contains('.')) suggested += ".png";
+    return QFileDialog::getSaveFileName(
+        nullptr, tr("Export Texture"), suggested,
+        tr("PNG (*.png);;JPEG (*.jpg);;All Files (*)"),
+        nullptr, QFileDialog::DontUseNativeDialog);
+}
+
 void MaterialEditorQML::openTextureFileDialog()
 {
     // This will be handled by QML FileDialog
@@ -3837,20 +3883,21 @@ void MaterialEditorQML::onSDGenerationProgress()
 void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
                                                     const QString& textureFileName)
 {
-    auto dbg = [](const QString& m) {
-        QFile f(QStringLiteral("/tmp/qtmesh_meshtex.log"));
-        if (f.open(QIODevice::Append | QIODevice::Text)) {
-            QTextStream s(&f); s << m << "\n";
-        }
-    };
-    dbg(QStringLiteral("applyTextureToEntityDiffuse entity=%1 tex=%2")
-        .arg(entityName, textureFileName));
-
-    if (!isOgreAvailable()) { dbg("  no ogre"); return; }
+    // Drive the SAME pipeline as a manual texture change in the
+    // Material Editor (issue #403). Earlier attempts hand-mutated the
+    // entity's TUSes, but the editor renders via an RTSS-cloned
+    // technique and keeps its own m_ogreMaterial/m_passMap state — so
+    // a direct mutation updated neither the on-screen render, the
+    // panel, nor the script consistently. The proven path is:
+    //   loadMaterial(name) -> select the diffuse TUS -> setTextureName(),
+    // where setTextureName() already invalidates RTSS, recompiles,
+    // re-applies PBR, re-binds to sub-entities, and refreshes the
+    // script + panel.
+    if (!isOgreAvailable()) return;
     Manager* mgr = Manager::getSingletonPtr();
-    if (!mgr) { dbg("  no manager"); return; }
+    if (!mgr) return;
 
-    // Resolve the entity by name (filtered list is all real Entities).
+    // Resolve the entity + the material name of its first submesh.
     Ogre::Entity* entity = nullptr;
     for (Ogre::Entity* e : mgr->getEntities()) {
         if (e && e->getMovableType() == "Entity"
@@ -3859,97 +3906,101 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
             break;
         }
     }
-    if (!entity) { dbg("  entity not found"); return; }
+    if (!entity || entity->getNumSubEntities() == 0) return;
+    Ogre::SubEntity* sub0 = entity->getSubEntity(0);
+    if (!sub0 || !sub0->getMaterial()) return;
+    const QString matName = QString::fromStdString(sub0->getMaterial()->getName());
 
-    const Ogre::String texName = textureFileName.toStdString();
-    dbg(QStringLiteral("  entity found, subEntities=%1")
-        .arg(entity->getNumSubEntities()));
+    // Make sure the freshly-written PNG exists as a loadable texture
+    // resource. The generated_textures dir is registered as a
+    // resource location at startup, but its file INDEX was built then
+    // — a texture generated this session isn't in the index, so
+    // loading it by bare name (image.load(name, group)) fails and the
+    // material shows a "broken link". Fix: read the file from its
+    // absolute path via a QFile/Ogre DataStream and create the
+    // texture resource directly under its bare name, so subsequent
+    // name resolution (setTextureName / RTSS regen) finds it. Force-
+    // recreate if a stale entry exists.
+    const std::string group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+    const Ogre::String texStd = textureFileName.toStdString();
+    {
+        QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        const QString absPath = QDir(dataPath).filePath("generated_textures/" + textureFileName);
+        try {
+            // Drop any stale texture of this name so the new bytes load.
+            if (Ogre::TextureManager::getSingleton().getByName(texStd, group))
+                Ogre::TextureManager::getSingleton().remove(texStd, group);
 
-    // Explicitly create the texture resource from the file before
-    // binding it. `setTextureName` alone defers loading to render
-    // time, and if a texture of that name isn't already in the
-    // manager (it isn't — fresh PNG) the FFP silently keeps the old
-    // binding. Loading the Image into TextureManager here guarantees
-    // the resource exists and is GPU-uploadable by name.
-    const Ogre::String group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
-    try {
-        if (!Ogre::TextureManager::getSingleton().getByName(texName, group)) {
             Ogre::Image image;
-            image.load(texName, group);   // resolves via the registered location
-            Ogre::TextureManager::getSingleton().loadImage(texName, group, image);
-            dbg(QStringLiteral("  loaded texture into manager OK"));
-        } else {
-            dbg(QStringLiteral("  texture already in manager"));
-        }
-    } catch (const std::exception& e) {
-        dbg(QStringLiteral("  texture load FAILED: %1").arg(QString::fromUtf8(e.what())));
-    } catch (...) {
-        dbg(QStringLiteral("  texture load FAILED (unknown)"));
+            QFile imgFile(absPath);
+            if (imgFile.open(QIODevice::ReadOnly)) {
+                const QByteArray bytes = imgFile.readAll();
+                imgFile.close();
+                Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
+                    const_cast<char*>(bytes.constData()),
+                    static_cast<size_t>(bytes.size()), false, true));
+                // Extension drives the codec (png).
+                image.load(ds, "png");
+                Ogre::TextureManager::getSingleton().loadImage(texStd, group, image);
+            }
+        } catch (...) {}
     }
 
-    // Bind the generated texture to the diffuse/albedo TUS of every
-    // sub-entity's material — same approach as ApplyAtlas::
-    // retargetDiffuseTus: prefer a TUS named "diffuse_map"/"albedo",
-    // else the first textured TUS, else create one. Then re-wire the
-    // FFP/RTSS PBR slots and recompile so the new binding renders
-    // (without the recompile the FFP path keeps the cached binding).
-    std::set<Ogre::Material*> recompiled;
-    for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i) {
-        Ogre::SubEntity* sub = entity->getSubEntity(i);
-        if (!sub) continue;
-        const Ogre::MaterialPtr mat = sub->getMaterial();
-        if (!mat || mat->getNumTechniques() == 0) continue;
-        Ogre::Technique* tech = mat->getTechnique(0);
-        if (!tech || tech->getNumPasses() == 0) continue;
-        Ogre::Pass* pass = tech->getPass(0);
+    // Load the entity's material into the editor and select the
+    // diffuse texture unit, then set the texture through the proven
+    // path. loadMaterial() builds m_passMap and auto-selects pass 0 +
+    // TUS 0; for the Mixamo/standard layout TUS 0 is the diffuse map.
+    // If a named diffuse/albedo TUS exists at another index, select
+    // that instead.
+    loadMaterial(matName);
 
-        Ogre::TextureUnitState* target = nullptr;
+    // Find the diffuse texture unit. On Mixamo / Assimp-imported PBR
+    // materials the base-colour TUS is often named "0" (a numeric
+    // name) rather than "albedo"/"diffuse_map". That matters: the
+    // PBR/RTSS wiring (RTShaderHelper::wirePbrSlotsForFFP +
+    // applyPbrIfTagged) only recognizes NAMED slots, so a diffuse on
+    // TUS "0" never gets the FFP colour-operation the Cook-Torrance
+    // shader needs — the texture loads but never renders (the bug we
+    // chased). Rename a numeric/empty diffuse slot to "diffuse_map"
+    // so the PBR path picks it up.
+    int diffuseTusIndex = 0;
+    if (Ogre::Pass* pass = getCurrentPass()) {
+        int namedDiffuse = -1, firstTextured = -1;
         for (unsigned short t = 0; t < pass->getNumTextureUnitStates(); ++t) {
             Ogre::TextureUnitState* tus = pass->getTextureUnitState(t);
             const auto n = tus->getName();
-            if (n == "diffuse_map" || n == "albedo") { target = tus; break; }
-        }
-        if (!target) {
-            for (unsigned short t = 0; t < pass->getNumTextureUnitStates(); ++t) {
-                Ogre::TextureUnitState* tus = pass->getTextureUnitState(t);
-                if (!tus->getTextureName().empty()) { target = tus; break; }
+            if (n == "diffuse_map" || n == "albedo"
+                || n == "Diffuse" || n == "BaseColor") {
+                namedDiffuse = t;
+                break;
+            }
+            // A numeric / empty name on a slot that ISN'T a known
+            // non-diffuse channel is the unnamed diffuse.
+            if (firstTextured < 0
+                && n != "roughness" && n != "metallic" && n != "ao"
+                && n != "emissive" && n != "normal_map" && n != "NormalMap"
+                && !tus->getTextureName().empty()) {
+                firstTextured = t;
             }
         }
-        bool created = false;
-        if (!target) { target = pass->createTextureUnitState(); created = true; }
-        const Ogre::String prevTex = target->getTextureName();
-        target->setTextureName(texName);
-        dbg(QStringLiteral("  sub %1 mat=%2 tus=%3 created=%4 prevTex=%5 -> %6")
-            .arg(i)
-            .arg(QString::fromStdString(mat->getName()))
-            .arg(QString::fromStdString(target->getName()))
-            .arg(created)
-            .arg(QString::fromStdString(prevTex))
-            .arg(textureFileName));
-
-        if (recompiled.insert(mat.get()).second) {
-            try {
-                RTShaderHelper::wirePbrSlotsForFFP(mat.get());
-            } catch (...) {}
-            mat->compile();
-            mat->reload();
-            // Verify the binding survived the recompile/reload.
-            Ogre::String afterTex;
-            if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
-                auto* p = mat->getTechnique(0)->getPass(0);
-                for (unsigned short t = 0; t < p->getNumTextureUnitStates(); ++t) {
-                    const auto nm = p->getTextureUnitState(t)->getName();
-                    if (nm == "diffuse_map" || nm == "albedo"
-                        || !p->getTextureUnitState(t)->getTextureName().empty()) {
-                        afterTex = p->getTextureUnitState(t)->getTextureName();
-                        break;
-                    }
-                }
-            }
-            dbg(QStringLiteral("  after compile/reload, diffuse tex=%1")
-                .arg(QString::fromStdString(afterTex)));
+        if (namedDiffuse >= 0) {
+            diffuseTusIndex = namedDiffuse;
+        } else if (firstTextured >= 0) {
+            // Rename the unnamed diffuse so the PBR/FFP wiring sees it.
+            pass->getTextureUnitState(
+                static_cast<unsigned short>(firstTextured))->setName("diffuse_map");
+            diffuseTusIndex = firstTextured;
+            // Rebuild the editor's TUS list so the rename + selection
+            // are consistent.
+            updateTextureUnitList();
         }
     }
+    setSelectedTextureUnitIndex(diffuseTusIndex);
+
+    // setTextureName no-ops if the new name equals m_textureName;
+    // clear it first so the assignment always fires.
+    m_textureName.clear();
+    setTextureName(textureFileName);
 }
 
 void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)

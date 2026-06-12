@@ -239,8 +239,8 @@ GroupBox {
                 Text {
                     id: placeholderText
                     anchors.centerIn: parent
-                    text: MaterialEditorQML.textureName === "*Select a texture*" ? 
-                          "No texture selected" : 
+                    text: MaterialEditorQML.textureName === "*Select a texture*" ?
+                          "No texture selected" :
                           "Texture preview\nnot available"
                     color: disabledTextColor
                     horizontalAlignment: Text.AlignHCenter
@@ -248,7 +248,31 @@ GroupBox {
                 }
             }
         }
-        
+
+        // Export the currently-previewed texture to disk (issue #403
+        // escape hatch — lets the user save a generated texture and
+        // apply it via other tools even when in-app application of
+        // the texture to certain materials isn't working yet).
+        RowLayout {
+            Layout.fillWidth: true
+            Item { Layout.fillWidth: true }
+            ThemedButton {
+                text: "Save Texture As…"
+                // Bind to textureName (a NOTIFY property) so the
+                // enabled state tracks selection changes — a plain
+                // getTexturePreviewPath() call would only evaluate
+                // once and never update. Enabled whenever a real
+                // texture is set.
+                enabled: MaterialEditorQML.textureName !== ""
+                    && MaterialEditorQML.textureName !== "*Select a texture*"
+                onClicked: {
+                    const dest = MaterialEditorQML.chooseTextureExportPath()
+                    if (dest && dest.length > 0)
+                        MaterialEditorQML.exportCurrentTexture(dest)
+                }
+            }
+        }
+
         // Texture Coordinates Group
         GroupBox {
             title: "Texture Coordinates"

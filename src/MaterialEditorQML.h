@@ -355,6 +355,17 @@ public slots:
     QStringList getBlendFactorNames() const;
     QStringList getAvailableTextures() const;
     QString getTexturePreviewPath() const;
+
+    // Export the currently-shown texture (the preview image) to a
+    // user-chosen file. Lets the user save a generated texture even
+    // when in-app material application isn't working, so they can
+    // apply it via other tools / re-import. Returns true on success.
+    // Issue #403 escape hatch.
+    Q_INVOKABLE bool exportCurrentTexture(const QString& destPath);
+    // Open a save-file dialog seeded with the current texture name
+    // and return the chosen path (empty on cancel). Convenience for
+    // the QML "Save Texture As…" button.
+    Q_INVOKABLE QString chooseTextureExportPath();
     
     // Additional utility functions for new properties
     QStringList getShadingModeNames() const;
