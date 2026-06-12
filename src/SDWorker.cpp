@@ -273,9 +273,18 @@ void SDWorker::generateTextureControlled(const QString &prompt,
                 .scaled(m_settings.width, m_settings.height,
                         Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                 .convertToFormat(QImage::Format_RGB888);
-            controlBytes = QByteArray(
-                reinterpret_cast<const char*>(controlRgb.constBits()),
-                static_cast<int>(controlRgb.sizeInBytes()));
+            // sd.cpp expects a tightly-packed width*height*3 buffer.
+            // QImage scanlines are padded to a 32-bit boundary, so we
+            // must copy row-by-row (bytesPerLine may exceed width*3 for
+            // widths that aren't a multiple of 4) rather than blit the
+            // whole sizeInBytes() span.
+            const int rowBytes = controlRgb.width() * 3;
+            controlBytes.reserve(rowBytes * controlRgb.height());
+            for (int y = 0; y < controlRgb.height(); ++y) {
+                controlBytes.append(
+                    reinterpret_cast<const char*>(controlRgb.constScanLine(y)),
+                    rowBytes);
+            }
             img_params.control_image.data =
                 reinterpret_cast<uint8_t*>(controlBytes.data());
             img_params.control_image.width   = controlRgb.width();

@@ -132,6 +132,13 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     }
 #endif
     // LCOV_EXCL_STOP
+
+    // Re-evaluate the "use selected mesh" checkbox whenever the scene
+    // selection changes (independent of the SD build flag).
+    if (auto* sel = SelectionSet::getSingleton()) {
+        connect(sel, &SelectionSet::selectionChanged,
+                this, &MaterialEditorQML::hasSelectedMeshChanged);
+    }
 }
 
 MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
@@ -1914,6 +1921,8 @@ QString MaterialEditorQML::getTexturePreviewPath() const
 
 bool MaterialEditorQML::exportCurrentTexture(const QString& destPath)
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Export current texture to %1").arg(destPath));
     if (destPath.isEmpty()) {
         emit errorOccurred(tr("No export path chosen."));
         return false;
@@ -1939,6 +1948,20 @@ bool MaterialEditorQML::exportCurrentTexture(const QString& destPath)
         emit errorOccurred(tr("Could not locate the current texture to export."));
         return false;
     }
+    // Guard against exporting onto the source file: if dest and src
+    // resolve to the same path, the QFile::remove(dest) below would
+    // delete the source before the copy, destroying the only copy.
+    const QString srcCanonical = QFileInfo(src).canonicalFilePath();
+    const QFileInfo destInfo(destPath);
+    const QString destCanonical = destInfo.exists()
+        ? destInfo.canonicalFilePath()
+        : QFileInfo(destInfo.absoluteFilePath()).absoluteFilePath();
+    if (!srcCanonical.isEmpty() &&
+        (srcCanonical == destCanonical ||
+         srcCanonical == QFileInfo(destPath).absoluteFilePath())) {
+        // Source already is the destination — nothing to do.
+        return true;
+    }
     QFile::remove(destPath);
     if (!QFile::copy(src, destPath)) {
         emit errorOccurred(tr("Failed to write %1").arg(destPath));
@@ -1949,6 +1972,8 @@ bool MaterialEditorQML::exportCurrentTexture(const QString& destPath)
 
 QString MaterialEditorQML::chooseTextureExportPath()
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Open texture export file dialog"));
     QString suggested = m_textureName.isEmpty()
         ? QStringLiteral("texture.png") : m_textureName;
     if (!suggested.contains('.')) suggested += ".png";
@@ -3771,12 +3796,29 @@ QString MaterialEditorQML::discoveredControlNetDepthPath() const
     QDir d(dir);
     const QStringList files = d.entryList(
         QStringList() << "*.safetensors" << "*.ckpt", QDir::Files);
+    // The depth ControlNet pipeline here is SD 1.5-only — an SDXL depth
+    // ControlNet would silently fail against an SD 1.5 base. So skip any
+    // file whose name marks it as SDXL, and prefer an explicit SD1.5
+    // tag when present.
+    auto isSdxl = [](const QString& lower) {
+        return lower.contains("sdxl") || lower.contains("xl_")
+            || lower.contains("-xl") || lower.contains("_xl");
+    };
+    QString fallback;
     for (const QString& f : files) {
         const QString lower = f.toLower();
-        if ((lower.contains("control") && lower.contains("depth")))
+        if (!(lower.contains("control") && lower.contains("depth")))
+            continue;
+        if (isSdxl(lower))
+            continue;  // wrong architecture for the SD 1.5 base
+        // A filename that explicitly tags SD 1.5 is the strongest match.
+        if (lower.contains("sd15") || lower.contains("sd_15")
+            || lower.contains("v11"))
             return d.filePath(f);
+        if (fallback.isEmpty())
+            fallback = d.filePath(f);
     }
-    return QString();
+    return fallback;
 #else
     return QString();
 #endif
@@ -3845,7 +3887,8 @@ void MaterialEditorQML::generateMeshTextureFromPrompt(const QString &prompt,
     m_sdGenerationProgress = 0.0f;
     emit sdGenerationProgressChanged();
     sdManager->generateMeshTexture(prompt, depth, controlNetPath,
-                                   static_cast<float>(std::clamp(controlStrength, 0.0, 1.0)));
+                                   static_cast<float>(std::clamp(controlStrength, 0.0, 1.0)),
+                                   QString(), genW, genH);
     // LCOV_EXCL_STOP
 #else
     Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(controlStrength);
@@ -4098,6 +4141,10 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
 
 void MaterialEditorQML::onSDGenerationError(const QString &error)
 {
+    // Drop any pending mesh-texture target — otherwise the next plain
+    // txt2img to complete would take the mesh-aware completion branch
+    // and apply itself to this stale entity.
+    m_sdMeshTextureEntity.clear();
     m_sdGenerationProgress = 0.0f;
     emit sdGenerationProgressChanged();
     emit sdIsGeneratingChanged();
@@ -4115,6 +4162,7 @@ void MaterialEditorQML::onSDGenerationError(const QString &error)
 
 void MaterialEditorQML::onSDGenerationStopped()
 {
+    m_sdMeshTextureEntity.clear();
     m_sdGenerationProgress = 0.0f;
     emit sdGenerationProgressChanged();
     emit sdIsGeneratingChanged();

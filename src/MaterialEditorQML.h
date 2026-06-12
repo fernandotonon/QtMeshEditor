@@ -141,6 +141,10 @@ class MaterialEditorQML : public QObject
     Q_PROPERTY(bool sdIsGenerating READ sdIsGenerating NOTIFY sdIsGeneratingChanged)
     Q_PROPERTY(float sdGenerationProgress READ sdGenerationProgress NOTIFY sdGenerationProgressChanged)
     Q_PROPERTY(bool sdPendingForMaterial READ sdPendingForMaterial NOTIFY sdPendingForMaterialChanged)
+    // Reactive mirror of hasSelectedMesh() so the "use selected mesh"
+    // checkbox re-evaluates when the scene selection changes (a plain
+    // Q_INVOKABLE binding would never re-run on selectionChanged).
+    Q_PROPERTY(bool hasSelectedMesh READ hasSelectedMesh NOTIFY hasSelectedMeshChanged)
 
 public:
     explicit MaterialEditorQML(QObject *parent = nullptr);
@@ -664,6 +668,7 @@ signals:
     void sdTextureGenerated(const QString &filePath);
     void sdGenerationError(const QString &error);
     void sdPendingForMaterialChanged();
+    void hasSelectedMeshChanged();
 
     // Theme palette signal — fired when QApplication::paletteChanged so
     // QML bindings on backgroundColor/panelColor/textColor/… refresh.

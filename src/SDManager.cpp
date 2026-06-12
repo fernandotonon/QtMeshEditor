@@ -450,7 +450,9 @@ void SDManager::generateMeshTexture(const QString &prompt,
                                     const QImage &controlImage,
                                     const QString &controlNetPath,
                                     float controlStrength,
-                                    const QString &outputFileName)
+                                    const QString &outputFileName,
+                                    int width,
+                                    int height)
 {
     if (!isModelLoaded()) {
         emit generationError("No SD model loaded. Please load a model first.");
@@ -464,8 +466,9 @@ void SDManager::generateMeshTexture(const QString &prompt,
         QDir outputDir(QDir(dataPath).filePath("generated_textures"));
         if (!outputDir.exists()) outputDir.mkpath(".");
         QString fileName = QFileInfo(outputFileName.trimmed()).fileName();
-        if (!fileName.endsWith(".png", Qt::CaseInsensitive) &&
-            !fileName.endsWith(".jpg", Qt::CaseInsensitive)) {
+        // The worker always encodes PNG, so force a .png suffix — a .jpg
+        // name would produce a PNG payload with a misleading extension.
+        if (!fileName.endsWith(".png", Qt::CaseInsensitive)) {
             fileName.replace(QRegularExpression(R"(\.\w+$)"), "");
             fileName += ".png";
         }
@@ -483,6 +486,11 @@ void SDManager::generateMeshTexture(const QString &prompt,
     }
     genSettings.controlNetPath  = controlNetPath;
     genSettings.controlStrength = controlStrength;
+    // Honor the caller's requested generation size (the depth map is
+    // captured at this resolution too); fall back to the stored SD
+    // settings when a non-positive value is passed.
+    if (width  > 0) genSettings.width  = width;
+    if (height > 0) genSettings.height = height;
 
     QMetaObject::invokeMethod(m_worker,
         [this, enhancedPrompt, controlImage, outputPath, genSettings]() {

@@ -1571,6 +1571,9 @@ QJsonObject MCPServer::toolGenerateMeshTexture(const QJsonObject &args)
 
     const int width  = args.contains("width")  ? args["width"].toInt(512)  : 512;
     const int height = args.contains("height") ? args["height"].toInt(512) : 512;
+    if (width < 64 || width > 2048 || height < 64 || height > 2048)
+        return makeErrorResult(
+            "'width' and 'height' must be between 64 and 2048.");
     double strength  = args.contains("controlnet_strength")
         ? args["controlnet_strength"].toDouble(0.9) : 0.9;
     strength = std::clamp(strength, 0.0, 1.0);
@@ -1600,17 +1603,36 @@ QJsonObject MCPServer::toolGenerateMeshTexture(const QJsonObject &args)
     // Resolve / honor an explicit controlnet model path, else
     // auto-discover one in the models dir.
     QString controlNetPath = args.value("controlnet_path").toString();
+    if (!controlNetPath.isEmpty() && !QFileInfo(controlNetPath).isFile())
+        return makeErrorResult(
+            QStringLiteral("ControlNet model not found: %1").arg(controlNetPath));
     if (controlNetPath.isEmpty()) {
         QDir d(sd->modelsDirectory());
         const QStringList files = d.entryList(
             QStringList() << "*.safetensors" << "*.ckpt", QDir::Files);
+        // SD 1.5-only pipeline: skip SDXL depth ControlNets, prefer an
+        // explicit SD1.5 tag (mirrors MaterialEditorQML::discovered...).
+        auto isSdxl = [](const QString& lower) {
+            return lower.contains("sdxl") || lower.contains("xl_")
+                || lower.contains("-xl") || lower.contains("_xl");
+        };
+        QString fallback;
         for (const QString& f : files) {
             const QString lower = f.toLower();
-            if (lower.contains("control") && lower.contains("depth")) {
+            if (!(lower.contains("control") && lower.contains("depth")))
+                continue;
+            if (isSdxl(lower))
+                continue;
+            if (lower.contains("sd15") || lower.contains("sd_15")
+                || lower.contains("v11")) {
                 controlNetPath = d.filePath(f);
                 break;
             }
+            if (fallback.isEmpty())
+                fallback = d.filePath(f);
         }
+        if (controlNetPath.isEmpty())
+            controlNetPath = fallback;
     }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mesh_texture"),
@@ -1621,7 +1643,8 @@ QJsonObject MCPServer::toolGenerateMeshTexture(const QJsonObject &args)
             .arg(strength).arg(depthSize));
 
     sd->generateMeshTexture(prompt, depth, controlNetPath,
-                            static_cast<float>(strength), QString());
+                            static_cast<float>(strength), QString(),
+                            width, height);
 
     QJsonObject result = makeSuccessResult(QStringLiteral(
         "Mesh-aware texture generation started for '%1'%2. "
@@ -5736,7 +5759,10 @@ QJsonArray MCPServer::buildToolsList()
         );
     }
 
-    // generate_mesh_texture
+    // generate_mesh_texture — only advertised when Stable Diffusion is
+    // compiled in; the handler hard-fails otherwise, so publishing it on
+    // a non-SD build would imply a capability the server can't satisfy.
+#ifdef ENABLE_STABLE_DIFFUSION
     {
         QJsonObject props;
         props["prompt"] = QJsonObject{{"type", "string"},
@@ -5770,6 +5796,7 @@ QJsonArray MCPServer::buildToolsList()
             QJsonArray{"prompt"}
         );
     }
+#endif // ENABLE_STABLE_DIFFUSION
 
     // retopologize
     {

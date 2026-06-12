@@ -122,7 +122,9 @@ public slots:
                              const QImage &controlImage,
                              const QString &controlNetPath,
                              float controlStrength,
-                             const QString &outputFileName = QString());
+                             const QString &outputFileName = QString(),
+                             int width = 0,
+                             int height = 0);
 
     Q_INVOKABLE void stopGeneration();
     Q_INVOKABLE void tryAutoLoadModel();

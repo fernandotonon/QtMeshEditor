@@ -887,8 +887,12 @@ GroupBox {
                         text: "Use selected mesh (depth-conditioned)"
                         enabled: MaterialEditorQML.sdModelLoaded
                             && !MaterialEditorQML.sdIsGenerating
-                            && MaterialEditorQML.hasSelectedMesh()
+                            && MaterialEditorQML.hasSelectedMesh
                         checked: false
+                        // Drop the checked state when conditioning is no
+                        // longer actionable (e.g. selection cleared), so
+                        // a stale check can't drive mesh generation.
+                        onEnabledChanged: if (!enabled) checked = false
                     }
                 }
 
@@ -897,7 +901,7 @@ GroupBox {
                 ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 4
-                    visible: useMeshCheck.checked
+                    visible: useMeshCheck.checked && useMeshCheck.enabled
 
                     ThemedLabel {
                         Layout.fillWidth: true

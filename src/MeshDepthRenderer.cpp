@@ -16,6 +16,8 @@
 #include <OgreViewport.h>
 
 #include <cmath>
+#include <functional>
+#include <utility>
 
 namespace {
 
@@ -206,16 +208,18 @@ QImage MeshDepthRenderer::renderDepthMap(Ogre::Entity* entity, int size,
     Ogre::SceneNode* targetNode = entity->getParentSceneNode();
     if (targetNode) targetNode->showBoundingBox(false);
 
-    // Hide other entities entirely.
-    std::vector<Ogre::SceneNode*> hiddenNodes;
+    // Hide other entities entirely, remembering each node's prior
+    // visibility so we restore exactly what we changed (a node that
+    // was already hidden must stay hidden on restore).
+    std::vector<std::pair<Ogre::SceneNode*, bool>> hiddenNodes;
     if (Manager::getSingletonPtr()) {
         for (Ogre::Entity* other : Manager::getSingleton()->getEntities()) {
             if (!other || other == entity) continue;
             if (other->getMovableType() != "Entity") continue;
             Ogre::SceneNode* n = other->getParentSceneNode();
             if (n && n->getAttachedObject(0) && n->getAttachedObject(0)->getVisible()) {
+                hiddenNodes.emplace_back(n, true);
                 n->setVisible(false);
-                hiddenNodes.push_back(n);
             }
         }
     }
@@ -231,21 +235,30 @@ QImage MeshDepthRenderer::renderDepthMap(Ogre::Entity* entity, int size,
         se->setMaterial(depthMat);
     }
 
+    // Restore all live-scene state we mutated. Run via RAII so a throw
+    // (or early return) in update()/readRenderTarget() can't leak the
+    // depth material / fog / hidden nodes into the on-screen scene.
+    auto restore = [&]() {
+        for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i)
+            entity->getSubEntity(i)->setMaterialName(savedMaterials[i]);
+        sm->setFog(savedFogMode, savedFogColour, 0.0f, savedFogStart, savedFogEnd);
+        sm->setAmbientLight(savedAmbient);
+        if (gridNode) gridNode->setVisible(gridWasVisible);
+        if (targetNode) targetNode->showBoundingBox(true);
+        for (auto& [n, wasVisible] : hiddenNodes) n->setVisible(wasVisible);
+    };
+    struct Restorer {
+        std::function<void()> fn;
+        ~Restorer() { fn(); }
+    } restorer{restore};
+
     // Render a single frame.
     st.renderTarget->update();
     QImage rgba = readRenderTarget(size);
 
-    // Restore entity materials + scene fog/ambient + hidden nodes.
-    for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i)
-        entity->getSubEntity(i)->setMaterialName(savedMaterials[i]);
-    sm->setFog(savedFogMode, savedFogColour, 0.0f, savedFogStart, savedFogEnd);
-    sm->setAmbientLight(savedAmbient);
-    if (gridNode) gridNode->setVisible(gridWasVisible);
-    if (targetNode) targetNode->showBoundingBox(true);
-    for (Ogre::SceneNode* n : hiddenNodes) n->setVisible(true);
-
     // Collapse to grayscale (the channels are equal already, but be
-    // explicit so downstream code can rely on it).
+    // explicit so downstream code can rely on it). Restore runs as the
+    // Restorer goes out of scope.
     return rgba.convertToFormat(QImage::Format_Grayscale8)
         .convertToFormat(QImage::Format_RGB888);
 }
@@ -262,13 +275,20 @@ void MeshDepthRenderer::shutdown()
         Ogre::TextureManager::getSingleton().remove(st.rttTexture);
         st.rttTexture.reset();
     }
-    if (sm && st.cameraNode) {
-        st.cameraNode->detachAllObjects();
-        sm->getRootSceneNode()->removeAndDestroyChild(st.cameraNode->getName());
+    // Always null the cached pointers, even when the SceneManager is
+    // already gone (e.g. shutdown ordering): leaving them dangling would
+    // let a later renderDepthMap() skip camera recreation and deref a
+    // destroyed camera. When the SceneManager still exists, destroy the
+    // owned objects first; otherwise it tore them down with itself.
+    if (st.cameraNode) {
+        if (sm) {
+            st.cameraNode->detachAllObjects();
+            sm->getRootSceneNode()->removeAndDestroyChild(st.cameraNode->getName());
+        }
         st.cameraNode = nullptr;
     }
-    if (sm && st.camera) {
-        sm->destroyCamera(st.camera);
+    if (st.camera) {
+        if (sm) sm->destroyCamera(st.camera);
         st.camera = nullptr;
     }
     st.size = 0;
