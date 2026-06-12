@@ -86,6 +86,7 @@
 #include "UvUnwrapController.h"
 #include "QuadRetopoController.h"
 #include "SkinWeightsController.h"
+#include "MeshDepthRenderer.h"
 #include "MaterialPresetLibrary.h"
 #include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
@@ -406,6 +407,7 @@ MainWindow::~MainWindow()
         UvUnwrapController::kill();
         QuadRetopoController::kill();
         SkinWeightsController::kill();
+        MeshDepthRenderer::shutdown();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
         MaterialPreviewRenderer::kill();

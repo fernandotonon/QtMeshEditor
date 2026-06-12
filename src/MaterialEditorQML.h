@@ -141,6 +141,10 @@ class MaterialEditorQML : public QObject
     Q_PROPERTY(bool sdIsGenerating READ sdIsGenerating NOTIFY sdIsGeneratingChanged)
     Q_PROPERTY(float sdGenerationProgress READ sdGenerationProgress NOTIFY sdGenerationProgressChanged)
     Q_PROPERTY(bool sdPendingForMaterial READ sdPendingForMaterial NOTIFY sdPendingForMaterialChanged)
+    // Reactive mirror of hasSelectedMesh() so the "use selected mesh"
+    // checkbox re-evaluates when the scene selection changes (a plain
+    // Q_INVOKABLE binding would never re-run on selectionChanged).
+    Q_PROPERTY(bool hasSelectedMesh READ hasSelectedMesh NOTIFY hasSelectedMeshChanged)
 
 public:
     explicit MaterialEditorQML(QObject *parent = nullptr);
@@ -355,6 +359,17 @@ public slots:
     QStringList getBlendFactorNames() const;
     QStringList getAvailableTextures() const;
     QString getTexturePreviewPath() const;
+
+    // Export the currently-shown texture (the preview image) to a
+    // user-chosen file. Lets the user save a generated texture even
+    // when in-app material application isn't working, so they can
+    // apply it via other tools / re-import. Returns true on success.
+    // Issue #403 escape hatch.
+    Q_INVOKABLE bool exportCurrentTexture(const QString& destPath);
+    // Open a save-file dialog seeded with the current texture name
+    // and return the chosen path (empty on cancel). Convenience for
+    // the QML "Save Texture As…" button.
+    Q_INVOKABLE QString chooseTextureExportPath();
     
     // Additional utility functions for new properties
     QStringList getShadingModeNames() const;
@@ -525,6 +540,24 @@ public slots:
     Q_INVOKABLE void generateTextureFromPrompt(const QString &prompt, int width = 0, int height = 0);
     Q_INVOKABLE void stopTextureGeneration();
 
+    // Issue #403: mesh-aware texture generation. Same as
+    // generateTextureFromPrompt but renders the selected entity's
+    // depth map and conditions generation on it via a ControlNet
+    // depth model (auto-discovered in the sd_models dir; falls back
+    // to plain txt2img if none found). `controlStrength` is 0..1.
+    // The result is applied to the active material's diffuse slot by
+    // the existing SD-complete path.
+    Q_INVOKABLE void generateMeshTextureFromPrompt(const QString &prompt,
+                                                   int width = 0, int height = 0,
+                                                   double controlStrength = 0.9);
+    // True when a skinned/static mesh is selected — drives the
+    // "use selected mesh" checkbox enabled state.
+    Q_INVOKABLE bool hasSelectedMesh() const;
+    // Path to an auto-discovered ControlNet depth model in the
+    // sd_models directory, or empty if none is downloaded. Lets the
+    // UI show whether depth conditioning will actually engage.
+    Q_INVOKABLE QString discoveredControlNetDepthPath() const;
+
     // Undo/Redo functionality
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
@@ -635,6 +668,7 @@ signals:
     void sdTextureGenerated(const QString &filePath);
     void sdGenerationError(const QString &error);
     void sdPendingForMaterialChanged();
+    void hasSelectedMeshChanged();
 
     // Theme palette signal — fired when QApplication::paletteChanged so
     // QML bindings on backgroundColor/panelColor/textColor/… refresh.
@@ -751,6 +785,17 @@ private:
     float m_sdGenerationProgress = 0.0f;
     bool m_sdPendingForMaterial = false; // True when SD is generating a texture triggered by LLM
     QString m_pendingMaterialScript; // Deferred material script waiting for SD
+
+    // Issue #403: when a mesh-aware (depth-conditioned) generation is
+    // in flight, the result must be bound to the SELECTED ENTITY's
+    // diffuse TUS — not the Material Editor's "current pass", which
+    // may not be the rendered material. Holds the target entity name;
+    // empty when the completion should use the normal current-pass
+    // apply path. `applyTextureToEntityDiffuse` does the entity-based
+    // bind (same approach as ApplyAtlas::retargetDiffuseTus).
+    QString m_sdMeshTextureEntity;
+    void applyTextureToEntityDiffuse(const QString& entityName,
+                                     const QString& textureFileName);
 
     // Undo/Redo stacks
     QStringList m_undoStack;

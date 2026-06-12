@@ -3,6 +3,16 @@
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "LLMManager.h"
+#include "SelectionSet.h"
+#include "MeshDepthRenderer.h"
+#include <OgreEntity.h>
+#include <OgreSubEntity.h>
+#include <OgreMesh.h>
+#include <OgreTechnique.h>
+#include <QDir>
+#include <QFileInfo>
+#include <QTextStream>
+#include <set>
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
@@ -122,6 +132,13 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     }
 #endif
     // LCOV_EXCL_STOP
+
+    // Re-evaluate the "use selected mesh" checkbox whenever the scene
+    // selection changes (independent of the SD build flag).
+    if (auto* sel = SelectionSet::getSingleton()) {
+        connect(sel, &SelectionSet::selectionChanged,
+                this, &MaterialEditorQML::hasSelectedMeshChanged);
+    }
 }
 
 MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
@@ -1900,6 +1917,70 @@ QString MaterialEditorQML::getTexturePreviewPath() const
 
     // Return empty if texture file not found (may only exist in GPU memory)
     return "";
+}
+
+bool MaterialEditorQML::exportCurrentTexture(const QString& destPath)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Export current texture to %1").arg(destPath));
+    if (destPath.isEmpty()) {
+        emit errorOccurred(tr("No export path chosen."));
+        return false;
+    }
+    // Resolve the on-disk source via the same logic the preview uses.
+    QString src = getTexturePreviewPath();
+    if (src.startsWith("file://"))
+        src = QUrl(src).toLocalFile();
+    if (src.isEmpty() || !QFileInfo::exists(src)) {
+        // Fall back: dump the GPU texture to the chosen path.
+        if (isOgreAvailable() && !m_textureName.isEmpty()) {
+            try {
+                auto texPtr = Ogre::TextureManager::getSingleton()
+                    .getByName(m_textureName.toStdString());
+                if (texPtr) {
+                    Ogre::Image img;
+                    texPtr->convertToImage(img, true);
+                    img.save(destPath.toStdString());
+                    if (QFileInfo::exists(destPath)) return true;
+                }
+            } catch (...) {}
+        }
+        emit errorOccurred(tr("Could not locate the current texture to export."));
+        return false;
+    }
+    // Guard against exporting onto the source file: if dest and src
+    // resolve to the same path, the QFile::remove(dest) below would
+    // delete the source before the copy, destroying the only copy.
+    const QString srcCanonical = QFileInfo(src).canonicalFilePath();
+    const QFileInfo destInfo(destPath);
+    const QString destCanonical = destInfo.exists()
+        ? destInfo.canonicalFilePath()
+        : QFileInfo(destInfo.absoluteFilePath()).absoluteFilePath();
+    if (!srcCanonical.isEmpty() &&
+        (srcCanonical == destCanonical ||
+         srcCanonical == QFileInfo(destPath).absoluteFilePath())) {
+        // Source already is the destination — nothing to do.
+        return true;
+    }
+    QFile::remove(destPath);
+    if (!QFile::copy(src, destPath)) {
+        emit errorOccurred(tr("Failed to write %1").arg(destPath));
+        return false;
+    }
+    return true;
+}
+
+QString MaterialEditorQML::chooseTextureExportPath()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Open texture export file dialog"));
+    QString suggested = m_textureName.isEmpty()
+        ? QStringLiteral("texture.png") : m_textureName;
+    if (!suggested.contains('.')) suggested += ".png";
+    return QFileDialog::getSaveFileName(
+        nullptr, tr("Export Texture"), suggested,
+        tr("PNG (*.png);;JPEG (*.jpg);;All Files (*)"),
+        nullptr, QFileDialog::DontUseNativeDialog);
 }
 
 void MaterialEditorQML::openTextureFileDialog()
@@ -3696,6 +3777,125 @@ void MaterialEditorQML::generateTextureFromPrompt(const QString &prompt, int wid
 #endif
 }
 
+bool MaterialEditorQML::hasSelectedMesh() const
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    const auto entities = sel->getResolvedEntities();
+    return !entities.isEmpty() && entities.first() && entities.first()->getMesh();
+}
+
+QString MaterialEditorQML::discoveredControlNetDepthPath() const
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager* sdManager = SDManager::instance();
+    if (!sdManager) return QString();
+    // Scan the models directory for a ControlNet depth file
+    // (recommended filename, or the lllyasviel naming heuristic).
+    const QString dir = sdManager->modelsDirectory();
+    QDir d(dir);
+    const QStringList files = d.entryList(
+        QStringList() << "*.safetensors" << "*.ckpt", QDir::Files);
+    // The depth ControlNet pipeline here is SD 1.5-only — an SDXL depth
+    // ControlNet would silently fail against an SD 1.5 base. So skip any
+    // file whose name marks it as SDXL, and prefer an explicit SD1.5
+    // tag when present.
+    auto isSdxl = [](const QString& lower) {
+        return lower.contains("sdxl") || lower.contains("xl_")
+            || lower.contains("-xl") || lower.contains("_xl");
+    };
+    QString fallback;
+    for (const QString& f : files) {
+        const QString lower = f.toLower();
+        if (!(lower.contains("control") && lower.contains("depth")))
+            continue;
+        if (isSdxl(lower))
+            continue;  // wrong architecture for the SD 1.5 base
+        // A filename that explicitly tags SD 1.5 is the strongest match.
+        if (lower.contains("sd15") || lower.contains("sd_15")
+            || lower.contains("v11"))
+            return d.filePath(f);
+        if (fallback.isEmpty())
+            fallback = d.filePath(f);
+    }
+    return fallback;
+#else
+    return QString();
+#endif
+}
+
+void MaterialEditorQML::generateMeshTextureFromPrompt(const QString &prompt,
+                                                      int width, int height,
+                                                      double controlStrength)
+{
+    if (prompt.isEmpty()) {
+        emit sdGenerationError("Please enter a texture prompt");
+        return;
+    }
+
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager *sdManager = SDManager::instance();
+    if (!sdManager->isModelLoaded()) {
+        emit sdGenerationError("No SD model loaded. Please download and load a model from AI Settings.");
+        return;
+    }
+
+    auto* sel = SelectionSet::getSingleton();
+    const auto entities = sel ? sel->getResolvedEntities() : QList<Ogre::Entity*>{};
+    if (entities.isEmpty() || !entities.first() || !entities.first()->getMesh()) {
+        emit sdGenerationError("No mesh selected. Select a mesh to condition on its shape.");
+        return;
+    }
+    Ogre::Entity* entity = entities.first();
+
+    // LCOV_EXCL_START — requires a loaded SD model + a mesh
+    const int genW = width  > 0 ? width  : 512;
+    const int genH = height > 0 ? height : 512;
+
+    // Render the depth map at the generation resolution (square; the
+    // depth renderer frames the entity to fill the view).
+    QString depthErr;
+    const int depthSize = std::max(genW, genH);
+    const QImage depth = MeshDepthRenderer::renderDepthMap(entity, depthSize, &depthErr);
+    if (depth.isNull()) {
+        emit sdGenerationError(QStringLiteral("Depth render failed: %1").arg(depthErr));
+        return;
+    }
+
+    const QString controlNetPath = discoveredControlNetDepthPath();
+    if (controlNetPath.isEmpty()) {
+        // No ControlNet model — degrade to plain txt2img but tell the
+        // user why the result won't follow the mesh shape.
+        emit sdGenerationError(
+            "No ControlNet depth model found in the models folder — "
+            "generating without mesh conditioning. Download "
+            "\"ControlNet Depth (SD 1.5)\" in AI Settings for shape-aware results.");
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mesh_texture"),
+        QStringLiteral("entity=%1 controlNet=%2 strength=%3 size=%4")
+            .arg(QString::fromStdString(entity->getName()))
+            .arg(controlNetPath.isEmpty() ? QStringLiteral("(none)")
+                                          : QFileInfo(controlNetPath).fileName())
+            .arg(controlStrength).arg(depthSize));
+
+    // Remember the target so onSDGenerationCompleted binds the
+    // result to THIS entity's diffuse TUS (not the editor's current
+    // pass, which may not be the rendered material).
+    m_sdMeshTextureEntity = QString::fromStdString(entity->getName());
+
+    m_sdGenerationProgress = 0.0f;
+    emit sdGenerationProgressChanged();
+    sdManager->generateMeshTexture(prompt, depth, controlNetPath,
+                                   static_cast<float>(std::clamp(controlStrength, 0.0, 1.0)),
+                                   QString(), genW, genH);
+    // LCOV_EXCL_STOP
+#else
+    Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(controlStrength);
+    emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
+#endif
+}
+
 void MaterialEditorQML::stopTextureGeneration()
 {
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -3723,6 +3923,129 @@ void MaterialEditorQML::onSDGenerationProgress()
     emit sdGenerationProgressChanged();
 }
 
+void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
+                                                    const QString& textureFileName)
+{
+    // Drive the SAME pipeline as a manual texture change in the
+    // Material Editor (issue #403). Earlier attempts hand-mutated the
+    // entity's TUSes, but the editor renders via an RTSS-cloned
+    // technique and keeps its own m_ogreMaterial/m_passMap state — so
+    // a direct mutation updated neither the on-screen render, the
+    // panel, nor the script consistently. The proven path is:
+    //   loadMaterial(name) -> select the diffuse TUS -> setTextureName(),
+    // where setTextureName() already invalidates RTSS, recompiles,
+    // re-applies PBR, re-binds to sub-entities, and refreshes the
+    // script + panel.
+    if (!isOgreAvailable()) return;
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return;
+
+    // Resolve the entity + the material name of its first submesh.
+    Ogre::Entity* entity = nullptr;
+    for (Ogre::Entity* e : mgr->getEntities()) {
+        if (e && e->getMovableType() == "Entity"
+            && e->getName() == entityName.toStdString()) {
+            entity = e;
+            break;
+        }
+    }
+    if (!entity || entity->getNumSubEntities() == 0) return;
+    Ogre::SubEntity* sub0 = entity->getSubEntity(0);
+    if (!sub0 || !sub0->getMaterial()) return;
+    const QString matName = QString::fromStdString(sub0->getMaterial()->getName());
+
+    // Make sure the freshly-written PNG exists as a loadable texture
+    // resource. The generated_textures dir is registered as a
+    // resource location at startup, but its file INDEX was built then
+    // — a texture generated this session isn't in the index, so
+    // loading it by bare name (image.load(name, group)) fails and the
+    // material shows a "broken link". Fix: read the file from its
+    // absolute path via a QFile/Ogre DataStream and create the
+    // texture resource directly under its bare name, so subsequent
+    // name resolution (setTextureName / RTSS regen) finds it. Force-
+    // recreate if a stale entry exists.
+    const std::string group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+    const Ogre::String texStd = textureFileName.toStdString();
+    {
+        QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        const QString absPath = QDir(dataPath).filePath("generated_textures/" + textureFileName);
+        try {
+            // Drop any stale texture of this name so the new bytes load.
+            if (Ogre::TextureManager::getSingleton().getByName(texStd, group))
+                Ogre::TextureManager::getSingleton().remove(texStd, group);
+
+            Ogre::Image image;
+            QFile imgFile(absPath);
+            if (imgFile.open(QIODevice::ReadOnly)) {
+                const QByteArray bytes = imgFile.readAll();
+                imgFile.close();
+                Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
+                    const_cast<char*>(bytes.constData()),
+                    static_cast<size_t>(bytes.size()), false, true));
+                // Extension drives the codec (png).
+                image.load(ds, "png");
+                Ogre::TextureManager::getSingleton().loadImage(texStd, group, image);
+            }
+        } catch (...) {}
+    }
+
+    // Load the entity's material into the editor and select the
+    // diffuse texture unit, then set the texture through the proven
+    // path. loadMaterial() builds m_passMap and auto-selects pass 0 +
+    // TUS 0; for the Mixamo/standard layout TUS 0 is the diffuse map.
+    // If a named diffuse/albedo TUS exists at another index, select
+    // that instead.
+    loadMaterial(matName);
+
+    // Find the diffuse texture unit. On Mixamo / Assimp-imported PBR
+    // materials the base-colour TUS is often named "0" (a numeric
+    // name) rather than "albedo"/"diffuse_map". That matters: the
+    // PBR/RTSS wiring (RTShaderHelper::wirePbrSlotsForFFP +
+    // applyPbrIfTagged) only recognizes NAMED slots, so a diffuse on
+    // TUS "0" never gets the FFP colour-operation the Cook-Torrance
+    // shader needs — the texture loads but never renders (the bug we
+    // chased). Rename a numeric/empty diffuse slot to "diffuse_map"
+    // so the PBR path picks it up.
+    int diffuseTusIndex = 0;
+    if (Ogre::Pass* pass = getCurrentPass()) {
+        int namedDiffuse = -1, firstTextured = -1;
+        for (unsigned short t = 0; t < pass->getNumTextureUnitStates(); ++t) {
+            Ogre::TextureUnitState* tus = pass->getTextureUnitState(t);
+            const auto n = tus->getName();
+            if (n == "diffuse_map" || n == "albedo"
+                || n == "Diffuse" || n == "BaseColor") {
+                namedDiffuse = t;
+                break;
+            }
+            // A numeric / empty name on a slot that ISN'T a known
+            // non-diffuse channel is the unnamed diffuse.
+            if (firstTextured < 0
+                && n != "roughness" && n != "metallic" && n != "ao"
+                && n != "emissive" && n != "normal_map" && n != "NormalMap"
+                && !tus->getTextureName().empty()) {
+                firstTextured = t;
+            }
+        }
+        if (namedDiffuse >= 0) {
+            diffuseTusIndex = namedDiffuse;
+        } else if (firstTextured >= 0) {
+            // Rename the unnamed diffuse so the PBR/FFP wiring sees it.
+            pass->getTextureUnitState(
+                static_cast<unsigned short>(firstTextured))->setName("diffuse_map");
+            diffuseTusIndex = firstTextured;
+            // Rebuild the editor's TUS list so the rename + selection
+            // are consistent.
+            updateTextureUnitList();
+        }
+    }
+    setSelectedTextureUnitIndex(diffuseTusIndex);
+
+    // setTextureName no-ops if the new name equals m_textureName;
+    // clear it first so the assignment always fires.
+    m_textureName.clear();
+    setTextureName(textureFileName);
+}
+
 void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
 {
     m_sdGenerationProgress = 1.0f;
@@ -3732,6 +4055,29 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
     QFileInfo fileInfo(outputPath);
     QString dirPath = fileInfo.absolutePath();
     QString fileName = fileInfo.fileName();
+
+    // Issue #403: if this was a mesh-aware generation, bind the
+    // result to the selected entity's diffuse TUS directly (the
+    // editor's "current pass" may not be the rendered material, which
+    // is why the mesh otherwise rendered untextured). Register the
+    // resource location first so Ogre can load the file by name.
+    if (!m_sdMeshTextureEntity.isEmpty()) {
+        const QString targetEntity = m_sdMeshTextureEntity;
+        m_sdMeshTextureEntity.clear();
+        if (isOgreAvailable() && Ogre::Root::getSingletonPtr()) {
+            try {
+                auto &rgm = Ogre::ResourceGroupManager::getSingleton();
+                rgm.addResourceLocation(dirPath.toStdString(), "FileSystem",
+                                        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                rgm.initialiseResourceGroup(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            } catch (...) {}
+            applyTextureToEntityDiffuse(targetEntity, fileName);
+        }
+        m_textureName = fileName;
+        emit textureNameChanged();
+        emit sdTextureGenerated(outputPath);
+        return;
+    }
 
     // Helper lambda to emit deferred material completion if SD was triggered by LLM
     auto emitDeferredCompletion = [this]() {
@@ -3795,6 +4141,10 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
 
 void MaterialEditorQML::onSDGenerationError(const QString &error)
 {
+    // Drop any pending mesh-texture target — otherwise the next plain
+    // txt2img to complete would take the mesh-aware completion branch
+    // and apply itself to this stale entity.
+    m_sdMeshTextureEntity.clear();
     m_sdGenerationProgress = 0.0f;
     emit sdGenerationProgressChanged();
     emit sdIsGeneratingChanged();
@@ -3812,6 +4162,7 @@ void MaterialEditorQML::onSDGenerationError(const QString &error)
 
 void MaterialEditorQML::onSDGenerationStopped()
 {
+    m_sdMeshTextureEntity.clear();
     m_sdGenerationProgress = 0.0f;
     emit sdGenerationProgressChanged();
     emit sdIsGeneratingChanged();

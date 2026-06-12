@@ -4,7 +4,24 @@ import QtQuick.Layouts
 import MaterialEditorQML 1.0
 
 GroupBox {
+    id: root
     title: "Texture Properties"
+
+    // Issue #403: dispatch texture generation — mesh-conditioned
+    // when the "use selected mesh" checkbox is ticked, plain
+    // txt2img otherwise. Shared by the prompt field's Enter key and
+    // the Generate button.
+    function runTextureGeneration() {
+        if (sdPromptField.text.trim().length === 0) return
+        if (useMeshCheck.checked && MaterialEditorQML.hasSelectedMesh()) {
+            MaterialEditorQML.generateMeshTextureFromPrompt(
+                sdPromptField.text, sdWidthSpin.value, sdHeightSpin.value,
+                meshStrengthSlider.value)
+        } else {
+            MaterialEditorQML.generateTextureFromPrompt(
+                sdPromptField.text, sdWidthSpin.value, sdHeightSpin.value)
+        }
+    }
 
     // Slice I: flat Inspector-style header.
     topPadding: 22
@@ -222,8 +239,8 @@ GroupBox {
                 Text {
                     id: placeholderText
                     anchors.centerIn: parent
-                    text: MaterialEditorQML.textureName === "*Select a texture*" ? 
-                          "No texture selected" : 
+                    text: MaterialEditorQML.textureName === "*Select a texture*" ?
+                          "No texture selected" :
                           "Texture preview\nnot available"
                     color: disabledTextColor
                     horizontalAlignment: Text.AlignHCenter
@@ -231,7 +248,31 @@ GroupBox {
                 }
             }
         }
-        
+
+        // Export the currently-previewed texture to disk (issue #403
+        // escape hatch — lets the user save a generated texture and
+        // apply it via other tools even when in-app application of
+        // the texture to certain materials isn't working yet).
+        RowLayout {
+            Layout.fillWidth: true
+            Item { Layout.fillWidth: true }
+            ThemedButton {
+                text: "Save Texture As…"
+                // Bind to textureName (a NOTIFY property) so the
+                // enabled state tracks selection changes — a plain
+                // getTexturePreviewPath() call would only evaluate
+                // once and never update. Enabled whenever a real
+                // texture is set.
+                enabled: MaterialEditorQML.textureName !== ""
+                    && MaterialEditorQML.textureName !== "*Select a texture*"
+                onClicked: {
+                    const dest = MaterialEditorQML.chooseTextureExportPath()
+                    if (dest && dest.length > 0)
+                        MaterialEditorQML.exportCurrentTexture(dest)
+                }
+            }
+        }
+
         // Texture Coordinates Group
         GroupBox {
             title: "Texture Coordinates"
@@ -814,7 +855,7 @@ GroupBox {
 
                         Keys.onReturnPressed: {
                             if (text.length > 0 && MaterialEditorQML.sdModelLoaded && !MaterialEditorQML.sdIsGenerating) {
-                                MaterialEditorQML.generateTextureFromPrompt(text, sdWidthSpin.value, sdHeightSpin.value)
+                                root.runTextureGeneration()
                             }
                         }
                     }
@@ -827,8 +868,64 @@ GroupBox {
                             if (MaterialEditorQML.sdIsGenerating) {
                                 MaterialEditorQML.stopTextureGeneration()
                             } else {
-                                MaterialEditorQML.generateTextureFromPrompt(sdPromptField.text, sdWidthSpin.value, sdHeightSpin.value)
+                                root.runTextureGeneration()
                             }
+                        }
+                    }
+                }
+
+                // Issue #403: mesh-aware generation toggle. When
+                // checked, the selected mesh's depth map conditions
+                // generation (ControlNet) so the texture follows its
+                // shape. Disabled when no mesh is selected.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    ThemedCheckBox {
+                        id: useMeshCheck
+                        text: "Use selected mesh (depth-conditioned)"
+                        enabled: MaterialEditorQML.sdModelLoaded
+                            && !MaterialEditorQML.sdIsGenerating
+                            && MaterialEditorQML.hasSelectedMesh
+                        checked: false
+                        // Drop the checked state when conditioning is no
+                        // longer actionable (e.g. selection cleared), so
+                        // a stale check can't drive mesh generation.
+                        onEnabledChanged: if (!enabled) checked = false
+                    }
+                }
+
+                // ControlNet status + strength — only relevant when
+                // mesh conditioning is on.
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+                    visible: useMeshCheck.checked && useMeshCheck.enabled
+
+                    ThemedLabel {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pointSize: 8
+                        text: MaterialEditorQML.discoveredControlNetDepthPath() !== ""
+                            ? "✓ ControlNet depth model found — generation will follow the mesh shape."
+                            : "⚠ No ControlNet depth model in the models folder. It'll generate without shape conditioning. Download \"ControlNet Depth (SD 1.5)\" in AI Settings."
+                        color: MaterialEditorQML.discoveredControlNetDepthPath() !== ""
+                            ? "#4caf50" : "#e0a030"
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        ThemedLabel { text: "Shape strength:"; font.pointSize: 9 }
+                        Slider {
+                            id: meshStrengthSlider
+                            Layout.fillWidth: true
+                            from: 0; to: 1; value: 0.9
+                        }
+                        ThemedLabel {
+                            text: (Math.round(meshStrengthSlider.value * 100) / 100).toFixed(2)
+                            font.pointSize: 9
                         }
                     }
                 }

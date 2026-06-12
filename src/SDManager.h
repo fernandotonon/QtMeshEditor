@@ -18,6 +18,12 @@ struct SDModelInfo {
     QString description;
     qint64 size;
     bool isDownloaded;
+    // "base" = a full SD model loadable as the generation context.
+    // "controlnet" = a ControlNet conditioning model (issue #403),
+    // NOT loadable as a base model — used only via the mesh-texture
+    // dialog's ControlNet field. Defaults to "base" so existing
+    // entries are unaffected.
+    QString kind = QStringLiteral("base");
 
     QVariantMap toVariantMap() const {
         return {
@@ -26,7 +32,8 @@ struct SDModelInfo {
             {"url", url},
             {"description", description},
             {"size", size},
-            {"isDownloaded", isDownloaded}
+            {"isDownloaded", isDownloaded},
+            {"kind", kind}
         };
     }
 };
@@ -105,6 +112,20 @@ public slots:
 
     Q_INVOKABLE void generateTexture(const QString &prompt, int width = 0, int height = 0, const QString &outputFileName = QString());
     // img2img disabled — crashes on macOS Metal. Edits use txt2img with combined prompt.
+
+    // Issue #403: mesh-aware (depth-conditioned) generation. Same
+    // flow as generateTexture but conditions on `controlImage` (a
+    // rendered depth map) via a ControlNet model at `controlNetPath`.
+    // When controlImage is null or controlNetPath empty, behaves
+    // like a plain generateTexture. `controlStrength` is 0..1.
+    void generateMeshTexture(const QString &prompt,
+                             const QImage &controlImage,
+                             const QString &controlNetPath,
+                             float controlStrength,
+                             const QString &outputFileName = QString(),
+                             int width = 0,
+                             int height = 0);
+
     Q_INVOKABLE void stopGeneration();
     Q_INVOKABLE void tryAutoLoadModel();
 

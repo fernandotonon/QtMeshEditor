@@ -110,6 +110,24 @@ void SDManager::populateRecommendedModels()
         6938081905,
         false
     });
+
+    // Issue #403: ControlNet depth model for mesh-aware texture
+    // generation. NOT a base model — it pairs WITH SD 1.5 as the
+    // conditioning network. Selected via the "Generate Texture from
+    // Mesh…" dialog's ControlNet field, not the base-model dropdown.
+    // lllyasviel's converted fp16 safetensors (the sd.cpp-compatible
+    // single-file format).
+    {
+        SDModelInfo cn;
+        cn.name        = "ControlNet Depth (SD 1.5)";
+        cn.fileName    = "control_v11f1p_sd15_depth_fp16.safetensors";
+        cn.url         = "https://huggingface.co/comfyanonymous/ControlNet-v1-1_fp16_safetensors/resolve/main/control_v11f1p_sd15_depth_fp16.safetensors";
+        cn.description = "Depth ControlNet for mesh-aware texture generation. Pairs with SD 1.5 (not SDXL). ~723MB";
+        cn.size        = 722601104;
+        cn.isDownloaded = false;
+        cn.kind        = QStringLiteral("controlnet");
+        m_recommendedModels.append(cn);
+    }
 }
 
 bool SDManager::isModelLoaded() const
@@ -332,7 +350,22 @@ void SDManager::scanForModels()
     filters << "*.safetensors" << "*.ckpt" << "*.gguf";
     QFileInfoList files = modelsDir.entryInfoList(filters, QDir::Files);
 
+    // Collect ControlNet filenames so they don't show up as base
+    // models (they can't be loaded as a generation context). Use
+    // both the known recommended-list filenames and a name heuristic
+    // ("controlnet" / "control_v" — the lllyasviel naming).
+    QStringList controlNetFiles;
+    for (const SDModelInfo &info : m_recommendedModels)
+        if (info.kind == QStringLiteral("controlnet"))
+            controlNetFiles << info.fileName;
+
     for (const QFileInfo &file : files) {
+        const QString lower = file.fileName().toLower();
+        const bool isControlNet =
+            controlNetFiles.contains(file.fileName())
+            || lower.contains("controlnet")
+            || lower.startsWith("control_v");
+        if (isControlNet) continue;  // not a base model
         m_availableModels.append(file.completeBaseName());
     }
 
@@ -410,6 +443,60 @@ void SDManager::generateTexture(const QString &prompt, int width, int height, co
         m_worker->setSettings(genSettings);
         m_worker->generateTexture(enhancedPrompt, outputPath);
     }, Qt::QueuedConnection);
+    // LCOV_EXCL_STOP
+}
+
+void SDManager::generateMeshTexture(const QString &prompt,
+                                    const QImage &controlImage,
+                                    const QString &controlNetPath,
+                                    float controlStrength,
+                                    const QString &outputFileName,
+                                    int width,
+                                    int height)
+{
+    if (!isModelLoaded()) {
+        emit generationError("No SD model loaded. Please load a model first.");
+        return;
+    }
+
+    // LCOV_EXCL_START — requires a loaded SD model + worker
+    QString outputPath;
+    if (!outputFileName.isEmpty()) {
+        QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        QDir outputDir(QDir(dataPath).filePath("generated_textures"));
+        if (!outputDir.exists()) outputDir.mkpath(".");
+        QString fileName = QFileInfo(outputFileName.trimmed()).fileName();
+        // The worker always encodes PNG, so force a .png suffix — a .jpg
+        // name would produce a PNG payload with a misleading extension.
+        if (!fileName.endsWith(".png", Qt::CaseInsensitive)) {
+            fileName.replace(QRegularExpression(R"(\.\w+$)"), "");
+            fileName += ".png";
+        }
+        outputPath = outputDir.filePath(fileName);
+    } else {
+        outputPath = generateOutputPath();
+    }
+
+    QString enhancedPrompt = enhanceTexturePrompt(prompt);
+
+    SDSettings genSettings = m_settings;
+    if (genSettings.negativePrompt.isEmpty() ||
+        genSettings.negativePrompt == "blurry, low quality, distorted, simple, cartoon") {
+        genSettings.negativePrompt = getTextureNegativePrompt();
+    }
+    genSettings.controlNetPath  = controlNetPath;
+    genSettings.controlStrength = controlStrength;
+    // Honor the caller's requested generation size (the depth map is
+    // captured at this resolution too); fall back to the stored SD
+    // settings when a non-positive value is passed.
+    if (width  > 0) genSettings.width  = width;
+    if (height > 0) genSettings.height = height;
+
+    QMetaObject::invokeMethod(m_worker,
+        [this, enhancedPrompt, controlImage, outputPath, genSettings]() {
+            m_worker->setSettings(genSettings);
+            m_worker->generateTextureControlled(enhancedPrompt, controlImage, outputPath);
+        }, Qt::QueuedConnection);
     // LCOV_EXCL_STOP
 }
 

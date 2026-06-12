@@ -90,6 +90,7 @@ QuadRetopo.cpp
 QuadRetopoController.cpp
 SkinWeights.cpp
 SkinWeightsController.cpp
+MeshDepthRenderer.cpp
 TextureChannelPacker.cpp
 TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
@@ -215,6 +216,7 @@ QuadRetopo.h
 QuadRetopoController.h
 SkinWeights.h
 SkinWeightsController.h
+MeshDepthRenderer.h
 TextureChannelPacker.h
 TextureAtlasPacker.h
 PaintBufferImageProvider.h

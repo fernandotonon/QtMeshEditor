@@ -153,6 +153,12 @@ private:
     /// Issue #402: compute skin weights via inverse-distance
     /// heuristic. Mesh must have a skeleton attached.
     QJsonObject toolComputeSkinWeights(const QJsonObject &args);
+    /// Issue #403: mesh-aware (depth-conditioned) texture
+    /// generation. Renders the selected entity's depth map and
+    /// conditions sd.cpp on it via a ControlNet depth model, then
+    /// applies the result to the active material diffuse. Async —
+    /// returns immediately; progress flows through SD signals.
+    QJsonObject toolGenerateMeshTexture(const QJsonObject &args);
     QJsonObject toolGetSceneInfo(const QJsonObject &args);
     QJsonObject toolTakeScreenshot(const QJsonObject &args);
     QJsonObject toolCreatePrimitive(const QJsonObject &args);
