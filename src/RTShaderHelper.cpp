@@ -474,18 +474,54 @@ void RTShaderHelper::finalizeShaderGenMaterial(Ogre::MaterialPtr& mat,
     mat->compile();
 }
 
+// True for slot names that carry a non-diffuse PBR channel and therefore must
+// NOT be treated as the base-colour fallback below.
+static bool isKnownNonDiffuseSlot(const std::string& n)
+{
+    return isNormalSlotName(n) || n == "ao" || n == "emissive"
+        || n == "metallic" || n == "roughness";
+}
+
 void RTShaderHelper::wirePbrSlotsForFFP(Ogre::Material* mat)
 {
     if (!mat) return;
     for (auto* tech : mat->getTechniques()) {
         for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
             auto* p = tech->getPass(pi);
+
+            // Does this pass expose a recognized diffuse/base-colour slot? If
+            // not, the first plain textured slot (numeric/empty name, e.g. an
+            // Assimp-imported "0" TUS or a user-added unit) must still receive
+            // the diffuse modulate op — otherwise a texture applied to it loads
+            // but never renders, since the loop below only wires NAMED slots.
+            // (This was the "applying texture to the model does nothing" bug.)
+            bool hasNamedDiffuse = false;
+            int fallbackDiffuse = -1;
+            for (unsigned short i = 0; i < p->getNumTextureUnitStates(); ++i) {
+                auto* tus = p->getTextureUnitState(i);
+                const std::string& n = tus->getName();
+                if (n == "albedo" || n == "diffuse_map") {
+                    hasNamedDiffuse = true;
+                    break;
+                }
+                if (fallbackDiffuse < 0 && !isKnownNonDiffuseSlot(n)
+                    && !tus->getTextureName().empty()) {
+                    fallbackDiffuse = i;
+                }
+            }
+
             for (unsigned short i = 0; i < p->getNumTextureUnitStates(); ++i) {
                 auto* tus = p->getTextureUnitState(i);
                 const std::string& n = tus->getName();
                 if (isNormalSlotName(n)) {
                     markNormalUnitNonFfp(tus);
-                } else if (n == "albedo") {
+                } else if (!hasNamedDiffuse && i == fallbackDiffuse) {
+                    // Unnamed/numeric diffuse fallback — wire like albedo.
+                    tus->setColourOperationEx(
+                        Ogre::LBX_MODULATE,
+                        Ogre::LBS_TEXTURE,
+                        Ogre::LBS_DIFFUSE);
+                } else if (n == "albedo" || n == "diffuse_map") {
                     tus->setColourOperationEx(
                         Ogre::LBX_MODULATE,
                         Ogre::LBS_TEXTURE,

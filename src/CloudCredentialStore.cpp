@@ -10,6 +10,8 @@
 #include <QSettings>
 #include <QStandardPaths>
 
+#include <optional>
+
 #ifdef Q_OS_WIN
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -32,6 +34,21 @@
 namespace {
 
 constexpr auto kTestOrganizationName = "QtMeshEditorTests";
+
+// In-process cache of the secret payload. The OS keychain/credential store is
+// queried at most once per process: on macOS every SecItemCopyMatching call can
+// raise a "QtMeshEditor wants to use confidential information" prompt, and the
+// account control reads the session 3-4 times during startup. Caching collapses
+// those reads into a single OS access (and zero accesses once the user has
+// signed out). The cache is invalidated on save/clear so it never goes stale.
+std::optional<QByteArray> g_secretCache;
+bool g_secretCacheValid = false;
+
+void invalidateSecretCache()
+{
+    g_secretCache.reset();
+    g_secretCacheValid = false;
+}
 
 bool useIsolatedTestStorage()
 {
@@ -139,6 +156,9 @@ bool storeSecretBytes(const QByteArray& payload)
     CFDictionarySetValue(add, kSecAttrAccount,
                          CFStringCreateWithCString(nullptr, account.constData(), kCFStringEncodingUTF8));
     CFDictionarySetValue(add, kSecValueData, data);
+    // Make the item readable without an interactive unlock each session, so the
+    // user is not re-prompted on every app launch after granting access once.
+    CFDictionarySetValue(add, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock);
     const OSStatus status = SecItemAdd(add, nullptr);
     CFRelease(data);
     CFRelease(add);
@@ -164,7 +184,7 @@ bool storeSecretBytes(const QByteArray& payload)
     return writeFallbackFile(payload);
 }
 
-QByteArray loadSecretBytes()
+QByteArray loadSecretBytesFromOS()
 {
     if (!useIsolatedTestStorage()) {
 #if defined(Q_OS_MACOS)
@@ -213,6 +233,18 @@ QByteArray loadSecretBytes()
     return readFallbackFile();
 }
 
+// Cache-aware reader: hits the OS store at most once per process lifetime.
+QByteArray loadSecretBytes()
+{
+    if (g_secretCacheValid)
+        return g_secretCache.value_or(QByteArray());
+
+    QByteArray payload = loadSecretBytesFromOS();
+    g_secretCache = payload;
+    g_secretCacheValid = true;
+    return payload;
+}
+
 void deleteSecretBytes()
 {
     if (!useIsolatedTestStorage()) {
@@ -245,7 +277,17 @@ bool CloudCredentialStore::saveSession(const CloudSession& session)
 {
     if (!session.hasToken())
         return false;
-    return storeSecretBytes(sessionToPayload(session));
+    const QByteArray payload = sessionToPayload(session);
+    const bool ok = storeSecretBytes(payload);
+    if (ok) {
+        // Prime the cache with what we just wrote so the next read does not
+        // re-query the OS store (which would prompt again on macOS).
+        g_secretCache = payload;
+        g_secretCacheValid = true;
+    } else {
+        invalidateSecretCache();
+    }
+    return ok;
 }
 
 CloudSession CloudCredentialStore::loadSession()
@@ -257,11 +299,20 @@ void CloudCredentialStore::clearSession()
 {
     deleteSecretBytes();
     removeFallbackFile();
+    // Empty payload is a valid cached state ("no session"), so the account
+    // control's post-sign-out refresh does not re-hit the OS store.
+    g_secretCache = QByteArray();
+    g_secretCacheValid = true;
 }
 
 bool CloudCredentialStore::hasSession()
 {
     return loadSession().hasToken();
+}
+
+void CloudCredentialStore::resetCacheForTesting()
+{
+    invalidateSecretCache();
 }
 
 void CloudCredentialStore::migrateLegacySettingsIfNeeded()

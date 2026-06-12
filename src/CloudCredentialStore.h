@@ -37,6 +37,14 @@ public:
 
     /** Moves legacy Cloud/token* values from QSettings into secure storage. */
     static void migrateLegacySettingsIfNeeded();
+
+    /**
+     * Drops the in-process secret cache so the next read hits the backing
+     * store again. The cache collapses the 3-4 startup reads into a single OS
+     * access (each macOS keychain query can raise a confirmation prompt).
+     * Only needed by tests that mutate the backing file directly.
+     */
+    static void resetCacheForTesting();
 };
 
 #endif // CLOUD_CREDENTIAL_STORE_H

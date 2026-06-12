@@ -85,9 +85,36 @@ TEST_F(CloudCredentialStoreTest, LoadSessionReturnsEmptyForCorruptFile)
     ASSERT_EQ(file.write("not-json"), 8);
     file.close();
 
+    // We wrote the backing file directly, behind the in-process cache; drop it
+    // so the read actually parses the corrupt file rather than returning the
+    // cached "no session" state SetUp() primed via clearSession().
+    CloudCredentialStore::resetCacheForTesting();
+
     const CloudSession loaded = CloudCredentialStore::loadSession();
     EXPECT_FALSE(loaded.hasToken());
     EXPECT_TRUE(loaded.email.isEmpty());
+}
+
+TEST_F(CloudCredentialStoreTest, CacheServesReadsWithoutHittingBackingStore)
+{
+    CloudSession session;
+    session.token = QStringLiteral("cached-token");
+    session.expiresAt = 7;
+    ASSERT_TRUE(CloudCredentialStore::saveSession(session));
+
+    // Delete the backing file out from under the store. Because saveSession()
+    // primed the in-process cache, subsequent reads must still succeed without
+    // touching the (now-missing) backing store — this is exactly what stops the
+    // repeated macOS keychain prompts at startup.
+    QFile::remove(sessionFilePath());
+
+    const CloudSession cached = CloudCredentialStore::loadSession();
+    EXPECT_EQ(cached.token, QStringLiteral("cached-token"));
+    EXPECT_TRUE(CloudCredentialStore::hasSession());
+
+    // After an explicit cache reset the read falls through to the (gone) file.
+    CloudCredentialStore::resetCacheForTesting();
+    EXPECT_FALSE(CloudCredentialStore::hasSession());
 }
 
 TEST_F(CloudCredentialStoreTest, MigrateNoOpWhenNoLegacyToken)
