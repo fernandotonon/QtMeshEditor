@@ -1,0 +1,58 @@
+cask "qtmesheditor" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "https://github.com/fernandotonon/QtMeshEditor/releases/download/#{version}/QtMeshEditor-#{version}-MacOS.dmg"
+  name "QtMeshEditor"
+  desc "Qt-based Ogre3D Mesh Editor with AI-enhanced Material Editor"
+  homepage "https://github.com/fernandotonon/QtMeshEditor"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  app "QtMeshEditor.app"
+
+  # CLI access: GUI launcher + the `qtmesh` pipeline alias.
+  binary "#{appdir}/QtMeshEditor.app/Contents/MacOS/QtMeshEditor", target: "qtmesheditor"
+  binary "#{appdir}/QtMeshEditor.app/Contents/MacOS/QtMeshEditor", target: "qtmesh"
+
+  # A single postflight block: Homebrew allows only one, and it must live INSIDE
+  # the cask. (A stray second `postflight do...end` appended after the cask's
+  # closing `end` is parsed as a top-level call and breaks every install with
+  # "undefined method 'postflight'" — #718.)
+  postflight do
+    # Clear quarantine so the app isn't blocked as "not supported on this mac".
+    system_command "/usr/bin/xattr",
+                   args: ["-rd", "com.apple.quarantine", "#{appdir}/QtMeshEditor.app"],
+                   sudo: false
+    # Register the bundle so Finder picks up CFBundleDocumentTypes without a
+    # reboot (#664).
+    system_command "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+                   args: ["-f", "-R", "#{appdir}/QtMeshEditor.app"],
+                   sudo: false
+  end
+
+  caveats <<~EOS
+    CLI commands are now available:
+      qtmesheditor    # Launch the GUI
+      qtmesh          # CLI pipeline (info, convert, fix, scan, etc.)
+
+    Example:
+      qtmesh info model.fbx --json
+      qtmesh scan ./assets --fail-on warning
+
+    If you encounter a "not supported on this mac" error, allow the app in
+    System Settings > Privacy & Security, then reopen it. Report issues at:
+    https://github.com/fernandotonon/QtMeshEditor/issues
+  EOS
+
+  # QSettings writes under the "none" org domain (QCoreApplication
+  # setOrganizationDomain("none")), so the prefs file is com.none.QtMeshEditor.
+  zap trash: [
+    "~/Library/Preferences/com.none.QtMeshEditor.plist",
+    "~/Library/Preferences/QtMeshEditor",
+    "~/Library/Saved Application State/com.none.QtMeshEditor.savedState",
+  ]
+end

@@ -2090,21 +2090,22 @@ jobs:
 
         echo "Updating cask to version $VERSION with SHA256 $SHA256"
 
-        # Only update version and sha256 — the cask file contains CLI symlink
-        # stanzas (binary, postflight/uninstall_postflight for qtmesh) that
-        # must be preserved. sed only touches the matching lines.
+        # Only update version and sha256 — the cask file already contains the
+        # CLI symlink + lsregister stanzas inside its single postflight block,
+        # so we must NOT append anything. (A previous version appended a second
+        # `postflight do...end` AFTER the cask's closing `end`, which Homebrew
+        # parsed as a top-level call and rejected with
+        # "undefined method 'postflight'", breaking every install — #718.)
         sed -i "s/version '.*'/version '$VERSION'/" "$CASK_FILE"
         sed -i "s/sha256 '.*'/sha256 '$SHA256'/" "$CASK_FILE"
 
-        # Ensure Finder picks up CFBundleDocumentTypes after install (#664).
+        # Safety net: if an older tap revision is missing the lsregister call,
+        # rewrite the WHOLE cask from the canonical template in this repo rather
+        # than appending a stray stanza.
         if ! grep -q 'lsregister' "$CASK_FILE"; then
-          {
-            echo ''
-            echo '  postflight do'
-            echo '    system_command "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",'
-            echo '      args: ["-f", "-R", "#{appdir}/QtMeshEditor.app"]'
-            echo '  end'
-          } >> "$CASK_FILE"
+          echo "Cask missing lsregister — regenerating from canonical template"
+          sed -e "s/@VERSION@/$VERSION/" -e "s/@SHA256@/$SHA256/" \
+            packaging/macos/qtmesheditor.rb.in > "$CASK_FILE"
         fi
 
         echo "Updated cask file:"
