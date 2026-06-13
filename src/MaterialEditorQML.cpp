@@ -1005,6 +1005,82 @@ void MaterialEditorQML::setUseVertexColorToEmissive(bool use)
     }
 }
 
+void MaterialEditorQML::ensureTextureInMaterialGroup(const QString& textureName)
+{
+    if (!isOgreAvailable() || textureName.isEmpty()
+        || textureName == "*Select a texture*")
+        return;
+
+    const std::string texStd = textureName.toStdString();
+    const std::string matGroup = m_ogreMaterial
+        ? m_ogreMaterial->getGroup()
+        : std::string(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    try {
+        auto& tm = Ogre::TextureManager::getSingleton();
+
+        // Already resolvable from the material's group? Nothing to do.
+        if (tm.getByName(texStd, matGroup))
+            return;
+
+        // Resolve an on-disk source. Prefer the origin of an already-loaded
+        // copy (in any group), then fall back to the same locations the
+        // preview searches, then to a direct probe of the app + working dirs.
+        QString srcPath;
+        if (auto existing = tm.getByName(texStd)) {
+            const QString origin = QString::fromStdString(existing->getOrigin());
+            if (!origin.isEmpty() && QFileInfo::exists(origin))
+                srcPath = origin;
+        }
+        if (srcPath.isEmpty()) {
+            // Reuse the preview's resolver (handles generated_textures + media).
+            const QString prev = getTexturePreviewPath();
+            if (prev.startsWith(QStringLiteral("file://")))
+                srcPath = QUrl(prev).toLocalFile();
+        }
+        if (srcPath.isEmpty()) {
+            const QStringList probe = {
+                QDir(QCoreApplication::applicationDirPath()).filePath(textureName),
+                QDir::current().filePath(textureName),
+                QString("media/materials/textures/%1").arg(textureName)
+            };
+            for (const QString& p : probe) {
+                if (QFileInfo::exists(p)) { srcPath = p; break; }
+            }
+        }
+        if (srcPath.isEmpty() || !QFileInfo::exists(srcPath))
+            return; // Can't find the bytes; leave binding as-is.
+
+        // Register the source directory into the material's group and load the
+        // image there under the bare name, so name resolution succeeds.
+        const QFileInfo fi(srcPath);
+        auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+        if (!rgm.resourceGroupExists(matGroup))
+            rgm.createResourceGroup(matGroup);
+        rgm.addResourceLocation(fi.absolutePath().toStdString(), "FileSystem", matGroup);
+
+        Ogre::Image image;
+        QFile f(srcPath);
+        if (f.open(QIODevice::ReadOnly)) {
+            const QByteArray bytes = f.readAll();
+            f.close();
+            Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
+                const_cast<char*>(bytes.constData()),
+                static_cast<size_t>(bytes.size()), false, true));
+            image.load(ds, fi.suffix().toLower().toStdString());
+            tm.loadImage(texStd, matGroup, image);
+            SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                QStringLiteral("Loaded texture '%1' into material group '%2' from '%3'")
+                    .arg(textureName, QString::fromStdString(matGroup), srcPath));
+        }
+    } catch (...) {
+        // Best-effort: a failure here just means the binding may still miss.
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+            QStringLiteral("Failed to load texture '%1' into material group")
+                .arg(textureName));
+    }
+}
+
 void MaterialEditorQML::setTextureName(const QString &name)
 {
     if (m_textureName != name) {
@@ -1012,6 +1088,15 @@ void MaterialEditorQML::setTextureName(const QString &name)
         
         Ogre::TextureUnitState* textureUnit = getCurrentTextureUnit();
         if (textureUnit && !name.isEmpty() && name != "*Select a texture*") {
+            // The on-screen mesh renders via RTSS (the viewport uses the
+            // MSN_SHADERGEN material scheme). RTSS resolves the TUS texture by
+            // name against the MATERIAL's resource group (+ AUTODETECT). If the
+            // texture was loaded into a DIFFERENT group than the material, the
+            // lookup misses and RTSS renders the yellow/black placeholder —
+            // even though the editor preview (which reads the file straight off
+            // disk) looks correct. Make the texture resolvable from the
+            // material's own group before binding it.
+            ensureTextureInMaterialGroup(name);
             // Only set non-empty, valid texture names to avoid OGRE crashes
             textureUnit->setTextureName(name.toStdString());
 
@@ -1764,7 +1849,15 @@ void MaterialEditorQML::updateMaterialText()
             }
         }
 
-        // Re-apply material to all sub-entities that use it
+        // Re-apply material to all sub-entities that use it. Re-binding the
+        // SAME material name can be a no-op inside Ogre (the SubEntity keeps its
+        // cached Technique pointer, which we just invalidated via
+        // removeAllShaderBasedTechniques + compile) — so the on-screen mesh
+        // would keep rendering the stale technique and never pick up the new
+        // texture, even though the editor preview (which re-binds a fresh
+        // material name on its own sphere) updates. Force the rebind by
+        // clearing the material first, then setting it via the material PTR so
+        // the SubEntity re-resolves its technique from the recompiled material.
         std::string matName = m_materialName.toStdString();
         for (Ogre::SceneNode* sn : Manager::getSingleton()->getSceneNodes()) {
             if (sn->getName().empty() || sn->getAttachedObjects().empty())
@@ -1773,8 +1866,15 @@ void MaterialEditorQML::updateMaterialText()
                 if (obj->getMovableType() != "Entity") continue;
                 auto* entity = static_cast<Ogre::Entity*>(obj);
                 for (unsigned int si = 0; si < entity->getNumSubEntities(); ++si) {
-                    if (entity->getSubEntity(si)->getMaterialName() == matName)
-                        entity->getSubEntity(si)->setMaterialName(matName);
+                    Ogre::SubEntity* sub = entity->getSubEntity(si);
+                    if (sub->getMaterialName() != matName)
+                        continue;
+                    // setMaterial(ptr) re-resolves the SubEntity's technique
+                    // against the just-recompiled material even when the name is
+                    // unchanged — unlike setMaterialName(sameName), which can
+                    // keep the now-stale cached Technique pointer and leave the
+                    // mesh rendering the old texture.
+                    sub->setMaterial(m_ogreMaterial);
                 }
             }
         }
@@ -3864,9 +3964,12 @@ void MaterialEditorQML::generateMeshTextureFromPrompt(const QString &prompt,
 
     const QString controlNetPath = discoveredControlNetDepthPath();
     if (controlNetPath.isEmpty()) {
-        // No ControlNet model — degrade to plain txt2img but tell the
-        // user why the result won't follow the mesh shape.
-        emit sdGenerationError(
+        // No ControlNet model — we still proceed (plain txt2img conditioned by
+        // the prompt only). Surface this as a non-fatal NOTICE, NOT an error:
+        // emitting sdGenerationError here tripped the QML error handler (which
+        // clears the in-flight target and resets state) and made the run look
+        // like it never started. Use a dedicated notice signal instead.
+        emit sdGenerationNotice(
             "No ControlNet depth model found in the models folder — "
             "generating without mesh conditioning. Download "
             "\"ControlNet Depth (SD 1.5)\" in AI Settings for shape-aware results.");
@@ -4115,7 +4218,10 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
             rgm.initialiseResourceGroup(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
         } catch (...) {}
 
-        // Apply texture to current material pass
+        // Apply the generated texture to the current material's diffuse TUS
+        // through the SAME path as a manual texture change, so it gets the
+        // group-resolution + RTSS rebind that makes it actually render on the
+        // model (a raw texUnit->setTextureName() here left the mesh untextured).
         Ogre::Pass *pass = getCurrentPass();
         if (pass) {
             Ogre::TextureUnitState *texUnit = getCurrentTextureUnit();
@@ -4127,14 +4233,14 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
                 }
             }
             if (texUnit) {
-                texUnit->setTextureName(fileName.toStdString());
+                // Force the assignment even if m_textureName already equals
+                // fileName (setTextureName no-ops on equal names).
+                m_textureName.clear();
+                setTextureName(fileName);
             }
         }
     } catch (...) {}
 
-    m_textureName = fileName;
-    emit textureNameChanged();
-    updateMaterialText();
     emit sdTextureGenerated(outputPath);
     emitDeferredCompletion();
 }

@@ -190,6 +190,7 @@ winget install FernandoTonon.QtMeshEditor --source winget
 
 # macOS (Homebrew)
 brew tap fernandotonon/qtmesheditor
+brew trust fernandotonon/qtmesheditor   # Homebrew now requires trusting third-party taps
 brew install qtmesheditor
 
 # Linux (Snap)

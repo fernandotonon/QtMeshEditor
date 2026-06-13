@@ -2434,9 +2434,11 @@ void MainWindow::signInToQtMeshCloud()
                           token.user.value(QStringLiteral("name")).toString());
         settings.setValue(AppSettingsKeys::cloudUserSlug(),
                           token.user.value(QStringLiteral("slug")).toString());
-        settings.remove(AppSettingsKeys::cloudToken());
-        settings.remove(AppSettingsKeys::cloudTokenExpiresAt());
-        settings.remove(AppSettingsKeys::cloudUserEmail());
+        // NB: do NOT remove the cloudToken / cloudTokenExpiresAt / cloudUserEmail
+        // keys here. CloudCredentialStore now persists the session in exactly
+        // those QSettings keys (it no longer uses the OS keychain), so removing
+        // them would erase the session we just saved and log the user out on the
+        // next launch.
         settings.sync();
         updateCloudAuthActions();
         return true;

@@ -13,13 +13,18 @@ GroupBox {
     // the Generate button.
     function runTextureGeneration() {
         if (sdPromptField.text.trim().length === 0) return
-        if (useMeshCheck.checked && MaterialEditorQML.hasSelectedMesh()) {
+        // hasSelectedMesh is exposed as a Q_PROPERTY, not a callable — read it
+        // as a property. Calling it as MaterialEditorQML.hasSelectedMesh()
+        // throws "not a function" and silently aborted the whole handler, which
+        // is why mesh-conditioned generation never started.
+        var useMesh = useMeshCheck.checked && MaterialEditorQML.hasSelectedMesh
+        var w = sdWidthSpin.value
+        var h = sdHeightSpin.value
+        if (useMesh) {
             MaterialEditorQML.generateMeshTextureFromPrompt(
-                sdPromptField.text, sdWidthSpin.value, sdHeightSpin.value,
-                meshStrengthSlider.value)
+                sdPromptField.text, w, h, meshStrengthSlider.value)
         } else {
-            MaterialEditorQML.generateTextureFromPrompt(
-                sdPromptField.text, sdWidthSpin.value, sdHeightSpin.value)
+            MaterialEditorQML.generateTextureFromPrompt(sdPromptField.text, w, h)
         }
     }
 
@@ -789,6 +794,14 @@ GroupBox {
                     sdErrorRect.visible = true
                     sdErrorTimer.restart()
                 }
+                // Non-fatal notice (e.g. degraded mesh-conditioning). Shown in
+                // the same banner, but generation continues — so we do NOT
+                // touch the generating/progress state here.
+                function onSdGenerationNotice(message) {
+                    sdErrorText.text = message
+                    sdErrorRect.visible = true
+                    sdErrorTimer.restart()
+                }
             }
         }
 
@@ -889,10 +902,19 @@ GroupBox {
                             && !MaterialEditorQML.sdIsGenerating
                             && MaterialEditorQML.hasSelectedMesh
                         checked: false
-                        // Drop the checked state when conditioning is no
-                        // longer actionable (e.g. selection cleared), so
-                        // a stale check can't drive mesh generation.
-                        onEnabledChanged: if (!enabled) checked = false
+                        // Drop the checked state only when the mesh selection
+                        // itself is gone (so a stale check can't drive mesh
+                        // generation). Do NOT key this off `enabled`: the box is
+                        // also disabled while generating, and clearing it then
+                        // would uncheck the user's choice the moment generation
+                        // starts.
+                        Connections {
+                            target: MaterialEditorQML
+                            function onHasSelectedMeshChanged() {
+                                if (!MaterialEditorQML.hasSelectedMesh)
+                                    useMeshCheck.checked = false
+                            }
+                        }
                     }
                 }
 

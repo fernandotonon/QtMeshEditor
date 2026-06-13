@@ -6,7 +6,7 @@ Installed-Size: 757000
 Architecture: amd64 
 Bugs: https://github.com/fernandotonon/QtMeshEditor/issues
 Homepage: https://github.com/fernandotonon/QtMeshEditor 
-Depends: libxcb-cursor0, libqt6core6, libqt6gui6, libqt6widgets6, libqt6network6, libqt6opengl6, libqt6qml6, libqt6quick6, libsecret-1-0
+Depends: libxcb-cursor0, libqt6core6, libqt6gui6, libqt6widgets6, libqt6network6, libqt6opengl6, libqt6qml6, libqt6quick6
 Maintainer: Fernando Tonon de Rossi <tonon.fernando@hotmail.com> 
 Description: Free 3D asset tool for indie game developers
  Merge Mixamo animations, convert between 40+ 3D formats, edit materials

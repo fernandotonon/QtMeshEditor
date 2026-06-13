@@ -502,16 +502,11 @@ else()
     message(STATUS "OGRE Codec_Assimp not found, using built-in Assimp integration")
 endif()
 
-set(QTMESH_LIBSECRET_FOUND FALSE)
-if(UNIX AND NOT APPLE)
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(LIBSECRET QUIET libsecret-1)
-        if(LIBSECRET_FOUND)
-            set(QTMESH_LIBSECRET_FOUND TRUE)
-        endif()
-    endif()
-endif()
+# Cloud session secrets are stored in QSettings (see CloudCredentialStore.cpp).
+# The platform secret stores are no longer the backend, but the migration path
+# still does a ONE-TIME read of the OS store to carry over a pre-QSettings
+# session — macOS needs the Security framework and Windows needs advapi32 for
+# that read. libsecret is fully dropped (no Linux secret-store read-back).
 
 target_link_libraries(${CMAKE_PROJECT_NAME}
 ${CODEC_ASSIMP_LINK_LIB}
@@ -529,17 +524,12 @@ meshoptimizer
 xatlas
 )
 
+# One-time legacy secret-store read for migration (see CloudCredentialStore).
 if(APPLE)
     target_link_libraries(${CMAKE_PROJECT_NAME} "-framework Security")
 elseif(WIN32)
     target_link_libraries(${CMAKE_PROJECT_NAME} advapi32)
-elseif(QTMESH_LIBSECRET_FOUND)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE HAVE_LIBSECRET=1)
-    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${LIBSECRET_INCLUDE_DIRS})
-    target_sources(${CMAKE_PROJECT_NAME} PRIVATE CloudCredentialStore_linux.c)
-    target_link_libraries(${CMAKE_PROJECT_NAME} ${LIBSECRET_LIBRARIES})
 endif()
-
 
 # Link llama.cpp if enabled
 if(ENABLE_LOCAL_LLM)
@@ -585,6 +575,14 @@ if(BUILD_TESTS)
     # Add all files ending with _test.cpp to the set (recursively to include subdirectories like Assimp)
     file(GLOB_RECURSE TestFiles "${CMAKE_CURRENT_SOURCE_DIR}/*_test.cpp")
     foreach(TestFile ${TestFiles})
+        # The PS1 runtime sources (src/PS1/runtime/*.cpp) are only added to
+        # SRC_FILES when ENABLE_PS1_RIP is ON, so their *_test.cpp counterparts
+        # must be gated the same way — otherwise the test links a stub test
+        # (e.g. TextureDecoder_test.cpp) against a missing impl and fails with
+        # undefined symbols like qHash(TextureDecoder::MaterialKey).
+        if(NOT ENABLE_PS1_RIP AND TestFile MATCHES "/PS1/runtime/")
+            continue()
+        endif()
         list(APPEND TEST_SOURCES ${TestFile})
     endforeach()
 
@@ -615,15 +613,14 @@ if(BUILD_TESTS)
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
     meshoptimizer xatlas)
 
+    # CloudCredentialStore.cpp (compiled into the tests) does a one-time legacy
+    # secret-store read in migrateLegacySettingsIfNeeded(), which
+    # CloudCredentialStore_test.cpp exercises — so the test binary needs the
+    # same platform link as the app or macOS/Windows test builds fail to link.
     if(APPLE)
         target_link_libraries(UnitTests "-framework Security")
     elseif(WIN32)
         target_link_libraries(UnitTests advapi32)
-    elseif(QTMESH_LIBSECRET_FOUND)
-        target_compile_definitions(UnitTests PRIVATE HAVE_LIBSECRET=1)
-        target_include_directories(UnitTests PRIVATE ${LIBSECRET_INCLUDE_DIRS})
-        target_sources(UnitTests PRIVATE CloudCredentialStore_linux.c)
-        target_link_libraries(UnitTests ${LIBSECRET_LIBRARIES})
     endif()
 
     # Link llama.cpp for tests if enabled

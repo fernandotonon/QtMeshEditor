@@ -6,7 +6,6 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
 
@@ -31,12 +30,6 @@ protected:
         QSettings().clear();
         QCoreApplication::setOrganizationName(previousOrganizationName);
         QCoreApplication::setApplicationName(previousApplicationName);
-    }
-
-    static QString sessionFilePath()
-    {
-        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-        return dir + QStringLiteral("/cloud_session.dat");
     }
 };
 
@@ -71,55 +64,106 @@ TEST_F(CloudCredentialStoreTest, HasSessionFalseWhenCleared)
     EXPECT_FALSE(CloudCredentialStore::hasSession());
 }
 
-TEST_F(CloudCredentialStoreTest, LoadSessionReturnsEmptyForCorruptFile)
+TEST_F(CloudCredentialStoreTest, LoadSessionReturnsEmptyWhenNoTokenStored)
 {
-    const QString path = sessionFilePath();
-    ASSERT_FALSE(path.isEmpty());
+    // No token in QSettings → no session, even if a stray email key lingers.
+    QSettings settings;
+    settings.setValue(AppSettingsKeys::cloudUserEmail(), QStringLiteral("orphan@example.com"));
+    settings.sync();
+    CloudCredentialStore::resetCacheForTesting();
 
-    const QFileInfo info(path);
-    if (QDir dir = info.dir(); !dir.exists())
-        ASSERT_TRUE(dir.mkpath(QStringLiteral(".")));
+    const CloudSession loaded = CloudCredentialStore::loadSession();
+    EXPECT_FALSE(loaded.hasToken());
+}
 
-    QFile file(path);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    ASSERT_EQ(file.write("not-json"), 8);
-    file.close();
+TEST_F(CloudCredentialStoreTest, CacheServesReadsWithoutHittingBackingStore)
+{
+    CloudSession session;
+    session.token = QStringLiteral("cached-token");
+    session.expiresAt = 7;
+    ASSERT_TRUE(CloudCredentialStore::saveSession(session));
+
+    // Wipe the backing store keys out from under the cache. Because
+    // saveSession() primed the in-process cache, subsequent reads must still
+    // succeed without re-reading QSettings — this is what collapses the
+    // account control's repeated startup reads into one.
+    QSettings settings;
+    settings.remove(AppSettingsKeys::cloudToken());
+    settings.sync();
+
+    const CloudSession cached = CloudCredentialStore::loadSession();
+    EXPECT_EQ(cached.token, QStringLiteral("cached-token"));
+    EXPECT_TRUE(CloudCredentialStore::hasSession());
+
+    // After an explicit cache reset the read falls through to the (wiped) store.
+    CloudCredentialStore::resetCacheForTesting();
+    EXPECT_FALSE(CloudCredentialStore::hasSession());
+}
+
+TEST_F(CloudCredentialStoreTest, MigrateIsNoOp)
+{
+    // Tokens already live in QSettings, so migration is a no-op and must leave
+    // any pre-existing token in place.
+    QSettings settings;
+    settings.setValue(AppSettingsKeys::cloudToken(), QStringLiteral("existing-token"));
+    settings.setValue(AppSettingsKeys::cloudTokenExpiresAt(), 42);
+    settings.setValue(AppSettingsKeys::cloudUserEmail(), QStringLiteral("user@example.com"));
+    settings.sync();
+    CloudCredentialStore::resetCacheForTesting();
+
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
+
+    const CloudSession loaded = CloudCredentialStore::loadSession();
+    EXPECT_EQ(loaded.token, QStringLiteral("existing-token"));
+    EXPECT_EQ(loaded.expiresAt, 42);
+    EXPECT_EQ(loaded.email, QStringLiteral("user@example.com"));
+}
+
+TEST_F(CloudCredentialStoreTest, MigratesLegacyFallbackFileIntoSettings)
+{
+    // Simulate an upgrade from a pre-QSettings build that stored the session in
+    // the mode-0600 fallback file. No token in QSettings yet → migration must
+    // read the legacy file once and copy it into QSettings so the user stays
+    // signed in.
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    ASSERT_FALSE(dir.isEmpty());
+    QDir().mkpath(dir);
+    const QString legacyPath = dir + QStringLiteral("/cloud_session.dat");
+    QFile f(legacyPath);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    f.write(QByteArrayLiteral(
+        "{\"token\":\"legacy-tok\",\"expiresAt\":123,\"email\":\"old@example.com\"}"));
+    f.close();
+    CloudCredentialStore::resetCacheForTesting();
+
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
+
+    const CloudSession loaded = CloudCredentialStore::loadSession();
+    EXPECT_EQ(loaded.token, QStringLiteral("legacy-tok"));
+    EXPECT_EQ(loaded.expiresAt, 123);
+    EXPECT_EQ(loaded.email, QStringLiteral("old@example.com"));
+    // It must have landed in QSettings (not just the cache).
+    CloudCredentialStore::resetCacheForTesting();
+    QSettings settings;
+    EXPECT_EQ(settings.value(AppSettingsKeys::cloudToken()).toString(),
+              QStringLiteral("legacy-tok"));
+
+    QFile::remove(legacyPath);
+}
+
+TEST_F(CloudCredentialStoreTest, LoadSessionDropsEmailWhenTokenMissing)
+{
+    // A stray email/expiry key without a token must not surface as a session.
+    QSettings settings;
+    settings.setValue(AppSettingsKeys::cloudUserEmail(), QStringLiteral("stale@example.com"));
+    settings.setValue(AppSettingsKeys::cloudTokenExpiresAt(), 999);
+    settings.sync();
+    CloudCredentialStore::resetCacheForTesting();
 
     const CloudSession loaded = CloudCredentialStore::loadSession();
     EXPECT_FALSE(loaded.hasToken());
     EXPECT_TRUE(loaded.email.isEmpty());
-}
-
-TEST_F(CloudCredentialStoreTest, MigrateNoOpWhenNoLegacyToken)
-{
-    QSettings settings;
-    settings.setValue(AppSettingsKeys::cloudUserName(), QStringLiteral("still-here"));
-    settings.sync();
-
-    CloudCredentialStore::migrateLegacySettingsIfNeeded();
-
-    EXPECT_FALSE(CloudCredentialStore::hasSession());
-    EXPECT_EQ(settings.value(AppSettingsKeys::cloudUserName()).toString(),
-              QStringLiteral("still-here"));
-}
-
-TEST_F(CloudCredentialStoreTest, MigratesLegacyPlaintextSettings)
-{
-    QSettings settings;
-    settings.setValue(AppSettingsKeys::cloudToken(), QStringLiteral("legacy-token"));
-    settings.setValue(AppSettingsKeys::cloudTokenExpiresAt(), 42);
-    settings.setValue(AppSettingsKeys::cloudUserEmail(), QStringLiteral("legacy@example.com"));
-    settings.sync();
-
-    CloudCredentialStore::migrateLegacySettingsIfNeeded();
-
-    const CloudSession loaded = CloudCredentialStore::loadSession();
-    EXPECT_EQ(loaded.token, QStringLiteral("legacy-token"));
-    EXPECT_EQ(loaded.expiresAt, 42);
-    EXPECT_EQ(loaded.email, QStringLiteral("legacy@example.com"));
-    EXPECT_TRUE(settings.value(AppSettingsKeys::cloudToken()).toString().isEmpty());
-    EXPECT_TRUE(settings.value(AppSettingsKeys::cloudTokenExpiresAt()).toString().isEmpty());
-    EXPECT_TRUE(settings.value(AppSettingsKeys::cloudUserEmail()).toString().isEmpty());
+    EXPECT_EQ(loaded.expiresAt, 0);
 }
 
 TEST_F(CloudCredentialStoreTest, RoundTripWithoutEmail)
