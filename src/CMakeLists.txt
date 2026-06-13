@@ -125,6 +125,13 @@ QtMeshCloudClient.cpp
 CloudCredentialStore.cpp
 CloudUploadPlanner.cpp
 CloudAccountMenuButton.cpp
+DependencyResolver.cpp
+ProjectPackager.cpp
+QtMeshCloudSession.cpp
+CloudUploadDialog.cpp
+CloudProjectsDialog.cpp
+CloudUploadProgress.cpp
+CloudCLIPipeline.cpp
 FeedbackDiagnostics.cpp
 FeedbackDialog.cpp
 FeedbackReportHelper.cpp
@@ -243,6 +250,13 @@ PlatformProfile.h
 QtMeshCloudClient.h
 CloudCredentialStore.h
 CloudUploadPlanner.h
+DependencyResolver.h
+ProjectPackager.h
+QtMeshCloudSession.h
+CloudUploadDialog.h
+CloudProjectsDialog.h
+CloudUploadProgress.h
+CloudCLIPipeline.h
 FeedbackPrefill.h
 FeedbackDiagnostics.h
 FeedbackDialog.h

@@ -24,6 +24,8 @@ public:
     /// Reads CloudCredentialStore / QSettings and updates button + menu visibility.
     void refresh();
 
+    void setUploadEnabled(bool enabled);
+
     /// Exposed for unit tests.
     static QString initialsFromDisplayName(const QString& displayName);
 

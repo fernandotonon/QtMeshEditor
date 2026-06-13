@@ -27,12 +27,19 @@
 #include "VertexCacheOptimizer.h"
 #include "MeshDecimator.h"
 #include "UvUnwrap.h"
+#include "CloudCredentialStore.h"
+#include "ProjectPackager.h"
+#include "QtMeshCloudClient.h"
+#include "QtMeshCloudSession.h"
+#include "ScanConfig.h"
+#include "ScanEngine.h"
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
 #include "MeshDepthRenderer.h"
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
+#include <QEventLoop>
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -623,7 +630,13 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("mirror_pose"), &MCPServer::toolMirrorPose},
         {QStringLiteral("save_pose_library"), &MCPServer::toolSavePoseLibrary},
         {QStringLiteral("load_pose_library"), &MCPServer::toolLoadPoseLibrary},
-        {QStringLiteral("apply_pose_masked"), &MCPServer::toolApplyPoseMasked}
+        {QStringLiteral("apply_pose_masked"), &MCPServer::toolApplyPoseMasked},
+        {QStringLiteral("cloud_status"), &MCPServer::toolCloudStatus},
+        {QStringLiteral("cloud_login"), &MCPServer::toolCloudLogin},
+        {QStringLiteral("cloud_logout"), &MCPServer::toolCloudLogout},
+        {QStringLiteral("cloud_list_projects"), &MCPServer::toolCloudListProjects},
+        {QStringLiteral("cloud_delete_project"), &MCPServer::toolCloudDeleteProject},
+        {QStringLiteral("cloud_upload"), &MCPServer::toolCloudUpload}
     };
     return handlers;
 }
@@ -644,7 +657,8 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
         QStringLiteral("bake_vat"),
-        QStringLiteral("list_morph_targets")
+        QStringLiteral("list_morph_targets"),
+        QStringLiteral("cloud_upload")
     };
     return heavyTools.contains(name);
 }
@@ -5017,6 +5031,163 @@ QJsonObject MCPServer::toolApplyPoseMasked(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+QJsonObject MCPServer::toolCloudStatus(const QJsonObject & /*args*/)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("cloud_status"));
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
+    const bool connected = CloudCredentialStore::hasSession();
+    const CloudSession session = CloudCredentialStore::loadSession();
+
+    QJsonObject content;
+    content[QStringLiteral("connected")] = connected;
+    if (connected && !session.email.isEmpty())
+        content[QStringLiteral("email")] = session.email;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolCloudLogin(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("cloud_login"));
+    const QString apiKey = args.value(QStringLiteral("api_key")).toString().trimmed();
+    if (apiKey.isEmpty())
+        return makeErrorResult(
+            "Error: cloud_login requires an 'api_key' argument. "
+            "Interactive device flow is only available via `qtmesh cloud login`.");
+
+    CloudSession session;
+    session.token = apiKey;
+    if (!CloudCredentialStore::saveSession(session))
+        return makeErrorResult("Error: could not persist API key securely.");
+
+    QJsonObject content;
+    content[QStringLiteral("ok")] = true;
+    content[QStringLiteral("message")] = QStringLiteral("Saved API key to secure storage.");
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolCloudLogout(const QJsonObject & /*args*/)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("cloud_logout"));
+    const QString token = CloudCredentialStore::loadSession().token;
+    if (!token.isEmpty())
+        QtMeshCloudClient::logout(token);
+    CloudCredentialStore::clearSession();
+
+    QJsonObject content;
+    content[QStringLiteral("ok")] = true;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolCloudListProjects(const QJsonObject & /*args*/)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("cloud_list_projects"));
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
+    const QString token = CloudCredentialStore::loadSession().token;
+    if (token.isEmpty())
+        return makeErrorResult("Error: not signed in. Use cloud_login first.");
+
+    const auto result = QtMeshCloudClient::fetchProjects(token);
+    if (!result.ok)
+        return makeErrorResult(result.errorString);
+
+    QJsonArray projects;
+    for (const auto& project : result.projects) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("id"), project.id);
+        obj.insert(QStringLiteral("name"), project.name);
+        obj.insert(QStringLiteral("ownerSlug"), project.ownerSlug);
+        obj.insert(QStringLiteral("projectSlug"), project.projectSlug);
+        obj.insert(QStringLiteral("projectUrl"), project.projectUrl);
+        projects.append(obj);
+    }
+    QJsonObject content;
+    content.insert(QStringLiteral("projects"), projects);
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolCloudDeleteProject(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("cloud_delete_project"));
+    const QString projectId = args.value(QStringLiteral("project_id")).toString().trimmed();
+    if (projectId.isEmpty())
+        return makeErrorResult("Error: missing required 'project_id' argument");
+
+    const QString token = CloudCredentialStore::loadSession().token;
+    if (token.isEmpty())
+        return makeErrorResult("Error: not signed in.");
+
+    const auto result = QtMeshCloudClient::deleteProject(token, projectId);
+    if (!result.ok)
+        return makeErrorResult(result.errorString);
+
+    QJsonObject content;
+    content[QStringLiteral("ok")] = true;
+    content[QStringLiteral("project_id")] = projectId;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolCloudUpload(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("cloud_upload"));
+    const QString filePath = args.value(QStringLiteral("file")).toString();
+    if (filePath.isEmpty())
+        return makeErrorResult("Error: missing required 'file' argument");
+    if (!QFileInfo::exists(filePath))
+        return makeErrorResult(QString("Error: file not found: %1").arg(filePath));
+
+    const QString token = CloudCredentialStore::loadSession().token;
+    if (token.isEmpty())
+        return makeErrorResult("Error: not signed in.");
+
+    QString projectName = args.value(QStringLiteral("name")).toString().trimmed();
+    if (projectName.isEmpty())
+        projectName = QFileInfo(filePath).completeBaseName();
+
+    PackageMetadata manifest = ProjectPackager::buildManifest(filePath, {}, projectName);
+    const bool runScan = !args.contains(QStringLiteral("scan")) || args.value(QStringLiteral("scan")).toBool(true);
+    if (runScan) {
+        ScanConfig config;
+        config.roots = {QFileInfo(filePath).absolutePath()};
+        config.includePatterns = {QFileInfo(filePath).fileName()};
+        manifest.scanSummary = ScanEngine::scanReportToJsonObject(
+            ScanEngine::run(config, config.roots.first()));
+    }
+
+    QtMeshCloudSession session(token);
+    QEventLoop loop;
+    QString projectUrl;
+    QString error;
+    connect(&session, &QtMeshCloudSession::uploadFinished, &loop,
+            [&](bool ok, const QString& err, const QString& url, const QString&) {
+                projectUrl = url;
+                error = err;
+                if (!ok && error.isEmpty())
+                    error = QStringLiteral("Upload failed");
+                loop.quit();
+            });
+    connect(&session, &QtMeshCloudSession::uploadCanceled, &loop, [&]() {
+        error = QStringLiteral("Upload canceled");
+        loop.quit();
+    });
+    session.uploadPackage(manifest);
+    loop.exec();
+
+    if (!error.isEmpty())
+        return makeErrorResult(error);
+
+    QJsonObject content;
+    content[QStringLiteral("ok")] = true;
+    content[QStringLiteral("projectUrl")] = projectUrl;
+    content[QStringLiteral("fileCount")] = manifest.files.size();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -6253,6 +6424,59 @@ QJsonArray MCPServer::buildToolsList()
             props,
             required
         );
+    }
+
+    // cloud_status / cloud_login / cloud_logout / cloud_list_projects / cloud_delete_project / cloud_upload
+    {
+        appendTool(
+            "cloud_status",
+            "Return whether a QtMesh Cloud session is stored locally (never includes the token).",
+            QJsonObject{},
+            QJsonArray{});
+        QJsonObject loginProps;
+        loginProps["api_key"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Bearer token / API key to store in the OS keychain. Device flow is CLI-only."}};
+        appendTool(
+            "cloud_login",
+            "Store a QtMesh Cloud API key in secure local storage.",
+            loginProps,
+            QJsonArray{"api_key"});
+        appendTool(
+            "cloud_logout",
+            "Sign out of QtMesh Cloud and clear the locally stored session.",
+            QJsonObject{},
+            QJsonArray{});
+        appendTool(
+            "cloud_list_projects",
+            "List QtMesh Cloud projects for the signed-in account.",
+            QJsonObject{},
+            QJsonArray{});
+        QJsonObject deleteProps;
+        deleteProps["project_id"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Cloud project id to delete."}};
+        appendTool(
+            "cloud_delete_project",
+            "Delete a QtMesh Cloud project by id.",
+            deleteProps,
+            QJsonArray{"project_id"});
+        QJsonObject uploadProps;
+        uploadProps["file"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Main asset file to package and upload (dependencies are auto-detected)."}};
+        uploadProps["name"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Optional cloud project display name (defaults to the file basename)."}};
+        uploadProps["scan"] = QJsonObject{
+            {"type", "boolean"},
+            {"description", "Run a local asset scan before upload and attach the report. Default true."}};
+        appendTool(
+            "cloud_upload",
+            "Package an asset plus detected dependencies and upload to QtMesh Cloud. "
+            "Returns the project URL on success.",
+            uploadProps,
+            QJsonArray{"file"});
     }
 
     // list_morph_targets

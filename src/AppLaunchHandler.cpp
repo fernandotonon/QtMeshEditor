@@ -25,6 +25,7 @@ bool isCliSubcommand(const QString& arg)
         QStringLiteral("optimize"), QStringLiteral("bake-vertex-colors"),
         QStringLiteral("vat"), QStringLiteral("uv"), QStringLiteral("retopo"),
         QStringLiteral("skin"), QStringLiteral("morph"), QStringLiteral("nodeanim"),
+        QStringLiteral("cloud"),
     };
     return kSubcommands.contains(arg);
 }

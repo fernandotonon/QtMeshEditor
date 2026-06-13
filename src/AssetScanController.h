@@ -49,6 +49,12 @@ public:
     /// Resolve the CLI binary used for isolated subprocess scans (test seam).
     static QString resolveCliBinaryForTest();
 
+    /// Run `qtmesh scan` in a child process so the live editor scene is untouched.
+    /// When @p includePattern is non-empty, only matching files under @p rootPath are scanned.
+    static QByteArray runIsolatedScanJsonSync(const QString& rootPath,
+                                              const QString& includePattern = QString(),
+                                              QString* errorOut = nullptr);
+
     /// Parse `--json` scan stdout into summary + findings (test seam).
     static bool parseScanJsonReport(const QByteArray& jsonBytes,
                                     int* scanned, int* passed, int* warnings, int* errors,
