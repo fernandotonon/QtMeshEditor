@@ -1069,9 +1069,15 @@ void MaterialEditorQML::ensureTextureInMaterialGroup(const QString& textureName)
                 static_cast<size_t>(bytes.size()), false, true));
             image.load(ds, fi.suffix().toLower().toStdString());
             tm.loadImage(texStd, matGroup, image);
+            SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                QStringLiteral("Loaded texture '%1' into material group '%2' from '%3'")
+                    .arg(textureName, QString::fromStdString(matGroup), srcPath));
         }
     } catch (...) {
         // Best-effort: a failure here just means the binding may still miss.
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+            QStringLiteral("Failed to load texture '%1' into material group")
+                .arg(textureName));
     }
 }
 

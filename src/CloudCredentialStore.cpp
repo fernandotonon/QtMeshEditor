@@ -1,9 +1,25 @@
 #include "CloudCredentialStore.h"
 #include "AppSettingsKeys.h"
 
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSettings>
+#include <QStandardPaths>
 
 #include <optional>
+
+#ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <wincred.h>
+#endif
+
+#ifdef Q_OS_MACOS
+#include <Security/Security.h>
+#endif
 
 // Session secrets are stored in QSettings (the same per-user backing store used
 // for every other app preference). An earlier implementation kept the bearer
@@ -32,12 +48,19 @@ CloudSession readFromSettings()
     QSettings settings;
     CloudSession session;
     session.token = settings.value(AppSettingsKeys::cloudToken()).toString();
+    // No token → no session. Don't hydrate email/expiry from stray keys, or
+    // loadSession() would return a partial session and surface stale identity
+    // data in UI fallbacks that read loadSession().email.
+    if (session.token.isEmpty())
+        return {};
     session.expiresAt = settings.value(AppSettingsKeys::cloudTokenExpiresAt()).toLongLong();
     session.email = settings.value(AppSettingsKeys::cloudUserEmail()).toString();
     return session;
 }
 
-void writeToSettings(const CloudSession& session)
+// Returns false if QSettings reported a write/sync error so callers can tell
+// the user the login wasn't persisted instead of silently dropping it.
+bool writeToSettings(const CloudSession& session)
 {
     QSettings settings;
     settings.setValue(AppSettingsKeys::cloudToken(), session.token);
@@ -47,6 +70,70 @@ void writeToSettings(const CloudSession& session)
     else
         settings.setValue(AppSettingsKeys::cloudUserEmail(), session.email);
     settings.sync();
+    return settings.status() == QSettings::NoError;
+}
+
+// One-shot read of the OLD OS secret store (Keychain / Credential Manager /
+// libsecret) and the legacy mode-0600 fallback file, used only to migrate a
+// user who signed in on a pre-QSettings build. Returns an empty session when
+// nothing is found. The libsecret backend is intentionally NOT read back here:
+// it required linking libsecret (now removed) and Linux desktop secret daemons
+// don't prompt the way macOS Keychain does, so the cost of dropping that narrow
+// upgrade path is low compared to re-introducing the dependency.
+CloudSession readLegacySecretStore()
+{
+    QByteArray payload;
+
+#if defined(Q_OS_MACOS)
+    const QByteArray service = QByteArrayLiteral("QtMeshEditor");
+    const QByteArray account = QByteArrayLiteral("QtMeshCloud");
+    CFMutableDictionaryRef dict = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(dict, kSecClass, kSecClassGenericPassword);
+    CFDictionarySetValue(dict, kSecAttrService,
+                         CFStringCreateWithCString(nullptr, service.constData(), kCFStringEncodingUTF8));
+    CFDictionarySetValue(dict, kSecAttrAccount,
+                         CFStringCreateWithCString(nullptr, account.constData(), kCFStringEncodingUTF8));
+    CFDictionarySetValue(dict, kSecReturnData, kCFBooleanTrue);
+    CFDictionarySetValue(dict, kSecMatchLimit, kSecMatchLimitOne);
+    CFTypeRef result = nullptr;
+    const OSStatus status = SecItemCopyMatching(dict, &result);
+    CFRelease(dict);
+    if (status == errSecSuccess && result) {
+        CFDataRef data = reinterpret_cast<CFDataRef>(result);
+        payload = QByteArray(reinterpret_cast<const char*>(CFDataGetBytePtr(data)),
+                             static_cast<int>(CFDataGetLength(data)));
+        CFRelease(result);
+    }
+#elif defined(Q_OS_WIN)
+    PCREDENTIALW cred = nullptr;
+    if (CredReadW(L"QtMeshEditor/QtMeshCloud", CRED_TYPE_GENERIC, 0, &cred) && cred) {
+        payload = QByteArray(reinterpret_cast<const char*>(cred->CredentialBlob),
+                             static_cast<int>(cred->CredentialBlobSize));
+        CredFree(cred);
+    }
+#endif
+
+    // Legacy mode-0600 fallback file (used when no OS store was available).
+    if (payload.isEmpty()) {
+        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+        QFile file(dir + QStringLiteral("/cloud_session.dat"));
+        if (file.open(QIODevice::ReadOnly))
+            payload = file.readAll();
+    }
+
+    CloudSession session;
+    if (payload.isEmpty())
+        return session;
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+        return session;
+    const QJsonObject obj = doc.object();
+    session.token = obj.value(QStringLiteral("token")).toString();
+    session.expiresAt = static_cast<qint64>(obj.value(QStringLiteral("expiresAt")).toDouble(0));
+    session.email = obj.value(QStringLiteral("email")).toString();
+    return session;
 }
 
 void eraseFromSettings()
@@ -64,7 +151,12 @@ bool CloudCredentialStore::saveSession(const CloudSession& session)
 {
     if (!session.hasToken())
         return false;
-    writeToSettings(session);
+    if (!writeToSettings(session)) {
+        // The write didn't persist (permissions / disk). Don't claim success or
+        // prime the cache, so the caller can surface the failure.
+        invalidateCache();
+        return false;
+    }
     g_sessionCache = session;
     g_cacheValid = true;
     return true;
@@ -100,8 +192,17 @@ void CloudCredentialStore::resetCacheForTesting()
 
 void CloudCredentialStore::migrateLegacySettingsIfNeeded()
 {
-    // Tokens already live in QSettings under the same keys, so there is nothing
-    // to migrate. Retained as a no-op so existing callers (the account control's
-    // refresh) keep compiling, and as the hook point should the storage backend
-    // change again.
+    // If a session already lives in QSettings, we're done.
+    if (readFromSettings().hasToken())
+        return;
+
+    // Upgrade path: a user who signed in on a pre-QSettings build has their
+    // token in the OS secret store / legacy fallback file. Read it once and
+    // copy it into QSettings so they stay signed in instead of being silently
+    // logged out after the storage-backend change.
+    const CloudSession legacy = readLegacySecretStore();
+    if (legacy.hasToken() && writeToSettings(legacy)) {
+        g_sessionCache = legacy;
+        g_cacheValid = true;
+    }
 }

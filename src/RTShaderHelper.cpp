@@ -500,7 +500,7 @@ void RTShaderHelper::wirePbrSlotsForFFP(Ogre::Material* mat)
             for (unsigned short i = 0; i < p->getNumTextureUnitStates(); ++i) {
                 auto* tus = p->getTextureUnitState(i);
                 const std::string& n = tus->getName();
-                if (n == "albedo" || n == "diffuse_map") {
+                if (isAlbedoSlotName(n)) {
                     hasNamedDiffuse = true;
                     break;
                 }
@@ -521,7 +521,7 @@ void RTShaderHelper::wirePbrSlotsForFFP(Ogre::Material* mat)
                         Ogre::LBX_MODULATE,
                         Ogre::LBS_TEXTURE,
                         Ogre::LBS_DIFFUSE);
-                } else if (n == "albedo" || n == "diffuse_map") {
+                } else if (isAlbedoSlotName(n)) {
                     tus->setColourOperationEx(
                         Ogre::LBX_MODULATE,
                         Ogre::LBS_TEXTURE,

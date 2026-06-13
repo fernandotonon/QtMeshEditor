@@ -502,9 +502,11 @@ else()
     message(STATUS "OGRE Codec_Assimp not found, using built-in Assimp integration")
 endif()
 
-# Cloud session secrets are stored in QSettings (see CloudCredentialStore.cpp);
-# the platform secret stores (Keychain / Credential Manager / libsecret) are no
-# longer used, so no extra link libraries are needed for it.
+# Cloud session secrets are stored in QSettings (see CloudCredentialStore.cpp).
+# The platform secret stores are no longer the backend, but the migration path
+# still does a ONE-TIME read of the OS store to carry over a pre-QSettings
+# session — macOS needs the Security framework and Windows needs advapi32 for
+# that read. libsecret is fully dropped (no Linux secret-store read-back).
 
 target_link_libraries(${CMAKE_PROJECT_NAME}
 ${CODEC_ASSIMP_LINK_LIB}
@@ -521,6 +523,13 @@ Qt::QuickControls2
 meshoptimizer
 xatlas
 )
+
+# One-time legacy secret-store read for migration (see CloudCredentialStore).
+if(APPLE)
+    target_link_libraries(${CMAKE_PROJECT_NAME} "-framework Security")
+elseif(WIN32)
+    target_link_libraries(${CMAKE_PROJECT_NAME} advapi32)
+endif()
 
 # Link llama.cpp if enabled
 if(ENABLE_LOCAL_LLM)
