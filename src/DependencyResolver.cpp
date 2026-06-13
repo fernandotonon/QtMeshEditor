@@ -249,11 +249,31 @@ QVector<DependencyEntry> DependencyResolver::detectFromFiles(const QString& main
 
     const QString ext = mainInfo.suffix().toLower();
     if (ext == QLatin1String("obj")) {
-        const QString mtlPath = mainInfo.absolutePath() + QLatin1Char('/')
-            + mainInfo.completeBaseName() + QStringLiteral(".mtl");
-        if (QFileInfo::exists(mtlPath)) {
-            appendEntry(out, seen, mtlPath, QStringLiteral("material"), mainInfo.fileName());
-            collectMtlDependencies(mtlPath, out, seen);
+        bool foundMtl = false;
+        QFile objFile(mainInfo.absoluteFilePath());
+        if (objFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            while (!objFile.atEnd()) {
+                const QString line = QString::fromUtf8(objFile.readLine()).trimmed();
+                if (!line.startsWith(QLatin1String("mtllib "), Qt::CaseInsensitive))
+                    continue;
+                const QString mtlName = line.mid(7).trimmed();
+                if (mtlName.isEmpty())
+                    continue;
+                const QString mtlPath = QDir(mainInfo.absolutePath()).filePath(mtlName);
+                if (!QFileInfo::exists(mtlPath))
+                    continue;
+                foundMtl = true;
+                appendEntry(out, seen, mtlPath, QStringLiteral("material"), mainInfo.fileName());
+                collectMtlDependencies(mtlPath, out, seen);
+            }
+        }
+        if (!foundMtl) {
+            const QString mtlPath = mainInfo.absolutePath() + QLatin1Char('/')
+                + mainInfo.completeBaseName() + QStringLiteral(".mtl");
+            if (QFileInfo::exists(mtlPath)) {
+                appendEntry(out, seen, mtlPath, QStringLiteral("material"), mainInfo.fileName());
+                collectMtlDependencies(mtlPath, out, seen);
+            }
         }
     } else if (ext == QLatin1String("gltf")) {
         collectGltfDependencies(mainInfo.absoluteFilePath(), out, seen);

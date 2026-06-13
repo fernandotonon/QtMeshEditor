@@ -130,6 +130,7 @@ private slots:
     void signOutOfQtMeshCloud();
     void uploadFilesToQtMeshCloud();
     void showCloudProjectsDialog();
+    QtMeshCloudSession* cloudSessionForToken(const QString& token);
     void showSendFeedbackDialog(const FeedbackPrefill& prefill = FeedbackPrefill{});
     bool startMCPServer(int port);
     void stopMCPServer();

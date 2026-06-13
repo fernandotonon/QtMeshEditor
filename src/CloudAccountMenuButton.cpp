@@ -343,7 +343,7 @@ void CloudAccountMenuButton::refresh()
     updateHeader(display, signedIn);
 
     m_openProjectsAction->setEnabled(signedIn);
-    m_uploadAction->setEnabled(signedIn);
+    m_uploadAction->setEnabled(true);
 
     m_signInAction->setVisible(!signedIn);
     m_signInAction->setEnabled(!signedIn);
@@ -353,10 +353,16 @@ void CloudAccountMenuButton::refresh()
 
 void CloudAccountMenuButton::setUploadEnabled(bool enabled)
 {
-    if (m_uploadAction)
-        m_uploadAction->setEnabled(enabled && CloudCredentialStore::hasSession());
-    if (m_uploadAction && !enabled)
+    if (!m_uploadAction)
+        return;
+    if (!CloudCredentialStore::hasSession()) {
+        m_uploadAction->setEnabled(true);
+        m_uploadAction->setToolTip({});
+        return;
+    }
+    m_uploadAction->setEnabled(enabled);
+    if (!enabled)
         m_uploadAction->setToolTip(tr("Open a model first"));
-    else if (m_uploadAction)
+    else
         m_uploadAction->setToolTip({});
 }

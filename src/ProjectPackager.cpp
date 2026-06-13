@@ -32,6 +32,17 @@ QString sha256File(const QString& path)
     return QString::fromLatin1(hash.result().toHex());
 }
 
+bool isDescendantPath(const QString& rootDir, const QString& absolutePath)
+{
+    const QString root = QDir(rootDir).absolutePath();
+    const QString path = QDir(absolutePath).absolutePath();
+    if (root.isEmpty() || path.isEmpty())
+        return false;
+    if (path == root)
+        return true;
+    return path.startsWith(root + QLatin1Char('/'));
+}
+
 QString commonRootDir(const QStringList& absolutePaths)
 {
     if (absolutePaths.isEmpty())
@@ -40,7 +51,7 @@ QString commonRootDir(const QStringList& absolutePaths)
     QString common = QFileInfo(absolutePaths.first()).absolutePath();
     for (const QString& path : absolutePaths) {
         const QString dir = QFileInfo(path).absolutePath();
-        while (!dir.startsWith(common) && !common.isEmpty()) {
+        while (!isDescendantPath(common, dir) && !common.isEmpty()) {
             const int slash = common.lastIndexOf(QLatin1Char('/'));
             if (slash < 0)
                 break;
@@ -55,7 +66,7 @@ QString commonRootDir(const QStringList& absolutePaths)
 QString makeRelativePath(const QString& rootDir, const QString& absolutePath, QSet<QString>& usedNames)
 {
     QString relative;
-    if (!rootDir.isEmpty() && absolutePath.startsWith(rootDir)) {
+    if (!rootDir.isEmpty() && isDescendantPath(rootDir, absolutePath)) {
         relative = QDir(rootDir).relativeFilePath(absolutePath);
     } else {
         relative = QFileInfo(absolutePath).fileName();

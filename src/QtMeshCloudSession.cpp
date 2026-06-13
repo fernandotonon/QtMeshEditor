@@ -3,6 +3,8 @@
 #include "CloudUploadPlanner.h"
 #include "SentryReporter.h"
 
+#include <QPointer>
+#include <QCoreApplication>
 #include <QThread>
 
 QtMeshCloudSession::QtMeshCloudSession(const QString& bearerToken, QObject* parent)
@@ -19,14 +21,17 @@ void QtMeshCloudSession::cancel()
 void QtMeshCloudSession::listProjects()
 {
     const QString token = m_bearerToken;
-    QThread* worker = QThread::create([this, token]() {
+    QPointer<QtMeshCloudSession> self(this);
+    QThread* worker = QThread::create([self, token]() {
         const auto result = QtMeshCloudClient::fetchProjects(token);
-        QMetaObject::invokeMethod(this, [this, result]() {
+        QMetaObject::invokeMethod(qApp, [self, result]() {
+            if (!self)
+                return;
             if (!result.ok) {
-                emit projectsListed({}, result.errorString);
+                emit self->projectsListed({}, result.errorString);
                 return;
             }
-            emit projectsListed(result.projects, {});
+            emit self->projectsListed(result.projects, {});
         }, Qt::QueuedConnection);
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
@@ -42,7 +47,8 @@ void QtMeshCloudSession::uploadPackage(const PackageMetadata& metadata,
     const QString token = m_bearerToken;
     const PackageMetadata package = metadata;
 
-    QThread* worker = QThread::create([this, token, package, ownerSlug, projectSlug, createNewProject]() {
+    QPointer<QtMeshCloudSession> self(this);
+    QThread* worker = QThread::create([self, token, package, ownerSlug, projectSlug, createNewProject, canceled = &m_canceled]() {
         QtMeshCloudClient::ProjectResult project;
         if (createNewProject) {
             QString slug = projectSlug.isEmpty()
@@ -58,15 +64,22 @@ void QtMeshCloudSession::uploadPackage(const PackageMetadata& metadata,
             project.ok = true;
             project.ownerSlug = ownerSlug;
             project.projectSlug = projectSlug;
+            project.projectUrl = QStringLiteral("https://qtmesh.dev/%1/%2")
+                                     .arg(project.ownerSlug, project.projectSlug);
         }
 
-        if (m_canceled.load()) {
-            QMetaObject::invokeMethod(this, [this]() { emit uploadCanceled(); }, Qt::QueuedConnection);
+        if (canceled->load()) {
+            QMetaObject::invokeMethod(qApp, [self]() {
+                if (self)
+                    emit self->uploadCanceled();
+            }, Qt::QueuedConnection);
             return;
         }
         if (!project.ok) {
-            QMetaObject::invokeMethod(this, [this, project]() {
-                emit uploadFinished(false, project.errorString, {}, {});
+            QMetaObject::invokeMethod(qApp, [self, project]() {
+                if (!self)
+                    return;
+                emit self->uploadFinished(false, project.errorString, {}, {});
             }, Qt::QueuedConnection);
             return;
         }
@@ -83,13 +96,18 @@ void QtMeshCloudSession::uploadPackage(const PackageMetadata& metadata,
 
         const auto uploadUrls = QtMeshCloudClient::requestUploadUrls(
             token, project.ownerSlug, project.projectSlug, descriptors);
-        if (m_canceled.load()) {
-            QMetaObject::invokeMethod(this, [this]() { emit uploadCanceled(); }, Qt::QueuedConnection);
+        if (canceled->load()) {
+            QMetaObject::invokeMethod(qApp, [self]() {
+                if (self)
+                    emit self->uploadCanceled();
+            }, Qt::QueuedConnection);
             return;
         }
         if (!uploadUrls.ok) {
-            QMetaObject::invokeMethod(this, [this, uploadUrls]() {
-                emit uploadFinished(false, uploadUrls.errorString, {}, {});
+            QMetaObject::invokeMethod(qApp, [self, uploadUrls]() {
+                if (!self)
+                    return;
+                emit self->uploadFinished(false, uploadUrls.errorString, {}, {});
             }, Qt::QueuedConnection);
             return;
         }
@@ -99,25 +117,35 @@ void QtMeshCloudSession::uploadPackage(const PackageMetadata& metadata,
         QString fallbackMainFileId;
         const int total = uploadUrls.uploads.size();
         for (int i = 0; i < total; ++i) {
-            if (m_canceled.load()) {
-                QMetaObject::invokeMethod(this, [this]() { emit uploadCanceled(); }, Qt::QueuedConnection);
+            if (canceled->load()) {
+                QMetaObject::invokeMethod(qApp, [self]() {
+                    if (self)
+                        emit self->uploadCanceled();
+                }, Qt::QueuedConnection);
                 return;
             }
 
             const QString label = descriptors.at(i).uploadName;
-            QMetaObject::invokeMethod(this, [this, i, total, label]() {
-                emit uploadProgress(i + 1, total + 1, label);
+            QMetaObject::invokeMethod(qApp, [self, i, total, label]() {
+                if (!self)
+                    return;
+                emit self->uploadProgress(i + 1, total + 1, label);
             }, Qt::QueuedConnection);
 
             const auto result = QtMeshCloudClient::uploadFileContent(
-                token, uploadUrls.uploads.at(i), descriptors.at(i).path, &m_canceled);
+                token, uploadUrls.uploads.at(i), descriptors.at(i).path, canceled);
             if (result.canceled) {
-                QMetaObject::invokeMethod(this, [this]() { emit uploadCanceled(); }, Qt::QueuedConnection);
+                QMetaObject::invokeMethod(qApp, [self]() {
+                    if (self)
+                        emit self->uploadCanceled();
+                }, Qt::QueuedConnection);
                 return;
             }
             if (!result.ok) {
-                QMetaObject::invokeMethod(this, [this, result]() {
-                    emit uploadFinished(false, result.errorString, {}, {});
+                QMetaObject::invokeMethod(qApp, [self, result]() {
+                    if (!self)
+                        return;
+                    emit self->uploadFinished(false, result.errorString, {}, {});
                 }, Qt::QueuedConnection);
                 return;
             }
@@ -131,19 +159,37 @@ void QtMeshCloudSession::uploadPackage(const PackageMetadata& metadata,
         if (mainFileId.isEmpty())
             mainFileId = fallbackMainFileId;
 
+        if (canceled->load()) {
+            QMetaObject::invokeMethod(qApp, [self]() {
+                if (self)
+                    emit self->uploadCanceled();
+            }, Qt::QueuedConnection);
+            return;
+        }
+
+        QMetaObject::invokeMethod(qApp, [self, total]() {
+            if (!self)
+                return;
+            emit self->uploadProgress(total + 1, total + 1, QString());
+        }, Qt::QueuedConnection);
+
         const auto completed = QtMeshCloudClient::completeUpload(
             token, project.ownerSlug, project.projectSlug, uploadedFileIds, mainFileId);
         if (!completed.ok) {
-            QMetaObject::invokeMethod(this, [this, completed]() {
-                emit uploadFinished(false, completed.errorString, {}, {});
+            QMetaObject::invokeMethod(qApp, [self, completed]() {
+                if (!self)
+                    return;
+                emit self->uploadFinished(false, completed.errorString, {}, {});
             }, Qt::QueuedConnection);
             return;
         }
 
         SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
                                       QStringLiteral("QtMesh Cloud package upload completed"));
-        QMetaObject::invokeMethod(this, [this, project, completed]() {
-            emit uploadFinished(true, {}, project.projectUrl, completed.scanStatus);
+        QMetaObject::invokeMethod(qApp, [self, project, completed]() {
+            if (!self)
+                return;
+            emit self->uploadFinished(true, {}, project.projectUrl, completed.scanStatus);
         }, Qt::QueuedConnection);
     });
 

@@ -6,6 +6,7 @@
 #include "QtMeshCloudClient.h"
 #include "ScanConfig.h"
 #include "ScanEngine.h"
+#include "SentryReporter.h"
 
 #include <QCoreApplication>
 #include <QFileInfo>
@@ -37,10 +38,39 @@ QString sessionToken(const QString& apiKeyFlag)
     return CloudCredentialStore::loadSession().token;
 }
 
+int cloudSubcommandIndex(int argc, char* argv[])
+{
+    for (int i = 1; i < argc; ++i) {
+        if (QString::fromUtf8(argv[i]) == QLatin1String("cloud"))
+            return i + 1;
+    }
+    return 2;
+}
+
+int cloudPayloadIndex(int argc, char* argv[])
+{
+    return cloudSubcommandIndex(argc, argv) + 1;
+}
+
+QString cloudSubcommand(int argc, char* argv[])
+{
+    const int index = cloudSubcommandIndex(argc, argv);
+    return index < argc ? QString::fromUtf8(argv[index]) : QString();
+}
+
+bool payloadHasJsonFlag(int argc, char* argv[])
+{
+    for (int i = cloudPayloadIndex(argc, argv); i < argc; ++i) {
+        if (QString::fromUtf8(argv[i]) == QLatin1String("--json"))
+            return true;
+    }
+    return false;
+}
+
 int cmdCloudLogin(int argc, char* argv[])
 {
     QString apiKey;
-    for (int i = 2; i < argc; ++i) {
+    for (int i = cloudPayloadIndex(argc, argv); i < argc; ++i) {
         const QString arg = QString::fromUtf8(argv[i]);
         if (arg == QLatin1String("--api-key") && i + 1 < argc)
             apiKey = QString::fromUtf8(argv[++i]);
@@ -100,6 +130,7 @@ int cmdCloudLogin(int argc, char* argv[])
 
 int cmdCloudLogout()
 {
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
     const QString token = CloudCredentialStore::loadSession().token;
     if (!token.isEmpty())
         QtMeshCloudClient::logout(token);
@@ -175,7 +206,7 @@ int cmdCloudList(bool jsonOutput)
 int cmdCloudDelete(int argc, char* argv[])
 {
     QString projectId;
-    for (int i = 2; i < argc; ++i) {
+    for (int i = cloudPayloadIndex(argc, argv); i < argc; ++i) {
         const QString arg = QString::fromUtf8(argv[i]);
         if (!arg.startsWith(QLatin1Char('-')) && projectId.isEmpty())
             projectId = arg;
@@ -205,7 +236,7 @@ int cmdCloudUpload(int argc, char* argv[])
     QString projectName;
     bool jsonOutput = false;
     bool runScan = true;
-    for (int i = 2; i < argc; ++i) {
+    for (int i = cloudPayloadIndex(argc, argv); i < argc; ++i) {
         const QString arg = QString::fromUtf8(argv[i]);
         if (arg == QLatin1String("--json")) {
             jsonOutput = true;
@@ -236,6 +267,9 @@ int cmdCloudUpload(int argc, char* argv[])
     if (projectName.isEmpty())
         projectName = QFileInfo(mainFile).completeBaseName();
 
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                  QStringLiteral("QtMesh Cloud CLI upload start"));
+
     PackageMetadata manifest = ProjectPackager::buildManifest(mainFile, {}, projectName);
     if (runScan) {
         ScanConfig config;
@@ -253,6 +287,9 @@ int cmdCloudUpload(int argc, char* argv[])
         project = QtMeshCloudClient::createProject(token, manifest.projectName, slug);
     }
     if (!project.ok) {
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                      QStringLiteral("QtMesh Cloud CLI upload failed: create project"),
+                                      QStringLiteral("error"));
         err() << "Error: " << project.errorString << Qt::endl;
         return 1;
     }
@@ -270,6 +307,9 @@ int cmdCloudUpload(int argc, char* argv[])
     const auto uploadUrls = QtMeshCloudClient::requestUploadUrls(
         token, project.ownerSlug, project.projectSlug, descriptors);
     if (!uploadUrls.ok) {
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                      QStringLiteral("QtMesh Cloud CLI upload failed: upload urls"),
+                                      QStringLiteral("error"));
         err() << "Error: " << uploadUrls.errorString << Qt::endl;
         return 1;
     }
@@ -281,6 +321,9 @@ int cmdCloudUpload(int argc, char* argv[])
         const auto result = QtMeshCloudClient::uploadFileContent(
             token, uploadUrls.uploads.at(i), descriptors.at(i).path, nullptr);
         if (!result.ok) {
+            SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                          QStringLiteral("QtMesh Cloud CLI upload failed: file content"),
+                                          QStringLiteral("error"));
             err() << "Error: " << result.errorString << Qt::endl;
             return 1;
         }
@@ -296,11 +339,16 @@ int cmdCloudUpload(int argc, char* argv[])
     const auto completed = QtMeshCloudClient::completeUpload(
         token, project.ownerSlug, project.projectSlug, uploadedFileIds, mainFileId);
     if (!completed.ok) {
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                      QStringLiteral("QtMesh Cloud CLI upload failed: complete"),
+                                      QStringLiteral("error"));
         err() << "Error: " << completed.errorString << Qt::endl;
         return 1;
     }
 
     const QString projectUrl = project.projectUrl;
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                  QStringLiteral("QtMesh Cloud CLI upload completed"));
 
     if (jsonOutput) {
         QJsonObject obj;
@@ -321,20 +369,20 @@ int cmdCloudUpload(int argc, char* argv[])
 
 int CloudCLIPipeline::run(int argc, char* argv[])
 {
-    if (argc < 3) {
+    const QString sub = cloudSubcommand(argc, argv);
+    if (sub.isEmpty()) {
         err() << "Usage: qtmesh cloud <login|logout|status|list|upload|delete> ..." << Qt::endl;
         return 2;
     }
 
-    const QString sub = QString::fromUtf8(argv[2]);
     if (sub == QLatin1String("login"))
         return cmdCloudLogin(argc, argv);
     if (sub == QLatin1String("logout"))
         return cmdCloudLogout();
     if (sub == QLatin1String("status"))
-        return cmdCloudStatus(argc > 3 && QString::fromUtf8(argv[3]) == QLatin1String("--json"));
+        return cmdCloudStatus(payloadHasJsonFlag(argc, argv));
     if (sub == QLatin1String("list"))
-        return cmdCloudList(argc > 3 && QString::fromUtf8(argv[3]) == QLatin1String("--json"));
+        return cmdCloudList(payloadHasJsonFlag(argc, argv));
     if (sub == QLatin1String("delete"))
         return cmdCloudDelete(argc, argv);
     if (sub == QLatin1String("upload"))

@@ -228,7 +228,11 @@ MainWindow::MainWindow(QWidget *parent) :
 
     m_cloudUploadMenuAction = new QAction(tr("Upload to QtMesh Cloud..."), this);
     m_cloudUploadMenuAction->setObjectName(QStringLiteral("actionUploadToQtMeshCloud"));
-    connect(m_cloudUploadMenuAction, &QAction::triggered, this, &MainWindow::uploadFilesToQtMeshCloud);
+    connect(m_cloudUploadMenuAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("File menu: Upload to QtMesh Cloud"));
+        uploadFilesToQtMeshCloud();
+    });
     ui->menuFile->insertAction(ui->actionExport_Selected, m_cloudUploadMenuAction);
 
     m_cloudUploadProgress = new CloudUploadProgress(this);
@@ -2580,10 +2584,25 @@ void MainWindow::signOutOfQtMeshCloud()
     settings.remove(AppSettingsKeys::cloudUserEmail());
     settings.remove(AppSettingsKeys::cloudUserSlug());
     settings.sync();
+    if (m_cloudSession) {
+        m_cloudSession->deleteLater();
+        m_cloudSession = nullptr;
+    }
     updateCloudAuthActions();
     SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
                                   QStringLiteral("QtMesh Cloud signed out"));
     QMessageBox::information(this, tr("QtMesh Cloud"), tr("Signed out of QtMesh Cloud."));
+}
+
+QtMeshCloudSession* MainWindow::cloudSessionForToken(const QString& token)
+{
+    if (m_cloudSession && m_cloudSession->bearerToken() != token) {
+        m_cloudSession->deleteLater();
+        m_cloudSession = nullptr;
+    }
+    if (!m_cloudSession)
+        m_cloudSession = new QtMeshCloudSession(token, this);
+    return m_cloudSession;
 }
 
 void MainWindow::showCloudProjectsDialog()
@@ -2607,19 +2626,19 @@ void MainWindow::showCloudProjectsDialog()
     progress.setMinimumDuration(0);
     progress.show();
 
-    if (!m_cloudSession)
-        m_cloudSession = new QtMeshCloudSession(token, this);
+    QtMeshCloudSession* session = cloudSessionForToken(token);
 
     QEventLoop loop;
     QList<QtMeshCloudClient::ProjectSummary> projects;
     QString error;
-    connect(m_cloudSession, &QtMeshCloudSession::projectsListed, this,
+    connect(session, &QtMeshCloudSession::projectsListed, this,
             [&](const QList<QtMeshCloudClient::ProjectSummary>& listed, const QString& err) {
                 projects = listed;
                 error = err;
                 loop.quit();
-            });
-    m_cloudSession->listProjects();
+            },
+            Qt::SingleShotConnection);
+    session->listProjects();
     loop.exec();
     progress.close();
 
@@ -2672,20 +2691,19 @@ void MainWindow::uploadFilesToQtMeshCloud()
     progress.setMinimumDuration(0);
     progress.show();
 
-    if (!m_cloudSession)
-        m_cloudSession = new QtMeshCloudSession(token, this);
+    QtMeshCloudSession* session = cloudSessionForToken(token);
 
     QEventLoop listLoop;
     QList<QtMeshCloudClient::ProjectSummary> projects;
     QString listError;
-    connect(m_cloudSession, &QtMeshCloudSession::projectsListed, this,
+    connect(session, &QtMeshCloudSession::projectsListed, this,
             [&](const QList<QtMeshCloudClient::ProjectSummary>& listed, const QString& err) {
                 projects = listed;
                 listError = err;
                 listLoop.quit();
             },
             Qt::SingleShotConnection);
-    m_cloudSession->listProjects();
+    session->listProjects();
     listLoop.exec();
     progress.close();
 
@@ -2762,24 +2780,22 @@ void MainWindow::uploadFilesToQtMeshCloud()
         }
     }
 
-    if (m_cloudSession)
-        m_cloudSession->deleteLater();
-    m_cloudSession = new QtMeshCloudSession(token, this);
+    session = cloudSessionForToken(token);
     m_cloudUploadProgress->start(tr("Uploading to QtMesh Cloud…"), manifest.files.size() + 1);
 
-    connect(m_cloudSession, &QtMeshCloudSession::uploadProgress, this,
+    connect(session, &QtMeshCloudSession::uploadProgress, this,
             [this](int current, int total, const QString& fileName) {
                 m_cloudUploadProgress->updateProgress(current, total, fileName);
             });
-    connect(m_cloudUploadProgress, &CloudUploadProgress::cancelRequested, m_cloudSession,
+    connect(m_cloudUploadProgress, &CloudUploadProgress::cancelRequested, session,
             &QtMeshCloudSession::cancel);
 
-    connect(m_cloudSession, &QtMeshCloudSession::uploadCanceled, this, [this]() {
+    connect(session, &QtMeshCloudSession::uploadCanceled, this, [this]() {
         m_cloudUploadProgress->finish(false, tr("Upload canceled"));
         QTimer::singleShot(3000, m_cloudUploadProgress, &CloudUploadProgress::hideProgress);
     });
 
-    connect(m_cloudSession, &QtMeshCloudSession::uploadFinished, this,
+    connect(session, &QtMeshCloudSession::uploadFinished, this,
             [this, fileCount = manifest.files.size()](bool ok, const QString& error,
                                                       const QString& projectUrl,
                                                       const QString& scanStatus) {
@@ -2816,7 +2832,7 @@ void MainWindow::uploadFilesToQtMeshCloud()
                 QTimer::singleShot(3000, m_cloudUploadProgress, &CloudUploadProgress::hideProgress);
             });
 
-    m_cloudSession->uploadPackage(manifest, selectedProject.ownerSlug, selectedProject.projectSlug,
+    session->uploadPackage(manifest, selectedProject.ownerSlug, selectedProject.projectSlug,
                                   false);
 }
 

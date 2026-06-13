@@ -27,7 +27,9 @@
 #include "VertexCacheOptimizer.h"
 #include "MeshDecimator.h"
 #include "UvUnwrap.h"
+#include "AssetScanController.h"
 #include "CloudCredentialStore.h"
+#include "DependencyResolver.h"
 #include "ProjectPackager.h"
 #include "QtMeshCloudClient.h"
 #include "QtMeshCloudSession.h"
@@ -674,8 +676,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         txn = SentryReporter::startTransaction(QStringLiteral("mcp.%1").arg(name), "mcp.tool");
     }
 
-    // Lazily initialize Ogre/Manager on first tool call
-    if (!ensureOgreInitialized()) {
+    // Lazily initialize Ogre/Manager on first scene-dependent tool call
+    if (!name.startsWith(QStringLiteral("cloud_")) && !ensureOgreInitialized()) {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult("Error: Ogre 3D engine could not be initialized (no OpenGL available)");
     }
@@ -5070,6 +5072,7 @@ QJsonObject MCPServer::toolCloudLogin(const QJsonObject &args)
 QJsonObject MCPServer::toolCloudLogout(const QJsonObject & /*args*/)
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("cloud_logout"));
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
     const QString token = CloudCredentialStore::loadSession().token;
     if (!token.isEmpty())
         QtMeshCloudClient::logout(token);
@@ -5116,6 +5119,7 @@ QJsonObject MCPServer::toolCloudDeleteProject(const QJsonObject &args)
     if (projectId.isEmpty())
         return makeErrorResult("Error: missing required 'project_id' argument");
 
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
     const QString token = CloudCredentialStore::loadSession().token;
     if (token.isEmpty())
         return makeErrorResult("Error: not signed in.");
@@ -5140,6 +5144,7 @@ QJsonObject MCPServer::toolCloudUpload(const QJsonObject &args)
     if (!QFileInfo::exists(filePath))
         return makeErrorResult(QString("Error: file not found: %1").arg(filePath));
 
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
     const QString token = CloudCredentialStore::loadSession().token;
     if (token.isEmpty())
         return makeErrorResult("Error: not signed in.");
@@ -5151,11 +5156,15 @@ QJsonObject MCPServer::toolCloudUpload(const QJsonObject &args)
     PackageMetadata manifest = ProjectPackager::buildManifest(filePath, {}, projectName);
     const bool runScan = !args.contains(QStringLiteral("scan")) || args.value(QStringLiteral("scan")).toBool(true);
     if (runScan) {
-        ScanConfig config;
-        config.roots = {QFileInfo(filePath).absolutePath()};
-        config.includePatterns = {QFileInfo(filePath).fileName()};
-        manifest.scanSummary = ScanEngine::scanReportToJsonObject(
-            ScanEngine::run(config, config.roots.first()));
+        QString scanError;
+        const QByteArray scanJson = AssetScanController::runIsolatedScanJsonSync(
+            QFileInfo(filePath).absolutePath(), QFileInfo(filePath).fileName(), &scanError);
+        if (!scanJson.isEmpty()) {
+            QJsonParseError parseError;
+            const QJsonDocument doc = QJsonDocument::fromJson(scanJson, &parseError);
+            if (parseError.error == QJsonParseError::NoError && doc.isObject())
+                manifest.scanSummary = doc.object();
+        }
     }
 
     QtMeshCloudSession session(token);
