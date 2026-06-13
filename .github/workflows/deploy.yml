@@ -2075,6 +2075,11 @@ jobs:
         echo "SHA256: $SHA256"
         echo "sha256=$SHA256" >> $GITHUB_OUTPUT
 
+    - name: Check out QtMeshEditor (for the canonical cask template)
+      uses: actions/checkout@v4
+      with:
+        path: qtmesheditor-src
+
     - name: Clone Homebrew tap repository
       run: |
         git clone https://x-access-token:${{ secrets.HOMEBREW_TAP_TOKEN }}@github.com/fernandotonon/homebrew-qtmesheditor.git
@@ -2082,33 +2087,27 @@ jobs:
         git config user.name "GitHub Actions Bot"
         git config user.email "actions@github.com"
 
-    - name: Update Cask file
+    - name: Generate Cask file from canonical template
       run: |
         VERSION="${{ github.ref_name }}"
         SHA256="${{ steps.sha256.outputs.sha256 }}"
         CASK_FILE="homebrew-qtmesheditor/Casks/qtmesheditor.rb"
+        TEMPLATE="qtmesheditor-src/packaging/macos/qtmesheditor.rb.in"
 
-        echo "Updating cask to version $VERSION with SHA256 $SHA256"
+        echo "Generating cask for version $VERSION (sha256 $SHA256)"
 
-        # Only update version and sha256 — the cask file already contains the
-        # CLI symlink + lsregister stanzas inside its single postflight block,
-        # so we must NOT append anything. (A previous version appended a second
-        # `postflight do...end` AFTER the cask's closing `end`, which Homebrew
-        # parsed as a top-level call and rejected with
-        # "undefined method 'postflight'", breaking every install — #718.)
-        sed -i "s/version '.*'/version '$VERSION'/" "$CASK_FILE"
-        sed -i "s/sha256 '.*'/sha256 '$SHA256'/" "$CASK_FILE"
+        # Always regenerate the ENTIRE cask from the in-repo template — never
+        # sed-patch or append to the existing tap file. (The old approach
+        # appended a second `postflight do...end` AFTER the cask's closing `end`,
+        # which Homebrew parsed as a top-level call and rejected with
+        # "undefined method 'postflight'", breaking every install — #718. It also
+        # used single-quote sed patterns that no longer match the double-quote
+        # DSL.) The template owns the whole cask, so version/sha + structure stay
+        # correct and the file can never drift.
+        sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHA256@/$SHA256/g" \
+          "$TEMPLATE" > "$CASK_FILE"
 
-        # Safety net: if an older tap revision is missing the lsregister call,
-        # rewrite the WHOLE cask from the canonical template in this repo rather
-        # than appending a stray stanza.
-        if ! grep -q 'lsregister' "$CASK_FILE"; then
-          echo "Cask missing lsregister — regenerating from canonical template"
-          sed -e "s/@VERSION@/$VERSION/" -e "s/@SHA256@/$SHA256/" \
-            packaging/macos/qtmesheditor.rb.in > "$CASK_FILE"
-        fi
-
-        echo "Updated cask file:"
+        echo "Generated cask file:"
         cat "$CASK_FILE"
 
     - name: Commit and push changes
