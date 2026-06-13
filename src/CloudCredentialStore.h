@@ -22,11 +22,15 @@ struct CloudSession {
 };
 
 /**
- * OS-backed storage for QtMesh Cloud session secrets.
+ * Storage for QtMesh Cloud session secrets.
  *
- * Uses Keychain (macOS), Credential Manager (Windows), or libsecret (Linux) when
- * available; otherwise a mode-0600 file under the app config directory.
- * Non-secret profile fields (name, slug) remain in QSettings.
+ * Backed by QSettings (the per-user app preference store), the same as every
+ * other setting. An earlier version used the OS secret store (Keychain /
+ * Credential Manager / libsecret), but on macOS every Keychain read raised a
+ * confirmation dialog and the session is read several times at startup, so the
+ * user was prompted repeatedly on each launch. The token is a short-lived
+ * cloud session bearer, so QSettings is an acceptable (non-prompting) home.
+ * Non-secret profile fields (name, slug) also live in QSettings.
  */
 class CloudCredentialStore {
 public:

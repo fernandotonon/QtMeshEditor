@@ -292,7 +292,7 @@ Split View|Skeleton Animation Controls
 | Platform | Command |
 |----------|---------|
 | **Windows** | `winget install FernandoTonon.QtMeshEditor` |
-| **macOS** | `brew tap fernandotonon/qtmesheditor && brew install qtmesheditor` |
+| **macOS** | `brew tap fernandotonon/qtmesheditor && brew trust fernandotonon/qtmesheditor && brew install qtmesheditor` |
 | **Linux** | `sudo snap install qtmesheditor` |
 | **Docker** | `docker run --rm ghcr.io/fernandotonon/qtmesh --help` |
 

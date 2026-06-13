@@ -205,7 +205,7 @@ export const installOptions = [
   {
     platform: 'macOS',
     method: 'Homebrew',
-    command: 'brew tap fernandotonon/qtmesheditor\nbrew install qtmesheditor'
+    command: 'brew tap fernandotonon/qtmesheditor\nbrew trust fernandotonon/qtmesheditor\nbrew install qtmesheditor'
   },
   {
     platform: 'Linux',

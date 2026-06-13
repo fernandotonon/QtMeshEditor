@@ -502,16 +502,9 @@ else()
     message(STATUS "OGRE Codec_Assimp not found, using built-in Assimp integration")
 endif()
 
-set(QTMESH_LIBSECRET_FOUND FALSE)
-if(UNIX AND NOT APPLE)
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(LIBSECRET QUIET libsecret-1)
-        if(LIBSECRET_FOUND)
-            set(QTMESH_LIBSECRET_FOUND TRUE)
-        endif()
-    endif()
-endif()
+# Cloud session secrets are stored in QSettings (see CloudCredentialStore.cpp);
+# the platform secret stores (Keychain / Credential Manager / libsecret) are no
+# longer used, so no extra link libraries are needed for it.
 
 target_link_libraries(${CMAKE_PROJECT_NAME}
 ${CODEC_ASSIMP_LINK_LIB}
@@ -528,18 +521,6 @@ Qt::QuickControls2
 meshoptimizer
 xatlas
 )
-
-if(APPLE)
-    target_link_libraries(${CMAKE_PROJECT_NAME} "-framework Security")
-elseif(WIN32)
-    target_link_libraries(${CMAKE_PROJECT_NAME} advapi32)
-elseif(QTMESH_LIBSECRET_FOUND)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE HAVE_LIBSECRET=1)
-    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${LIBSECRET_INCLUDE_DIRS})
-    target_sources(${CMAKE_PROJECT_NAME} PRIVATE CloudCredentialStore_linux.c)
-    target_link_libraries(${CMAKE_PROJECT_NAME} ${LIBSECRET_LIBRARIES})
-endif()
-
 
 # Link llama.cpp if enabled
 if(ENABLE_LOCAL_LLM)
@@ -614,17 +595,6 @@ if(BUILD_TESTS)
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
     meshoptimizer xatlas)
-
-    if(APPLE)
-        target_link_libraries(UnitTests "-framework Security")
-    elseif(WIN32)
-        target_link_libraries(UnitTests advapi32)
-    elseif(QTMESH_LIBSECRET_FOUND)
-        target_compile_definitions(UnitTests PRIVATE HAVE_LIBSECRET=1)
-        target_include_directories(UnitTests PRIVATE ${LIBSECRET_INCLUDE_DIRS})
-        target_sources(UnitTests PRIVATE CloudCredentialStore_linux.c)
-        target_link_libraries(UnitTests ${LIBSECRET_LIBRARIES})
-    endif()
 
     # Link llama.cpp for tests if enabled
     if(ENABLE_LOCAL_LLM)

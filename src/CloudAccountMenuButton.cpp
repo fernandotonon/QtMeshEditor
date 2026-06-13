@@ -50,28 +50,29 @@ public:
     {
         m_signedIn = signedIn;
         m_initials = initials;
-        if (signedIn && !initials.isEmpty()) {
-            setIcon(QIcon());
-            setText(QString());
-            setToolButtonStyle(Qt::ToolButtonIconOnly);
-        } else {
-            setText(QString());
-            setToolButtonStyle(Qt::ToolButtonIconOnly);
-            if (m_loggedOutIcon.isNull())
-                m_loggedOutIcon = QIcon(QStringLiteral(":/icones/cloud_account_user.svg"));
-            setIcon(m_loggedOutIcon);
-        }
+        // The avatar (both states) is drawn directly in paintEvent — never via
+        // setIcon. An earlier version used an SVG QIcon for the logged-out
+        // state, which renders blank in deployed builds that don't bundle the
+        // Qt SVG icon-engine plugin (the icon showed locally but vanished in
+        // the installed app). Painting the glyph ourselves has no plugin
+        // dependency and looks identical on every platform.
+        setIcon(QIcon());
+        setText(QString());
+        setToolButtonStyle(Qt::ToolButtonIconOnly);
         update();
     }
 
 protected:
     void paintEvent(QPaintEvent* event) override
     {
-        if (m_signedIn && !m_initials.isEmpty()) {
-            QPainter painter(this);
-            painter.setRenderHint(QPainter::Antialiasing, true);
+        QToolButton::paintEvent(event);
 
-            const QRect r = rect().adjusted(2, 2, -2, -2);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRect r = rect().adjusted(2, 2, -2, -2);
+
+        if (m_signedIn && !m_initials.isEmpty()) {
+            // Signed-in with known initials: filled circle + initials.
             painter.setPen(Qt::NoPen);
             painter.setBrush(QColor(0x4a, 0x7a, 0xa8));
             painter.drawEllipse(r);
@@ -81,32 +82,46 @@ protected:
             painter.setFont(font);
             painter.setPen(QColor(0xf0, 0xf4, 0xf8));
             painter.drawText(r, Qt::AlignCenter, m_initials);
-            paintStatusBadge(painter);
-            return;
+        } else {
+            // Generic person glyph (head + shoulders) for the logged-out
+            // state, or signed-in without resolvable initials.
+            paintPersonGlyph(painter, r);
         }
 
-        if (m_signedIn) {
-            if (m_loggedOutIcon.isNull())
-                m_loggedOutIcon = QIcon(QStringLiteral(":/icones/cloud_account_user.svg"));
-            const QRect r = rect().adjusted(2, 2, -2, -2);
-            const QPixmap pix = m_loggedOutIcon.pixmap(r.size());
-            if (!pix.isNull()) {
-                QPainter painter(this);
-                painter.setRenderHint(QPainter::Antialiasing, true);
-                painter.drawPixmap(r, pix);
-                paintStatusBadge(painter);
-                return;
-            }
-        }
-
-        QToolButton::paintEvent(event);
-
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
         paintStatusBadge(painter);
     }
 
 private:
+    // Draws a simple head-and-shoulders silhouette inside @p r, matching the
+    // look of the previous cloud_account_user.svg without needing the SVG
+    // plugin to be deployed.
+    void paintPersonGlyph(QPainter& painter, const QRect& r) const
+    {
+        const QColor glyph = m_signedIn ? QColor(0x4a, 0x7a, 0xa8)
+                                        : QColor(0xb0, 0xb0, 0xb0);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(glyph);
+
+        const qreal w = r.width();
+        const qreal h = r.height();
+        const QPointF c = QPointF(r.center()) + QPointF(0.5, 0.5);
+
+        // Head: circle in the upper third.
+        const qreal headD = w * 0.40;
+        const QRectF head(c.x() - headD / 2.0,
+                          r.top() + h * 0.12,
+                          headD, headD);
+        painter.drawEllipse(head);
+
+        // Shoulders: a wide rounded cap at the bottom (clipped to the button).
+        const qreal shW = w * 0.70;
+        const qreal shH = h * 0.55;
+        const QRectF shoulders(c.x() - shW / 2.0,
+                               r.top() + h * 0.52,
+                               shW, shH);
+        painter.drawRoundedRect(shoulders, shW * 0.5, shW * 0.5);
+    }
+
     void paintStatusBadge(QPainter& painter) const
     {
         const int badgeD = 7;
@@ -122,7 +137,6 @@ private:
 private:
     bool m_signedIn = false;
     QString m_initials;
-    QIcon m_loggedOutIcon;
 };
 
 QString CloudAccountMenuButton::initialsFromDisplayName(const QString& displayName)

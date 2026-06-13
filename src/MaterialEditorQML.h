@@ -667,6 +667,9 @@ signals:
     void sdGenerationProgressChanged();
     void sdTextureGenerated(const QString &filePath);
     void sdGenerationError(const QString &error);
+    /** Non-fatal informational message during generation (e.g. degraded mode);
+        unlike sdGenerationError it must NOT abort or reset the in-flight run. */
+    void sdGenerationNotice(const QString &message);
     void sdPendingForMaterialChanged();
     void hasSelectedMeshChanged();
 
@@ -686,6 +689,14 @@ private:
     Ogre::TextureUnitState* getCurrentTextureUnit() const;
     Ogre::Technique* getCurrentTechnique() const;
     bool isOgreAvailable() const;
+    /**
+     * Make a texture name resolvable from the current material's resource
+     * group so the RTSS-rendered mesh can sample it (otherwise the on-screen
+     * model renders the yellow/black placeholder while the editor preview,
+     * which reads the file off disk, looks fine). Loads the texture into the
+     * material's group from its on-disk source when it is missing there.
+     */
+    void ensureTextureInMaterialGroup(const QString& textureName);
     
     // Undo/Redo helper methods
     void addToUndoStack(const QString &text);
