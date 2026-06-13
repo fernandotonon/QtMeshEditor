@@ -575,6 +575,14 @@ if(BUILD_TESTS)
     # Add all files ending with _test.cpp to the set (recursively to include subdirectories like Assimp)
     file(GLOB_RECURSE TestFiles "${CMAKE_CURRENT_SOURCE_DIR}/*_test.cpp")
     foreach(TestFile ${TestFiles})
+        # The PS1 runtime sources (src/PS1/runtime/*.cpp) are only added to
+        # SRC_FILES when ENABLE_PS1_RIP is ON, so their *_test.cpp counterparts
+        # must be gated the same way — otherwise the test links a stub test
+        # (e.g. TextureDecoder_test.cpp) against a missing impl and fails with
+        # undefined symbols like qHash(TextureDecoder::MaterialKey).
+        if(NOT ENABLE_PS1_RIP AND TestFile MATCHES "/PS1/runtime/")
+            continue()
+        endif()
         list(APPEND TEST_SOURCES ${TestFile})
     endforeach()
 
@@ -604,6 +612,16 @@ if(BUILD_TESTS)
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
     meshoptimizer xatlas)
+
+    # CloudCredentialStore.cpp (compiled into the tests) does a one-time legacy
+    # secret-store read in migrateLegacySettingsIfNeeded(), which
+    # CloudCredentialStore_test.cpp exercises — so the test binary needs the
+    # same platform link as the app or macOS/Windows test builds fail to link.
+    if(APPLE)
+        target_link_libraries(UnitTests "-framework Security")
+    elseif(WIN32)
+        target_link_libraries(UnitTests advapi32)
+    endif()
 
     # Link llama.cpp for tests if enabled
     if(ENABLE_LOCAL_LLM)
