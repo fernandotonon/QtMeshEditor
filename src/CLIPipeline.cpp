@@ -1,4 +1,5 @@
 #include "CLIPipeline.h"
+#include "CloudCLIPipeline.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "AnimationMerger.h"
@@ -750,6 +751,14 @@ void CLIPipeline::printUsage()
         "                                    animated lights — anything non-skeletal). Authoring on the CLI\n"
         "                                    side needs the C5 glTF/FBX exporter round-trip first.\n"
         "\n"
+        "  cloud login [--api-key <token>]   Sign in via device flow (prints URL + code) or store an API key.\n"
+        "  cloud logout                      Sign out and clear the saved session.\n"
+        "  cloud status [--json]             Show whether a QtMesh Cloud session is stored locally.\n"
+        "  cloud list [--json]               List cloud projects for the signed-in account.\n"
+        "  cloud upload <file> [--name <n>] [--no-scan] [--json]\n"
+        "                                    Package the asset + dependencies and upload to QtMesh Cloud.\n"
+        "  cloud delete <project-id>         Delete a cloud project by id.\n"
+        "\n"
         "Global options:\n"
         "  --help, -h            Show this help\n"
         "  --version, -v         Show version\n"
@@ -1290,6 +1299,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
     else if (cmd == "nodeanim") rc = cmdNodeAnim(argc, argv);
+    else if (cmd == "cloud") rc = CloudCLIPipeline::run(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;

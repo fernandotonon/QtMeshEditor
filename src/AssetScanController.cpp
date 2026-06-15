@@ -264,7 +264,9 @@ struct ScanSubprocessOutcome {
     QByteArray jsonBytes;
 };
 
-static ScanSubprocessOutcome runScanSubprocessSync(const QString& rootPath, const QString& profileId)
+static ScanSubprocessOutcome runScanSubprocessSync(const QString& rootPath,
+                                                   const QString& profileId,
+                                                   const QString& includePattern)
 {
     ScanSubprocessOutcome outcome;
     const QString binary = AssetScanController::resolveCliBinaryForTest();
@@ -273,10 +275,13 @@ static ScanSubprocessOutcome runScanSubprocessSync(const QString& rootPath, cons
     if (baseName.contains(QStringLiteral("editor")))
         args << QStringLiteral("--cli");
     args << QStringLiteral("scan")
-         << QDir(rootPath).absolutePath()
-         << QStringLiteral("--target") << profileId
-         << QStringLiteral("--json")
+         << QDir(rootPath).absolutePath();
+    if (!profileId.isEmpty())
+        args << QStringLiteral("--target") << profileId;
+    args << QStringLiteral("--json")
          << QStringLiteral("--no-telemetry");
+    if (!includePattern.isEmpty())
+        args << QStringLiteral("--include") << includePattern;
 
     QProcess process;
     process.setProgram(binary);
@@ -312,6 +317,20 @@ static ScanSubprocessOutcome runScanSubprocessSync(const QString& rootPath, cons
 
     outcome.ok = true;
     return outcome;
+}
+
+QByteArray AssetScanController::runIsolatedScanJsonSync(const QString& rootPath,
+                                                          const QString& includePattern,
+                                                          QString* errorOut)
+{
+    const ScanSubprocessOutcome outcome =
+        runScanSubprocessSync(rootPath, QString(), includePattern);
+    if (!outcome.ok) {
+        if (errorOut)
+            *errorOut = outcome.message;
+        return {};
+    }
+    return outcome.jsonBytes;
 }
 
 void AssetScanController::scanFolder(const QString& rootPath)
@@ -355,7 +374,7 @@ void AssetScanController::scanFolder(const QString& rootPath)
     const QString profileId = m_selectedProfileId;
     auto outcome = std::make_shared<ScanSubprocessOutcome>();
     QThread* worker = QThread::create([absRoot, profileId, outcome]() {
-        *outcome = runScanSubprocessSync(absRoot, profileId);
+        *outcome = runScanSubprocessSync(absRoot, profileId, QString());
     });
 
     connect(worker, &QThread::finished, this, [this, worker, outcome]() {

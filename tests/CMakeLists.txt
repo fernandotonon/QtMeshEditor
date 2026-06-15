@@ -65,6 +65,13 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudClient.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudCredentialStore.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudUploadPlanner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudCLIPipeline.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudProjectsDialog.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudUploadDialog.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudUploadProgress.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/DependencyResolver.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ProjectPackager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudSession.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudAccountMenuButton.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackDiagnostics.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackDialog.cpp
@@ -516,6 +523,12 @@ if(BUILD_TESTS)
             "${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudAccountMenuButton_test.cpp"
         )
     endif()
+
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../src/ProjectPackager_test.cpp")
+        create_test_executable(ProjectPackager_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/../src/ProjectPackager_test.cpp"
+        )
+    endif()
     
     # 4. QML Component Test Runner (existing) - special handling for CI
     create_test_executable_no_autotest(MaterialEditorQML_qml_test_runner
@@ -555,6 +568,9 @@ if(BUILD_TESTS)
 
     if(TARGET CloudAccountMenuButton_test)
         gtest_discover_tests(CloudAccountMenuButton_test DISCOVERY_MODE PRE_TEST)
+    endif()
+    if(TARGET ProjectPackager_test)
+        gtest_discover_tests(ProjectPackager_test DISCOVERY_MODE PRE_TEST)
     endif()
     
     if(TARGET MaterialEditorQML_qml_test_runner)

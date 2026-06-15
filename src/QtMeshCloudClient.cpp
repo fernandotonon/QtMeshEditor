@@ -630,6 +630,58 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
     return out;
 }
 
+QtMeshCloudClient::UploadResult QtMeshCloudClient::deleteProject(const QString& bearerToken,
+                                                                 const QString& projectId,
+                                                                 int timeoutMs)
+{
+    UploadResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    if (projectId.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("missing project id");
+        return out;
+    }
+
+    const QUrl url(apiBaseUrl()
+        + QStringLiteral("/v1/projects/")
+        + QString::fromUtf8(QUrl::toPercentEncoding(projectId.trimmed())));
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+    req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
+    req.setTransferTimeout(timeoutMs);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+                                  QStringLiteral("QtMesh Cloud deleteProject: start"));
+
+    QNetworkReply* reply = nam.deleteResource(req);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    out.responseBodySnippet = trimSnippet(responseBody);
+    out.ok = nerr == QNetworkReply::NoError && out.httpStatus >= 200 && out.httpStatus < 300;
+    if (!out.ok) {
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+    }
+    return out;
+}
+
 QtMeshCloudClient::ProjectResult QtMeshCloudClient::createProject(const QString& bearerToken,
                                                                   const QString& name,
                                                                   const QString& slug,

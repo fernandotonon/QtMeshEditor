@@ -262,7 +262,7 @@ void CloudAccountMenuButton::buildMenu()
         emit openProjectsRequested();
     });
 
-    m_uploadAction = m_menu->addAction(tr("Upload Files..."));
+    m_uploadAction = m_menu->addAction(tr("Upload to QtMesh Cloud..."));
     m_uploadAction->setObjectName(QStringLiteral("actionQtMeshCloudUploadFiles"));
     connect(m_uploadAction, &QAction::triggered, this, [this]() {
         SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
@@ -343,10 +343,30 @@ void CloudAccountMenuButton::refresh()
     updateHeader(display, signedIn);
 
     m_openProjectsAction->setEnabled(signedIn);
-    m_uploadAction->setEnabled(true);
+    if (signedIn)
+        setUploadEnabled(m_uploadAssetAvailable);
+    else if (m_uploadAction)
+        m_uploadAction->setEnabled(true);
 
     m_signInAction->setVisible(!signedIn);
     m_signInAction->setEnabled(!signedIn);
     m_signOutAction->setVisible(signedIn);
     m_signOutAction->setEnabled(signedIn);
+}
+
+void CloudAccountMenuButton::setUploadEnabled(bool enabled)
+{
+    m_uploadAssetAvailable = enabled;
+    if (!m_uploadAction)
+        return;
+    if (!CloudCredentialStore::hasSession()) {
+        m_uploadAction->setEnabled(true);
+        m_uploadAction->setToolTip({});
+        return;
+    }
+    m_uploadAction->setEnabled(enabled);
+    if (!enabled)
+        m_uploadAction->setToolTip(tr("Open a model first"));
+    else
+        m_uploadAction->setToolTip({});
 }

@@ -115,6 +115,11 @@ public:
     /// GET /v1/projects — lists cloud projects the authenticated user can access.
     static ProjectsListResult fetchProjects(const QString& bearerToken, int timeoutMs = 30000);
 
+    /// DELETE /v1/projects/{id} — removes a cloud project.
+    static UploadResult deleteProject(const QString& bearerToken,
+                                      const QString& projectId,
+                                      int timeoutMs = 30000);
+
     /// POST /v1/projects — creates a private cloud project owned by the authenticated user.
     static ProjectResult createProject(const QString& bearerToken,
                                        const QString& name,

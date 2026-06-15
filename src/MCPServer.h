@@ -286,6 +286,14 @@ private:
     /// the body pose.
     QJsonObject toolApplyPoseMasked(const QJsonObject &args);
 
+    /// Epic #684 slice H: QtMesh Cloud account + upload tools.
+    QJsonObject toolCloudStatus(const QJsonObject &args);
+    QJsonObject toolCloudLogin(const QJsonObject &args);
+    QJsonObject toolCloudLogout(const QJsonObject &args);
+    QJsonObject toolCloudListProjects(const QJsonObject &args);
+    QJsonObject toolCloudDeleteProject(const QJsonObject &args);
+    QJsonObject toolCloudUpload(const QJsonObject &args);
+
     // Animation
     struct NodeAnimation {
         Ogre::SceneNode* node;
