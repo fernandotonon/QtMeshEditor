@@ -27,8 +27,11 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre())
-            GTEST_SKIP() << "Ogre init failed (Xvfb/GL required)";
+        // This suite operates on the live Ogre scene graph, so Ogre must be
+        // available. Fail loudly rather than GTEST_SKIP — a skip would silently
+        // hide a broken CI/runtime environment (per project convention; the CI
+        // harness also treats skip-only suites as failures).
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed — invalid CI/runtime environment";
 
         createStandardOgreMaterials();
         model = new SceneTreeModel();
