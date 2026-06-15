@@ -155,12 +155,14 @@ void lintJsonValue(const QJsonValue& value, bool& bad)
         return;
     }
     if (value.isObject()) {
-        for (auto it = value.toObject().begin(); it != value.toObject().end(); ++it)
+        const QJsonObject object = value.toObject();
+        for (auto it = object.begin(); it != object.end(); ++it)
             lintJsonValue(it.value(), bad);
         return;
     }
     if (value.isArray()) {
-        for (const QJsonValue& item : value.toArray())
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue& item : array)
             lintJsonValue(item, bad);
     }
 }
