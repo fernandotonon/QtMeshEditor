@@ -56,6 +56,7 @@ private:
     QAction* m_uploadAction = nullptr;
     QAction* m_feedbackAction = nullptr;
     QAction* m_openProjectsAction = nullptr;
+    bool m_uploadAssetAvailable = false;
 };
 
 #endif

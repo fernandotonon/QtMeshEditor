@@ -177,7 +177,9 @@ PackageMetadata ProjectPackager::buildManifest(const QString& mainAssetPath,
     metadata.sourceFormat = mainInfo.suffix().toLower();
     metadata.qtMeshEditorVersion = applicationVersion();
 
-    QVector<DependencyEntry> dependencies = DependencyResolver::detect(mainAssetPath);
+    // File-based detection only. Callers that need live-scene textures (the upload
+    // dialog) discover them via DependencyResolver::detect() and pass explicitExtras.
+    QVector<DependencyEntry> dependencies = DependencyResolver::detectFromFiles(mainAssetPath);
     QSet<QString> included;
     for (const DependencyEntry& entry : dependencies)
         included.insert(entry.absolutePath);
