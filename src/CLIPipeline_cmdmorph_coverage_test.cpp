@@ -183,10 +183,17 @@ TEST(CLIPipeline_cmdMorphCoverageTest, ListFlagBeforeFileNonexistentReturns1)
 
 TEST(CLIPipeline_cmdMorphCoverageTest, ListNonexistentFileNotSubcommandHeader)
 {
-    // Verifies "morph" as argv[0] is skipped and a separate nonexistent file
-    // token drives the not-found path (return 1), not the empty-file path.
-    MorphArgv args({"morph", "morph", "--list"});
-    // Here the second "morph" is captured as the file path (does not start
-    // with '-'); it does not exist as a file -> return 1.
+    // The parser skips EVERY token equal to "morph" by value (argv[0] handling),
+    // so a distinct non-flag token is needed to populate the file path. With a
+    // real (nonexistent) filename + --list we reach the not-found branch (1).
+    MorphArgv args({"morph", "not_a_real_morph_file.dae", "--list"});
     EXPECT_EQ(1, CLIPipeline::cmdMorph(args.argc(), args.argv()));
+}
+
+TEST(CLIPipeline_cmdMorphCoverageTest, SecondMorphTokenIsSkippedNotTreatedAsFile)
+{
+    // Documents the by-value skip: a literal second "morph" is NOT captured as
+    // the file path, so filePath stays empty and we hit the no-input branch (2).
+    MorphArgv args({"morph", "morph", "--list"});
+    EXPECT_EQ(2, CLIPipeline::cmdMorph(args.argc(), args.argv()));
 }
