@@ -2,6 +2,7 @@
 
 #include "DependencyResolver.h"
 #include "ProjectPackager.h"
+#include "SentryReporter.h"
 
 #include <algorithm>
 
@@ -55,8 +56,16 @@ CloudUploadDialog::CloudUploadDialog(QWidget* parent)
     buttons->addWidget(m_uploadButton);
     layout->addLayout(buttons);
 
-    connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
-    connect(m_uploadButton, &QPushButton::clicked, this, &QDialog::accept);
+    connect(cancelButton, &QPushButton::clicked, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud upload dialog: Cancel"));
+        reject();
+    });
+    connect(m_uploadButton, &QPushButton::clicked, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud upload dialog: Upload"));
+        accept();
+    });
     connect(m_projectCombo, &QComboBox::currentIndexChanged, this, [this](int) {
         m_uploadButton->setEnabled(hasSelectedProject());
     });
@@ -106,6 +115,9 @@ void CloudUploadDialog::rebuildDependencyList()
 {
     m_dependencyList->clear();
     m_dependencies = DependencyResolver::detect(m_mainAssetPath);
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+                                  QStringLiteral("Detected %1 cloud upload dependencies")
+                                      .arg(m_dependencies.size()));
     for (const DependencyEntry& entry : m_dependencies) {
         const QFileInfo info(entry.absolutePath);
         QString label = info.fileName();

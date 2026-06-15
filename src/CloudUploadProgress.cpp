@@ -1,5 +1,7 @@
 #include "CloudUploadProgress.h"
 
+#include "SentryReporter.h"
+
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QProgressBar>
@@ -21,7 +23,11 @@ CloudUploadProgress::CloudUploadProgress(QWidget* parent)
     layout->addWidget(m_bar);
     layout->addWidget(m_cancelButton);
 
-    connect(m_cancelButton, &QPushButton::clicked, this, &CloudUploadProgress::cancelRequested);
+    connect(m_cancelButton, &QPushButton::clicked, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud upload progress: Cancel"));
+        emit cancelRequested();
+    });
     hide();
 }
 

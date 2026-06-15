@@ -7,6 +7,7 @@
 #include <OgreMaterialManager.h>
 #include <OgrePass.h>
 #include <OgreResourceGroupManager.h>
+#include <OgreRoot.h>
 #include <OgreSubEntity.h>
 #include <OgreTechnique.h>
 #include <OgreTextureUnitState.h>
@@ -219,7 +220,7 @@ void collectRsdDependencies(const QString& rsdPath,
 
 QString locateTextureOnDisk(const Ogre::String& textureName, const Ogre::String& groupName)
 {
-    if (textureName.empty())
+    if (textureName.empty() || !Ogre::Root::getSingletonPtr())
         return {};
 
     const Ogre::StringVectorPtr locationsPtr =
@@ -293,10 +294,14 @@ QVector<DependencyEntry> DependencyResolver::detectFromLoadedScene(const QString
     QVector<DependencyEntry> out;
     QSet<QString> seen;
 
-    if (!Manager::getSingletonPtr())
+    Manager* manager = Manager::getSingletonPtr();
+    // Scene texture probing needs a live editor session. Unit tests may leave a
+    // headless Manager singleton around without a MainWindow or valid Ogre scene.
+    if (!manager || !manager->getMainWindow() || !manager->getRoot() || !manager->getSceneMgr())
         return out;
 
-    for (Ogre::Entity* entity : Manager::getSingleton()->getEntities()) {
+    try {
+    for (Ogre::Entity* entity : manager->getEntities()) {
         if (!entity || entity->getMovableType() != "Entity")
             continue;
 
@@ -328,6 +333,9 @@ QVector<DependencyEntry> DependencyResolver::detectFromLoadedScene(const QString
                 }
             }
         }
+    }
+    } catch (const Ogre::Exception&) {
+        return out;
     }
 
     return out;

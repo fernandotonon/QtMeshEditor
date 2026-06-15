@@ -29,7 +29,6 @@
 #include "UvUnwrap.h"
 #include "AssetScanController.h"
 #include "CloudCredentialStore.h"
-#include "DependencyResolver.h"
 #include "ProjectPackager.h"
 #include "QtMeshCloudClient.h"
 #include "QtMeshCloudSession.h"

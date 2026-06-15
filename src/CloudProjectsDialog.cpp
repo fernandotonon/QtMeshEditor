@@ -1,5 +1,7 @@
 #include "CloudProjectsDialog.h"
 
+#include "SentryReporter.h"
+
 #include <QDesktopServices>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -28,14 +30,21 @@ CloudProjectsDialog::CloudProjectsDialog(QWidget* parent)
     buttons->addWidget(m_openButton);
     layout->addLayout(buttons);
 
-    connect(closeButton, &QPushButton::clicked, this, &QDialog::reject);
+    connect(closeButton, &QPushButton::clicked, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud projects dialog: Close"));
+        reject();
+    });
     connect(m_openButton, &QPushButton::clicked, this, [this]() {
         const QListWidgetItem* item = m_list->currentItem();
         if (!item)
             return;
         const QString url = item->data(Qt::UserRole + 1).toString();
-        if (!url.isEmpty())
-            QDesktopServices::openUrl(QUrl(url));
+        if (url.isEmpty())
+            return;
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud projects dialog: Open in Browser"));
+        QDesktopServices::openUrl(QUrl(url));
     });
     connect(m_list, &QListWidget::itemDoubleClicked, m_openButton, &QPushButton::click);
 }
