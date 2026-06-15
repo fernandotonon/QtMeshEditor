@@ -29,6 +29,8 @@ class QToolBar;
 class QAction;
 class QToolButton;
 class CloudAccountMenuButton;
+class CloudUploadProgress;
+class QtMeshCloudSession;
 class OgreWidget;
 
 namespace Ui {
@@ -127,6 +129,8 @@ private slots:
     void signInToQtMeshCloud();
     void signOutOfQtMeshCloud();
     void uploadFilesToQtMeshCloud();
+    void showCloudProjectsDialog();
+    QtMeshCloudSession* cloudSessionForToken(const QString& token);
     void showSendFeedbackDialog(const FeedbackPrefill& prefill = FeedbackPrefill{});
     bool startMCPServer(int port);
     void stopMCPServer();
@@ -197,6 +201,11 @@ private:
     QToolBar* m_topBarStretch = nullptr;
     QQuickWidget* m_modeBar = nullptr;
     CloudAccountMenuButton* m_cloudAccountControl = nullptr;
+    CloudUploadProgress* m_cloudUploadProgress = nullptr;
+    QtMeshCloudSession* m_cloudSession = nullptr;
+    QAction* m_cloudUploadMenuAction = nullptr;
+
+    void updateCloudUploadActionState();
 
     /// View menu entries for bottom tabbed docks — checked state follows user
     /// preference, not QDockWidget::isVisible() (inactive tabs would otherwise

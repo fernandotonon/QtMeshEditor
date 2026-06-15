@@ -24,6 +24,8 @@ public:
     /// Reads CloudCredentialStore / QSettings and updates button + menu visibility.
     void refresh();
 
+    void setUploadEnabled(bool enabled);
+
     /// Exposed for unit tests.
     static QString initialsFromDisplayName(const QString& displayName);
 
@@ -54,6 +56,7 @@ private:
     QAction* m_uploadAction = nullptr;
     QAction* m_feedbackAction = nullptr;
     QAction* m_openProjectsAction = nullptr;
+    bool m_uploadAssetAvailable = false;
 };
 
 #endif
