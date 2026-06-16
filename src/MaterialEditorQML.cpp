@@ -4200,8 +4200,10 @@ void MaterialEditorQML::finishMultiViewBake()
         emit sdIsGeneratingChanged();
         return;
     }
+    // Log only the basename — outPath is under the app-data dir and would leak
+    // the local username/path into telemetry.
     SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-        QStringLiteral("Wrote multi-view baked texture %1").arg(outPath));
+        QStringLiteral("Wrote multi-view baked texture %1").arg(outName));
 
     if (isOgreAvailable() && Ogre::Root::getSingletonPtr()) {
         try {
