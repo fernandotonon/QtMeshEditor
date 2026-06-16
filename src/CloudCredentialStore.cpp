@@ -192,17 +192,32 @@ void CloudCredentialStore::resetCacheForTesting()
 
 void CloudCredentialStore::migrateLegacySettingsIfNeeded()
 {
-    // If a session already lives in QSettings, we're done.
-    if (readFromSettings().hasToken())
-        return;
-
-    // Upgrade path: a user who signed in on a pre-QSettings build has their
-    // token in the OS secret store / legacy fallback file. Read it once and
-    // copy it into QSettings so they stay signed in instead of being silently
-    // logged out after the storage-backend change.
-    const CloudSession legacy = readLegacySecretStore();
-    if (legacy.hasToken() && writeToSettings(legacy)) {
-        g_sessionCache = legacy;
-        g_cacheValid = true;
+    // The OS secret store must be probed AT MOST ONCE, ever. Each probe is a
+    // SecItemCopyMatching (macOS Keychain) / CredRead (Windows) that can raise a
+    // confirmation prompt — re-probing on every launch (which happens when the
+    // user is signed out, since QSettings then has no token) is exactly the
+    // repeated-keychain-prompt bug we set out to kill. Persist a "done" flag the
+    // first time through and never touch the keychain again, signed in or not.
+    {
+        QSettings settings;
+        if (settings.value(AppSettingsKeys::cloudLegacyMigrationDone(), false).toBool())
+            return;
     }
+
+    // If a session already lives in QSettings there is nothing to migrate, but
+    // still mark the probe done so we don't keychain-probe on a later sign-out.
+    if (!readFromSettings().hasToken()) {
+        // One-time upgrade: a user who signed in on a pre-QSettings build has
+        // their token in the OS secret store / legacy fallback file. Carry it
+        // into QSettings so they stay signed in across the backend change.
+        const CloudSession legacy = readLegacySecretStore();
+        if (legacy.hasToken() && writeToSettings(legacy)) {
+            g_sessionCache = legacy;
+            g_cacheValid = true;
+        }
+    }
+
+    QSettings settings;
+    settings.setValue(AppSettingsKeys::cloudLegacyMigrationDone(), true);
+    settings.sync();
 }
