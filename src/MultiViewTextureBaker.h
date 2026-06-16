@@ -12,6 +12,8 @@
 
 #include <vector>
 
+namespace Ogre { class Entity; }
+
 /**
  * @brief Project per-view generated images onto a mesh's UV0 atlas (slice 1 of
  *        the multi-view AI texture bake — see MULTIVIEW_TEXTURE_BAKE_DESIGN.md).
@@ -84,6 +86,14 @@ public:
     static Report bake(const std::vector<Triangle>& tris,
                        const std::vector<View>& views,
                        TexturePaintBuffer& out);
+
+    /// Extract world-space triangles + UV0 from a live entity (positions and
+    /// normals transformed by the entity's parent-node derived world matrix).
+    /// Uses EditableMesh::loadFromEntity under the hood. Returns an empty
+    /// vector if the entity/mesh is null or has no UV0. The `errorOut` (if
+    /// given) is set on failure.
+    static std::vector<Triangle> fromEntity(Ogre::Entity* entity,
+                                            QString* errorOut = nullptr);
 };
 
 #endif // MULTIVIEWTEXTUREBAKER_H

@@ -5,6 +5,8 @@
 #include "LLMManager.h"
 #include "SelectionSet.h"
 #include "MeshDepthRenderer.h"
+#include "MultiViewTextureBaker.h"
+#include "TexturePaintBuffer.h"
 #include <OgreEntity.h>
 #include <OgreSubEntity.h>
 #include <OgreMesh.h>
@@ -140,6 +142,10 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
                 this, &MaterialEditorQML::hasSelectedMeshChanged);
     }
 }
+
+// Defaulted here (not in the header) so the std::unique_ptr<MultiViewBakeState>
+// pimpl is destroyed where MultiViewBakeState is a complete type.
+MaterialEditorQML::~MaterialEditorQML() = default;
 
 MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
 {
@@ -3999,6 +4005,212 @@ void MaterialEditorQML::generateMeshTextureFromPrompt(const QString &prompt,
 #endif
 }
 
+// --------------------------------------------------------------------------
+// Multi-view depth-conditioned generation + projection bake (slice 2).
+// --------------------------------------------------------------------------
+
+// In-flight state for a multi-view bake. One image is generated per view; the
+// per-view depth render also yields the exact camera matrices the baker needs.
+struct MaterialEditorQML::MultiViewBakeState {
+    QString entityName;
+    QString prompt;
+    QString controlNetPath;
+    int width = 512;
+    int height = 512;
+    float controlStrength = 0.9f;
+    std::vector<MeshDepthRenderer::View> views;   // resolved camera views
+    std::vector<MultiViewTextureBaker::View> baked; // accumulated image+matrices
+    size_t current = 0;                            // index of the view being generated
+};
+
+namespace {
+MeshDepthRenderer::View resolveDepthView(const QString& name)
+{
+    const QString n = name.trimmed().toLower();
+    if (n == "back")   return MeshDepthRenderer::back();
+    if (n == "left")   return MeshDepthRenderer::left();
+    if (n == "right")  return MeshDepthRenderer::right();
+    if (n == "top")    return MeshDepthRenderer::top();
+    if (n == "bottom") return MeshDepthRenderer::bottom();
+    return MeshDepthRenderer::front();
+}
+} // namespace
+
+void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
+                                                     int width, int height,
+                                                     double controlStrength,
+                                                     const QStringList &views)
+{
+    if (prompt.isEmpty()) {
+        emit sdGenerationError("Please enter a texture prompt");
+        return;
+    }
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager *sdManager = SDManager::instance();
+    if (!sdManager->isModelLoaded()) {
+        emit sdGenerationError("No SD model loaded. Please download and load a model from AI Settings.");
+        return;
+    }
+    auto* sel = SelectionSet::getSingleton();
+    const auto entities = sel ? sel->getResolvedEntities() : QList<Ogre::Entity*>{};
+    if (entities.isEmpty() || !entities.first() || !entities.first()->getMesh()) {
+        emit sdGenerationError("No mesh selected. Select a mesh to condition on its shape.");
+        return;
+    }
+    if (m_multiViewBake) {
+        emit sdGenerationError("A multi-view bake is already in progress.");
+        return;
+    }
+    Ogre::Entity* entity = entities.first();
+
+    // LCOV_EXCL_START — requires a loaded SD model + a mesh
+    auto st = std::make_unique<MultiViewBakeState>();
+    st->entityName = QString::fromStdString(entity->getName());
+    st->prompt = prompt;
+    st->width = width > 0 ? width : 512;
+    st->height = height > 0 ? height : 512;
+    st->controlStrength = static_cast<float>(std::clamp(controlStrength, 0.0, 1.0));
+    st->controlNetPath = discoveredControlNetDepthPath();
+
+    const QStringList viewNames = views.isEmpty()
+        ? QStringList{ QStringLiteral("front"), QStringLiteral("back") } : views;
+    for (const QString& vn : viewNames)
+        st->views.push_back(resolveDepthView(vn));
+
+    if (st->controlNetPath.isEmpty()) {
+        emit sdGenerationNotice(
+            "No ControlNet depth model found — multi-view bake will follow the "
+            "prompt only (download \"ControlNet Depth (SD 1.5)\" for shape-aware results).");
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mesh_texture_multiview"),
+        QStringLiteral("entity=%1 views=%2 size=%3")
+            .arg(st->entityName).arg(viewNames.join(',')).arg(std::max(st->width, st->height)));
+
+    m_multiViewBake = std::move(st);
+    startNextMultiViewGeneration();
+    // LCOV_EXCL_STOP
+#else
+    Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(controlStrength); Q_UNUSED(views);
+    emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
+#endif
+}
+
+void MaterialEditorQML::startNextMultiViewGeneration()
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    if (!m_multiViewBake) return;
+    MultiViewBakeState& s = *m_multiViewBake;
+
+    // Resolve the entity afresh each step (selection could change; bail if gone).
+    Ogre::Entity* entity = nullptr;
+    if (Manager::getSingletonPtr()) {
+        for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
+            if (e && e->getMovableType() == "Entity"
+                && e->getName() == s.entityName.toStdString()) { entity = e; break; }
+        }
+    }
+    if (!entity) {
+        emit sdGenerationError("Mesh for multi-view bake is no longer available.");
+        m_multiViewBake.reset();
+        emit sdIsGeneratingChanged();
+        return;
+    }
+
+    const int depthSize = std::max(s.width, s.height);
+    QString depthErr;
+    MeshDepthRenderer::RenderResult rr =
+        MeshDepthRenderer::renderDepthMapView(entity, depthSize, s.views[s.current], &depthErr);
+    if (rr.depth.isNull()) {
+        emit sdGenerationError(QStringLiteral("Depth render failed (%1 view): %2")
+            .arg(s.views[s.current].name, depthErr));
+        m_multiViewBake.reset();
+        emit sdIsGeneratingChanged();
+        return;
+    }
+
+    // Stash the camera matrices for this view now; the image arrives later in
+    // onSDGenerationCompleted and is paired with this entry by index.
+    MultiViewTextureBaker::View bv;
+    bv.viewProj = rr.projMatrix * rr.viewMatrix;
+    bv.camDirection = rr.camDirection;
+    s.baked.push_back(bv);  // image filled on completion
+
+    m_sdGenerationProgress = 0.0f;
+    emit sdGenerationProgressChanged();
+    SDManager::instance()->generateMeshTexture(
+        s.prompt, rr.depth, s.controlNetPath, s.controlStrength,
+        QString(), s.width, s.height);
+#endif
+}
+
+void MaterialEditorQML::finishMultiViewBake()
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    if (!m_multiViewBake) return;
+    // Move the state out so any early return fully clears the in-flight flag.
+    std::unique_ptr<MultiViewBakeState> s = std::move(m_multiViewBake);
+
+    Ogre::Entity* entity = nullptr;
+    if (Manager::getSingletonPtr()) {
+        for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
+            if (e && e->getMovableType() == "Entity"
+                && e->getName() == s->entityName.toStdString()) { entity = e; break; }
+        }
+    }
+    if (!entity) { emit sdGenerationError("Mesh gone before bake."); emit sdIsGeneratingChanged(); return; }
+
+    QString geoErr;
+    std::vector<MultiViewTextureBaker::Triangle> tris =
+        MultiViewTextureBaker::fromEntity(entity, &geoErr);
+    if (tris.empty()) {
+        emit sdGenerationError(QStringLiteral("Bake failed: %1").arg(geoErr));
+        emit sdIsGeneratingChanged();
+        return;
+    }
+
+    MultiViewTextureBaker::Options opts;
+    opts.resolution = std::max(s->width, s->height);
+    TexturePaintBuffer out;
+    MultiViewTextureBaker::Report rep =
+        MultiViewTextureBaker::bake(tris, s->baked, out, opts);
+    if (!rep.ok || rep.pixelsWritten == 0) {
+        emit sdGenerationError(QStringLiteral("Bake produced no texels: %1")
+            .arg(rep.ok ? QStringLiteral("no view covered the mesh") : rep.error));
+        emit sdIsGeneratingChanged();
+        return;
+    }
+
+    // Save the baked atlas next to the generated textures and apply it.
+    const QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString outDir = QDir(dataPath).filePath("generated_textures");
+    QDir().mkpath(outDir);
+    const QString outName = QStringLiteral("multiview_bake_%1.png").arg(s->entityName);
+    const QString outPath = QDir(outDir).filePath(outName);
+    if (!out.save(outPath.toStdString())) {
+        emit sdGenerationError("Failed to write baked texture.");
+        emit sdIsGeneratingChanged();
+        return;
+    }
+
+    if (isOgreAvailable() && Ogre::Root::getSingletonPtr()) {
+        try {
+            auto &rgm = Ogre::ResourceGroupManager::getSingleton();
+            rgm.addResourceLocation(outDir.toStdString(), "FileSystem",
+                                    Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            rgm.initialiseResourceGroup(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        } catch (...) {}
+        applyTextureToEntityDiffuse(s->entityName, outName);
+    }
+    m_textureName = outName;
+    emit textureNameChanged();
+    emit sdTextureGenerated(outPath);
+    emit sdIsGeneratingChanged();
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mesh_texture_multiview"),
+        QStringLiteral("baked %1 texels from %2 views (%3 dilated)")
+            .arg(rep.pixelsWritten).arg(s->baked.size()).arg(rep.pixelsDilated));
+#endif
+}
+
 void MaterialEditorQML::stopTextureGeneration()
 {
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -4159,6 +4371,28 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
     QString dirPath = fileInfo.absolutePath();
     QString fileName = fileInfo.fileName();
 
+#ifdef ENABLE_STABLE_DIFFUSION
+    // Multi-view bake (slice 2): pair this completed image with the view whose
+    // depth/matrices we stashed in startNextMultiViewGeneration(), then either
+    // issue the next view or bake when all views are done.
+    if (m_multiViewBake) {
+        MultiViewBakeState& s = *m_multiViewBake;
+        if (s.current < s.baked.size()) {
+            QImage img(outputPath);
+            if (!img.isNull())
+                s.baked[s.current].image = img.convertToFormat(QImage::Format_RGB888);
+        }
+        emit sdTextureGenerated(outputPath);  // let the preview update per view
+        ++s.current;
+        if (s.current < s.views.size()) {
+            startNextMultiViewGeneration();   // next view
+        } else {
+            finishMultiViewBake();            // all views captured → bake + apply
+        }
+        return;
+    }
+#endif
+
     // Issue #403: if this was a mesh-aware generation, bind the
     // result to the selected entity's diffuse TUS directly (the
     // editor's "current pass" may not be the rendered material, which
@@ -4251,6 +4485,11 @@ void MaterialEditorQML::onSDGenerationError(const QString &error)
     // txt2img to complete would take the mesh-aware completion branch
     // and apply itself to this stale entity.
     m_sdMeshTextureEntity.clear();
+#ifdef ENABLE_STABLE_DIFFUSION
+    // Abort an in-flight multi-view bake on any generation error so it can't
+    // strand the in-progress flag or capture a later unrelated generation.
+    m_multiViewBake.reset();
+#endif
     m_sdGenerationProgress = 0.0f;
     emit sdGenerationProgressChanged();
     emit sdIsGeneratingChanged();

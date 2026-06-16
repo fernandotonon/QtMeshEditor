@@ -20,7 +20,11 @@ GroupBox {
         var useMesh = useMeshCheck.checked && MaterialEditorQML.hasSelectedMesh
         var w = sdWidthSpin.value
         var h = sdHeightSpin.value
-        if (useMesh) {
+        if (useMesh && multiViewCheck.checked) {
+            // Front+back projection bake onto the mesh's UV0 (slice 2).
+            MaterialEditorQML.generateMeshTextureMultiView(
+                sdPromptField.text, w, h, meshStrengthSlider.value, ["front", "back"])
+        } else if (useMesh) {
             MaterialEditorQML.generateMeshTextureFromPrompt(
                 sdPromptField.text, w, h, meshStrengthSlider.value)
         } else {
@@ -915,6 +919,22 @@ GroupBox {
                                     useMeshCheck.checked = false
                             }
                         }
+                    }
+                }
+
+                // Slice 2: multi-view bake. When on (and mesh conditioning is
+                // enabled), generate front + back images and projection-bake
+                // them onto the mesh's UV0 atlas instead of a single planar
+                // view. Only meaningful with "use selected mesh" checked.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    visible: useMeshCheck.checked && useMeshCheck.enabled
+                    ThemedCheckBox {
+                        id: multiViewCheck
+                        text: "Bake front + back (projects onto UV map)"
+                        enabled: !MaterialEditorQML.sdIsGenerating
+                        checked: false
                     }
                 }
 

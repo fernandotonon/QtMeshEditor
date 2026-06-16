@@ -1,6 +1,12 @@
 #include "MultiViewTextureBaker.h"
 
 #include "VertexColorBaker.h"  // for dilate()
+#include "EditableMesh.h"
+
+#include <OgreEntity.h>
+#include <OgreNode.h>
+#include <OgreMatrix3.h>
+#include <OgreMatrix4.h>
 
 #include <algorithm>
 #include <cmath>
@@ -197,4 +203,65 @@ MultiViewTextureBaker::Report MultiViewTextureBaker::bake(
 
     rep.ok = true;
     return rep;
+}
+
+std::vector<MultiViewTextureBaker::Triangle>
+MultiViewTextureBaker::fromEntity(Ogre::Entity* entity, QString* errorOut)
+{
+    std::vector<Triangle> out;
+    if (!entity || !entity->getMesh()) {
+        if (errorOut) *errorOut = QStringLiteral("null entity/mesh");
+        return out;
+    }
+
+    EditableMesh em;
+    if (!em.loadFromEntity(entity)) {
+        if (errorOut) *errorOut = QStringLiteral("failed to read mesh geometry");
+        return out;
+    }
+
+    // World transform of the entity's parent node (positions to world, normals
+    // via the inverse-transpose to stay correct under non-uniform scale).
+    Ogre::Matrix4 world = Ogre::Matrix4::IDENTITY;
+    if (Ogre::Node* node = entity->getParentNode())
+        world = Ogre::Matrix4(node->_getFullTransform());  // derived world matrix
+    Ogre::Matrix3 world3;
+    world.extract3x3Matrix(world3);
+    Ogre::Matrix3 normalMat = world3.Inverse().Transpose();
+
+    bool sawUv = false;
+    for (const EditableSubMesh& sub : em.subMeshes()) {
+        for (const EditableTriangle& tri : sub.triangles) {
+            if (tri.indices[0] >= sub.vertices.size()
+                || tri.indices[1] >= sub.vertices.size()
+                || tri.indices[2] >= sub.vertices.size())
+                continue;
+            Triangle t;
+            for (int k = 0; k < 3; ++k) {
+                const EditableVertex& v = sub.vertices[tri.indices[k]];
+                t.p[k]  = world * v.position;       // world-space position
+                t.uv[k] = v.uv;
+                if (v.uv != Ogre::Vector2::ZERO) sawUv = true;
+            }
+            // World face normal from the geometry (robust even if per-vertex
+            // normals are absent); fall back to the transformed vertex normal.
+            Ogre::Vector3 fn = (t.p[1] - t.p[0]).crossProduct(t.p[2] - t.p[0]);
+            if (fn.isZeroLength()) {
+                fn = normalMat * sub.vertices[tri.indices[0]].normal;
+            }
+            t.normal = fn;
+            out.push_back(t);
+        }
+    }
+
+    if (out.empty()) {
+        if (errorOut) *errorOut = QStringLiteral("mesh has no triangles");
+        return out;
+    }
+    if (!sawUv && errorOut) {
+        // Not fatal here (caller decides) but flag it — a bake onto all-zero
+        // UVs collapses to one texel.
+        *errorOut = QStringLiteral("mesh has no usable UV0");
+    }
+    return out;
 }
