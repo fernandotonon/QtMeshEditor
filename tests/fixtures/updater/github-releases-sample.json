@@ -1,5 +1,14 @@
 [
   {
+    "tag_name": "3.6.0-beta.2",
+    "name": "3.6.0-beta.2",
+    "body": "Second beta preview.",
+    "html_url": "https://github.com/fernandotonon/QtMeshEditor/releases/tag/3.6.0-beta.2",
+    "prerelease": true,
+    "published_at": "2026-06-16T18:00:00Z",
+    "assets": []
+  },
+  {
     "tag_name": "3.6.0-beta.1",
     "name": "3.6.0-beta.1",
     "body": "Beta preview with updater work.",

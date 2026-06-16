@@ -77,6 +77,19 @@ TEST(UpdateVersion, CompareIgnoresPrereleaseSuffix)
     EXPECT_EQ(UpdateVersion::compare("3.2.0", "3.2.0-rc1"), Comparison::Same);
 }
 
+TEST(UpdateVersion, ComparePrereleaseSuffixWhenModeIncludesPrerelease)
+{
+    EXPECT_EQ(UpdateVersion::compare("3.6.0-beta.1", "3.6.0-beta.2",
+                                     UpdateVersion::CompareMode::WithPrerelease),
+              Comparison::Older);
+    EXPECT_EQ(UpdateVersion::compare("3.6.0-beta.2", "3.6.0-beta.1",
+                                     UpdateVersion::CompareMode::WithPrerelease),
+              Comparison::Newer);
+    EXPECT_EQ(UpdateVersion::compare("3.6.0-beta.1", "3.6.0-beta.1",
+                                     UpdateVersion::CompareMode::WithPrerelease),
+              Comparison::Same);
+}
+
 TEST(UpdateVersion, CompareInvalidWhenAnyInputUnparseable)
 {
     EXPECT_EQ(UpdateVersion::compare("", "3.2.0"),       Comparison::Invalid);

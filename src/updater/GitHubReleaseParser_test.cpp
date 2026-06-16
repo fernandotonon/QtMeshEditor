@@ -38,7 +38,7 @@ TEST(GitHubReleaseParser, ParsesReleaseFieldsAndAssets)
 
     const QJsonDocument doc = QJsonDocument::fromJson(json);
     ASSERT_TRUE(doc.isArray());
-    const auto release = GitHubReleaseParser::parseReleaseObject(doc.array().at(1).toObject());
+    const auto release = GitHubReleaseParser::parseReleaseObject(doc.array().at(2).toObject());
 
     EXPECT_TRUE(release.valid);
     EXPECT_EQ(release.tagName, QStringLiteral("3.5.3"));
@@ -80,8 +80,19 @@ TEST(GitHubReleaseParser, BetaChannelPrefersPrerelease)
         GitHubReleaseParser::pickLatestForChannel(json, Channel::Beta, QStringLiteral("3.5.3"));
 
     ASSERT_TRUE(result.parseOk);
-    EXPECT_EQ(result.release.tagName, QStringLiteral("3.6.0-beta.1"));
+    EXPECT_EQ(result.release.tagName, QStringLiteral("3.6.0-beta.2"));
     EXPECT_TRUE(result.release.prerelease);
+    EXPECT_EQ(result.comparison, Comparison::Older);
+}
+
+TEST(GitHubReleaseParser, BetaChannelDetectsPrereleaseBump)
+{
+    const QByteArray json = loadFixture("github-releases-sample.json");
+    const CheckResult result = GitHubReleaseParser::pickLatestForChannel(
+        json, Channel::Beta, QStringLiteral("3.6.0-beta.1"));
+
+    ASSERT_TRUE(result.parseOk);
+    EXPECT_EQ(result.release.tagName, QStringLiteral("3.6.0-beta.2"));
     EXPECT_EQ(result.comparison, Comparison::Older);
 }
 

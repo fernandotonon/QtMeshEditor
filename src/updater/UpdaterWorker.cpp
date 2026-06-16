@@ -46,10 +46,20 @@ void UpdaterWorker::checkForUpdates(const QString& apiUrl,
 
 void UpdaterWorker::onReplyFinished()
 {
-    QNetworkReply* reply = m_activeReply;
+    auto* reply = qobject_cast<QNetworkReply*>(sender());
+    if (!reply) {
+        return;
+    }
+
+    if (reply != m_activeReply) {
+        reply->deleteLater();
+        return;
+    }
+
     m_activeReply = nullptr;
 
-    if (!reply) {
+    if (reply->error() == QNetworkReply::OperationCanceledError) {
+        reply->deleteLater();
         return;
     }
 

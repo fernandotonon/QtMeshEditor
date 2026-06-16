@@ -103,7 +103,9 @@ CheckResult pickLatestForChannel(const QByteArray& releasesJson,
 
     result.parseOk = true;
     result.release = chosen;
-    result.comparison = UpdateVersion::compare(localVersion, chosen.tagName);
+    const auto compareMode = channel == Channel::Beta ? UpdateVersion::CompareMode::WithPrerelease
+                                                      : UpdateVersion::CompareMode::ReleaseOnly;
+    result.comparison = UpdateVersion::compare(localVersion, chosen.tagName, compareMode);
     return result;
 }
 

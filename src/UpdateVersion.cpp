@@ -3,58 +3,148 @@
 #include <QRegularExpression>
 #include <QString>
 #include <QVersionNumber>
+#include <optional>
 
 namespace UpdateVersion {
 
-QString normalize(const QString& raw)
+namespace {
+
+struct ParsedVersion {
+    QVersionNumber core;
+    QString prereleaseSuffix; // text after `-`, before `+`; empty for stable tags
+};
+
+QString stripLeadingVAndBuildMetadata(QString s)
 {
-    QString s = raw.trimmed();
-    if (s.isEmpty()) return {};
-
-    // Strip a single leading `v` / `V`. Common GitHub habit.
-    if (s.startsWith(QLatin1Char('v')) || s.startsWith(QLatin1Char('V')))
+    if (s.startsWith(QLatin1Char('v')) || s.startsWith(QLatin1Char('V'))) {
         s = s.mid(1);
+    }
 
-    // Cut off pre-release / build metadata. Semver lets us treat
-    // anything after `-` or `+` as a non-numeric suffix; for the
-    // purposes of "is there a newer stable release" we just drop it.
-    // Use qsizetype (the indexOf return type) end-to-end so a future
-    // very-long-string input doesn't silently truncate in a 32-bit
-    // signed int (Sonar flagged the previous int form).
-    const qsizetype dash = s.indexOf(QLatin1Char('-'));
     const qsizetype plus = s.indexOf(QLatin1Char('+'));
-    qsizetype cut = -1;
-    if (dash >= 0) cut = dash;
-    if (plus >= 0 && (cut < 0 || plus < cut)) cut = plus;
-    if (cut >= 0) s = s.left(cut);
-
-    // Require the result to look like one or more dot-separated
-    // numeric components, nothing else. This blocks "latest",
-    // "main", and the empty string from being treated as a version.
-    static const QRegularExpression rx(QStringLiteral("^\\d+(?:\\.\\d+)*$"));
-    if (!rx.match(s).hasMatch()) return {};
-
+    if (plus >= 0) {
+        s = s.left(plus);
+    }
     return s;
 }
 
-Comparison compare(const QString& localVersion, const QString& remoteTag)
+std::optional<ParsedVersion> parseReleaseOnly(const QString& raw)
 {
-    const QString local = normalize(localVersion);
-    const QString remote = normalize(remoteTag);
-    if (local.isEmpty() || remote.isEmpty())
-        return Comparison::Invalid;
+    QString s = stripLeadingVAndBuildMetadata(raw.trimmed());
+    if (s.isEmpty()) {
+        return std::nullopt;
+    }
 
-    bool okL = false, okR = false;
-    const QVersionNumber lv = QVersionNumber::fromString(local, /*suffixIndex=*/nullptr);
-    const QVersionNumber rv = QVersionNumber::fromString(remote, /*suffixIndex=*/nullptr);
-    okL = !lv.isNull();
-    okR = !rv.isNull();
-    if (!okL || !okR) return Comparison::Invalid;
+    const qsizetype dash = s.indexOf(QLatin1Char('-'));
+    if (dash >= 0) {
+        s = s.left(dash);
+    }
 
-    const int cmp = QVersionNumber::compare(lv, rv);
-    if (cmp <  0) return Comparison::Older;
-    if (cmp >  0) return Comparison::Newer;
+    static const QRegularExpression rx(QStringLiteral("^\\d+(?:\\.\\d+)*$"));
+    if (!rx.match(s).hasMatch()) {
+        return std::nullopt;
+    }
+
+    const QVersionNumber core = QVersionNumber::fromString(s);
+    if (core.isNull()) {
+        return std::nullopt;
+    }
+    return ParsedVersion{core, {}};
+}
+
+std::optional<ParsedVersion> parseWithPrerelease(const QString& raw)
+{
+    QString s = stripLeadingVAndBuildMetadata(raw.trimmed());
+    if (s.isEmpty()) {
+        return std::nullopt;
+    }
+
+    QString corePart = s;
+    QString suffix;
+    const qsizetype dash = s.indexOf(QLatin1Char('-'));
+    if (dash >= 0) {
+        corePart = s.left(dash);
+        suffix = s.mid(dash + 1);
+    }
+
+    static const QRegularExpression rx(QStringLiteral("^\\d+(?:\\.\\d+)*$"));
+    if (!rx.match(corePart).hasMatch()) {
+        return std::nullopt;
+    }
+
+    const QVersionNumber core = QVersionNumber::fromString(corePart);
+    if (core.isNull()) {
+        return std::nullopt;
+    }
+    return ParsedVersion{core, suffix};
+}
+
+Comparison compareParsed(const ParsedVersion& local, const ParsedVersion& remote)
+{
+    const int coreCmp = QVersionNumber::compare(local.core, remote.core);
+    if (coreCmp < 0) {
+        return Comparison::Older;
+    }
+    if (coreCmp > 0) {
+        return Comparison::Newer;
+    }
+
+    if (local.prereleaseSuffix.isEmpty() && remote.prereleaseSuffix.isEmpty()) {
+        return Comparison::Same;
+    }
+    if (local.prereleaseSuffix.isEmpty()) {
+        return Comparison::Newer;
+    }
+    if (remote.prereleaseSuffix.isEmpty()) {
+        return Comparison::Older;
+    }
+
+    const int suffixCmp =
+        QString::compare(local.prereleaseSuffix, remote.prereleaseSuffix, Qt::CaseInsensitive);
+    if (suffixCmp < 0) {
+        return Comparison::Older;
+    }
+    if (suffixCmp > 0) {
+        return Comparison::Newer;
+    }
     return Comparison::Same;
+}
+
+} // namespace
+
+QString normalize(const QString& raw)
+{
+    const auto parsed = parseReleaseOnly(raw);
+    if (!parsed) {
+        return {};
+    }
+
+    QString s = stripLeadingVAndBuildMetadata(raw.trimmed());
+    const qsizetype dash = s.indexOf(QLatin1Char('-'));
+    if (dash >= 0) {
+        s = s.left(dash);
+    }
+    return s;
+}
+
+Comparison compare(const QString& localVersion,
+                   const QString& remoteTag,
+                   const CompareMode mode)
+{
+    if (mode == CompareMode::ReleaseOnly) {
+        const auto local = parseReleaseOnly(localVersion);
+        const auto remote = parseReleaseOnly(remoteTag);
+        if (!local || !remote) {
+            return Comparison::Invalid;
+        }
+        return compareParsed(*local, *remote);
+    }
+
+    const auto local = parseWithPrerelease(localVersion);
+    const auto remote = parseWithPrerelease(remoteTag);
+    if (!local || !remote) {
+        return Comparison::Invalid;
+    }
+    return compareParsed(*local, *remote);
 }
 
 } // namespace UpdateVersion
