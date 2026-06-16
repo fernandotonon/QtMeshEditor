@@ -617,6 +617,10 @@ if(BUILD_TESTS)
     ${TEST_SOURCES}
     ${RESOURCE_SRCS}
     ${QML_RESOURCE_SRCS}
+    # Compile the VAT shader qrc into the test binary so VATShaderEmitter's
+    # writeShaders() tests run for real instead of GTEST_SKIP-ing (the CI
+    # harness treats a suite that only skips as a failure).
+    ${VAT_SHADER_RESOURCE_SRCS}
     ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp
     )
     target_compile_definitions(UnitTests PRIVATE BATCH_EXPORTER_TEST_SEAM QTMESH_UNIT_TESTS
