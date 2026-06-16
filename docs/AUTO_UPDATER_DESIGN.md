@@ -26,51 +26,18 @@ This document locks the four architecturally consequential decisions before prod
 3. CI signs with new secret (`MINISIGN_SECRET_KEY` GitHub Actions secret, base64-encoded key file).
 4. If secret compromised: revoke GitHub secret, publish advisory, push rotation release; package-manager channels (Homebrew/WinGet/Snap) bypass in-app verify and remain the recovery path.
 
-### CI signing (planned — follow-up PR)
+### CI signing
+
+Implemented in `.github/workflows/deploy.yml` as the `sign-release-artifacts` job (runs on `release: published`). Waits until all four required assets are on the release (`*-bin-Windows.zip`, `*-setup-Windows.exe`, `qtmesheditor_amd64.deb`, `*-MacOS.dmg`), downloads each by exact filename, writes `SHA256SUMS`, signs each artifact + manifest with minisign, verifies with `packaging/updater/minisign.pub`, and uploads `*.minisig` + `SHA256SUMS` + `minisign.pub` to the GitHub Release.
 
 **GitHub Actions secrets** (repo → Settings → Secrets and variables → Actions):
 
 | Secret | Required | Value |
 |--------|----------|-------|
 | `MINISIGN_SECRET_KEY` | Yes | `base64 -w0 ~/.minisign/minisign.key` (helper: `scripts/encode-minisign-secret-for-github.sh`) |
-| `MINISIGN_PASSWORD` | Only if the secret key is password-encrypted | The minisign key passphrase. CI passes it on stdin when signing. Prefer a dedicated `-W` (no password) release key stored only in this secret to avoid a second secret. |
+| `MINISIGN_PASSWORD` | Only if the secret key is password-encrypted | The minisign key passphrase. CI passes it on stdin when signing. |
 
 Production public key: `packaging/updater/minisign.pub` (embedded in `MinisignVerify::productionPublicKeyBase64()`).
-
-Extend `deploy.yml` after existing SHA-256 cask step:
-
-```yaml
-- name: Install minisign
-  run: sudo apt-get install -y minisign
-
-- name: Sign release artifacts
-  env:
-    MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
-    MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
-  run: |
-    echo "$MINISIGN_SECRET_KEY" | base64 -d > /tmp/minisign.key
-    chmod 600 /tmp/minisign.key
-    sign() {
-      if [[ -n "${MINISIGN_PASSWORD:-}" ]]; then
-        printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s /tmp/minisign.key -m "$1" -x "$1.minisig" \
-          -t "timestamp:$(date +%s)	file:$(basename "$1")"
-      else
-        minisign -S -s /tmp/minisign.key -m "$1" -x "$1.minisig" \
-          -t "timestamp:$(date +%s)	file:$(basename "$1")"
-      fi
-    }
-    for f in QtMeshEditor-*.zip QtMeshEditor-*.dmg qtmesheditor_*.deb; do
-      sign "$f"
-    done
-    rm -f /tmp/minisign.key
-
-- name: Upload signatures with release assets
-  uses: softprops/action-gh-release@v2
-  with:
-    files: "*.minisig"
-```
-
-Also publish `SHA256SUMS` + `SHA256SUMS.minisig` for manifest-driven downloads (#444).
 
 ### PoC status
 

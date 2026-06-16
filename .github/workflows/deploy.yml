@@ -2033,6 +2033,146 @@ jobs:
         echo "Sentry release $VERSION created and finalized"
 
 ####################################################################
+# Sign release artifacts (minisign / Ed25519) — epic #439 spike follow-up
+####################################################################
+
+ sign-release-artifacts:
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published'
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+
+    - name: Install minisign
+      run: sudo apt-get update && sudo apt-get install -y minisign
+
+    - name: Wait for release assets to appear
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        VERSION="${RELEASE_TAG}"
+        REQUIRED=(
+          "QtMeshEditor-${VERSION}-bin-Windows.zip"
+          "QtMeshEditor-${VERSION}-setup-Windows.exe"
+          "qtmesheditor_amd64.deb"
+          "QtMeshEditor-${VERSION}-MacOS.dmg"
+        )
+        missing_required() {
+          local present
+          present=$(gh release view "$VERSION" --json assets --jq '.assets[].name')
+          local missing=()
+          for name in "${REQUIRED[@]}"; do
+            if ! printf '%s\n' "$present" | grep -Fxq "$name"; then
+              missing+=("$name")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '%s\n' "${missing[@]}"
+            return 1
+          fi
+          return 0
+        }
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          if missing=$(missing_required); then
+            echo "All required release assets present for $VERSION"
+            exit 0
+          fi
+          echo "Release $VERSION still missing (attempt $i):"
+          printf '  - %s\n' $missing
+          sleep 30
+        done
+        echo "::error::Timed out waiting for required release assets"
+        exit 1
+
+    - name: Download release artifacts
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        VERSION="${RELEASE_TAG}"
+        mkdir -p release-assets
+        REQUIRED=(
+          "QtMeshEditor-${VERSION}-bin-Windows.zip"
+          "QtMeshEditor-${VERSION}-setup-Windows.exe"
+          "qtmesheditor_amd64.deb"
+          "QtMeshEditor-${VERSION}-MacOS.dmg"
+        )
+        for name in "${REQUIRED[@]}"; do
+          gh release download "$VERSION" --dir release-assets --pattern "$name"
+          if [ ! -f "release-assets/$name" ]; then
+            echo "::error::Missing downloaded artifact: $name"
+            exit 1
+          fi
+        done
+        ls -la release-assets/
+
+    - name: Sign release artifacts
+      env:
+        MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+      run: |
+        set -euo pipefail
+        if [ -z "${MINISIGN_SECRET_KEY:-}" ]; then
+          echo "::error::MINISIGN_SECRET_KEY secret is not configured"
+          exit 1
+        fi
+        echo "$MINISIGN_SECRET_KEY" | base64 -d > /tmp/minisign.key
+        chmod 600 /tmp/minisign.key
+        cd release-assets
+        VERSION="${RELEASE_TAG}"
+        REQUIRED=(
+          "QtMeshEditor-${VERSION}-bin-Windows.zip"
+          "QtMeshEditor-${VERSION}-setup-Windows.exe"
+          "qtmesheditor_amd64.deb"
+          "QtMeshEditor-${VERSION}-MacOS.dmg"
+        )
+        sign_file() {
+          local f="$1"
+          local trusted="timestamp:$(date +%s)	file:$(basename "$f")"
+          if [ -n "${MINISIGN_PASSWORD:-}" ]; then
+            printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s /tmp/minisign.key \
+              -m "$f" -x "$f.minisig" -t "$trusted"
+          else
+            minisign -S -s /tmp/minisign.key -m "$f" -x "$f.minisig" -t "$trusted"
+          fi
+        }
+        for f in "${REQUIRED[@]}"; do
+          if [ ! -f "$f" ]; then
+            echo "::error::Required artifact missing before signing: $f"
+            exit 1
+          fi
+          sign_file "$f"
+        done
+        sha256sum "${REQUIRED[@]}" | LC_ALL=C sort -k2 > SHA256SUMS
+        sign_file SHA256SUMS
+        rm -f /tmp/minisign.key
+
+    - name: Verify signatures (smoke test)
+      run: |
+        set -euo pipefail
+        PUB=$(grep -v '^untrusted' packaging/updater/minisign.pub | grep -v '^#' | tr -d '\n\r')
+        cd release-assets
+        for sig in *.minisig; do
+          base="${sig%.minisig}"
+          minisign -V -m "$base" -x "$sig" -P "$PUB" -q
+        done
+
+    - name: Upload signatures and checksum manifest
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release upload "${RELEASE_TAG}" \
+          release-assets/*.minisig \
+          release-assets/SHA256SUMS \
+          packaging/updater/minisign.pub \
+          --clobber
+
+####################################################################
 # Update Homebrew Cask after macOS release
 ####################################################################
 
@@ -2040,6 +2180,8 @@ jobs:
     needs: build-macos
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'published'
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
     steps:
     - name: Wait for DMG to be available
       run: |
@@ -2048,7 +2190,7 @@ jobs:
 
     - name: Download DMG from release
       run: |
-        VERSION="${{ github.ref_name }}"
+        VERSION="${RELEASE_TAG}"
         DMG_URL="https://github.com/fernandotonon/QtMeshEditor/releases/download/${VERSION}/QtMeshEditor-${VERSION}-MacOS.dmg"
         echo "Downloading DMG from: $DMG_URL"
 
@@ -2089,7 +2231,7 @@ jobs:
 
     - name: Generate Cask file from canonical template
       run: |
-        VERSION="${{ github.ref_name }}"
+        VERSION="${RELEASE_TAG}"
         SHA256="${{ steps.sha256.outputs.sha256 }}"
         CASK_FILE="homebrew-qtmesheditor/Casks/qtmesheditor.rb"
         TEMPLATE="qtmesheditor-src/packaging/macos/qtmesheditor.rb.in"
@@ -2114,7 +2256,7 @@ jobs:
       run: |
         cd homebrew-qtmesheditor
         git add Casks/qtmesheditor.rb
-        git commit -m "Update QtMeshEditor to ${{ github.ref_name }}" || echo "No changes to commit"
+        git commit -m "Update QtMeshEditor to ${RELEASE_TAG}" || echo "No changes to commit"
         git push
 
 ####################################################################
