@@ -2040,8 +2040,12 @@ jobs:
     needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'published'
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
 
     - name: Install minisign
       run: sudo apt-get update && sudo apt-get install -y minisign
@@ -2051,7 +2055,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        VERSION="${{ github.ref_name }}"
+        VERSION="${RELEASE_TAG}"
         REQUIRED=(
           "QtMeshEditor-${VERSION}-bin-Windows.zip"
           "QtMeshEditor-${VERSION}-setup-Windows.exe"
@@ -2090,7 +2094,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        VERSION="${{ github.ref_name }}"
+        VERSION="${RELEASE_TAG}"
         mkdir -p release-assets
         REQUIRED=(
           "QtMeshEditor-${VERSION}-bin-Windows.zip"
@@ -2120,7 +2124,7 @@ jobs:
         echo "$MINISIGN_SECRET_KEY" | base64 -d > /tmp/minisign.key
         chmod 600 /tmp/minisign.key
         cd release-assets
-        VERSION="${{ github.ref_name }}"
+        VERSION="${RELEASE_TAG}"
         REQUIRED=(
           "QtMeshEditor-${VERSION}-bin-Windows.zip"
           "QtMeshEditor-${VERSION}-setup-Windows.exe"
@@ -2162,7 +2166,7 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        gh release upload "${{ github.ref_name }}" \
+        gh release upload "${RELEASE_TAG}" \
           release-assets/*.minisig \
           release-assets/SHA256SUMS \
           packaging/updater/minisign.pub \
@@ -2176,6 +2180,8 @@ jobs:
     needs: build-macos
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'published'
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
     steps:
     - name: Wait for DMG to be available
       run: |
@@ -2184,7 +2190,7 @@ jobs:
 
     - name: Download DMG from release
       run: |
-        VERSION="${{ github.ref_name }}"
+        VERSION="${RELEASE_TAG}"
         DMG_URL="https://github.com/fernandotonon/QtMeshEditor/releases/download/${VERSION}/QtMeshEditor-${VERSION}-MacOS.dmg"
         echo "Downloading DMG from: $DMG_URL"
 
@@ -2225,7 +2231,7 @@ jobs:
 
     - name: Generate Cask file from canonical template
       run: |
-        VERSION="${{ github.ref_name }}"
+        VERSION="${RELEASE_TAG}"
         SHA256="${{ steps.sha256.outputs.sha256 }}"
         CASK_FILE="homebrew-qtmesheditor/Casks/qtmesheditor.rb"
         TEMPLATE="qtmesheditor-src/packaging/macos/qtmesheditor.rb.in"
@@ -2250,7 +2256,7 @@ jobs:
       run: |
         cd homebrew-qtmesheditor
         git add Casks/qtmesheditor.rb
-        git commit -m "Update QtMeshEditor to ${{ github.ref_name }}" || echo "No changes to commit"
+        git commit -m "Update QtMeshEditor to ${RELEASE_TAG}" || echo "No changes to commit"
         git push
 
 ####################################################################
