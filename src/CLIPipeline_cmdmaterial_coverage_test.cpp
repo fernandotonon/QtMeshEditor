@@ -1,0 +1,245 @@
+// Coverage tests for CLIPipeline::cmdMaterial focused on the *success* path
+// (CLIPipeline.cpp lines ~3324-3425): import -> SelectionSet::append loop ->
+// MaterialPresetLibrary::applyPreset -> MeshImporterExporter::exporter ->
+// MaterialManager sidecar serialize+write.
+//
+// The existing CLIPipeline_test.cpp CLIPipelineCmdMaterial* suites only cover
+// error returns (NoArgs=2, FileWithoutPreset=2, UnknownPreset=2,
+// NonexistentFile=1) and --list-presets=0. None of them ever applies a preset
+// and exports a mesh + .material sidecar. This file drives the real asset
+// (testRobotMeshPath() copied into a QTemporaryDir, with its robot.skeleton
+// sibling) through the full preset->export->sidecar pipeline.
+//
+// Suite name (CLIPipelineCmdMaterialCoverage) is unique vs the existing
+// suites; all helpers live in this file's own anonymous namespace (no ODR
+// clash with CLIPipeline_test.cpp's TestArgv).
+
+#include <gtest/gtest.h>
+
+#include <QByteArray>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QString>
+#include <QStringList>
+#include <QTemporaryDir>
+#include <vector>
+
+#include <OgreMaterialManager.h>
+
+#include "CLIPipeline.h"
+#include "MaterialPresetLibrary.h"
+#include "SelectionSet.h"
+#include "TestHelpers.h"
+
+namespace {
+
+// RAII argv builder driven by a QStringList (lets us assemble dynamic temp
+// paths). Separate type in this file's anonymous namespace (no ODR clash).
+class ArgvBuilder {
+public:
+    explicit ArgvBuilder(const QStringList& args)
+    {
+        for (const QString& a : args)
+            m_storage.push_back(a.toUtf8());
+        for (auto& ba : m_storage)
+            m_argv.push_back(ba.data());
+        m_argc = static_cast<int>(m_argv.size());
+    }
+    int argc() { return m_argc; }
+    char** argv() { return m_argv.data(); }
+
+private:
+    std::vector<QByteArray> m_storage;
+    std::vector<char*> m_argv;
+    int m_argc = 0;
+};
+
+class CLIPipelineCmdMaterialCoverageTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Ogre plugins/codecs not available";
+        createStandardOgreMaterials();
+        // Each cmdMaterial run appends to the global SelectionSet; clear it so
+        // selectedEntityCount in the next run reflects only that run's import.
+        if (auto* sel = SelectionSet::getSingletonPtr())
+            sel->clear();
+    }
+
+    void TearDown() override
+    {
+        if (auto* sel = SelectionSet::getSingletonPtr())
+            sel->clear();
+    }
+
+    // Copy robot.mesh (+ sibling robot.skeleton) into a fresh temp dir so the
+    // export can write next to it without touching the repo's media tree.
+    // Returns the absolute path to the copied mesh, or empty on failure.
+    QString copyRobotInto(QTemporaryDir& dir)
+    {
+        const QString fixture = testRobotMeshPath();
+        if (fixture.isEmpty() || !QFile::exists(fixture))
+            return QString();
+        const QString src = dir.filePath("robot.mesh");
+        QFile::remove(src);
+        if (!QFile::copy(fixture, src))
+            return QString();
+
+        // Keep the sibling skeleton next to the mesh so Ogre resolves the link.
+        const QString skelFixture =
+            QFileInfo(fixture).absolutePath() + "/robot.skeleton";
+        if (QFile::exists(skelFixture)) {
+            const QString skelDst = dir.filePath("robot.skeleton");
+            QFile::remove(skelDst);
+            QFile::copy(skelFixture, skelDst);
+        }
+        return src;
+    }
+};
+
+// --preset <simple> with -o <output>: assert exit 0, the output mesh exists,
+// and the <basename>.material sidecar is written next to it (non-empty).
+// Exercises the simple "Plastic (Red)" applyPreset branch.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, SimplePresetWithOutputWritesMeshAndSidecar)
+{
+    QTemporaryDir src;
+    ASSERT_TRUE(src.isValid());
+    const QString mesh = copyRobotInto(src);
+    ASSERT_FALSE(mesh.isEmpty()) << "robot.mesh fixture unavailable";
+
+    QTemporaryDir out;
+    ASSERT_TRUE(out.isValid());
+    const QString outMesh = out.filePath("plastic_out.mesh");
+
+    ArgvBuilder args({"qtmesh", "material", mesh,
+                      "--preset", "Plastic (Red)",
+                      "-o", outMesh});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 0);
+
+    EXPECT_TRUE(QFile::exists(outMesh)) << outMesh.toStdString();
+
+    const QString sidecar =
+        QDir(out.path()).filePath(QStringLiteral("plastic_out.material"));
+    EXPECT_TRUE(QFile::exists(sidecar)) << sidecar.toStdString();
+    EXPECT_GT(QFileInfo(sidecar).size(), 0);
+
+    // The preset material resource must have been created under "Preset/<name>".
+    auto* mm = Ogre::MaterialManager::getSingletonPtr();
+    ASSERT_NE(mm, nullptr);
+    EXPECT_TRUE(mm->resourceExists("Preset/Plastic (Red)"));
+}
+
+// --preset 'Metallic-Roughness' hits the PBR applyPbrTemplate branch (distinct
+// from the simple startsWith("Plastic") branch). Both reach the same
+// matName "Preset/<name>" resourceExists/getByName sidecar path.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, PbrPresetWithOutputWritesMeshAndSidecar)
+{
+    QTemporaryDir src;
+    ASSERT_TRUE(src.isValid());
+    const QString mesh = copyRobotInto(src);
+    ASSERT_FALSE(mesh.isEmpty()) << "robot.mesh fixture unavailable";
+
+    QTemporaryDir out;
+    ASSERT_TRUE(out.isValid());
+    const QString outMesh = out.filePath("pbr_out.mesh");
+
+    ArgvBuilder args({"qtmesh", "material", mesh,
+                      "--preset", "Metallic-Roughness",
+                      "--output", outMesh});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 0);
+
+    EXPECT_TRUE(QFile::exists(outMesh)) << outMesh.toStdString();
+
+    const QString sidecar =
+        QDir(out.path()).filePath(QStringLiteral("pbr_out.material"));
+    EXPECT_TRUE(QFile::exists(sidecar)) << sidecar.toStdString();
+    EXPECT_GT(QFileInfo(sidecar).size(), 0);
+
+    auto* mm = Ogre::MaterialManager::getSingletonPtr();
+    ASSERT_NE(mm, nullptr);
+    EXPECT_TRUE(mm->resourceExists("Preset/Metallic-Roughness"));
+}
+
+// --preset without -o: outputPath defaults to inputPath (line 3330). The mesh
+// is overwritten in place and the sidecar lands next to it. The singular
+// "(1 entity)" report-string branch is hit since robot.mesh has one entity.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, PresetWithoutOutputDefaultsToInputPath)
+{
+    QTemporaryDir src;
+    ASSERT_TRUE(src.isValid());
+    const QString mesh = copyRobotInto(src);
+    ASSERT_FALSE(mesh.isEmpty()) << "robot.mesh fixture unavailable";
+
+    ArgvBuilder args({"qtmesh", "material", mesh,
+                      "--preset", "Metal (Gold)"});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 0);
+
+    // In-place rewrite: the input mesh still exists.
+    EXPECT_TRUE(QFile::exists(mesh)) << mesh.toStdString();
+
+    // Sidecar uses the input's complete base name ("robot.material").
+    const QString sidecar =
+        QDir(src.path()).filePath(QStringLiteral("robot.material"));
+    EXPECT_TRUE(QFile::exists(sidecar)) << sidecar.toStdString();
+    EXPECT_GT(QFileInfo(sidecar).size(), 0);
+
+    auto* mm = Ogre::MaterialManager::getSingletonPtr();
+    ASSERT_NE(mm, nullptr);
+    EXPECT_TRUE(mm->resourceExists("Preset/Metal (Gold)"));
+}
+
+// Another simple-branch preset to exercise the report-string path again and
+// confirm distinct preset names each get their own "Preset/<name>" resource.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, UnlitPresetWritesSidecar)
+{
+    QTemporaryDir src;
+    ASSERT_TRUE(src.isValid());
+    const QString mesh = copyRobotInto(src);
+    ASSERT_FALSE(mesh.isEmpty()) << "robot.mesh fixture unavailable";
+
+    QTemporaryDir out;
+    ASSERT_TRUE(out.isValid());
+    const QString outMesh = out.filePath("unlit_out.mesh");
+
+    ArgvBuilder args({"qtmesh", "material", mesh,
+                      "--preset", "Unlit PBR",
+                      "-o", outMesh});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 0);
+
+    const QString sidecar =
+        QDir(out.path()).filePath(QStringLiteral("unlit_out.material"));
+    EXPECT_TRUE(QFile::exists(sidecar)) << sidecar.toStdString();
+    EXPECT_GT(QFileInfo(sidecar).size(), 0);
+
+    auto* mm = Ogre::MaterialManager::getSingletonPtr();
+    ASSERT_NE(mm, nullptr);
+    EXPECT_TRUE(mm->resourceExists("Preset/Unlit PBR"));
+}
+
+// Sanity: every preset name reported by the library is recognized by
+// cmdMaterial (none falls into the "Unknown preset" guard, return 2). This
+// asserts the preset-name contract between MaterialPresetLibrary and the CLI
+// validator without re-running a full export for each name.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, AllLibraryPresetsAreAcceptedByValidator)
+{
+    auto* lib = MaterialPresetLibrary::instance();
+    ASSERT_NE(lib, nullptr);
+    const QStringList names = lib->presetNames();
+    ASSERT_FALSE(names.isEmpty());
+
+    // A nonexistent file + a *valid* preset returns 1 (file-not-found), never
+    // 2 (unknown-preset). If any name returned 2, the validator rejected it.
+    for (const QString& n : names) {
+        ArgvBuilder args({"qtmesh", "material",
+                          "/tmp/qtmesh_cmdmaterial_cov_no_such_file_zz.mesh",
+                          "--preset", n});
+        const int rc = CLIPipeline::cmdMaterial(args.argc(), args.argv());
+        EXPECT_EQ(rc, 1) << "preset '" << n.toStdString()
+                         << "' should pass validation (file-not-found=1, not unknown=2)";
+    }
+}
+
+} // namespace
