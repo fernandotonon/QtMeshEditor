@@ -33,9 +33,6 @@ bool pathContains(const QString& path, QLatin1String needle)
 #ifdef Q_OS_LINUX
 Flavor detectLinux(const QString& path)
 {
-    if (QFile::exists(QStringLiteral("/.dockerenv")))
-        return Flavor::Docker;
-
     if (pathContains(path, QLatin1String("/snap/qtmesheditor/"))
         || path.startsWith(QStringLiteral("/snap/bin/qtmesheditor"), Qt::CaseInsensitive))
         return Flavor::Snap;
@@ -52,6 +49,9 @@ Flavor detectLinux(const QString& path)
     if (pathContains(path, QLatin1String("/opt/QtMeshEditor"))
         || pathContains(path, QLatin1String("/opt/qtmesheditor")))
         return Flavor::Portable;
+
+    if (QFile::exists(QStringLiteral("/.dockerenv")))
+        return Flavor::Docker;
 
     return Flavor::Unknown;
 }

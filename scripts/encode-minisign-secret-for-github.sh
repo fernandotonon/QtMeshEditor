@@ -14,5 +14,5 @@ fi
 echo "Copy the single line below into GitHub → Settings → Secrets → Actions → MINISIGN_SECRET_KEY"
 echo "(Do not commit this output or paste it in issues/PRs.)"
 echo
-base64 -w0 "$KEY"
+base64 "$KEY" | tr -d '\n'
 echo

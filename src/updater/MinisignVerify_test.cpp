@@ -66,6 +66,7 @@ TEST(MinisignVerify, RejectsWrongPublicKey)
         QStringLiteral("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="));
 
     EXPECT_NE(out.result, MinisignVerify::Result::Ok);
+    EXPECT_EQ(out.result, MinisignVerify::Result::InvalidPublicKey);
 }
 
 #else

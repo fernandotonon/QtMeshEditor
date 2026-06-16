@@ -16,7 +16,7 @@ This document locks the four architecturally consequential decisions before prod
 
 ### Public key placement
 
-- **Production:** compile-time string in `MinisignVerify.cpp` (or generated header from `packaging/updater/minisign.pub.in` at configure time). Same pattern as Sentry DSN / embedded resource paths.
+- **Production:** compile-time string `kProductionPublicKeyBase64` in `MinisignVerify.cpp`, kept in sync with `packaging/updater/minisign.pub` (human-readable copy for CI/docs).
 - **Development / tests:** separate test keypair; only the `.pub` and `.minisig` fixtures are committed (`tests/fixtures/updater/`). Secret keys never enter git.
 
 ### Key rotation
