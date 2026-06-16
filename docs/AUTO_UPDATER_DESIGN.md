@@ -28,6 +28,15 @@ This document locks the four architecturally consequential decisions before prod
 
 ### CI signing (planned — follow-up PR)
 
+**GitHub Actions secrets** (repo → Settings → Secrets and variables → Actions):
+
+| Secret | Required | Value |
+|--------|----------|-------|
+| `MINISIGN_SECRET_KEY` | Yes | `base64 -w0 ~/.minisign/minisign.key` (helper: `scripts/encode-minisign-secret-for-github.sh`) |
+| `MINISIGN_PASSWORD` | Only if the secret key is password-encrypted | The minisign key passphrase. CI passes it on stdin when signing. Prefer a dedicated `-W` (no password) release key stored only in this secret to avoid a second secret. |
+
+Production public key: `packaging/updater/minisign.pub` (embedded in `MinisignVerify::productionPublicKeyBase64()`).
+
 Extend `deploy.yml` after existing SHA-256 cask step:
 
 ```yaml
@@ -37,12 +46,21 @@ Extend `deploy.yml` after existing SHA-256 cask step:
 - name: Sign release artifacts
   env:
     MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+    MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
   run: |
     echo "$MINISIGN_SECRET_KEY" | base64 -d > /tmp/minisign.key
     chmod 600 /tmp/minisign.key
+    sign() {
+      if [[ -n "${MINISIGN_PASSWORD:-}" ]]; then
+        printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s /tmp/minisign.key -m "$1" -x "$1.minisig" \
+          -t "timestamp:$(date +%s)	file:$(basename "$1")"
+      else
+        minisign -S -s /tmp/minisign.key -m "$1" -x "$1.minisig" \
+          -t "timestamp:$(date +%s)	file:$(basename "$1")"
+      fi
+    }
     for f in QtMeshEditor-*.zip QtMeshEditor-*.dmg qtmesheditor_*.deb; do
-      minisign -S -s /tmp/minisign.key -m "$f" -x "$f.minisig" \
-        -t "timestamp:$(date +%s)	file:$(basename "$f")"
+      sign "$f"
     done
     rm -f /tmp/minisign.key
 

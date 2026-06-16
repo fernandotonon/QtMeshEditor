@@ -92,3 +92,8 @@ website/dist/
 website/node_modules/
 docs/*
 !docs/AUTO_UPDATER_DESIGN.md
+
+# minisign — never commit secret keys
+minisign.key
+*.minisig
+!tests/fixtures/**/*.minisig

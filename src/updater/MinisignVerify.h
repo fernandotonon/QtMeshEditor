@@ -36,6 +36,14 @@ struct Outcome {
 /// Human-readable error for logging / UI.
 QString resultToString(Result result);
 
+/// Base64 public key body for release artifact verification (`minisign -P` form).
+QString productionPublicKeyBase64();
+
+/**
+ * @brief Verify @p messageFile against @p signatureFile using the production pubkey.
+ */
+Outcome verifyReleaseFile(const QString& messageFile, const QString& signatureFile);
+
 /**
  * @brief Verify @p messageFile against @p signatureFile using an embedded pubkey.
  *

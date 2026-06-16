@@ -12,6 +12,12 @@ namespace MinisignVerify {
 
 namespace {
 
+// packaging/updater/minisign.pub — rotate via docs/AUTO_UPDATER_DESIGN.md §1.
+constexpr const char kProductionPublicKeyBase64[] =
+    "RWQYgVXaH+8eYME58t9l6roX1QIqFsW+/nYV216ymPtW8H6odA8aMGhJ";
+
+} // namespace
+
 constexpr int kSigAlgBytes = 2;
 constexpr int kKeyNumBytes = 8;
 constexpr int kSigBytes = 64;
@@ -105,8 +111,6 @@ Outcome verifyParsed(const QByteArray& message,
 
 #endif // Q_OS_LINUX
 
-} // namespace
-
 QString resultToString(Result result)
 {
     switch (result) {
@@ -120,6 +124,16 @@ QString resultToString(Result result)
     case Result::CommentSignatureFailed: return QStringLiteral("comment_signature_failed");
     }
     return QStringLiteral("unknown");
+}
+
+QString productionPublicKeyBase64()
+{
+    return QString::fromUtf8(kProductionPublicKeyBase64);
+}
+
+Outcome verifyReleaseFile(const QString& messageFile, const QString& signatureFile)
+{
+    return verifyFile(messageFile, signatureFile, productionPublicKeyBase64());
 }
 
 Outcome verifyFile(const QString& messageFile,
