@@ -100,6 +100,9 @@ TexturePaintBuffer.cpp
 UpdateVersion.cpp
 updater/InstallFlavor.cpp
 updater/MinisignVerify.cpp
+updater/GitHubReleaseParser.cpp
+updater/UpdaterWorker.cpp
+updater/UpdaterController.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
 VATBaker.cpp
@@ -236,6 +239,9 @@ TexturePaintBuffer.h
 UpdateVersion.h
 updater/InstallFlavor.h
 updater/MinisignVerify.h
+updater/GitHubReleaseParser.h
+updater/UpdaterWorker.h
+updater/UpdaterController.h
 TexturePaintController.h
 VertexColorBaker.h
 ApplyAtlas.h

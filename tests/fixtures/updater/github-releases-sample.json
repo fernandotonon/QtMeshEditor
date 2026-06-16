@@ -1,0 +1,55 @@
+[
+  {
+    "tag_name": "3.6.0-beta.2",
+    "name": "3.6.0-beta.2",
+    "body": "Second beta preview.",
+    "html_url": "https://github.com/fernandotonon/QtMeshEditor/releases/tag/3.6.0-beta.2",
+    "prerelease": true,
+    "published_at": "2026-06-16T18:00:00Z",
+    "assets": []
+  },
+  {
+    "tag_name": "3.6.0-beta.1",
+    "name": "3.6.0-beta.1",
+    "body": "Beta preview with updater work.",
+    "html_url": "https://github.com/fernandotonon/QtMeshEditor/releases/tag/3.6.0-beta.1",
+    "prerelease": true,
+    "published_at": "2026-06-16T12:00:00Z",
+    "assets": [
+      {
+        "name": "QtMeshEditor-3.6.0-beta.1-bin-Windows.zip",
+        "browser_download_url": "https://github.com/fernandotonon/QtMeshEditor/releases/download/3.6.0-beta.1/QtMeshEditor-3.6.0-beta.1-bin-Windows.zip",
+        "size": 120000000
+      }
+    ]
+  },
+  {
+    "tag_name": "3.5.3",
+    "name": "3.5.3",
+    "body": "Stable release notes.",
+    "html_url": "https://github.com/fernandotonon/QtMeshEditor/releases/tag/3.5.3",
+    "prerelease": false,
+    "published_at": "2026-06-15T19:38:57Z",
+    "assets": [
+      {
+        "name": "QtMeshEditor-3.5.3-bin-Windows.zip",
+        "browser_download_url": "https://github.com/fernandotonon/QtMeshEditor/releases/download/3.5.3/QtMeshEditor-3.5.3-bin-Windows.zip",
+        "size": 118000000
+      },
+      {
+        "name": "qtmesheditor_amd64.deb",
+        "browser_download_url": "https://github.com/fernandotonon/QtMeshEditor/releases/download/3.5.3/qtmesheditor_amd64.deb",
+        "size": 45000000
+      }
+    ]
+  },
+  {
+    "tag_name": "3.5.2",
+    "name": "3.5.2",
+    "body": "Older stable.",
+    "html_url": "https://github.com/fernandotonon/QtMeshEditor/releases/tag/3.5.2",
+    "prerelease": false,
+    "published_at": "2026-06-12T00:04:38Z",
+    "assets": []
+  }
+]
