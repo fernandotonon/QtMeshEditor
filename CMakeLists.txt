@@ -319,6 +319,11 @@ endif()
 message(STATUS "xatlas enabled (auto UV unwrap)")
 
 ##############################################################
+#  libsodium — minisign signature verify (auto-updater spike #440)
+##############################################################
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Libsodium.cmake)
+
+##############################################################
 #  Sentry crash reporting and analytics
 ##############################################################
 option(ENABLE_SENTRY "Enable Sentry crash reporting and analytics" ON)

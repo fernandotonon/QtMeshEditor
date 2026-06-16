@@ -1,0 +1,2 @@
+# Never commit minisign secret keys — only .pub + signed fixtures belong in git.
+*.key
