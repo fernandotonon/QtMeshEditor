@@ -198,8 +198,11 @@ TEST(AppLaunchHandlerCoverageTest, IsImportable_KnownExtensionCaseInsensitive)
 
 TEST(AppLaunchHandlerCoverageTest, IsImportable_UnknownExtension_False)
 {
-    EXPECT_FALSE(AppLaunchHandler::isImportableMeshPath(QStringLiteral("/tmp/notes.txt")));
+    // NB: .txt IS an importable extension (Manager::mValidFileExtention lists it
+    // for SMD-style imports), so use extensions that are genuinely absent.
     EXPECT_FALSE(AppLaunchHandler::isImportableMeshPath(QStringLiteral("/tmp/image.png")));
+    EXPECT_FALSE(AppLaunchHandler::isImportableMeshPath(QStringLiteral("/tmp/data.json")));
+    EXPECT_FALSE(AppLaunchHandler::isImportableMeshPath(QStringLiteral("/tmp/archive.zip")));
 }
 
 TEST(AppLaunchHandlerCoverageTest, IsImportable_EmptyPath_False)
@@ -349,15 +352,16 @@ TEST(AppLaunchHandlerCoverageTest, Collect_NonImportableExtensionSkipped)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-    const QString txtPath = dir.filePath(QStringLiteral("readme.txt"));
-    QFile txt(txtPath);
-    ASSERT_TRUE(txt.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    txt.write("hello");
-    txt.close();
+    // .png is not in Manager::mValidFileExtention (.txt would be, so avoid it).
+    const QString pngPath = dir.filePath(QStringLiteral("image.png"));
+    QFile png(pngPath);
+    ASSERT_TRUE(png.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    png.write("not-a-mesh");
+    png.close();
 
     const QStringList args = {
         QStringLiteral("QtMeshEditor"),
-        txtPath,
+        pngPath,
     };
     EXPECT_TRUE(AppLaunchHandler::collectGuiLaunchPaths(args).isEmpty());
 }
