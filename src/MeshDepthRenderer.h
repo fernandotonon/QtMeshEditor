@@ -4,6 +4,9 @@
 #include <QImage>
 #include <QString>
 
+#include <OgreMatrix4.h>
+#include <OgreVector3.h>
+
 namespace Ogre {
     class Entity;
 }
@@ -32,10 +35,50 @@ namespace Ogre {
 // the live editor viewport camera instead; framing is the safe v1.)
 class MeshDepthRenderer {
 public:
-    // Render `entity`'s depth map at `size` x `size`. Returns a
-    // grayscale QImage on success, or a null QImage on failure
-    // (errorOut populated). Must be called on the main/render thread
-    // — it touches the Ogre scene manager.
+    // A camera view to capture from. `dir` is the WORLD-space direction the
+    // camera looks ALONG (i.e. FROM the camera TOWARD the mesh centre),
+    // normalised by the renderer; the camera is placed at center - dir*dist.
+    // front = (0,0,1): imported characters (Mixamo et al.) face -Z, so the
+    // camera sits on the -Z side (center - (0,0,1)*dist) looking toward +Z and
+    // sees the front — matching the pre-multiview single-view placement.
+    // `up` is the camera up-vector hint (defaults to +Y; use ±Z for top/bottom
+    // views where the look direction is parallel to +Y).
+    struct View {
+        Ogre::Vector3 dir = Ogre::Vector3(0, 0, 1);
+        Ogre::Vector3 up  = Ogre::Vector3::UNIT_Y;
+        const char*   name = "front";
+    };
+
+    // Built-in named views. front/back differ only in sign of Z.
+    static View front()  { return { Ogre::Vector3(0, 0,  1), Ogre::Vector3::UNIT_Y, "front"  }; }
+    static View back()   { return { Ogre::Vector3(0, 0, -1), Ogre::Vector3::UNIT_Y, "back"   }; }
+    static View left()   { return { Ogre::Vector3( 1, 0, 0), Ogre::Vector3::UNIT_Y, "left"   }; }
+    static View right()  { return { Ogre::Vector3(-1, 0, 0), Ogre::Vector3::UNIT_Y, "right"  }; }
+    static View top()    { return { Ogre::Vector3(0, -1, 0), Ogre::Vector3(0,0,1),  "top"    }; }
+    static View bottom() { return { Ogre::Vector3(0,  1, 0), Ogre::Vector3(0,0,1),  "bottom" }; }
+
+    // Result of a view render: the grayscale depth image PLUS the exact
+    // view/projection matrices and camera position used. The multi-view
+    // baker re-projects mesh triangles through THESE matrices so the bake
+    // aligns pixel-for-pixel with what ControlNet was conditioned on.
+    struct RenderResult {
+        QImage        depth;            // null on failure
+        Ogre::Matrix4 viewMatrix;
+        Ogre::Matrix4 projMatrix;
+        Ogre::Vector3 camPosition = Ogre::Vector3::ZERO;
+        Ogre::Vector3 camDirection = Ogre::Vector3::ZERO;  // normalised view dir
+    };
+
+    // Render `entity`'s depth map at `size` x `size` from `view`. Returns a
+    // RenderResult whose `.depth` is null on failure (errorOut populated).
+    // Must be called on the main/render thread — it touches the Ogre scene
+    // manager.
+    static RenderResult renderDepthMapView(Ogre::Entity* entity,
+                                           int size,
+                                           const View& view,
+                                           QString* errorOut = nullptr);
+
+    // Back-compat convenience: front-view depth image only (issue #403).
     static QImage renderDepthMap(Ogre::Entity* entity,
                                  int size,
                                  QString* errorOut = nullptr);

@@ -5,6 +5,8 @@
 #include <QQmlEngine>
 #include <QColor>
 #include <QStringList>
+
+#include <memory>
 #include <QVariantMap>
 #include <QQuickItem>
 #include <QDir>
@@ -148,7 +150,9 @@ class MaterialEditorQML : public QObject
 
 public:
     explicit MaterialEditorQML(QObject *parent = nullptr);
-    virtual ~MaterialEditorQML() = default;
+    // Defined (defaulted) in the .cpp so std::unique_ptr<MultiViewBakeState>
+    // sees the complete type when destroying the pimpl.
+    ~MaterialEditorQML() override;
 
     // Property getters
     QString materialName() const { return m_materialName; }
@@ -550,6 +554,15 @@ public slots:
     Q_INVOKABLE void generateMeshTextureFromPrompt(const QString &prompt,
                                                    int width = 0, int height = 0,
                                                    double controlStrength = 0.9);
+    // Multi-view depth-conditioned generation (slice 2): generate one image per
+    // camera view (e.g. {"front","back"}) and projection-bake them onto the
+    // selected mesh's UV0 atlas, then apply the baked texture to its diffuse.
+    // Views run sequentially through the SD worker; the bake fires when the
+    // last view completes. `views` defaults to front+back when empty.
+    Q_INVOKABLE void generateMeshTextureMultiView(const QString &prompt,
+                                                  int width = 0, int height = 0,
+                                                  double controlStrength = 0.9,
+                                                  const QStringList &views = {});
     // True when a skinned/static mesh is selected — drives the
     // "use selected mesh" checkbox enabled state.
     Q_INVOKABLE bool hasSelectedMesh() const;
@@ -807,6 +820,17 @@ private:
     QString m_sdMeshTextureEntity;
     void applyTextureToEntityDiffuse(const QString& entityName,
                                      const QString& textureFileName);
+
+    // Multi-view bake (slice 2) in-flight state. When non-empty, each SD
+    // completion is captured into the per-view image list and the next view is
+    // issued; when the last view completes, MultiViewTextureBaker bakes the
+    // images onto the entity's UV0 and the result is applied to its diffuse.
+    // Stored separately from the single-view m_sdMeshTextureEntity path so the
+    // two never interfere. Implemented in the .cpp (sd-guarded).
+    struct MultiViewBakeState;
+    std::unique_ptr<MultiViewBakeState> m_multiViewBake;
+    void startNextMultiViewGeneration();   // issue depth+generate for the current view
+    void finishMultiViewBake();            // bake accumulated images + apply
 
     // Undo/Redo stacks
     QStringList m_undoStack;

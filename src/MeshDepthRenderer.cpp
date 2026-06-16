@@ -131,38 +131,53 @@ QImage readRenderTarget(int size)
 QImage MeshDepthRenderer::renderDepthMap(Ogre::Entity* entity, int size,
                                          QString* errorOut)
 {
+    // Back-compat: front view, image only.
+    return renderDepthMapView(entity, size, front(), errorOut).depth;
+}
+
+MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
+    Ogre::Entity* entity, int size, const View& view, QString* errorOut)
+{
+    RenderResult result;
     if (!entity) {
         if (errorOut) *errorOut = QStringLiteral("null entity");
-        return QImage();
+        return result;
     }
     size = std::clamp(size, 64, 2048);
     if (!ensureRenderTarget(size, errorOut))
-        return QImage();
+        return result;
 
     auto* sm = sceneMgr();
     DepthState& st = state();
 
     // Frame the camera on the entity's bounding sphere so the whole
     // mesh fills the view (matches how the generated texture is
-    // planar-projected back).
+    // projection-baked back).
     const Ogre::AxisAlignedBox aabb = entity->getWorldBoundingBox(true);
     const Ogre::Vector3 center = aabb.getCenter();
     const Ogre::Real radius = aabb.getHalfSize().length();
     if (radius <= 0.0f) {
         if (errorOut) *errorOut = QStringLiteral("entity has zero-size bounding box");
-        return QImage();
+        return result;
     }
     // Distance so the sphere fits in the 45° vertical FOV.
     const Ogre::Real fovY = st.camera->getFOVy().valueRadians();
     const Ogre::Real dist = radius / std::sin(fovY * 0.5f) * 1.15f;  // 15% margin
-    // Place the camera on the -Z side: imported characters (Mixamo et
-    // al.) face -Z, which is also the side the default editor camera
-    // looks at. Capturing from +Z gave the model's BACK; -Z gives the
-    // front.
-    const Ogre::Vector3 camPos = center + Ogre::Vector3(0, 0, -dist);
+    // `view.dir` is the direction the camera looks ALONG (toward the centre),
+    // so the camera is placed at center - dir*dist. front = (0,0,1) → camera on
+    // -Z (center - (0,0,1)*dist) looking toward +Z; imported characters face -Z
+    // so this captures the FRONT, matching the pre-multiview placement
+    // (camPos was center + (0,0,-dist)).
+    Ogre::Vector3 dir = view.dir;
+    if (dir.isZeroLength()) dir = Ogre::Vector3(0, 0, 1);
+    dir.normalise();
+    const Ogre::Vector3 camPos = center - dir * dist;
     st.cameraNode->setPosition(camPos);
-    // Ogre 14: orient the node, not the camera. Look from camPos
-    // toward the entity center.
+    // Orient via the view's up hint. Node::lookAt takes the up from the
+    // fixed-yaw axis, so set that to `up` first. Top/bottom views look parallel
+    // to the default +Y, which is degenerate, so those views supply a Z-up hint.
+    const Ogre::Vector3 up = view.up.isZeroLength() ? Ogre::Vector3::UNIT_Y : view.up;
+    st.cameraNode->setFixedYawAxis(true, up);
     st.cameraNode->lookAt(center, Ogre::Node::TS_WORLD,
                           Ogre::Vector3::NEGATIVE_UNIT_Z);
 
@@ -256,11 +271,20 @@ QImage MeshDepthRenderer::renderDepthMap(Ogre::Entity* entity, int size,
     st.renderTarget->update();
     QImage rgba = readRenderTarget(size);
 
+    // Capture the EXACT view/projection the frame was rendered with, so the
+    // multi-view baker re-projects mesh triangles through the identical camera.
+    // Read after update() so Ogre has finalised the auto-aspect projection.
+    result.viewMatrix = st.camera->getViewMatrix();
+    result.projMatrix = st.camera->getProjectionMatrix();
+    result.camPosition = camPos;
+    result.camDirection = dir;
+
     // Collapse to grayscale (the channels are equal already, but be
     // explicit so downstream code can rely on it). Restore runs as the
     // Restorer goes out of scope.
-    return rgba.convertToFormat(QImage::Format_Grayscale8)
+    result.depth = rgba.convertToFormat(QImage::Format_Grayscale8)
         .convertToFormat(QImage::Format_RGB888);
+    return result;
 }
 
 void MeshDepthRenderer::shutdown()

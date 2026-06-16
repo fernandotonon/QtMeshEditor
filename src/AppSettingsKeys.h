@@ -98,6 +98,15 @@ inline const QString& cloudUserSlug()
     return k;
 }
 
+/** @brief Set once the one-time pre-QSettings secret-store migration has been
+ *  attempted, so the OS keychain is never probed again (which would prompt on
+ *  every launch). */
+inline const QString& cloudLegacyMigrationDone()
+{
+    static const QString k(QStringLiteral("Cloud/legacyMigrationDone"));
+    return k;
+}
+
 /** @brief Last platform profile id used for Validation-mode asset folder scan (issue #370). */
 inline const QString& validationPlatformProfileId()
 {

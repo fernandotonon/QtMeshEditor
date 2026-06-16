@@ -151,6 +151,40 @@ TEST_F(CloudCredentialStoreTest, MigratesLegacyFallbackFileIntoSettings)
     QFile::remove(legacyPath);
 }
 
+TEST_F(CloudCredentialStoreTest, LegacyMigrationProbesOnlyOnce)
+{
+    // Ensure a clean legacy precondition first — a leftover cloud_session.dat
+    // from another test/run would make the "nothing migrates" assertion below
+    // order-dependent.
+    const QString cfgDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    QFile::remove(cfgDir + QStringLiteral("/cloud_session.dat"));
+
+    // First call: nothing in the legacy store, so nothing migrates — but the
+    // probe must be marked done so the OS keychain is never touched again
+    // (the repeated-prompt bug).
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
+    {
+        QSettings settings;
+        EXPECT_TRUE(settings.value(AppSettingsKeys::cloudLegacyMigrationDone()).toBool());
+    }
+
+    // Now drop a legacy fallback file. A second migrate must IGNORE it (the
+    // done-flag short-circuits before any legacy read), so no session appears.
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    QDir().mkpath(dir);
+    const QString legacyPath = dir + QStringLiteral("/cloud_session.dat");
+    QFile f(legacyPath);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    f.write(QByteArrayLiteral("{\"token\":\"should-be-ignored\",\"expiresAt\":1}"));
+    f.close();
+    CloudCredentialStore::resetCacheForTesting();
+
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
+    EXPECT_FALSE(CloudCredentialStore::hasSession());
+
+    QFile::remove(legacyPath);
+}
+
 TEST_F(CloudCredentialStoreTest, LoadSessionDropsEmailWhenTokenMissing)
 {
     // A stray email/expiry key without a token must not surface as a session.
