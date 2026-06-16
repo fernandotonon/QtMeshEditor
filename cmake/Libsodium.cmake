@@ -1,5 +1,5 @@
-# Build a static libsodium for minisign verify (spike #440 / follow-up #445).
-# Windows/macOS skip entirely — MinisignVerify returns Unsupported there.
+# libsodium for minisign verify (spike #440 / follow-up #445).
+# Linux only — other platforms get a stub INTERFACE target.
 
 if(TARGET qtmesh_sodium)
     return()
@@ -12,6 +12,21 @@ if(NOT (UNIX AND NOT APPLE))
     return()
 endif()
 
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(QTMESH_LIBSODIUM libsodium)
+endif()
+
+if(QTMESH_LIBSODIUM_FOUND)
+    message(STATUS "libsodium: using system package (pkg-config)")
+    add_library(qtmesh_sodium INTERFACE)
+    target_include_directories(qtmesh_sodium SYSTEM INTERFACE ${QTMESH_LIBSODIUM_INCLUDE_DIRS})
+    target_link_libraries(qtmesh_sodium INTERFACE ${QTMESH_LIBSODIUM_LIBRARIES})
+    target_compile_options(qtmesh_sodium INTERFACE ${QTMESH_LIBSODIUM_CFLAGS_OTHER})
+    target_compile_definitions(qtmesh_sodium INTERFACE QTMESH_MINISIGN_VERIFY=1)
+    return()
+endif()
+
 include(FetchContent)
 
 set(QTMESH_LIBSODIUM_URL
@@ -20,6 +35,8 @@ set(QTMESH_LIBSODIUM_URL
 set(QTMESH_LIBSODIUM_SHA256
     "b6b1d2a8802cd8bfa611638c0e9ce31d14ef324e16062c39a76854091cba6d7f"
     CACHE STRING "SHA256 of libsodium tarball")
+
+message(STATUS "libsodium: system package not found — building static from source")
 
 FetchContent_Declare(
     qtmesh_libsodium_src
