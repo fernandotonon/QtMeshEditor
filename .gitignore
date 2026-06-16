@@ -28,6 +28,7 @@ ui_files/
 ui_*
 *.log
 *.cmake
+!cmake/Libsodium.cmake
 *.user
 *.qtc_clangd*
 _CPack_Packages/*
@@ -89,4 +90,5 @@ Twist Dance.fbx.skeleton
 #website
 website/dist/
 website/node_modules/
-docs/
+docs/*
+!docs/AUTO_UPDATER_DESIGN.md

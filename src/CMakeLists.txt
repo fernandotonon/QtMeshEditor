@@ -97,6 +97,8 @@ PaintBufferImageProvider.cpp
 PaintSelectionMask.cpp
 TexturePaintBuffer.cpp
 UpdateVersion.cpp
+updater/InstallFlavor.cpp
+updater/MinisignVerify.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
 VATBaker.cpp
@@ -230,6 +232,8 @@ PaintBufferImageProvider.h
 PaintSelectionMask.h
 TexturePaintBuffer.h
 UpdateVersion.h
+updater/InstallFlavor.h
+updater/MinisignVerify.h
 TexturePaintController.h
 VertexColorBaker.h
 ApplyAtlas.h
@@ -536,6 +540,7 @@ Qt::QuickWidgets
 Qt::QuickControls2
 meshoptimizer
 xatlas
+qtmesh_sodium
 )
 
 # One-time legacy secret-store read for migration (see CloudCredentialStore).
@@ -625,7 +630,7 @@ if(BUILD_TESTS)
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
-    meshoptimizer xatlas)
+    meshoptimizer xatlas qtmesh_sodium)
 
     # CloudCredentialStore.cpp (compiled into the tests) does a one-time legacy
     # secret-store read in migrateLegacySettingsIfNeeded(), which
