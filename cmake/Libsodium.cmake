@@ -1,7 +1,14 @@
 # Build a static libsodium for minisign verify (spike #440 / follow-up #445).
-# Windows MinGW is not wired yet — MinisignVerify returns Unsupported there.
+# Windows/macOS skip entirely — MinisignVerify returns Unsupported there.
 
 if(TARGET qtmesh_sodium)
+    return()
+endif()
+
+if(NOT (UNIX AND NOT APPLE))
+    message(STATUS "libsodium: skipped (minisign verify is Linux-only in spike #440)")
+    add_library(qtmesh_sodium INTERFACE)
+    target_compile_definitions(qtmesh_sodium INTERFACE QTMESH_MINISIGN_VERIFY=0)
     return()
 endif()
 
@@ -22,14 +29,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(qtmesh_libsodium_src)
 
 set(QTMESH_LIBSODIUM_PREFIX "${CMAKE_BINARY_DIR}/libsodium-install")
-
-if(NOT (UNIX AND NOT APPLE))
-    message(STATUS "libsodium: skipped (minisign verify is Linux-only in spike #440)")
-    add_library(qtmesh_sodium INTERFACE)
-    target_compile_definitions(qtmesh_sodium INTERFACE QTMESH_MINISIGN_VERIFY=0)
-    return()
-endif()
-
 set(QTMESH_LIBSODIUM_MARKER "${QTMESH_LIBSODIUM_PREFIX}/lib/libsodium.a")
 
 if(NOT EXISTS "${QTMESH_LIBSODIUM_MARKER}")

@@ -108,9 +108,14 @@ Flavor detectWindows(const QString& path)
                L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\FernandoTonon.QtMeshEditor"))
         return Flavor::WinGet;
 
-    // Zip portable installs typically live under Downloads or a user-chosen folder.
-    if (pathContains(path, QLatin1String("\\QtMeshEditor\\"))
-        || path.endsWith(QStringLiteral("QtMeshEditor.exe"), Qt::CaseInsensitive))
+    // Zip portable installs use QtMeshEditor-<ver>-bin-Windows.zip layout: ...\QtMeshEditor\bin\...
+    // Reject CI/dev trees (...\build\...) even when the repo folder is named QtMeshEditor.
+    if (pathContains(path, QLatin1String("\\build\\"))
+        || pathContains(path, QLatin1String("/build/")))
+        return Flavor::Unknown;
+
+    if (pathContains(path, QLatin1String("\\QtMeshEditor\\bin\\"))
+        || pathContains(path, QLatin1String("/QtMeshEditor/bin/")))
         return Flavor::Portable;
 
     return Flavor::Unknown;
