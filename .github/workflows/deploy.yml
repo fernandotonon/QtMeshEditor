@@ -2050,26 +2050,61 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
+        set -euo pipefail
         VERSION="${{ github.ref_name }}"
+        REQUIRED=(
+          "QtMeshEditor-${VERSION}-bin-Windows.zip"
+          "QtMeshEditor-${VERSION}-setup-Windows.exe"
+          "qtmesheditor_amd64.deb"
+          "QtMeshEditor-${VERSION}-MacOS.dmg"
+        )
+        missing_required() {
+          local present
+          present=$(gh release view "$VERSION" --json assets --jq '.assets[].name')
+          local missing=()
+          for name in "${REQUIRED[@]}"; do
+            if ! printf '%s\n' "$present" | grep -Fxq "$name"; then
+              missing+=("$name")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '%s\n' "${missing[@]}"
+            return 1
+          fi
+          return 0
+        }
         for i in 1 2 3 4 5 6 7 8 9 10; do
-          COUNT=$(gh release view "$VERSION" --json assets --jq '.assets | length')
-          echo "Release $VERSION has $COUNT asset(s) (attempt $i)"
-          if [ "$COUNT" -ge 3 ]; then
+          if missing=$(missing_required); then
+            echo "All required release assets present for $VERSION"
             exit 0
           fi
+          echo "Release $VERSION still missing (attempt $i):"
+          printf '  - %s\n' $missing
           sleep 30
         done
-        echo "::error::Timed out waiting for release assets"
+        echo "::error::Timed out waiting for required release assets"
         exit 1
 
     - name: Download release artifacts
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
+        set -euo pipefail
+        VERSION="${{ github.ref_name }}"
         mkdir -p release-assets
-        gh release download "${{ github.ref_name }}" --dir release-assets \
-          --pattern 'QtMeshEditor-*' \
-          --pattern 'qtmesheditor_*.deb'
+        REQUIRED=(
+          "QtMeshEditor-${VERSION}-bin-Windows.zip"
+          "QtMeshEditor-${VERSION}-setup-Windows.exe"
+          "qtmesheditor_amd64.deb"
+          "QtMeshEditor-${VERSION}-MacOS.dmg"
+        )
+        for name in "${REQUIRED[@]}"; do
+          gh release download "$VERSION" --dir release-assets --pattern "$name"
+          if [ ! -f "release-assets/$name" ]; then
+            echo "::error::Missing downloaded artifact: $name"
+            exit 1
+          fi
+        done
         ls -la release-assets/
 
     - name: Sign release artifacts
@@ -2085,6 +2120,13 @@ jobs:
         echo "$MINISIGN_SECRET_KEY" | base64 -d > /tmp/minisign.key
         chmod 600 /tmp/minisign.key
         cd release-assets
+        VERSION="${{ github.ref_name }}"
+        REQUIRED=(
+          "QtMeshEditor-${VERSION}-bin-Windows.zip"
+          "QtMeshEditor-${VERSION}-setup-Windows.exe"
+          "qtmesheditor_amd64.deb"
+          "QtMeshEditor-${VERSION}-MacOS.dmg"
+        )
         sign_file() {
           local f="$1"
           local trusted="timestamp:$(date +%s)	file:$(basename "$f")"
@@ -2095,17 +2137,14 @@ jobs:
             minisign -S -s /tmp/minisign.key -m "$f" -x "$f.minisig" -t "$trusted"
           fi
         }
-        shopt -s nullglob
-        FILES=(QtMeshEditor-* qtmesheditor_*.deb)
-        if [ ${#FILES[@]} -eq 0 ]; then
-          echo "::error::No release artifacts found to sign"
-          exit 1
-        fi
-        for f in "${FILES[@]}"; do
-          [[ "$f" == *.minisig ]] && continue
+        for f in "${REQUIRED[@]}"; do
+          if [ ! -f "$f" ]; then
+            echo "::error::Required artifact missing before signing: $f"
+            exit 1
+          fi
           sign_file "$f"
         done
-        sha256sum "${FILES[@]}" | LC_ALL=C sort -k2 > SHA256SUMS
+        sha256sum "${REQUIRED[@]}" | LC_ALL=C sort -k2 > SHA256SUMS
         sign_file SHA256SUMS
         rm -f /tmp/minisign.key
 

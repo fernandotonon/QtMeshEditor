@@ -28,7 +28,7 @@ This document locks the four architecturally consequential decisions before prod
 
 ### CI signing
 
-Implemented in `.github/workflows/deploy.yml` as the `sign-release-artifacts` job (runs on `release: published`). Downloads zip/dmg/deb assets, writes `SHA256SUMS`, signs each artifact + manifest with minisign, verifies with `packaging/updater/minisign.pub`, and uploads `*.minisig` + `SHA256SUMS` + `minisign.pub` to the GitHub Release.
+Implemented in `.github/workflows/deploy.yml` as the `sign-release-artifacts` job (runs on `release: published`). Waits until all four required assets are on the release (`*-bin-Windows.zip`, `*-setup-Windows.exe`, `qtmesheditor_amd64.deb`, `*-MacOS.dmg`), downloads each by exact filename, writes `SHA256SUMS`, signs each artifact + manifest with minisign, verifies with `packaging/updater/minisign.pub`, and uploads `*.minisig` + `SHA256SUMS` + `minisign.pub` to the GitHub Release.
 
 **GitHub Actions secrets** (repo → Settings → Secrets and variables → Actions):
 
