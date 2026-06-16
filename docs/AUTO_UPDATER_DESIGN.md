@@ -126,8 +126,8 @@ Version comparison reuses `UpdateVersion::compare()` (#442) — normalises optio
 
 | Issue | Work |
 |-------|------|
-| [#441](https://github.com/fernandotonon/QtMeshEditor/issues/441) | `UpdaterController` + GitHub JSON |
-| [#442](https://github.com/fernandotonon/QtMeshEditor/issues/442) | Semver compare (partially done — `UpdateVersion`) |
+| [#441](https://github.com/fernandotonon/QtMeshEditor/issues/441) | `UpdaterController` + GitHub JSON — **in progress** |
+| [#442](https://github.com/fernandotonon/QtMeshEditor/issues/442) | Semver compare — **done** (`UpdateVersion`) |
 | [#443](https://github.com/fernandotonon/QtMeshEditor/issues/443) | Wire `InstallFlavor` into UX |
 | [#444–445](https://github.com/fernandotonon/QtMeshEditor/issues/444) | Download + verify pipeline |
 | [#446–448](https://github.com/fernandotonon/QtMeshEditor/issues/446) | Relauncher + per-platform install |
@@ -144,4 +144,7 @@ Version comparison reuses `UpdateVersion::compare()` (#442) — normalises optio
 | `src/updater/MinisignVerify.*` | minisign verify PoC (Linux) |
 | `cmake/Libsodium.cmake` | Static libsodium fetch/build |
 | `tests/fixtures/updater/*` | Signed README fixture + test pubkey |
-| `scripts/generate-updater-fixtures.sh` | Regenerate fixtures locally |
+| `src/updater/GitHubReleaseParser.*` | GitHub Releases JSON parsing (#441) |
+| `src/updater/UpdaterWorker.*` | Worker-thread HTTP for update checks (#441) |
+| `src/updater/UpdaterController.*` | QML singleton orchestrating checks (#441) |
+| `tests/fixtures/updater/github-releases-sample.json` | Canned releases API fixture |
