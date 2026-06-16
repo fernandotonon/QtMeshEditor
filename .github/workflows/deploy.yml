@@ -2033,6 +2033,103 @@ jobs:
         echo "Sentry release $VERSION created and finalized"
 
 ####################################################################
+# Sign release artifacts (minisign / Ed25519) — epic #439 spike follow-up
+####################################################################
+
+ sign-release-artifacts:
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published'
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install minisign
+      run: sudo apt-get update && sudo apt-get install -y minisign
+
+    - name: Wait for release assets to appear
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        VERSION="${{ github.ref_name }}"
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          COUNT=$(gh release view "$VERSION" --json assets --jq '.assets | length')
+          echo "Release $VERSION has $COUNT asset(s) (attempt $i)"
+          if [ "$COUNT" -ge 3 ]; then
+            exit 0
+          fi
+          sleep 30
+        done
+        echo "::error::Timed out waiting for release assets"
+        exit 1
+
+    - name: Download release artifacts
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        mkdir -p release-assets
+        gh release download "${{ github.ref_name }}" --dir release-assets \
+          --pattern 'QtMeshEditor-*' \
+          --pattern 'qtmesheditor_*.deb'
+        ls -la release-assets/
+
+    - name: Sign release artifacts
+      env:
+        MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+      run: |
+        set -euo pipefail
+        if [ -z "${MINISIGN_SECRET_KEY:-}" ]; then
+          echo "::error::MINISIGN_SECRET_KEY secret is not configured"
+          exit 1
+        fi
+        echo "$MINISIGN_SECRET_KEY" | base64 -d > /tmp/minisign.key
+        chmod 600 /tmp/minisign.key
+        cd release-assets
+        sign_file() {
+          local f="$1"
+          local trusted="timestamp:$(date +%s)	file:$(basename "$f")"
+          if [ -n "${MINISIGN_PASSWORD:-}" ]; then
+            printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s /tmp/minisign.key \
+              -m "$f" -x "$f.minisig" -t "$trusted"
+          else
+            minisign -S -s /tmp/minisign.key -m "$f" -x "$f.minisig" -t "$trusted"
+          fi
+        }
+        shopt -s nullglob
+        FILES=(QtMeshEditor-* qtmesheditor_*.deb)
+        if [ ${#FILES[@]} -eq 0 ]; then
+          echo "::error::No release artifacts found to sign"
+          exit 1
+        fi
+        for f in "${FILES[@]}"; do
+          [[ "$f" == *.minisig ]] && continue
+          sign_file "$f"
+        done
+        sha256sum "${FILES[@]}" | LC_ALL=C sort -k2 > SHA256SUMS
+        sign_file SHA256SUMS
+        rm -f /tmp/minisign.key
+
+    - name: Verify signatures (smoke test)
+      run: |
+        set -euo pipefail
+        PUB=$(grep -v '^untrusted' packaging/updater/minisign.pub | grep -v '^#' | tr -d '\n\r')
+        cd release-assets
+        for sig in *.minisig; do
+          base="${sig%.minisig}"
+          minisign -V -m "$base" -x "$sig" -P "$PUB" -q
+        done
+
+    - name: Upload signatures and checksum manifest
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release upload "${{ github.ref_name }}" \
+          release-assets/*.minisig \
+          release-assets/SHA256SUMS \
+          packaging/updater/minisign.pub \
+          --clobber
+
+####################################################################
 # Update Homebrew Cask after macOS release
 ####################################################################
 
