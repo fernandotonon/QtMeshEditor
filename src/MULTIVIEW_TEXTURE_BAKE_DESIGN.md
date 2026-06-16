@@ -28,7 +28,7 @@ Decisions taken:
 
 ## Pipeline
 
-```
+```text
 selected Entity
   │
   ├─ 0. UV gate: UvUnwrap::infoForEntity → if !hasUv0 || uv0Coverage < THRESH
@@ -116,6 +116,7 @@ images, bake on the last completion. Same seed across views.
 - Sentry breadcrumb category `ai.assist.mesh_texture_multiview`.
 
 ## Risks & mitigations
+
 | Risk | Mitigation |
 |---|---|
 | Occlusion / back-facing bleed | facing weight `max(0,−n·viewDir)` + per-view depth occlusion test |

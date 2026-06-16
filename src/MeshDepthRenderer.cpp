@@ -163,12 +163,13 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
     // Distance so the sphere fits in the 45° vertical FOV.
     const Ogre::Real fovY = st.camera->getFOVy().valueRadians();
     const Ogre::Real dist = radius / std::sin(fovY * 0.5f) * 1.15f;  // 15% margin
-    // The camera sits along `view.dir` from the centre, at framing distance.
-    // view.dir points FROM the camera TOWARD the centre, so the camera is at
-    // center - dir*dist. front = (0,0,-1) → camera on -Z (imported characters
-    // face -Z, so this captures the front), matching the pre-multiview default.
+    // `view.dir` is the direction the camera looks ALONG (toward the centre),
+    // so the camera is placed at center - dir*dist. front = (0,0,1) → camera on
+    // -Z (center - (0,0,1)*dist) looking toward +Z; imported characters face -Z
+    // so this captures the FRONT, matching the pre-multiview placement
+    // (camPos was center + (0,0,-dist)).
     Ogre::Vector3 dir = view.dir;
-    if (dir.isZeroLength()) dir = Ogre::Vector3(0, 0, -1);
+    if (dir.isZeroLength()) dir = Ogre::Vector3(0, 0, 1);
     dir.normalise();
     const Ogre::Vector3 camPos = center - dir * dist;
     st.cameraNode->setPosition(camPos);

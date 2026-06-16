@@ -258,10 +258,13 @@ MultiViewTextureBaker::fromEntity(Ogre::Entity* entity, QString* errorOut)
         if (errorOut) *errorOut = QStringLiteral("mesh has no triangles");
         return out;
     }
-    if (!sawUv && errorOut) {
-        // Not fatal here (caller decides) but flag it — a bake onto all-zero
-        // UVs collapses to one texel.
-        *errorOut = QStringLiteral("mesh has no usable UV0");
+    if (!sawUv) {
+        // No usable UV0 → a bake would collapse onto a single texel. Fail hard
+        // (return empty) so the caller aborts rather than producing garbage.
+        // The slice-3 UV-unwrap gate will handle this case by unwrapping first.
+        if (errorOut) *errorOut = QStringLiteral("mesh has no usable UV0 (run UV unwrap first)");
+        out.clear();
+        return out;
     }
     return out;
 }

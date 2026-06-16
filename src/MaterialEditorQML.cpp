@@ -12,6 +12,7 @@
 #include <OgreMesh.h>
 #include <OgreTechnique.h>
 #include <QDir>
+#include <QRegularExpression>
 #include <QFileInfo>
 #include <QTextStream>
 #include <set>
@@ -4082,6 +4083,9 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
             "No ControlNet depth model found — multi-view bake will follow the "
             "prompt only (download \"ControlNet Depth (SD 1.5)\" for shape-aware results).");
     }
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Multi-view mesh texture: entity=%1 views=%2 size=%3")
+            .arg(st->entityName).arg(viewNames.join(',')).arg(std::max(st->width, st->height)));
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mesh_texture_multiview"),
         QStringLiteral("entity=%1 views=%2 size=%3")
             .arg(st->entityName).arg(viewNames.join(',')).arg(std::max(st->width, st->height)));
@@ -4184,13 +4188,20 @@ void MaterialEditorQML::finishMultiViewBake()
     const QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     const QString outDir = QDir(dataPath).filePath("generated_textures");
     QDir().mkpath(outDir);
-    const QString outName = QStringLiteral("multiview_bake_%1.png").arg(s->entityName);
+    // Sanitize the entity name into a filesystem-safe basename — imported names
+    // can carry '/', ':', spaces, etc. that would break out.save().
+    QString safeName = s->entityName;
+    safeName.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]")), QStringLiteral("_"));
+    if (safeName.isEmpty()) safeName = QStringLiteral("entity");
+    const QString outName = QStringLiteral("multiview_bake_%1.png").arg(safeName);
     const QString outPath = QDir(outDir).filePath(outName);
     if (!out.save(outPath.toStdString())) {
         emit sdGenerationError("Failed to write baked texture.");
         emit sdIsGeneratingChanged();
         return;
     }
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QStringLiteral("Wrote multi-view baked texture %1").arg(outPath));
 
     if (isOgreAvailable() && Ogre::Root::getSingletonPtr()) {
         try {
@@ -4377,11 +4388,18 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
     // issue the next view or bake when all views are done.
     if (m_multiViewBake) {
         MultiViewBakeState& s = *m_multiViewBake;
-        if (s.current < s.baked.size()) {
-            QImage img(outputPath);
-            if (!img.isNull())
-                s.baked[s.current].image = img.convertToFormat(QImage::Format_RGB888);
+        QImage img(outputPath);
+        if (img.isNull() || s.current >= s.baked.size()) {
+            // A view image we can't load would bake invalid input later; abort
+            // the whole multi-view run now rather than fail late.
+            emit sdGenerationError(QStringLiteral("Multi-view bake aborted: could not "
+                "load the generated %1 view image.")
+                .arg(s.current < s.views.size() ? s.views[s.current].name : "?"));
+            m_multiViewBake.reset();
+            emit sdIsGeneratingChanged();
+            return;
         }
+        s.baked[s.current].image = img.convertToFormat(QImage::Format_RGB888);
         emit sdTextureGenerated(outputPath);  // let the preview update per view
         ++s.current;
         if (s.current < s.views.size()) {
@@ -4508,6 +4526,11 @@ void MaterialEditorQML::onSDGenerationError(const QString &error)
 void MaterialEditorQML::onSDGenerationStopped()
 {
     m_sdMeshTextureEntity.clear();
+#ifdef ENABLE_STABLE_DIFFUSION
+    // Abandon any in-flight multi-view bake so a later unrelated generation
+    // can't be captured into its stale per-view slots.
+    m_multiViewBake.reset();
+#endif
     m_sdGenerationProgress = 0.0f;
     emit sdGenerationProgressChanged();
     emit sdIsGeneratingChanged();

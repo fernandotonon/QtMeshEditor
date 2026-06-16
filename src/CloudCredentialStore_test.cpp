@@ -153,6 +153,12 @@ TEST_F(CloudCredentialStoreTest, MigratesLegacyFallbackFileIntoSettings)
 
 TEST_F(CloudCredentialStoreTest, LegacyMigrationProbesOnlyOnce)
 {
+    // Ensure a clean legacy precondition first — a leftover cloud_session.dat
+    // from another test/run would make the "nothing migrates" assertion below
+    // order-dependent.
+    const QString cfgDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    QFile::remove(cfgDir + QStringLiteral("/cloud_session.dat"));
+
     // First call: nothing in the legacy store, so nothing migrates — but the
     // probe must be marked done so the OS keychain is never touched again
     // (the repeated-prompt bug).
