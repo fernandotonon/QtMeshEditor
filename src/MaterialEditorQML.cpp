@@ -12,6 +12,7 @@
 #include <OgreMesh.h>
 #include <OgreTechnique.h>
 #include <QDir>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QFileInfo>
 #include <QTextStream>
@@ -4019,6 +4020,7 @@ struct MaterialEditorQML::MultiViewBakeState {
     int width = 512;
     int height = 512;
     float controlStrength = 0.9f;
+    int64_t seed = -1;                             // ONE locked seed across views
     std::vector<MeshDepthRenderer::View> views;   // resolved camera views
     std::vector<MultiViewTextureBaker::View> baked; // accumulated image+matrices
     size_t current = 0;                            // index of the view being generated
@@ -4072,6 +4074,12 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
     st->height = height > 0 ? height : 512;
     st->controlStrength = static_cast<float>(std::clamp(controlStrength, 0.0, 1.0));
     st->controlNetPath = discoveredControlNetDepthPath();
+    // Lock ONE seed for every view so front/back share the same denoising
+    // trajectory — the cheapest, highest-leverage consistency win (otherwise
+    // each view draws fresh random noise and the styles diverge). Pick a fixed
+    // positive seed once; pass it to every generateMeshTexture call below.
+    st->seed = static_cast<int64_t>(
+        QRandomGenerator::global()->bounded(1, 2147483647));
 
     const QStringList viewNames = views.isEmpty()
         ? QStringList{ QStringLiteral("front"), QStringLiteral("back") } : views;
@@ -4143,7 +4151,7 @@ void MaterialEditorQML::startNextMultiViewGeneration()
     emit sdGenerationProgressChanged();
     SDManager::instance()->generateMeshTexture(
         s.prompt, rr.depth, s.controlNetPath, s.controlStrength,
-        QString(), s.width, s.height);
+        QString(), s.width, s.height, s.seed);  // same seed → consistent views
 #endif
 }
 

@@ -53,10 +53,17 @@ public:
     struct Options {
         int   resolution     = 1024;  // output atlas size (square)
         int   dilationPixels = 4;     // seam-dilation passes after raster
-        float facingPower    = 1.0f;  // exponent on the facing weight
+        /// Exponent on the per-view facing weight. LOWER = wider, softer
+        /// front↔back cross-fade band near the silhouette (less visible seam);
+        /// higher = each view dominates its facing hemisphere more sharply.
+        float facingPower    = 0.5f;
         /// Triangles whose facing weight to a view is below this are not
         /// projected from that view (back-face / grazing rejection).
         float minFacing      = 0.05f;
+        /// Match the per-channel mean of every view image to the FIRST view
+        /// before baking, so independent diffusion runs (front/back) don't
+        /// produce a global hue/brightness mismatch across the seam.
+        bool  colorMatchToFirstView = true;
         /// Background for texels no view covered (alpha 0 = transparent seam mask).
         Ogre::ColourValue background = Ogre::ColourValue(1.0f, 1.0f, 1.0f, 0.0f);
     };
