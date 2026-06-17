@@ -28,7 +28,9 @@
 #include <QFileInfo>
 #include <QEvent>
 #include "SentryReporter.h"
+#ifdef ENABLE_AUTO_UPDATER
 #include "updater/UpdaterController.h"
+#endif
 #include <QDialog>
 #include <QProgressDialog>
 #include <QThread>
@@ -603,6 +605,13 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return SkinWeightsController::qmlInstance(engine, nullptr);
             });
+#ifdef ENABLE_AUTO_UPDATER
+        qmlRegisterSingletonType<UpdaterController>(
+            "Updater", 1, 0, "UpdaterController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return UpdaterController::qmlInstance(engine, nullptr);
+            });
+#endif
         // Open the LOD export directory picker from MainWindow so the dialog has a
         // proper parent widget — QFileDialog invoked from a QML context doesn't
         // reliably appear on macOS without a valid parent QWidget.
@@ -666,6 +675,11 @@ void MainWindow::initToolBar()
         // thumbnail during a paint stroke.
         m_propertiesPanel->engine()->addImageProvider(
             QStringLiteral("paintbuffer"), new PaintBufferImageProvider());
+
+#ifdef ENABLE_AUTO_UPDATER
+        connect(UpdaterController::instance(), &UpdaterController::showDialogRequested,
+                this, &MainWindow::showUpdaterDialog);
+#endif
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
         if (auto* root = m_propertiesPanel->rootObject()) {
@@ -2232,6 +2246,12 @@ void MainWindow::initToolBar()
 
     QAction* mcpSettingsAction = aiMenu->addAction(tr("MCP Server Settings..."));
     connect(mcpSettingsAction, &QAction::triggered, this, &MainWindow::showMCPSettings);
+
+#ifdef ENABLE_AUTO_UPDATER
+    ui->actionVerify_Update->setText(tr("Check for Updates..."));
+#else
+    ui->actionVerify_Update->setVisible(false);
+#endif
 
     // Keyboard Shortcuts reference in Help menu
     QAction* shortcutsAction = ui->menuHelp->addAction(tr("Keyboard Shortcuts"));
@@ -4430,12 +4450,79 @@ void MainWindow::custom_Palette_Color_Selected(const QColor &color)
 }
 // LCOV_EXCL_STOP
 
-// LCOV_EXCL_START — network request
+// LCOV_EXCL_START — updater dialog
+#ifdef ENABLE_AUTO_UPDATER
+void MainWindow::showUpdaterDialog(bool runCheck)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Help > Check for Updates"));
+
+    if (m_updaterWindow) {
+        if (auto* window = qobject_cast<QQuickWindow*>(m_updaterWindow)) {
+            QMetaObject::invokeMethod(window, "open", Q_ARG(QVariant, runCheck));
+            window->show();
+            window->raise();
+            window->requestActivate();
+        }
+        return;
+    }
+
+    auto* engine = new QQmlApplicationEngine(this);
+    m_updaterEngine = engine;
+    engine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
+
+    qmlRegisterSingletonType<PropertiesPanelController>(
+        "PropertiesPanel", 1, 0, "PropertiesPanelController",
+        [](QQmlEngine* eng, QJSEngine*) -> QObject* {
+            return PropertiesPanelController::qmlInstance(eng, nullptr);
+        });
+    qmlRegisterSingletonType<UpdaterController>(
+        "Updater", 1, 0, "UpdaterController",
+        [](QQmlEngine* eng, QJSEngine*) -> QObject* {
+            return UpdaterController::qmlInstance(eng, nullptr);
+        });
+
+    connect(engine, &QQmlApplicationEngine::objectCreated, this,
+            [this, engine, runCheck](QObject* obj, const QUrl&) {
+                if (!obj) {
+                    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                                  QStringLiteral("Updater dialog: QML load failed"));
+                    engine->deleteLater();
+                    m_updaterEngine = nullptr;
+                    return;
+                }
+
+                m_updaterWindow = obj;
+                if (auto* window = qobject_cast<QQuickWindow*>(obj)) {
+                    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+                    connect(window, &QQuickWindow::visibleChanged, this,
+                            [this, window, engine](bool visible) {
+                                if (visible || m_updaterWindow != window) {
+                                    return;
+                                }
+                                m_updaterWindow = nullptr;
+                                m_updaterEngine = nullptr;
+                                engine->deleteLater();
+                            });
+                    QMetaObject::invokeMethod(window, "open", Q_ARG(QVariant, runCheck));
+                    window->show();
+                    window->raise();
+                    window->requestActivate();
+                }
+            });
+
+    engine->load(QUrl(QStringLiteral("qrc:/UpdaterDialog/UpdaterDialog.qml")));
+}
+
 void MainWindow::on_actionVerify_Update_triggered()
 {
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Check for updates"));
-    UpdaterController::instance()->checkForUpdates();
+    showUpdaterDialog(true);
 }
+#else
+void MainWindow::on_actionVerify_Update_triggered()
+{
+}
+#endif
 // LCOV_EXCL_STOP
 
 // LCOV_EXCL_START — dialogs and server lifecycle

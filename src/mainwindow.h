@@ -23,6 +23,7 @@ class EditorModeController;
 class WelcomeScreenController;
 class AssetBrowserController;
 class QQuickWidget;
+class QQmlApplicationEngine;
 class QPlainTextEdit;
 class QLabel;
 class QToolBar;
@@ -238,6 +239,12 @@ private:
     void updateToolRailForMode();
     void setupCloudAccountStatusControl();
     void updateCloudAuthActions();
+
+#ifdef ENABLE_AUTO_UPDATER
+    void showUpdaterDialog(bool runCheck = true);
+    QObject* m_updaterWindow = nullptr;
+    QQmlApplicationEngine* m_updaterEngine = nullptr;
+#endif
 };
 
 #endif // MAINWINDOW_H
