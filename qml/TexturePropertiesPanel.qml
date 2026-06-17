@@ -224,9 +224,15 @@ GroupBox {
                         var path = MaterialEditorQML.getTexturePreviewPath()
                         if (path !== "") {
                             cacheBuster++
+                            texturePreview.visible = true
                             texturePreview.source = path + "?v=" + cacheBuster
                         } else {
+                            // No resolvable preview — clearing source leaves
+                            // status at Image.Null (no statusChanged for Error),
+                            // so explicitly fall back to the placeholder here.
                             texturePreview.source = ""
+                            texturePreview.visible = false
+                            placeholderText.visible = true
                         }
                     }
 
@@ -243,8 +249,8 @@ GroupBox {
                     }
 
                     onStatusChanged: {
-                        if (status === Image.Error) {
-                            // If the constructed path fails, show placeholder
+                        if (status === Image.Null || status === Image.Error) {
+                            // Null (empty source) or a failed load → placeholder.
                             texturePreview.visible = false
                             placeholderText.visible = true
                         } else if (status === Image.Ready) {

@@ -1096,6 +1096,9 @@ void MaterialEditorQML::setTextureName(const QString &name)
         m_textureName = name;
 
         if (!name.isEmpty() && name != "*Select a texture*") {
+            SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                QStringLiteral("Set material texture: %1").arg(name));
+
             // The on-screen mesh renders via RTSS (the viewport uses the
             // MSN_SHADERGEN material scheme). RTSS resolves the TUS texture by
             // name against the MATERIAL's resource group (+ AUTODETECT). If the
@@ -1112,9 +1115,13 @@ void MaterialEditorQML::setTextureName(const QString &name)
             // Technique/Pass/TUS objects and the cached m_texUnitMap pointer
             // dangles — dereferencing it crashed inside
             // TextureUnitState::retrieveTexture()/Pass::getResourceGroup().
-            // Re-running updateTextureUnitList() re-captures live pointers via
-            // the same name-keyed lookup the selection uses (which correctly
-            // tracks the authored technique even after RTSS augments the list).
+            // Re-running these re-captures live pointers via the same
+            // name-keyed lookup the selection uses (which correctly tracks the
+            // authored technique even after RTSS augments the list).
+            // updateTechniqueList() must run first: updateTextureUnitList()
+            // reads m_passMap via getCurrentPass(), and a prior recompile may
+            // have left that map referencing freed Pass objects.
+            updateTechniqueList(); // rebuilds m_techMap + the selected pass map
             updateTextureUnitList();
             Ogre::TextureUnitState* textureUnit = getCurrentTextureUnit();
             if (textureUnit) {
@@ -1128,10 +1135,19 @@ void MaterialEditorQML::setTextureName(const QString &name)
                         if (Ogre::Technique* tech = getCurrentTechnique()) {
                             while (tech->getNumPasses() > 1)
                                 tech->removePass(1);
+                            // removePass() invalidated any cached pass beyond 0;
+                            // reset the selection to the surviving pass and
+                            // refresh the maps before touching it via the cache,
+                            // then apply alpha-reject directly to pass 0 (PS1
+                            // .tim uses color 0x0000 for transparent texels — see
+                            // PS1TIM::loadTimToOgreImage).
+                            m_selectedPassIndex = 0;
+                            updatePassList();
+                            updateTextureUnitList();
+                            if (tech->getNumPasses() > 0)
+                                tech->getPass(0)->setAlphaRejectSettings(
+                                    Ogre::CMPF_GREATER_EQUAL, 1);
                         }
-                        // PS1 .tim often uses color 0x0000 for transparent texels (see PS1TIM::loadTimToOgreImage).
-                        if (Ogre::Pass* pass = getCurrentPass())
-                            pass->setAlphaRejectSettings(Ogre::CMPF_GREATER_EQUAL, 1);
                     }
                 }
 
@@ -1984,6 +2000,21 @@ QStringList MaterialEditorQML::getAvailableTextures() const
     return textures;
 }
 
+namespace {
+// A texture name from an imported asset can carry subdirectories or "..".
+// Reduce it to a single safe filename so a preview can never escape the
+// texture_previews dir or fail because a nested dir wasn't created.
+QString safePreviewBaseName(const QString& texName)
+{
+    QString base = QFileInfo(texName).fileName(); // strip any directory part
+    base.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]")),
+                 QStringLiteral("_"));
+    if (base.isEmpty())
+        base = QStringLiteral("texture");
+    return base;
+}
+} // namespace
+
 QString MaterialEditorQML::getTexturePreviewPath() const
 {
     const QString texName = m_textureName;
@@ -1993,27 +2024,34 @@ QString MaterialEditorQML::getTexturePreviewPath() const
 
     // Memoize: the QML Image `source` binding evaluates this getter twice per
     // change and reloadPreview() calls it once more, so a single texture switch
-    // invokes us 3×. Resolving touches the GPU (convertToImage locks the
-    // hardware buffer) and disk (remove + save the preview PNG) — re-running
-    // that on every call raced the renderer / the QML Image still loading the
-    // file, and crashed under rapid back-and-forth switching. Once resolved,
-    // the path is stable for a given texture name, so cache it; the cache is
-    // cleared when a texture is (re)applied (see clearTexturePreviewCache()).
-    auto cached = m_previewPathCache.constFind(texName);
+    // invokes us 3×. Resolving touches disk (decode + save the preview PNG), so
+    // re-running it on every call raced the QML Image still loading the file.
+    // Key the cache by the material's resource GROUP as well as the texture
+    // name: FBX imports can load the same basename (e.g. diffuse.png) into
+    // different per-asset groups, and a name-only key would serve the previous
+    // asset's preview after switching materials.
+    const QString groupKey = QString::fromStdString(
+        m_ogreMaterial ? m_ogreMaterial->getGroup()
+                       : std::string(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME));
+    const QString cacheKey = groupKey + QLatin1Char('\n') + texName;
+    auto cached = m_previewPathCache.constFind(cacheKey);
     if (cached != m_previewPathCache.constEnd()) {
         return cached.value();
     }
-    // Refuse to recurse: convertToImage() inside computeTexturePreviewPath()
-    // can pump the event loop and re-enter this getter; a nested second
-    // GPU-buffer readback is exactly what crashed. Return empty (uncached) so
-    // the outer call still resolves and caches the real path.
+    // Refuse to recurse: if computeTexturePreviewPath() ever pumps the event
+    // loop it could re-enter this getter. Return empty (uncached) so the outer
+    // call still resolves and caches the real path.
     if (m_resolvingPreview) {
         return "";
     }
     m_resolvingPreview = true;
     const QString resolved = computeTexturePreviewPath(texName);
     m_resolvingPreview = false;
-    m_previewPathCache.insert(texName, resolved);
+    // Only cache real resolutions — a transient miss (texture not yet loaded)
+    // must not stick until the next explicit invalidation.
+    if (!resolved.isEmpty()) {
+        m_previewPathCache.insert(cacheKey, resolved);
+    }
     return resolved;
 }
 
@@ -2043,10 +2081,28 @@ QString MaterialEditorQML::computeTexturePreviewPath(const QString &texName) con
                 // Check origin (absolute path)
                 QString origin = QString::fromStdString(texPtr->getOrigin());
                 if (!origin.isEmpty() && QFileInfo::exists(origin)) {
-                    // QML Image cannot display .tim; for those, generate a PNG preview.
+                    // QML Image cannot display .tim; for those, generate a PNG
+                    // preview via the CPU-side PS1TIM decoder (NOT convertToImage,
+                    // which faults on these GPU-only buffers).
                     const QString ext = QFileInfo(origin).suffix().toLower();
                     if (ext != "tim") {
                         return QUrl::fromLocalFile(QFileInfo(origin).absoluteFilePath()).toString();
+                    }
+                    Ogre::Image timImg;
+                    if (PS1TIM::loadTimToOgreImage(origin, timImg)) {
+                        const QString dataPath = QStandardPaths::writableLocation(
+                            QStandardPaths::AppDataLocation);
+                        const QString outDir = QDir(dataPath).filePath("texture_previews");
+                        QDir().mkpath(outDir);
+                        const QString outPath = QDir(outDir).filePath(
+                            safePreviewBaseName(texName) + "_tim.png");
+                        QFile::remove(outPath);
+                        try {
+                            timImg.save(outPath.toStdString());
+                        } catch (...) {}
+                        if (QFileInfo::exists(outPath))
+                            return QUrl::fromLocalFile(
+                                QFileInfo(outPath).absoluteFilePath()).toString();
                     }
                 }
 
@@ -2071,8 +2127,8 @@ QString MaterialEditorQML::computeTexturePreviewPath(const QString &texName) con
                                 QStandardPaths::AppDataLocation);
                             const QString outDir = QDir(dataPath).filePath("texture_previews");
                             QDir().mkpath(outDir);
-                            const QString outPath =
-                                QDir(outDir).filePath(texName + "_embedded.png");
+                            const QString outPath = QDir(outDir).filePath(
+                                safePreviewBaseName(texName) + "_embedded.png");
                             QFile::remove(outPath);
                             if (qimg.save(outPath, "PNG")
                                 && QFileInfo::exists(outPath)) {
@@ -4504,9 +4560,9 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
     QString fileName = fileInfo.fileName();
 
     // A freshly generated image may reuse a texture name whose preview path is
-    // already memoized — drop the stale entry so the preview re-resolves to the
-    // new pixels rather than the previous file.
-    m_previewPathCache.remove(fileName);
+    // already memoized — clear the (group-keyed) cache so the preview
+    // re-resolves to the new pixels rather than a previous file.
+    m_previewPathCache.clear();
 
 #ifdef ENABLE_STABLE_DIFFUSION
     // Multi-view bake (slice 2): pair this completed image with the view whose
