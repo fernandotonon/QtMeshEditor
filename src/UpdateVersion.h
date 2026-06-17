@@ -27,6 +27,11 @@ enum class Comparison {
     Invalid =  2,  ///< at least one input couldn't be parsed at all
 };
 
+enum class CompareMode {
+    ReleaseOnly,     ///< Ignore `-rc`/`-beta` suffixes (stable channel default)
+    WithPrerelease,  ///< Compare full semver including pre-release segment
+};
+
 /**
  * @brief Normalise a version-ish string into a canonical `X.Y.Z` form.
  *
@@ -50,7 +55,9 @@ QString normalize(const QString& raw);
  * treat Invalid as "do nothing" rather than "update available" — a
  * malformed release tag from the API shouldn't prompt the user.
  */
-Comparison compare(const QString& localVersion, const QString& remoteTag);
+Comparison compare(const QString& localVersion,
+                   const QString& remoteTag,
+                   CompareMode mode = CompareMode::ReleaseOnly);
 
 /// True iff `remoteTag` represents a version strictly newer than
 /// `localVersion`. Convenience wrapper used by the UI to decide

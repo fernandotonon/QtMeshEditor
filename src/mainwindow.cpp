@@ -28,7 +28,7 @@
 #include <QFileInfo>
 #include <QEvent>
 #include "SentryReporter.h"
-#include "UpdateVersion.h"
+#include "updater/UpdaterController.h"
 #include <QDialog>
 #include <QProgressDialog>
 #include <QThread>
@@ -4433,86 +4433,8 @@ void MainWindow::custom_Palette_Color_Selected(const QColor &color)
 // LCOV_EXCL_START — network request
 void MainWindow::on_actionVerify_Update_triggered()
 {
-    // Verify if the latest release on GitHub is equal to the current version
-    // If not, ask the user if he wants to update
-    // If yes, download the latest release and install it
-
-    auto networkManager = new QNetworkAccessManager(this);
-
-    // Send a GET request to the GitHub API to retrieve the latest release information
-    QNetworkRequest request(QUrl("https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest"));
-    QNetworkReply* reply = networkManager->get(request);
-
-    // Connect the finished signal to a slot to handle the response
-    connect(reply, &QNetworkReply::finished, this, [=]() {
-        if (reply->error() == QNetworkReply::NoError) {
-            // Read the response data
-            QByteArray data = reply->readAll();
-
-            // Parse the JSON response
-            QJsonDocument doc = QJsonDocument::fromJson(data);
-            QJsonObject obj = doc.object();
-
-            // Compare the GitHub release tag against the running build
-            // through UpdateVersion: normalises a leading `v`, handles
-            // semver suffixes, and uses QVersionNumber so e.g. 3.10.0
-            // ranks above 3.2.0 (the old string-equality test got both
-            // of those wrong). Only prompt when the remote is strictly
-            // newer — Invalid / Same / Newer all stay quiet so a
-            // malformed API response doesn't permanently nag the user.
-            const QString latestVersion = obj.value("tag_name").toString();
-            const QString currentVersion = QApplication::applicationVersion();
-            const UpdateVersion::Comparison cmp =
-                UpdateVersion::compare(currentVersion, latestVersion);
-            if (cmp == UpdateVersion::Comparison::Older) {
-                SentryReporter::addBreadcrumb(
-                    "ui.action",
-                    QStringLiteral("Update available: %1 -> %2")
-                        .arg(currentVersion, latestVersion));
-                // Renamed from `reply` to dodge the outer-scope
-                // QNetworkReply* (Sonar flagged it as shadowing).
-                const QMessageBox::StandardButton userChoice =
-                    QMessageBox::question(
-                        nullptr, tr("Update"),
-                        tr("A new version is available (%1 → %2). Do you want to update?")
-                            .arg(currentVersion, latestVersion),
-                        QMessageBox::Yes | QMessageBox::No);
-                if (userChoice == QMessageBox::Yes) {
-                    SentryReporter::addBreadcrumb(
-                        "ui.action", "Open latest release page");
-                    QString downloadUrl = obj.value("html_url").toString();
-                    QDesktopServices::openUrl(QUrl(downloadUrl));
-                }
-            } else if (cmp == UpdateVersion::Comparison::Invalid) {
-                SentryReporter::addBreadcrumb(
-                    "ui.action", "Update check returned unparsable version data");
-                // Don't bother the user — log it and move on.
-                Ogre::LogManager::getSingleton().logMessage(
-                    "Update check: could not parse versions '"
-                    + currentVersion.toStdString() + "' / '"
-                    + latestVersion.toStdString() + "'");
-            } else {
-                SentryReporter::addBreadcrumb(
-                    "ui.action", "Already on latest release");
-                QMessageBox::information(
-                    nullptr, tr("Update"),
-                    tr("You're using the latest release."));
-            }
-        } else {
-            // Handle the error
-            Ogre::LogManager::getSingleton().logMessage(reply->errorString().toStdString());
-        }
-
-        // Clean up
-        networkManager->deleteLater();
-        reply->deleteLater();
-    });
-
-    // Connect the SSL errors signal to a slot to handle SSL errors
-    connect(networkManager, &QNetworkAccessManager::sslErrors, this, [=](QNetworkReply* reply, const QList<QSslError>& errors) {
-        // Ignore SSL errors
-        reply->ignoreSslErrors();
-    });
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Check for updates"));
+    UpdaterController::instance()->checkForUpdates();
 }
 // LCOV_EXCL_STOP
 
