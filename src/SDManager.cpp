@@ -452,7 +452,8 @@ void SDManager::generateMeshTexture(const QString &prompt,
                                     float controlStrength,
                                     const QString &outputFileName,
                                     int width,
-                                    int height)
+                                    int height,
+                                    int64_t seed)
 {
     if (!isModelLoaded()) {
         emit generationError("No SD model loaded. Please load a model first.");
@@ -486,6 +487,10 @@ void SDManager::generateMeshTexture(const QString &prompt,
     }
     genSettings.controlNetPath  = controlNetPath;
     genSettings.controlStrength = controlStrength;
+    // A non-negative seed locks generation determinism for this call (used by
+    // the multi-view bake to share one seed across views); -1 keeps the stored
+    // seed (which is itself -1 = random by default).
+    if (seed >= 0) genSettings.seed = seed;
     // Honor the caller's requested generation size (the depth map is
     // captured at this resolution too); fall back to the stored SD
     // settings when a non-positive value is passed.

@@ -69,6 +69,55 @@ Ogre::ColourValue sampleImage(const QImage& img, const Ogre::Vector2& uv)
     return top * (1 - ty) + bot * ty;
 }
 
+// Per-channel mean of a view image over reasonably-opaque, non-near-white
+// pixels (near-white is usually the generator's empty background, which would
+// skew the target). Returns mean RGB in 0..1.
+Ogre::Vector3 imageMeanRGB(const QImage& img)
+{
+    double sr = 0, sg = 0, sb = 0; long count = 0;
+    const int w = img.width(), h = img.height();
+    // Sample on a grid (cap work on large images) — mean is stable from a subset.
+    const int step = std::max(1, (w * h) / (256 * 256));
+    long idx = 0;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x, ++idx) {
+            if (idx % step) continue;
+            const QRgb c = img.pixel(x, y);
+            if (qAlpha(c) < 8) continue;
+            if (qRed(c) > 247 && qGreen(c) > 247 && qBlue(c) > 247) continue; // bg
+            sr += qRed(c); sg += qGreen(c); sb += qBlue(c); ++count;
+        }
+    }
+    if (count == 0) return Ogre::Vector3(0.5f, 0.5f, 0.5f);
+    return Ogre::Vector3(float(sr / count) / 255.0f,
+                         float(sg / count) / 255.0f,
+                         float(sb / count) / 255.0f);
+}
+
+// Shift `img`'s per-channel mean toward `target` (mean-matching). A gentle
+// additive correction — robust and avoids the contrast over-stretch a full
+// mean+std match can cause on flat textures.
+QImage colorMatched(const QImage& img, const Ogre::Vector3& target)
+{
+    const Ogre::Vector3 m = imageMeanRGB(img);
+    const float dr = (target.x - m.x) * 255.0f;
+    const float dg = (target.y - m.y) * 255.0f;
+    const float db = (target.z - m.z) * 255.0f;
+    if (std::abs(dr) < 1.0f && std::abs(dg) < 1.0f && std::abs(db) < 1.0f)
+        return img;  // already close — skip the copy
+    QImage outImg = img.convertToFormat(QImage::Format_RGB888);
+    for (int y = 0; y < outImg.height(); ++y) {
+        uchar* line = outImg.scanLine(y);
+        for (int x = 0; x < outImg.width(); ++x) {
+            uchar* p = line + x * 3;
+            p[0] = static_cast<uchar>(std::clamp(p[0] + dr, 0.0f, 255.0f));
+            p[1] = static_cast<uchar>(std::clamp(p[1] + dg, 0.0f, 255.0f));
+            p[2] = static_cast<uchar>(std::clamp(p[2] + db, 0.0f, 255.0f));
+        }
+    }
+    return outImg;
+}
+
 } // namespace
 
 MultiViewTextureBaker::Report MultiViewTextureBaker::bake(
@@ -96,6 +145,20 @@ MultiViewTextureBaker::Report MultiViewTextureBaker::bake(
     }
     const int res = std::clamp(opts.resolution, 16, 8192);
     rep.perViewTriangleCount.assign(views.size(), 0);
+
+    // Color-match later views to the first view's mean so independent diffusion
+    // runs (front vs back) don't show a global hue/brightness jump at the seam.
+    // Work on a local copy; the first view is the reference (unchanged).
+    std::vector<View> matched;
+    const std::vector<View>* useViews = &views;
+    if (opts.colorMatchToFirstView && views.size() > 1) {
+        const Ogre::Vector3 target = imageMeanRGB(views[0].image);
+        matched = views;
+        for (size_t i = 1; i < matched.size(); ++i)
+            matched[i].image = colorMatched(matched[i].image, target);
+        useViews = &matched;
+    }
+    const std::vector<View>& V = *useViews;
 
     // Weighted accumulation buffers (RGB * weight, and weight sum) per texel.
     const size_t n = static_cast<size_t>(res) * res;
@@ -158,8 +221,8 @@ MultiViewTextureBaker::Report MultiViewTextureBaker::bake(
         if (nrm.isZeroLength()) continue;   // degenerate triangle
         nrm.normalise();
 
-        for (size_t vi = 0; vi < views.size(); ++vi) {
-            const View& v = views[vi];
+        for (size_t vi = 0; vi < V.size(); ++vi) {
+            const View& v = V[vi];
             // Facing weight: the surface normal pointing back toward the camera
             // means -viewDir (camera looks ALONG camDirection into the scene).
             float facing = -nrm.dotProduct(v.camDirection);

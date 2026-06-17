@@ -198,3 +198,37 @@ TEST(MultiViewTextureBakerTest, DilationFillsBackgroundNeighbours)
     // Centre is inside the island → green.
     EXPECT_NEAR(at(out, 0.5f, 0.5f).g, 1.0f, 0.02f);
 }
+
+TEST(MultiViewTextureBakerTest, ColorMatchShiftsLaterViewTowardFirst)
+{
+    // Two cameras that BOTH face the +Z quad (front at +Z, and a second one
+    // slightly off +Z so its facing weight is also positive). The first view is
+    // mid-grey; the second is dark. With colorMatchToFirstView on, the second
+    // image's mean is lifted toward the first, so the blended result is brighter
+    // than it would be with the dark second image left as-is.
+    auto tris = makeQuad(Ogre::Vector3::UNIT_Z);
+
+    MultiViewTextureBaker::View v0 = frontView(solid(16, 130, 130, 130)); // grey
+    MultiViewTextureBaker::View v1;                                        // dark
+    v1.image = solid(16, 20, 20, 20);
+    v1.viewProj = makeViewProj(Ogre::Vector3(0.6f, 0, 4), Ogre::Vector3(0, 0, 0),
+                               Ogre::Vector3::UNIT_Y, 1.2f, 1.0f, 0.1f, 100.0f);
+    v1.camDirection = Ogre::Vector3(-0.15f, 0, -1).normalisedCopy();
+
+    auto bakeWith = [&](bool match) {
+        TexturePaintBuffer out;
+        MultiViewTextureBaker::Options opts;
+        opts.resolution = 32;
+        opts.dilationPixels = 0;
+        opts.colorMatchToFirstView = match;
+        auto rep = MultiViewTextureBaker::bake(tris, { v0, v1 }, out, opts);
+        EXPECT_TRUE(rep.ok) << rep.error.toStdString();
+        return at(out, 0.5f, 0.5f).r;
+    };
+
+    const float matched = bakeWith(true);
+    const float unmatched = bakeWith(false);
+    // Matching lifts the dark second view toward the grey first view, so the
+    // blended centre is brighter than without matching.
+    EXPECT_GT(matched, unmatched);
+}

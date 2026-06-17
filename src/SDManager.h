@@ -118,13 +118,18 @@ public slots:
     // rendered depth map) via a ControlNet model at `controlNetPath`.
     // When controlImage is null or controlNetPath empty, behaves
     // like a plain generateTexture. `controlStrength` is 0..1.
+    // `seed` >= 0 overrides the stored random seed for this call — used by the
+    // multi-view bake to lock ONE seed across all views so front/back share the
+    // same denoising trajectory (much closer hue/lighting/style). -1 keeps the
+    // stored seed (random when that is also -1).
     void generateMeshTexture(const QString &prompt,
                              const QImage &controlImage,
                              const QString &controlNetPath,
                              float controlStrength,
                              const QString &outputFileName = QString(),
                              int width = 0,
-                             int height = 0);
+                             int height = 0,
+                             int64_t seed = -1);
 
     Q_INVOKABLE void stopGeneration();
     Q_INVOKABLE void tryAutoLoadModel();
