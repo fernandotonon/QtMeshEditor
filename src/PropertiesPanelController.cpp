@@ -155,6 +155,15 @@ QColor PropertiesPanelController::highlightColor() const
     return QApplication::palette().color(QPalette::Highlight);
 }
 
+bool PropertiesPanelController::autoUpdaterEnabled() const
+{
+#ifdef ENABLE_AUTO_UPDATER
+    return true;
+#else
+    return false;
+#endif
+}
+
 // Transform accessors
 double PropertiesPanelController::posX() const { return mPosX; }
 double PropertiesPanelController::posY() const { return mPosY; }
