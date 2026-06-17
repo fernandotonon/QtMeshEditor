@@ -36,17 +36,28 @@ UpdaterWorker::UpdaterWorker(QObject* parent)
 UpdaterWorker::~UpdaterWorker()
 {
     cancelActiveRequest();
+    closeDownloadPartFile();
+}
+
+void UpdaterWorker::closeDownloadPartFile()
+{
+    if (!m_downloadPartFile) {
+        return;
+    }
+    m_downloadPartFile->close();
+    delete m_downloadPartFile;
+    m_downloadPartFile = nullptr;
 }
 
 void UpdaterWorker::cancelActiveRequest()
 {
-    if (!m_activeReply) {
-        m_activeJob = ActiveJob::None;
-        return;
+    m_cancelRequested = true;
+    if (m_activeReply) {
+        m_activeReply->abort();
+        m_activeReply->deleteLater();
+        m_activeReply = nullptr;
     }
-    m_activeReply->abort();
-    m_activeReply->deleteLater();
-    m_activeReply = nullptr;
+    closeDownloadPartFile();
     m_activeJob = ActiveJob::None;
 }
 
@@ -55,6 +66,7 @@ void UpdaterWorker::checkForUpdates(const QString& apiUrl,
                                     GitHubReleaseParser::Channel channel)
 {
     cancelActiveRequest();
+    m_cancelRequested = false;
 
     const QUrl url(apiUrl);
     QNetworkRequest httpRequest(url);
@@ -110,6 +122,7 @@ void UpdaterWorker::onCheckReplyFinished()
 void UpdaterWorker::downloadUpdate(const DownloadRequest& request)
 {
     cancelActiveRequest();
+    m_cancelRequested = false;
     m_downloadRequest = request;
     m_downloadAttempt = 0;
     m_activeJob = ActiveJob::Download;
@@ -121,28 +134,38 @@ void UpdaterWorker::startArtifactDownloadAttempt(int attemptIndex)
     m_downloadAttempt = attemptIndex;
 
     const auto beginDownload = [this]() {
-        if (m_activeJob != ActiveJob::Download) {
+        if (m_activeJob != ActiveJob::Download || m_cancelRequested) {
             return;
         }
 
-    qint64 existingSize = 0;
-    if (QFile::exists(m_downloadRequest.artifactPartPath)) {
-        existingSize = QFileInfo(m_downloadRequest.artifactPartPath).size();
-    }
+        closeDownloadPartFile();
 
-    QNetworkRequest httpRequest = makeRequest(QUrl(m_downloadRequest.artifactUrl));
-    if (existingSize > 0) {
-        httpRequest.setRawHeader("Range",
-                                 QByteArray("bytes=" + QByteArray::number(existingSize) + '-'));
-    }
+        qint64 existingSize = 0;
+        if (QFile::exists(m_downloadRequest.artifactPartPath)) {
+            existingSize = QFileInfo(m_downloadRequest.artifactPartPath).size();
+        }
 
-    m_activeReply = m_network->get(httpRequest);
-    connect(m_activeReply, &QNetworkReply::downloadProgress, this, &UpdaterWorker::onDownloadProgress);
-    connect(m_activeReply, &QNetworkReply::finished, this, &UpdaterWorker::onDownloadReplyFinished);
+        m_downloadPartFile = new QFile(m_downloadRequest.artifactPartPath);
+        QIODevice::OpenMode mode = QIODevice::WriteOnly;
+        if (existingSize > 0) {
+            mode |= QIODevice::Append;
+        }
+        if (!m_downloadPartFile->open(mode)) {
+            finishDownloadWithError(QStringLiteral("Cannot write download to disk"));
+            return;
+        }
 
-    if (existingSize > 0) {
+        QNetworkRequest httpRequest = makeRequest(QUrl(m_downloadRequest.artifactUrl));
+        if (existingSize > 0) {
+            httpRequest.setRawHeader("Range",
+                                     QByteArray("bytes=" + QByteArray::number(existingSize) + '-'));
+        }
+
+        m_activeReply = m_network->get(httpRequest);
         m_activeReply->setProperty("resumeOffset", existingSize);
-    }
+        connect(m_activeReply, &QNetworkReply::downloadProgress, this, &UpdaterWorker::onDownloadProgress);
+        connect(m_activeReply, &QNetworkReply::readyRead, this, &UpdaterWorker::onDownloadReadyRead);
+        connect(m_activeReply, &QNetworkReply::finished, this, &UpdaterWorker::onDownloadReplyFinished);
     };
 
     if (attemptIndex > 0) {
@@ -164,8 +187,23 @@ void UpdaterWorker::onDownloadProgress(qint64 received, qint64 total)
     emit downloadProgress(combinedReceived, combinedTotal);
 }
 
+void UpdaterWorker::onDownloadReadyRead()
+{
+    if (!m_activeReply || !m_downloadPartFile) {
+        return;
+    }
+    const QByteArray chunk = m_activeReply->readAll();
+    if (chunk.isEmpty()) {
+        return;
+    }
+    if (m_downloadPartFile->write(chunk) != chunk.size()) {
+        m_activeReply->abort();
+    }
+}
+
 void UpdaterWorker::finishDownloadWithError(const QString& message, bool cancelled)
 {
+    closeDownloadPartFile();
     DownloadOutcome outcome;
     outcome.cancelled = cancelled;
     outcome.errorMessage = message;
@@ -179,6 +217,13 @@ bool UpdaterWorker::downloadUrlBlocking(const QString& url,
                                         bool resume,
                                         QString* errorMessage)
 {
+    if (m_cancelRequested || m_activeJob != ActiveJob::Download) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Download cancelled");
+        }
+        return false;
+    }
+
     qint64 existingSize = 0;
     if (resume && QFile::exists(destPath)) {
         existingSize = QFileInfo(destPath).size();
@@ -191,17 +236,51 @@ bool UpdaterWorker::downloadUrlBlocking(const QString& url,
     }
 
     QNetworkReply* reply = m_network->get(httpRequest);
+    m_activeReply = reply;
+
+    QFile out(destPath);
+    QIODevice::OpenMode mode = QIODevice::WriteOnly;
+    if (existingSize > 0) {
+        mode |= QIODevice::Append;
+    }
+    if (!out.open(mode)) {
+        m_activeReply = nullptr;
+        reply->deleteLater();
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Cannot write %1").arg(destPath);
+        }
+        return false;
+    }
+
     QEventLoop loop;
+    connect(reply, &QNetworkReply::readyRead, &loop, [&]() {
+        if (m_cancelRequested) {
+            reply->abort();
+            return;
+        }
+        const QByteArray chunk = reply->readAll();
+        if (!chunk.isEmpty() && out.write(chunk) != chunk.size()) {
+            reply->abort();
+        }
+    });
     connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     loop.exec();
 
-    const bool wasCancelled = reply->error() == QNetworkReply::OperationCanceledError;
-    const bool ok = reply->error() == QNetworkReply::NoError;
-    const QByteArray payload = reply->readAll();
+    const QByteArray tail = reply->readAll();
+    if (!tail.isEmpty()) {
+        out.write(tail);
+    }
+    out.close();
+
+    const bool cancelled = m_cancelRequested
+        || m_activeJob != ActiveJob::Download
+        || reply->error() == QNetworkReply::OperationCanceledError;
+    const bool ok = !cancelled && reply->error() == QNetworkReply::NoError;
     const QString errorString = reply->errorString();
+    m_activeReply = nullptr;
     reply->deleteLater();
 
-    if (wasCancelled) {
+    if (cancelled) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("Download cancelled");
         }
@@ -215,23 +294,6 @@ bool UpdaterWorker::downloadUrlBlocking(const QString& url,
         return false;
     }
 
-    QIODevice::OpenMode mode = QIODevice::WriteOnly;
-    if (existingSize > 0) {
-        mode |= QIODevice::Append;
-    }
-    QFile out(destPath);
-    if (!out.open(mode)) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Cannot write %1").arg(destPath);
-        }
-        return false;
-    }
-    if (out.write(payload) != payload.size()) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("Write failed for %1").arg(destPath);
-        }
-        return false;
-    }
     return true;
 }
 
@@ -246,8 +308,9 @@ void UpdaterWorker::onDownloadReplyFinished()
     }
 
     m_activeReply = nullptr;
+    onDownloadReadyRead();
 
-    if (reply->error() == QNetworkReply::OperationCanceledError) {
+    if (reply->error() == QNetworkReply::OperationCanceledError || m_cancelRequested) {
         reply->deleteLater();
         finishDownloadWithError(QStringLiteral("Download cancelled"), true);
         return;
@@ -255,11 +318,12 @@ void UpdaterWorker::onDownloadReplyFinished()
 
     const qint64 resumeOffset = reply->property("resumeOffset").toLongLong();
     const bool append = resumeOffset > 0;
-    const QByteArray payload = reply->readAll();
     const bool httpOk = reply->error() == QNetworkReply::NoError;
     const int httpStatus =
         reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     reply->deleteLater();
+
+    closeDownloadPartFile();
 
     if (!httpOk) {
         if (m_downloadAttempt + 1 < kMaxDownloadAttempts) {
@@ -277,20 +341,11 @@ void UpdaterWorker::onDownloadReplyFinished()
         return;
     }
 
-    QIODevice::OpenMode mode = QIODevice::WriteOnly;
-    if (append) {
-        mode |= QIODevice::Append;
-    }
-    QFile partFile(m_downloadRequest.artifactPartPath);
-    if (!partFile.open(mode)) {
-        finishDownloadWithError(QStringLiteral("Cannot write download to disk"));
+    if (append && httpStatus == 200) {
+        QFile::remove(m_downloadRequest.artifactPartPath);
+        startArtifactDownloadAttempt(0);
         return;
     }
-    if (partFile.write(payload) != payload.size()) {
-        finishDownloadWithError(QStringLiteral("Download write failed"));
-        return;
-    }
-    partFile.close();
 
     if (QFile::exists(m_downloadRequest.artifactFinalPath)) {
         QFile::remove(m_downloadRequest.artifactFinalPath);
@@ -300,12 +355,17 @@ void UpdaterWorker::onDownloadReplyFinished()
         return;
     }
 
+    if (m_cancelRequested || m_activeJob != ActiveJob::Download) {
+        finishDownloadWithError(QStringLiteral("Download cancelled"), true);
+        return;
+    }
+
     QString sidecarError;
     if (!downloadUrlBlocking(m_downloadRequest.signatureUrl,
                              m_downloadRequest.signaturePath,
                              false,
                              &sidecarError)) {
-        finishDownloadWithError(sidecarError);
+        finishDownloadWithError(sidecarError, sidecarError.contains(QStringLiteral("cancelled")));
         return;
     }
 
@@ -314,9 +374,15 @@ void UpdaterWorker::onDownloadReplyFinished()
                                  m_downloadRequest.sha256SumsPath,
                                  false,
                                  &sidecarError)) {
-            finishDownloadWithError(sidecarError);
+            finishDownloadWithError(sidecarError,
+                                    sidecarError.contains(QStringLiteral("cancelled")));
             return;
         }
+    }
+
+    if (m_cancelRequested || m_activeJob != ActiveJob::Download) {
+        finishDownloadWithError(QStringLiteral("Download cancelled"), true);
+        return;
     }
 
     DownloadOutcome outcome;

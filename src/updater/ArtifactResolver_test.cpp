@@ -87,6 +87,20 @@ TEST(ArtifactResolver, PicksLinuxTarballWithSignature)
 
 #endif
 
+TEST(ArtifactResolver, RejectsPackageManagedFlavor)
+{
+    QList<ReleaseAsset> assets = {
+        makeAsset(QStringLiteral("QtMeshEditor-3.5.3-bin-Windows.zip")),
+        makeAsset(QStringLiteral("QtMeshEditor-3.5.3-bin-Windows.zip.minisig")),
+    };
+
+    const ArtifactResolver::ResolvedArtifact resolved =
+        ArtifactResolver::resolveForCurrentPlatform(assets, InstallFlavor::Flavor::Homebrew);
+
+    EXPECT_FALSE(resolved.ok);
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("portable")));
+}
+
 TEST(ArtifactResolver, RequiresSignatureSidecar)
 {
     QList<ReleaseAsset> assets;

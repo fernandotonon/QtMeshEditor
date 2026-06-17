@@ -42,8 +42,7 @@ Production public key: `packaging/updater/minisign.pub` (embedded in `MinisignVe
 ### PoC status
 
 - `MinisignVerify::verifyFile()` implements minisign’s dual-signature check (file + trusted comment) via **libsodium** (same algorithms as the CLI).
-- Linux-only in this spike; Windows/macOS return `Unsupported` until #445 wires cross-platform static libsodium.
-- **#445:** `MinisignVerify` builds wherever `QTMESH_MINISIGN_VERIFY=1` (Linux + macOS via libsodium). Windows MinGW verify is deferred — downloads fail closed at the signature step until a follow-up wires libsodium there.
+- **#445:** builds with `QTMESH_MINISIGN_VERIFY=1` on Linux and macOS (system pkg-config or static libsodium). Windows MinGW verify is deferred — downloads fail closed at the signature step until a follow-up wires libsodium there.
 - Tests: `MinisignVerify_test` verifies good/tampered/bad-key against `tests/fixtures/updater/release-3.5.3-readme.md` (content from GitHub tag `3.5.3`).
 
 ---

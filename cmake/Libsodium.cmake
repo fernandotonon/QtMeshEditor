@@ -30,6 +30,12 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(FetchContent)
+include(ProcessorCount)
+
+ProcessorCount(QTMESH_LIBSODIUM_JOBS)
+if(NOT QTMESH_LIBSODIUM_JOBS OR QTMESH_LIBSODIUM_JOBS LESS 1)
+    set(QTMESH_LIBSODIUM_JOBS 1)
+endif()
 
 set(QTMESH_LIBSODIUM_URL
     "https://download.libsodium.org/libsodium/releases/libsodium-1.0.20-stable.tar.gz"
@@ -64,7 +70,7 @@ if(NOT EXISTS "${QTMESH_LIBSODIUM_MARKER}")
         message(FATAL_ERROR "libsodium configure failed (${qtmesh_sodium_configure_result})")
     endif()
     execute_process(
-        COMMAND make -j
+        COMMAND make -j${QTMESH_LIBSODIUM_JOBS}
         WORKING_DIRECTORY "${qtmesh_libsodium_src_SOURCE_DIR}"
         RESULT_VARIABLE qtmesh_sodium_build_result
     )

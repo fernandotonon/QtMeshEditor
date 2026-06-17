@@ -55,8 +55,7 @@ ResolvedArtifact resolveForCurrentPlatform(
 {
     ResolvedArtifact result;
 
-    if (!InstallFlavor::isPackageManagerManaged(flavor) && flavor != InstallFlavor::Flavor::Portable
-        && flavor != InstallFlavor::Flavor::Unknown) {
+    if (flavor != InstallFlavor::Flavor::Portable && flavor != InstallFlavor::Flavor::Unknown) {
         result.errorMessage = QStringLiteral("In-app download is only supported for portable installs");
         return result;
     }

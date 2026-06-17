@@ -9,6 +9,7 @@
 
 class QNetworkAccessManager;
 class QNetworkReply;
+class QFile;
 
 struct DownloadRequest {
     QString artifactUrl;
@@ -81,6 +82,7 @@ signals:
 private slots:
     void onCheckReplyFinished();
     void onDownloadProgress(qint64 received, qint64 total);
+    void onDownloadReadyRead();
     void onDownloadReplyFinished();
 
 private:
@@ -96,10 +98,13 @@ private:
                              QString* errorMessage);
     void finishDownloadWithError(const QString& message, bool cancelled = false);
     void startArtifactDownloadAttempt(int attemptIndex);
+    void closeDownloadPartFile();
 
     QNetworkAccessManager* m_network = nullptr;
     QNetworkReply* m_activeReply = nullptr;
+    QFile* m_downloadPartFile = nullptr;
     ActiveJob m_activeJob = ActiveJob::None;
+    bool m_cancelRequested = false;
     DownloadRequest m_downloadRequest;
     int m_downloadAttempt = 0;
     static constexpr int kMaxDownloadAttempts = 3;
