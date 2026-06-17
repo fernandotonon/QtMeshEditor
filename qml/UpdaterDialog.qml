@@ -35,6 +35,11 @@ Window {
         focus: true
         Keys.onPressed: function(event) {
             if (event.key === Qt.Key_Escape) {
+                if (UpdaterController.state === UpdaterController.Checking
+                    || UpdaterController.state === UpdaterController.Downloading
+                    || UpdaterController.state === UpdaterController.Verifying) {
+                    UpdaterController.cancel()
+                }
                 UpdaterController.dismiss()
                 dialog.close()
                 event.accepted = true

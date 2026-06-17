@@ -128,7 +128,12 @@ UpdaterController::~UpdaterController()
 void UpdaterController::loadSettings()
 {
     QSettings settings;
-    setChannel(settings.value(AppSettingsKeys::updaterChannel(), QStringLiteral("stable")).toString());
+    bool channelOk = false;
+    const GitHubReleaseParser::Channel parsed = GitHubReleaseParser::channelFromString(
+        settings.value(AppSettingsKeys::updaterChannel(), QStringLiteral("stable")).toString(),
+        &channelOk);
+    m_channel = GitHubReleaseParser::channelToString(
+        channelOk ? parsed : GitHubReleaseParser::Channel::Stable);
     m_checkOnStartup = settings.value(AppSettingsKeys::updaterCheckOnStartup(), true).toBool();
     m_autoDownload = settings.value(AppSettingsKeys::updaterAutoDownload(), false).toBool();
     m_lastCheckedAt = settings.value(AppSettingsKeys::updaterLastCheckedAt()).toString();
@@ -269,6 +274,8 @@ void UpdaterController::applyCheckResult(const GitHubReleaseParser::CheckResult&
 
 void UpdaterController::requestCheckDialog()
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Updater settings: Check now"));
     emit showDialogRequested(true);
 }
 

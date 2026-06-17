@@ -39,76 +39,87 @@ Column {
         width: parent.width
         spacing: 4
         Text { text: "Channel"; font.pixelSize: 12; font.bold: true; color: textColor }
+        ButtonGroup { id: channelGroup }
         Row {
             spacing: 6
             Repeater {
                 model: ["stable", "beta"]
-                Rectangle {
-                    width: 72; height: 26; radius: 3
-                    border.color: borderColor; border.width: 1
-                    color: UpdaterController.channel === modelData ? highlightColor
-                         : channelMouse.containsMouse ? Qt.lighter(inputBgColor, 1.1) : inputBgColor
-                    Text {
-                        anchors.centerIn: parent
-                        text: modelData
-                        font.pixelSize: 11
-                        color: UpdaterController.channel === modelData ? "white" : textColor
-                    }
-                    MouseArea {
-                        id: channelMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: UpdaterController.channel = modelData
-                    }
+                Button {
+                    ButtonGroup.group: channelGroup
+                    checkable: true
+                    checked: UpdaterController.channel === modelData
+                    text: modelData
+                    implicitHeight: 26
+                    implicitWidth: 72
+                    onClicked: UpdaterController.channel = modelData
+                    palette.button: checked ? highlightColor : inputBgColor
+                    palette.buttonText: checked ? "white" : textColor
                 }
             }
         }
     }
 
-    Row {
-        spacing: 6
+    CheckBox {
         width: parent.width
-        property bool enabled: UpdaterController.checkOnStartup
-        Rectangle {
-            width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
-            border.color: borderColor; border.width: 1; radius: 2
-            color: parent.enabled ? highlightColor : "transparent"
-            Text { anchors.centerIn: parent; text: parent.parent.enabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-            MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: UpdaterController.checkOnStartup = !parent.parent.enabled
+        text: "Check for updates on startup"
+        checked: UpdaterController.checkOnStartup
+        onToggled: UpdaterController.checkOnStartup = checked
+        font.pixelSize: 12
+        indicator: Rectangle {
+            implicitWidth: 14
+            implicitHeight: 14
+            x: control.leftPadding
+            y: parent.height / 2 - height / 2
+            radius: 2
+            border.color: borderColor
+            border.width: 1
+            color: control.checked ? highlightColor : "transparent"
+            Text {
+                anchors.centerIn: parent
+                visible: control.checked
+                text: "\u2713"
+                color: "white"
+                font.pixelSize: 10
             }
         }
-        Text {
-            text: "Check for updates on startup"
-            font.pixelSize: 12
+        contentItem: Text {
+            text: control.text
+            font: control.font
             color: textColor
-            anchors.verticalCenter: parent.verticalCenter
+            verticalAlignment: Text.AlignVCenter
+            leftPadding: control.indicator.width + control.spacing
         }
     }
 
-    Row {
-        spacing: 6
+    CheckBox {
         width: parent.width
-        property bool enabled: UpdaterController.autoDownload
-        Rectangle {
-            width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
-            border.color: borderColor; border.width: 1; radius: 2
-            color: parent.enabled ? highlightColor : "transparent"
-            Text { anchors.centerIn: parent; text: parent.parent.enabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-            MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: UpdaterController.autoDownload = !parent.parent.enabled
+        text: "Auto-download in background (opt-in)"
+        checked: UpdaterController.autoDownload
+        onToggled: UpdaterController.autoDownload = checked
+        font.pixelSize: 12
+        indicator: Rectangle {
+            implicitWidth: 14
+            implicitHeight: 14
+            x: control.leftPadding
+            y: parent.height / 2 - height / 2
+            radius: 2
+            border.color: borderColor
+            border.width: 1
+            color: control.checked ? highlightColor : "transparent"
+            Text {
+                anchors.centerIn: parent
+                visible: control.checked
+                text: "\u2713"
+                color: "white"
+                font.pixelSize: 10
             }
         }
-        Text {
-            text: "Auto-download in background (opt-in)"
-            font.pixelSize: 12
+        contentItem: Text {
+            text: control.text
+            font: control.font
             color: textColor
-            anchors.verticalCenter: parent.verticalCenter
+            verticalAlignment: Text.AlignVCenter
+            leftPadding: control.indicator.width + control.spacing
         }
     }
 
@@ -121,21 +132,13 @@ Column {
               : "Last checked: never"
     }
 
-    Rectangle {
-        width: 120; height: 28; radius: 3
-        color: checkMouse.containsMouse ? Qt.lighter(highlightColor, 1.1) : highlightColor
-        Text {
-            anchors.centerIn: parent
-            text: "Check now"
-            color: "white"
-            font.pixelSize: 12
-        }
-        MouseArea {
-            id: checkMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: UpdaterController.requestCheckDialog()
-        }
+    Button {
+        text: "Check now"
+        implicitHeight: 28
+        implicitWidth: 120
+        onClicked: UpdaterController.requestCheckDialog()
+        palette.button: highlightColor
+        palette.buttonText: "white"
+        font.pixelSize: 12
     }
 }

@@ -12,6 +12,7 @@ class UpdaterControllerTestEnv : public ::testing::Test
 protected:
     void SetUp() override
     {
+        UpdaterController::kill();
         QSettings settings;
         settings.remove(AppSettingsKeys::updaterChannel());
         settings.remove(AppSettingsKeys::updaterCheckOnStartup());
@@ -63,4 +64,17 @@ TEST_F(UpdaterControllerTestEnv, SkipVersionWritesSettingsKey)
     EXPECT_EQ(settings.value(AppSettingsKeys::updaterSkippedVersion()).toString(),
               QStringLiteral("3.5.4-beta.1"));
     EXPECT_EQ(controller->state(), UpdaterController::State::UpToDate);
+}
+
+TEST_F(UpdaterControllerTestEnv, LoadSettingsDoesNotResetOtherPreferences)
+{
+    QSettings settings;
+    settings.setValue(AppSettingsKeys::updaterChannel(), QStringLiteral("beta"));
+    settings.setValue(AppSettingsKeys::updaterCheckOnStartup(), false);
+    settings.setValue(AppSettingsKeys::updaterAutoDownload(), true);
+
+    UpdaterController* controller = UpdaterController::instance();
+    EXPECT_EQ(controller->channel(), QStringLiteral("beta"));
+    EXPECT_FALSE(controller->checkOnStartup());
+    EXPECT_TRUE(controller->autoDownload());
 }
