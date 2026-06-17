@@ -709,6 +709,11 @@ private:
     // Uncached resolution of a texture's preview path (the body behind the
     // memoizing getTexturePreviewPath()). Does the Ogre/disk work.
     QString computeTexturePreviewPath(const QString &texName) const;
+    // setTextureName() post-bind steps, split out to keep that method flat:
+    // collapse a PS1 TMD material to a single unlit pass, and force RTSS to
+    // regenerate this material's shaders against the freshly bound texture.
+    void collapseTmdMaterialToSinglePass();
+    void regenerateRtssShaders();
     /**
      * Make a texture name resolvable from the current material's resource
      * group so the RTSS-rendered mesh can sample it (otherwise the on-screen
