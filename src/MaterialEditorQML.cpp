@@ -7,6 +7,7 @@
 #include "MeshDepthRenderer.h"
 #include "MultiViewTextureBaker.h"
 #include "TexturePaintBuffer.h"
+#include "EmbeddedTextureCache.h"
 #include <OgreEntity.h>
 #include <OgreSubEntity.h>
 #include <OgreMesh.h>
@@ -1093,9 +1094,8 @@ void MaterialEditorQML::setTextureName(const QString &name)
 {
     if (m_textureName != name) {
         m_textureName = name;
-        
-        Ogre::TextureUnitState* textureUnit = getCurrentTextureUnit();
-        if (textureUnit && !name.isEmpty() && name != "*Select a texture*") {
+
+        if (!name.isEmpty() && name != "*Select a texture*") {
             // The on-screen mesh renders via RTSS (the viewport uses the
             // MSN_SHADERGEN material scheme). RTSS resolves the TUS texture by
             // name against the MATERIAL's resource group (+ AUTODETECT). If the
@@ -1105,25 +1105,64 @@ void MaterialEditorQML::setTextureName(const QString &name)
             // disk) looks correct. Make the texture resolvable from the
             // material's own group before binding it.
             ensureTextureInMaterialGroup(name);
-            // Only set non-empty, valid texture names to avoid OGRE crashes
-            textureUnit->setTextureName(name.toStdString());
 
-            // If this is a per-import PS1 TMD material, default to unlit single-pass once an image is present.
-            if (m_ogreMaterial) {
-                const std::string matName = m_ogreMaterial->getName();
-                if (matName.rfind("TMD/", 0) == 0) {
-                    if (Ogre::Technique* tech = getCurrentTechnique()) {
-                        while (tech->getNumPasses() > 1)
-                            tech->removePass(1);
+            // Rebuild the cached technique/pass/TUS pointers BEFORE using them.
+            // An earlier apply (or ensureTextureInMaterialGroup) can recompile
+            // the material, after which Ogre has destroyed+rebuilt its
+            // Technique/Pass/TUS objects and the cached m_texUnitMap pointer
+            // dangles — dereferencing it crashed inside
+            // TextureUnitState::retrieveTexture()/Pass::getResourceGroup().
+            // Re-running updateTextureUnitList() re-captures live pointers via
+            // the same name-keyed lookup the selection uses (which correctly
+            // tracks the authored technique even after RTSS augments the list).
+            updateTextureUnitList();
+            Ogre::TextureUnitState* textureUnit = getCurrentTextureUnit();
+            if (textureUnit) {
+                // Only set non-empty, valid texture names to avoid OGRE crashes
+                textureUnit->setTextureName(name.toStdString());
+
+                // If this is a per-import PS1 TMD material, default to unlit single-pass once an image is present.
+                if (m_ogreMaterial) {
+                    const std::string matName = m_ogreMaterial->getName();
+                    if (matName.rfind("TMD/", 0) == 0) {
+                        if (Ogre::Technique* tech = getCurrentTechnique()) {
+                            while (tech->getNumPasses() > 1)
+                                tech->removePass(1);
+                        }
+                        // PS1 .tim often uses color 0x0000 for transparent texels (see PS1TIM::loadTimToOgreImage).
+                        if (Ogre::Pass* pass = getCurrentPass())
+                            pass->setAlphaRejectSettings(Ogre::CMPF_GREATER_EQUAL, 1);
                     }
-                    // PS1 .tim often uses color 0x0000 for transparent texels (see PS1TIM::loadTimToOgreImage).
-                    if (Ogre::Pass* pass = getCurrentPass())
-                        pass->setAlphaRejectSettings(Ogre::CMPF_GREATER_EQUAL, 1);
                 }
+
+                // The viewport renders this material through RTSS (the
+                // MSN_SHADERGEN scheme). Rebinding the TUS texture above does
+                // NOT update the already-generated shader/technique — RTSS keeps
+                // serving the cached program built against the PREVIOUS texture,
+                // so after a few switches the surface went blank and lighting
+                // glitched (FFP↔generated technique desync). Force RTSS to
+                // regenerate this material's shaders against the new binding.
+                if (m_ogreMaterial) {
+                    if (auto* shaderGen =
+                            Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+                        const Ogre::String scheme =
+                            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME;
+                        try {
+                            shaderGen->invalidateMaterial(scheme,
+                                m_ogreMaterial->getName(), m_ogreMaterial->getGroup());
+                            shaderGen->validateMaterial(scheme,
+                                m_ogreMaterial->getName(), m_ogreMaterial->getGroup());
+                        } catch (...) {
+                            // Best-effort: a missing generated technique just
+                            // means RTSS will rebuild it lazily on next render.
+                        }
+                    }
+                    m_ogreMaterial->compile();
+                }
+                updateMaterialText();
             }
-            updateMaterialText();
         }
-        
+
         emit textureNameChanged();
     }
 }
@@ -1947,15 +1986,59 @@ QStringList MaterialEditorQML::getAvailableTextures() const
 
 QString MaterialEditorQML::getTexturePreviewPath() const
 {
-    QString texName = m_textureName;
+    const QString texName = m_textureName;
     if (texName.isEmpty() || texName == "*Select a texture*" || texName.trimmed().isEmpty()) {
         return "";
     }
 
+    // Memoize: the QML Image `source` binding evaluates this getter twice per
+    // change and reloadPreview() calls it once more, so a single texture switch
+    // invokes us 3×. Resolving touches the GPU (convertToImage locks the
+    // hardware buffer) and disk (remove + save the preview PNG) — re-running
+    // that on every call raced the renderer / the QML Image still loading the
+    // file, and crashed under rapid back-and-forth switching. Once resolved,
+    // the path is stable for a given texture name, so cache it; the cache is
+    // cleared when a texture is (re)applied (see clearTexturePreviewCache()).
+    auto cached = m_previewPathCache.constFind(texName);
+    if (cached != m_previewPathCache.constEnd()) {
+        return cached.value();
+    }
+    // Refuse to recurse: convertToImage() inside computeTexturePreviewPath()
+    // can pump the event loop and re-enter this getter; a nested second
+    // GPU-buffer readback is exactly what crashed. Return empty (uncached) so
+    // the outer call still resolves and caches the real path.
+    if (m_resolvingPreview) {
+        return "";
+    }
+    m_resolvingPreview = true;
+    const QString resolved = computeTexturePreviewPath(texName);
+    m_resolvingPreview = false;
+    m_previewPathCache.insert(texName, resolved);
+    return resolved;
+}
+
+QString MaterialEditorQML::computeTexturePreviewPath(const QString &texName) const
+{
+
     // 1. Ask Ogre where the texture was actually loaded from (most accurate)
     if (isOgreAvailable()) {
         try {
+            // getByName(name) only searches the DEFAULT resource group. Imported
+            // FBX textures are frequently loaded into a per-asset group (named
+            // after the import directory), so the no-group lookup misses them
+            // and the preview came up blank even though the texture is loaded.
+            // Fall back to a group-agnostic scan of the resource map by name.
             auto texPtr = Ogre::TextureManager::getSingleton().getByName(texName.toStdString());
+            if (!texPtr) {
+                auto it = Ogre::TextureManager::getSingleton().getResourceIterator();
+                while (it.hasMoreElements()) {
+                    Ogre::ResourcePtr r = it.getNext();
+                    if (r && r->getName() == texName.toStdString()) {
+                        texPtr = Ogre::static_pointer_cast<Ogre::Texture>(r);
+                        break;
+                    }
+                }
+            }
             if (texPtr) {
                 // Check origin (absolute path)
                 QString origin = QString::fromStdString(texPtr->getOrigin());
@@ -1967,21 +2050,49 @@ QString MaterialEditorQML::getTexturePreviewPath() const
                     }
                 }
 
-                // If we can't return a directly viewable file (e.g., .tim), generate a PNG preview from the GPU texture.
-                try {
-                    Ogre::Image img;
-                    texPtr->convertToImage(img, true);
-                    const QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-                    const QString outDir = QDir(dataPath).filePath("texture_previews");
-                    QDir().mkpath(outDir);
-                    const QString outPath = QDir(outDir).filePath(texName + ".png");
-                    QFile::remove(outPath); // ensure stale previews don't linger
-                    img.save(outPath.toStdString());
-                    if (QFileInfo::exists(outPath)) {
-                        return QUrl::fromLocalFile(QFileInfo(outPath).absoluteFilePath()).toString();
+                // Embedded-FBX textures (Boss_diffuse.png inside Rumba
+                // Dancing.fbx, #508) have no on-disk origin and are loaded into
+                // Ogre via loadImage/loadRawData, where convertToImage() below
+                // often can't read the buffer back — so the preview was blank.
+                // The original bytes were stashed at import in
+                // EmbeddedTextureCache; decode those (most reliable source)
+                // into a PNG preview. Try this BEFORE convertToImage.
+                {
+                    const std::vector<uint8_t> bytes =
+                        EmbeddedTextureCache::retrieve(texName.toStdString());
+                    if (!bytes.empty()) {
+                        // Decode with QImage first (handles PNG/JPG/BMP/…); the
+                        // cache holds the original compressed payload for the
+                        // common mHeight==0 case.
+                        QImage qimg;
+                        if (qimg.loadFromData(bytes.data(),
+                                              static_cast<int>(bytes.size()))) {
+                            const QString dataPath = QStandardPaths::writableLocation(
+                                QStandardPaths::AppDataLocation);
+                            const QString outDir = QDir(dataPath).filePath("texture_previews");
+                            QDir().mkpath(outDir);
+                            const QString outPath =
+                                QDir(outDir).filePath(texName + "_embedded.png");
+                            QFile::remove(outPath);
+                            if (qimg.save(outPath, "PNG")
+                                && QFileInfo::exists(outPath)) {
+                                return QUrl::fromLocalFile(
+                                    QFileInfo(outPath).absoluteFilePath()).toString();
+                            }
+                        }
                     }
-                } catch (...) {
                 }
+
+                // NOTE: we deliberately do NOT call texPtr->convertToImage()
+                // here. For textures loaded via loadImage/loadRawData (embedded
+                // FBX, generated, raw-decoded) the GPU buffer often can't be
+                // read back, and convertToImage() then dereferences a null
+                // internal buffer and faults with EXC_BAD_ACCESS — a HARDWARE
+                // fault that a C++ try/catch CANNOT intercept, so it crashed the
+                // app (reliably reproduced by switching back to an embedded
+                // texture). The embedded-cache branch above already covers the
+                // case convertToImage() was meant to handle; anything not
+                // resolved by then falls through to the on-disk searches below.
 
                 // The resource group name is often the directory the model was loaded from
                 QString group = QString::fromStdString(texPtr->getGroup());
@@ -4391,6 +4502,11 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
     QFileInfo fileInfo(outputPath);
     QString dirPath = fileInfo.absolutePath();
     QString fileName = fileInfo.fileName();
+
+    // A freshly generated image may reuse a texture name whose preview path is
+    // already memoized — drop the stale entry so the preview re-resolves to the
+    // new pixels rather than the previous file.
+    m_previewPathCache.remove(fileName);
 
 #ifdef ENABLE_STABLE_DIFFUSION
     // Multi-view bake (slice 2): pair this completed image with the view whose

@@ -3288,6 +3288,15 @@ Rectangle {
                 function onMaterialNameChanged() { materialToolCol.refreshMaterialList() }
             }
 
+            // Also refresh when the scene's material set may have changed —
+            // a model load or selection change — so newly-loaded materials
+            // appear without needing the manual Refresh button.
+            Connections {
+                target: PropertiesPanelController.sceneTreeModel
+                ignoreUnknownSignals: true
+                function onMaterialsChanged() { materialToolCol.refreshMaterialList() }
+            }
+
             // ── Material Library header: New / Import / Refresh ──
 
             Text {

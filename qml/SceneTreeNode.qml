@@ -287,6 +287,16 @@ Column {
                     verticalAlignment: TextInput.AlignVCenter
 
                     property var allMaterials: treeModel ? treeModel.availableMaterials() : []
+                    // Re-fetch the material list whenever it may have changed
+                    // (model load / node + entity created / selection change),
+                    // so the dropdown always offers an up-to-date set.
+                    Connections {
+                        target: treeModel
+                        ignoreUnknownSignals: true
+                        function onMaterialsChanged() {
+                            matFilter.allMaterials = treeModel ? treeModel.availableMaterials() : []
+                        }
+                    }
                     property var filtered: {
                         var query = text.toLowerCase()
                         if (query.length === 0) return allMaterials
