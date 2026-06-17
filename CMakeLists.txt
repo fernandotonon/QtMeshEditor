@@ -282,6 +282,15 @@ if(ENABLE_PS1_RIP)
     add_subdirectory(plugins/ps1core_stub)
 endif()
 ##############################################################
+#  In-app auto-updater (portable Windows/macOS/Linux tarballs)
+##############################################################
+option(ENABLE_AUTO_UPDATER "Enable in-app auto-updater UI and download path" ON)
+
+if(ENABLE_AUTO_UPDATER)
+    add_definitions(-DENABLE_AUTO_UPDATER)
+    message(STATUS "In-app auto-updater enabled")
+endif()
+##############################################################
 #  meshoptimizer — LOD generation, vertex-cache / overdraw /
 #  fetch optimization, vertex remap dedupe. MIT, header-light,
 #  ~200 KB. First consumer is `qtmesh lod --algo meshopt`

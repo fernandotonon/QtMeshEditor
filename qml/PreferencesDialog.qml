@@ -23,6 +23,12 @@ Rectangle {
     property color inputBgColor: palette.base
 
     property int currentTab: 0
+    readonly property var tabLabels: {
+        var tabs = ["General", "Appearance", "Viewport"]
+        if (PropertiesPanelController.autoUpdaterEnabled)
+            tabs.push("Updates")
+        return tabs
+    }
 
     // Helper to read a setting with default
     function readSetting(key, defaultVal) {
@@ -73,7 +79,7 @@ Rectangle {
                 spacing: 2
 
                 Repeater {
-                    model: ["General", "Appearance", "Viewport"]
+                    model: root.tabLabels
 
                     Rectangle {
                         Layout.fillWidth: true
@@ -500,6 +506,16 @@ Rectangle {
                                     onEditingFinished: writeSetting("Viewport/farClip", parseFloat(text) || 10000)
                                 }
                             }
+                        }
+                    }
+
+                    Loader {
+                        width: parent.width - 32
+                        active: PropertiesPanelController.autoUpdaterEnabled && currentTab === 3
+                        source: "qrc:/UpdaterDialog/UpdaterSettingsPanel.qml"
+                        onLoaded: {
+                            if (item)
+                                item.currentTab = Qt.binding(function() { return currentTab })
                         }
                     }
 

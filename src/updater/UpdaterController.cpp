@@ -1,17 +1,38 @@
 #include "UpdaterController.h"
 #include "UpdaterWorker.h"
+#include "AppSettingsKeys.h"
 #include "SentryReporter.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDesktopServices>
-#include <QMessageBox>
+#include <QGuiApplication>
+#include <QSettings>
 #include <QUrl>
 
 namespace {
 
 constexpr const char* kDefaultReleasesApi =
     "https://api.github.com/repos/fernandotonon/QtMeshEditor/releases?per_page=20";
+
+QString stateToString(UpdaterController::State state)
+{
+    switch (state) {
+    case UpdaterController::State::Idle: return QStringLiteral("idle");
+    case UpdaterController::State::Checking: return QStringLiteral("checking");
+    case UpdaterController::State::UnknownInstall: return QStringLiteral("unknown_install");
+    case UpdaterController::State::PackageManaged: return QStringLiteral("package_managed");
+    case UpdaterController::State::UpdateAvailable: return QStringLiteral("update_available");
+    case UpdaterController::State::UpToDate: return QStringLiteral("up_to_date");
+    case UpdaterController::State::Error: return QStringLiteral("error");
+    case UpdaterController::State::Downloading: return QStringLiteral("downloading");
+    case UpdaterController::State::Verifying: return QStringLiteral("verifying");
+    case UpdaterController::State::ReadyToInstall: return QStringLiteral("ready_to_install");
+    }
+    return QStringLiteral("idle");
+}
 
 } // namespace
 
@@ -32,10 +53,17 @@ UpdaterController* UpdaterController::qmlInstance(QQmlEngine* engine, QJSEngine*
     return instance();
 }
 
+void UpdaterController::kill()
+{
+    delete s_instance;
+    s_instance = nullptr;
+}
+
 UpdaterController::UpdaterController(QObject* parent)
     : QObject(parent)
 {
     qRegisterMetaType<GitHubReleaseParser::Channel>("GitHubReleaseParser::Channel");
+    loadSettings();
     refreshInstallFlavor();
 
     m_workerThread = new QThread(this);
@@ -44,6 +72,8 @@ UpdaterController::UpdaterController(QObject* parent)
 
     connect(m_worker, &UpdaterWorker::checkFinished, this,
             [this](const GitHubReleaseParser::CheckResult& result, const QString& networkError) {
+                recordLastChecked();
+
                 if (!networkError.isEmpty()) {
                     setState(State::Error);
                     setError(networkError);
@@ -52,11 +82,10 @@ UpdaterController::UpdaterController(QObject* parent)
                         networkError,
                         QStringLiteral("error"));
                     emit checkError(networkError);
-                    presentCheckOutcome();
+                    logDialogStateBreadcrumb();
                     return;
                 }
 
-                applyCheckResult(result);
                 if (!result.parseOk) {
                     setState(State::Error);
                     setError(result.errorMessage);
@@ -65,32 +94,71 @@ UpdaterController::UpdaterController(QObject* parent)
                         result.errorMessage,
                         QStringLiteral("error"));
                     emit checkError(result.errorMessage);
-                    presentCheckOutcome();
+                    logDialogStateBreadcrumb();
                     return;
                 }
 
+                applyCheckResult(result);
                 SentryReporter::addBreadcrumb(
                     QStringLiteral("updater.check.success"),
                     QStringLiteral("remote=%1 comparison=%2")
                         .arg(result.release.tagName)
                         .arg(static_cast<int>(result.comparison)));
-                presentCheckOutcome();
+                logDialogStateBreadcrumb();
             });
 
-    connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
     m_workerThread->start();
 }
 
 UpdaterController::~UpdaterController()
 {
-    if (m_worker) {
-        QMetaObject::invokeMethod(m_worker, &UpdaterWorker::cancelActiveRequest,
-                                  Qt::BlockingQueuedConnection);
+    if (m_worker && m_workerThread) {
+        if (m_workerThread->isRunning()) {
+            QMetaObject::invokeMethod(m_worker, &UpdaterWorker::cancelActiveRequest,
+                                      Qt::BlockingQueuedConnection);
+            m_workerThread->quit();
+            m_workerThread->wait();
+        }
+        m_worker->moveToThread(QThread::currentThread());
+        delete m_worker;
+        m_worker = nullptr;
     }
-    if (m_workerThread) {
-        m_workerThread->quit();
-        m_workerThread->wait();
-    }
+}
+
+void UpdaterController::loadSettings()
+{
+    QSettings settings;
+    bool channelOk = false;
+    const GitHubReleaseParser::Channel parsed = GitHubReleaseParser::channelFromString(
+        settings.value(AppSettingsKeys::updaterChannel(), QStringLiteral("stable")).toString(),
+        &channelOk);
+    m_channel = GitHubReleaseParser::channelToString(
+        channelOk ? parsed : GitHubReleaseParser::Channel::Stable);
+    m_checkOnStartup = settings.value(AppSettingsKeys::updaterCheckOnStartup(), true).toBool();
+    m_autoDownload = settings.value(AppSettingsKeys::updaterAutoDownload(), false).toBool();
+    m_lastCheckedAt = settings.value(AppSettingsKeys::updaterLastCheckedAt()).toString();
+}
+
+void UpdaterController::saveSettings()
+{
+    QSettings settings;
+    settings.setValue(AppSettingsKeys::updaterChannel(), m_channel);
+    settings.setValue(AppSettingsKeys::updaterCheckOnStartup(), m_checkOnStartup);
+    settings.setValue(AppSettingsKeys::updaterAutoDownload(), m_autoDownload);
+    settings.setValue(AppSettingsKeys::updaterLastCheckedAt(), m_lastCheckedAt);
+}
+
+void UpdaterController::recordLastChecked()
+{
+    m_lastCheckedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    saveSettings();
+    emit lastCheckedAtChanged();
+}
+
+bool UpdaterController::isVersionSkipped(const QString& tag) const
+{
+    QSettings settings;
+    return settings.value(AppSettingsKeys::updaterSkippedVersion()).toString() == tag;
 }
 
 void UpdaterController::refreshInstallFlavor()
@@ -101,6 +169,7 @@ void UpdaterController::refreshInstallFlavor()
         m_installFlavor = slug;
         emit installFlavorChanged();
     }
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.flavor.detected"), slug);
 }
 
 void UpdaterController::setChannel(const QString& channel)
@@ -113,7 +182,28 @@ void UpdaterController::setChannel(const QString& channel)
         return;
     }
     m_channel = normalized;
+    saveSettings();
     emit channelChanged();
+}
+
+void UpdaterController::setCheckOnStartup(bool value)
+{
+    if (m_checkOnStartup == value) {
+        return;
+    }
+    m_checkOnStartup = value;
+    saveSettings();
+    emit checkOnStartupChanged();
+}
+
+void UpdaterController::setAutoDownload(bool value)
+{
+    if (m_autoDownload == value) {
+        return;
+    }
+    m_autoDownload = value;
+    saveSettings();
+    emit autoDownloadChanged();
 }
 
 GitHubReleaseParser::Channel UpdaterController::activeChannel() const
@@ -139,20 +229,34 @@ void UpdaterController::setError(const QString& error)
     emit errorChanged();
 }
 
+void UpdaterController::logDialogStateBreadcrumb()
+{
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("updater.dialog.state"),
+        stateToString(m_state));
+}
+
 void UpdaterController::applyCheckResult(const GitHubReleaseParser::CheckResult& result)
 {
     m_lastComparison = result.comparison;
     m_latestVersion = result.release.tagName;
     m_latestUrl = result.release.htmlUrl;
     m_changelog = result.release.body;
+    m_publishedAt = result.release.publishedAt;
     emit latestVersionChanged();
     emit latestUrlChanged();
     emit changelogChanged();
+    emit publishedAtChanged();
 
     switch (result.comparison) {
     case UpdateVersion::Comparison::Older:
+        if (isVersionSkipped(m_latestVersion)) {
+            setState(State::UpToDate);
+            emit noUpdate();
+            return;
+        }
         setState(State::UpdateAvailable);
-        emit updateAvailable(m_localVersion, m_latestVersion);
+        emit updateAvailable(m_currentVersion, m_latestVersion);
         break;
     case UpdateVersion::Comparison::Same:
     case UpdateVersion::Comparison::Newer:
@@ -162,68 +266,38 @@ void UpdaterController::applyCheckResult(const GitHubReleaseParser::CheckResult&
     case UpdateVersion::Comparison::Invalid:
         setState(State::Error);
         setError(QStringLiteral("Could not compare versions '%1' / '%2'")
-                     .arg(m_localVersion, m_latestVersion));
+                     .arg(m_currentVersion, m_latestVersion));
         emit checkError(m_error);
         break;
     }
 }
 
-void UpdaterController::presentCheckOutcome()
+void UpdaterController::requestCheckDialog()
 {
-    if (InstallFlavor::isPackageManagerManaged(m_flavor)) {
-        const QString hint = InstallFlavor::updateCommandHint(m_flavor);
-        QMessageBox::information(
-            nullptr,
-            tr("Update"),
-            tr("Updates for %1 installs are managed by your package manager.\n\nRun:\n%2")
-                .arg(InstallFlavor::displayName(m_flavor), hint));
-        setState(State::Idle);
-        return;
-    }
-
-    switch (m_state) {
-    case State::UpdateAvailable: {
-        const QMessageBox::StandardButton choice = QMessageBox::question(
-            nullptr,
-            tr("Update"),
-            tr("A new version is available (%1 → %2). Do you want to open the release page?")
-                .arg(m_localVersion, m_latestVersion),
-            QMessageBox::Yes | QMessageBox::No);
-        if (choice == QMessageBox::Yes) {
-            SentryReporter::addBreadcrumb(QStringLiteral("updater.check"),
-                                          QStringLiteral("Open release page"));
-            QDesktopServices::openUrl(QUrl(m_latestUrl));
-        }
-        setState(State::Idle);
-        break;
-    }
-    case State::UpToDate:
-        QMessageBox::information(nullptr, tr("Update"), tr("You're using the latest release."));
-        setState(State::Idle);
-        break;
-    case State::Error:
-        QMessageBox::warning(
-            nullptr,
-            tr("Update"),
-            tr("Could not check for updates.\n\n%1").arg(m_error));
-        setState(State::Idle);
-        break;
-    default:
-        break;
-    }
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Updater settings: Check now"));
+    emit showDialogRequested(true);
 }
 
 void UpdaterController::checkForUpdates()
 {
     refreshInstallFlavor();
-    m_localVersion = QApplication::applicationVersion();
+    m_currentVersion = QApplication::applicationVersion();
+    emit currentVersionChanged();
     setError(QString());
 
     if (InstallFlavor::isPackageManagerManaged(m_flavor)) {
         SentryReporter::addBreadcrumb(
             QStringLiteral("updater.check.start"),
             QStringLiteral("package-manager flavor=%1").arg(m_installFlavor));
-        presentCheckOutcome();
+        setState(State::PackageManaged);
+        logDialogStateBreadcrumb();
+        return;
+    }
+
+    if (m_flavor == InstallFlavor::Flavor::Unknown && !m_unknownInstallConfirmed) {
+        setState(State::UnknownInstall);
+        logDialogStateBreadcrumb();
         return;
     }
 
@@ -233,10 +307,10 @@ void UpdaterController::checkForUpdates()
 
     SentryReporter::addBreadcrumb(
         QStringLiteral("updater.check.start"),
-        QStringLiteral("channel=%1 local=%2").arg(m_channel, m_localVersion));
+        QStringLiteral("channel=%1 local=%2").arg(m_channel, m_currentVersion));
     setState(State::Checking);
 
-    const QString localVersion = m_localVersion;
+    const QString localVersion = m_currentVersion;
     const auto channel = activeChannel();
     QMetaObject::invokeMethod(
         m_worker,
@@ -247,6 +321,14 @@ void UpdaterController::checkForUpdates()
         Q_ARG(GitHubReleaseParser::Channel, channel));
 }
 
+void UpdaterController::confirmUnknownInstall()
+{
+    m_unknownInstallConfirmed = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.dialog.action"),
+                                  QStringLiteral("confirm_unknown_install"));
+    checkForUpdates();
+}
+
 void UpdaterController::downloadAndInstall()
 {
     SentryReporter::addBreadcrumb(QStringLiteral("updater.download"),
@@ -254,6 +336,7 @@ void UpdaterController::downloadAndInstall()
     setError(tr("Automatic download and install is not available yet."));
     setState(State::Error);
     emit checkError(m_error);
+    logDialogStateBreadcrumb();
 }
 
 void UpdaterController::cancel()
@@ -262,8 +345,9 @@ void UpdaterController::cancel()
         QMetaObject::invokeMethod(m_worker, &UpdaterWorker::cancelActiveRequest,
                                   Qt::QueuedConnection);
     }
-    if (m_state == State::Checking) {
+    if (m_state == State::Checking || m_state == State::Downloading) {
         setState(State::Idle);
+        logDialogStateBreadcrumb();
     }
 }
 
@@ -271,4 +355,60 @@ void UpdaterController::dismiss()
 {
     setState(State::Idle);
     setError(QString());
+    logDialogStateBreadcrumb();
 }
+
+void UpdaterController::remindLater()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.dialog.action"),
+                                  QStringLiteral("remind_later"));
+    dismiss();
+}
+
+void UpdaterController::skipThisVersion()
+{
+    if (m_latestVersion.isEmpty()) {
+        dismiss();
+        return;
+    }
+    QSettings settings;
+    settings.setValue(AppSettingsKeys::updaterSkippedVersion(), m_latestVersion);
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.dialog.action"),
+                                  QStringLiteral("skip_version=%1").arg(m_latestVersion));
+    setState(State::UpToDate);
+    logDialogStateBreadcrumb();
+}
+
+void UpdaterController::openReleasePage()
+{
+    if (m_latestUrl.isEmpty()) {
+        return;
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.dialog.action"),
+                                  QStringLiteral("open_release_page"));
+    QDesktopServices::openUrl(QUrl(m_latestUrl));
+}
+
+void UpdaterController::copyUpdateCommand()
+{
+    const QString hint = updateCommandHint();
+    if (hint.isEmpty()) {
+        return;
+    }
+    if (QGuiApplication::clipboard()) {
+        QGuiApplication::clipboard()->setText(hint);
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.dialog.action"),
+                                  QStringLiteral("copy_update_command"));
+}
+
+#ifdef QTMESH_UNIT_TESTS
+void UpdaterController::setLatestVersionForTest(const QString& tag)
+{
+    if (m_latestVersion == tag) {
+        return;
+    }
+    m_latestVersion = tag;
+    emit latestVersionChanged();
+}
+#endif

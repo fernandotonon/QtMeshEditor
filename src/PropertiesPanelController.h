@@ -23,6 +23,7 @@ class PropertiesPanelController : public QObject
     Q_PROPERTY(QColor inputColor READ inputColor NOTIFY themeChanged)
     Q_PROPERTY(QColor controlBgColor READ controlBgColor NOTIFY themeChanged)
     Q_PROPERTY(QColor highlightColor READ highlightColor NOTIFY themeChanged)
+    Q_PROPERTY(bool autoUpdaterEnabled READ autoUpdaterEnabled CONSTANT)
 
     // Transform properties
     Q_PROPERTY(double posX READ posX WRITE setPosX NOTIFY transformChanged)
@@ -98,6 +99,7 @@ public:
     QColor inputColor() const;
     QColor controlBgColor() const;
     QColor highlightColor() const;
+    bool autoUpdaterEnabled() const;
 
     // Transform accessors
     double posX() const;

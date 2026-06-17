@@ -121,6 +121,36 @@ inline const QString& validationPlatformProfilePickerVersion()
     return k;
 }
 
+inline const QString& updaterChannel()
+{
+    static const QString k(QStringLiteral("Updater/channel"));
+    return k;
+}
+
+inline const QString& updaterCheckOnStartup()
+{
+    static const QString k(QStringLiteral("Updater/checkOnStartup"));
+    return k;
+}
+
+inline const QString& updaterAutoDownload()
+{
+    static const QString k(QStringLiteral("Updater/autoDownload"));
+    return k;
+}
+
+inline const QString& updaterLastCheckedAt()
+{
+    static const QString k(QStringLiteral("Updater/lastCheckedAt"));
+    return k;
+}
+
+inline const QString& updaterSkippedVersion()
+{
+    static const QString k(QStringLiteral("Updater/skippedVersion"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H
