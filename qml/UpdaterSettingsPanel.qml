@@ -60,6 +60,7 @@ Column {
     }
 
     CheckBox {
+        id: startupCheck
         width: parent.width
         text: "Check for updates on startup"
         checked: UpdaterController.checkOnStartup
@@ -68,30 +69,31 @@ Column {
         indicator: Rectangle {
             implicitWidth: 14
             implicitHeight: 14
-            x: control.leftPadding
+            x: startupCheck.leftPadding
             y: parent.height / 2 - height / 2
             radius: 2
             border.color: borderColor
             border.width: 1
-            color: control.checked ? highlightColor : "transparent"
+            color: startupCheck.checked ? highlightColor : "transparent"
             Text {
                 anchors.centerIn: parent
-                visible: control.checked
+                visible: startupCheck.checked
                 text: "\u2713"
                 color: "white"
                 font.pixelSize: 10
             }
         }
         contentItem: Text {
-            text: control.text
-            font: control.font
+            text: startupCheck.text
+            font: startupCheck.font
             color: textColor
             verticalAlignment: Text.AlignVCenter
-            leftPadding: control.indicator.width + control.spacing
+            leftPadding: startupCheck.indicator.width + startupCheck.spacing
         }
     }
 
     CheckBox {
+        id: autoDownloadCheck
         width: parent.width
         text: "Auto-download in background (opt-in)"
         checked: UpdaterController.autoDownload
@@ -100,26 +102,26 @@ Column {
         indicator: Rectangle {
             implicitWidth: 14
             implicitHeight: 14
-            x: control.leftPadding
+            x: autoDownloadCheck.leftPadding
             y: parent.height / 2 - height / 2
             radius: 2
             border.color: borderColor
             border.width: 1
-            color: control.checked ? highlightColor : "transparent"
+            color: autoDownloadCheck.checked ? highlightColor : "transparent"
             Text {
                 anchors.centerIn: parent
-                visible: control.checked
+                visible: autoDownloadCheck.checked
                 text: "\u2713"
                 color: "white"
                 font.pixelSize: 10
             }
         }
         contentItem: Text {
-            text: control.text
-            font: control.font
+            text: autoDownloadCheck.text
+            font: autoDownloadCheck.font
             color: textColor
             verticalAlignment: Text.AlignVCenter
-            leftPadding: control.indicator.width + control.spacing
+            leftPadding: autoDownloadCheck.indicator.width + autoDownloadCheck.spacing
         }
     }
 

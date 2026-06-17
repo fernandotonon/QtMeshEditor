@@ -679,11 +679,13 @@ void MainWindow::initToolBar()
 #ifdef ENABLE_AUTO_UPDATER
         connect(UpdaterController::instance(), &UpdaterController::showDialogRequested,
                 this, &MainWindow::showUpdaterDialog);
+#ifndef QTMESH_UNIT_TESTS
         if (UpdaterController::instance()->checkOnStartup()) {
             QTimer::singleShot(3000, this, []() {
                 UpdaterController::instance()->checkForUpdates();
             });
         }
+#endif
 #endif
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
