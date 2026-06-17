@@ -1,30 +1,32 @@
-# libsodium for minisign verify (spike #440 / follow-up #445).
-# Linux only — other platforms get a stub INTERFACE target.
+# libsodium for minisign verify (#440 / #445).
+# Linux + macOS link static/system libsodium. Windows MinGW verify is deferred
+# (autotools/cmake build not wired in CI yet — download still runs, verify fails closed).
 
 if(TARGET qtmesh_sodium)
     return()
 endif()
 
-if(NOT (UNIX AND NOT APPLE))
-    message(STATUS "libsodium: skipped (minisign verify is Linux-only in spike #440)")
+if(WIN32)
+    message(STATUS "libsodium: Windows MinGW verify deferred (#445 follow-up)")
     add_library(qtmesh_sodium INTERFACE)
     target_compile_definitions(qtmesh_sodium INTERFACE QTMESH_MINISIGN_VERIFY=0)
     return()
 endif()
 
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(QTMESH_LIBSODIUM libsodium)
-endif()
-
-if(QTMESH_LIBSODIUM_FOUND)
-    message(STATUS "libsodium: using system package (pkg-config)")
-    add_library(qtmesh_sodium INTERFACE)
-    target_include_directories(qtmesh_sodium SYSTEM INTERFACE ${QTMESH_LIBSODIUM_INCLUDE_DIRS})
-    target_link_libraries(qtmesh_sodium INTERFACE ${QTMESH_LIBSODIUM_LIBRARIES})
-    target_compile_options(qtmesh_sodium INTERFACE ${QTMESH_LIBSODIUM_CFLAGS_OTHER})
-    target_compile_definitions(qtmesh_sodium INTERFACE QTMESH_MINISIGN_VERIFY=1)
-    return()
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(QTMESH_LIBSODIUM libsodium)
+    endif()
+    if(QTMESH_LIBSODIUM_FOUND)
+        message(STATUS "libsodium: using system package (pkg-config)")
+        add_library(qtmesh_sodium INTERFACE)
+        target_include_directories(qtmesh_sodium SYSTEM INTERFACE ${QTMESH_LIBSODIUM_INCLUDE_DIRS})
+        target_link_libraries(qtmesh_sodium INTERFACE ${QTMESH_LIBSODIUM_LIBRARIES})
+        target_compile_options(qtmesh_sodium INTERFACE ${QTMESH_LIBSODIUM_CFLAGS_OTHER})
+        target_compile_definitions(qtmesh_sodium INTERFACE QTMESH_MINISIGN_VERIFY=1)
+        return()
+    endif()
 endif()
 
 include(FetchContent)
@@ -36,7 +38,7 @@ set(QTMESH_LIBSODIUM_SHA256
     "b6b1d2a8802cd8bfa611638c0e9ce31d14ef324e16062c39a76854091cba6d7f"
     CACHE STRING "SHA256 of libsodium tarball")
 
-message(STATUS "libsodium: system package not found — building static from source")
+message(STATUS "libsodium: building static from source")
 
 FetchContent_Declare(
     qtmesh_libsodium_src

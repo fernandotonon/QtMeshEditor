@@ -43,6 +43,7 @@ Production public key: `packaging/updater/minisign.pub` (embedded in `MinisignVe
 
 - `MinisignVerify::verifyFile()` implements minisign’s dual-signature check (file + trusted comment) via **libsodium** (same algorithms as the CLI).
 - Linux-only in this spike; Windows/macOS return `Unsupported` until #445 wires cross-platform static libsodium.
+- **#445:** `MinisignVerify` builds wherever `QTMESH_MINISIGN_VERIFY=1` (Linux + macOS via libsodium). Windows MinGW verify is deferred — downloads fail closed at the signature step until a follow-up wires libsodium there.
 - Tests: `MinisignVerify_test` verifies good/tampered/bad-key against `tests/fixtures/updater/release-3.5.3-readme.md` (content from GitHub tag `3.5.3`).
 
 ---
@@ -129,7 +130,7 @@ Version comparison reuses `UpdateVersion::compare()` (#442) — normalises optio
 | [#441](https://github.com/fernandotonon/QtMeshEditor/issues/441) | `UpdaterController` + GitHub JSON — **in progress** |
 | [#442](https://github.com/fernandotonon/QtMeshEditor/issues/442) | Semver compare — **done** (`UpdateVersion`) |
 | [#443](https://github.com/fernandotonon/QtMeshEditor/issues/443) | Wire `InstallFlavor` into UX |
-| [#444–445](https://github.com/fernandotonon/QtMeshEditor/issues/444) | Download + verify pipeline |
+| [#444–445](https://github.com/fernandotonon/QtMeshEditor/issues/444) | Download + verify pipeline — **in progress** |
 | [#446–448](https://github.com/fernandotonon/QtMeshEditor/issues/446) | Relauncher + per-platform install |
 | **New PR** | `deploy.yml` minisign signing (section above) |
 

@@ -21,7 +21,7 @@ constexpr const char* kTestPublicKeyBase64 =
 
 } // namespace
 
-#if defined(Q_OS_LINUX)
+#if defined(QTMESH_MINISIGN_VERIFY) && QTMESH_MINISIGN_VERIFY
 
 TEST(MinisignVerify, AcceptsSignedReleaseReadmeFixture)
 {
@@ -71,7 +71,7 @@ TEST(MinisignVerify, RejectsWrongPublicKey)
 
 #else
 
-TEST(MinisignVerify, UnsupportedOnWindowsInSpike)
+TEST(MinisignVerify, UnsupportedWhenVerifyBackendDisabled)
 {
     const MinisignVerify::Outcome out = MinisignVerify::verifyFile(
         fixturePath("release-3.5.3-readme.md"),

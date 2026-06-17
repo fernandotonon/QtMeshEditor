@@ -236,7 +236,6 @@ Window {
                 }
                 InspectorButton {
                     label: "Download & install"
-                    buttonEnabled: false
                     onClicked: UpdaterController.downloadAndInstall()
                 }
             }
@@ -266,6 +265,25 @@ Window {
                 text: UpdaterController.latestVersion.length > 0
                       ? "You already have the latest release (" + UpdaterController.latestVersion + ")."
                       : "You already have the latest release."
+            }
+            InspectorButton {
+                label: "Close"
+                onClicked: { UpdaterController.dismiss(); dialog.close() }
+            }
+        }
+
+        // Ready to install (#444 — install step lands in #446–448)
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: UpdaterController.state === UpdaterController.ReadyToInstall
+            spacing: 8
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 12
+                text: "Update " + UpdaterController.latestVersion +
+                      " downloaded and verified. Automatic installation will be available in a future release."
             }
             InspectorButton {
                 label: "Close"

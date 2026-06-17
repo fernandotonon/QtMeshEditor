@@ -3,8 +3,10 @@
 
 #include "GitHubReleaseParser.h"
 #include "InstallFlavor.h"
+#include "UpdaterWorker.h"
 
-#include <QObject>
+#include <QElapsedTimer>
+#include <QList>
 #include <QQmlEngine>
 #include <QJSEngine>
 #include <QThread>
@@ -13,7 +15,7 @@
  * @brief QML-facing singleton orchestrating update checks (#441, #443, #449).
  *
  * Mirrors the LLMManager / SDManager pattern: main-thread controller with
- * a worker thread for HTTP. Download/install land in #444–448.
+ * a worker thread for HTTP. Install/relaunch land in #446–448.
  */
 class UpdaterController : public QObject
 {
@@ -120,6 +122,11 @@ private:
     void setState(State state);
     void setError(const QString& error);
     void applyCheckResult(const GitHubReleaseParser::CheckResult& result);
+    void beginDownloadIfNeeded(bool userInitiated);
+    void startDownloadJob();
+    void handleDownloadFinished(const DownloadOutcome& outcome);
+    void handleVerifyFinished(const VerifyOutcome& outcome);
+    void setProgressPercent(int percent);
     GitHubReleaseParser::Channel activeChannel() const;
     void refreshInstallFlavor();
     void loadSettings();
@@ -149,6 +156,10 @@ private:
     bool m_checkOnStartup = true;
     bool m_autoDownload = false;
     QString m_lastCheckedAt;
+    QList<GitHubReleaseParser::ReleaseAsset> m_releaseAssets;
+    QString m_stagedArtifactPath;
+    qint64 m_lastProgressEmitMs = 0;
+    QElapsedTimer m_progressThrottle;
 };
 
 #endif // UPDATERCONTROLLER_H

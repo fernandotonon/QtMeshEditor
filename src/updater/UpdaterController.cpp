@@ -1,4 +1,5 @@
 #include "UpdaterController.h"
+#include "ArtifactResolver.h"
 #include "UpdaterWorker.h"
 #include "AppSettingsKeys.h"
 #include "SentryReporter.h"
@@ -8,8 +9,11 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QDir>
+#include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QUrl>
 
 namespace {
@@ -63,6 +67,10 @@ UpdaterController::UpdaterController(QObject* parent)
     : QObject(parent)
 {
     qRegisterMetaType<GitHubReleaseParser::Channel>("GitHubReleaseParser::Channel");
+    qRegisterMetaType<DownloadRequest>("DownloadRequest");
+    qRegisterMetaType<DownloadOutcome>("DownloadOutcome");
+    qRegisterMetaType<VerifyRequest>("VerifyRequest");
+    qRegisterMetaType<VerifyOutcome>("VerifyOutcome");
     loadSettings();
     refreshInstallFlavor();
 
@@ -106,6 +114,29 @@ UpdaterController::UpdaterController(QObject* parent)
                         .arg(static_cast<int>(result.comparison)));
                 logDialogStateBreadcrumb();
             });
+
+    connect(m_worker, &UpdaterWorker::downloadProgress, this,
+            [this](qint64 received, qint64 total) {
+                if (total <= 0) {
+                    return;
+                }
+                if (!m_progressThrottle.isValid()) {
+                    m_progressThrottle.start();
+                }
+                const qint64 nowMs = m_progressThrottle.elapsed();
+                const int percent =
+                    static_cast<int>((received * 100LL) / total);
+                const int clamped = qBound(0, percent, 100);
+                if (clamped >= 100 || nowMs - m_lastProgressEmitMs >= 100) {
+                    m_lastProgressEmitMs = nowMs;
+                    setProgressPercent(clamped);
+                }
+            });
+
+    connect(m_worker, &UpdaterWorker::downloadFinished, this,
+            &UpdaterController::handleDownloadFinished);
+    connect(m_worker, &UpdaterWorker::verifyFinished, this,
+            &UpdaterController::handleVerifyFinished);
 
     m_workerThread->start();
 }
@@ -243,6 +274,7 @@ void UpdaterController::applyCheckResult(const GitHubReleaseParser::CheckResult&
     m_latestUrl = result.release.htmlUrl;
     m_changelog = result.release.body;
     m_publishedAt = result.release.publishedAt;
+    m_releaseAssets = result.release.assets;
     emit latestVersionChanged();
     emit latestUrlChanged();
     emit changelogChanged();
@@ -257,6 +289,7 @@ void UpdaterController::applyCheckResult(const GitHubReleaseParser::CheckResult&
         }
         setState(State::UpdateAvailable);
         emit updateAvailable(m_currentVersion, m_latestVersion);
+        beginDownloadIfNeeded(false);
         break;
     case UpdateVersion::Comparison::Same:
     case UpdateVersion::Comparison::Newer:
@@ -331,12 +364,141 @@ void UpdaterController::confirmUnknownInstall()
 
 void UpdaterController::downloadAndInstall()
 {
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.download"),
-                                  QStringLiteral("downloadAndInstall not implemented yet"));
-    setError(tr("Automatic download and install is not available yet."));
-    setState(State::Error);
-    emit checkError(m_error);
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.download.start"),
+                                  QStringLiteral("version=%1").arg(m_latestVersion));
+    beginDownloadIfNeeded(true);
+}
+
+void UpdaterController::beginDownloadIfNeeded(bool userInitiated)
+{
+    if (m_state != State::UpdateAvailable) {
+        return;
+    }
+    if (!userInitiated && !m_autoDownload) {
+        return;
+    }
+    if (InstallFlavor::isPackageManagerManaged(m_flavor)) {
+        setError(tr("Updates for this install are managed by %1.")
+                     .arg(InstallFlavor::displayName(m_flavor)));
+        setState(State::Error);
+        return;
+    }
+    startDownloadJob();
+}
+
+void UpdaterController::startDownloadJob()
+{
+    const ArtifactResolver::ResolvedArtifact artifact =
+        ArtifactResolver::resolveForCurrentPlatform(m_releaseAssets, m_flavor);
+    if (!artifact.ok) {
+        setError(artifact.errorMessage);
+        setState(State::Error);
+        SentryReporter::addBreadcrumb(QStringLiteral("updater.download.error"),
+                                    artifact.errorMessage,
+                                    QStringLiteral("error"));
+        logDialogStateBreadcrumb();
+        return;
+    }
+
+    const QString stagingRoot =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+        + QStringLiteral("/updater/staging/")
+        + m_latestVersion;
+    QDir().mkpath(stagingRoot);
+
+    DownloadRequest request;
+    request.fileName = artifact.fileName;
+    request.artifactUrl = artifact.downloadUrl;
+    request.artifactPartPath =
+        QDir(stagingRoot).filePath(artifact.fileName + QStringLiteral(".part"));
+    request.artifactFinalPath = QDir(stagingRoot).filePath(artifact.fileName);
+    request.signatureUrl = artifact.signatureUrl;
+    request.signaturePath = QDir(stagingRoot).filePath(artifact.signatureFileName);
+    if (!artifact.sha256SumsUrl.isEmpty()) {
+        request.sha256SumsUrl = artifact.sha256SumsUrl;
+        request.sha256SumsPath = QDir(stagingRoot).filePath(artifact.sha256SumsFileName);
+    }
+
+    m_stagedArtifactPath = request.artifactFinalPath;
+    setError(QString());
+    setProgressPercent(0);
+    m_lastProgressEmitMs = 0;
+    setState(State::Downloading);
     logDialogStateBreadcrumb();
+
+    QMetaObject::invokeMethod(m_worker,
+                              "downloadUpdate",
+                              Qt::QueuedConnection,
+                              Q_ARG(DownloadRequest, request));
+}
+
+void UpdaterController::handleDownloadFinished(const DownloadOutcome& outcome)
+{
+    if (outcome.cancelled) {
+        SentryReporter::addBreadcrumb(QStringLiteral("updater.download.cancel"),
+                                    outcome.fileName);
+        setState(State::UpdateAvailable);
+        setProgressPercent(0);
+        logDialogStateBreadcrumb();
+        return;
+    }
+
+    if (!outcome.ok) {
+        SentryReporter::addBreadcrumb(QStringLiteral("updater.download.error"),
+                                      outcome.errorMessage,
+                                      QStringLiteral("error"));
+        setError(outcome.errorMessage);
+        setState(State::Error);
+        logDialogStateBreadcrumb();
+        return;
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.download.complete"),
+                                  outcome.fileName);
+    setProgressPercent(100);
+    setState(State::Verifying);
+    logDialogStateBreadcrumb();
+
+    VerifyRequest verifyRequest;
+    verifyRequest.artifactPath = outcome.artifactPath;
+    verifyRequest.signaturePath = outcome.signaturePath;
+    verifyRequest.sha256SumsPath = outcome.sha256SumsPath;
+    verifyRequest.fileName = outcome.fileName;
+
+    QMetaObject::invokeMethod(m_worker,
+                              "verifyDownload",
+                              Qt::QueuedConnection,
+                              Q_ARG(VerifyRequest, verifyRequest));
+}
+
+void UpdaterController::handleVerifyFinished(const VerifyOutcome& outcome)
+{
+    if (!outcome.ok) {
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("updater.verify.failure"),
+            QStringLiteral("%1: %2").arg(outcome.failedStage, outcome.errorMessage),
+            QStringLiteral("error"));
+        setError(outcome.errorMessage.isEmpty()
+                     ? tr("Download verification failed.")
+                     : outcome.errorMessage);
+        setState(State::Error);
+        logDialogStateBreadcrumb();
+        return;
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.verify.success"), m_latestVersion);
+    setState(State::ReadyToInstall);
+    logDialogStateBreadcrumb();
+}
+
+void UpdaterController::setProgressPercent(int percent)
+{
+    const int clamped = qBound(0, percent, 100);
+    if (m_progress == clamped) {
+        return;
+    }
+    m_progress = clamped;
+    emit progressChanged();
 }
 
 void UpdaterController::cancel()
@@ -345,8 +507,14 @@ void UpdaterController::cancel()
         QMetaObject::invokeMethod(m_worker, &UpdaterWorker::cancelActiveRequest,
                                   Qt::QueuedConnection);
     }
-    if (m_state == State::Checking || m_state == State::Downloading) {
-        setState(State::Idle);
+    if (m_state == State::Checking || m_state == State::Downloading
+        || m_state == State::Verifying) {
+        if (m_state == State::Downloading) {
+            setState(State::UpdateAvailable);
+        } else {
+            setState(State::Idle);
+        }
+        setProgressPercent(0);
         logDialogStateBreadcrumb();
     }
 }
