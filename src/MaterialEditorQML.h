@@ -5,6 +5,7 @@
 #include <QQmlEngine>
 #include <QColor>
 #include <QStringList>
+#include <QHash>
 
 #include <memory>
 #include <QVariantMap>
@@ -363,6 +364,9 @@ public slots:
     QStringList getBlendFactorNames() const;
     QStringList getAvailableTextures() const;
     QString getTexturePreviewPath() const;
+    // Drop any memoized preview paths (call when a texture is applied/changed so
+    // a regenerated image is re-resolved instead of serving a stale cached PNG).
+    void clearTexturePreviewCache() { m_previewPathCache.clear(); }
 
     // Export the currently-shown texture (the preview image) to a
     // user-chosen file. Lets the user save a generated texture even
@@ -702,6 +706,14 @@ private:
     Ogre::TextureUnitState* getCurrentTextureUnit() const;
     Ogre::Technique* getCurrentTechnique() const;
     bool isOgreAvailable() const;
+    // Uncached resolution of a texture's preview path (the body behind the
+    // memoizing getTexturePreviewPath()). Does the Ogre/disk work.
+    QString computeTexturePreviewPath(const QString &texName) const;
+    // setTextureName() post-bind steps, split out to keep that method flat:
+    // collapse a PS1 TMD material to a single unlit pass, and force RTSS to
+    // regenerate this material's shaders against the freshly bound texture.
+    void collapseTmdMaterialToSinglePass();
+    void regenerateRtssShaders();
     /**
      * Make a texture name resolvable from the current material's resource
      * group so the RTSS-rendered mesh can sample it (otherwise the on-screen
@@ -747,6 +759,18 @@ private:
     
     // Texture properties
     QString m_textureName = "*Select a texture*";
+    // Memoizes getTexturePreviewPath() results keyed by texture name. The QML
+    // Image `source` binding evaluates the getter twice per change and
+    // reloadPreview() calls it again, so without a cache rapid texture
+    // switching re-runs convertToImage() (locks the GPU buffer) + rewrites the
+    // same preview PNG on every call — a re-entrant GPU-buffer / file race that
+    // crashed on macOS. Cache the resolved path so repeat lookups are cheap and
+    // touch neither Ogre nor disk. Mutable: the getter is const.
+    mutable QHash<QString, QString> m_previewPathCache;
+    // Re-entrancy guard for computeTexturePreviewPath(): convertToImage() can
+    // pump the event loop, which could re-enter the getter and run a second
+    // GPU-buffer readback nested inside the first. Refuse to recurse.
+    mutable bool m_resolvingPreview = false;
     double m_scrollAnimUSpeed = 0.0;
     double m_scrollAnimVSpeed = 0.0;
     

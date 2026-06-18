@@ -214,6 +214,11 @@ Column {
                         onClicked: {
                             matSelector.dropdownOpen = !matSelector.dropdownOpen
                             if (matSelector.dropdownOpen) {
+                                // Fetch the current list lazily, on open, so we
+                                // don't fan out availableMaterials() across every
+                                // node when materialsChanged fires.
+                                if (treeModel)
+                                    matFilter.allMaterials = treeModel.availableMaterials()
                                 matFilter.text = ""
                                 matFilter.forceActiveFocus()
                             }
@@ -287,6 +292,23 @@ Column {
                     verticalAlignment: TextInput.AlignVCenter
 
                     property var allMaterials: treeModel ? treeModel.availableMaterials() : []
+                    // Re-fetch the material list whenever it may have changed
+                    // (model load / node + entity created / selection change),
+                    // so the dropdown always offers an up-to-date set.
+                    Connections {
+                        target: treeModel
+                        ignoreUnknownSignals: true
+                        function onMaterialsChanged() {
+                            // Only the open submesh dropdown needs a fresh list;
+                            // refetching on every node would fan out one signal
+                            // into one availableMaterials() call per tree node
+                            // and stall large scenes. Closed dropdowns re-fetch
+                            // lazily when opened (matSelector click handler).
+                            if (!treeModel || !matSelector.visible || !matSelector.dropdownOpen)
+                                return
+                            matFilter.allMaterials = treeModel.availableMaterials()
+                        }
+                    }
                     property var filtered: {
                         var query = text.toLowerCase()
                         if (query.length === 0) return allMaterials

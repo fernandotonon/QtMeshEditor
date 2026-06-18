@@ -206,18 +206,33 @@ GroupBox {
                     width: Math.min(parent.width - 20, sourceSize.width)
                     height: Math.min(parent.height - 20, sourceSize.height)
                     fillMode: Image.PreserveAspectFit
-                    source: MaterialEditorQML.getTexturePreviewPath() !== "" ? MaterialEditorQML.getTexturePreviewPath() + "?v=0" : ""
-                    
+                    // Driven imperatively via reloadPreview() — NOT a binding.
+                    // A `source:` binding on getTexturePreviewPath() re-evaluates
+                    // the getter twice per change (once for the !=="" test, once
+                    // for the value); combined with reloadPreview() that re-ran
+                    // the GPU readback + preview-PNG rewrite several times per
+                    // switch and crashed under rapid switching. The getter is now
+                    // memoized C++-side, and we call it once here.
+                    source: ""
+
                     // Cache-bust counter for forcing image reload
                     property int cacheBuster: 0
+
+                    Component.onCompleted: reloadPreview()
 
                     function reloadPreview() {
                         var path = MaterialEditorQML.getTexturePreviewPath()
                         if (path !== "") {
                             cacheBuster++
+                            texturePreview.visible = true
                             texturePreview.source = path + "?v=" + cacheBuster
                         } else {
+                            // No resolvable preview — clearing source leaves
+                            // status at Image.Null (no statusChanged for Error),
+                            // so explicitly fall back to the placeholder here.
                             texturePreview.source = ""
+                            texturePreview.visible = false
+                            placeholderText.visible = true
                         }
                     }
 
@@ -234,8 +249,8 @@ GroupBox {
                     }
 
                     onStatusChanged: {
-                        if (status === Image.Error) {
-                            // If the constructed path fails, show placeholder
+                        if (status === Image.Null || status === Image.Error) {
+                            // Null (empty source) or a failed load → placeholder.
                             texturePreview.visible = false
                             placeholderText.visible = true
                         } else if (status === Image.Ready) {

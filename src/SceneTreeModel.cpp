@@ -76,6 +76,10 @@ SceneTreeModel::SceneTreeModel(QObject* parent)
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, scheduleRebuild);
     connect(Manager::getSingleton(), &Manager::entityCreated, this, scheduleRebuild);
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged, this, &SceneTreeModel::updateSelection);
+    // The user wants the material picker to refresh on selection change too, so
+    // a freshly-selected entity's materials are immediately offered.
+    connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
+            this, &SceneTreeModel::materialsChanged);
 }
 
 SceneTreeModel::~SceneTreeModel()
@@ -95,6 +99,9 @@ void SceneTreeModel::rebuild()
     buildChildren(rootNode, mRootItem);
 
     endResetModel();
+    // A rebuild follows model loads / node + entity creation, any of which can
+    // introduce new materials — tell QML pickers to refresh their lists.
+    emit materialsChanged();
 }
 
 void SceneTreeModel::buildChildren(Ogre::SceneNode* sceneNode, SceneTreeItem* parentItem)

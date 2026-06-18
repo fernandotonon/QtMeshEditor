@@ -79,6 +79,11 @@ public slots:
 
 signals:
     void selectionUpdated();
+    // Emitted whenever the set of available materials may have changed — on
+    // scene rebuild (model load / node or entity created) and on selection
+    // change — so QML material pickers (the scene-tree submesh dropdown) can
+    // re-fetch availableMaterials() instead of caching a stale list.
+    void materialsChanged();
 
 private:
     void buildChildren(Ogre::SceneNode* sceneNode, SceneTreeItem* parentItem);
