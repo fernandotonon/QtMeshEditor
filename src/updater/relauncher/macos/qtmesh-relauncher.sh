@@ -36,10 +36,22 @@ if [[ ! -d "$source_app" ]]; then
   exit 3
 fi
 
+tmp_root="${install_root}.new.$$"
+bak_root="${install_root}.old.$$"
+rm -rf "$tmp_root" "$bak_root"
+
 if command -v rsync >/dev/null 2>&1; then
-  rsync -a --delete "${source_app}/" "${install_root}/"
+  rsync -a --delete "${source_app}/" "${tmp_root}/"
 else
-  ditto "${source_app}" "${install_root}"
+  ditto "${source_app}" "${tmp_root}"
+fi
+
+mv "$install_root" "$bak_root"
+if mv "$tmp_root" "$install_root"; then
+  rm -rf "$bak_root"
+else
+  mv "$bak_root" "$install_root"
+  exit 4
 fi
 
 open -n "$install_root"

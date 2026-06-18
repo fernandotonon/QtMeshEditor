@@ -78,21 +78,29 @@ bool extractArchive(const QString& artifactPath,
                     ArtifactKind kind,
                     QString* errorMessage)
 {
-    QDir().mkpath(destinationDir);
     QProcess process;
     QStringList args;
 
     switch (kind) {
     case ArtifactKind::Zip:
+        QDir().mkpath(destinationDir);
         args << QStringLiteral("-xf") << artifactPath << QStringLiteral("-C") << destinationDir;
         return runCommand(&process, QStringLiteral("tar"), args, 600000, errorMessage);
     case ArtifactKind::TarGz:
+        QDir().mkpath(destinationDir);
         args << QStringLiteral("-xzf") << artifactPath << QStringLiteral("-C") << destinationDir;
         return runCommand(&process, QStringLiteral("tar"), args, 600000, errorMessage);
     case ArtifactKind::TarXz:
+        QDir().mkpath(destinationDir);
         args << QStringLiteral("-xJf") << artifactPath << QStringLiteral("-C") << destinationDir;
         return runCommand(&process, QStringLiteral("tar"), args, 600000, errorMessage);
     case ArtifactKind::AppImage:
+        QDir().mkpath(QFileInfo(destinationDir).absolutePath());
+        if (QFileInfo::exists(destinationDir) && QFileInfo(destinationDir).isDir()) {
+            QDir(destinationDir).removeRecursively();
+        } else if (QFile::exists(destinationDir)) {
+            QFile::remove(destinationDir);
+        }
         if (!QFile::copy(artifactPath, destinationDir)) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("Could not stage AppImage payload");
@@ -323,8 +331,13 @@ InstallPlan prepareInstall(const InstallContext& context)
     QString oldDir;
 
 #if defined(Q_OS_WIN)
-    newDir = QDir(resolved.installRoot).filePath(QStringLiteral("_new"));
-    oldDir = QDir(resolved.installRoot).filePath(QStringLiteral("_old"));
+    {
+        QDir installParent(resolved.installRoot);
+        const QString installFolderName = QFileInfo(resolved.installRoot).fileName();
+        installParent.cdUp();
+        newDir = installParent.filePath(installFolderName + QStringLiteral("_new"));
+        oldDir = installParent.filePath(installFolderName + QStringLiteral("_old"));
+    }
     QDir(newDir).removeRecursively();
     QDir().mkpath(newDir);
     payloadDir = newDir;
@@ -347,7 +360,7 @@ InstallPlan prepareInstall(const InstallContext& context)
     }
 #elif defined(Q_OS_LINUX)
     if (plan.artifactKind == ArtifactKind::AppImage) {
-        payloadDir = QDir(workDir).filePath(stagedInfo.fileName());
+        payloadDir = QDir(workDir).filePath(QStringLiteral("payload/") + stagedInfo.fileName());
         if (!extractArchive(resolved.stagedArtifactPath, payloadDir, plan.artifactKind,
                             &extractError)) {
             plan.errorMessage = extractError;

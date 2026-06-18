@@ -1,8 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
-#include <QTemporaryDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QTemporaryDir>
 
 #include "UpdaterInstaller.h"
 
@@ -74,3 +75,34 @@ TEST(UpdaterInstaller, IsInstallLocationWritableUsesTempDir)
     context.installRoot = tempDir.path();
     EXPECT_TRUE(UpdaterInstaller::isInstallLocationWritable(context));
 }
+
+#if defined(Q_OS_LINUX)
+TEST(UpdaterInstaller, PrepareInstallStagesAppImagePayload)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString stagedPath =
+        tempDir.filePath(QStringLiteral("QtMeshEditor-x86_64.AppImage"));
+    {
+        QFile staged(stagedPath);
+        ASSERT_TRUE(staged.open(QIODevice::WriteOnly));
+        staged.write("appimage-payload");
+    }
+
+    UpdaterInstaller::InstallContext context;
+    context.stagedArtifactPath = stagedPath;
+    context.releaseTag = QStringLiteral("9.9.9");
+    context.executablePath = tempDir.filePath(QStringLiteral("QtMeshEditor.AppImage"));
+    context.installRoot = tempDir.path();
+
+    const UpdaterInstaller::InstallPlan plan = UpdaterInstaller::prepareInstall(context);
+    ASSERT_TRUE(plan.ok) << plan.errorMessage.toStdString();
+    EXPECT_EQ(plan.artifactKind, UpdaterInstaller::ArtifactKind::AppImage);
+
+    const QString payloadPath =
+        tempDir.filePath(QStringLiteral("payload/QtMeshEditor-x86_64.AppImage"));
+    EXPECT_TRUE(QFileInfo::exists(payloadPath));
+    EXPECT_TRUE(QFileInfo(payloadPath).isExecutable());
+}
+#endif

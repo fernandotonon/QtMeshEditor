@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,14 +55,26 @@ static int parse_manifest(const char* path, InstallManifest* manifest)
 
     fclose(file);
     return manifest->installRoot[0] != '\0' && manifest->newDir[0] != '\0'
-        && manifest->executablePath[0] != '\0';
+        && manifest->oldDir[0] != '\0' && manifest->executablePath[0] != '\0';
 }
 
 static int remove_directory_tree(const char* path)
 {
-    char command[MAX_PATH * 2 + 32];
-    _snprintf(command, sizeof(command), "cmd /C rmdir /S /Q \"%s\"", path);
-    return system(command) == 0;
+    char from[MAX_PATH + 2] = {0};
+    const size_t length = strnlen(path, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        return 0;
+    }
+
+    memcpy(from, path, length);
+    from[length] = '\0';
+    from[length + 1] = '\0';
+
+    SHFILEOPSTRUCTA op = {0};
+    op.wFunc = FO_DELETE;
+    op.pFrom = from;
+    op.fFlags = FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
+    return SHFileOperationA(&op) == 0;
 }
 
 int main(int argc, char** argv)
@@ -84,9 +97,7 @@ int main(int argc, char** argv)
         }
     }
 
-    if (manifest.oldDir[0] != '\0') {
-        remove_directory_tree(manifest.oldDir);
-    }
+    remove_directory_tree(manifest.oldDir);
 
     if (!MoveFileExA(manifest.installRoot, manifest.oldDir, MOVEFILE_WRITE_THROUGH)) {
         return 3;
@@ -112,7 +123,10 @@ int main(int argc, char** argv)
                         manifest.installRoot,
                         &startupInfo,
                         &processInfo)) {
-        MoveFileExA(manifest.oldDir, manifest.installRoot, MOVEFILE_WRITE_THROUGH);
+        remove_directory_tree(manifest.installRoot);
+        if (!MoveFileExA(manifest.oldDir, manifest.installRoot, MOVEFILE_WRITE_THROUGH)) {
+            return 6;
+        }
         return 5;
     }
 

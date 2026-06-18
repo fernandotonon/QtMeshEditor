@@ -35,7 +35,7 @@ fi
 if [[ "$artifact_kind" == "app_image" ]]; then
   mv -f "$payload_dir" "$executable_path"
   chmod +x "$executable_path"
-  exec "$executable_path" "$@"
+  exec "$executable_path" "${@:2}"
 fi
 
 if ! command -v rsync >/dev/null 2>&1; then
@@ -44,4 +44,4 @@ if ! command -v rsync >/dev/null 2>&1; then
 fi
 
 rsync -a --delete "${payload_dir}/" "${install_root}/"
-exec "$executable_path" "$@"
+exec "$executable_path" "${@:2}"

@@ -10,7 +10,7 @@ if(WIN32)
         OUTPUT_NAME qtmesh-relauncher
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
-    target_link_libraries(qtmesh-relauncher PRIVATE kernel32)
+    target_link_libraries(qtmesh-relauncher PRIVATE kernel32 shell32)
     install(TARGETS qtmesh-relauncher RUNTIME DESTINATION bin COMPONENT Runtime)
 else()
     if(APPLE)
@@ -20,7 +20,8 @@ else()
             COPYONLY
         )
         install(PROGRAMS macos/qtmesh-relauncher.sh
-                DESTINATION MacOS COMPONENT Runtime
+                DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/QtMeshEditor.app/Contents/MacOS"
+                COMPONENT Runtime
                 RENAME qtmesh-relauncher)
     else()
         configure_file(

@@ -593,6 +593,16 @@ endif()
 
 if(ENABLE_AUTO_UPDATER AND TARGET qtmesh-relauncher)
     add_dependencies(${CMAKE_PROJECT_NAME} qtmesh-relauncher)
+    if(APPLE)
+        add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy
+                "${CMAKE_BINARY_DIR}/bin/qtmesh-relauncher"
+                "$<TARGET_BUNDLE_DIR:${CMAKE_PROJECT_NAME}>/Contents/MacOS/qtmesh-relauncher"
+            COMMAND ${CMAKE_COMMAND} -E chmod 755
+                "$<TARGET_BUNDLE_DIR:${CMAKE_PROJECT_NAME}>/Contents/MacOS/qtmesh-relauncher"
+            COMMENT "Copying qtmesh-relauncher into app bundle"
+        )
+    endif()
 endif()
 ENDIF()
 
