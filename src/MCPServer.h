@@ -159,6 +159,7 @@ private:
     /// applies the result to the active material diffuse. Async —
     /// returns immediately; progress flows through SD signals.
     QJsonObject toolGenerateMeshTexture(const QJsonObject &args);
+    QJsonObject toolGeneratePbrMaps(const QJsonObject &args);
     QJsonObject toolGetSceneInfo(const QJsonObject &args);
     QJsonObject toolTakeScreenshot(const QJsonObject &args);
     QJsonObject toolCreatePrimitive(const QJsonObject &args);
