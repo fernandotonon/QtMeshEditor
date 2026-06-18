@@ -15,7 +15,8 @@
  * @brief QML-facing singleton orchestrating update checks (#441, #443, #449).
  *
  * Mirrors the LLMManager / SDManager pattern: main-thread controller with
- * a worker thread for HTTP. Install/relaunch land in #446–448.
+ * a worker thread for HTTP. Install/relaunch (#446–448) runs on the main thread
+ * via UpdaterInstaller before the app exits.
  */
 class UpdaterController : public QObject
 {
@@ -52,6 +53,7 @@ public:
         Downloading,
         Verifying,
         ReadyToInstall,
+        Installing,
     };
     Q_ENUM(State)
 
@@ -84,6 +86,7 @@ public:
     Q_INVOKABLE void requestCheckDialog();
     Q_INVOKABLE void confirmUnknownInstall();
     Q_INVOKABLE void downloadAndInstall();
+    Q_INVOKABLE void installUpdate();
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void dismiss();
     Q_INVOKABLE void remindLater();

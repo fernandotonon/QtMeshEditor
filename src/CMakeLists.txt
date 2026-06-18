@@ -105,6 +105,7 @@ updater/MinisignVerify.cpp
 updater/GitHubReleaseParser.cpp
 updater/UpdaterWorker.cpp
 updater/UpdaterController.cpp
+updater/UpdaterInstaller.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
 VATBaker.cpp
@@ -246,6 +247,7 @@ updater/MinisignVerify.h
 updater/GitHubReleaseParser.h
 updater/UpdaterWorker.h
 updater/UpdaterController.h
+updater/UpdaterInstaller.h
 TexturePaintController.h
 VertexColorBaker.h
 ApplyAtlas.h
@@ -587,6 +589,10 @@ endif()
 if(ENABLE_PS1_RIP AND TARGET Qt6::Gamepad)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE HAVE_QT_GAMEPAD)
     target_link_libraries(${CMAKE_PROJECT_NAME} Qt6::Gamepad)
+endif()
+
+if(ENABLE_AUTO_UPDATER AND TARGET qtmesh-relauncher)
+    add_dependencies(${CMAKE_PROJECT_NAME} qtmesh-relauncher)
 endif()
 ENDIF()
 

@@ -112,6 +112,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/GitHubReleaseParser.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/UpdaterWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/UpdaterController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/UpdaterInstaller.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexColorBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBaker.cpp
