@@ -34,6 +34,12 @@
 #include "PoseLibrary.h"
 #include "ModelTurntableRenderer.h"
 #include "QtMeshCloudClient.h"
+#ifdef ENABLE_STABLE_DIFFUSION
+#include "SDManager.h"
+#include "MeshDepthRenderer.h"
+#include <QEventLoop>
+#include <QImage>
+#endif
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
 #include <QWidget>
@@ -581,6 +587,13 @@ void CLIPipeline::printUsage()
         "                                  (Plastic/Metal/Wood/Glass/Unlit/Wireframe + PBR templates:\n"
         "                                  Metallic-Roughness, Specular-Glossiness, Unlit PBR)\n"
         "  material --list-presets         List the built-in preset names\n"
+        "  material <file> --generate-texture \"<prompt>\" [--model <name>]\n"
+        "                  [--controlnet <path>] [--controlnet-strength <0..1>]\n"
+        "                  [--width N] [--height N] [-o <output>]\n"
+        "                                  AI mesh-aware (depth-conditioned) texture\n"
+        "                                  generation; binds result as diffuse and\n"
+        "                                  re-exports (needs an SD build + base model;\n"
+        "                                  run 'uv --unwrap' first if the mesh lacks UVs)\n"
         "\n"
         "Scan options:\n"
         "  --target <id>             Alias for --profile (CI-friendly). Built-in: ps1, n64, nds, dreamcast,\n"
@@ -3272,9 +3285,15 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
 {
     // Parse:
     //   material <file> --preset <name> [-o <output>]
+    //   material <file> --generate-texture <prompt> [--model <name>]
+    //                   [--controlnet <path>] [--controlnet-strength <0..1>]
+    //                   [--width N] [--height N] [-o <output>]
     //   material <file> --list-presets
     //   material --list-presets
     QString inputPath, outputPath, presetName;
+    QString genPrompt, sdModel, controlNetPath;
+    double controlStrength = 0.9;
+    int genWidth = 512, genHeight = 512;
     bool listPresets = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -3285,6 +3304,30 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
             presetName = QString(argv[++i]);
             continue;
         }
+        if (arg == "--generate-texture" && i + 1 < argc) {
+            genPrompt = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--model" && i + 1 < argc) {
+            sdModel = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--controlnet" && i + 1 < argc) {
+            controlNetPath = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--controlnet-strength" && i + 1 < argc) {
+            controlStrength = QString(argv[++i]).toDouble();
+            continue;
+        }
+        if (arg == "--width" && i + 1 < argc) {
+            genWidth = QString(argv[++i]).toInt();
+            continue;
+        }
+        if (arg == "--height" && i + 1 < argc) {
+            genHeight = QString(argv[++i]).toInt();
+            continue;
+        }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString(argv[++i]);
             continue;
@@ -3293,6 +3336,15 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
             inputPath = arg;
             continue;
         }
+    }
+
+    // Depth-conditioned mesh-aware texture generation (issue #403). Distinct
+    // enough (async SD worker, model loading, depth RTT) to live in its own
+    // helper; presets continue below.
+    if (!genPrompt.isEmpty()) {
+        return cmdMaterialGenerateTexture(inputPath, outputPath, genPrompt,
+                                          sdModel, controlNetPath,
+                                          controlStrength, genWidth, genHeight);
     }
 
     auto* lib = MaterialPresetLibrary::instance();
@@ -3423,6 +3475,212 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
         .arg(outFi.fileName()));
 
     return 0;
+}
+
+int CLIPipeline::cmdMaterialGenerateTexture(const QString& inputPath,
+                                            QString outputPath,
+                                            const QString& prompt,
+                                            const QString& modelName,
+                                            QString controlNetPath,
+                                            double controlStrength,
+                                            int width, int height)
+{
+#ifndef ENABLE_STABLE_DIFFUSION
+    Q_UNUSED(inputPath); Q_UNUSED(outputPath); Q_UNUSED(prompt);
+    Q_UNUSED(modelName); Q_UNUSED(controlNetPath); Q_UNUSED(controlStrength);
+    Q_UNUSED(width); Q_UNUSED(height);
+    err() << "Error: this build was compiled without AI texture generation "
+             "(rebuild with -DENABLE_STABLE_DIFFUSION=ON)." << Qt::endl;
+    return 1;
+#else
+    if (inputPath.isEmpty()) {
+        err() << "Error: missing <file> for --generate-texture." << Qt::endl;
+        return 2;
+    }
+    if (width < 64 || width > 2048 || height < 64 || height > 2048) {
+        err() << "Error: --width/--height must be between 64 and 2048." << Qt::endl;
+        return 2;
+    }
+    controlStrength = std::clamp(controlStrength, 0.0, 1.0);
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << inputPath << Qt::endl;
+        return 1;
+    }
+    if (outputPath.isEmpty()) outputPath = inputPath;
+    const QFileInfo outFi(outputPath);
+
+    if (!controlNetPath.isEmpty() && !QFileInfo(controlNetPath).isFile()) {
+        err() << "Error: ControlNet model not found: " << controlNetPath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mesh_texture"),
+        QStringLiteral("CLI generate-texture .%1 strength=%2 size=%3x%4")
+            .arg(fi.suffix()).arg(controlStrength).arg(width).arg(height));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    auto& entities = Manager::getSingleton()->getEntities();
+    Ogre::Entity* entity = nullptr;
+    for (auto* obj : entities) {
+        if (obj && obj->getMovableType() == "Entity") {
+            entity = static_cast<Ogre::Entity*>(obj);
+            break;
+        }
+    }
+    if (!entity || !entity->getMesh()) {
+        err() << "Error: Failed to load a mesh from: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    SDManager* sd = SDManager::instance();
+    if (!sd) {
+        err() << "Error: AI texture generation unavailable." << Qt::endl;
+        return 1;
+    }
+
+    // Resolve and load a base SD model synchronously. --model overrides;
+    // otherwise fall back to the last-used / first available model.
+    sd->scanForModels();
+    QString chosenModel = modelName;
+    if (chosenModel.isEmpty()) chosenModel = sd->lastModelName();
+    if (chosenModel.isEmpty()) {
+        const QStringList avail = sd->availableModels();
+        if (!avail.isEmpty()) chosenModel = avail.first();
+    }
+    if (chosenModel.isEmpty()) {
+        err() << "Error: no SD model found in the models directory ("
+              << sd->modelsDirectory() << "). Place a .safetensors/.ckpt/.gguf "
+                 "base model there or pass --model." << Qt::endl;
+        return 1;
+    }
+    if (!sd->isModelLoaded() || sd->currentModelName() != chosenModel) {
+        QEventLoop loadLoop;
+        bool loadOk = false;
+        QString loadErr;
+        QObject::connect(sd, &SDManager::modelLoadCompleted, &loadLoop,
+            [&](const QString&) { loadOk = true; loadLoop.quit(); });
+        QObject::connect(sd, &SDManager::modelLoadError, &loadLoop,
+            [&](const QString& e) { loadErr = e; loadLoop.quit(); });
+        sd->loadModel(chosenModel);
+        loadLoop.exec();
+        if (!loadOk) {
+            err() << "Error: failed to load SD model '" << chosenModel << "': "
+                  << loadErr << Qt::endl;
+            return 1;
+        }
+    }
+
+    // Render the depth map from the front view (same path GUI/MCP use).
+    QString depthErr;
+    const int depthSize = std::max(width, height);
+    const QImage depth = MeshDepthRenderer::renderDepthMap(entity, depthSize, &depthErr);
+    if (depth.isNull()) {
+        err() << "Error: depth render failed: " << depthErr << Qt::endl;
+        return 1;
+    }
+
+    // Auto-discover an SD1.5 depth ControlNet if none was given (same heuristic
+    // as the MCP tool); missing one degrades to plain txt2img.
+    if (controlNetPath.isEmpty()) {
+        QDir d(sd->modelsDirectory());
+        const QStringList files = d.entryList(
+            QStringList() << "*.safetensors" << "*.ckpt", QDir::Files);
+        auto isSdxl = [](const QString& l) {
+            return l.contains("sdxl") || l.contains("xl_")
+                || l.contains("-xl") || l.contains("_xl"); };
+        QString fallback;
+        for (const QString& f : files) {
+            const QString l = f.toLower();
+            if (!(l.contains("control") && l.contains("depth")) || isSdxl(l))
+                continue;
+            if (l.contains("sd15") || l.contains("sd_15") || l.contains("v11")) {
+                controlNetPath = d.filePath(f); break;
+            }
+            if (fallback.isEmpty()) fallback = d.filePath(f);
+        }
+        if (controlNetPath.isEmpty()) controlNetPath = fallback;
+    }
+
+    // Drive generation synchronously: write to a deterministic file next to the
+    // output mesh so the result is easy to find and re-bind.
+    const QString texName = outFi.completeBaseName() + "_ai.png";
+    QEventLoop genLoop;
+    QString genPath, genErr;
+    QObject::connect(sd, &SDManager::generationCompleted, &genLoop,
+        [&](const QString& p) { genPath = p; genLoop.quit(); });
+    QObject::connect(sd, &SDManager::generationError, &genLoop,
+        [&](const QString& e) { genErr = e; genLoop.quit(); });
+    QObject::connect(sd, &SDManager::generationStopped, &genLoop,
+        [&]() { genErr = QStringLiteral("generation stopped"); genLoop.quit(); });
+
+    sd->generateMeshTexture(prompt, depth, controlNetPath,
+                            static_cast<float>(controlStrength), texName,
+                            width, height);
+    genLoop.exec();
+
+    if (genPath.isEmpty() || !QFileInfo::exists(genPath)) {
+        err() << "Error: texture generation failed: "
+              << (genErr.isEmpty() ? QStringLiteral("no output produced") : genErr)
+              << Qt::endl;
+        return 1;
+    }
+
+    // Copy the generated PNG next to the output mesh and bind it as the diffuse
+    // texture on every submesh, so the exported asset references a local file.
+    const QString localTex = QDir(outFi.absolutePath()).filePath(texName);
+    if (QFileInfo(genPath).absoluteFilePath() != QFileInfo(localTex).absoluteFilePath()) {
+        QFile::remove(localTex);
+        QFile::copy(genPath, localTex);
+    }
+    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+        outFi.absolutePath().toStdString(), "FileSystem",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    int boundCount = 0;
+    for (unsigned int s = 0; s < entity->getNumSubEntities(); ++s) {
+        Ogre::SubEntity* sub = entity->getSubEntity(s);
+        const auto mat = sub ? sub->getMaterial() : Ogre::MaterialPtr();
+        if (!mat || mat->getNumTechniques() == 0) continue;
+        auto* pass = mat->getTechnique(0)->getNumPasses() > 0
+            ? mat->getTechnique(0)->getPass(0) : nullptr;
+        if (!pass) continue;
+        Ogre::TextureUnitState* target = nullptr;
+        for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+            auto* tus = pass->getTextureUnitState(i);
+            if (tus->getName() == "diffuse_map" || tus->getName() == "albedo") {
+                target = tus; break;
+            }
+        }
+        if (!target && pass->getNumTextureUnitStates() > 0)
+            target = pass->getTextureUnitState(0);
+        if (!target)
+            target = pass->createTextureUnitState();
+        target->setTextureName(texName.toStdString());
+        ++boundCount;
+    }
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    const int result = MeshImporterExporter::exporter(
+        node, outFi.absoluteFilePath(), formatForExtension(outputPath));
+    if (result != 0) {
+        err() << "Error: Export failed." << Qt::endl;
+        return 1;
+    }
+
+    cliWrite(QString("Generated mesh-aware texture for %1%2.\n"
+                     "  texture: %3\n  bound to %4 submesh(es)\n  saved: %5\n")
+        .arg(fi.fileName())
+        .arg(controlNetPath.isEmpty()
+                 ? QStringLiteral(" (no ControlNet — plain txt2img)")
+                 : QStringLiteral(" (depth-conditioned via %1)")
+                       .arg(QFileInfo(controlNetPath).fileName()))
+        .arg(texName).arg(boundCount).arg(outFi.fileName()));
+    return 0;
+#endif
 }
 
 int CLIPipeline::cmdPackTextures(int argc, char* argv[])
