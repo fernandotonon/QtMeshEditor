@@ -103,6 +103,15 @@ public:
                                           QString controlNetPath,
                                           double controlStrength,
                                           int width, int height);
+    /// #404: ONNX PBR map synthesis from a diffuse texture. Produces
+    /// normal/roughness/height PNGs next to the albedo; if a mesh is given,
+    /// binds them into the slice-E canonical slots and re-exports. Exit 1 when
+    /// built without ENABLE_ONNX.
+    static int cmdMaterialGeneratePbr(const QString& albedoPath,
+                                      const QString& meshPath,
+                                      QString outputPath,
+                                      int tileSize, bool wantNormal,
+                                      bool wantRoughness, bool wantHeight);
     /// Slice G: pack 1-4 grayscale source images into a single RGBA
     /// output texture. Headless / scriptable equivalent of the GUI
     /// "Pack Channels…" dialog.

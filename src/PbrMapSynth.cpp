@@ -253,6 +253,22 @@ Result synthesize(const QImage& albedoIn, const QString& modelPath,
 {
     Result r;
     if (albedoIn.isNull()) { r.error = QStringLiteral("albedo image is null"); return r; }
+
+    const QImage albedo = albedoIn.convertToFormat(QImage::Format_RGB888);
+    const int W = albedo.width(), H = albedo.height();
+
+    // Roughness is a pure-data heuristic — it needs no model, so compute it
+    // first and let a roughness-only request succeed offline.
+    if (opts.generateRoughness)
+        r.roughness = roughnessFromAlbedo(albedo, opts.roughnessBase, opts.roughnessContrast);
+
+    if (!opts.generateNormal && !opts.generateHeight) {
+        r.ok = !r.roughness.isNull();
+        if (!r.ok) r.error = QStringLiteral("roughness generation failed");
+        return r;
+    }
+
+    // Normal/height require the ONNX model.
     if (modelPath.isEmpty() || !QFileInfo::exists(modelPath)) {
         r.error = QStringLiteral("PBR model not available at '%1' — connect to the "
             "internet to download it, or set the model path in AI Settings.")
@@ -260,17 +276,6 @@ Result synthesize(const QImage& albedoIn, const QString& modelPath,
         return r;
     }
 
-    const QImage albedo = albedoIn.convertToFormat(QImage::Format_RGB888);
-    const int W = albedo.width(), H = albedo.height();
-
-    // Roughness needs no model.
-    if (opts.generateRoughness)
-        r.roughness = roughnessFromAlbedo(albedo, opts.roughnessBase, opts.roughnessContrast);
-
-    if (!opts.generateNormal && !opts.generateHeight) {
-        r.ok = !r.roughness.isNull() || !opts.generateRoughness;
-        return r;
-    }
 
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_pbr");
