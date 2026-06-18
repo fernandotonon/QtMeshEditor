@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import QtQuick.Window
 import PropertiesPanel 1.0
 
@@ -14,8 +15,6 @@ Window {
     visible: false
 
     property string versionText: ""
-
-    signal viewUpdateClicked()
 
     function showForVersion(version) {
         versionText = version

@@ -7,7 +7,7 @@ namespace UpdaterTelemetry {
 
 void breadcrumb(const QString& category, const QString& message, const QString& level)
 {
-    if (!SentryReporter::isEnabled()) {
+    if (!SentryReporter::isEnabled() || !isAllowedTelemetryMessage(message)) {
         return;
     }
     SentryReporter::addBreadcrumb(category, message, level);

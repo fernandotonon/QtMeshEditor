@@ -99,6 +99,7 @@ UpdaterController::UpdaterController(QObject* parent)
 
                 if (!networkError.isEmpty()) {
                     if (wasSilent) {
+                        setState(State::Idle);
                         UpdaterTelemetry::breadcrumb(
                             QStringLiteral("updater.background.error"),
                             QStringLiteral("network_error"),
@@ -120,6 +121,7 @@ UpdaterController::UpdaterController(QObject* parent)
 
                 if (!result.parseOk) {
                     if (wasSilent) {
+                        setState(State::Idle);
                         UpdaterTelemetry::breadcrumb(
                             QStringLiteral("updater.background.error"),
                             QStringLiteral("parse_error"),
@@ -140,11 +142,13 @@ UpdaterController::UpdaterController(QObject* parent)
                 }
 
                 applyCheckResult(result);
-                UpdaterTelemetry::breadcrumb(
-                    QStringLiteral("updater.check.success"),
-                    QStringLiteral("remote=%1 comparison=%2")
-                        .arg(result.release.tagName)
-                        .arg(static_cast<int>(result.comparison)));
+                if (result.comparison != UpdateVersion::Comparison::Invalid) {
+                    UpdaterTelemetry::breadcrumb(
+                        QStringLiteral("updater.check.success"),
+                        QStringLiteral("remote=%1 comparison=%2")
+                            .arg(result.release.tagName)
+                            .arg(static_cast<int>(result.comparison)));
+                }
                 logDialogStateBreadcrumb();
                 finishSilentCheck();
             });
@@ -470,6 +474,8 @@ void UpdaterController::checkForUpdates()
         if (!m_silentCheck) {
             setState(State::PackageManaged);
             logDialogStateBreadcrumb();
+        } else {
+            finishSilentCheck();
         }
         return;
     }
@@ -478,11 +484,16 @@ void UpdaterController::checkForUpdates()
         if (!m_silentCheck) {
             setState(State::UnknownInstall);
             logDialogStateBreadcrumb();
+        } else {
+            finishSilentCheck();
         }
         return;
     }
 
     if (m_state == State::Checking) {
+        if (m_silentCheck) {
+            finishSilentCheck();
+        }
         return;
     }
 

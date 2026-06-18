@@ -895,9 +895,9 @@ jobs:
     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
     runs-on: ubuntu-latest
     # Hard cap on the whole job. The full sweep takes ~12 min normally
-    # (build + xvfb + ~25 suites + coverage + sonar). Cap at 60 so a
+    # (build + xvfb + ~25 suites + coverage + sonar). Cap at 90 so a
     # cold ccache build on a large PR still finishes under the limit.
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions: read-all
     env: 
           LD_LIBRARY_PATH: gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
@@ -1043,8 +1043,21 @@ jobs:
           # (ccache wraps the compiler, so build-wrapper's intercept is
           # transparent to the cache layer).
 
-          # Run build-wrapper to capture compilation into a named directory
-          build-wrapper-linux-x86-64 --out-dir build-wrapper-output make -C build -j$(nproc)
+          # Build only test targets (BUILD_QT_MESH_EDITOR=OFF) so the compile
+          # phase leaves room for the ~25-suite test sweep within the job cap.
+          build-wrapper-linux-x86-64 --out-dir build-wrapper-output \
+            make -C build -j$(nproc) \
+              UnitTests \
+              qtmesh_test_common \
+              qtmesh_updater \
+              qtmesh_ps1core_stub \
+              qtmesh_ps1core_libretro \
+              MaterialEditorQML_test \
+              MaterialEditorQML_qml_test \
+              MaterialEditorQML_perf_test \
+              CloudAccountMenuButton_test \
+              ProjectPackager_test \
+              MaterialEditorQML_qml_test_runner
 
           echo "=== ccache statistics ==="
           ccache -s || true

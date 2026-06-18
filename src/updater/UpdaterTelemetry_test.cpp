@@ -33,3 +33,13 @@ TEST(UpdaterTelemetryTest, BreadcrumbHonorsTelemetryOptOut)
                                  QStringLiteral("channel=stable local=3.5.3"));
     SentryReporter::setEnabled(previous);
 }
+
+TEST(UpdaterTelemetryTest, BreadcrumbDropsDisallowedPayloads)
+{
+    const bool previous = SentryReporter::isEnabled();
+    SentryReporter::setEnabled(true);
+    // Must not crash; disallowed payloads are silently dropped.
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.download.complete"),
+                                 QStringLiteral("file=/tmp/foo.zip"));
+    SentryReporter::setEnabled(previous);
+}

@@ -30,6 +30,7 @@
 #include "SentryReporter.h"
 #ifdef ENABLE_AUTO_UPDATER
 #include "updater/UpdaterController.h"
+#include "updater/UpdaterTelemetry.h"
 #endif
 #include <QDialog>
 #include <QProgressDialog>
@@ -4523,6 +4524,9 @@ void MainWindow::showUpdaterDialog(bool runCheck)
 
 void MainWindow::showUpdateToast(const QString& version)
 {
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.background.toast"),
+                                 QStringLiteral("version=%1").arg(version));
+
     if (m_updateToastEngine) {
         if (auto* toast = m_updateToastWindow) {
             QMetaObject::invokeMethod(toast, "showForVersion", Q_ARG(QVariant, version));

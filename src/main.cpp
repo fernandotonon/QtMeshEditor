@@ -32,6 +32,7 @@
 #include "AppLaunchHandler.h"
 #ifdef ENABLE_AUTO_UPDATER
 #include "updater/UpdaterController.h"
+#include "updater/UpdaterTelemetry.h"
 #endif
 
 #ifndef Q_OS_WIN
@@ -190,6 +191,8 @@ int main(int argc, char *argv[])
     for (int i = 1; i < argc; ++i) {
         if (QString::fromUtf8(argv[i]) == QLatin1String("--no-update-check")) {
             UpdaterController::setSessionBackgroundChecksDisabled(true);
+            UpdaterTelemetry::breadcrumb(QStringLiteral("updater.background.skip"),
+                                         QStringLiteral("session_disabled"));
         }
     }
 #endif
