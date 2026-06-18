@@ -242,4 +242,62 @@ TEST_F(CLIPipelineCmdMaterialCoverageTest, AllLibraryPresetsAreAcceptedByValidat
     }
 }
 
+// --generate-texture (#403). The SD model dir is empty in CI, so the
+// deterministic, crash-free outcome we can assert is the clean failure path:
+//
+//  * built WITH ENABLE_STABLE_DIFFUSION → import + Ogre init succeed, then the
+//    "no SD model found" guard returns 1 (never crashes, never writes output).
+//  * built WITHOUT it → the #ifndef branch returns 1 immediately.
+//
+// Either way the exported mesh must NOT be produced. A nonexistent input is a
+// separate guard (return 1) that needs no SD model and no Ogre RTT.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, GenerateTextureNonexistentFileReturnsError)
+{
+    ArgvBuilder args({"qtmesh", "material",
+                      "/tmp/qtmesh_gentex_no_such_file_zz.mesh",
+                      "--generate-texture", "rusty bronze armor"});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
+}
+
+TEST_F(CLIPipelineCmdMaterialCoverageTest, GenerateTextureRejectsOutOfRangeSize)
+{
+    QTemporaryDir src;
+    ASSERT_TRUE(src.isValid());
+    const QString mesh = copyRobotInto(src);
+    ASSERT_FALSE(mesh.isEmpty()) << "robot.mesh fixture unavailable";
+
+#ifdef ENABLE_STABLE_DIFFUSION
+    // Width out of [64,2048] → usage error (2), before any model/RTT work.
+    ArgvBuilder args({"qtmesh", "material", mesh,
+                      "--generate-texture", "x", "--width", "16"});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 2);
+#else
+    // Not built with SD → the feature returns 1 regardless of args.
+    ArgvBuilder args({"qtmesh", "material", mesh,
+                      "--generate-texture", "x"});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
+#endif
+}
+
+// With a valid mesh + valid size but an empty SD model dir, generation can't
+// proceed: exit 1 and NO output mesh written. (When built without SD the same
+// exit-1 / no-output contract holds via the #ifndef branch.)
+TEST_F(CLIPipelineCmdMaterialCoverageTest, GenerateTextureNoModelFailsCleanly)
+{
+    QTemporaryDir src;
+    ASSERT_TRUE(src.isValid());
+    const QString mesh = copyRobotInto(src);
+    ASSERT_FALSE(mesh.isEmpty()) << "robot.mesh fixture unavailable";
+
+    QTemporaryDir out;
+    ASSERT_TRUE(out.isValid());
+    const QString outMesh = out.filePath("gentex_out.mesh");
+
+    ArgvBuilder args({"qtmesh", "material", mesh,
+                      "--generate-texture", "rusty bronze armor",
+                      "-o", outMesh});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
+    EXPECT_FALSE(QFile::exists(outMesh)) << "no mesh should be written on failure";
+}
+
 } // namespace

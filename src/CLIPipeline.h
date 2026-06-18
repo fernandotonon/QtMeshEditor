@@ -91,6 +91,18 @@ public:
     static int cmdTurntable(int argc, char* argv[]);
     static int cmdScan(int argc, char* argv[]);
     static int cmdMaterial(int argc, char* argv[]);
+    /// #403: depth-conditioned (ControlNet) mesh-aware texture generation,
+    /// headless equivalent of the Material Editor's "Use selected mesh" path.
+    /// Loads an SD base model, renders a front-view depth map, drives the
+    /// async SDManager worker synchronously, binds the result as diffuse, and
+    /// re-exports. No-op error (exit 1) when built without ENABLE_STABLE_DIFFUSION.
+    static int cmdMaterialGenerateTexture(const QString& inputPath,
+                                          QString outputPath,
+                                          const QString& prompt,
+                                          const QString& modelName,
+                                          QString controlNetPath,
+                                          double controlStrength,
+                                          int width, int height);
     /// Slice G: pack 1-4 grayscale source images into a single RGBA
     /// output texture. Headless / scriptable equivalent of the GUI
     /// "Pack Channels…" dialog.
