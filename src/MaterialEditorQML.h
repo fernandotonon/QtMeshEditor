@@ -548,6 +548,13 @@ public slots:
     Q_INVOKABLE void generateTextureFromPrompt(const QString &prompt, int width = 0, int height = 0);
     Q_INVOKABLE void stopTextureGeneration();
 
+    // Issue #404: AI PBR map synthesis from the current diffuse texture.
+    // aiPbrAvailable() is true only on an ENABLE_ONNX build. generatePbrFromDiffuse()
+    // synthesizes normal/roughness/height from the active texture and binds them
+    // into the material's canonical slots.
+    Q_INVOKABLE bool aiPbrAvailable() const;
+    Q_INVOKABLE void generatePbrFromDiffuse();
+
     // Issue #403: mesh-aware texture generation. Same as
     // generateTextureFromPrompt but renders the selected entity's
     // depth map and conditions generation on it via a ControlNet
@@ -684,6 +691,10 @@ signals:
     void sdGenerationProgressChanged();
     void sdTextureGenerated(const QString &filePath);
     void sdGenerationError(const QString &error);
+    // Issue #404: PBR map synthesis lifecycle.
+    void pbrSynthStarted();
+    void pbrSynthCompleted(const QVariantMap &result);
+    void pbrSynthError(const QString &error);
     /** Non-fatal informational message during generation (e.g. degraded mode);
         unlike sdGenerationError it must NOT abort or reset the in-flight run. */
     void sdGenerationNotice(const QString &message);

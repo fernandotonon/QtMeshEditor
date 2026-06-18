@@ -279,7 +279,27 @@ GroupBox {
         // the texture to certain materials isn't working yet).
         RowLayout {
             Layout.fillWidth: true
-            Item { Layout.fillWidth: true }
+            // #404: synthesize normal/roughness/height from the current diffuse.
+            // Only shown on an ONNX build; disabled until a real texture is set.
+            ThemedButton {
+                id: pbrSynthBtn
+                text: "Generate PBR maps from diffuse"
+                visible: MaterialEditorQML.aiPbrAvailable()
+                enabled: MaterialEditorQML.textureName !== ""
+                    && MaterialEditorQML.textureName !== "*Select a texture*"
+                onClicked: {
+                    pbrStatus.text = "Synthesizing PBR maps…"
+                    MaterialEditorQML.generatePbrFromDiffuse()
+                }
+            }
+            ThemedLabel {
+                id: pbrStatus
+                Layout.fillWidth: true
+                visible: MaterialEditorQML.aiPbrAvailable()
+                text: ""
+                elide: Text.ElideRight
+            }
+            Item { Layout.fillWidth: true; visible: !MaterialEditorQML.aiPbrAvailable() }
             ThemedButton {
                 text: "Save Texture As…"
                 // Bind to textureName (a NOTIFY property) so the
@@ -294,6 +314,15 @@ GroupBox {
                     if (dest && dest.length > 0)
                         MaterialEditorQML.exportCurrentTexture(dest)
                 }
+            }
+
+            Connections {
+                target: MaterialEditorQML
+                function onPbrSynthCompleted(result) {
+                    pbrStatus.text = result.fromCache ? "PBR maps ready (cached)."
+                                                      : "PBR maps generated."
+                }
+                function onPbrSynthError(err) { pbrStatus.text = "PBR: " + err }
             }
         }
 

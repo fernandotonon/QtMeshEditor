@@ -21,6 +21,9 @@
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
+#ifdef ENABLE_ONNX
+#include "AIAssistManager.h"
+#endif
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 #include "RTShaderHelper.h"
@@ -4056,6 +4059,69 @@ void MaterialEditorQML::generateTextureFromPrompt(const QString &prompt, int wid
     Q_UNUSED(width);
     Q_UNUSED(height);
     emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
+#endif
+}
+
+bool MaterialEditorQML::aiPbrAvailable() const
+{
+#ifdef ENABLE_ONNX
+    return AIAssistManager::instance()->isAvailable();
+#else
+    return false;
+#endif
+}
+
+void MaterialEditorQML::generatePbrFromDiffuse()
+{
+#ifndef ENABLE_ONNX
+    emit pbrSynthError(tr("AI PBR synthesis is not enabled. Rebuild with ENABLE_ONNX=ON."));
+#else
+    // Resolve the current texture's on-disk path via the same group-agnostic
+    // resolver the preview uses.
+    QString src = getTexturePreviewPath();
+    if (src.startsWith(QStringLiteral("file://")))
+        src = QUrl(src).toLocalFile();
+    if (src.isEmpty() || !QFileInfo::exists(src)) {
+        emit pbrSynthError(tr("No on-disk diffuse texture to synthesize from. "
+                              "Apply or save a diffuse texture first."));
+        return;
+    }
+
+    emit pbrSynthStarted();
+    const PbrMapSynthResult res =
+        AIAssistManager::instance()->synthesizePbrMaps(src, {});
+    if (!res.ok) {
+        emit pbrSynthError(res.error.isEmpty()
+            ? tr("PBR synthesis failed.") : res.error);
+        return;
+    }
+
+    // Bind the generated maps into the active material's canonical slots.
+    if (m_ogreMaterial) {
+        auto bindSlot = [&](const char* slot, const QString& path) {
+            if (path.isEmpty()) return;
+            ensureTextureInMaterialGroup(QFileInfo(path).fileName());
+            for (auto* tech : m_ogreMaterial->getTechniques()) {
+                for (unsigned short p = 0; p < tech->getNumPasses(); ++p) {
+                    Ogre::Pass* pass = tech->getPass(p);
+                    Ogre::TextureUnitState* tus = nullptr;
+                    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i)
+                        if (pass->getTextureUnitState(i)->getName() == slot) {
+                            tus = pass->getTextureUnitState(i); break;
+                        }
+                    if (!tus) { tus = pass->createTextureUnitState(); tus->setName(slot); }
+                    tus->setTextureName(QFileInfo(path).fileName().toStdString());
+                }
+            }
+        };
+        bindSlot("normal_map", res.normalPath);
+        bindSlot("roughness",  res.roughnessPath);
+        RTShaderHelper::wirePbrSlotsForFFP(m_ogreMaterial.get());
+        m_ogreMaterial->compile();
+        updateMaterialText();
+    }
+
+    emit pbrSynthCompleted(res.toVariantMap());
 #endif
 }
 
