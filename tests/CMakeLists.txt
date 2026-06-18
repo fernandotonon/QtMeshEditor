@@ -104,7 +104,6 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintBufferImageProvider.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintSelectionMask.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintBuffer.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UpdateVersion.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexColorBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBaker.cpp
@@ -395,12 +394,19 @@ if(BUILD_TESTS)
         SET(OGRE_Codec_Assimp_LIBRARY_REL ${OGRE_PLUGIN_DIR}/libCodec_Assimp.dll.a)
     endif()
 
-    # Common libraries for all test executables
-    set(COMMON_TEST_LIBRARIES
-        gtest
-        gtest_main
-        gmock
-        gmock_main
+    # Shared static lib: compile MaterialEditor test support sources once instead
+    # of rebuilding them for every *_test executable (CI build-wrapper budget).
+    set(TEST_SUPPORT_INCLUDES
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${BUILD_INCLUDE_DIR}
+        ${BUILD_UIH_DIR}
+        ${OGRE_PROCEDURAL_LIB_DIR}include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/OgreXML
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Assimp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FBX
+    )
+
+    set(TEST_SUPPORT_LIBRARIES
         ${OGRE_Codec_Assimp_LIBRARY_REL}
         ${OGRE_LIBRARIES}
         ${ASSIMP_LIBRARIES}
@@ -419,44 +425,64 @@ if(BUILD_TESTS)
         qtmesh_updater
     )
 
-    # Add llama.cpp libraries if local LLM is enabled
     if(ENABLE_LOCAL_LLM)
-        list(APPEND COMMON_TEST_LIBRARIES llama ggml)
+        list(APPEND TEST_SUPPORT_LIBRARIES llama ggml)
     endif()
 
-    # Link Sentry for tests if enabled (SentryReporter is part of TEST_SRC_FILES).
     if(ENABLE_SENTRY)
-        list(APPEND COMMON_TEST_LIBRARIES sentry)
+        list(APPEND TEST_SUPPORT_LIBRARIES sentry)
     endif()
+
+    add_library(qtmesh_test_common STATIC ${TEST_SRC_FILES} ${TEST_HEADER_FILES})
+    set_target_properties(qtmesh_test_common PROPERTIES
+        AUTOMOC ON
+        POSITION_INDEPENDENT_CODE ON
+    )
+    target_include_directories(qtmesh_test_common PRIVATE ${TEST_SUPPORT_INCLUDES})
+    target_compile_definitions(qtmesh_test_common PRIVATE
+        BATCH_EXPORTER_TEST_SEAM
+        QTMESH_UNIT_TESTS
+        "QTMESH_UT_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    target_link_libraries(qtmesh_test_common PUBLIC ${TEST_SUPPORT_LIBRARIES})
+
+    if(APPLE)
+        target_link_libraries(qtmesh_test_common PUBLIC "-framework Security")
+    elseif(WIN32)
+        target_link_libraries(qtmesh_test_common PUBLIC advapi32)
+    endif()
+
+    if(ENABLE_PS1_RIP)
+        add_dependencies(qtmesh_test_common qtmesh_ps1core_stub)
+        if(TARGET qtmesh_ps1core_libretro)
+            add_dependencies(qtmesh_test_common qtmesh_ps1core_libretro)
+        endif()
+        if(TARGET Qt6::Gamepad)
+            target_compile_definitions(qtmesh_test_common PRIVATE HAVE_QT_GAMEPAD)
+            target_link_libraries(qtmesh_test_common PUBLIC Qt6::Gamepad)
+        endif()
+    endif()
+
+    ADD_DEPENDENCIES(qtmesh_test_common ui)
+
+    set(COMMON_TEST_LIBRARIES
+        gtest
+        gtest_main
+        gmock
+        gmock_main
+        qtmesh_test_common
+    )
     
     # Helper function to create test executables
     function(create_test_executable target_name test_source_file)
         add_executable(${target_name} 
             ${test_source_file}
-            ${TEST_HEADER_FILES}
-            ${TEST_SRC_FILES}
             ${TEST_RESOURCE_SRCS}
             ${TEST_QML_RESOURCE_SRCS}
         )
         
-        target_include_directories(${target_name} PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src
-            ${BUILD_INCLUDE_DIR}
-            ${BUILD_UIH_DIR}
-            ${OGRE_PROCEDURAL_LIB_DIR}include
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/OgreXML
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/Assimp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/FBX
-        )
+        target_include_directories(${target_name} PRIVATE ${TEST_SUPPORT_INCLUDES})
         
         target_link_libraries(${target_name} ${COMMON_TEST_LIBRARIES})
-
-        if(ENABLE_PS1_RIP)
-            add_dependencies(${target_name} qtmesh_ps1core_stub)
-            if(TARGET qtmesh_ps1core_libretro)
-                add_dependencies(${target_name} qtmesh_ps1core_libretro)
-            endif()
-        endif()
         
         # Add dependency on UI generation
         ADD_DEPENDENCIES(${target_name} ui)
@@ -469,30 +495,13 @@ if(BUILD_TESTS)
     function(create_test_executable_no_autotest target_name test_source_file)
         add_executable(${target_name} 
             ${test_source_file}
-            ${TEST_HEADER_FILES}
-            ${TEST_SRC_FILES}
             ${TEST_RESOURCE_SRCS}
             ${TEST_QML_RESOURCE_SRCS}
         )
         
-        target_include_directories(${target_name} PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src
-            ${BUILD_INCLUDE_DIR}
-            ${BUILD_UIH_DIR}
-            ${OGRE_PROCEDURAL_LIB_DIR}include
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/OgreXML
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/Assimp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/FBX
-        )
+        target_include_directories(${target_name} PRIVATE ${TEST_SUPPORT_INCLUDES})
         
         target_link_libraries(${target_name} ${COMMON_TEST_LIBRARIES})
-
-        if(ENABLE_PS1_RIP)
-            add_dependencies(${target_name} qtmesh_ps1core_stub)
-            if(TARGET qtmesh_ps1core_libretro)
-                add_dependencies(${target_name} qtmesh_ps1core_libretro)
-            endif()
-        endif()
         
         # Add dependency on UI generation
         ADD_DEPENDENCIES(${target_name} ui)

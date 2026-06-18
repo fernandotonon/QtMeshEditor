@@ -1,4 +1,5 @@
 set(QTMESH_UPDATER_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../UpdateVersion.cpp
     InstallFlavor.cpp
     ArtifactResolver.cpp
     UpdateVerifier.cpp

@@ -986,9 +986,12 @@ jobs:
         create-symlink: true
 
     - name: Setup headless environment for Qt tests
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
             sudo apt-get update
-            sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libx11-dev xvfb \
+            sudo apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+                libxcb-cursor0 libxcb-xinerama0 libx11-dev xvfb \
                 mesa-utils libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0 \
                 libsecret-1-dev libretro-beetle-psx libsodium-dev
             # Start Xvfb with GLX support for Ogre GL initialization

@@ -97,7 +97,6 @@ TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
 PaintSelectionMask.cpp
 TexturePaintBuffer.cpp
-UpdateVersion.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
 VATBaker.cpp
