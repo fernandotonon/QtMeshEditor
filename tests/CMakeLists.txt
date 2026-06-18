@@ -105,14 +105,6 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PaintSelectionMask.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintBuffer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UpdateVersion.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/InstallFlavor.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/ArtifactResolver.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/UpdateVerifier.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/MinisignVerify.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/GitHubReleaseParser.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/UpdaterWorker.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/UpdaterController.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/UpdaterInstaller.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexColorBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBaker.cpp
@@ -424,6 +416,7 @@ if(BUILD_TESTS)
         meshoptimizer
         xatlas
         qtmesh_sodium
+        qtmesh_updater
     )
 
     # Add llama.cpp libraries if local LLM is enabled

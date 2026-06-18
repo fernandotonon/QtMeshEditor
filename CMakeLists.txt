@@ -289,7 +289,6 @@ option(ENABLE_AUTO_UPDATER "Enable in-app auto-updater UI and download path" ON)
 if(ENABLE_AUTO_UPDATER)
     add_definitions(-DENABLE_AUTO_UPDATER)
     message(STATUS "In-app auto-updater enabled")
-    add_subdirectory(src/updater/relauncher)
 endif()
 ##############################################################
 #  meshoptimizer — LOD generation, vertex-cache / overdraw /
