@@ -598,8 +598,6 @@ if(ENABLE_AUTO_UPDATER AND TARGET qtmesh-relauncher)
             COMMAND ${CMAKE_COMMAND} -E copy
                 "${CMAKE_BINARY_DIR}/bin/qtmesh-relauncher"
                 "$<TARGET_BUNDLE_DIR:${CMAKE_PROJECT_NAME}>/Contents/MacOS/qtmesh-relauncher"
-            COMMAND ${CMAKE_COMMAND} -E chmod 755
-                "$<TARGET_BUNDLE_DIR:${CMAKE_PROJECT_NAME}>/Contents/MacOS/qtmesh-relauncher"
             COMMENT "Copying qtmesh-relauncher into app bundle"
         )
     endif()
