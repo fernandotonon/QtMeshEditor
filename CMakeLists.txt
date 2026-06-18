@@ -264,6 +264,16 @@ if(ENABLE_STABLE_DIFFUSION)
     message(STATUS "AI texture generation enabled with stable-diffusion.cpp")
 endif()
 ##############################################################
+#  ONNX Runtime — AI PBR map synthesis (#404)
+##############################################################
+option(ENABLE_ONNX "Enable AI PBR map synthesis via ONNX Runtime" OFF)
+
+if(ENABLE_ONNX)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/OnnxRuntime.cmake)
+    add_definitions(-DENABLE_ONNX)
+    message(STATUS "AI PBR map synthesis enabled with ONNX Runtime")
+endif()
+##############################################################
 #  PS1 runtime geometry extraction (experimental)
 ##############################################################
 option(ENABLE_PS1_RIP "Enable experimental PS1 runtime geometry extraction" OFF)
