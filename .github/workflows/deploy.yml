@@ -749,6 +749,7 @@ jobs:
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
+            -DENABLE_AUTO_UPDATER=OFF \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
