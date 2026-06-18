@@ -58,6 +58,9 @@
     <file alias="UpdaterDialog.qml">../qml/UpdaterDialog.qml</file>
     <file alias="UpdaterSettingsPanel.qml">../qml/UpdaterSettingsPanel.qml</file>
   </qresource>
+  <qresource prefix="/UpdateToast">
+    <file alias="UpdateToast.qml">../qml/UpdateToast.qml</file>
+  </qresource>
   <qresource prefix="/PreferencesDialog">
     <file alias="PreferencesDialog.qml">../qml/PreferencesDialog.qml</file>
   </qresource>

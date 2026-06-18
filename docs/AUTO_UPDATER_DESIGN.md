@@ -130,8 +130,27 @@ Version comparison reuses `UpdateVersion::compare()` (#442) — normalises optio
 | [#442](https://github.com/fernandotonon/QtMeshEditor/issues/442) | Semver compare — **done** (`UpdateVersion`) |
 | [#443](https://github.com/fernandotonon/QtMeshEditor/issues/443) | Wire `InstallFlavor` into UX |
 | [#444–445](https://github.com/fernandotonon/QtMeshEditor/issues/444) | Download + verify pipeline — **in progress** |
-| [#446–448](https://github.com/fernandotonon/QtMeshEditor/issues/446) | Relauncher + per-platform install |
-| **New PR** | `deploy.yml` minisign signing (section above) |
+| [#446–448](https://github.com/fernandotonon/QtMeshEditor/issues/446) | Relauncher + per-platform install — **done** |
+| [#450–451](https://github.com/fernandotonon/QtMeshEditor/issues/450) | Background check + Sentry funnel breadcrumbs |
+
+---
+
+## Sentry funnel (ops)
+
+Breadcrumbs use the `updater.*` category prefix. Payloads intentionally exclude URLs, filesystem paths, and artifact filenames — only version strings, channel, enum-like error classes, and progress percent.
+
+Example Discover queries (self-hosted Sentry):
+
+| Funnel step | Query |
+|-------------|-------|
+| Background checks started | `message.category:updater.background.start` |
+| Updates found (background) | `message.category:updater.background.available` |
+| User opened dialog | `message.category:updater.dialog.state update_available` |
+| Download finished | `message.category:updater.download.complete` |
+| Verify OK | `message.category:updater.verify.success` |
+| Install relaunch | `message.category:updater.install.relaunch` |
+
+Session opt-out: `--no-update-check` disables background checks; `--no-telemetry` / Sentry consent disables all breadcrumbs via `UpdaterTelemetry::breadcrumb()`.
 
 ---
 
