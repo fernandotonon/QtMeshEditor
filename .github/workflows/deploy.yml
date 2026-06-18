@@ -895,10 +895,9 @@ jobs:
     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
     runs-on: ubuntu-latest
     # Hard cap on the whole job. The full sweep takes ~12 min normally
-    # (build + xvfb + ~25 suites + coverage + sonar). Cap at 45 so a
-    # hung suite or a deadlock surfaces in well under an hour instead
-    # of camping on the runner for GitHub's default 6-hour ceiling.
-    timeout-minutes: 45
+    # (build + xvfb + ~25 suites + coverage + sonar). Cap at 60 so a
+    # cold ccache build on a large PR still finishes under the limit.
+    timeout-minutes: 60
     permissions: read-all
     env: 
           LD_LIBRARY_PATH: gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
