@@ -678,13 +678,13 @@ void MainWindow::initToolBar()
 
 #ifdef ENABLE_AUTO_UPDATER
         connect(UpdaterController::instance(), &UpdaterController::showDialogRequested,
-                this, &MainWindow::showUpdaterDialog);
+                this, [this](bool runCheck) { showUpdaterDialog(runCheck); });
+        connect(UpdaterController::instance(), &UpdaterController::backgroundUpdateAvailable,
+                this, [this](const QString& version) { showUpdateToast(version); });
 #ifndef QTMESH_UNIT_TESTS
-        if (UpdaterController::instance()->checkOnStartup()) {
-            QTimer::singleShot(3000, this, []() {
-                UpdaterController::instance()->checkForUpdates();
-            });
-        }
+        QTimer::singleShot(5000, this, []() {
+            UpdaterController::instance()->checkForUpdatesInBackground();
+        });
 #endif
 #endif
 
@@ -4519,6 +4519,53 @@ void MainWindow::showUpdaterDialog(bool runCheck)
             });
 
     engine->load(QUrl(QStringLiteral("qrc:/UpdaterDialog/UpdaterDialog.qml")));
+}
+
+void MainWindow::showUpdateToast(const QString& version)
+{
+    if (m_updateToastEngine) {
+        if (auto* toast = m_updateToastWindow) {
+            QMetaObject::invokeMethod(toast, "showForVersion", Q_ARG(QVariant, version));
+        }
+        return;
+    }
+
+    m_updateToastEngine = new QQmlApplicationEngine(this);
+    m_updateToastEngine->addImportPath(QStringLiteral("qrc:/"));
+    qmlRegisterSingletonType<PropertiesPanelController>(
+        "PropertiesPanel", 1, 0, "PropertiesPanelController",
+        [](QQmlEngine* eng, QJSEngine*) -> QObject* {
+            return PropertiesPanelController::qmlInstance(eng, nullptr);
+        });
+    qmlRegisterSingletonType<UpdaterController>(
+        "Updater", 1, 0, "UpdaterController",
+        [](QQmlEngine* eng, QJSEngine*) -> QObject* {
+            return UpdaterController::qmlInstance(eng, nullptr);
+        });
+
+    connect(m_updateToastEngine, &QQmlApplicationEngine::objectCreated, this,
+            [this, version](QObject* obj, const QUrl&) {
+                if (!obj) {
+                    m_updateToastEngine->deleteLater();
+                    m_updateToastEngine = nullptr;
+                    return;
+                }
+
+                m_updateToastWindow = obj;
+                if (auto* window = qobject_cast<QQuickWindow*>(obj)) {
+                    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+                    connect(window, &QQuickWindow::destroyed, this, [this]() {
+                        m_updateToastWindow = nullptr;
+                        if (m_updateToastEngine) {
+                            m_updateToastEngine->deleteLater();
+                            m_updateToastEngine = nullptr;
+                        }
+                    });
+                }
+                QMetaObject::invokeMethod(obj, "showForVersion", Q_ARG(QVariant, version));
+            });
+
+    m_updateToastEngine->load(QUrl(QStringLiteral("qrc:/UpdateToast/UpdateToast.qml")));
 }
 
 void MainWindow::on_actionVerify_Update_triggered()

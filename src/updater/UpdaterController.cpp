@@ -1,9 +1,9 @@
 #include "UpdaterController.h"
 #include "ArtifactResolver.h"
 #include "UpdaterInstaller.h"
+#include "UpdaterTelemetry.h"
 #include "UpdaterWorker.h"
 #include "AppSettingsKeys.h"
-#include "SentryReporter.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -43,6 +43,7 @@ QString stateToString(UpdaterController::State state)
 } // namespace
 
 UpdaterController* UpdaterController::s_instance = nullptr;
+bool UpdaterController::s_sessionBackgroundChecksDisabled = false;
 
 UpdaterController* UpdaterController::instance()
 {
@@ -65,6 +66,16 @@ void UpdaterController::kill()
     s_instance = nullptr;
 }
 
+void UpdaterController::setSessionBackgroundChecksDisabled(bool disabled)
+{
+    s_sessionBackgroundChecksDisabled = disabled;
+}
+
+bool UpdaterController::sessionBackgroundChecksDisabled()
+{
+    return s_sessionBackgroundChecksDisabled;
+}
+
 UpdaterController::UpdaterController(QObject* parent)
     : QObject(parent)
 {
@@ -75,6 +86,7 @@ UpdaterController::UpdaterController(QObject* parent)
     qRegisterMetaType<VerifyOutcome>("VerifyOutcome");
     loadSettings();
     refreshInstallFlavor();
+    applyDefaultStartupCheckIfNeeded();
 
     m_workerThread = new QThread(this);
     m_worker = new UpdaterWorker();
@@ -82,39 +94,59 @@ UpdaterController::UpdaterController(QObject* parent)
 
     connect(m_worker, &UpdaterWorker::checkFinished, this,
             [this](const GitHubReleaseParser::CheckResult& result, const QString& networkError) {
+                const bool wasSilent = m_silentCheck;
                 recordLastChecked();
 
                 if (!networkError.isEmpty()) {
+                    if (wasSilent) {
+                        UpdaterTelemetry::breadcrumb(
+                            QStringLiteral("updater.background.error"),
+                            QStringLiteral("network_error"),
+                            QStringLiteral("error"));
+                        finishSilentCheck();
+                        return;
+                    }
                     setState(State::Error);
                     setError(networkError);
-                    SentryReporter::addBreadcrumb(
+                    UpdaterTelemetry::breadcrumb(
                         QStringLiteral("updater.check.error"),
-                        networkError,
+                        QStringLiteral("network_error"),
                         QStringLiteral("error"));
                     emit checkError(networkError);
                     logDialogStateBreadcrumb();
+                    finishSilentCheck();
                     return;
                 }
 
                 if (!result.parseOk) {
+                    if (wasSilent) {
+                        UpdaterTelemetry::breadcrumb(
+                            QStringLiteral("updater.background.error"),
+                            QStringLiteral("parse_error"),
+                            QStringLiteral("error"));
+                        finishSilentCheck();
+                        return;
+                    }
                     setState(State::Error);
                     setError(result.errorMessage);
-                    SentryReporter::addBreadcrumb(
+                    UpdaterTelemetry::breadcrumb(
                         QStringLiteral("updater.check.error"),
-                        result.errorMessage,
+                        QStringLiteral("parse_error"),
                         QStringLiteral("error"));
                     emit checkError(result.errorMessage);
                     logDialogStateBreadcrumb();
+                    finishSilentCheck();
                     return;
                 }
 
                 applyCheckResult(result);
-                SentryReporter::addBreadcrumb(
+                UpdaterTelemetry::breadcrumb(
                     QStringLiteral("updater.check.success"),
                     QStringLiteral("remote=%1 comparison=%2")
                         .arg(result.release.tagName)
                         .arg(static_cast<int>(result.comparison)));
                 logDialogStateBreadcrumb();
+                finishSilentCheck();
             });
 
     connect(m_worker, &UpdaterWorker::downloadProgress, this,
@@ -129,9 +161,12 @@ UpdaterController::UpdaterController(QObject* parent)
                 const int percent =
                     static_cast<int>((received * 100LL) / total);
                 const int clamped = qBound(0, percent, 100);
-                if (clamped >= 100 || nowMs - m_lastProgressEmitMs >= 100) {
+                if (clamped >= 100 || nowMs - m_lastProgressEmitMs >= 1000) {
                     m_lastProgressEmitMs = nowMs;
                     setProgressPercent(clamped);
+                    UpdaterTelemetry::breadcrumb(
+                        QStringLiteral("updater.download.progress"),
+                        QStringLiteral("percent=%1").arg(clamped));
                 }
             });
 
@@ -167,9 +202,69 @@ void UpdaterController::loadSettings()
         &channelOk);
     m_channel = GitHubReleaseParser::channelToString(
         channelOk ? parsed : GitHubReleaseParser::Channel::Stable);
-    m_checkOnStartup = settings.value(AppSettingsKeys::updaterCheckOnStartup(), true).toBool();
     m_autoDownload = settings.value(AppSettingsKeys::updaterAutoDownload(), false).toBool();
     m_lastCheckedAt = settings.value(AppSettingsKeys::updaterLastCheckedAt()).toString();
+}
+
+void UpdaterController::applyDefaultStartupCheckIfNeeded()
+{
+    QSettings settings;
+    const bool previous = m_checkOnStartup;
+    if (settings.contains(AppSettingsKeys::updaterCheckOnStartup())) {
+        m_checkOnStartup = settings.value(AppSettingsKeys::updaterCheckOnStartup()).toBool();
+    } else {
+        m_checkOnStartup = (m_flavor == InstallFlavor::Flavor::Portable);
+    }
+    if (m_checkOnStartup != previous) {
+        emit checkOnStartupChanged();
+    }
+}
+
+bool UpdaterController::isWithinRateLimit() const
+{
+    if (m_lastCheckedAt.isEmpty()) {
+        return true;
+    }
+    const QDateTime lastChecked =
+        QDateTime::fromString(m_lastCheckedAt, Qt::ISODate);
+    if (!lastChecked.isValid()) {
+        return true;
+    }
+    return lastChecked.secsTo(QDateTime::currentDateTimeUtc()) >= 24 * 3600;
+}
+
+bool UpdaterController::shouldRunBackgroundCheck(QString* skipReason) const
+{
+    if (s_sessionBackgroundChecksDisabled) {
+        if (skipReason) {
+            *skipReason = QStringLiteral("session_disabled");
+        }
+        return false;
+    }
+    if (!m_checkOnStartup) {
+        if (skipReason) {
+            *skipReason = QStringLiteral("check_on_startup_off");
+        }
+        return false;
+    }
+    if (!isWithinRateLimit()) {
+        if (skipReason) {
+            *skipReason = QStringLiteral("rate_limited");
+        }
+        return false;
+    }
+    if (m_flavor != InstallFlavor::Flavor::Portable) {
+        if (skipReason) {
+            *skipReason = QStringLiteral("flavor=%1").arg(m_installFlavor);
+        }
+        return false;
+    }
+    return true;
+}
+
+void UpdaterController::finishSilentCheck()
+{
+    m_silentCheck = false;
 }
 
 void UpdaterController::saveSettings()
@@ -202,7 +297,7 @@ void UpdaterController::refreshInstallFlavor()
         m_installFlavor = slug;
         emit installFlavorChanged();
     }
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.flavor.detected"), slug);
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.flavor.detected"), slug);
 }
 
 void UpdaterController::setChannel(const QString& channel)
@@ -264,7 +359,7 @@ void UpdaterController::setError(const QString& error)
 
 void UpdaterController::logDialogStateBreadcrumb()
 {
-    SentryReporter::addBreadcrumb(
+    UpdaterTelemetry::breadcrumb(
         QStringLiteral("updater.dialog.state"),
         stateToString(m_state));
 }
@@ -285,20 +380,45 @@ void UpdaterController::applyCheckResult(const GitHubReleaseParser::CheckResult&
     switch (result.comparison) {
     case UpdateVersion::Comparison::Older:
         if (isVersionSkipped(m_latestVersion)) {
-            setState(State::UpToDate);
-            emit noUpdate();
+            if (!m_silentCheck) {
+                setState(State::UpToDate);
+                emit noUpdate();
+            } else {
+                setState(State::Idle);
+            }
             return;
         }
         setState(State::UpdateAvailable);
-        emit updateAvailable(m_currentVersion, m_latestVersion);
+        if (m_silentCheck) {
+            UpdaterTelemetry::breadcrumb(
+                QStringLiteral("updater.background.available"),
+                QStringLiteral("version=%1").arg(m_latestVersion));
+            emit backgroundUpdateAvailable(m_latestVersion);
+        } else {
+            emit updateAvailable(m_currentVersion, m_latestVersion);
+        }
+        if (m_autoDownload) {
+            m_showDialogWhenReady = m_silentCheck;
+        }
         beginDownloadIfNeeded(false);
         break;
     case UpdateVersion::Comparison::Same:
     case UpdateVersion::Comparison::Newer:
-        setState(State::UpToDate);
-        emit noUpdate();
+        if (!m_silentCheck) {
+            setState(State::UpToDate);
+            emit noUpdate();
+        } else {
+            setState(State::Idle);
+        }
         break;
     case UpdateVersion::Comparison::Invalid:
+        if (m_silentCheck) {
+            UpdaterTelemetry::breadcrumb(
+                QStringLiteral("updater.background.error"),
+                QStringLiteral("compare_error"),
+                QStringLiteral("error"));
+            return;
+        }
         setState(State::Error);
         setError(QStringLiteral("Could not compare versions '%1' / '%2'")
                      .arg(m_currentVersion, m_latestVersion));
@@ -307,11 +427,33 @@ void UpdaterController::applyCheckResult(const GitHubReleaseParser::CheckResult&
     }
 }
 
+void UpdaterController::checkForUpdatesInBackground()
+{
+    QString skipReason;
+    if (!shouldRunBackgroundCheck(&skipReason)) {
+        UpdaterTelemetry::breadcrumb(QStringLiteral("updater.background.skip"), skipReason);
+        return;
+    }
+
+    UpdaterTelemetry::breadcrumb(
+        QStringLiteral("updater.background.start"),
+        QStringLiteral("channel=%1").arg(m_channel));
+    m_silentCheck = true;
+    checkForUpdates();
+}
+
 void UpdaterController::requestCheckDialog()
 {
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+    UpdaterTelemetry::breadcrumb(QStringLiteral("ui.action"),
                                   QStringLiteral("Updater settings: Check now"));
     emit showDialogRequested(true);
+}
+
+void UpdaterController::openUpdateDialog()
+{
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.background.action"),
+                                  QStringLiteral("open_dialog"));
+    emit showDialogRequested(false);
 }
 
 void UpdaterController::checkForUpdates()
@@ -322,17 +464,21 @@ void UpdaterController::checkForUpdates()
     setError(QString());
 
     if (InstallFlavor::isPackageManagerManaged(m_flavor)) {
-        SentryReporter::addBreadcrumb(
+        UpdaterTelemetry::breadcrumb(
             QStringLiteral("updater.check.start"),
             QStringLiteral("package-manager flavor=%1").arg(m_installFlavor));
-        setState(State::PackageManaged);
-        logDialogStateBreadcrumb();
+        if (!m_silentCheck) {
+            setState(State::PackageManaged);
+            logDialogStateBreadcrumb();
+        }
         return;
     }
 
     if (m_flavor == InstallFlavor::Flavor::Unknown && !m_unknownInstallConfirmed) {
-        setState(State::UnknownInstall);
-        logDialogStateBreadcrumb();
+        if (!m_silentCheck) {
+            setState(State::UnknownInstall);
+            logDialogStateBreadcrumb();
+        }
         return;
     }
 
@@ -340,7 +486,7 @@ void UpdaterController::checkForUpdates()
         return;
     }
 
-    SentryReporter::addBreadcrumb(
+    UpdaterTelemetry::breadcrumb(
         QStringLiteral("updater.check.start"),
         QStringLiteral("channel=%1 local=%2").arg(m_channel, m_currentVersion));
     setState(State::Checking);
@@ -359,14 +505,14 @@ void UpdaterController::checkForUpdates()
 void UpdaterController::confirmUnknownInstall()
 {
     m_unknownInstallConfirmed = true;
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.dialog.action"),
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.dialog.action"),
                                   QStringLiteral("confirm_unknown_install"));
     checkForUpdates();
 }
 
 void UpdaterController::downloadAndInstall()
 {
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.download.start"),
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.download.start"),
                                   QStringLiteral("version=%1").arg(m_latestVersion));
     beginDownloadIfNeeded(true);
 }
@@ -377,7 +523,7 @@ void UpdaterController::installUpdate()
         return;
     }
 
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.install.start"),
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.install.start"),
                                   QStringLiteral("version=%1").arg(m_latestVersion));
     setError(QString());
     setState(State::Installing);
@@ -392,8 +538,8 @@ void UpdaterController::installUpdate()
 
     const UpdaterInstaller::InstallPlan plan = UpdaterInstaller::prepareInstall(context);
     if (!plan.ok) {
-        SentryReporter::addBreadcrumb(QStringLiteral("updater.install.error"),
-                                      plan.errorMessage,
+        UpdaterTelemetry::breadcrumb(QStringLiteral("updater.install.error"),
+                                      QStringLiteral("prepare_failed"),
                                       QStringLiteral("error"));
         setError(plan.errorMessage.isEmpty()
                      ? tr("Could not prepare the update for installation.")
@@ -404,7 +550,7 @@ void UpdaterController::installUpdate()
     }
 
     if (!UpdaterInstaller::launchRelauncher(plan)) {
-        SentryReporter::addBreadcrumb(QStringLiteral("updater.install.error"),
+        UpdaterTelemetry::breadcrumb(QStringLiteral("updater.install.error"),
                                       QStringLiteral("relauncher missing or failed to start"),
                                       QStringLiteral("error"));
         setError(tr("Could not launch the update installer. "
@@ -414,8 +560,8 @@ void UpdaterController::installUpdate()
         return;
     }
 
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.install.relaunch"),
-                                  plan.manifestPath);
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.install.relaunch"),
+                                  QStringLiteral("version=%1").arg(m_latestVersion));
     QApplication::quit();
 }
 
@@ -443,8 +589,8 @@ void UpdaterController::startDownloadJob()
     if (!artifact.ok) {
         setError(artifact.errorMessage);
         setState(State::Error);
-        SentryReporter::addBreadcrumb(QStringLiteral("updater.download.error"),
-                                    artifact.errorMessage,
+        UpdaterTelemetry::breadcrumb(QStringLiteral("updater.download.error"),
+                                    QStringLiteral("artifact_resolve_failed"),
                                     QStringLiteral("error"));
         logDialogStateBreadcrumb();
         return;
@@ -485,8 +631,8 @@ void UpdaterController::startDownloadJob()
 void UpdaterController::handleDownloadFinished(const DownloadOutcome& outcome)
 {
     if (outcome.cancelled) {
-        SentryReporter::addBreadcrumb(QStringLiteral("updater.download.cancel"),
-                                    outcome.fileName);
+        UpdaterTelemetry::breadcrumb(QStringLiteral("updater.download.cancel"),
+                                    QStringLiteral("version=%1").arg(m_latestVersion));
         setState(State::UpdateAvailable);
         setProgressPercent(0);
         logDialogStateBreadcrumb();
@@ -494,8 +640,8 @@ void UpdaterController::handleDownloadFinished(const DownloadOutcome& outcome)
     }
 
     if (!outcome.ok) {
-        SentryReporter::addBreadcrumb(QStringLiteral("updater.download.error"),
-                                      outcome.errorMessage,
+        UpdaterTelemetry::breadcrumb(QStringLiteral("updater.download.error"),
+                                      QStringLiteral("download_failed"),
                                       QStringLiteral("error"));
         setError(outcome.errorMessage);
         setState(State::Error);
@@ -503,8 +649,8 @@ void UpdaterController::handleDownloadFinished(const DownloadOutcome& outcome)
         return;
     }
 
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.download.complete"),
-                                  outcome.fileName);
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.download.complete"),
+                                  QStringLiteral("version=%1").arg(m_latestVersion));
     setProgressPercent(100);
     setState(State::Verifying);
     logDialogStateBreadcrumb();
@@ -524,9 +670,9 @@ void UpdaterController::handleDownloadFinished(const DownloadOutcome& outcome)
 void UpdaterController::handleVerifyFinished(const VerifyOutcome& outcome)
 {
     if (!outcome.ok) {
-        SentryReporter::addBreadcrumb(
+        UpdaterTelemetry::breadcrumb(
             QStringLiteral("updater.verify.failure"),
-            QStringLiteral("%1: %2").arg(outcome.failedStage, outcome.errorMessage),
+            QStringLiteral("stage=%1").arg(outcome.failedStage),
             QStringLiteral("error"));
         setError(outcome.errorMessage.isEmpty()
                      ? tr("Download verification failed.")
@@ -536,9 +682,13 @@ void UpdaterController::handleVerifyFinished(const VerifyOutcome& outcome)
         return;
     }
 
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.verify.success"), m_latestVersion);
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.verify.success"), m_latestVersion);
     setState(State::ReadyToInstall);
     logDialogStateBreadcrumb();
+    if (m_showDialogWhenReady) {
+        m_showDialogWhenReady = false;
+        emit showDialogRequested(false);
+    }
 }
 
 void UpdaterController::setProgressPercent(int percent)
@@ -578,7 +728,7 @@ void UpdaterController::dismiss()
 
 void UpdaterController::remindLater()
 {
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.dialog.action"),
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.dialog.action"),
                                   QStringLiteral("remind_later"));
     dismiss();
 }
@@ -591,7 +741,7 @@ void UpdaterController::skipThisVersion()
     }
     QSettings settings;
     settings.setValue(AppSettingsKeys::updaterSkippedVersion(), m_latestVersion);
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.dialog.action"),
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.dialog.action"),
                                   QStringLiteral("skip_version=%1").arg(m_latestVersion));
     setState(State::UpToDate);
     logDialogStateBreadcrumb();
@@ -602,7 +752,7 @@ void UpdaterController::openReleasePage()
     if (m_latestUrl.isEmpty()) {
         return;
     }
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.dialog.action"),
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.dialog.action"),
                                   QStringLiteral("open_release_page"));
     QDesktopServices::openUrl(QUrl(m_latestUrl));
 }
@@ -616,7 +766,7 @@ void UpdaterController::copyUpdateCommand()
     if (QGuiApplication::clipboard()) {
         QGuiApplication::clipboard()->setText(hint);
     }
-    SentryReporter::addBreadcrumb(QStringLiteral("updater.dialog.action"),
+    UpdaterTelemetry::breadcrumb(QStringLiteral("updater.dialog.action"),
                                   QStringLiteral("copy_update_command"));
 }
 
@@ -628,5 +778,18 @@ void UpdaterController::setLatestVersionForTest(const QString& tag)
     }
     m_latestVersion = tag;
     emit latestVersionChanged();
+}
+
+void UpdaterController::setLastCheckedAtForTest(const QString& isoUtc)
+{
+    m_lastCheckedAt = isoUtc;
+    emit lastCheckedAtChanged();
+}
+
+void UpdaterController::setInstallFlavorForTest(InstallFlavor::Flavor flavor)
+{
+    m_flavor = flavor;
+    m_installFlavor = InstallFlavor::toSlug(flavor);
+    emit installFlavorChanged();
 }
 #endif

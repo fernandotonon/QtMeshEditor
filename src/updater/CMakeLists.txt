@@ -8,6 +8,7 @@ set(QTMESH_UPDATER_SOURCES
     UpdaterWorker.cpp
     UpdaterController.cpp
     UpdaterInstaller.cpp
+    UpdaterTelemetry.cpp
 )
 
 add_library(qtmesh_updater STATIC ${QTMESH_UPDATER_SOURCES})
