@@ -106,6 +106,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TexturePaintBuffer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UpdateVersion.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/InstallFlavor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/ArtifactResolver.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/UpdateVerifier.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/MinisignVerify.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/GitHubReleaseParser.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/UpdaterWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/updater/UpdaterController.cpp
@@ -419,6 +422,7 @@ if(BUILD_TESTS)
         Qt::QuickControls2
         meshoptimizer
         xatlas
+        qtmesh_sodium
     )
 
     # Add llama.cpp libraries if local LLM is enabled

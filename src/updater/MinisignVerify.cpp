@@ -4,7 +4,7 @@
 #include <QFile>
 #include <QTextStream>
 
-#if defined(Q_OS_LINUX)
+#if defined(QTMESH_MINISIGN_VERIFY) && QTMESH_MINISIGN_VERIFY
 #include <sodium.h>
 #endif
 
@@ -39,7 +39,7 @@ QByteArray decodeBase64(const QString& encoded)
     return QByteArray::fromBase64(trimmed);
 }
 
-#if defined(Q_OS_LINUX)
+#if defined(QTMESH_MINISIGN_VERIFY) && QTMESH_MINISIGN_VERIFY
 
 bool ensureSodiumInit()
 {
@@ -109,7 +109,7 @@ Outcome verifyParsed(const QByteArray& message,
     return ok;
 }
 
-#endif // Q_OS_LINUX
+#endif // QTMESH_MINISIGN_VERIFY
 
 QString resultToString(Result result)
 {
@@ -140,12 +140,12 @@ Outcome verifyFile(const QString& messageFile,
                    const QString& signatureFile,
                    const QString& publicKeyBase64)
 {
-#if !defined(Q_OS_LINUX)
+#if !defined(QTMESH_MINISIGN_VERIFY) || !QTMESH_MINISIGN_VERIFY
     Q_UNUSED(messageFile);
     Q_UNUSED(signatureFile);
     Q_UNUSED(publicKeyBase64);
     return fail(Result::Unsupported,
-                QStringLiteral("minisign verify is only built on Linux in this spike"));
+                QStringLiteral("minisign verify is not available in this build"));
 #else
     const QByteArray pubStruct = decodeBase64(publicKeyBase64);
     if (pubStruct.size() < kPubStructBytes)

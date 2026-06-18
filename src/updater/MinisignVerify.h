@@ -11,8 +11,8 @@
  * production public key is compiled in; CI signs artifacts with the matching
  * secret (see docs/AUTO_UPDATER_DESIGN.md).
  *
- * Linux builds link libsodium for verify. Other platforms return
- * @ref Result::Unsupported until #445 lands cross-platform crypto.
+ * Linux builds link libsodium for verify when @c QTMESH_MINISIGN_VERIFY is set.
+ * Builds without the backend return @ref Result::Unsupported.
  */
 namespace MinisignVerify {
 

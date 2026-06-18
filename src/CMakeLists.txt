@@ -99,6 +99,8 @@ PaintSelectionMask.cpp
 TexturePaintBuffer.cpp
 UpdateVersion.cpp
 updater/InstallFlavor.cpp
+updater/ArtifactResolver.cpp
+updater/UpdateVerifier.cpp
 updater/MinisignVerify.cpp
 updater/GitHubReleaseParser.cpp
 updater/UpdaterWorker.cpp
@@ -238,6 +240,8 @@ PaintSelectionMask.h
 TexturePaintBuffer.h
 UpdateVersion.h
 updater/InstallFlavor.h
+updater/ArtifactResolver.h
+updater/UpdateVerifier.h
 updater/MinisignVerify.h
 updater/GitHubReleaseParser.h
 updater/UpdaterWorker.h
