@@ -1,5 +1,6 @@
 #include "UpdaterController.h"
 #include "ArtifactResolver.h"
+#include "UpdaterInstaller.h"
 #include "UpdaterWorker.h"
 #include "AppSettingsKeys.h"
 #include "SentryReporter.h"
@@ -34,6 +35,7 @@ QString stateToString(UpdaterController::State state)
     case UpdaterController::State::Downloading: return QStringLiteral("downloading");
     case UpdaterController::State::Verifying: return QStringLiteral("verifying");
     case UpdaterController::State::ReadyToInstall: return QStringLiteral("ready_to_install");
+    case UpdaterController::State::Installing: return QStringLiteral("installing");
     }
     return QStringLiteral("idle");
 }
@@ -367,6 +369,54 @@ void UpdaterController::downloadAndInstall()
     SentryReporter::addBreadcrumb(QStringLiteral("updater.download.start"),
                                   QStringLiteral("version=%1").arg(m_latestVersion));
     beginDownloadIfNeeded(true);
+}
+
+void UpdaterController::installUpdate()
+{
+    if (m_state != State::ReadyToInstall) {
+        return;
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.install.start"),
+                                  QStringLiteral("version=%1").arg(m_latestVersion));
+    setError(QString());
+    setState(State::Installing);
+    logDialogStateBreadcrumb();
+
+    UpdaterInstaller::InstallContext context;
+    context.stagedArtifactPath = m_stagedArtifactPath;
+    context.releaseTag = m_latestVersion;
+    context.executablePath = QCoreApplication::applicationFilePath();
+    context.installRoot = UpdaterInstaller::resolveInstallRoot(context.executablePath);
+    context.parentPid = QCoreApplication::applicationPid();
+
+    const UpdaterInstaller::InstallPlan plan = UpdaterInstaller::prepareInstall(context);
+    if (!plan.ok) {
+        SentryReporter::addBreadcrumb(QStringLiteral("updater.install.error"),
+                                      plan.errorMessage,
+                                      QStringLiteral("error"));
+        setError(plan.errorMessage.isEmpty()
+                     ? tr("Could not prepare the update for installation.")
+                     : plan.errorMessage);
+        setState(State::Error);
+        logDialogStateBreadcrumb();
+        return;
+    }
+
+    if (!UpdaterInstaller::launchRelauncher(plan)) {
+        SentryReporter::addBreadcrumb(QStringLiteral("updater.install.error"),
+                                      QStringLiteral("relauncher missing or failed to start"),
+                                      QStringLiteral("error"));
+        setError(tr("Could not launch the update installer. "
+                    "Make sure qtmesh-relauncher is next to the application binary."));
+        setState(State::Error);
+        logDialogStateBreadcrumb();
+        return;
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("updater.install.relaunch"),
+                                  plan.manifestPath);
+    QApplication::quit();
 }
 
 void UpdaterController::beginDownloadIfNeeded(bool userInitiated)

@@ -37,7 +37,8 @@ Window {
             if (event.key === Qt.Key_Escape) {
                 if (UpdaterController.state === UpdaterController.Checking
                     || UpdaterController.state === UpdaterController.Downloading
-                    || UpdaterController.state === UpdaterController.Verifying) {
+                    || UpdaterController.state === UpdaterController.Verifying
+                    || UpdaterController.state === UpdaterController.Installing) {
                     UpdaterController.cancel()
                 }
                 UpdaterController.dismiss()
@@ -100,6 +101,7 @@ Window {
                 case UpdaterController.Downloading: return "Downloading update…"
                 case UpdaterController.Verifying: return "Verifying download…"
                 case UpdaterController.ReadyToInstall: return "Ready to install"
+                case UpdaterController.Installing: return "Installing update…"
                 default: return "Software updates"
                 }
             }
@@ -119,6 +121,7 @@ Window {
             running: UpdaterController.state === UpdaterController.Checking
                      || UpdaterController.state === UpdaterController.Downloading
                      || UpdaterController.state === UpdaterController.Verifying
+                     || UpdaterController.state === UpdaterController.Installing
             visible: running
         }
 
@@ -272,7 +275,7 @@ Window {
             }
         }
 
-        // Ready to install (#444 — install step lands in #446–448)
+        // Ready to install (#446–448)
         ColumnLayout {
             Layout.fillWidth: true
             visible: UpdaterController.state === UpdaterController.ReadyToInstall
@@ -283,11 +286,33 @@ Window {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 12
                 text: "Update " + UpdaterController.latestVersion +
-                      " downloaded and verified. Automatic installation will be available in a future release."
+                      " downloaded and verified. Install now to replace this copy and restart."
             }
-            InspectorButton {
-                label: "Close"
-                onClicked: { UpdaterController.dismiss(); dialog.close() }
+            RowLayout {
+                spacing: 8
+                InspectorButton {
+                    label: "Install & restart"
+                    primary: true
+                    onClicked: UpdaterController.installUpdate()
+                }
+                InspectorButton {
+                    label: "Later"
+                    onClicked: { UpdaterController.dismiss(); dialog.close() }
+                }
+            }
+        }
+
+        // Installing
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: UpdaterController.state === UpdaterController.Installing
+            spacing: 8
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 12
+                text: "Preparing installation. The application will close and restart automatically."
             }
         }
 

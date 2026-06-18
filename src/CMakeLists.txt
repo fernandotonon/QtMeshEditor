@@ -97,14 +97,6 @@ TextureAtlasPacker.cpp
 PaintBufferImageProvider.cpp
 PaintSelectionMask.cpp
 TexturePaintBuffer.cpp
-UpdateVersion.cpp
-updater/InstallFlavor.cpp
-updater/ArtifactResolver.cpp
-updater/UpdateVerifier.cpp
-updater/MinisignVerify.cpp
-updater/GitHubReleaseParser.cpp
-updater/UpdaterWorker.cpp
-updater/UpdaterController.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
 VATBaker.cpp
@@ -239,13 +231,6 @@ PaintBufferImageProvider.h
 PaintSelectionMask.h
 TexturePaintBuffer.h
 UpdateVersion.h
-updater/InstallFlavor.h
-updater/ArtifactResolver.h
-updater/UpdateVerifier.h
-updater/MinisignVerify.h
-updater/GitHubReleaseParser.h
-updater/UpdaterWorker.h
-updater/UpdaterController.h
 TexturePaintController.h
 VertexColorBaker.h
 ApplyAtlas.h
@@ -297,6 +282,8 @@ ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/PS1")
 #file(GLOB UI_FILES ./ui_files/*.ui)
 # if we don't include this CMake will not include ui headers properly:
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH_DIR})
+
+add_subdirectory(updater)
 
 ##############################################################
 #  Processing ogre-procedural
@@ -553,6 +540,7 @@ Qt::QuickControls2
 meshoptimizer
 xatlas
 qtmesh_sodium
+qtmesh_updater
 )
 
 # One-time legacy secret-store read for migration (see CloudCredentialStore).
@@ -587,6 +575,18 @@ endif()
 if(ENABLE_PS1_RIP AND TARGET Qt6::Gamepad)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE HAVE_QT_GAMEPAD)
     target_link_libraries(${CMAKE_PROJECT_NAME} Qt6::Gamepad)
+endif()
+
+if(ENABLE_AUTO_UPDATER AND TARGET qtmesh-relauncher)
+    add_dependencies(${CMAKE_PROJECT_NAME} qtmesh-relauncher)
+    if(APPLE)
+        add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy
+                "${CMAKE_BINARY_DIR}/bin/qtmesh-relauncher"
+                "$<TARGET_BUNDLE_DIR:${CMAKE_PROJECT_NAME}>/Contents/MacOS/qtmesh-relauncher"
+            COMMENT "Copying qtmesh-relauncher into app bundle"
+        )
+    endif()
 endif()
 ENDIF()
 
@@ -646,7 +646,7 @@ if(BUILD_TESTS)
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
-    meshoptimizer xatlas qtmesh_sodium)
+    meshoptimizer xatlas qtmesh_sodium qtmesh_updater)
 
     # CloudCredentialStore.cpp (compiled into the tests) does a one-time legacy
     # secret-store read in migrateLegacySettingsIfNeeded(), which
