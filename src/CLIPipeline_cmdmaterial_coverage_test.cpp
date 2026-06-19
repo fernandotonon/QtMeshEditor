@@ -64,6 +64,10 @@ protected:
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         ASSERT_TRUE(canLoadMeshFiles()) << "Ogre plugins/codecs not available";
         createStandardOgreMaterials();
+        // The --generate-pbr path auto-downloads its ONNX models on first use;
+        // forbid network in tests so the synchronous synthesize call can't hang
+        // on a download (it returns the graceful "model not available" error).
+        qputenv("QTMESH_PBR_NO_DOWNLOAD", "1");
         // Each cmdMaterial run appends to the global SelectionSet; clear it so
         // selectedEntityCount in the next run reflects only that run's import.
         if (auto* sel = SelectionSet::getSingletonPtr())
@@ -72,6 +76,7 @@ protected:
 
     void TearDown() override
     {
+        qunsetenv("QTMESH_PBR_NO_DOWNLOAD");
         if (auto* sel = SelectionSet::getSingletonPtr())
             sel->clear();
     }

@@ -118,6 +118,10 @@ bool AIAssistManager::ensureModelBlocking(Map map)
     const QString dest = modelPath(map);
     if (QFileInfo::exists(dest))
         return true;
+    // Offline / test guard: never hit the network when this is set (unit tests
+    // set it so the synchronous synthesize path can't hang on a download).
+    if (!qEnvironmentVariableIsEmpty("QTMESH_PBR_NO_DOWNLOAD"))
+        return false;
     const QString url = defaultModelUrl(map);
     if (url.isEmpty())
         return false;
