@@ -148,6 +148,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AssetScanController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelTurntableRenderer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelIsometricRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorModeController.cpp
@@ -286,6 +287,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AssetScanController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelTurntableRenderer.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelIsometricRenderer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorModeController.h

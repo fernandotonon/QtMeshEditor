@@ -139,6 +139,7 @@ AssetBrowserController.cpp
 AssetScanController.cpp
 MaterialPreviewRenderer.cpp
 ModelTurntableRenderer.cpp
+ModelIsometricRenderer.cpp
 EditableMesh.cpp
 EditModeController.cpp
 EditorModeController.cpp
@@ -266,6 +267,7 @@ AssetBrowserController.h
 AssetScanController.h
 MaterialPreviewRenderer.h
 ModelTurntableRenderer.h
+ModelIsometricRenderer.h
 EditableMesh.h
 EditModeController.h
 EditorModeController.h

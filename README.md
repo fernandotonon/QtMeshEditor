@@ -53,10 +53,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run QtMesh scan
-        uses: fernandotonon/QtMeshEditor@3.6.0
+        uses: fernandotonon/QtMeshEditor@3.7.0
         with:
           command: scan
-          image-tag: "3.6.0"
+          image-tag: "3.7.0"
         env:
           QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
 ```
@@ -81,37 +81,37 @@ Release tags are listed on the [releases page](https://github.com/fernandotonon/
 
 ```yaml
 # Validate a specific mesh
-- uses: fernandotonon/QtMeshEditor@3.6.0
+- uses: fernandotonon/QtMeshEditor@3.7.0
   with:
     command: validate
     input-file: ./models/character.fbx
-    image-tag: "3.6.0"
+    image-tag: "3.7.0"
 
 # Convert FBX → glTF
-- uses: fernandotonon/QtMeshEditor@3.6.0
+- uses: fernandotonon/QtMeshEditor@3.7.0
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.gltf2
-    image-tag: "3.6.0"
+    image-tag: "3.7.0"
 
 # Resample Mixamo animations (200+ keyframes → 30)
-- uses: fernandotonon/QtMeshEditor@3.6.0
+- uses: fernandotonon/QtMeshEditor@3.7.0
   with:
     command: anim
     input-file: ./animations/dance.fbx
     output-file: ./output/dance_optimized.fbx
     options: --resample 30
-    image-tag: "3.6.0"
+    image-tag: "3.7.0"
 
 # Get mesh info as JSON
-- uses: fernandotonon/QtMeshEditor@3.6.0
+- uses: fernandotonon/QtMeshEditor@3.7.0
   id: info
   with:
     command: info
     input-file: ./models/character.fbx
     options: --json
-    image-tag: "3.6.0"
+    image-tag: "3.7.0"
 
 # Docker (alternative — :latest tracks newest image; pin :3.4.0 to match semver action ref)
 docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh:latest scan ./assets --fail-on error

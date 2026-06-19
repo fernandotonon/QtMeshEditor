@@ -18,6 +18,7 @@ const NAV = [
     { id: 'cmd-lod', label: 'lod' },
     { id: 'cmd-pose', label: 'pose' },
     { id: 'cmd-turntable', label: 'turntable' },
+    { id: 'cmd-isometric', label: 'isometric' },
     { id: 'cmd-vat', label: 'vat' },
     { id: 'cmd-scan', label: 'scan' },
   ]},
@@ -477,6 +478,26 @@ qtmesh turntable <file> -o frame_%02d.png [--frames N] [--axis y|x|z]`}
               Use <Code>%%</Code> in the path for a literal percent sign. Invalid numeric flags (e.g. <Code>--frames abc</Code>) return exit code <Code>2</Code>.
             </p>
           </CmdSection>
+
+          <CmdSection id="cmd-isometric" name="isometric" description={<>Headless render-to-texture export for <strong>isometric / 8-direction</strong> sprite atlases used by 2D games (Godot <Code>AnimatedSprite2D</Code>, Unity sliced sheets, etc.). Renders the model from fixed compass directions while optionally sampling an animation into evenly spaced frames. Output is a single PNG grid: <strong>rows = directions</strong>, <strong>columns = animation frames</strong>. Row 0 is the front view (camera on +Z); each subsequent row rotates clockwise when viewed from above (+Y). Uses the same Ogre RTSS path as <Code>turntable</Code>.</>}
+            synopsis={`qtmesh isometric <file> -o <output.png> [--directions N] [--frames N] [--animation NAME]`}
+            options={[
+              ['-o <output>', 'Output PNG path (required)'],
+              ['--directions N', 'Compass direction rows (default 8; clamped 1–64)'],
+              ['--frames N', 'Animation frame columns (default 1 static, 8 when --animation is set)'],
+              ['--animation NAME', 'Sample this skeletal animation across --frames columns'],
+              ['--elevation DEG', 'Camera elevation above the orbit plane (default 30; alias --camera-height)'],
+              ['--start-azimuth DEG', 'Rotate row 0 to match your game facing (default 0)'],
+              ['--size WxH', 'Per-cell resolution (default 512×512)'],
+              ['--width W / --height H', 'Per-cell dimensions'],
+              ['--json', 'Emit machine-readable report (grid dims, direction order, paths)'],
+            ]}
+            examples={[
+              'qtmesh isometric character.fbx -o iso.png',
+              'qtmesh isometric character.fbx --animation "Walk" --frames 8 -o iso_walk.png --size 256',
+              'qtmesh isometric prop.glb -o iso_prop.png --directions 4 --elevation 25 --json',
+            ]}
+          />
 
           <CmdSection id="cmd-vat" name="vat" description={<>Bake a skeletal animation to a <strong>Vertex Animation Texture</strong> (OpenVAT format). The output is a 16-bit PNG storing per-vertex position+normal samples in time, a JSON sidecar with the playback bounds, a vertex-order-aligned glTF, and an Ogre bind sidecar (<Code>{`<basename>_ogre_bind.bin`}</Code>) so engine importers can realign UV2 to the bake's column order on import. Drop-in shader templates for Godot/Unity/Unreal ship at <a href="https://github.com/fernandotonon/QtMeshEditor/tree/master/tools/vat-shaders" className={s.link}>tools/vat-shaders/</a> and can be copied next to the bake with <Code>--include-shaders</Code>. Live demos: <a href="/#vat-demo" className={s.link}>Godot (web)</a>, <a href="https://github.com/fernandotonon/QtMeshEditor/tree/master/tools/unity-vat-demo" className={s.link}>Unity sample project</a>, <a href="https://github.com/fernandotonon/QtMeshEditor/tree/master/tools/unreal-vat-demo" className={s.link}>Unreal sample project</a>.</>}
             synopsis={`qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders <list>] [--json]`}

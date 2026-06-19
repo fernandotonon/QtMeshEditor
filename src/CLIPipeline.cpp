@@ -32,6 +32,7 @@
 #include "MorphAnimationManager.h"
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
+#include "ModelIsometricRenderer.h"
 #include "ModelTurntableRenderer.h"
 #include "QtMeshCloudClient.h"
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -581,6 +582,11 @@ void CLIPipeline::printUsage()
         "  turntable <file> -o <pattern>     Use %02d in -o to write separate frame PNGs\n"
         "                                    Options: --axis y|x|z, --elevation/--camera-height <deg>,\n"
         "                                    --width/--height, --json\n"
+        "  isometric <file> -o <output> [--directions N] [--frames N] [--animation NAME]\n"
+        "                                    8-direction isometric sprite grid (rows=directions,\n"
+        "                                    cols=animation frames). Static mesh when no animation.\n"
+        "                                    Options: --elevation/--camera-height <deg>, --size WxH,\n"
+        "                                    --width/--height, --start-azimuth <deg>, --json\n"
         "  scan [path] [options]           Scan directory for 3D asset issues (default path: .)\n"
         "  material <file> --preset <name> [-o <output>]\n"
         "                                  Apply a built-in material preset to every sub-entity\n"
@@ -1294,6 +1300,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "lod") rc = cmdLod(argc, argv);
     else if (cmd == "pose") rc = cmdPose(argc, argv);
     else if (cmd == "turntable") rc = cmdTurntable(argc, argv);
+    else if (cmd == "isometric") rc = cmdIsometric(argc, argv);
     else if (cmd == "scan") rc = cmdScan(argc, argv);
     else if (cmd == "material") rc = cmdMaterial(argc, argv);
     else if (cmd == "pack-textures") rc = cmdPackTextures(argc, argv);
@@ -3276,6 +3283,233 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
                          .arg(frames.size())
                          .arg(QFileInfo(outputPath).fileName()));
         }
+    }
+
+    return 0;
+}
+
+int CLIPipeline::cmdIsometric(int argc, char* argv[])
+{
+    // isometric <file> -o <output> [--directions N] [--frames N] [--animation NAME]
+    //                     [--size WxH] [--width W] [--height H] [--elevation deg]
+    //                     [--start-azimuth deg] [--json]
+    QString inputPath, outputPath, animationName;
+    int frameCount = 1;
+    bool frameCountExplicit = false;
+    int directionCount = 8;
+    int width = 512;
+    int height = 512;
+    float elevation = 30.0f;
+    float startAzimuth = 0.0f;
+    bool jsonOutput = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "isometric" || arg == "--cli")
+            continue;
+        if (arg == "--json") {
+            jsonOutput = true;
+            continue;
+        }
+        if (arg == "-o" && i + 1 < argc) {
+            outputPath = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--animation" && i + 1 < argc) {
+            animationName = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--frames" && i + 1 < argc) {
+            if (!parseCliInt(QString(argv[++i]), &frameCount)) {
+                err() << "Error: Invalid value for --frames." << Qt::endl;
+                return 2;
+            }
+            frameCountExplicit = true;
+            continue;
+        }
+        if (arg == "--directions" && i + 1 < argc) {
+            if (!parseCliInt(QString(argv[++i]), &directionCount)) {
+                err() << "Error: Invalid value for --directions." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--width" && i + 1 < argc) {
+            if (!parseCliInt(QString(argv[++i]), &width)) {
+                err() << "Error: Invalid value for --width." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--height" && i + 1 < argc) {
+            if (!parseCliInt(QString(argv[++i]), &height)) {
+                err() << "Error: Invalid value for --height." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--size" && i + 1 < argc) {
+            const QString sizeArg = QString(argv[++i]);
+            const int xPos = sizeArg.indexOf(QLatin1Char('x'));
+            if (xPos > 0) {
+                if (!parseCliInt(sizeArg.left(xPos), &width) || !parseCliInt(sizeArg.mid(xPos + 1), &height)) {
+                    err() << "Error: Invalid value for --size (expected WxH)." << Qt::endl;
+                    return 2;
+                }
+            } else if (!parseCliInt(sizeArg, &width)) {
+                err() << "Error: Invalid value for --size." << Qt::endl;
+                return 2;
+            } else {
+                height = width;
+            }
+            continue;
+        }
+        if (arg == "--elevation" && i + 1 < argc) {
+            if (!parseCliFloat(QString(argv[++i]), &elevation)) {
+                err() << "Error: Invalid value for --elevation." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if ((arg == "--camera-height" || arg == "--camera_height") && i + 1 < argc) {
+            if (!parseCliFloat(QString(argv[++i]), &elevation)) {
+                err() << "Error: Invalid value for --camera-height." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--start-azimuth" && i + 1 < argc) {
+            if (!parseCliFloat(QString(argv[++i]), &startAzimuth)) {
+                err() << "Error: Invalid value for --start-azimuth." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (!arg.startsWith(QLatin1Char('-')) && inputPath.isEmpty()) {
+            inputPath = arg;
+            continue;
+        }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh isometric <file> -o <output> [--directions N] [--frames N]" << Qt::endl;
+        return 2;
+    }
+    if (outputPath.isEmpty()) {
+        err() << "Error: Output path required (-o)." << Qt::endl;
+        err() << "Usage: qtmesh isometric <file> -o <output.png> [--directions 8]" << Qt::endl;
+        return 2;
+    }
+
+    if (!animationName.isEmpty() && !frameCountExplicit)
+        frameCount = 8;
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless())
+        return 1;
+
+    SentryReporter::addBreadcrumb("ui.action",
+                                  QString("Isometric .%1 dirs=%2 frames=%3 anim=%4")
+                                      .arg(fi.suffix())
+                                      .arg(directionCount)
+                                      .arg(frameCount)
+                                      .arg(animationName.isEmpty() ? QStringLiteral("static") : animationName));
+    SentryReporter::addBreadcrumb("file.import", fi.absoluteFilePath());
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    QList<Ogre::Entity *> entityList;
+    for (auto *obj : Manager::getSingleton()->getEntities()) {
+        if (obj && obj->getMovableType() == "Entity")
+            entityList.append(static_cast<Ogre::Entity *>(obj));
+    }
+    if (entityList.isEmpty()) {
+        SentryReporter::captureMessage(QString("CLI isometric: import failed (.%1)").arg(fi.suffix()),
+                                       "error");
+        err() << "Error: Failed to load file: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    Ogre::Entity *animatedEntity = nullptr;
+    if (!animationName.isEmpty()) {
+        for (Ogre::Entity *entity : entityList) {
+            if (entity && entity->hasSkeleton()) {
+                animatedEntity = entity;
+                break;
+            }
+        }
+        if (!animatedEntity) {
+            err() << "Error: --animation requires a skinned mesh with a skeleton." << Qt::endl;
+            return 1;
+        }
+    }
+
+    IsometricOptions options;
+    options.width = width;
+    options.height = height;
+    options.elevationDegrees = elevation;
+    options.directionCount = qBound(1, directionCount, 64);
+    options.startAzimuthDegrees = startAzimuth;
+
+    QList<QList<QImage>> grid;
+    QString renderError;
+    if (!ModelIsometricRenderer::renderToGrid(entityList, animatedEntity, animationName, frameCount, options,
+                                              &grid, &renderError)) {
+        ModelIsometricRenderer::shutdown();
+        err() << "Error: " << renderError << Qt::endl;
+        if (renderError.contains(QStringLiteral("not found"))) {
+            err() << "Available animations:" << Qt::endl;
+            if (animatedEntity) {
+                Ogre::SkeletonPtr skel = animatedEntity->getMesh()->getSkeleton();
+                if (skel) {
+                    for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai)
+                        err() << "  " << QString::fromStdString(skel->getAnimation(ai)->getName()) << Qt::endl;
+                }
+            }
+        }
+        return 1;
+    }
+
+    const QImage sheet = ModelIsometricRenderer::composeDirectionGrid(grid);
+    if (sheet.isNull() || !sheet.save(outputPath)) {
+        ModelIsometricRenderer::shutdown();
+        err() << "Error: Failed to write isometric sprite sheet " << outputPath << Qt::endl;
+        return 1;
+    }
+
+    ModelIsometricRenderer::shutdown();
+    SentryReporter::addBreadcrumb("file.export", QFileInfo(outputPath).absoluteFilePath());
+
+    const int dirs = grid.size();
+    const int frames = dirs > 0 ? grid.first().size() : 0;
+
+    if (jsonOutput) {
+        QJsonObject root;
+        root["input"] = fi.absoluteFilePath();
+        root["output"] = QFileInfo(outputPath).absoluteFilePath();
+        root["directions"] = dirs;
+        root["frames"] = frames;
+        root["cellWidth"] = width;
+        root["cellHeight"] = height;
+        root["sheetWidth"] = sheet.width();
+        root["sheetHeight"] = sheet.height();
+        root["elevation"] = elevation;
+        root["startAzimuth"] = startAzimuth;
+        root["directionOrder"] = ModelIsometricRenderer::directionOrderConvention();
+        if (!animationName.isEmpty())
+            root["animation"] = animationName;
+        cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        cliWrite(QString("Wrote isometric sprite sheet (%1 directions × %2 frames): %3\n")
+                     .arg(dirs)
+                     .arg(frames)
+                     .arg(QFileInfo(outputPath).fileName()));
     }
 
     return 0;

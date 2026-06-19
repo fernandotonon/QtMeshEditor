@@ -1109,6 +1109,43 @@ TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSingleFrameWritesOnePng)
     EXPECT_EQ(img.height(), 24);
 }
 
+TEST(CLIPipelineCmdIsometricError, MissingInputFile)
+{
+    TestArgv args({"qtmesh", "isometric", "-o", "out.png"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdIsometricError, MissingOutputPath)
+{
+    TestArgv args({"qtmesh", "isometric", "model.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdIsometricError, NonexistentInputFile)
+{
+    TestArgv args({"qtmesh", "isometric", "/nonexistent/path/model_xyz.obj", "-o", "out.png"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 1);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdIsometric_StaticGridWritesPng)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "iso_one.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("iso.png").toUtf8();
+
+    TestArgv args({"qtmesh", "isometric", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--directions", "2",
+                   "--size", "24"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 24);
+    EXPECT_EQ(img.height(), 48);
+}
+
 TEST(CLIPipelineCmdInfoError, NonexistentFile)
 {
     TestArgv args({"qtmesh", "info", "/tmp/nonexistent_cli_test_file_12345.fbx"});
