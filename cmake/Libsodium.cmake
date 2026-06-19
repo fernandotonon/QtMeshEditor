@@ -1,15 +1,67 @@
 # libsodium for minisign verify (#440 / #445).
-# Linux + macOS link static/system libsodium. Windows MinGW verify is deferred
-# (autotools/cmake build not wired in CI yet — download still runs, verify fails closed).
+# Linux + macOS: system pkg-config or autotools static build from source.
+# Windows MinGW: official prebuilt static libs (same 1.0.20-stable release).
 
 if(TARGET qtmesh_sodium)
     return()
 endif()
 
+function(qtmesh_sodium_add_imported_static lib_path include_dir)
+    add_library(qtmesh_sodium STATIC IMPORTED GLOBAL)
+    set_target_properties(qtmesh_sodium PROPERTIES
+        IMPORTED_LOCATION "${lib_path}"
+        INTERFACE_INCLUDE_DIRECTORIES "${include_dir}"
+        INTERFACE_COMPILE_DEFINITIONS "SODIUM_STATIC=1;QTMESH_MINISIGN_VERIFY=1"
+    )
+    if(WIN32)
+        set_property(TARGET qtmesh_sodium APPEND PROPERTY
+            IMPORTED_LINK_INTERFACE_LIBRARIES "advapi32;bcrypt")
+    endif()
+endfunction()
+
 if(WIN32)
-    message(STATUS "libsodium: Windows MinGW verify deferred (#445 follow-up)")
-    add_library(qtmesh_sodium INTERFACE)
-    target_compile_definitions(qtmesh_sodium INTERFACE QTMESH_MINISIGN_VERIFY=0)
+    if(NOT MINGW)
+        message(STATUS "libsodium: Windows MSVC minisign verify not wired — verify disabled")
+        add_library(qtmesh_sodium INTERFACE)
+        target_compile_definitions(qtmesh_sodium INTERFACE QTMESH_MINISIGN_VERIFY=0)
+        return()
+    endif()
+
+    include(FetchContent)
+
+    set(QTMESH_LIBSODIUM_MINGW_URL
+        "https://download.libsodium.org/libsodium/releases/libsodium-1.0.20-stable-mingw.tar.gz"
+        CACHE STRING "Prebuilt MinGW libsodium tarball for minisign verify")
+    set(QTMESH_LIBSODIUM_MINGW_SHA256
+        "19f7e5f814f62f5bfdf6ea2208244adbddb80e73362879ddb0e4844bc1f12c82"
+        CACHE STRING "SHA256 of MinGW libsodium tarball")
+
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(QTMESH_LIBSODIUM_MINGW_ARCH "win64")
+    else()
+        set(QTMESH_LIBSODIUM_MINGW_ARCH "win32")
+    endif()
+
+    message(STATUS "libsodium: using prebuilt MinGW ${QTMESH_LIBSODIUM_MINGW_ARCH} package")
+
+    FetchContent_Declare(
+        qtmesh_libsodium_mingw
+        URL ${QTMESH_LIBSODIUM_MINGW_URL}
+        URL_HASH SHA256=${QTMESH_LIBSODIUM_MINGW_SHA256}
+    )
+    FetchContent_MakeAvailable(qtmesh_libsodium_mingw)
+
+    set(QTMESH_LIBSODIUM_MINGW_ROOT
+        "${qtmesh_libsodium_mingw_SOURCE_DIR}/libsodium-${QTMESH_LIBSODIUM_MINGW_ARCH}")
+    set(QTMESH_LIBSODIUM_MARKER "${QTMESH_LIBSODIUM_MINGW_ROOT}/lib/libsodium.a")
+
+    if(NOT EXISTS "${QTMESH_LIBSODIUM_MARKER}")
+        message(FATAL_ERROR "libsodium MinGW package missing ${QTMESH_LIBSODIUM_MARKER}")
+    endif()
+
+    qtmesh_sodium_add_imported_static(
+        "${QTMESH_LIBSODIUM_MARKER}"
+        "${QTMESH_LIBSODIUM_MINGW_ROOT}/include")
     return()
 endif()
 
@@ -87,9 +139,6 @@ if(NOT EXISTS "${QTMESH_LIBSODIUM_MARKER}")
     endif()
 endif()
 
-add_library(qtmesh_sodium STATIC IMPORTED GLOBAL)
-set_target_properties(qtmesh_sodium PROPERTIES
-    IMPORTED_LOCATION "${QTMESH_LIBSODIUM_MARKER}"
-    INTERFACE_INCLUDE_DIRECTORIES "${QTMESH_LIBSODIUM_PREFIX}/include"
-    INTERFACE_COMPILE_DEFINITIONS "SODIUM_STATIC=1;QTMESH_MINISIGN_VERIFY=1"
-)
+qtmesh_sodium_add_imported_static(
+    "${QTMESH_LIBSODIUM_MARKER}"
+    "${QTMESH_LIBSODIUM_PREFIX}/include")
