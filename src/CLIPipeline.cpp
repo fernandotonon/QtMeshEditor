@@ -3323,16 +3323,16 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
             continue;
         }
         if (arg == "--frames" && i + 1 < argc) {
-            if (!parseCliInt(QString(argv[++i]), &frameCount)) {
-                err() << "Error: Invalid value for --frames." << Qt::endl;
+            if (!parseCliInt(QString(argv[++i]), &frameCount) || frameCount <= 0) {
+                err() << "Error: --frames must be a positive integer." << Qt::endl;
                 return 2;
             }
             frameCountExplicit = true;
             continue;
         }
         if (arg == "--directions" && i + 1 < argc) {
-            if (!parseCliInt(QString(argv[++i]), &directionCount)) {
-                err() << "Error: Invalid value for --directions." << Qt::endl;
+            if (!parseCliInt(QString(argv[++i]), &directionCount) || directionCount <= 0) {
+                err() << "Error: --directions must be a positive integer." << Qt::endl;
                 return 2;
             }
             continue;
@@ -3465,13 +3465,29 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
     Ogre::Entity *animatedEntity = nullptr;
     if (!animationName.isEmpty()) {
         for (Ogre::Entity *entity : entityList) {
-            if (entity && entity->hasSkeleton()) {
+            if (!entity || !entity->hasSkeleton())
+                continue;
+            Ogre::AnimationStateSet *states = entity->getAllAnimationStates();
+            if (states && states->hasAnimationState(animationName.toStdString())) {
                 animatedEntity = entity;
                 break;
             }
         }
         if (!animatedEntity) {
-            err() << "Error: --animation requires a skinned mesh with a skeleton." << Qt::endl;
+            err() << "Error: --animation requires a skinned mesh with clip '" << animationName << "'." << Qt::endl;
+            err() << "Available animations:" << Qt::endl;
+            for (Ogre::Entity *entity : entityList) {
+                if (!entity || !entity->hasSkeleton())
+                    continue;
+                Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+                if (!skel)
+                    continue;
+                const QString entityLabel = QString::fromStdString(entity->getName());
+                for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+                    err() << "  [" << entityLabel << "] "
+                          << QString::fromStdString(skel->getAnimation(ai)->getName()) << Qt::endl;
+                }
+            }
             return 1;
         }
     }
@@ -3493,11 +3509,16 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
         err() << "Error: " << renderError << Qt::endl;
         if (renderError.contains(QStringLiteral("not found"))) {
             err() << "Available animations:" << Qt::endl;
-            if (animatedEntity) {
-                Ogre::SkeletonPtr skel = animatedEntity->getMesh()->getSkeleton();
-                if (skel) {
-                    for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai)
-                        err() << "  " << QString::fromStdString(skel->getAnimation(ai)->getName()) << Qt::endl;
+            for (Ogre::Entity *entity : entityList) {
+                if (!entity || !entity->hasSkeleton())
+                    continue;
+                Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+                if (!skel)
+                    continue;
+                const QString entityLabel = QString::fromStdString(entity->getName());
+                for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+                    err() << "  [" << entityLabel << "] "
+                          << QString::fromStdString(skel->getAnimation(ai)->getName()) << Qt::endl;
                 }
             }
         }

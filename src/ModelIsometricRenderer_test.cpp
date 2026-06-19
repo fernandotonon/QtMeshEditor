@@ -13,6 +13,7 @@ protected:
     void SetUp() override
     {
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Mesh resources unavailable in test environment";
         ModelIsometricRenderer::shutdown();
     }
 
@@ -64,6 +65,29 @@ TEST_F(ModelIsometricRendererTest, ClampsMinimumSizeAndDirectionCount)
     ASSERT_EQ(grid.first().size(), 1);
     EXPECT_EQ(grid.first().first().width(), 16);
     EXPECT_EQ(grid.first().first().height(), 16);
+}
+
+TEST_F(ModelIsometricRendererTest, RejectsOversizedGrid)
+{
+    PrimitiveObject::createCube(QStringLiteral("IsoOversizeCube"));
+
+    QList<Ogre::Entity *> entities;
+    for (auto *obj : Manager::getSingleton()->getEntities()) {
+        if (obj && obj->getMovableType() == "Entity")
+            entities.append(static_cast<Ogre::Entity *>(obj));
+    }
+    ASSERT_FALSE(entities.isEmpty());
+
+    IsometricOptions options;
+    options.width = 512;
+    options.height = 512;
+    options.directionCount = 64;
+
+    QList<QList<QImage>> grid;
+    QString err;
+    EXPECT_FALSE(ModelIsometricRenderer::renderToGrid(entities, nullptr, {}, 360, options, &grid, &err));
+    EXPECT_TRUE(err.contains(QStringLiteral("Grid too large")));
+    EXPECT_TRUE(grid.isEmpty());
 }
 
 TEST_F(ModelIsometricRendererTest, StaticGridDimensions)

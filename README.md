@@ -35,7 +35,7 @@ Available on the [GitHub Actions Marketplace](https://github.com/marketplace/act
 **Versioning**
 
 - **Always follow the latest GitHub release** — use the Marketplace floating tag `fernandotonon/QtMeshEditor@v1` (same pattern as the [Marketplace example](https://github.com/marketplace/actions/qtmesheditor)). The composite action defaults to `image-tag: latest`, so the Docker CLI tracks the newest published `ghcr.io/fernandotonon/qtmesh` image.
-- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.5.3**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
+- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.7.0**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
 
 Pinned workflow template (action + `ghcr.io` image aligned):
 

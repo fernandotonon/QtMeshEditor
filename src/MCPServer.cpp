@@ -4613,13 +4613,16 @@ QJsonObject MCPServer::toolGenerateIsometricSprites(const QJsonObject &args)
     Ogre::Entity *animatedEntity = nullptr;
     if (!animationName.isEmpty()) {
         for (Ogre::Entity *entity : entityList) {
-            if (entity && entity->hasSkeleton()) {
+            if (!entity || !entity->hasSkeleton())
+                continue;
+            Ogre::AnimationStateSet *states = entity->getAllAnimationStates();
+            if (states && states->hasAnimationState(animationName.toStdString())) {
                 animatedEntity = entity;
                 break;
             }
         }
         if (!animatedEntity)
-            return makeErrorResult("--animation requires a skinned mesh with a skeleton");
+            return makeErrorResult(QString("Error: no skinned entity has animation '%1'").arg(animationName));
     }
 
     QList<QList<QImage>> grid;

@@ -187,6 +187,10 @@ TEST_F(CLIPipelineCmdIsometricCoverageTest, CameraPaddingJsonReport)
                       "--padding", "1.5", "--json"});
     EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
     ASSERT_TRUE(QFile::exists(out));
+    QImage img(out);
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 28);
+    EXPECT_EQ(img.height(), 56);
 }
 
 TEST_F(CLIPipelineCmdIsometricCoverageTest, AnimatedGridWhenAssetAvailable)
@@ -202,7 +206,7 @@ TEST_F(CLIPipelineCmdIsometricCoverageTest, AnimatedGridWhenAssetAvailable)
     const QString out = outPath("iso_anim.png");
     ArgvBuilder args({"qtmesh", "isometric", fbx, "-o", out, "--animation", animName.constData(), "--frames", "4",
                       "--directions", "4", "--size", "32"});
-    ASSERT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
 
     ASSERT_TRUE(QFile::exists(out));
     QImage img(out);

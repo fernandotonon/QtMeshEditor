@@ -769,7 +769,8 @@ protected:
     // One-time warmup: the first FBX import in a process sometimes fails
     // due to lazy initialization in the resource/plugin pipeline.
     static void SetUpTestSuite() {
-        if (!tryInitOgre() || !canLoadMeshFiles()) return;
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Mesh resources unavailable in test environment";
         createStandardOgreMaterials();
 
         QString warmupFile = testDataDir() + "/Twist Dance.fbx";
@@ -1174,6 +1175,12 @@ TEST(CLIPipelineCmdIsometricError, InvalidResolutionReturnsUsageError)
 TEST(CLIPipelineCmdIsometricError, InvalidCameraDistanceReturnsUsageError)
 {
     TestArgv args({"qtmesh", "isometric", "model.fbx", "-o", "out.png", "--camera-distance", "0"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdIsometricError, InvalidFramesReturnsUsageError)
+{
+    TestArgv args({"qtmesh", "isometric", "model.fbx", "-o", "out.png", "--frames", "0"});
     EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
 }
 

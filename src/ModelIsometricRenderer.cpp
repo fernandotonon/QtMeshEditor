@@ -16,9 +16,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <unordered_set>
 
 namespace {
+
+constexpr int kMaxIsometricDirections = 64;
+constexpr int kMaxIsometricFrames = 360;
+constexpr int kMaxIsometricCellSize = 8192;
+constexpr int kMaxIsometricCells = 4096;
+constexpr int kMaxIsometricSheetDim = 16384;
 
 Ogre::SceneManager *sceneMgr()
 {
@@ -180,14 +187,21 @@ Ogre::AxisAlignedBox combinedWorldBounds(const QList<Ogre::Entity *> &entities)
   return box;
 }
 
-void recenterEntitiesAtOrigin(const QList<Ogre::Entity *> &entities, Ogre::AxisAlignedBox &bounds)
+void recenterEntitiesAtOrigin(const QList<Ogre::Entity *> &entities, Ogre::AxisAlignedBox &bounds,
+                              Ogre::Vector3 *outOffset = nullptr)
 {
+  if (outOffset)
+    *outOffset = Ogre::Vector3::ZERO;
+
   if (bounds.isNull() || bounds.isInfinite())
     return;
 
   const Ogre::Vector3 center = bounds.getCenter();
   if (center.squaredLength() < 1e-10f)
     return;
+
+  if (outOffset)
+    *outOffset = center;
 
   std::unordered_set<Ogre::SceneNode *> shifted;
   for (Ogre::Entity *entity : entities) {
@@ -202,6 +216,38 @@ void recenterEntitiesAtOrigin(const QList<Ogre::Entity *> &entities, Ogre::AxisA
   bounds.setExtents(bounds.getMinimum() - center, bounds.getMaximum() - center);
   refreshEntityBounds(entities);
 }
+
+void restoreEntitiesFromRecenter(const QList<Ogre::Entity *> &entities, const Ogre::Vector3 &offset)
+{
+  if (offset.squaredLength() < 1e-10f)
+    return;
+
+  std::unordered_set<Ogre::SceneNode *> shifted;
+  for (Ogre::Entity *entity : entities) {
+    if (!entity)
+      continue;
+    Ogre::SceneNode *node = entity->getParentSceneNode();
+    if (!node || !shifted.insert(node).second)
+      continue;
+    node->translate(offset, Ogre::Node::TS_WORLD);
+  }
+  refreshEntityBounds(entities);
+}
+
+struct RecenterGuard {
+  const QList<Ogre::Entity *> &entities;
+  Ogre::Vector3 offset;
+  bool active = false;
+
+  RecenterGuard(const QList<Ogre::Entity *> &ents, Ogre::Vector3 off) : entities(ents), offset(off)
+  {
+    active = offset.squaredLength() >= 1e-10f;
+  }
+  ~RecenterGuard() {
+    if (active)
+      restoreEntitiesFromRecenter(entities, offset);
+  }
+};
 
 Ogre::Vector3 orbitAxisVector(TurntableAxis axis)
 {
@@ -454,10 +500,27 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
     return false;
   }
 
-  const int width = std::max(16, options.width);
-  const int height = std::max(16, options.height);
-  const int directions = std::clamp(options.directionCount, 1, 64);
-  const int frames = std::clamp(frameCount, 1, 360);
+  const int width = std::clamp(options.width, 16, kMaxIsometricCellSize);
+  const int height = std::clamp(options.height, 16, kMaxIsometricCellSize);
+  const int directions = std::clamp(options.directionCount, 1, kMaxIsometricDirections);
+  const int frames = std::clamp(frameCount, 1, kMaxIsometricFrames);
+
+  const std::int64_t sheetW = static_cast<std::int64_t>(frames) * width;
+  const std::int64_t sheetH = static_cast<std::int64_t>(directions) * height;
+  if (static_cast<std::int64_t>(directions) * frames > kMaxIsometricCells
+      || sheetW > kMaxIsometricSheetDim || sheetH > kMaxIsometricSheetDim) {
+    if (errorOut) {
+      *errorOut =
+          QStringLiteral("Grid too large (%1 directions × %2 frames at %3×%4 px; max %5 cells, %6 px/side)")
+              .arg(directions)
+              .arg(frames)
+              .arg(width)
+              .arg(height)
+              .arg(kMaxIsometricCells)
+              .arg(kMaxIsometricSheetDim);
+    }
+    return false;
+  }
 
   const bool wantsAnimation = animatedEntity && !animationName.isEmpty();
   Ogre::AnimationState *animState = nullptr;
@@ -489,8 +552,10 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
     return false;
   }
 
-  recenterEntitiesAtOrigin(entities, bounds);
+  Ogre::Vector3 recenterOffset = Ogre::Vector3::ZERO;
+  recenterEntitiesAtOrigin(entities, bounds, &recenterOffset);
   bounds = combinedWorldBounds(entities);
+  RecenterGuard recenterGuard(entities, recenterOffset);
 
   const float elevationRad =
       Ogre::Degree(std::clamp(options.elevationDegrees, -80.0f, 80.0f)).valueRadians();
@@ -510,8 +575,8 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
   }
 
   SentryReporter::addBreadcrumb(
-      "cli.isometric",
-      QStringLiteral("render start dirs=%1 frames=%2 animated=%3")
+      "file.export",
+      QStringLiteral("isometric render start dirs=%1 frames=%2 animated=%3")
           .arg(directions)
           .arg(frames)
           .arg(wantsAnimation ? animationName : QStringLiteral("static")));
@@ -541,22 +606,24 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
       animState->setEnabled(false);
 
     restoreIsometricLighting(sm);
-    SentryReporter::addBreadcrumb("cli.isometric",
-                                  QStringLiteral("render ok dirs=%1 frames=%2").arg(directions).arg(frames));
+    SentryReporter::addBreadcrumb("file.export",
+                                  QStringLiteral("isometric render ok dirs=%1 frames=%2")
+                                      .arg(directions)
+                                      .arg(frames));
     return true;
   } catch (const Ogre::Exception &e) {
     outRowsByDirection->clear();
     restoreIsometricLighting(sm);
     if (errorOut)
       *errorOut = QString::fromStdString(e.getFullDescription());
-    SentryReporter::addBreadcrumb("cli.isometric", QStringLiteral("render failed: Ogre exception"));
+    SentryReporter::addBreadcrumb("file.export", QStringLiteral("isometric render failed: Ogre exception"));
     return false;
   } catch (...) {
     outRowsByDirection->clear();
     restoreIsometricLighting(sm);
     if (errorOut)
       *errorOut = QStringLiteral("Isometric render failed");
-    SentryReporter::addBreadcrumb("cli.isometric", QStringLiteral("render failed"));
+    SentryReporter::addBreadcrumb("file.export", QStringLiteral("isometric render failed"));
     return false;
   }
 }
