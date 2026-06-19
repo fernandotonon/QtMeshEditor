@@ -11,8 +11,9 @@
  * production public key is compiled in; CI signs artifacts with the matching
  * secret (see docs/AUTO_UPDATER_DESIGN.md).
  *
- * Linux builds link libsodium for verify when @c QTMESH_MINISIGN_VERIFY is set.
- * Builds without the backend return @ref Result::Unsupported.
+ * Linux, macOS, and Windows MinGW builds link libsodium when
+ * @c QTMESH_MINISIGN_VERIFY is set. Builds without the backend return
+ * @ref Result::Unsupported.
  */
 namespace MinisignVerify {
 
