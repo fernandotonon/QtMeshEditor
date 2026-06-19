@@ -102,7 +102,7 @@ Only **`Portable`** enables download/install. All others show `updateCommandHint
 | **Portable** | macOS: `/Applications/QtMeshEditor.app`; Linux: `/opt/QtMeshEditor/`; Windows: zip layout / MSI registry `QtMeshEditor` without WinGet key. |
 | **Unknown** | CI trees, dev `build_local/`, ambiguous paths — **no self-update** (fail closed). |
 
-`ENABLE_AUTO_UPDATER=OFF` for snap/flatpak/deb/docker CI builds (#439) so the code path is absent in those artifacts.
+`ENABLE_AUTO_UPDATER=OFF` for snap/flatpak/deb/docker CI builds (#439) so the code path is absent in those artifacts. **Wired:** `build-linux` passes `-DENABLE_AUTO_UPDATER=OFF` when producing `qtmesheditor_amd64.deb` (snap + Docker consume the same package). Package builds also remove **Help → Check for Updates** from the menu at runtime.
 
 ### PoC status
 

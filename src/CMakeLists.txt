@@ -283,7 +283,9 @@ ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/PS1")
 # if we don't include this CMake will not include ui headers properly:
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH_DIR})
 
-add_subdirectory(updater)
+if(ENABLE_AUTO_UPDATER OR BUILD_TESTS)
+    add_subdirectory(updater)
+endif()
 
 ##############################################################
 #  Processing ogre-procedural
@@ -540,8 +542,11 @@ Qt::QuickControls2
 meshoptimizer
 xatlas
 qtmesh_sodium
-qtmesh_updater
 )
+
+if(ENABLE_AUTO_UPDATER)
+    target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_updater)
+endif()
 
 # One-time legacy secret-store read for migration (see CloudCredentialStore).
 if(APPLE)
