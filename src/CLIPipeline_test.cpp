@@ -1146,6 +1146,31 @@ TEST_F(CLIPipelineCmdTest, CmdIsometric_StaticGridWritesPng)
     EXPECT_EQ(img.height(), 48);
 }
 
+TEST_F(CLIPipelineCmdTest, CmdIsometric_ResolutionSetsSquareCells)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "iso_res.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("iso_res.png").toUtf8();
+
+    TestArgv args({"qtmesh", "isometric", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--directions", "4",
+                   "--resolution", "32"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 32 * 1);
+    EXPECT_EQ(img.height(), 32 * 4);
+}
+
+TEST(CLIPipelineCmdIsometricError, InvalidResolutionReturnsUsageError)
+{
+    TestArgv args({"qtmesh", "isometric", "model.fbx", "-o", "out.png", "--resolution", "8"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
+}
+
 TEST(CLIPipelineCmdInfoError, NonexistentFile)
 {
     TestArgv args({"qtmesh", "info", "/tmp/nonexistent_cli_test_file_12345.fbx"});

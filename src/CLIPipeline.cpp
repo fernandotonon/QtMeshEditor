@@ -586,7 +586,7 @@ void CLIPipeline::printUsage()
         "                                    8-direction isometric sprite grid (rows=directions,\n"
         "                                    cols=animation frames). Static mesh when no animation.\n"
         "                                    Options: --elevation/--camera-height <deg>, --size WxH,\n"
-        "                                    --width/--height, --start-azimuth <deg>, --json\n"
+        "                                    --resolution N, --width/--height, --start-azimuth <deg>, --json\n"
         "  scan [path] [options]           Scan directory for 3D asset issues (default path: .)\n"
         "  material <file> --preset <name> [-o <output>]\n"
         "                                  Apply a built-in material preset to every sub-entity\n"
@@ -3291,7 +3291,7 @@ int CLIPipeline::cmdTurntable(int argc, char* argv[])
 int CLIPipeline::cmdIsometric(int argc, char* argv[])
 {
     // isometric <file> -o <output> [--directions N] [--frames N] [--animation NAME]
-    //                     [--size WxH] [--width W] [--height H] [--elevation deg]
+    //                     [--size WxH] [--resolution N] [--width W] [--height H] [--elevation deg]
     //                     [--start-azimuth deg] [--json]
     QString inputPath, outputPath, animationName;
     int frameCount = 1;
@@ -3332,6 +3332,15 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
                 err() << "Error: Invalid value for --directions." << Qt::endl;
                 return 2;
             }
+            continue;
+        }
+        if (arg == "--resolution" && i + 1 < argc) {
+            int res = 0;
+            if (!parseCliInt(QString(argv[++i]), &res) || res < 16 || res > 8192) {
+                err() << "Error: --resolution must be an integer in [16..8192]." << Qt::endl;
+                return 2;
+            }
+            width = height = res;
             continue;
         }
         if (arg == "--width" && i + 1 < argc) {
@@ -3497,6 +3506,8 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
         root["frames"] = frames;
         root["cellWidth"] = width;
         root["cellHeight"] = height;
+        if (width == height)
+            root["resolution"] = width;
         root["sheetWidth"] = sheet.width();
         root["sheetHeight"] = sheet.height();
         root["elevation"] = elevation;

@@ -4568,6 +4568,12 @@ QJsonObject MCPServer::toolGenerateIsometricSprites(const QJsonObject &args)
         frameCount = 8;
 
     IsometricOptions options;
+    if (args.contains("resolution")) {
+        const int res = args.value("resolution").toInt(512);
+        if (res < 16 || res > 8192)
+            return makeErrorResult("Error: resolution must be an integer in [16..8192]");
+        options.width = options.height = res;
+    }
     if (args.contains("width")) options.width = args.value("width").toInt(options.width);
     if (args.contains("height")) options.height = args.value("height").toInt(options.height);
     if (args.contains("elevation")) options.elevationDegrees = static_cast<float>(args.value("elevation").toDouble(30.0));
@@ -4630,6 +4636,8 @@ QJsonObject MCPServer::toolGenerateIsometricSprites(const QJsonObject &args)
     result["frames"] = frames;
     result["cellWidth"] = options.width;
     result["cellHeight"] = options.height;
+    if (options.width == options.height)
+        result["resolution"] = options.width;
     result["sheetWidth"] = sheet.width();
     result["sheetHeight"] = sheet.height();
     result["elevation"] = options.elevationDegrees;
@@ -6555,8 +6563,11 @@ QJsonArray MCPServer::buildToolsList()
         props["elevation"] = QJsonObject{
             {"type", "number"},
             {"description", "Camera elevation in degrees above the orbit plane (default 30)."}};
-        props["width"] = QJsonObject{{"type", "integer"}, {"description", "Per-cell width in pixels (default 512)."}};
-        props["height"] = QJsonObject{{"type", "integer"}, {"description", "Per-cell height in pixels (default 512)."}};
+        props["resolution"] = QJsonObject{
+            {"type", "integer"},
+            {"description", "Per-cell square resolution in pixels (sets width and height). Default 512. Range [16..8192]."}};
+        props["width"] = QJsonObject{{"type", "integer"}, {"description", "Per-cell width in pixels (overrides resolution width). Default 512."}};
+        props["height"] = QJsonObject{{"type", "integer"}, {"description", "Per-cell height in pixels (overrides resolution height). Default 512."}};
         props["start_azimuth"] = QJsonObject{
             {"type", "number"},
             {"description", "Rotate row 0 to align with your game's facing direction (degrees, default 0)."}};

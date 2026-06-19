@@ -132,7 +132,7 @@ TEST_F(CLIPipelineCmdIsometricCoverageTest, StaticGridWritesPngOnDisk)
     const QString mesh = meshInput("iso_static.obj");
     const QString out = outPath("iso_static.png");
 
-    ArgvBuilder args({"qtmesh", "isometric", mesh, "-o", out, "--directions", "4", "--size", "40"});
+    ArgvBuilder args({"qtmesh", "isometric", mesh, "-o", out, "--directions", "4", "--resolution", "40"});
     EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
 
     ASSERT_TRUE(QFile::exists(out));

@@ -56,6 +56,7 @@ qtmesh pose model.fbx --animation "Dance" --count 4 -o pose_%02d.stl  # export N
 qtmesh turntable model.fbx -o turntable.png  # PNG sprite sheet (12 frames default)
 qtmesh turntable model.fbx -o frame_%02d.png --frames 24 --axis y --camera-height 25
 qtmesh isometric model.fbx -o iso.png  # 8-direction static sprite grid (rows=directions)
+qtmesh isometric model.fbx --resolution 256 -o iso.png  # square 256px cells
 qtmesh isometric model.fbx --animation "Walk" --frames 8 -o iso.png  # 8×8 animated atlas
 qtmesh validate model.fbx                      # validate mesh (exit 1 if errors found)
 qtmesh validate model.fbx --json               # validation results as JSON
