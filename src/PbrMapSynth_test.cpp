@@ -134,6 +134,22 @@ TEST(PbrMapSynthCore, RoughnessFlatLuminanceIsUniform)
     EXPECT_NEAR(qGray(r.pixel(4, 4)), center, 4);
 }
 
+// decodeGrayscaleFromRgb takes luminance of a 3-channel planar tensor (the
+// PBRify roughness/height models emit RGB even for grayscale maps).
+TEST(PbrMapSynthCore, DecodeGrayscaleFromRgbLuminance)
+{
+    const int w = 2, h = 1;
+    const size_t plane = 2;
+    std::vector<float> t(plane * 3);
+    // pixel0 = white (1,1,1) -> ~255 ; pixel1 = black (0,0,0) -> 0
+    t[0]=1; t[plane+0]=1; t[2*plane+0]=1;
+    t[1]=0; t[plane+1]=0; t[2*plane+1]=0;
+    QImage g = decodeGrayscaleFromRgb(t, w, h);
+    ASSERT_EQ(g.format(), QImage::Format_Grayscale8);
+    EXPECT_GE(qGray(g.pixel(0,0)), 254);
+    EXPECT_LE(qGray(g.pixel(1,0)), 1);
+}
+
 // Without ENABLE_ONNX, synthesize() reports the not-built error cleanly.
 #ifndef ENABLE_ONNX
 TEST(PbrMapSynthCore, SynthesizeWithoutOnnxFailsCleanly)

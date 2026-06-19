@@ -48,21 +48,23 @@ class AIAssistManager : public QObject
 
     Q_PROPERTY(bool available READ isAvailable CONSTANT)
     Q_PROPERTY(bool modelReady READ isModelReady NOTIFY modelReadyChanged)
-    Q_PROPERTY(QString modelPath READ modelPath NOTIFY modelReadyChanged)
 
 public:
     static AIAssistManager* instance();
     static AIAssistManager* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
 
+    /// The three per-map PBRify models (each a separate CC0 SPAN .onnx).
+    enum class Map { Normal, Roughness, Height };
+
     /// True only when the binary was compiled with ENABLE_ONNX.
     Q_INVOKABLE bool isAvailable() const;
-    /// True when the PBR model file exists on disk.
+    /// True when ALL configured per-map model files exist on disk.
     Q_INVOKABLE bool isModelReady() const;
-    /// Absolute path the PBR model is expected at (under AppData/ai_models/pbr).
-    QString modelPath() const;
+    /// Absolute path a given map's model is expected at (AppData/ai_models/pbr).
+    QString modelPath(Map map) const;
 
-    /// Kick off a background download of the PBR model if it is missing. No-op
-    /// if already present or no URL is configured. GUI prefetch hook.
+    /// Kick off background downloads of any missing per-map models. No-op for
+    /// maps already present or with no URL configured. GUI prefetch hook.
     Q_INVOKABLE void ensureModel();
 
     /// Synthesize PBR maps from an albedo image on disk, writing the requested
@@ -85,7 +87,8 @@ signals:
 private:
     explicit AIAssistManager(QObject* parent = nullptr);
 
-    QString defaultModelUrl() const;   // configurable; QSettings override
+    QString defaultModelUrl(Map map) const;   // configurable; QSettings override
+    static QString mapModelFile(Map map);     // bare .onnx filename per map
     static AIAssistManager* s_instance;
 };
 

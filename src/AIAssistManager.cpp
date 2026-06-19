@@ -13,27 +13,46 @@
 AIAssistManager* AIAssistManager::s_instance = nullptr;
 
 namespace {
-// Filename of the bundled/downloaded PBR UNet. The production model is a
-// permissively-licensed UNet (DeepBump is GPL and out); the actual host URL is
-// resolved separately (settings/env override below). Tests inject their own.
-constexpr const char* kPbrModelFile = "pbr_unet.onnx";
-constexpr const char* kModelUrlSettingsKey = "ai/pbrModelUrl";
-// TODO(#404): point at a permissively-licensed ONNX UNet host. Empty until then;
-// ensureModel() no-ops when empty and synthesize fails gracefully.
-constexpr const char* kDefaultPbrModelUrl = "";
+// PBRify_Remix (CC0-1.0) per-map SPAN models, exported to ONNX via
+// scripts/export-pbrify-onnx.py. Each map is a separate model file/URL.
+// The host base URL is configurable (QSettings ai/pbrModelBaseUrl or
+// QTMESH_PBR_MODEL_BASE_URL env); empty default until the .onnx files are
+// hosted, in which case ensureModel() no-ops and synthesis fails gracefully.
+constexpr const char* kModelBaseUrlSettingsKey = "ai/pbrModelBaseUrl";
+// TODO(#404): host the exported CC0 .onnx files and set this default.
+constexpr const char* kDefaultModelBaseUrl = "";
+
+const char* mapDownloadLabel(AIAssistManager::Map m) {
+    switch (m) {
+        case AIAssistManager::Map::Normal:    return "PBR Normal";
+        case AIAssistManager::Map::Roughness: return "PBR Roughness";
+        case AIAssistManager::Map::Height:    return "PBR Height";
+    }
+    return "PBR";
+}
 } // namespace
+
+QString AIAssistManager::mapModelFile(Map map)
+{
+    switch (map) {
+        case Map::Normal:    return QStringLiteral("1x-PBRify_NormalV3.onnx");
+        case Map::Roughness: return QStringLiteral("1x-PBRify_RoughnessV2.onnx");
+        case Map::Height:    return QStringLiteral("1x-PBRify_Height.onnx");
+    }
+    return {};
+}
 
 AIAssistManager::AIAssistManager(QObject* parent) : QObject(parent)
 {
     if (auto* dl = ModelDownloader::instance()) {
         connect(dl, &ModelDownloader::downloadProgressUpdated, this,
             [this](const QString& name, qint64 r, qint64 t) {
-                if (name == QLatin1String("PBR UNet"))
+                if (name.startsWith(QLatin1String("PBR ")))
                     emit modelDownloadProgress(r, t);
             });
         connect(dl, &ModelDownloader::downloadCompleted, this,
             [this](const QString& name, const QString&) {
-                if (name == QLatin1String("PBR UNet"))
+                if (name.startsWith(QLatin1String("PBR ")))
                     emit modelReadyChanged();
             });
     }
@@ -60,42 +79,48 @@ bool AIAssistManager::isAvailable() const
 #endif
 }
 
-QString AIAssistManager::modelPath() const
+QString AIAssistManager::modelPath(Map map) const
 {
     const QString dataPath =
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataPath).filePath(QStringLiteral("ai_models/pbr/") + kPbrModelFile);
+    return QDir(dataPath).filePath(QStringLiteral("ai_models/pbr/") + mapModelFile(map));
 }
 
 bool AIAssistManager::isModelReady() const
 {
-    return QFileInfo::exists(modelPath());
+    // Ready when every per-map model is present.
+    return QFileInfo::exists(modelPath(Map::Normal))
+        && QFileInfo::exists(modelPath(Map::Roughness))
+        && QFileInfo::exists(modelPath(Map::Height));
 }
 
-QString AIAssistManager::defaultModelUrl() const
+QString AIAssistManager::defaultModelUrl(Map map) const
 {
     QSettings s;
-    const QString fromSettings =
-        s.value(QString::fromLatin1(kModelUrlSettingsKey)).toString();
-    if (!fromSettings.isEmpty())
-        return fromSettings;
-    const QByteArray env = qgetenv("QTMESH_PBR_MODEL_URL");
-    if (!env.isEmpty())
-        return QString::fromUtf8(env);
-    return QString::fromLatin1(kDefaultPbrModelUrl);
+    QString base = s.value(QString::fromLatin1(kModelBaseUrlSettingsKey)).toString();
+    if (base.isEmpty()) {
+        const QByteArray env = qgetenv("QTMESH_PBR_MODEL_BASE_URL");
+        base = env.isEmpty() ? QString::fromLatin1(kDefaultModelBaseUrl)
+                             : QString::fromUtf8(env);
+    }
+    if (base.isEmpty())
+        return {};
+    if (!base.endsWith('/')) base += '/';
+    return base + mapModelFile(map);
 }
 
 void AIAssistManager::ensureModel()
 {
-    if (isModelReady())
-        return;
-    const QString url = defaultModelUrl();
-    if (url.isEmpty())
-        return; // no configured source — synthesize() will fail gracefully
-    const QString dest = modelPath();
-    QDir().mkpath(QFileInfo(dest).absolutePath());
-    if (auto* dl = ModelDownloader::instance())
-        dl->startDownload(url, dest, QStringLiteral("PBR UNet"));
+    auto* dl = ModelDownloader::instance();
+    if (!dl) return;
+    for (Map m : {Map::Normal, Map::Roughness, Map::Height}) {
+        if (QFileInfo::exists(modelPath(m))) continue;
+        const QString url = defaultModelUrl(m);
+        if (url.isEmpty()) continue; // no source — synthesize() fails gracefully
+        const QString dest = modelPath(m);
+        QDir().mkpath(QFileInfo(dest).absolutePath());
+        dl->startDownload(url, dest, QString::fromLatin1(mapDownloadLabel(m)));
+    }
 }
 
 PbrMapSynthResult AIAssistManager::synthesizePbrMaps(const QString& albedoPath,
@@ -146,36 +171,53 @@ PbrMapSynthResult AIAssistManager::synthesizePbrMaps(const QString& albedoPath,
         return out;
     }
 
-    PbrMapSynth::Result res = PbrMapSynth::synthesize(albedo, modelPath(), opts);
-    if (!res.ok) {
-        out.error = res.error;
+    // Run each requested map through its own per-map model. A model-dependent
+    // map (normal/height) that fails sets the error; roughness gracefully
+    // falls back to the offline luminance heuristic when its model is absent.
+#ifdef ENABLE_ONNX
+    if (opts.generateNormal) {
+        int w = 0, h = 0; QString err;
+        const std::vector<float> t =
+            PbrMapSynth::runTiledModel(albedo, modelPath(Map::Normal), opts, &w, &h, &err);
+        if (t.empty()) { out.error = err; emit synthesisError(out.error); return out; }
+        const QImage n = PbrMapSynth::decodeNormal(t, w, h, opts.normalStrength, opts.invertG);
+        if (n.save(normalOut, "PNG")) out.normalPath = normalOut;
+    }
+    if (opts.generateHeight) {
+        int w = 0, h = 0; QString err;
+        const std::vector<float> t =
+            PbrMapSynth::runTiledModel(albedo, modelPath(Map::Height), opts, &w, &h, &err);
+        if (t.empty()) { out.error = err; emit synthesisError(out.error); return out; }
+        const QImage hImg = PbrMapSynth::decodeGrayscaleFromRgb(t, w, h);
+        if (hImg.save(heightOut, "PNG")) out.heightPath = heightOut;
+    }
+    if (opts.generateRoughness) {
+        QImage rough;
+        int w = 0, h = 0; QString err;
+        const std::vector<float> t =
+            PbrMapSynth::runTiledModel(albedo, modelPath(Map::Roughness), opts, &w, &h, &err);
+        if (!t.empty())
+            rough = PbrMapSynth::decodeGrayscaleFromRgb(t, w, h);
+        else  // model missing/offline → luminance heuristic (always available)
+            rough = PbrMapSynth::roughnessFromAlbedo(albedo, opts.roughnessBase,
+                                                     opts.roughnessContrast);
+        if (!rough.isNull() && rough.save(roughOut, "PNG"))
+            out.roughnessPath = roughOut;
+    }
+#else
+    if (opts.generateNormal || opts.generateHeight) {
+        out.error = QStringLiteral("PBR map synthesis was not built into this binary "
+            "(rebuild with -DENABLE_ONNX=ON).");
         emit synthesisError(out.error);
         return out;
     }
-
-    // If the model produced height but no normal, derive the normal via the
-    // existing Sobel path (NormalMapGenerator) so all requested maps exist.
-    if (opts.generateNormal && res.normal.isNull() && !res.height.isNull()) {
-        // Persist height first so NormalMapGenerator can read it from disk.
-        res.height.save(heightOut, "PNG");
-        NormalMapGenerator::GenSpec spec;
-        spec.sourcePath = heightOut;
-        spec.invertG = opts.invertG;
-        spec.strength = 2.0f * opts.normalStrength;
-        const NormalMapGenerator::GenResult ng = NormalMapGenerator::generate(spec);
-        if (ng.ok)
-            res.normal = ng.image;
+    if (opts.generateRoughness) {
+        const QImage rough = PbrMapSynth::roughnessFromAlbedo(
+            albedo, opts.roughnessBase, opts.roughnessContrast);
+        if (!rough.isNull() && rough.save(roughOut, "PNG"))
+            out.roughnessPath = roughOut;
     }
-
-    if (opts.generateNormal && !res.normal.isNull()
-        && res.normal.save(normalOut, "PNG"))
-        out.normalPath = normalOut;
-    if (opts.generateRoughness && !res.roughness.isNull()
-        && res.roughness.save(roughOut, "PNG"))
-        out.roughnessPath = roughOut;
-    if (opts.generateHeight && !res.height.isNull()
-        && (QFileInfo::exists(heightOut) || res.height.save(heightOut, "PNG")))
-        out.heightPath = heightOut;
+#endif
 
     out.ok = (!opts.generateNormal    || !out.normalPath.isEmpty())
           && (!opts.generateRoughness || !out.roughnessPath.isEmpty())

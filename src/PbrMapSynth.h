@@ -71,15 +71,25 @@ QImage decodeHeight(const std::vector<float>& data, int width, int height);
 /// Derive a low-frequency roughness map from albedo luminance (no model).
 QImage roughnessFromAlbedo(const QImage& albedo, float base, float contrast);
 
+/// Take one channel of a 3-channel planar [0,1] tensor (default luminance) and
+/// scale to a Grayscale8 image — for the PBRify roughness/height models, which
+/// emit RGB even for single-channel maps.
+QImage decodeGrayscaleFromRgb(const std::vector<float>& data, int width, int height);
+
 // ── ONNX inference (only with ENABLE_ONNX) ───────────────────────────────────
 
-/// Run the ONNX model at `modelPath` against `albedo` and produce the requested
-/// maps (per `opts`). Roughness is always the heuristic; normal/height come
-/// from the model (with normal derived from height if the model lacks a normal
-/// output). Returns ok=false with a populated `error` when the model can't be
-/// loaded/run — callers surface this as the graceful offline/missing-model path.
-///
-/// Without ENABLE_ONNX this always returns ok=false ("not built with ONNX").
+/// Run one 3-channel-in/3-channel-out SPAN model at `modelPath` against
+/// `albedo`, tiling per `opts` with a feathered seam blend, and return the
+/// full-resolution PLANAR RGB float result (3*W*H, channel-planar). On failure
+/// returns an empty vector and sets `*error`. `outW`/`outH` get the dimensions.
+/// The caller decodes the result per map type (decodeNormal / decodeGrayscaleFromRgb).
+/// Without ENABLE_ONNX returns empty + a "not built with ONNX" error.
+std::vector<float> runTiledModel(const QImage& albedo, const QString& modelPath,
+                                 const Options& opts, int* outW, int* outH,
+                                 QString* error);
+
+/// Legacy single-model entry (kept for the original tests): runs `modelPath`
+/// and fills normal/height from its output, roughness from the heuristic.
 Result synthesize(const QImage& albedo, const QString& modelPath,
                   const Options& opts = {});
 

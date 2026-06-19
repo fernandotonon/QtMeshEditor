@@ -137,6 +137,27 @@ QImage decodeHeight(const std::vector<float>& data, int width, int height)
     return img;
 }
 
+QImage decodeGrayscaleFromRgb(const std::vector<float>& data, int width, int height)
+{
+    QImage img(width, height, QImage::Format_Grayscale8);
+    const size_t plane = static_cast<size_t>(width) * height;
+    const bool planar = data.size() >= plane * 3;
+    for (int y = 0; y < height; ++y) {
+        uchar* line = img.scanLine(y);
+        for (int x = 0; x < width; ++x) {
+            const size_t i = static_cast<size_t>(y) * width + x;
+            // PBRify roughness/height models emit RGB; take Rec.601 luminance
+            // (the three channels are near-identical for a grayscale map).
+            const float v = planar
+                ? (0.299f * data[0 * plane + i] + 0.587f * data[1 * plane + i]
+                   + 0.114f * data[2 * plane + i])
+                : data[i];
+            line[x] = static_cast<uchar>(clamp01(v) * 255.0f + 0.5f);
+        }
+    }
+    return img;
+}
+
 QImage roughnessFromAlbedo(const QImage& albedo, float base, float contrast)
 {
     const int w = albedo.width(), h = albedo.height();
@@ -248,34 +269,23 @@ bool runModelOnce(Ort::Session& session, Ort::AllocatorWithDefaultOptions& alloc
 
 } // namespace
 
-Result synthesize(const QImage& albedoIn, const QString& modelPath,
-                  const Options& opts)
+std::vector<float> runTiledModel(const QImage& albedoIn, const QString& modelPath,
+                                 const Options& opts, int* outW, int* outH,
+                                 QString* error)
 {
-    Result r;
-    if (albedoIn.isNull()) { r.error = QStringLiteral("albedo image is null"); return r; }
+    auto fail = [&](const QString& msg) -> std::vector<float> {
+        if (error) *error = msg;
+        return {};
+    };
+    if (albedoIn.isNull()) return fail(QStringLiteral("albedo image is null"));
+    if (modelPath.isEmpty() || !QFileInfo::exists(modelPath))
+        return fail(QStringLiteral("PBR model not available at '%1' — connect to the "
+            "internet to download it, or set the model path in AI Settings.").arg(modelPath));
 
     const QImage albedo = albedoIn.convertToFormat(QImage::Format_RGB888);
     const int W = albedo.width(), H = albedo.height();
-
-    // Roughness is a pure-data heuristic — it needs no model, so compute it
-    // first and let a roughness-only request succeed offline.
-    if (opts.generateRoughness)
-        r.roughness = roughnessFromAlbedo(albedo, opts.roughnessBase, opts.roughnessContrast);
-
-    if (!opts.generateNormal && !opts.generateHeight) {
-        r.ok = !r.roughness.isNull();
-        if (!r.ok) r.error = QStringLiteral("roughness generation failed");
-        return r;
-    }
-
-    // Normal/height require the ONNX model.
-    if (modelPath.isEmpty() || !QFileInfo::exists(modelPath)) {
-        r.error = QStringLiteral("PBR model not available at '%1' — connect to the "
-            "internet to download it, or set the model path in AI Settings.")
-            .arg(modelPath);
-        return r;
-    }
-
+    if (outW) *outW = W;
+    if (outH) *outH = H;
 
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_pbr");
@@ -288,10 +298,8 @@ Result synthesize(const QImage& albedoIn, const QString& modelPath,
             std::unordered_map<std::string, std::string> coremlOpts;
             so.AppendExecutionProvider("CoreML", coremlOpts);
         } catch (const Ort::Exception&) {
-            // CPU EP remains as the implicit fallback.
         }
 #endif
-
 #ifdef _WIN32
         std::wstring wpath = modelPath.toStdWString();
         Ort::Session session(env, wpath.c_str(), so);
@@ -301,13 +309,8 @@ Result synthesize(const QImage& albedoIn, const QString& modelPath,
 #endif
         Ort::AllocatorWithDefaultOptions alloc;
 
-        // Accumulate planar normal / height across tiles with feathered blend.
-        std::vector<float> accNormal, accHeight, weight;
         const size_t plane = static_cast<size_t>(W) * H;
-        if (opts.generateNormal) accNormal.assign(plane * 3, 0.0f);
-        if (opts.generateHeight) accHeight.assign(plane, 0.0f);
-        weight.assign(plane, 0.0f);
-
+        std::vector<float> acc(plane * 3, 0.0f), weight(plane, 0.0f);
         const int tile = (opts.tileSize > 0) ? opts.tileSize : std::max(W, H);
         const int step = std::max(1, tile - std::max(0, opts.overlap));
 
@@ -320,12 +323,12 @@ Result synthesize(const QImage& albedoIn, const QString& modelPath,
 
                 InferTile it;
                 QString err;
-                if (!runModelOnce(session, alloc, sub, it, err)) {
-                    r.error = err;
-                    return r;
-                }
+                if (!runModelOnce(session, alloc, sub, it, err))
+                    return fail(err);
+                if (it.normal.empty())  // PBRify models always emit 3ch
+                    return fail(QStringLiteral("model did not return a 3-channel output"));
 
-                // Feather weight: 1 in the centre, ramping down across `overlap`.
+                const size_t tplane = static_cast<size_t>(tw) * th;
                 for (int y = 0; y < th; ++y) {
                     for (int x = 0; x < tw; ++x) {
                         const float wx = (opts.overlap > 0)
@@ -337,14 +340,9 @@ Result synthesize(const QImage& albedoIn, const QString& modelPath,
                         const float fw = std::max(1e-3f, wx * wy);
                         const size_t gi = static_cast<size_t>(ty + y) * W + (tx + x);
                         const size_t ti = static_cast<size_t>(y) * tw + x;
-                        const size_t tplane = static_cast<size_t>(tw) * th;
                         weight[gi] += fw;
-                        if (!accNormal.empty() && !it.normal.empty()) {
-                            for (int c = 0; c < 3; ++c)
-                                accNormal[c * plane + gi] += it.normal[c * tplane + ti] * fw;
-                        }
-                        if (!accHeight.empty() && !it.height.empty())
-                            accHeight[gi] += it.height[ti] * fw;
+                        for (int c = 0; c < 3; ++c)
+                            acc[c * plane + gi] += it.normal[c * tplane + ti] * fw;
                     }
                 }
                 if (tx + tw >= W) break;
@@ -352,42 +350,45 @@ Result synthesize(const QImage& albedoIn, const QString& modelPath,
             if (ty + tile >= H) break;
         }
 
-        // Normalize by accumulated weight.
         for (size_t i = 0; i < plane; ++i) {
             const float wsum = weight[i] > 1e-6f ? weight[i] : 1.0f;
-            if (!accHeight.empty()) accHeight[i] /= wsum;
-            if (!accNormal.empty())
-                for (int c = 0; c < 3; ++c) accNormal[c * plane + i] /= wsum;
+            for (int c = 0; c < 3; ++c) acc[c * plane + i] /= wsum;
         }
-
-        const bool haveNormal = !accNormal.empty() &&
-            std::any_of(accNormal.begin(), accNormal.end(), [](float v){ return v != 0.0f; });
-        const bool haveHeight = !accHeight.empty() &&
-            std::any_of(accHeight.begin(), accHeight.end(), [](float v){ return v != 0.0f; });
-
-        if (opts.generateHeight && haveHeight)
-            r.height = decodeHeight(accHeight, W, H);
-
-        if (opts.generateNormal) {
-            if (haveNormal) {
-                r.normal = decodeNormal(accNormal, W, H, opts.normalStrength, opts.invertG);
-            } else if (haveHeight) {
-                // Model gave only height → derive the normal via Sobel later in
-                // the caller (AIAssistManager) using NormalMapGenerator; leave
-                // r.normal empty here and signal via the height map presence.
-            }
-        }
-
-        if (r.normal.isNull() && r.height.isNull() && !opts.generateRoughness) {
-            r.error = QStringLiteral("model produced no usable normal/height output");
-            return r;
-        }
-        r.ok = true;
-        return r;
+        return acc;
     } catch (const Ort::Exception& e) {
-        r.error = QStringLiteral("ONNX session failed: %1").arg(e.what());
+        return fail(QStringLiteral("ONNX session failed: %1").arg(e.what()));
+    }
+}
+
+Result synthesize(const QImage& albedoIn, const QString& modelPath,
+                  const Options& opts)
+{
+    Result r;
+    if (albedoIn.isNull()) { r.error = QStringLiteral("albedo image is null"); return r; }
+    const QImage albedo = albedoIn.convertToFormat(QImage::Format_RGB888);
+
+    if (opts.generateRoughness)
+        r.roughness = roughnessFromAlbedo(albedo, opts.roughnessBase, opts.roughnessContrast);
+
+    if (!opts.generateNormal && !opts.generateHeight) {
+        r.ok = !r.roughness.isNull();
+        if (!r.ok) r.error = QStringLiteral("roughness generation failed");
         return r;
     }
+
+    int W = 0, H = 0;
+    QString err;
+    const std::vector<float> out = runTiledModel(albedo, modelPath, opts, &W, &H, &err);
+    if (out.empty()) { r.error = err; return r; }
+
+    // Legacy single-model behaviour: interpret the 3ch output as a normal map,
+    // and the height as its luminance.
+    if (opts.generateNormal)
+        r.normal = decodeNormal(out, W, H, opts.normalStrength, opts.invertG);
+    if (opts.generateHeight)
+        r.height = decodeGrayscaleFromRgb(out, W, H);
+    r.ok = true;
+    return r;
 }
 
 #endif // ENABLE_ONNX
