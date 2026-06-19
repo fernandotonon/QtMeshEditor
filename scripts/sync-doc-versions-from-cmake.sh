@@ -85,7 +85,7 @@ apply_perl_replace() {
     'BEGIN { $v = $ENV{QTMESH_DOC_VERSION}; } s/(?<!`)(image-tag:\s*")(\d+\.\d+\.\d+)(")(?!`)/$1 . $v . $3/ge' \
     "$f"
   QTMESH_DOC_VERSION="${VERSION}" perl -i -pe \
-    'BEGIN { $v = $ENV{QTMESH_DOC_VERSION}; } s/\(currently \*\*\d+\.\d+\.\d+\*\*\)/(currently **) . $v . (**)/ge' \
+    'BEGIN { $v = $ENV{QTMESH_DOC_VERSION}; } s/(currently \*\*)\d+\.\d+\.\d+(\*\*)/$1 . $v . $2/ge' \
     "$f"
 }
 

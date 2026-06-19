@@ -4572,7 +4572,8 @@ QJsonObject MCPServer::toolGenerateIsometricSprites(const QJsonObject &args)
         const int res = args.value("resolution").toInt(512);
         if (res < 16 || res > 8192)
             return makeErrorResult("Error: resolution must be an integer in [16..8192]");
-        options.width = options.height = res;
+        options.width = res;
+        options.height = res;
     }
     if (args.contains("width")) options.width = args.value("width").toInt(options.width);
     if (args.contains("height")) options.height = args.value("height").toInt(options.height);
@@ -4612,22 +4613,14 @@ QJsonObject MCPServer::toolGenerateIsometricSprites(const QJsonObject &args)
 
     Ogre::Entity *animatedEntity = nullptr;
     if (!animationName.isEmpty()) {
-        for (Ogre::Entity *entity : entityList) {
-            if (!entity || !entity->hasSkeleton())
-                continue;
-            Ogre::AnimationStateSet *states = entity->getAllAnimationStates();
-            if (states && states->hasAnimationState(animationName.toStdString())) {
-                animatedEntity = entity;
-                break;
-            }
-        }
+        animatedEntity = ModelIsometricRenderer::findEntityWithAnimation(entityList, animationName);
         if (!animatedEntity)
             return makeErrorResult(QString("Error: no skinned entity has animation '%1'").arg(animationName));
     }
 
     QList<QList<QImage>> grid;
-    QString renderError;
-    if (!ModelIsometricRenderer::renderToGrid(entityList, animatedEntity, animationName, frameCount, options,
+    if (QString renderError;
+        !ModelIsometricRenderer::renderToGrid(entityList, animatedEntity, animationName, frameCount, options,
                                               &grid, &renderError)) {
         ModelIsometricRenderer::shutdown();
         return makeErrorResult(QString("Isometric render failed: %1").arg(renderError));
@@ -4640,8 +4633,8 @@ QJsonObject MCPServer::toolGenerateIsometricSprites(const QJsonObject &args)
 
     SentryReporter::addBreadcrumb("file.export", QFileInfo(outputPath).absoluteFilePath());
 
-    const int dirs = grid.size();
-    const int frames = dirs > 0 ? grid.first().size() : 0;
+    const int dirs = static_cast<int>(grid.size());
+    const int frames = dirs > 0 ? static_cast<int>(grid.first().size()) : 0;
 
     QJsonObject result = makeSuccessResult(
         QString("Wrote isometric sprite sheet (%1 directions × %2 frames): %3")

@@ -8,6 +8,7 @@
 #include "SentryReporter.h"
 
 #include <QPainter>
+#include <QTextStream>
 
 #include <OgreAnimationState.h>
 #include <OgreHardwarePixelBuffer.h>
@@ -17,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <unordered_set>
 
 namespace {
@@ -56,7 +58,7 @@ void prepareSceneForCapture(const QList<Ogre::Entity *> &entities)
 {
   SelectionSet::getSingleton()->clear();
 
-  for (Ogre::Entity *entity : entities) {
+  for (const Ogre::Entity *entity : entities) {
     if (!entity)
       continue;
     if (Ogre::SceneNode *node = entity->getParentSceneNode())
@@ -167,7 +169,7 @@ bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QStr
 
 void refreshEntityBounds(const QList<Ogre::Entity *> &entities)
 {
-  for (Ogre::Entity *entity : entities) {
+  for (const Ogre::Entity *entity : entities) {
     if (!entity)
       continue;
     if (Ogre::SceneNode *node = entity->getParentSceneNode())
@@ -179,7 +181,7 @@ Ogre::AxisAlignedBox combinedWorldBounds(const QList<Ogre::Entity *> &entities)
 {
   Ogre::AxisAlignedBox box;
   box.setNull();
-  for (Ogre::Entity *entity : entities) {
+  for (const Ogre::Entity *entity : entities) {
     if (!entity)
       continue;
     box.merge(entity->getWorldBoundingBox(true));
@@ -204,7 +206,7 @@ void recenterEntitiesAtOrigin(const QList<Ogre::Entity *> &entities, Ogre::AxisA
     *outOffset = center;
 
   std::unordered_set<Ogre::SceneNode *> shifted;
-  for (Ogre::Entity *entity : entities) {
+  for (const Ogre::Entity *entity : entities) {
     if (!entity)
       continue;
     Ogre::SceneNode *node = entity->getParentSceneNode();
@@ -223,7 +225,7 @@ void restoreEntitiesFromRecenter(const QList<Ogre::Entity *> &entities, const Og
     return;
 
   std::unordered_set<Ogre::SceneNode *> shifted;
-  for (Ogre::Entity *entity : entities) {
+  for (const Ogre::Entity *entity : entities) {
     if (!entity)
       continue;
     Ogre::SceneNode *node = entity->getParentSceneNode();
@@ -243,9 +245,16 @@ struct RecenterGuard {
   {
     active = offset.squaredLength() >= 1e-10f;
   }
-  ~RecenterGuard() {
-    if (active)
+  RecenterGuard(const RecenterGuard &) = delete;
+  RecenterGuard &operator=(const RecenterGuard &) = delete;
+  ~RecenterGuard() noexcept
+  {
+    if (!active)
+      return;
+    try {
       restoreEntitiesFromRecenter(entities, offset);
+    } catch (...) {
+    }
   }
 };
 
@@ -301,7 +310,7 @@ void cameraAxesFromViewDir(const Ogre::Vector3 &viewDir, const Ogre::Vector3 &wo
 }
 
 Ogre::Real fitOrbitDistance(const Ogre::AxisAlignedBox &bounds, const Ogre::Vector3 &pivotPoint,
-                            const Ogre::Vector3 &viewDir, Ogre::Camera *camera, float paddingFactor)
+                            const Ogre::Vector3 &viewDir, const Ogre::Camera *camera, float paddingFactor)
 {
   const Ogre::Vector3 center = pivotPoint;
   Ogre::Vector3 dir = viewDir;
@@ -372,7 +381,7 @@ void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, T
 void prepareMaterialsForCapture(const QList<Ogre::Entity *> &entities)
 {
   std::unordered_set<const Ogre::Material *> processed;
-  for (Ogre::Entity *entity : entities) {
+  for (const Ogre::Entity *entity : entities) {
     if (!entity)
       continue;
     MeshImporterExporter::applyNormalMapsToEntity(entity);
@@ -419,6 +428,33 @@ void applyAnimationFrame(Ogre::Entity *entity, Ogre::AnimationState *animState, 
     root->_fireFrameRenderingQueued(ev);
 
   entity->_updateAnimation();
+}
+
+bool captureIsometricGrid(const Ogre::AxisAlignedBox &bounds, const IsometricOptions &options, int width,
+                          int height, int directions, int frames, float elevationRad, float startAzimuthRad,
+                          float directionStep, bool wantsAnimation, Ogre::Entity *animatedEntity,
+                          Ogre::AnimationState *animState, float animLength, QList<QList<QImage>> *outRowsByDirection)
+{
+  outRowsByDirection->reserve(directions);
+  for (int dir = 0; dir < directions; ++dir) {
+    const float azimuth = startAzimuthRad - static_cast<float>(dir) * directionStep;
+    placeCameraOnAxis(bounds, azimuth, options.upAxis, elevationRad, options.cameraPadding,
+                      options.cameraDistance);
+
+    QList<QImage> row;
+    row.reserve(frames);
+    for (int frame = 0; frame < frames; ++frame) {
+      if (wantsAnimation) {
+        const float t = (frames == 1) ? 0.0f
+                                      : animLength * static_cast<float>(frame) / static_cast<float>(frames - 1);
+        applyAnimationFrame(animatedEntity, animState, t);
+      }
+      state().renderTarget->update();
+      row.append(readRenderTarget(width, height));
+    }
+    outRowsByDirection->append(row);
+  }
+  return true;
 }
 
 } // namespace
@@ -506,8 +542,8 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
   const int frames = std::clamp(frameCount, 1, kMaxIsometricFrames);
 
   const std::int64_t sheetW = static_cast<std::int64_t>(frames) * width;
-  const std::int64_t sheetH = static_cast<std::int64_t>(directions) * height;
-  if (static_cast<std::int64_t>(directions) * frames > kMaxIsometricCells
+  if (const std::int64_t sheetH = static_cast<std::int64_t>(directions) * height;
+      static_cast<std::int64_t>(directions) * frames > kMaxIsometricCells
       || sheetW > kMaxIsometricSheetDim || sheetH > kMaxIsometricSheetDim) {
     if (errorOut) {
       *errorOut =
@@ -531,13 +567,13 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
         *errorOut = QStringLiteral("Animated entity has no skeleton");
       return false;
     }
-    Ogre::AnimationStateSet *states = animatedEntity->getAllAnimationStates();
+    const Ogre::AnimationStateSet *states = animatedEntity->getAllAnimationStates();
     if (!states || !states->hasAnimationState(animationName.toStdString())) {
       if (errorOut)
         *errorOut = QStringLiteral("Animation '%1' not found").arg(animationName);
       return false;
     }
-    animState = states->getAnimationState(animationName.toStdString());
+    animState = animatedEntity->getAllAnimationStates()->getAnimationState(animationName.toStdString());
     animLength = animState->getLength();
   }
 
@@ -567,10 +603,10 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
   applyIsometricLighting(sm);
 
   if (wantsAnimation) {
-    for (const auto &[key, as] : animatedEntity->getAllAnimationStates()->getAnimationStates()) {
-      Q_UNUSED(key);
-      if (as)
-        as->setEnabled(false);
+    const Ogre::AnimationStateSet *states = animatedEntity->getAllAnimationStates();
+    for (const auto &entry : states->getAnimationStates()) {
+      if (entry.second)
+        entry.second->setEnabled(false);
     }
   }
 
@@ -583,24 +619,9 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
 
   outRowsByDirection->reserve(directions);
   try {
-    for (int dir = 0; dir < directions; ++dir) {
-      const float azimuth = startAzimuthRad - static_cast<float>(dir) * directionStep;
-      placeCameraOnAxis(bounds, azimuth, options.upAxis, elevationRad, options.cameraPadding,
-                        options.cameraDistance);
-
-      QList<QImage> row;
-      row.reserve(frames);
-      for (int frame = 0; frame < frames; ++frame) {
-        if (wantsAnimation) {
-          const float t = (frames == 1) ? 0.0f
-                                        : animLength * static_cast<float>(frame) / static_cast<float>(frames - 1);
-          applyAnimationFrame(animatedEntity, animState, t);
-        }
-        state().renderTarget->update();
-        row.append(readRenderTarget(width, height));
-      }
-      outRowsByDirection->append(row);
-    }
+    captureIsometricGrid(bounds, options, width, height, directions, frames, elevationRad, startAzimuthRad,
+                         directionStep, wantsAnimation, animatedEntity, animState, animLength,
+                         outRowsByDirection);
 
     if (wantsAnimation && animState)
       animState->setEnabled(false);
@@ -618,6 +639,13 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
       *errorOut = QString::fromStdString(e.getFullDescription());
     SentryReporter::addBreadcrumb("file.export", QStringLiteral("isometric render failed: Ogre exception"));
     return false;
+  } catch (const std::exception &e) {
+    outRowsByDirection->clear();
+    restoreIsometricLighting(sm);
+    if (errorOut)
+      *errorOut = QString::fromUtf8(e.what());
+    SentryReporter::addBreadcrumb("file.export", QStringLiteral("isometric render failed: std exception"));
+    return false;
   } catch (...) {
     outRowsByDirection->clear();
     restoreIsometricLighting(sm);
@@ -633,7 +661,7 @@ QImage ModelIsometricRenderer::composeDirectionGrid(const QList<QList<QImage>> &
   if (rowsByDirection.isEmpty())
     return {};
 
-  const int directionCount = rowsByDirection.size();
+  const int directionCount = static_cast<int>(rowsByDirection.size());
   int frameCount = 0;
   int frameW = 0;
   int frameH = 0;
@@ -655,7 +683,7 @@ QImage ModelIsometricRenderer::composeDirectionGrid(const QList<QList<QImage>> &
   QPainter painter(&sheet);
   for (int dir = 0; dir < directionCount; ++dir) {
     const QList<QImage> &row = rowsByDirection.at(dir);
-    for (int frame = 0; frame < row.size(); ++frame) {
+    for (int frame = 0; frame < static_cast<int>(row.size()); ++frame) {
       const QImage &src = row.at(frame);
       if (src.width() != frameW || src.height() != frameH)
         continue;
@@ -663,4 +691,37 @@ QImage ModelIsometricRenderer::composeDirectionGrid(const QList<QList<QImage>> &
     }
   }
   return sheet;
+}
+
+Ogre::Entity *ModelIsometricRenderer::findEntityWithAnimation(const QList<Ogre::Entity *> &entities,
+                                                              const QString &animationName)
+{
+  const std::string anim = animationName.toStdString();
+  for (Ogre::Entity *entity : entities) {
+    if (!entity || !entity->hasSkeleton())
+      continue;
+    const Ogre::AnimationStateSet *states = entity->getAllAnimationStates();
+    if (states && states->hasAnimationState(anim))
+      return entity;
+  }
+  return nullptr;
+}
+
+QString ModelIsometricRenderer::formatAvailableAnimations(const QList<Ogre::Entity *> &entities)
+{
+  QString text;
+  QTextStream stream(&text);
+  for (const Ogre::Entity *entity : entities) {
+    if (!entity || !entity->hasSkeleton())
+      continue;
+    const Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+    if (!skel)
+      continue;
+    const QString entityLabel = QString::fromStdString(entity->getName());
+    for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+      stream << "  [" << entityLabel << "] "
+             << QString::fromStdString(skel->getAnimation(ai)->getName()) << "\n";
+    }
+  }
+  return text;
 }

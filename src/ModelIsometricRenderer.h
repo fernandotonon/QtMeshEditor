@@ -48,6 +48,13 @@ public:
 
   /// Destroy isometric camera / RTT resources (safe to call repeatedly).
   static void shutdown();
+
+  /// First skinned entity that owns `animationName`, or nullptr.
+  static Ogre::Entity *findEntityWithAnimation(const QList<Ogre::Entity *> &entities,
+                                               const QString &animationName);
+
+  /// Multi-line listing of `[entity] clip` rows for CLI/MCP error hints.
+  static QString formatAvailableAnimations(const QList<Ogre::Entity *> &entities);
 };
 
 #endif // MODELISOMETRICRENDERER_H
