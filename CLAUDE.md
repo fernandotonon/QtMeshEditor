@@ -58,6 +58,8 @@ qtmesh turntable model.fbx -o frame_%02d.png --frames 24 --axis y --camera-heigh
 qtmesh isometric model.fbx -o iso.png  # 8-direction static sprite grid (rows=directions)
 qtmesh isometric model.fbx --resolution 256 -o iso.png  # square 256px cells
 qtmesh isometric model.fbx --animation "Walk" --frames 8 -o iso.png  # 8×8 animated atlas
+qtmesh isometric model.fbx -o iso.png --padding 1.5  # zoom out (auto-fit × 1.5)
+qtmesh isometric model.fbx -o iso.png --camera-distance 5  # fixed orbit distance
 qtmesh validate model.fbx                      # validate mesh (exit 1 if errors found)
 qtmesh validate model.fbx --json               # validation results as JSON
 qtmesh lod model.fbx --info                    # show LOD levels

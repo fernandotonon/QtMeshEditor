@@ -84,8 +84,15 @@ QByteArray firstAnimNameForFile(const QString &filePath)
     if (!Manager::getSingletonPtr())
         return QByteArray();
 
+    auto *mgr = Manager::getSingleton();
+    auto nodes = mgr->getSceneNodes();
+    for (auto *node : nodes) {
+        mgr->destroyAllAttachedMovableObjects(node);
+        mgr->destroySceneNode(node);
+    }
+
     MeshImporterExporter::importer({filePath});
-    auto &entities = Manager::getSingleton()->getEntities();
+    auto &entities = mgr->getEntities();
     QByteArray name;
     if (!entities.isEmpty() && entities.first()->hasSkeleton()) {
         Ogre::SkeletonPtr skel = entities.first()->getMesh()->getSkeleton();
@@ -95,10 +102,10 @@ QByteArray firstAnimNameForFile(const QString &filePath)
                        .toUtf8();
     }
 
-    auto nodes = Manager::getSingleton()->getSceneNodes();
+    nodes = mgr->getSceneNodes();
     for (auto *node : nodes) {
-        Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
-        Manager::getSingleton()->destroySceneNode(node);
+        mgr->destroyAllAttachedMovableObjects(node);
+        mgr->destroySceneNode(node);
     }
     return name;
 }
@@ -169,6 +176,17 @@ TEST_F(CLIPipelineCmdIsometricCoverageTest, ElevationAndStartAzimuthVariants)
     QImage img(out);
     EXPECT_EQ(img.width(), 36);
     EXPECT_EQ(img.height(), 72);
+}
+
+TEST_F(CLIPipelineCmdIsometricCoverageTest, CameraPaddingJsonReport)
+{
+    const QString mesh = meshInput("iso_pad.obj");
+    const QString out = outPath("iso_pad.png");
+
+    ArgvBuilder args({"qtmesh", "isometric", mesh, "-o", out, "--directions", "2", "--size", "28",
+                      "--padding", "1.5", "--json"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
+    ASSERT_TRUE(QFile::exists(out));
 }
 
 TEST_F(CLIPipelineCmdIsometricCoverageTest, AnimatedGridWhenAssetAvailable)

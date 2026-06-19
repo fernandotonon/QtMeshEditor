@@ -488,6 +488,8 @@ qtmesh turntable <file> -o frame_%02d.png [--frames N] [--axis y|x|z]`}
               ['--animation NAME', 'Sample this skeletal animation across --frames columns'],
               ['--elevation DEG', 'Camera elevation above the orbit plane (default 30; alias --camera-height)'],
               ['--start-azimuth DEG', 'Rotate row 0 to match your game facing (default 0)'],
+              ['--camera-distance N', 'Fixed orbit distance in world units (default: auto-fit from bounds)'],
+              ['--padding F', 'Multiplier on auto-fit distance when camera distance is unset (default 1.25)'],
               ['--resolution N', 'Square per-cell resolution in pixels (default 512; range 16–8192)'],
               ['--size WxH', 'Per-cell resolution (default 512×512)'],
               ['--width W / --height H', 'Per-cell dimensions (override --resolution)'],
@@ -497,6 +499,7 @@ qtmesh turntable <file> -o frame_%02d.png [--frames N] [--axis y|x|z]`}
               'qtmesh isometric character.fbx -o iso.png',
               'qtmesh isometric character.fbx --animation "Walk" --frames 8 -o iso_walk.png --resolution 256',
               'qtmesh isometric prop.glb -o iso_prop.png --directions 4 --resolution 128 --json',
+              'qtmesh isometric character.fbx -o iso_zoom.png --padding 0.9 --camera-distance 3',
             ]}
           />
 

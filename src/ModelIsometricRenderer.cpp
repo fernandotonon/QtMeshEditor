@@ -292,7 +292,7 @@ Ogre::Real fitOrbitDistance(const Ogre::AxisAlignedBox &bounds, const Ogre::Vect
 }
 
 void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, TurntableAxis axis,
-                       float elevationRadians, float paddingFactor)
+                       float elevationRadians, float paddingFactor, float fixedDistance)
 {
   IsometricState &st = state();
   if (!st.camera || !st.cameraNode || !st.pivotNode || bounds.isNull() || bounds.isInfinite())
@@ -311,7 +311,9 @@ void placeCameraOnAxis(const Ogre::AxisAlignedBox &bounds, float angleRadians, T
   const Ogre::Quaternion orbitRot(Ogre::Radian(angleRadians), orbitAxisVector(axis));
   Ogre::Vector3 viewDir = orbitRot * localViewDir;
 
-  const Ogre::Real distance = fitOrbitDistance(bounds, pivotPoint, viewDir, st.camera, paddingFactor);
+  const Ogre::Real distance =
+      fixedDistance > 0.0f ? fixedDistance
+                           : fitOrbitDistance(bounds, pivotPoint, viewDir, st.camera, paddingFactor);
   const float horiz = distance * horizUnit;
   const float axial = distance * axialUnit;
 
@@ -518,7 +520,8 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
   try {
     for (int dir = 0; dir < directions; ++dir) {
       const float azimuth = startAzimuthRad - static_cast<float>(dir) * directionStep;
-      placeCameraOnAxis(bounds, azimuth, options.upAxis, elevationRad, 1.25f);
+      placeCameraOnAxis(bounds, azimuth, options.upAxis, elevationRad, options.cameraPadding,
+                        options.cameraDistance);
 
       QList<QImage> row;
       row.reserve(frames);

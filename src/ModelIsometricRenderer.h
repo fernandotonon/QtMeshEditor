@@ -26,6 +26,10 @@ struct IsometricOptions {
   int directionCount = 8;
   /// Align row 0 to the game's facing direction (degrees).
   float startAzimuthDegrees = 0.0f;
+  /// Fixed orbit distance in world units. 0 = auto-fit from bounds (default).
+  float cameraDistance = 0.0f;
+  /// Multiplier on auto-fit distance when cameraDistance is 0 (default 1.25).
+  float cameraPadding = 1.25f;
 };
 
 class ModelIsometricRenderer

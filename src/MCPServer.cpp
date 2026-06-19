@@ -4579,6 +4579,20 @@ QJsonObject MCPServer::toolGenerateIsometricSprites(const QJsonObject &args)
     if (args.contains("elevation")) options.elevationDegrees = static_cast<float>(args.value("elevation").toDouble(30.0));
     if (args.contains("directions")) options.directionCount = args.value("directions").toInt(8);
     if (args.contains("start_azimuth")) options.startAzimuthDegrees = static_cast<float>(args.value("start_azimuth").toDouble(0.0));
+    if (args.contains("camera_distance")) {
+        const double dist = args.value("camera_distance").toDouble(0.0);
+        if (dist <= 0.0)
+            return makeErrorResult("Error: camera_distance must be a positive number");
+        options.cameraDistance = static_cast<float>(dist);
+    }
+    if (args.contains("camera_padding") || args.contains("padding")) {
+        const double pad = args.contains("camera_padding")
+                               ? args.value("camera_padding").toDouble(1.25)
+                               : args.value("padding").toDouble(1.25);
+        if (pad <= 0.0)
+            return makeErrorResult("Error: camera_padding must be a positive number");
+        options.cameraPadding = static_cast<float>(pad);
+    }
 
     SentryReporter::addBreadcrumb("file.import",
                                   QString("Isometric import %1").arg(QFileInfo(filePath).fileName()));
@@ -4642,6 +4656,10 @@ QJsonObject MCPServer::toolGenerateIsometricSprites(const QJsonObject &args)
     result["sheetHeight"] = sheet.height();
     result["elevation"] = options.elevationDegrees;
     result["startAzimuth"] = options.startAzimuthDegrees;
+    if (options.cameraDistance > 0.0f)
+        result["cameraDistance"] = options.cameraDistance;
+    else
+        result["cameraPadding"] = options.cameraPadding;
     result["directionOrder"] = ModelIsometricRenderer::directionOrderConvention();
     if (!animationName.isEmpty())
         result["animation"] = animationName;
@@ -6571,6 +6589,12 @@ QJsonArray MCPServer::buildToolsList()
         props["start_azimuth"] = QJsonObject{
             {"type", "number"},
             {"description", "Rotate row 0 to align with your game's facing direction (degrees, default 0)."}};
+        props["camera_distance"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Fixed orbit distance in world units. Omit or 0 for auto-fit from bounds."}};
+        props["camera_padding"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Multiplier on auto-fit distance when camera_distance is unset (default 1.25)."}};
         QJsonArray required;
         required.append("file");
         required.append("output");

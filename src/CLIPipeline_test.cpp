@@ -1171,6 +1171,33 @@ TEST(CLIPipelineCmdIsometricError, InvalidResolutionReturnsUsageError)
     EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
 }
 
+TEST(CLIPipelineCmdIsometricError, InvalidCameraDistanceReturnsUsageError)
+{
+    TestArgv args({"qtmesh", "isometric", "model.fbx", "-o", "out.png", "--camera-distance", "0"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdIsometric_CameraDistanceAndPadding)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "iso_cam.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("iso_cam.png").toUtf8();
+
+    TestArgv args({"qtmesh", "isometric", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--directions", "2",
+                   "--size", "24",
+                   "--camera-distance", "5",
+                   "--padding", "2"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 24);
+    EXPECT_EQ(img.height(), 48);
+}
+
 TEST(CLIPipelineCmdInfoError, NonexistentFile)
 {
     TestArgv args({"qtmesh", "info", "/tmp/nonexistent_cli_test_file_12345.fbx"});

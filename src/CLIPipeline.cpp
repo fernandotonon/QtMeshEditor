@@ -586,7 +586,8 @@ void CLIPipeline::printUsage()
         "                                    8-direction isometric sprite grid (rows=directions,\n"
         "                                    cols=animation frames). Static mesh when no animation.\n"
         "                                    Options: --elevation/--camera-height <deg>, --size WxH,\n"
-        "                                    --resolution N, --width/--height, --start-azimuth <deg>, --json\n"
+        "                                    --resolution N, --width/--height, --start-azimuth <deg>,\n"
+        "                                    --camera-distance N, --padding F, --json\n"
         "  scan [path] [options]           Scan directory for 3D asset issues (default path: .)\n"
         "  material <file> --preset <name> [-o <output>]\n"
         "                                  Apply a built-in material preset to every sub-entity\n"
@@ -3292,7 +3293,7 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
 {
     // isometric <file> -o <output> [--directions N] [--frames N] [--animation NAME]
     //                     [--size WxH] [--resolution N] [--width W] [--height H] [--elevation deg]
-    //                     [--start-azimuth deg] [--json]
+    //                     [--start-azimuth deg] [--camera-distance N] [--padding F] [--json]
     QString inputPath, outputPath, animationName;
     int frameCount = 1;
     bool frameCountExplicit = false;
@@ -3301,6 +3302,8 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
     int height = 512;
     float elevation = 30.0f;
     float startAzimuth = 0.0f;
+    float cameraDistance = 0.0f;
+    float cameraPadding = 1.25f;
     bool jsonOutput = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -3394,6 +3397,20 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
             }
             continue;
         }
+        if ((arg == "--camera-distance" || arg == "--camera_distance") && i + 1 < argc) {
+            if (!parseCliFloat(QString(argv[++i]), &cameraDistance) || cameraDistance <= 0.0f) {
+                err() << "Error: --camera-distance must be a positive number." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--padding" && i + 1 < argc) {
+            if (!parseCliFloat(QString(argv[++i]), &cameraPadding) || cameraPadding <= 0.0f) {
+                err() << "Error: --padding must be a positive number." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (!arg.startsWith(QLatin1Char('-')) && inputPath.isEmpty()) {
             inputPath = arg;
             continue;
@@ -3465,6 +3482,8 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
     options.elevationDegrees = elevation;
     options.directionCount = qBound(1, directionCount, 64);
     options.startAzimuthDegrees = startAzimuth;
+    options.cameraDistance = cameraDistance;
+    options.cameraPadding = cameraPadding;
 
     QList<QList<QImage>> grid;
     QString renderError;
@@ -3512,6 +3531,10 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
         root["sheetHeight"] = sheet.height();
         root["elevation"] = elevation;
         root["startAzimuth"] = startAzimuth;
+        if (cameraDistance > 0.0f)
+            root["cameraDistance"] = cameraDistance;
+        else
+            root["cameraPadding"] = cameraPadding;
         root["directionOrder"] = ModelIsometricRenderer::directionOrderConvention();
         if (!animationName.isEmpty())
             root["animation"] = animationName;
