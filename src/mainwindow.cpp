@@ -2258,7 +2258,7 @@ void MainWindow::initToolBar()
 #ifdef ENABLE_AUTO_UPDATER
     ui->actionVerify_Update->setText(tr("Check for Updates..."));
 #else
-    ui->actionVerify_Update->setVisible(false);
+    ui->menuHelp->removeAction(ui->actionVerify_Update);
 #endif
 
     // Keyboard Shortcuts reference in Help menu
