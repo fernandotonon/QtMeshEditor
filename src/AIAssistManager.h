@@ -89,6 +89,11 @@ private:
 
     QString defaultModelUrl(Map map) const;   // configurable; QSettings override
     static QString mapModelFile(Map map);     // bare .onnx filename per map
+    // Download `map`'s model if absent and BLOCK until it lands (local event
+    // loop on ModelDownloader). Returns true if the file is present afterward.
+    // Used by the synchronous synthesize path so first-run auto-downloads work
+    // from CLI/MCP/GUI alike.
+    bool ensureModelBlocking(Map map);
     static AIAssistManager* s_instance;
 };
 

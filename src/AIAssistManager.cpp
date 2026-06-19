@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QSettings>
+#include <QEventLoop>
 
 AIAssistManager* AIAssistManager::s_instance = nullptr;
 
@@ -19,8 +20,11 @@ namespace {
 // QTMESH_PBR_MODEL_BASE_URL env); empty default until the .onnx files are
 // hosted, in which case ensureModel() no-ops and synthesis fails gracefully.
 constexpr const char* kModelBaseUrlSettingsKey = "ai/pbrModelBaseUrl";
-// TODO(#404): host the exported CC0 .onnx files and set this default.
-constexpr const char* kDefaultModelBaseUrl = "";
+// CC0 PBRify ONNX models hosted on Hugging Face (re-export of
+// Kim2091/PBRify_Remix; see scripts/export-pbrify-onnx.py). Override via the
+// QSettings key / QTMESH_PBR_MODEL_BASE_URL env for self-hosting or testing.
+constexpr const char* kDefaultModelBaseUrl =
+    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/";
 
 const char* mapDownloadLabel(AIAssistManager::Map m) {
     switch (m) {
@@ -109,6 +113,40 @@ QString AIAssistManager::defaultModelUrl(Map map) const
     return base + mapModelFile(map);
 }
 
+bool AIAssistManager::ensureModelBlocking(Map map)
+{
+    const QString dest = modelPath(map);
+    if (QFileInfo::exists(dest))
+        return true;
+    const QString url = defaultModelUrl(map);
+    if (url.isEmpty())
+        return false;
+    auto* dl = ModelDownloader::instance();
+    if (!dl)
+        return false;
+    QDir().mkpath(QFileInfo(dest).absolutePath());
+
+    // Block until this specific model finishes (or errors). ModelDownloader is
+    // async; drive it with a local event loop. The download label is per-map so
+    // we only react to our own.
+    const QString label = QString::fromLatin1(mapDownloadLabel(map));
+    QEventLoop loop;
+    bool ok = false;
+    auto onDone = connect(dl, &ModelDownloader::downloadCompleted, &loop,
+        [&](const QString& name, const QString&) {
+            if (name == label) { ok = true; loop.quit(); }
+        });
+    auto onErr = connect(dl, &ModelDownloader::downloadError, &loop,
+        [&](const QString& name, const QString&) {
+            if (name == label) { ok = false; loop.quit(); }
+        });
+    dl->startDownload(url, dest, label);
+    loop.exec();
+    disconnect(onDone);
+    disconnect(onErr);
+    return ok && QFileInfo::exists(dest);
+}
+
 void AIAssistManager::ensureModel()
 {
     auto* dl = ModelDownloader::instance();
@@ -176,6 +214,7 @@ PbrMapSynthResult AIAssistManager::synthesizePbrMaps(const QString& albedoPath,
     // falls back to the offline luminance heuristic when its model is absent.
 #ifdef ENABLE_ONNX
     if (opts.generateNormal) {
+        ensureModelBlocking(Map::Normal);
         int w = 0, h = 0; QString err;
         const std::vector<float> t =
             PbrMapSynth::runTiledModel(albedo, modelPath(Map::Normal), opts, &w, &h, &err);
@@ -184,6 +223,7 @@ PbrMapSynthResult AIAssistManager::synthesizePbrMaps(const QString& albedoPath,
         if (n.save(normalOut, "PNG")) out.normalPath = normalOut;
     }
     if (opts.generateHeight) {
+        ensureModelBlocking(Map::Height);
         int w = 0, h = 0; QString err;
         const std::vector<float> t =
             PbrMapSynth::runTiledModel(albedo, modelPath(Map::Height), opts, &w, &h, &err);
@@ -192,6 +232,7 @@ PbrMapSynthResult AIAssistManager::synthesizePbrMaps(const QString& albedoPath,
         if (hImg.save(heightOut, "PNG")) out.heightPath = heightOut;
     }
     if (opts.generateRoughness) {
+        ensureModelBlocking(Map::Roughness);  // falls back to heuristic if it can't download
         QImage rough;
         int w = 0, h = 0; QString err;
         const std::vector<float> t =
