@@ -242,8 +242,11 @@ private:
 
 #ifdef ENABLE_AUTO_UPDATER
     void showUpdaterDialog(bool runCheck = true);
+    void showUpdateToast(const QString& version);
     QObject* m_updaterWindow = nullptr;
     QQmlApplicationEngine* m_updaterEngine = nullptr;
+    QObject* m_updateToastWindow = nullptr;
+    QQmlApplicationEngine* m_updateToastEngine = nullptr;
 #endif
 };
 

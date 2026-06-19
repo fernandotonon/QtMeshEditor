@@ -4,6 +4,9 @@
 
 #include "AppSettingsKeys.h"
 #include "UpdaterController.h"
+#include "InstallFlavor.h"
+
+#include <QDateTime>
 
 namespace {
 
@@ -77,4 +80,32 @@ TEST_F(UpdaterControllerTestEnv, LoadSettingsDoesNotResetOtherPreferences)
     EXPECT_EQ(controller->channel(), QStringLiteral("beta"));
     EXPECT_FALSE(controller->checkOnStartup());
     EXPECT_TRUE(controller->autoDownload());
+}
+
+TEST_F(UpdaterControllerTestEnv, BackgroundCheckSkippedWhenRateLimited)
+{
+    UpdaterController::setSessionBackgroundChecksDisabled(false);
+    UpdaterController* controller = UpdaterController::instance();
+    controller->setInstallFlavorForTest(InstallFlavor::Flavor::Portable);
+    controller->setCheckOnStartup(true);
+    controller->setLastCheckedAtForTest(
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+
+    const auto stateBefore = controller->state();
+    controller->checkForUpdatesInBackground();
+    EXPECT_EQ(controller->state(), stateBefore);
+}
+
+TEST_F(UpdaterControllerTestEnv, BackgroundCheckSkippedWhenSessionDisabled)
+{
+    UpdaterController::setSessionBackgroundChecksDisabled(true);
+    UpdaterController* controller = UpdaterController::instance();
+    controller->setInstallFlavorForTest(InstallFlavor::Flavor::Portable);
+    controller->setCheckOnStartup(true);
+    controller->setLastCheckedAtForTest(QString());
+
+    const auto stateBefore = controller->state();
+    controller->checkForUpdatesInBackground();
+    EXPECT_EQ(controller->state(), stateBefore);
+    UpdaterController::setSessionBackgroundChecksDisabled(false);
 }

@@ -30,6 +30,10 @@
 #include "CLIPipeline.h"
 #include "AppConsoleLog.h"
 #include "AppLaunchHandler.h"
+#ifdef ENABLE_AUTO_UPDATER
+#include "updater/UpdaterController.h"
+#include "updater/UpdaterTelemetry.h"
+#endif
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -182,6 +186,16 @@ int main(int argc, char *argv[])
     auto sentryClose = qScopeGuard([] { SentryReporter::shutdown(); });
 
     setSentrySessionTags(mcpWithGuiMode ? "gui+mcp" : "gui");
+
+#ifdef ENABLE_AUTO_UPDATER
+    for (int i = 1; i < argc; ++i) {
+        if (QString::fromUtf8(argv[i]) == QLatin1String("--no-update-check")) {
+            UpdaterController::setSessionBackgroundChecksDisabled(true);
+            UpdaterTelemetry::breadcrumb(QStringLiteral("updater.background.skip"),
+                                         QStringLiteral("session_disabled"));
+        }
+    }
+#endif
 
     // Register QML types
     qmlRegisterSingletonType<MaterialEditorQML>("MaterialEditorQML", 1, 0, "MaterialEditorQML",

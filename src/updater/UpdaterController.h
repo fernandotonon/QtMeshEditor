@@ -82,8 +82,13 @@ public:
     void setCheckOnStartup(bool value);
     void setAutoDownload(bool value);
 
+    static void setSessionBackgroundChecksDisabled(bool disabled);
+    static bool sessionBackgroundChecksDisabled();
+
     Q_INVOKABLE void checkForUpdates();
+    Q_INVOKABLE void checkForUpdatesInBackground();
     Q_INVOKABLE void requestCheckDialog();
+    Q_INVOKABLE void openUpdateDialog();
     Q_INVOKABLE void confirmUnknownInstall();
     Q_INVOKABLE void downloadAndInstall();
     Q_INVOKABLE void installUpdate();
@@ -96,6 +101,8 @@ public:
 
 #ifdef QTMESH_UNIT_TESTS
     void setLatestVersionForTest(const QString& tag);
+    void setLastCheckedAtForTest(const QString& isoUtc);
+    void setInstallFlavorForTest(InstallFlavor::Flavor flavor);
 #endif
 
 signals:
@@ -115,6 +122,7 @@ signals:
     void showDialogRequested(bool runCheck);
 
     void updateAvailable(const QString& currentVersion, const QString& latestVersion);
+    void backgroundUpdateAvailable(const QString& latestVersion);
     void noUpdate();
     void checkError(const QString& message);
 
@@ -137,8 +145,13 @@ private:
     void recordLastChecked();
     bool isVersionSkipped(const QString& tag) const;
     void logDialogStateBreadcrumb();
+    void applyDefaultStartupCheckIfNeeded();
+    bool shouldRunBackgroundCheck(QString* skipReason) const;
+    bool isWithinRateLimit() const;
+    void finishSilentCheck();
 
     static UpdaterController* s_instance;
+    static bool s_sessionBackgroundChecksDisabled;
 
     QThread* m_workerThread = nullptr;
     class UpdaterWorker* m_worker = nullptr;
@@ -163,6 +176,8 @@ private:
     QString m_stagedArtifactPath;
     qint64 m_lastProgressEmitMs = 0;
     QElapsedTimer m_progressThrottle;
+    bool m_silentCheck = false;
+    bool m_showDialogWhenReady = false;
 };
 
 #endif // UPDATERCONTROLLER_H
