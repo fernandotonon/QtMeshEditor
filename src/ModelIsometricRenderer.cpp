@@ -254,6 +254,7 @@ struct RecenterGuard {
     try {
       restoreEntitiesFromRecenter(entities, offset);
     } catch (...) {
+      // Best-effort restore; swallow to keep destructor noexcept.
     }
   }
 };
@@ -449,7 +450,10 @@ bool captureIsometricGrid(const Ogre::AxisAlignedBox &bounds, const IsometricOpt
                                       : animLength * static_cast<float>(frame) / static_cast<float>(frames - 1);
         applyAnimationFrame(animatedEntity, animState, t);
       }
-      state().renderTarget->update();
+      Ogre::RenderTarget *renderTarget = state().renderTarget;
+      if (!renderTarget)
+        return false;
+      renderTarget->update();
       row.append(readRenderTarget(width, height));
     }
     outRowsByDirection->append(row);
@@ -619,9 +623,15 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
 
   outRowsByDirection->reserve(directions);
   try {
-    captureIsometricGrid(bounds, options, width, height, directions, frames, elevationRad, startAzimuthRad,
-                         directionStep, wantsAnimation, animatedEntity, animState, animLength,
-                         outRowsByDirection);
+    if (!captureIsometricGrid(bounds, options, width, height, directions, frames, elevationRad, startAzimuthRad,
+                             directionStep, wantsAnimation, animatedEntity, animState, animLength,
+                             outRowsByDirection)) {
+      outRowsByDirection->clear();
+      restoreIsometricLighting(sm);
+      if (errorOut)
+        *errorOut = QStringLiteral("Isometric render target is not available");
+      return false;
+    }
 
     if (wantsAnimation && animState)
       animState->setEnabled(false);
