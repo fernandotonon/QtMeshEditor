@@ -42,7 +42,7 @@ Production public key: `packaging/updater/minisign.pub` (embedded in `MinisignVe
 ### PoC status
 
 - `MinisignVerify::verifyFile()` implements minisign’s dual-signature check (file + trusted comment) via **libsodium** (same algorithms as the CLI).
-- **#445:** builds with `QTMESH_MINISIGN_VERIFY=1` on Linux and macOS (system pkg-config or static libsodium). Windows MinGW verify is deferred — downloads fail closed at the signature step until a follow-up wires libsodium there.
+- **#445:** builds with `QTMESH_MINISIGN_VERIFY=1` on Linux, macOS, and Windows MinGW (system pkg-config, autotools static build, or official prebuilt MinGW libs). Windows MSVC builds still fail closed at verify until wired.
 - Tests: `MinisignVerify_test` verifies good/tampered/bad-key against `tests/fixtures/updater/release-3.5.3-readme.md` (content from GitHub tag `3.5.3`).
 
 ---
@@ -102,7 +102,7 @@ Only **`Portable`** enables download/install. All others show `updateCommandHint
 | **Portable** | macOS: `/Applications/QtMeshEditor.app`; Linux: `/opt/QtMeshEditor/`; Windows: zip layout / MSI registry `QtMeshEditor` without WinGet key. |
 | **Unknown** | CI trees, dev `build_local/`, ambiguous paths — **no self-update** (fail closed). |
 
-`ENABLE_AUTO_UPDATER=OFF` for snap/flatpak/deb/docker CI builds (#439) so the code path is absent in those artifacts.
+`ENABLE_AUTO_UPDATER=OFF` for snap/flatpak/deb/docker CI builds (#439) so the code path is absent in those artifacts. **Wired:** `build-linux` passes `-DENABLE_AUTO_UPDATER=OFF` when producing `qtmesheditor_amd64.deb` (snap + Docker consume the same package). Package builds also remove **Help → Check for Updates** from the menu at runtime.
 
 ### PoC status
 
