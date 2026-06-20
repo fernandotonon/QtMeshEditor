@@ -681,18 +681,19 @@ void MainWindow::initToolBar()
         connect(IsometricSpritesController::instance(), &IsometricSpritesController::outputPathPickRequested,
                 this, [this](const QString &startPath) {
             QTimer::singleShot(0, this, [this, startPath]() {
-                QString seed = startPath;
-                if (seed.isEmpty() || QFileInfo(seed).isDir())
-                    seed = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-                if (seed.isEmpty())
-                    seed = QDir::homePath();
-                if (!seed.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive))
-                    seed = QDir(seed).filePath(QStringLiteral("isometric_sprites.png"));
+                SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                              QStringLiteral("Isometric sprite save dialog requested"));
+                const QString seed = IsometricSpritesController::normalizedSaveSeed(startPath);
 
                 const QString chosen = QFileDialog::getSaveFileName(
                     this, tr("Save isometric sprite sheet"), seed,
                     tr("PNG image (*.png)"), nullptr,
                     QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                SentryReporter::addBreadcrumb(
+                    chosen.isEmpty() ? QStringLiteral("ui.action") : QStringLiteral("file.export"),
+                    chosen.isEmpty() ? QStringLiteral("Isometric sprite save dialog cancelled")
+                                     : QStringLiteral("Isometric sprite save dialog accepted: %1")
+                                           .arg(chosen));
                 emit IsometricSpritesController::instance()->outputPathPicked(chosen);
             });
         });

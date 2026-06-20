@@ -22,8 +22,10 @@ IsometricSpritesController *IsometricSpritesController::instance()
     return s_instance;
 }
 
-IsometricSpritesController *IsometricSpritesController::qmlInstance(QQmlEngine *, QJSEngine *)
+IsometricSpritesController *IsometricSpritesController::qmlInstance(QQmlEngine *engine, QJSEngine *)
 {
+    if (engine)
+        QQmlEngine::setObjectOwnership(instance(), QQmlEngine::CppOwnership);
     return instance();
 }
 
@@ -113,17 +115,31 @@ void IsometricSpritesController::requestOutputPathPick(const QString &startPath)
     emit outputPathPickRequested(startPath);
 }
 
+QString IsometricSpritesController::normalizedSaveSeed(const QString &startPath)
+{
+    QString seed = startPath;
+    if (seed.isEmpty() || QFileInfo(seed).isDir()) {
+        seed = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+        if (seed.isEmpty())
+            seed = QDir::homePath();
+        return QDir(seed).filePath(QStringLiteral("isometric_sprites.png"));
+    }
+    if (seed.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive))
+        return seed;
+
+    const QFileInfo fi(seed);
+    if (fi.isDir())
+        return QDir(seed).filePath(QStringLiteral("isometric_sprites.png"));
+    if (fi.suffix().isEmpty())
+        return fi.absoluteFilePath() + QStringLiteral(".png");
+    return fi.absoluteFilePath();
+}
+
 QString IsometricSpritesController::chooseOutputPath(const QString &startPath)
 {
+    const QString seed = normalizedSaveSeed(startPath);
     SentryReporter::addBreadcrumb("ui.action",
-                                  QStringLiteral("Isometric sprite save dialog opened (seed=%1)").arg(startPath));
-
-    QString seed = startPath;
-    if (seed.isEmpty() || !QFileInfo(seed).isDir())
-        seed = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-    if (seed.isEmpty())
-        seed = QDir::homePath();
-    seed = QDir(seed).filePath(QStringLiteral("isometric_sprites.png"));
+                                  QStringLiteral("Isometric sprite save dialog opened (seed=%1)").arg(seed));
 
     QApplication::processEvents();
     QWidget *parent = QApplication::activeWindow();
@@ -186,6 +202,10 @@ QVariantMap IsometricSpritesController::exportSelected(const QString &outputPath
     if (entityList.isEmpty())
         return fail(QStringLiteral("No mesh selected"));
 
+    const QList<Ogre::SceneNode *> prevNodes = sel->getNodesSelectionList();
+    const QList<Ogre::Entity *> prevEntities = sel->getEntitiesSelectionList();
+    const QList<Ogre::SubEntity *> prevSubEntities = sel->getSubEntitiesSelectionList();
+
     const QString anim = animationName.trimmed();
     const int frameCount = anim.isEmpty() ? 1 : frames;
 
@@ -224,9 +244,17 @@ QVariantMap IsometricSpritesController::exportSelected(const QString &outputPath
 
     // renderToGrid clears the selection for a clean capture — restore it.
     sel->clear();
-    for (Ogre::Entity *entity : entityList) {
+    for (Ogre::SceneNode *node : prevNodes) {
+        if (node)
+            sel->append(node);
+    }
+    for (Ogre::Entity *entity : prevEntities) {
         if (entity)
             sel->append(entity);
+    }
+    for (Ogre::SubEntity *sub : prevSubEntities) {
+        if (sub)
+            sel->append(sub);
     }
 
     setExporting(false);

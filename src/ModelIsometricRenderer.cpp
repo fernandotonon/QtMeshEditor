@@ -84,9 +84,8 @@ public:
     if (Manager::getSingletonPtr() && Manager::getSingleton()->hasSceneNode("GridLine_node")) {
       m_gridNode = Manager::getSingleton()->getSceneNode("GridLine_node");
       if (m_gridNode) {
-        m_gridWasVisible = m_gridNode->getAttachedObject(0)
-                               ? m_gridNode->getAttachedObject(0)->getVisible()
-                               : true;
+        m_gridWasVisible = m_gridNode->numAttachedObjects() == 0
+                               || m_gridNode->getAttachedObject(0)->getVisible();
         m_gridNode->setVisible(false);
       }
     }
@@ -97,7 +96,7 @@ public:
           continue;
         if (Ogre::SceneNode *node = other->getParentSceneNode()) {
           const bool wasVisible =
-              !node->getAttachedObject(0) || node->getAttachedObject(0)->getVisible();
+              node->numAttachedObjects() == 0 || node->getAttachedObject(0)->getVisible();
           if (wasVisible) {
             m_hiddenNodes.emplace_back(node, true);
             node->setVisible(false);

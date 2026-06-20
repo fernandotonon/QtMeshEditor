@@ -63,3 +63,15 @@ TEST(IsometricSpritesControllerStandalone, RequestOutputPathPickEmitsSignal)
     EXPECT_EQ(pickRequested.count(), 1);
     EXPECT_EQ(pickRequested.first().at(0).toString(), QStringLiteral("/tmp/seed.png"));
 }
+
+TEST(IsometricSpritesControllerStandalone, NormalizedSaveSeedPreservesFileLikePath)
+{
+    const QString seed = IsometricSpritesController::normalizedSaveSeed(QStringLiteral("/tmp/my_sprite"));
+    EXPECT_EQ(seed, QStringLiteral("/tmp/my_sprite.png"));
+}
+
+TEST(IsometricSpritesControllerStandalone, NormalizedSaveSeedDefaultsWhenEmpty)
+{
+    const QString seed = IsometricSpritesController::normalizedSaveSeed(QString());
+    EXPECT_TRUE(seed.endsWith(QStringLiteral("isometric_sprites.png")));
+}

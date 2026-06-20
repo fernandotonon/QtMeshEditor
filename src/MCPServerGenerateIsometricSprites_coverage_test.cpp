@@ -90,6 +90,7 @@ protected:
         ASSERT_NE(app, nullptr);
 
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Mesh resources unavailable in test environment";
         createStandardOgreMaterials();
 
         server = std::make_unique<MCPServer>();
@@ -137,8 +138,11 @@ TEST_F(MCPServerGenerateIsometricSpritesCoverageTest, MissingFileReturnsError)
 
 TEST_F(MCPServerGenerateIsometricSpritesCoverageTest, NonexistentFileReturnsError)
 {
+    const QString missing = tmp.filePath(QStringLiteral("definitely_missing_mesh.fbx"));
+    ASSERT_FALSE(QFile::exists(missing));
+
     QJsonObject args;
-    args["file"] = QStringLiteral("/nonexistent/missing_mesh.fbx");
+    args["file"] = missing;
     args["output"] = tmp.filePath(QStringLiteral("out.png"));
     const QJsonObject result = server->callTool(QStringLiteral("generate_isometric_sprites"), args);
     EXPECT_TRUE(isoIsError(result));

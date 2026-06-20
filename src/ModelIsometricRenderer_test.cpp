@@ -117,6 +117,9 @@ TEST_F(ModelIsometricRendererTest, StaticGridDimensions)
     }
 
     const QImage sheet = ModelIsometricRenderer::composeDirectionGrid(grid);
+    ASSERT_FALSE(sheet.isNull());
+    ASSERT_GT(sheet.width(), 0);
+    ASSERT_GT(sheet.height(), 0);
     EXPECT_EQ(sheet.width(), 64);
     EXPECT_EQ(sheet.height(), 48 * 4);
 

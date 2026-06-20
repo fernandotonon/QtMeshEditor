@@ -103,6 +103,10 @@ Window {
         signal clicked()
         implicitWidth: btnLabel.implicitWidth + 16
         Layout.preferredWidth: Math.max(90, implicitWidth)
+        activeFocusOnTab: buttonEnabled
+        Keys.onSpacePressed: if (buttonEnabled) btn.clicked()
+        Keys.onReturnPressed: if (buttonEnabled) btn.clicked()
+        Keys.onEnterPressed: if (buttonEnabled) btn.clicked()
         height: 26
         radius: 3
         color: btnMa.containsMouse && buttonEnabled

@@ -38,6 +38,9 @@ public:
     /// Direct save dialog (tests / headless). GUI should prefer requestOutputPathPick().
     Q_INVOKABLE QString chooseOutputPath(const QString &startPath = QString());
 
+    /// Normalize a browse seed into a sensible default `.png` save path.
+    static QString normalizedSaveSeed(const QString &startPath);
+
     /// Render the current selection to an isometric directions×frames PNG.
     /// Empty `animationName` → static mesh (one frame per direction).
     /// Returns `{ ok, outputPath, error, directions, frames, sheetWidth, sheetHeight }`.
