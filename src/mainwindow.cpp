@@ -1,5 +1,8 @@
 #include <QMessageBox>
+#include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QStandardPaths>
 #include <QInputDialog>
 #include <QLineEdit>
 #ifndef Q_OS_WIN
@@ -105,6 +108,8 @@
 #include "TexturePaintController.h"
 #include "PaintBufferImageProvider.h"
 #include "VATBakerController.h"
+#include "ThemeManager.h"
+#include "IsometricSpritesController.h"
 #include "MorphAnimationManager.h"
 #include "EditorModeController.h"
 #include "QtMeshCloudClient.h"
@@ -432,6 +437,7 @@ MainWindow::~MainWindow()
         UvUnwrapController::kill();
         QuadRetopoController::kill();
         SkinWeightsController::kill();
+        IsometricSpritesController::kill();
         MeshDepthRenderer::shutdown();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
@@ -570,6 +576,10 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return PropertiesPanelController::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<ThemeManager>("ThemeManager", 1, 0, "ThemeManager",
+            [](QQmlEngine* engine, QJSEngine* scriptEngine) -> QObject* {
+                return ThemeManager::qmlInstance(engine, scriptEngine);
+            });
         qmlRegisterSingletonType<AnimationControlController>("AnimationControl", 1, 0, "AnimationControlController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AnimationControlController::qmlInstance(engine, nullptr);
@@ -664,6 +674,28 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return VATBakerController::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<IsometricSpritesController>("PropertiesPanel", 1, 0, "IsometricSpritesController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return IsometricSpritesController::qmlInstance(engine, nullptr);
+            });
+        connect(IsometricSpritesController::instance(), &IsometricSpritesController::outputPathPickRequested,
+                this, [this](const QString &startPath) {
+            QTimer::singleShot(0, this, [this, startPath]() {
+                QString seed = startPath;
+                if (seed.isEmpty() || QFileInfo(seed).isDir())
+                    seed = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+                if (seed.isEmpty())
+                    seed = QDir::homePath();
+                if (!seed.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive))
+                    seed = QDir(seed).filePath(QStringLiteral("isometric_sprites.png"));
+
+                const QString chosen = QFileDialog::getSaveFileName(
+                    this, tr("Save isometric sprite sheet"), seed,
+                    tr("PNG image (*.png)"), nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                emit IsometricSpritesController::instance()->outputPathPicked(chosen);
+            });
+        });
         qmlRegisterSingletonType<MorphAnimationManager>("PropertiesPanel", 1, 0, "MorphAnimationManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MorphAnimationManager::qmlInstance(engine, nullptr);

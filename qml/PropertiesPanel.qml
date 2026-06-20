@@ -302,6 +302,17 @@ Rectangle {
                 Component.onCompleted: content = animationModeToolsComponent
             }
 
+            // ---- Isometric sprites (#724) ----
+            CollapsibleSection {
+                title: "Isometric Sprites"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.AnimationMode,
+                    IsometricSpritesController.hasExportableSelection)
+                expanded: false
+
+                Component.onCompleted: content = isometricSpritesToolsComponent
+            }
+
             // ---- Skinning (Animation mode) ----
             // Issue #402: auto skin weights. Surfaced in Animation
             // Mode because skinning governs how the mesh deforms
@@ -1118,6 +1129,70 @@ Rectangle {
                 font.pixelSize: 10
                 wrapMode: Text.Wrap
                 width: parent.width - 16
+            }
+        }
+    }
+
+    // ---- Isometric Sprites Tools (Animation mode) ----
+    Component {
+        id: isometricSpritesToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Render the selected mesh to an 8-direction isometric sprite "
+                    + "atlas (rows = directions, columns = animation frames)."
+            }
+
+            Rectangle {
+                id: isoBtn
+                width: Math.min(parent.width - 16, isoLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                opacity: IsometricSpritesController.hasExportableSelection ? 1.0 : 0.45
+                color: isoMa.containsMouse && IsometricSpritesController.hasExportableSelection
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                activeFocusOnTab: IsometricSpritesController.hasExportableSelection
+                Accessible.role: Accessible.Button
+                Accessible.name: "Export Isometric Sprites"
+                Keys.onSpacePressed: if (IsometricSpritesController.hasExportableSelection) root.openIsometricSpritesDialog()
+                Keys.onReturnPressed: if (IsometricSpritesController.hasExportableSelection) root.openIsometricSpritesDialog()
+                Keys.onEnterPressed: if (IsometricSpritesController.hasExportableSelection) root.openIsometricSpritesDialog()
+                border.color: isoBtn.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: isoBtn.activeFocus ? 2 : 1
+
+                Text {
+                    id: isoLabel
+                    anchors.centerIn: parent
+                    text: "Export Isometric Sprites…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: isoMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: IsometricSpritesController.hasExportableSelection
+                    cursorShape: IsometricSpritesController.hasExportableSelection
+                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                    onClicked: root.openIsometricSpritesDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: IsometricSpritesController.hasExportableSelection
+                        ? "Render an isometric directions×frames PNG atlas from the live scene."
+                        : "Select a mesh first."
+                }
             }
         }
     }
@@ -4026,6 +4101,28 @@ Rectangle {
             skinWeightsLoader.active = true
         } else if (skinWeightsLoader.item) {
             skinWeightsLoader.item.open()
+        }
+    }
+
+    Loader {
+        id: isometricSpritesLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/IsometricSpritesDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+        onStatusChanged: {
+            if (status === Loader.Error)
+                console.warn("IsometricSpritesDialog failed to load")
+        }
+    }
+    function openIsometricSpritesDialog() {
+        if (!isometricSpritesLoader.active) {
+            isometricSpritesLoader.active = true
+        } else if (isometricSpritesLoader.item) {
+            isometricSpritesLoader.item.open()
+        } else if (isometricSpritesLoader.status === Loader.Error) {
+            isometricSpritesLoader.active = false
+            isometricSpritesLoader.active = true
         }
     }
 

@@ -119,6 +119,20 @@ TEST_F(ModelIsometricRendererTest, StaticGridDimensions)
     const QImage sheet = ModelIsometricRenderer::composeDirectionGrid(grid);
     EXPECT_EQ(sheet.width(), 64);
     EXPECT_EQ(sheet.height(), 48 * 4);
+
+    bool hasVariation = false;
+    const QRgb ref = sheet.pixel(0, 0);
+    for (int y = 0; y < sheet.height() && !hasVariation; ++y) {
+        for (int x = 0; x < sheet.width(); ++x) {
+            const QRgb px = sheet.pixel(x, y);
+            if (qAbs(qRed(px) - qRed(ref)) > 8 || qAbs(qGreen(px) - qGreen(ref)) > 8
+                || qAbs(qBlue(px) - qBlue(ref)) > 8) {
+                hasVariation = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(hasVariation) << "rendered atlas should contain mesh pixels";
 }
 
 TEST_F(ModelIsometricRendererTest, ComposeDirectionGrid)
