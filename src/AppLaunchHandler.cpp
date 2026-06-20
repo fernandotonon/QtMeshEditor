@@ -17,7 +17,7 @@ bool isCliSubcommand(const QString& arg)
     static const QStringList kSubcommands = {
         QStringLiteral("info"), QStringLiteral("fix"), QStringLiteral("convert"),
         QStringLiteral("anim"), QStringLiteral("validate"), QStringLiteral("lod"),
-        QStringLiteral("pose"), QStringLiteral("turntable"), QStringLiteral("scan"),
+        QStringLiteral("pose"), QStringLiteral("turntable"), QStringLiteral("isometric"), QStringLiteral("scan"),
         QStringLiteral("material"), QStringLiteral("pack-textures"),
         QStringLiteral("normal-from-height"), QStringLiteral("memory"),
         QStringLiteral("analyze"), QStringLiteral("vertex-cache"),

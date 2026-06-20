@@ -125,6 +125,7 @@ function App() {
       { id: 'convert', label: 'Convert', title: 'Convert formats', code: pipelineExamples.convert, language: 'convert' },
       { id: 'merge', label: 'Merge', title: 'Merge animation clips', code: pipelineExamples.merge, language: 'anim' },
       { id: 'turntable', label: 'Turntable', title: 'Render turntable PNG', code: pipelineExamples.turntable, language: 'turntable' },
+      { id: 'isometric', label: 'Isometric', title: '8-direction sprite atlas', code: pipelineExamples.isometric, language: 'isometric' },
       { id: 'vat', label: 'VAT', title: 'Bake to vertex animation texture', code: pipelineExamples.vat, language: 'bash' },
       { id: 'docker', label: 'Docker', title: 'Docker workflow', code: pipelineExamples.docker, language: 'docker' },
       { id: 'gha', label: 'GitHub Actions', title: 'GitHub Actions workflow', code: githubActionExample, language: 'yaml' },

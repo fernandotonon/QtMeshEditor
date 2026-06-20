@@ -37,6 +37,7 @@
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
 #include "MeshDepthRenderer.h"
+#include "ModelIsometricRenderer.h"
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
@@ -618,6 +619,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("pack_atlas"), &MCPServer::toolPackAtlas},
         {QStringLiteral("apply_atlas"), &MCPServer::toolApplyAtlas},
         {QStringLiteral("optimize_mesh"), &MCPServer::toolOptimizeMesh},
+        {QStringLiteral("generate_isometric_sprites"), &MCPServer::toolGenerateIsometricSprites},
         {QStringLiteral("bake_vat"), &MCPServer::toolBakeVat},
         {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
         {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight},
@@ -4540,6 +4542,126 @@ QJsonObject MCPServer::toolOptimizeMesh(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolGenerateIsometricSprites(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "generate_isometric_sprites");
+
+    const QString filePath = args.value("file").toString();
+    const QString outputPath = args.value("output").toString();
+    if (filePath.isEmpty() || outputPath.isEmpty())
+        return makeErrorResult("Error: missing required 'file' and 'output' arguments");
+    if (!QFileInfo::exists(filePath))
+        return makeErrorResult(QString("Error: file not found: %1").arg(filePath));
+
+    if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingletonPtr()->getRenderSystem())
+        return makeErrorResult("Ogre render system not initialized");
+
+    auto *mgr = Manager::getSingletonPtr();
+    if (!mgr)
+        return makeErrorResult("Manager unavailable");
+
+    const QString animationName = args.value("animation").toString();
+    int frameCount = 1;
+    if (args.contains("frames"))
+        frameCount = args.value("frames").toInt(1);
+    else if (!animationName.isEmpty())
+        frameCount = 8;
+
+    IsometricOptions options;
+    if (args.contains("resolution")) {
+        const int res = args.value("resolution").toInt(512);
+        if (res < 16 || res > 8192)
+            return makeErrorResult("Error: resolution must be an integer in [16..8192]");
+        options.width = res;
+        options.height = res;
+    }
+    if (args.contains("width")) options.width = args.value("width").toInt(options.width);
+    if (args.contains("height")) options.height = args.value("height").toInt(options.height);
+    if (args.contains("elevation")) options.elevationDegrees = static_cast<float>(args.value("elevation").toDouble(30.0));
+    if (args.contains("directions")) options.directionCount = args.value("directions").toInt(8);
+    if (args.contains("start_azimuth")) options.startAzimuthDegrees = static_cast<float>(args.value("start_azimuth").toDouble(0.0));
+    if (args.contains("camera_distance")) {
+        const double dist = args.value("camera_distance").toDouble(0.0);
+        if (dist <= 0.0)
+            return makeErrorResult("Error: camera_distance must be a positive number");
+        options.cameraDistance = static_cast<float>(dist);
+    }
+    if (args.contains("camera_padding") || args.contains("padding")) {
+        const double pad = args.contains("camera_padding")
+                               ? args.value("camera_padding").toDouble(1.25)
+                               : args.value("padding").toDouble(1.25);
+        if (pad <= 0.0)
+            return makeErrorResult("Error: camera_padding must be a positive number");
+        options.cameraPadding = static_cast<float>(pad);
+    }
+
+    SentryReporter::addBreadcrumb("file.import",
+                                  QString("Isometric import %1").arg(QFileInfo(filePath).fileName()));
+
+    TransientImportSession session(mgr);
+    if (QString err = session.runImporter(QFileInfo(filePath).absoluteFilePath()); !err.isEmpty())
+        return makeErrorResult(err);
+
+    const QList<Ogre::Entity *> &imported = session.importedEntities();
+    if (imported.isEmpty())
+        return makeErrorResult(QString("Failed to load any entities from %1").arg(filePath));
+
+    QList<Ogre::Entity *> entityList;
+    for (Ogre::Entity *e : imported)
+        if (e)
+            entityList.append(e);
+
+    Ogre::Entity *animatedEntity = nullptr;
+    if (!animationName.isEmpty()) {
+        animatedEntity = ModelIsometricRenderer::findEntityWithAnimation(entityList, animationName);
+        if (!animatedEntity)
+            return makeErrorResult(QString("Error: no skinned entity has animation '%1'").arg(animationName));
+    }
+
+    QList<QList<QImage>> grid;
+    if (QString renderError;
+        !ModelIsometricRenderer::renderToGrid(entityList, animatedEntity, animationName, frameCount, options,
+                                              &grid, &renderError)) {
+        ModelIsometricRenderer::shutdown();
+        return makeErrorResult(QString("Isometric render failed: %1").arg(renderError));
+    }
+
+    const QImage sheet = ModelIsometricRenderer::composeDirectionGrid(grid);
+    ModelIsometricRenderer::shutdown();
+    if (sheet.isNull() || !sheet.save(outputPath))
+        return makeErrorResult(QString("Failed to write isometric sprite sheet: %1").arg(outputPath));
+
+    SentryReporter::addBreadcrumb("file.export", QFileInfo(outputPath).absoluteFilePath());
+
+    const int dirs = static_cast<int>(grid.size());
+    const int frames = dirs > 0 ? static_cast<int>(grid.first().size()) : 0;
+
+    QJsonObject result = makeSuccessResult(
+        QString("Wrote isometric sprite sheet (%1 directions × %2 frames): %3")
+            .arg(dirs)
+            .arg(frames)
+            .arg(QFileInfo(outputPath).fileName()));
+    result["output"] = QFileInfo(outputPath).absoluteFilePath();
+    result["directions"] = dirs;
+    result["frames"] = frames;
+    result["cellWidth"] = options.width;
+    result["cellHeight"] = options.height;
+    if (options.width == options.height)
+        result["resolution"] = options.width;
+    result["sheetWidth"] = sheet.width();
+    result["sheetHeight"] = sheet.height();
+    result["elevation"] = options.elevationDegrees;
+    result["startAzimuth"] = options.startAzimuthDegrees;
+    if (options.cameraDistance > 0.0f)
+        result["cameraDistance"] = options.cameraDistance;
+    else
+        result["cameraPadding"] = options.cameraPadding;
+    result["directionOrder"] = ModelIsometricRenderer::directionOrderConvention();
+    if (!animationName.isEmpty())
+        result["animation"] = animationName;
+    return result;
+}
+
 QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "bake_vat");
@@ -6432,6 +6554,54 @@ QJsonArray MCPServer::buildToolsList()
             props,
             required
         );
+    }
+
+    // generate_isometric_sprites (#724)
+    {
+        QJsonObject props;
+        props["file"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Source mesh file (FBX / glTF / glb / DAE / OBJ / PLY / STL / .mesh)."}};
+        props["output"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Output PNG path for the directions × frames sprite atlas."}};
+        props["animation"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Optional animation name. When set, samples evenly spaced frames across the clip."}};
+        props["frames"] = QJsonObject{
+            {"type", "integer"},
+            {"description", "Animation frame columns (default 8 when animation is set, else 1)."}};
+        props["directions"] = QJsonObject{
+            {"type", "integer"},
+            {"description", "Compass direction rows (default 8)."}};
+        props["elevation"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Camera elevation in degrees above the orbit plane (default 30)."}};
+        props["resolution"] = QJsonObject{
+            {"type", "integer"},
+            {"description", "Per-cell square resolution in pixels (sets width and height). Default 512. Range [16..8192]."}};
+        props["width"] = QJsonObject{{"type", "integer"}, {"description", "Per-cell width in pixels (overrides resolution width). Default 512."}};
+        props["height"] = QJsonObject{{"type", "integer"}, {"description", "Per-cell height in pixels (overrides resolution height). Default 512."}};
+        props["start_azimuth"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Rotate row 0 to align with your game's facing direction (degrees, default 0)."}};
+        props["camera_distance"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Fixed orbit distance in world units. Omit or 0 for auto-fit from bounds."}};
+        props["camera_padding"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Multiplier on auto-fit distance when camera_distance is unset (default 1.25)."}};
+        QJsonArray required;
+        required.append("file");
+        required.append("output");
+        appendTool(
+            "generate_isometric_sprites",
+            "Render an isometric / 8-direction animated sprite atlas from a mesh file. Rows are fixed "
+            "compass directions (row 0 = front, clockwise from above); columns are evenly spaced "
+            "animation frames. Static mesh when `animation` is omitted. Same renderer as "
+            "`qtmesh isometric`. Returns output path, grid dimensions, and the direction-order convention.",
+            props,
+            required);
     }
 
     // cloud_status / cloud_login / cloud_logout / cloud_list_projects / cloud_delete_project / cloud_upload
