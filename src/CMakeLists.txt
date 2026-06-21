@@ -111,6 +111,7 @@ ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
 PbrMapSynth.cpp
+TextureUpscaler.cpp
 AIAssistManager.cpp
 MemoryEstimator.cpp
 DrawCallAnalyzer.cpp

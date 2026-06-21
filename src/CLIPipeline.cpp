@@ -44,6 +44,7 @@
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
 #include "PbrMapSynth.h"
+#include "TextureUpscaler.h"
 #include "RTShaderHelper.h"
 #endif
 #include <OgreMaterialSerializer.h>
@@ -606,6 +607,9 @@ void CLIPipeline::printUsage()
         "                                  generation; binds result as diffuse and\n"
         "                                  re-exports (needs an SD build + base model;\n"
         "                                  run 'uv --unwrap' first if the mesh lacks UVs)\n"
+        "  material --texture <low.png> --upscale {2|4} [-o <high.png>]\n"
+        "                                  AI super-resolution (Real-ESRGAN); 2x/4x\n"
+        "                                  (needs an ONNX build + first-run model download)\n"
         "  material --texture <albedo.png> --generate-pbr [<mesh>] [-o <output>]\n"
         "                  [--tile-size N] [--no-normal] [--no-roughness] [--no-height]\n"
         "                                  AI PBR map synthesis (normal/roughness/height)\n"
@@ -3589,6 +3593,8 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     bool generatePbr = false;
     int pbrTileSize = 256;
     bool pbrNoNormal = false, pbrNoRoughness = false, pbrNoHeight = false;
+    // #405 Real-ESRGAN upscaling (shares --texture as the input).
+    int upscaleFactor = 0;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -3603,6 +3609,15 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
             continue;
         }
         if (arg == "--generate-pbr") { generatePbr = true; continue; }
+        if (arg == "--upscale" && i + 1 < argc) {
+            bool usOk = false;
+            upscaleFactor = QString(argv[++i]).toInt(&usOk);
+            if (!usOk) {
+                err() << "Error: --upscale must be an integer (2 or 4)." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--texture" && i + 1 < argc) {
             pbrAlbedo = QString(argv[++i]);
             continue;
@@ -3652,6 +3667,11 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     // Depth-conditioned mesh-aware texture generation (issue #403). Distinct
     // enough (async SD worker, model loading, depth RTT) to live in its own
     // helper; presets continue below.
+    // #405: Real-ESRGAN texture upscaling (--texture in, -o out).
+    if (upscaleFactor != 0) {
+        return cmdMaterialUpscale(pbrAlbedo, outputPath, upscaleFactor);
+    }
+
     // #404: PBR map synthesis (normal/roughness/height) from a diffuse via ONNX.
     if (generatePbr) {
         return cmdMaterialGeneratePbr(pbrAlbedo, inputPath, outputPath,
@@ -4142,6 +4162,59 @@ int CLIPipeline::cmdMaterialGeneratePbr(const QString& albedoPath,
     cliWrite(QString("Generated PBR maps from %1 and bound to %2 submesh(es).\n"
                      "  saved: %3\n")
         .arg(QFileInfo(albedoPath).fileName()).arg(bound).arg(outFi.fileName()));
+    return 0;
+#endif
+}
+
+int CLIPipeline::cmdMaterialUpscale(const QString& srcPath, QString outputPath,
+                                    int scale)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(srcPath); Q_UNUSED(outputPath); Q_UNUSED(scale);
+    err() << "Error: this build was compiled without AI texture upscaling "
+             "(rebuild with -DENABLE_ONNX=ON)." << Qt::endl;
+    return 1;
+#else
+    if (srcPath.isEmpty()) {
+        err() << "Error: --upscale requires --texture <image>." << Qt::endl;
+        return 2;
+    }
+    if (scale != 2 && scale != 4) {
+        err() << "Error: --upscale must be 2 or 4." << Qt::endl;
+        return 2;
+    }
+    if (!QFileInfo::exists(srcPath)) {
+        err() << "Error: texture not found: " << srcPath << Qt::endl;
+        return 1;
+    }
+    const QImage src(srcPath);
+    if (src.isNull()) {
+        err() << "Error: could not load image: " << srcPath << Qt::endl;
+        return 1;
+    }
+
+    // The facade handles model download (first-run) + run + cache; it writes
+    // <stem>_upscaled.png next to the source. (Breadcrumb emitted there.)
+    const QString produced =
+        AIAssistManager::instance()->upscaleTexture(srcPath, scale, /*overwrite=*/true);
+    if (produced.isEmpty()) {
+        err() << "Error: upscale failed (model unavailable or inference error)." << Qt::endl;
+        return 1;
+    }
+    // Honour an explicit -o by moving the facade's output there.
+    QString finalPath = produced;
+    if (!outputPath.isEmpty()
+        && QFileInfo(outputPath).absoluteFilePath() != QFileInfo(produced).absoluteFilePath()) {
+        QFile::remove(outputPath);
+        if (QFile::rename(produced, outputPath))
+            finalPath = outputPath;
+    }
+    const QImage outImg(finalPath);
+    cliWrite(QString("Upscaled %1 by %2x → %3 (%4×%5 → %6×%7)\n")
+        .arg(QFileInfo(srcPath).fileName()).arg(scale)
+        .arg(QFileInfo(finalPath).fileName())
+        .arg(src.width()).arg(src.height())
+        .arg(outImg.width()).arg(outImg.height()));
     return 0;
 #endif
 }
