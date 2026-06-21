@@ -777,6 +777,7 @@ void CLIPipeline::printUsage()
         "  cloud list [--json]               List cloud projects for the signed-in account.\n"
         "  cloud upload <file> [--name <n>] [--no-scan] [--json]\n"
         "                                    Package the asset + dependencies and upload to QtMesh Cloud.\n"
+        "                                    After files/complete, uploads the local scan report to the main file.\n"
         "  cloud delete <project-id>         Delete a cloud project by id.\n"
         "\n"
         "Global options:\n"

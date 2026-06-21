@@ -197,6 +197,15 @@ public:
                                                const QString& mainFileId = QString(),
                                                int timeoutMs = 30000);
 
+    /// PUT /v1/u/:owner/p/:project/files/:fileId/report — scan report after files/complete.
+    /// Body is the JSON from `ScanEngine::scanReportToJsonObject()` (max 5 MB).
+    static UploadResult uploadFileReport(const QString& bearerToken,
+                                         const QString& ownerSlug,
+                                         const QString& projectSlug,
+                                         const QString& fileId,
+                                         const QJsonObject& report,
+                                         int timeoutMs = 30000);
+
     struct ManifestResult {
         bool ok = false;
         int httpStatus = 0;

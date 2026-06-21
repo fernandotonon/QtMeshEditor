@@ -43,7 +43,12 @@ void CloudUploadProgress::updateProgress(int current, int total, const QString& 
 {
     m_bar->setMaximum(qMax(1, total));
     m_bar->setValue(current);
-    m_label->setText(tr("Uploading %1…").arg(fileName));
+    if (fileName.isEmpty())
+        return;
+    if (fileName.endsWith(QChar(0x2026)) || fileName.endsWith(QLatin1Char('.')))
+        m_label->setText(fileName);
+    else
+        m_label->setText(tr("Uploading %1…").arg(fileName));
 }
 
 void CloudUploadProgress::finish(bool ok, const QString& message)
