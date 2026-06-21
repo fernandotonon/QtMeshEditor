@@ -14,7 +14,10 @@
 
 namespace {
 
-void invokeUploadProgress(QtMeshCloudSession* self, int current, int total, const QString& label)
+void invokeUploadProgress(const QPointer<QtMeshCloudSession>& self,
+                          int current,
+                          int total,
+                          const QString& label)
 {
     if (!self)
         return;
@@ -26,7 +29,7 @@ void invokeUploadProgress(QtMeshCloudSession* self, int current, int total, cons
                               Qt::QueuedConnection);
 }
 
-void invokeUploadFinished(QtMeshCloudSession* self,
+void invokeUploadFinished(const QPointer<QtMeshCloudSession>& self,
                           bool ok,
                           const QString& error,
                           const QString& projectUrl,
@@ -42,7 +45,7 @@ void invokeUploadFinished(QtMeshCloudSession* self,
                               Qt::QueuedConnection);
 }
 
-void invokeUploadCanceled(QtMeshCloudSession* self)
+void invokeUploadCanceled(const QPointer<QtMeshCloudSession>& self)
 {
     if (!self)
         return;
@@ -54,7 +57,7 @@ void invokeUploadCanceled(QtMeshCloudSession* self)
                               Qt::QueuedConnection);
 }
 
-void invokePrepareWarning(QtMeshCloudSession* self, const QString& warning)
+void invokePrepareWarning(const QPointer<QtMeshCloudSession>& self, const QString& warning)
 {
     if (!self || warning.isEmpty())
         return;
@@ -117,22 +120,22 @@ void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest
 
     QThread* worker = QThread::create([self, token, req, canceled = &m_canceled]() {
         if (canceled->load()) {
-            invokeUploadCanceled(self.data());
+            invokeUploadCanceled(self);
             return;
         }
 
-        invokeUploadProgress(self.data(), 0, 1, QStringLiteral("Preparing package…"));
+        invokeUploadProgress(self, 0, 1, QStringLiteral("Preparing package…"));
 
         QJsonObject scanSummary;
         if (req.runLocalScan) {
-            invokeUploadProgress(self.data(), 0, 1, QStringLiteral("Scanning assets…"));
+            invokeUploadProgress(self, 0, 1, QStringLiteral("Scanning assets…"));
             const QFileInfo mainAssetInfo(req.mainAssetPath);
             QString scanError;
             const QByteArray scanJson = AssetScanController::runIsolatedScanJsonSync(
                 mainAssetInfo.absolutePath(), mainAssetInfo.fileName(), &scanError);
             if (scanJson.isEmpty()) {
                 invokePrepareWarning(
-                    self.data(),
+                    self,
                     scanError.isEmpty()
                         ? QStringLiteral("Local scan failed; continuing without scan summary.")
                         : QStringLiteral("Local scan failed; continuing without scan summary.\n\n%1")
@@ -142,7 +145,7 @@ void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest
                 const QJsonDocument doc = QJsonDocument::fromJson(scanJson, &parseError);
                 if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
                     invokePrepareWarning(
-                        self.data(),
+                        self,
                         QStringLiteral("Local scan returned invalid JSON; continuing without scan summary.\n\n%1")
                             .arg(parseError.errorString()));
                 } else {
@@ -152,21 +155,21 @@ void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest
         }
 
         if (canceled->load()) {
-            invokeUploadCanceled(self.data());
+            invokeUploadCanceled(self);
             return;
         }
 
         const PackageMetadata package = CloudUploadDialog::buildManifestForUpload(
             req.mainAssetPath, req.selectedAbsolutePaths, req.projectName, scanSummary);
         if (package.files.isEmpty()) {
-            invokeUploadFinished(self.data(), false,
+            invokeUploadFinished(self, false,
                                  QStringLiteral("Select at least one file to upload."), {}, {});
             return;
         }
 
         for (const PackageEntry& entry : package.files) {
             if (!QFileInfo::exists(entry.absolutePath)) {
-                invokeUploadFinished(self.data(), false,
+                invokeUploadFinished(self, false,
                                      QStringLiteral("Missing file: %1")
                                          .arg(QFileInfo(entry.absolutePath).fileName()),
                                      {}, {});
@@ -202,11 +205,11 @@ void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest
         }
 
         if (canceled->load()) {
-            invokeUploadCanceled(self.data());
+            invokeUploadCanceled(self);
             return;
         }
         if (!project.ok) {
-            invokeUploadFinished(self.data(), false, project.errorString, {}, {});
+            invokeUploadFinished(self, false, project.errorString, {}, {});
             return;
         }
 
@@ -223,11 +226,11 @@ void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest
         const auto uploadUrls = QtMeshCloudClient::requestUploadUrls(
             token, project.ownerSlug, project.projectSlug, descriptors);
         if (canceled->load()) {
-            invokeUploadCanceled(self.data());
+            invokeUploadCanceled(self);
             return;
         }
         if (!uploadUrls.ok) {
-            invokeUploadFinished(self.data(), false, uploadUrls.errorString, {}, {});
+            invokeUploadFinished(self, false, uploadUrls.errorString, {}, {});
             return;
         }
 
@@ -237,20 +240,20 @@ void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest
         const int total = uploadUrls.uploads.size();
         for (int i = 0; i < total; ++i) {
             if (canceled->load()) {
-                invokeUploadCanceled(self.data());
+                invokeUploadCanceled(self);
                 return;
             }
 
-            invokeUploadProgress(self.data(), i + 1, total + 1, descriptors.at(i).uploadName);
+            invokeUploadProgress(self, i + 1, total + 1, descriptors.at(i).uploadName);
 
             const auto result = QtMeshCloudClient::uploadFileContent(
                 token, uploadUrls.uploads.at(i), descriptors.at(i).path, canceled);
             if (result.canceled) {
-                invokeUploadCanceled(self.data());
+                invokeUploadCanceled(self);
                 return;
             }
             if (!result.ok) {
-                invokeUploadFinished(self.data(), false, result.errorString, {}, {});
+                invokeUploadFinished(self, false, result.errorString, {}, {});
                 return;
             }
 
@@ -264,16 +267,16 @@ void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest
             mainFileId = fallbackMainFileId;
 
         if (canceled->load()) {
-            invokeUploadCanceled(self.data());
+            invokeUploadCanceled(self);
             return;
         }
 
-        invokeUploadProgress(self.data(), total + 1, total + 1, QString());
+        invokeUploadProgress(self, total + 1, total + 1, QString());
 
         const auto completed = QtMeshCloudClient::completeUpload(
             token, project.ownerSlug, project.projectSlug, uploadedFileIds, mainFileId);
         if (!completed.ok) {
-            invokeUploadFinished(self.data(), false, completed.errorString, {}, {});
+            invokeUploadFinished(self, false, completed.errorString, {}, {});
             return;
         }
 
@@ -293,7 +296,7 @@ void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest
 
         SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
                                       QStringLiteral("QtMesh Cloud package upload completed"));
-        invokeUploadFinished(self.data(), true, reportWarning, project.projectUrl, completed.scanStatus);
+        invokeUploadFinished(self, true, reportWarning, project.projectUrl, completed.scanStatus);
     });
 
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
@@ -311,7 +314,7 @@ void QtMeshCloudSession::startUploadWorker(const PackageMetadata& package,
     QThread* worker = QThread::create([self, token, package, ownerSlug, projectSlug, createNewProject,
                                        canceled = &m_canceled]() {
         if (canceled->load()) {
-            invokeUploadCanceled(self.data());
+            invokeUploadCanceled(self);
             return;
         }
 
@@ -335,11 +338,11 @@ void QtMeshCloudSession::startUploadWorker(const PackageMetadata& package,
         }
 
         if (canceled->load()) {
-            invokeUploadCanceled(self.data());
+            invokeUploadCanceled(self);
             return;
         }
         if (!project.ok) {
-            invokeUploadFinished(self.data(), false, project.errorString, {}, {});
+            invokeUploadFinished(self, false, project.errorString, {}, {});
             return;
         }
 
@@ -356,11 +359,11 @@ void QtMeshCloudSession::startUploadWorker(const PackageMetadata& package,
         const auto uploadUrls = QtMeshCloudClient::requestUploadUrls(
             token, project.ownerSlug, project.projectSlug, descriptors);
         if (canceled->load()) {
-            invokeUploadCanceled(self.data());
+            invokeUploadCanceled(self);
             return;
         }
         if (!uploadUrls.ok) {
-            invokeUploadFinished(self.data(), false, uploadUrls.errorString, {}, {});
+            invokeUploadFinished(self, false, uploadUrls.errorString, {}, {});
             return;
         }
 
@@ -370,20 +373,20 @@ void QtMeshCloudSession::startUploadWorker(const PackageMetadata& package,
         const int total = uploadUrls.uploads.size();
         for (int i = 0; i < total; ++i) {
             if (canceled->load()) {
-                invokeUploadCanceled(self.data());
+                invokeUploadCanceled(self);
                 return;
             }
 
-            invokeUploadProgress(self.data(), i + 1, total + 1, descriptors.at(i).uploadName);
+            invokeUploadProgress(self, i + 1, total + 1, descriptors.at(i).uploadName);
 
             const auto result = QtMeshCloudClient::uploadFileContent(
                 token, uploadUrls.uploads.at(i), descriptors.at(i).path, canceled);
             if (result.canceled) {
-                invokeUploadCanceled(self.data());
+                invokeUploadCanceled(self);
                 return;
             }
             if (!result.ok) {
-                invokeUploadFinished(self.data(), false, result.errorString, {}, {});
+                invokeUploadFinished(self, false, result.errorString, {}, {});
                 return;
             }
 
@@ -397,16 +400,16 @@ void QtMeshCloudSession::startUploadWorker(const PackageMetadata& package,
             mainFileId = fallbackMainFileId;
 
         if (canceled->load()) {
-            invokeUploadCanceled(self.data());
+            invokeUploadCanceled(self);
             return;
         }
 
-        invokeUploadProgress(self.data(), total + 1, total + 1, QString());
+        invokeUploadProgress(self, total + 1, total + 1, QString());
 
         const auto completed = QtMeshCloudClient::completeUpload(
             token, project.ownerSlug, project.projectSlug, uploadedFileIds, mainFileId);
         if (!completed.ok) {
-            invokeUploadFinished(self.data(), false, completed.errorString, {}, {});
+            invokeUploadFinished(self, false, completed.errorString, {}, {});
             return;
         }
 
@@ -426,7 +429,7 @@ void QtMeshCloudSession::startUploadWorker(const PackageMetadata& package,
 
         SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
                                       QStringLiteral("QtMesh Cloud package upload completed"));
-        invokeUploadFinished(self.data(), true, reportWarning, project.projectUrl, completed.scanStatus);
+        invokeUploadFinished(self, true, reportWarning, project.projectUrl, completed.scanStatus);
     });
 
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
