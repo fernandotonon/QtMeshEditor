@@ -75,7 +75,7 @@ qtmesh material model.fbx --preset "Metallic-Roughness" -o out.fbx  # apply a bu
 qtmesh material --list-presets                 # list built-in preset names (incl. PBR templates)
 qtmesh material model.fbx --generate-texture "rusty bronze armor" -o out.fbx  # AI mesh-aware (depth-conditioned) texture → diffuse (needs SD build + base model; run `uv --unwrap` first if no UVs)
 qtmesh material model.fbx --generate-texture "..." --model mybase.safetensors --controlnet-strength 0.8 --width 768 --height 768 -o out.fbx  # explicit SD base model + ControlNet strength + size
-qtmesh material --texture albedo.png --generate-pbr -o out.fbx  # AI PBR map synthesis (normal/roughness/height) from a diffuse → maps next to it + bound to mesh (needs ONNX build + first-run model download; roughness works offline)
+qtmesh material --texture albedo.png --generate-pbr [<mesh>] -o out.fbx  # AI PBR map synthesis (normal/roughness/height) from a diffuse → writes maps next to the albedo; with a <mesh> also binds them + re-exports (needs ONNX build + first-run model download; roughness works offline)
 qtmesh material --texture albedo.png --generate-pbr --no-height --tile-size 512  # selective maps + larger model tiles; omit the mesh to just write the PNGs
 qtmesh scan ./assets                           # scan directory for asset issues
 qtmesh scan ./assets --profile example-minimal # built-in platform validation preset
