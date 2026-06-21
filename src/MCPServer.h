@@ -223,6 +223,8 @@ private:
     /// optimizations end-to-end on a single asset and writes the result.
     /// Per-stage applied/summary report on success.
     QJsonObject toolOptimizeMesh(const QJsonObject &args);
+    /// #724: 8-direction isometric animated sprite grid export (file-in / file-out).
+    QJsonObject toolGenerateIsometricSprites(const QJsonObject &args);
     /// Phase VAT slice 4: bake a skeletal animation to a Vertex
     /// Animation Texture + JSON sidecar. Args mirror the
     /// `qtmesh vat` CLI subcommand: file, anim, fps, encoding,

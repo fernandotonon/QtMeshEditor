@@ -89,6 +89,8 @@ public:
     static int cmdPose(int argc, char* argv[]);
     /// Render a mesh turntable as PNG frame(s) or a horizontal sprite sheet (#294).
     static int cmdTurntable(int argc, char* argv[]);
+    /// Render an 8-direction isometric sprite grid (rows = directions, cols = frames) (#724).
+    static int cmdIsometric(int argc, char* argv[]);
     static int cmdScan(int argc, char* argv[]);
     static int cmdMaterial(int argc, char* argv[]);
     /// #403: depth-conditioned (ControlNet) mesh-aware texture generation,

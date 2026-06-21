@@ -769,7 +769,8 @@ protected:
     // One-time warmup: the first FBX import in a process sometimes fails
     // due to lazy initialization in the resource/plugin pipeline.
     static void SetUpTestSuite() {
-        if (!tryInitOgre() || !canLoadMeshFiles()) return;
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Mesh resources unavailable in test environment";
         createStandardOgreMaterials();
 
         QString warmupFile = testDataDir() + "/Twist Dance.fbx";
@@ -1107,6 +1108,101 @@ TEST_F(CLIPipelineCmdTest, CmdTurntable_MinimalObjSingleFrameWritesOnePng)
     ASSERT_FALSE(img.isNull());
     EXPECT_EQ(img.width(), 24);
     EXPECT_EQ(img.height(), 24);
+}
+
+TEST(CLIPipelineCmdIsometricError, MissingInputFile)
+{
+    TestArgv args({"qtmesh", "isometric", "-o", "out.png"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdIsometricError, MissingOutputPath)
+{
+    TestArgv args({"qtmesh", "isometric", "model.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdIsometricError, NonexistentInputFile)
+{
+    TestArgv args({"qtmesh", "isometric", "/nonexistent/path/model_xyz.obj", "-o", "out.png"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 1);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdIsometric_StaticGridWritesPng)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "iso_one.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("iso.png").toUtf8();
+
+    TestArgv args({"qtmesh", "isometric", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--directions", "2",
+                   "--size", "24"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 24);
+    EXPECT_EQ(img.height(), 48);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdIsometric_ResolutionSetsSquareCells)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "iso_res.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("iso_res.png").toUtf8();
+
+    TestArgv args({"qtmesh", "isometric", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--directions", "4",
+                   "--resolution", "32"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 32 * 1);
+    EXPECT_EQ(img.height(), 32 * 4);
+}
+
+TEST(CLIPipelineCmdIsometricError, InvalidResolutionReturnsUsageError)
+{
+    TestArgv args({"qtmesh", "isometric", "model.fbx", "-o", "out.png", "--resolution", "8"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdIsometricError, InvalidCameraDistanceReturnsUsageError)
+{
+    TestArgv args({"qtmesh", "isometric", "model.fbx", "-o", "out.png", "--camera-distance", "0"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdIsometricError, InvalidFramesReturnsUsageError)
+{
+    TestArgv args({"qtmesh", "isometric", "model.fbx", "-o", "out.png", "--frames", "0"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 2);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdIsometric_CameraDistanceAndPadding)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QByteArray meshArg = writeMinimalObj(tmp.path(), "iso_cam.obj").toUtf8();
+    const QByteArray outArg = tmp.filePath("iso_cam.png").toUtf8();
+
+    TestArgv args({"qtmesh", "isometric", meshArg.constData(),
+                   "-o", outArg.constData(),
+                   "--directions", "2",
+                   "--size", "24",
+                   "--camera-distance", "5",
+                   "--padding", "2"});
+    EXPECT_EQ(CLIPipeline::cmdIsometric(args.argc(), args.argv()), 0);
+
+    QImage img(QString::fromUtf8(outArg));
+    ASSERT_FALSE(img.isNull());
+    EXPECT_EQ(img.width(), 24);
+    EXPECT_EQ(img.height(), 48);
 }
 
 TEST(CLIPipelineCmdInfoError, NonexistentFile)
