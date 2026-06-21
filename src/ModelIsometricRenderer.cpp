@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <exception>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -65,6 +67,65 @@ void prepareSceneForCapture(const QList<Ogre::Entity *> &entities)
       node->showBoundingBox(false);
   }
 }
+
+/// Hide editor chrome (grid, non-export entities) during RTT capture.
+/// The grid uses query flags that bypass the isometric viewport mask.
+class EditorCaptureGuard {
+public:
+  explicit EditorCaptureGuard(const QList<Ogre::Entity *> &visibleEntities)
+  {
+    std::unordered_set<Ogre::Entity *> keep;
+    keep.reserve(static_cast<std::size_t>(visibleEntities.size()));
+    for (Ogre::Entity *entity : visibleEntities) {
+      if (entity)
+        keep.insert(entity);
+    }
+
+    if (Manager::getSingletonPtr() && Manager::getSingleton()->hasSceneNode("GridLine_node")) {
+      m_gridNode = Manager::getSingleton()->getSceneNode("GridLine_node");
+      if (m_gridNode) {
+        m_gridWasVisible = m_gridNode->numAttachedObjects() == 0
+                               || m_gridNode->getAttachedObject(0)->getVisible();
+        m_gridNode->setVisible(false);
+      }
+    }
+
+    if (Manager::getSingletonPtr()) {
+      for (Ogre::Entity *other : Manager::getSingleton()->getEntities()) {
+        if (!other || other->getMovableType() != "Entity" || keep.count(other) != 0)
+          continue;
+        if (Ogre::SceneNode *node = other->getParentSceneNode()) {
+          const bool wasVisible =
+              node->numAttachedObjects() == 0 || node->getAttachedObject(0)->getVisible();
+          if (wasVisible) {
+            m_hiddenNodes.emplace_back(node, true);
+            node->setVisible(false);
+          }
+        }
+      }
+    }
+  }
+
+  EditorCaptureGuard(const EditorCaptureGuard &) = delete;
+  EditorCaptureGuard &operator=(const EditorCaptureGuard &) = delete;
+
+  ~EditorCaptureGuard() noexcept
+  {
+    try {
+      if (m_gridNode)
+        m_gridNode->setVisible(m_gridWasVisible);
+      for (auto &[node, wasVisible] : m_hiddenNodes)
+        node->setVisible(wasVisible);
+    } catch (...) {
+      // Best-effort restore; swallow to keep destructor noexcept.
+    }
+  }
+
+private:
+  Ogre::SceneNode *m_gridNode = nullptr;
+  bool m_gridWasVisible = false;
+  std::vector<std::pair<Ogre::SceneNode *, bool>> m_hiddenNodes;
+};
 
 void applyIsometricLighting(Ogre::SceneManager *sm)
 {
@@ -605,6 +666,7 @@ bool ModelIsometricRenderer::renderToGrid(const QList<Ogre::Entity *> &entities,
   prepareSceneForCapture(entities);
   prepareMaterialsForCapture(entities);
   applyIsometricLighting(sm);
+  EditorCaptureGuard editorGuard(entities);
 
   if (wantsAnimation) {
     const Ogre::AnimationStateSet *states = animatedEntity->getAllAnimationStates();

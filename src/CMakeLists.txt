@@ -102,6 +102,7 @@ VertexColorBaker.cpp
 VATBaker.cpp
 VATBakerController.cpp
 VATShaderEmitter.cpp
+IsometricSpritesController.cpp
 MinimalEXRWriter.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
@@ -268,6 +269,7 @@ AssetScanController.h
 MaterialPreviewRenderer.h
 ModelTurntableRenderer.h
 ModelIsometricRenderer.h
+IsometricSpritesController.h
 EditableMesh.h
 EditModeController.h
 EditorModeController.h

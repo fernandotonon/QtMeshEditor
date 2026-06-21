@@ -108,6 +108,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexColorBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBakerController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/IsometricSpritesController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATShaderEmitter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MinimalEXRWriter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MorphAnimationManager.cpp
@@ -288,6 +289,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelTurntableRenderer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelIsometricRenderer.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/IsometricSpritesController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorModeController.h
