@@ -206,6 +206,7 @@ private:
     CloudUploadProgress* m_cloudUploadProgress = nullptr;
     QtMeshCloudSession* m_cloudSession = nullptr;
     QAction* m_cloudUploadMenuAction = nullptr;
+    bool m_cloudUploadListingInFlight = false;
 
     void updateCloudUploadActionState();
     void startCloudPackageUpload(QtMeshCloudSession* session,

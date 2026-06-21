@@ -5277,9 +5277,17 @@ QJsonObject MCPServer::toolCloudUpload(const QJsonObject &args)
 
     const bool runScan = !args.contains(QStringLiteral("scan")) || args.value(QStringLiteral("scan")).toBool(true);
 
+    const QString mainCanonical = QFileInfo(filePath).canonicalFilePath();
     QStringList selectedPaths;
-    for (const DependencyEntry& entry : DependencyResolver::detect(filePath))
-        selectedPaths.append(entry.absolutePath);
+    selectedPaths.append(mainCanonical);
+    for (const DependencyEntry& entry : DependencyResolver::detect(filePath)) {
+        if (!entry.exists || !entry.checkedByDefault)
+            continue;
+        const QString absolute = QFileInfo(entry.absolutePath).absoluteFilePath();
+        if (absolute == mainCanonical)
+            continue;
+        selectedPaths.append(absolute);
+    }
 
     CloudPackageUploadRequest request;
     request.mainAssetPath = filePath;
@@ -5294,7 +5302,7 @@ QJsonObject MCPServer::toolCloudUpload(const QJsonObject &args)
     QString error;
     QString reportWarning;
     bool uploadOk = false;
-    int uploadedFileCount = selectedPaths.size();
+    const int uploadedFileCount = selectedPaths.size();
     connect(&session, &QtMeshCloudSession::uploadFinished, &loop,
             [&](bool ok, const QString& err, const QString& url, const QString&) {
                 uploadOk = ok;
@@ -5310,6 +5318,16 @@ QJsonObject MCPServer::toolCloudUpload(const QJsonObject &args)
         error = QStringLiteral("Upload canceled");
         loop.quit();
     });
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    timeout.setInterval(10 * 60 * 1000);
+    connect(&timeout, &QTimer::timeout, &loop, [&]() {
+        session.cancel();
+        uploadOk = false;
+        error = QStringLiteral("Upload timed out");
+        loop.quit();
+    });
+    timeout.start();
     session.uploadPackageFromAssets(request);
     loop.exec();
 

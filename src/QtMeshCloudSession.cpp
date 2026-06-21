@@ -80,6 +80,8 @@ QtMeshCloudSession::QtMeshCloudSession(const QString& bearerToken, QObject* pare
 void QtMeshCloudSession::cancel()
 {
     m_canceled.store(true);
+    if (m_uploadCancelFlag)
+        m_uploadCancelFlag->store(true);
 }
 
 void QtMeshCloudSession::listProjects()
@@ -107,18 +109,21 @@ void QtMeshCloudSession::uploadPackage(const PackageMetadata& metadata,
                                        const QString& projectSlug,
                                        bool createNewProject)
 {
+    m_uploadCancelFlag = std::make_shared<std::atomic_bool>(false);
     m_canceled.store(false);
     startUploadWorker(metadata, ownerSlug, projectSlug, createNewProject);
 }
 
 void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest& request)
 {
+    m_uploadCancelFlag = std::make_shared<std::atomic_bool>(false);
     m_canceled.store(false);
     const QString token = m_bearerToken;
     const CloudPackageUploadRequest req = request;
     QPointer<QtMeshCloudSession> self(this);
+    const std::shared_ptr<std::atomic_bool> canceled = m_uploadCancelFlag;
 
-    QThread* worker = QThread::create([self, token, req, canceled = &m_canceled]() {
+    QThread* worker = QThread::create([self, token, req, canceled]() {
         if (canceled->load()) {
             invokeUploadCanceled(self);
             return;
@@ -247,7 +252,7 @@ void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest
             invokeUploadProgress(self, i + 1, total + 1, descriptors.at(i).uploadName);
 
             const auto result = QtMeshCloudClient::uploadFileContent(
-                token, uploadUrls.uploads.at(i), descriptors.at(i).path, canceled);
+                token, uploadUrls.uploads.at(i), descriptors.at(i).path, canceled.get());
             if (result.canceled) {
                 invokeUploadCanceled(self);
                 return;
@@ -288,13 +293,13 @@ void QtMeshCloudSession::uploadPackageFromAssets(const CloudPackageUploadRequest
                 reportWarning = QStringLiteral("File uploaded, but analysis report upload failed.");
                 if (!reportResult.errorString.isEmpty())
                     reportWarning += QStringLiteral("\n\n") + reportResult.errorString;
-                SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+                SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
                                               reportWarning,
                                               QStringLiteral("warning"));
             }
         }
 
-        SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
                                       QStringLiteral("QtMesh Cloud package upload completed"));
         invokeUploadFinished(self, true, reportWarning, project.projectUrl, completed.scanStatus);
     });
@@ -310,9 +315,10 @@ void QtMeshCloudSession::startUploadWorker(const PackageMetadata& package,
 {
     const QString token = m_bearerToken;
     QPointer<QtMeshCloudSession> self(this);
+    const std::shared_ptr<std::atomic_bool> canceled = m_uploadCancelFlag;
 
     QThread* worker = QThread::create([self, token, package, ownerSlug, projectSlug, createNewProject,
-                                       canceled = &m_canceled]() {
+                                       canceled]() {
         if (canceled->load()) {
             invokeUploadCanceled(self);
             return;
@@ -380,7 +386,7 @@ void QtMeshCloudSession::startUploadWorker(const PackageMetadata& package,
             invokeUploadProgress(self, i + 1, total + 1, descriptors.at(i).uploadName);
 
             const auto result = QtMeshCloudClient::uploadFileContent(
-                token, uploadUrls.uploads.at(i), descriptors.at(i).path, canceled);
+                token, uploadUrls.uploads.at(i), descriptors.at(i).path, canceled.get());
             if (result.canceled) {
                 invokeUploadCanceled(self);
                 return;
@@ -421,13 +427,13 @@ void QtMeshCloudSession::startUploadWorker(const PackageMetadata& package,
                 reportWarning = QStringLiteral("File uploaded, but analysis report upload failed.");
                 if (!reportResult.errorString.isEmpty())
                     reportWarning += QStringLiteral("\n\n") + reportResult.errorString;
-                SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+                SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
                                               reportWarning,
                                               QStringLiteral("warning"));
             }
         }
 
-        SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
                                       QStringLiteral("QtMesh Cloud package upload completed"));
         invokeUploadFinished(self, true, reportWarning, project.projectUrl, completed.scanStatus);
     });

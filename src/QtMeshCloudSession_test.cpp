@@ -15,6 +15,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <memory>
 
 namespace {
@@ -210,9 +211,14 @@ TEST_F(QtMeshCloudSessionUploadReportTest, ReportFailureDoesNotFailBinaryUpload)
             });
 
     session.uploadPackage(manifest);
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    watchdog.setInterval(30000);
+    QObject::connect(&watchdog, &QTimer::timeout, &loop, &QEventLoop::quit);
+    watchdog.start();
     loop.exec();
 
-    EXPECT_TRUE(uploadOk);
+    ASSERT_TRUE(uploadOk) << "uploadFinished never fired (timeout or failure)";
     EXPECT_TRUE(m_mock->completeCalled());
     EXPECT_TRUE(m_mock->reportCalled());
     EXPECT_TRUE(uploadError.contains(QStringLiteral("analysis report upload failed"),

@@ -6,6 +6,7 @@
 
 #include <QObject>
 #include <atomic>
+#include <memory>
 
 struct CloudPackageUploadRequest {
     QString mainAssetPath;
@@ -60,6 +61,7 @@ private:
 
     QString m_bearerToken;
     std::atomic_bool m_canceled{false};
+    std::shared_ptr<std::atomic_bool> m_uploadCancelFlag;
 };
 
 #endif // QTMESH_CLOUD_SESSION_H

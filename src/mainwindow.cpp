@@ -2747,10 +2747,17 @@ void MainWindow::uploadFilesToQtMeshCloud()
         return;
     }
 
+    if (m_cloudUploadListingInFlight) {
+        statusBar()->showMessage(tr("Cloud upload already in progress…"), 3000);
+        return;
+    }
+    m_cloudUploadListingInFlight = true;
+
     statusBar()->showMessage(tr("Loading cloud projects…"), 0);
     m_cloudUploadProgress->start(tr("Loading cloud projects…"), 1);
 
     QtMeshCloudSession* session = cloudSessionForToken(token);
+    disconnect(session, &QtMeshCloudSession::projectsListed, this, nullptr);
     QPointer<MainWindow> self(this);
     connect(session, &QtMeshCloudSession::projectsListed, this,
             [self, token, mainAssetPath](const QList<QtMeshCloudClient::ProjectSummary>& projects,
@@ -2758,6 +2765,7 @@ void MainWindow::uploadFilesToQtMeshCloud()
                 if (!self)
                     return;
 
+                self->m_cloudUploadListingInFlight = false;
                 self->m_cloudUploadProgress->hideProgress();
                 self->statusBar()->clearMessage();
 
@@ -2772,6 +2780,21 @@ void MainWindow::uploadFilesToQtMeshCloud()
                         self, self->tr("QtMesh Cloud Upload"),
                         self->tr("You do not have any cloud projects yet. Create a project on "
                                  "QtMesh Cloud first, then upload files into it."));
+                    return;
+                }
+
+                if (!CloudCredentialStore::hasSession()) {
+                    QMessageBox::warning(self, self->tr("QtMesh Cloud Upload"),
+                                         self->tr("Your QtMesh Cloud session expired. Sign in again."));
+                    self->updateCloudAuthActions();
+                    return;
+                }
+                const QString currentToken = CloudCredentialStore::loadSession().token;
+                if (currentToken.isEmpty() || currentToken != token) {
+                    QMessageBox::warning(self, self->tr("QtMesh Cloud Upload"),
+                                         self->tr("Your QtMesh Cloud session changed while loading "
+                                                  "projects. Sign in again and retry."));
+                    self->updateCloudAuthActions();
                     return;
                 }
 
@@ -2800,7 +2823,7 @@ void MainWindow::uploadFilesToQtMeshCloud()
                 request.createNewProject = false;
                 request.runLocalScan = dialog.runLocalScanBeforeUpload();
 
-                self->startCloudPackageUpload(self->cloudSessionForToken(token), request);
+                self->startCloudPackageUpload(self->cloudSessionForToken(currentToken), request);
             },
             Qt::SingleShotConnection);
 
