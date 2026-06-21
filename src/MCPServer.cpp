@@ -42,6 +42,11 @@
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
+#ifdef ENABLE_ONNX
+#include "AIAssistManager.h"
+#include "PbrMapSynth.h"
+#include "RTShaderHelper.h"
+#endif
 #include <QEventLoop>
 #include <QDebug>
 #include <QFile>
@@ -569,6 +574,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("retopologize"),         &MCPServer::toolRetopologize},
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
+        {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
         {QStringLiteral("get_scene_info"), &MCPServer::toolGetSceneInfo},
         {QStringLiteral("take_screenshot"), &MCPServer::toolTakeScreenshot},
         {QStringLiteral("create_primitive"), &MCPServer::toolCreatePrimitive},
@@ -1676,6 +1682,91 @@ QJsonObject MCPServer::toolGenerateMeshTexture(const QJsonObject &args)
     result["controlNetUsed"]  = !controlNetPath.isEmpty();
     result["depthSize"]       = depthSize;
     result["controlStrength"] = strength;
+    return result;
+#endif
+}
+
+QJsonObject MCPServer::toolGeneratePbrMaps(const QJsonObject &args)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "This build was compiled without AI PBR map synthesis "
+        "(rebuild with -DENABLE_ONNX=ON).");
+#else
+    const QString albedoPath = args.value("albedo_path").toString();
+    if (albedoPath.trimmed().isEmpty())
+        return makeErrorResult("'albedo_path' is required.");
+    if (!QFileInfo::exists(albedoPath))
+        return makeErrorResult(
+            QStringLiteral("albedo not found: %1").arg(albedoPath));
+
+    PbrMapSynth::Options opts;
+    if (args.contains("normal"))    opts.generateNormal    = args["normal"].toBool();
+    if (args.contains("roughness")) opts.generateRoughness = args["roughness"].toBool();
+    if (args.contains("height"))    opts.generateHeight    = args["height"].toBool();
+    if (args.contains("tile_size")) opts.tileSize          = args["tile_size"].toInt(256);
+    if (args.contains("overwrite")) opts.overwriteCache    = args["overwrite"].toBool();
+    // Mirror the CLI bounds: 0 (whole image) or 32..4096. Reject out-of-range
+    // so a bad MCP/HTTP request can't drive pathological tiling/allocation.
+    if (opts.tileSize != 0 && (opts.tileSize < 32 || opts.tileSize > 4096))
+        return makeErrorResult("'tile_size' must be 0 (whole image) or between 32 and 4096.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.pbr_synth"),
+        QStringLiteral("MCP generate_pbr_maps from %1")
+            .arg(QFileInfo(albedoPath).fileName()));
+
+    const PbrMapSynthResult res =
+        AIAssistManager::instance()->synthesizePbrMaps(albedoPath, opts);
+    if (!res.ok)
+        return makeErrorResult(res.error.isEmpty()
+            ? QStringLiteral("PBR synthesis failed") : res.error);
+
+    // If a mesh is selected, bind the maps into the canonical slice-E slots.
+    int bound = 0;
+    if (hasSelectedEntities()) {
+        SelectionSet* sel = SelectionSet::getSingleton();
+        const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                                  : QList<Ogre::Entity*>{};
+        Ogre::Entity* entity = resolved.isEmpty() ? nullptr : resolved.first();
+        if (entity) {
+            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+                QFileInfo(albedoPath).absolutePath().toStdString(), "FileSystem",
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            auto bindSlot = [](Ogre::Pass* pass, const char* slot, const QString& p) {
+                if (p.isEmpty()) return;
+                const std::string tex = QFileInfo(p).fileName().toStdString();
+                Ogre::TextureUnitState* tus = nullptr;
+                for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i)
+                    if (pass->getTextureUnitState(i)->getName() == slot) { tus = pass->getTextureUnitState(i); break; }
+                if (!tus) { tus = pass->createTextureUnitState(); tus->setName(slot); }
+                tus->setTextureName(tex);
+            };
+            for (unsigned int s = 0; s < entity->getNumSubEntities(); ++s) {
+                const auto mat = entity->getSubEntity(s)->getMaterial();
+                if (!mat || mat->getNumTechniques() == 0) continue;
+                auto* tech = mat->getTechnique(0);
+                if (tech->getNumPasses() == 0) continue;
+                auto* pass = tech->getPass(0);
+                bindSlot(pass, "normal_map", res.normalPath);
+                bindSlot(pass, "roughness",  res.roughnessPath);
+                RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+                mat->compile();
+                ++bound;
+            }
+        }
+    }
+
+    QJsonObject result = makeSuccessResult(QStringLiteral(
+        "Generated PBR maps from '%1'%2.")
+        .arg(QFileInfo(albedoPath).fileName())
+        .arg(bound > 0 ? QStringLiteral(" and bound to %1 submesh(es)").arg(bound)
+                       : QString()));
+    result["normalPath"]    = res.normalPath;
+    result["roughnessPath"] = res.roughnessPath;
+    result["heightPath"]    = res.heightPath;
+    result["fromCache"]     = res.fromCache;
+    result["boundSubmeshes"] = bound;
     return result;
 #endif
 }
@@ -6124,6 +6215,41 @@ QJsonArray MCPServer::buildToolsList()
         );
     }
 #endif // ENABLE_STABLE_DIFFUSION
+
+    // generate_pbr_maps (#404) — only advertised when ONNX is compiled in.
+#ifdef ENABLE_ONNX
+    {
+        QJsonObject props;
+        props["albedo_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Path to the source albedo/diffuse texture on disk. The generated "
+             "maps are written next to it (<stem>_normal.png / _roughness.png / "
+             "_height.png)."}};
+        props["normal"]    = QJsonObject{{"type", "boolean"},
+            {"description", "Generate the tangent-space normal map (default true)."}};
+        props["roughness"] = QJsonObject{{"type", "boolean"},
+            {"description", "Generate the roughness map (default true). Derived "
+             "from albedo luminance — needs no model, works offline."}};
+        props["height"]    = QJsonObject{{"type", "boolean"},
+            {"description", "Generate the height map (default true)."}};
+        props["tile_size"] = QJsonObject{{"type", "integer"},
+            {"description", "Model input tile size (default 256). 0 = whole image."}};
+        props["overwrite"] = QJsonObject{{"type", "boolean"},
+            {"description", "Re-run even if cached output PNGs already exist."}};
+        appendTool(
+            "generate_pbr_maps",
+            "AI PBR map synthesis (issue #404). Predicts normal + height maps "
+            "from a single albedo texture via an ONNX UNet (downloaded on first "
+            "use) and derives roughness from albedo luminance. Writes the maps "
+            "next to the source albedo; if a mesh is selected, binds normal/"
+            "roughness into the material's canonical PBR slots. Normal/height "
+            "need the model (graceful error if unavailable); roughness works "
+            "offline.",
+            props,
+            QJsonArray{"albedo_path"}
+        );
+    }
+#endif // ENABLE_ONNX
 
     // retopologize
     {

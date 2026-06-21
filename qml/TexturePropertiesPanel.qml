@@ -279,7 +279,27 @@ GroupBox {
         // the texture to certain materials isn't working yet).
         RowLayout {
             Layout.fillWidth: true
-            Item { Layout.fillWidth: true }
+            // #404: synthesize normal/roughness/height from the current diffuse.
+            // Only shown on an ONNX build; disabled until a real texture is set.
+            ThemedButton {
+                id: pbrSynthBtn
+                text: "Generate PBR maps from diffuse"
+                visible: MaterialEditorQML.aiPbrAvailable()
+                enabled: MaterialEditorQML.textureName !== ""
+                    && MaterialEditorQML.textureName !== "*Select a texture*"
+                onClicked: {
+                    pbrStatus.text = "Synthesizing PBR maps…"
+                    MaterialEditorQML.generatePbrFromDiffuse()
+                }
+            }
+            ThemedLabel {
+                id: pbrStatus
+                Layout.fillWidth: true
+                visible: MaterialEditorQML.aiPbrAvailable()
+                text: ""
+                elide: Text.ElideRight
+            }
+            Item { Layout.fillWidth: true; visible: !MaterialEditorQML.aiPbrAvailable() }
             ThemedButton {
                 text: "Save Texture As…"
                 // Bind to textureName (a NOTIFY property) so the
@@ -293,6 +313,165 @@ GroupBox {
                     const dest = MaterialEditorQML.chooseTextureExportPath()
                     if (dest && dest.length > 0)
                         MaterialEditorQML.exportCurrentTexture(dest)
+                }
+            }
+
+            Connections {
+                target: MaterialEditorQML
+                function onPbrSynthCompleted(result) {
+                    pbrStatus.text = result.fromCache ? "PBR maps ready (cached)."
+                                                      : "PBR maps generated."
+                }
+                function onPbrSynthError(err) { pbrStatus.text = "PBR: " + err }
+            }
+        }
+
+        // ── PBR slots (multi-slot) view ─────────────────────────────────────
+        // Expandable section listing every texture unit of the current pass
+        // (albedo/normal_map/roughness/…), each with its own preview + picker.
+        // Offered only for PBR-named materials; collapsed by default so the
+        // single-texture controls above stay the simple path.
+        GroupBox {
+            id: pbrSlotsGroup
+            Layout.fillWidth: true
+            // Visibility tracks `units` (updated by the Connections block below)
+            // rather than the Q_INVOKABLE isPbrMaterial() — the latter has no
+            // NOTIFY signal so a method-call binding would go stale when slots
+            // are added/removed at runtime (e.g. after Generate PBR).
+            property var pbrSlotNames: ["albedo", "diffuse_map", "normal_map",
+                                        "roughness", "metallic", "ao", "emissive"]
+            visible: units.some(function(u) { return pbrSlotNames.indexOf(u) >= 0 })
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
+
+            property bool expanded: false
+            property var units: MaterialEditorQML.textureUnitList
+
+            title: ""
+            background: Rectangle {
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top; anchors.left: parent.left
+                    anchors.right: parent.right; height: 1
+                    color: MaterialEditorQML.borderColor
+                }
+            }
+            label: Item {
+                width: pbrSlotsGroup.width; height: 22
+                ThemedLabel {
+                    id: pbrSlotsHeader
+                    anchors.left: parent.left; topPadding: 4
+                    text: (pbrSlotsGroup.expanded ? "▼ " : "▶ ")
+                          + "PBR Texture Slots (" + pbrSlotsGroup.units.length + ")"
+                    font.bold: true
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: pbrSlotsGroup.expanded = !pbrSlotsGroup.expanded
+                }
+            }
+
+            // Refresh the slot list when bindings/selection change.
+            Connections {
+                target: MaterialEditorQML
+                function onTextureUnitsChanged() {
+                    pbrSlotsGroup.units = MaterialEditorQML.textureUnitList
+                    slotRepeater.bump++
+                }
+                function onTextureUnitListChanged() {
+                    pbrSlotsGroup.units = MaterialEditorQML.textureUnitList
+                    slotRepeater.bump++
+                }
+            }
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 6
+                visible: pbrSlotsGroup.expanded
+
+                Repeater {
+                    id: slotRepeater
+                    model: pbrSlotsGroup.units
+                    property int bump: 0   // force preview re-eval on rebind
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        property int slotIndex: index
+
+                        // Slot preview thumbnail
+                        Rectangle {
+                            width: 48; height: 48
+                            color: MaterialEditorQML.panelColor
+                            border.color: MaterialEditorQML.borderColor
+                            border.width: 1
+                            Image {
+                                anchors.fill: parent; anchors.margins: 2
+                                fillMode: Image.PreserveAspectFit
+                                cache: false
+                                source: {
+                                    slotRepeater.bump; // dependency
+                                    var p = MaterialEditorQML.texturePreviewPathForUnit(index)
+                                    return p !== "" ? p + "?v=" + slotRepeater.bump : ""
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            ThemedLabel {
+                                text: modelData            // the slot/unit name
+                                font.bold: true
+                                font.pixelSize: 11
+                            }
+                            ThemedLabel {
+                                Layout.fillWidth: true
+                                elide: Text.ElideMiddle
+                                font.pixelSize: 10
+                                color: MaterialEditorQML.disabledTextColor
+                                text: {
+                                    slotRepeater.bump;
+                                    var t = MaterialEditorQML.textureNameForUnit(index)
+                                    return t !== "" ? t : "(empty)"
+                                }
+                            }
+                        }
+
+                        // Pick an already-loaded texture for this slot.
+                        ThemedComboBox {
+                            Layout.preferredWidth: 150
+                            property var opts: ["— pick texture —"].concat(MaterialEditorQML.getAvailableTextures())
+                            model: opts
+                            currentIndex: 0
+                            onActivated: function(i) {
+                                if (i > 0) {
+                                    MaterialEditorQML.setTextureForUnit(slotIndex, opts[i])
+                                    currentIndex = 0
+                                }
+                            }
+                        }
+
+                        // Browse for a file to bind into this slot.
+                        ThemedButton {
+                            text: "Load file…"
+                            onClicked: {
+                                var p = MaterialEditorQML.openFileDialog()
+                                if (p && p.length > 0)
+                                    MaterialEditorQML.loadTextureFileForUnit(slotIndex, p)
+                            }
+                        }
+                    }
+                }
+
+                ThemedLabel {
+                    visible: pbrSlotsGroup.units.length === 0
+                    text: "This material has no texture units."
+                    font.pixelSize: 10
+                    color: MaterialEditorQML.disabledTextColor
                 }
             }
         }

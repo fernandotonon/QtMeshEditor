@@ -21,6 +21,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -63,6 +64,10 @@ protected:
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         ASSERT_TRUE(canLoadMeshFiles()) << "Ogre plugins/codecs not available";
         createStandardOgreMaterials();
+        // The --generate-pbr path auto-downloads its ONNX models on first use;
+        // forbid network in tests so the synchronous synthesize call can't hang
+        // on a download (it returns the graceful "model not available" error).
+        qputenv("QTMESH_PBR_NO_DOWNLOAD", "1");
         // Each cmdMaterial run appends to the global SelectionSet; clear it so
         // selectedEntityCount in the next run reflects only that run's import.
         if (auto* sel = SelectionSet::getSingletonPtr())
@@ -71,6 +76,7 @@ protected:
 
     void TearDown() override
     {
+        qunsetenv("QTMESH_PBR_NO_DOWNLOAD");
         if (auto* sel = SelectionSet::getSingletonPtr())
             sel->clear();
     }
@@ -298,6 +304,86 @@ TEST_F(CLIPipelineCmdMaterialCoverageTest, GenerateTextureNoModelFailsCleanly)
                       "-o", outMesh});
     EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
     EXPECT_FALSE(QFile::exists(outMesh)) << "no mesh should be written on failure";
+}
+
+// ── #404: --generate-pbr ─────────────────────────────────────────────────────
+
+namespace {
+// Write a small solid-colour albedo PNG; returns its path (empty on failure).
+QString writeAlbedo(const QTemporaryDir& dir, const QString& name, int rgb)
+{
+    QImage img(16, 16, QImage::Format_RGB888);
+    img.fill(rgb);
+    const QString p = dir.filePath(name);
+    if (!img.save(p, "PNG")) return QString();
+    return p;
+}
+} // namespace
+
+// --generate-pbr with no --texture → usage error (2) on an ONNX build; the
+// not-built branch returns 1. Either way it must not crash.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, GeneratePbrMissingTexture)
+{
+    ArgvBuilder args({"qtmesh", "material", "--generate-pbr"});
+    const int rc = CLIPipeline::cmdMaterial(args.argc(), args.argv());
+#ifdef ENABLE_ONNX
+    EXPECT_EQ(rc, 2);
+#else
+    EXPECT_EQ(rc, 1);
+#endif
+}
+
+// Out-of-range --tile-size → usage error (2) on ONNX; not-built returns 1.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, GeneratePbrRejectsBadTileSize)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString albedo = writeAlbedo(dir, "albedo.png", qRgb(120, 120, 120));
+    ASSERT_FALSE(albedo.isEmpty());
+
+    ArgvBuilder args({"qtmesh", "material", "--texture", albedo,
+                      "--generate-pbr", "--tile-size", "8"});
+    const int rc = CLIPipeline::cmdMaterial(args.argc(), args.argv());
+#ifdef ENABLE_ONNX
+    EXPECT_EQ(rc, 2);
+#else
+    EXPECT_EQ(rc, 1);
+#endif
+}
+
+// Roughness-only needs no model, so on an ONNX build it succeeds offline and
+// writes <stem>_roughness.png next to the albedo. Without ONNX it returns 1.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, GeneratePbrRoughnessOnly)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString albedo = writeAlbedo(dir, "tex.png", qRgb(40, 40, 40));
+    ASSERT_FALSE(albedo.isEmpty());
+
+    ArgvBuilder args({"qtmesh", "material", "--texture", albedo,
+                      "--generate-pbr", "--no-normal", "--no-height"});
+    const int rc = CLIPipeline::cmdMaterial(args.argc(), args.argv());
+#ifdef ENABLE_ONNX
+    EXPECT_EQ(rc, 0);
+    EXPECT_TRUE(QFile::exists(dir.filePath("tex_roughness.png")));
+    EXPECT_FALSE(QFile::exists(dir.filePath("tex_normal.png")));
+#else
+    EXPECT_EQ(rc, 1);
+#endif
+}
+
+// A full request (normal/height) with no downloaded model fails cleanly: exit 1,
+// no maps written. (Non-ONNX build: same exit-1 contract.)
+TEST_F(CLIPipelineCmdMaterialCoverageTest, GeneratePbrNoModelFailsCleanly)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString albedo = writeAlbedo(dir, "tex.png", qRgb(200, 180, 160));
+    ASSERT_FALSE(albedo.isEmpty());
+
+    ArgvBuilder args({"qtmesh", "material", "--texture", albedo, "--generate-pbr"});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
+    EXPECT_FALSE(QFile::exists(dir.filePath("tex_normal.png")));
 }
 
 } // namespace

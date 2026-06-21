@@ -110,6 +110,8 @@ PoseLibrary.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
+PbrMapSynth.cpp
+AIAssistManager.cpp
 MemoryEstimator.cpp
 DrawCallAnalyzer.cpp
 VertexCacheOptimizer.cpp
@@ -576,6 +578,20 @@ if(ENABLE_STABLE_DIFFUSION)
     target_link_libraries(${CMAKE_PROJECT_NAME} stable-diffusion)
 endif()
 
+# Link ONNX Runtime if enabled (#404 — AI PBR map synthesis). The imported
+# target is a SHARED lib, so copy it next to the binary at build time or it
+# won't be found at runtime.
+if(ENABLE_ONNX)
+    target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_onnx)
+    if(QTMESH_ONNX_RUNTIME_LIB)
+        add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${QTMESH_ONNX_RUNTIME_LIB}"
+                    "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+            COMMENT "Copying ONNX Runtime shared library next to QtMeshEditor")
+    endif()
+endif()
+
 # Link Sentry if enabled
 if(ENABLE_SENTRY)
     target_link_libraries(${CMAKE_PROJECT_NAME} sentry)
@@ -675,6 +691,18 @@ if(BUILD_TESTS)
     # Link stable-diffusion.cpp for tests if enabled
     if(ENABLE_STABLE_DIFFUSION)
         target_link_libraries(UnitTests stable-diffusion)
+    endif()
+
+    # Link ONNX Runtime for tests if enabled (#404)
+    if(ENABLE_ONNX)
+        target_link_libraries(UnitTests qtmesh_onnx)
+        if(QTMESH_ONNX_RUNTIME_LIB)
+            add_custom_command(TARGET UnitTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${QTMESH_ONNX_RUNTIME_LIB}"
+                        "$<TARGET_FILE_DIR:UnitTests>"
+                COMMENT "Copying ONNX Runtime shared library next to UnitTests")
+        endif()
     endif()
 
     # Link Sentry for tests if enabled

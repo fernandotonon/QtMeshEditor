@@ -28,7 +28,7 @@ ui_files/
 ui_*
 *.log
 *.cmake
-!cmake/Libsodium.cmake
+!cmake/*.cmake
 *.user
 *.qtc_clangd*
 _CPack_Packages/*
@@ -97,3 +97,7 @@ docs/*
 minisign.key
 *.minisig
 !tests/fixtures/**/*.minisig
+
+# Local ML experiment scratch (not part of the project)
+src/python_scripts/
+src/project_for_llm.py
