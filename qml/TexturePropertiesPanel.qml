@@ -316,6 +316,23 @@ GroupBox {
                 }
             }
 
+            // #405: AI super-resolution of the current texture (Real-ESRGAN).
+            // Shown on an ONNX build; writes <stem>_upscaled.png next to the source.
+            ThemedButton {
+                text: "Upscale 2×"
+                visible: MaterialEditorQML.aiPbrAvailable()
+                enabled: MaterialEditorQML.textureName !== ""
+                    && MaterialEditorQML.textureName !== "*Select a texture*"
+                onClicked: { pbrStatus.text = "Upscaling 2×…"; MaterialEditorQML.upscaleCurrentTexture(2) }
+            }
+            ThemedButton {
+                text: "Upscale 4×"
+                visible: MaterialEditorQML.aiPbrAvailable()
+                enabled: MaterialEditorQML.textureName !== ""
+                    && MaterialEditorQML.textureName !== "*Select a texture*"
+                onClicked: { pbrStatus.text = "Upscaling 4×…"; MaterialEditorQML.upscaleCurrentTexture(4) }
+            }
+
             Connections {
                 target: MaterialEditorQML
                 function onPbrSynthCompleted(result) {
@@ -323,6 +340,10 @@ GroupBox {
                                                       : "PBR maps generated."
                 }
                 function onPbrSynthError(err) { pbrStatus.text = "PBR: " + err }
+                function onUpscaleCompleted(path) {
+                    pbrStatus.text = "Upscaled → " + path.split('/').pop()
+                }
+                function onUpscaleError(err) { pbrStatus.text = "Upscale: " + err }
             }
         }
 

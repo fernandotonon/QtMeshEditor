@@ -573,6 +573,10 @@ public slots:
     // into the material's canonical slots.
     Q_INVOKABLE bool aiPbrAvailable() const;
     Q_INVOKABLE void generatePbrFromDiffuse();
+    /// #405: upscale the current texture by `scale` (2 or 4) via Real-ESRGAN,
+    /// writing <stem>_upscaled.png next to the source. Relays
+    /// upscaleStarted/Completed/Error from AIAssistManager.
+    Q_INVOKABLE void upscaleCurrentTexture(int scale);
 
     // Issue #403: mesh-aware texture generation. Same as
     // generateTextureFromPrompt but renders the selected entity's
@@ -716,6 +720,9 @@ signals:
     void pbrSynthStarted();
     void pbrSynthCompleted(const QVariantMap &result);
     void pbrSynthError(const QString &error);
+    void upscaleStarted();
+    void upscaleCompleted(const QString &outputPath);
+    void upscaleError(const QString &error);
     /** Non-fatal informational message during generation (e.g. degraded mode);
         unlike sdGenerationError it must NOT abort or reset the in-flight run. */
     void sdGenerationNotice(const QString &message);

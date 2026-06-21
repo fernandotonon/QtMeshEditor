@@ -386,4 +386,59 @@ TEST_F(CLIPipelineCmdMaterialCoverageTest, GeneratePbrNoModelFailsCleanly)
     EXPECT_FALSE(QFile::exists(dir.filePath("tex_normal.png")));
 }
 
+// ── #405: --upscale ─────────────────────────────────────────────────────────
+// The fixture sets QTMESH_PBR_NO_DOWNLOAD, so these exercise the validation +
+// no-model contracts without hitting the network.
+
+// --upscale without --texture → usage error (2) on ONNX; not-built returns 1.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, UpscaleMissingTexture)
+{
+    ArgvBuilder args({"qtmesh", "material", "--upscale", "4"});
+    const int rc = CLIPipeline::cmdMaterial(args.argc(), args.argv());
+#ifdef ENABLE_ONNX
+    EXPECT_EQ(rc, 2);
+#else
+    EXPECT_EQ(rc, 1);
+#endif
+}
+
+// Invalid factor (3) → usage error (2) on ONNX; not-built returns 1.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, UpscaleRejectsBadFactor)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString tex = writeAlbedo(dir, "low.png", qRgb(90, 90, 90));
+    ASSERT_FALSE(tex.isEmpty());
+    ArgvBuilder args({"qtmesh", "material", "--texture", tex, "--upscale", "3"});
+    const int rc = CLIPipeline::cmdMaterial(args.argc(), args.argv());
+#ifdef ENABLE_ONNX
+    EXPECT_EQ(rc, 2);
+#else
+    EXPECT_EQ(rc, 1);
+#endif
+}
+
+// Non-numeric --upscale → usage error (2) regardless of build.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, UpscaleRejectsNonNumeric)
+{
+    ArgvBuilder args({"qtmesh", "material", "--texture", "/tmp/x.png",
+                      "--upscale", "huge"});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 2);
+}
+
+// Valid factor + no downloaded model → exit 1, no output written. (Non-ONNX:
+// same exit-1 contract via the #ifndef branch.)
+TEST_F(CLIPipelineCmdMaterialCoverageTest, UpscaleNoModelFailsCleanly)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString tex = writeAlbedo(dir, "low.png", qRgb(60, 90, 120));
+    ASSERT_FALSE(tex.isEmpty());
+    const QString out = dir.filePath("high.png");
+    ArgvBuilder args({"qtmesh", "material", "--texture", tex,
+                      "--upscale", "4", "-o", out});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
+    EXPECT_FALSE(QFile::exists(out)) << "no output on failure";
+}
+
 } // namespace

@@ -4236,6 +4236,37 @@ void MaterialEditorQML::generatePbrFromDiffuse()
 #endif
 }
 
+void MaterialEditorQML::upscaleCurrentTexture(int scale)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(scale);
+    emit upscaleError(tr("AI upscaling is not enabled. Rebuild with ENABLE_ONNX=ON."));
+#else
+    QString src = getTexturePreviewPath();
+    if (src.startsWith(QStringLiteral("file://")))
+        src = QUrl(src).toLocalFile();
+    if (src.isEmpty() || !QFileInfo::exists(src)) {
+        emit upscaleError(tr("No on-disk texture to upscale. Apply or save a texture first."));
+        return;
+    }
+    emit upscaleStarted();
+    // The facade does the work + emits its own upscale* signals; relay them
+    // once (single-shot) so QML bound to MaterialEditorQML hears the result.
+    AIAssistManager* ai = AIAssistManager::instance();
+    auto* c1 = new QMetaObject::Connection;
+    auto* c2 = new QMetaObject::Connection;
+    auto cleanup = [c1, c2]() {
+        QObject::disconnect(*c1); QObject::disconnect(*c2);
+        delete c1; delete c2;
+    };
+    *c1 = connect(ai, &AIAssistManager::upscaleCompleted, this,
+        [this, cleanup](const QString& out) { emit upscaleCompleted(out); cleanup(); });
+    *c2 = connect(ai, &AIAssistManager::upscaleError, this,
+        [this, cleanup](const QString& e) { emit upscaleError(e); cleanup(); });
+    ai->upscaleTexture(src, scale, /*overwrite=*/true);
+#endif
+}
+
 bool MaterialEditorQML::hasSelectedMesh() const
 {
     auto* sel = SelectionSet::getSingleton();

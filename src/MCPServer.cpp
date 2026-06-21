@@ -575,6 +575,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
+        {QStringLiteral("upscale_texture"), &MCPServer::toolUpscaleTexture},
         {QStringLiteral("get_scene_info"), &MCPServer::toolGetSceneInfo},
         {QStringLiteral("take_screenshot"), &MCPServer::toolTakeScreenshot},
         {QStringLiteral("create_primitive"), &MCPServer::toolCreatePrimitive},
@@ -1767,6 +1768,38 @@ QJsonObject MCPServer::toolGeneratePbrMaps(const QJsonObject &args)
     result["heightPath"]    = res.heightPath;
     result["fromCache"]     = res.fromCache;
     result["boundSubmeshes"] = bound;
+    return result;
+#endif
+}
+
+QJsonObject MCPServer::toolUpscaleTexture(const QJsonObject &args)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "This build was compiled without AI texture upscaling "
+        "(rebuild with -DENABLE_ONNX=ON).");
+#else
+    const QString srcPath = args.value("texture_path").toString();
+    if (srcPath.trimmed().isEmpty())
+        return makeErrorResult("'texture_path' is required.");
+    if (!QFileInfo::exists(srcPath))
+        return makeErrorResult(QStringLiteral("texture not found: %1").arg(srcPath));
+    const int scale = args.contains("scale") ? args["scale"].toInt(4) : 4;
+    if (scale != 2 && scale != 4)
+        return makeErrorResult("'scale' must be 2 or 4.");
+    const bool overwrite = args.value("overwrite").toBool();
+
+    const QString out =
+        AIAssistManager::instance()->upscaleTexture(srcPath, scale, overwrite);
+    if (out.isEmpty())
+        return makeErrorResult(
+            "Upscale failed (model unavailable/offline or inference error).");
+
+    QJsonObject result = makeSuccessResult(QStringLiteral(
+        "Upscaled '%1' by %2x.").arg(QFileInfo(srcPath).fileName()).arg(scale));
+    result["outputPath"] = out;
+    result["scale"] = scale;
     return result;
 #endif
 }
@@ -6247,6 +6280,27 @@ QJsonArray MCPServer::buildToolsList()
             "offline.",
             props,
             QJsonArray{"albedo_path"}
+        );
+    }
+    // upscale_texture (#405)
+    {
+        QJsonObject props;
+        props["texture_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Path to the image to upscale. The result is written next to it as "
+             "<stem>_upscaled.png."}};
+        props["scale"] = QJsonObject{{"type", "integer"},
+            {"description", "Upscale factor: 2 or 4 (default 4)."}};
+        props["overwrite"] = QJsonObject{{"type", "boolean"},
+            {"description", "Re-run even if a cached _upscaled.png already exists."}};
+        appendTool(
+            "upscale_texture",
+            "AI texture super-resolution (issue #405). Upscales an image 2x or 4x "
+            "with Real-ESRGAN via an ONNX model (downloaded on first use). Useful "
+            "for low-res imported textures or AI-generated outputs. Fails "
+            "gracefully when the model is unavailable/offline.",
+            props,
+            QJsonArray{"texture_path"}
         );
     }
 #endif // ENABLE_ONNX
