@@ -29,6 +29,7 @@
 #include "UvUnwrap.h"
 #include "AssetScanController.h"
 #include "CloudCredentialStore.h"
+#include "DependencyResolver.h"
 #include "ProjectPackager.h"
 #include "QtMeshCloudClient.h"
 #include "QtMeshCloudSession.h"
@@ -5274,46 +5275,53 @@ QJsonObject MCPServer::toolCloudUpload(const QJsonObject &args)
     if (projectName.isEmpty())
         projectName = QFileInfo(filePath).completeBaseName();
 
-    PackageMetadata manifest = ProjectPackager::buildManifest(filePath, {}, projectName);
     const bool runScan = !args.contains(QStringLiteral("scan")) || args.value(QStringLiteral("scan")).toBool(true);
-    if (runScan) {
-        QString scanError;
-        const QByteArray scanJson = AssetScanController::runIsolatedScanJsonSync(
-            QFileInfo(filePath).absolutePath(), QFileInfo(filePath).fileName(), &scanError);
-        if (!scanJson.isEmpty()) {
-            QJsonParseError parseError;
-            const QJsonDocument doc = QJsonDocument::fromJson(scanJson, &parseError);
-            if (parseError.error == QJsonParseError::NoError && doc.isObject())
-                manifest.scanSummary = doc.object();
-        }
-    }
+
+    QStringList selectedPaths;
+    for (const DependencyEntry& entry : DependencyResolver::detect(filePath))
+        selectedPaths.append(entry.absolutePath);
+
+    CloudPackageUploadRequest request;
+    request.mainAssetPath = filePath;
+    request.selectedAbsolutePaths = selectedPaths;
+    request.projectName = projectName;
+    request.createNewProject = true;
+    request.runLocalScan = runScan;
 
     QtMeshCloudSession session(token);
     QEventLoop loop;
     QString projectUrl;
     QString error;
+    QString reportWarning;
+    bool uploadOk = false;
+    int uploadedFileCount = selectedPaths.size();
     connect(&session, &QtMeshCloudSession::uploadFinished, &loop,
             [&](bool ok, const QString& err, const QString& url, const QString&) {
+                uploadOk = ok;
                 projectUrl = url;
-                error = err;
-                if (!ok && error.isEmpty())
-                    error = QStringLiteral("Upload failed");
+                if (ok && !err.isEmpty())
+                    reportWarning = err;
+                else if (!ok)
+                    error = err.isEmpty() ? QStringLiteral("Upload failed") : err;
                 loop.quit();
             });
     connect(&session, &QtMeshCloudSession::uploadCanceled, &loop, [&]() {
+        uploadOk = false;
         error = QStringLiteral("Upload canceled");
         loop.quit();
     });
-    session.uploadPackage(manifest);
+    session.uploadPackageFromAssets(request);
     loop.exec();
 
-    if (!error.isEmpty())
+    if (!uploadOk)
         return makeErrorResult(error);
 
     QJsonObject content;
     content[QStringLiteral("ok")] = true;
     content[QStringLiteral("projectUrl")] = projectUrl;
-    content[QStringLiteral("fileCount")] = manifest.files.size();
+    content[QStringLiteral("fileCount")] = uploadedFileCount;
+    if (!reportWarning.isEmpty())
+        content[QStringLiteral("reportWarning")] = reportWarning;
     return makeSuccessResult(
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }

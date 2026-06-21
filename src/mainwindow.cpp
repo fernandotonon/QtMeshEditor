@@ -2732,7 +2732,7 @@ void MainWindow::uploadFilesToQtMeshCloud()
             return;
     }
 
-    QString mainAssetPath = primaryCloudAssetPath();
+    const QString mainAssetPath = primaryCloudAssetPath();
     if (mainAssetPath.isEmpty()) {
         QMessageBox::information(this, tr("QtMesh Cloud Upload"),
                                  tr("Open a model first, then upload it with its dependencies."));
@@ -2747,106 +2747,88 @@ void MainWindow::uploadFilesToQtMeshCloud()
         return;
     }
 
-    QProgressDialog progress(tr("Loading cloud projects..."), tr("Cancel"), 0, 0, this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(0);
-    progress.show();
+    statusBar()->showMessage(tr("Loading cloud projects…"), 0);
+    m_cloudUploadProgress->start(tr("Loading cloud projects…"), 1);
 
     QtMeshCloudSession* session = cloudSessionForToken(token);
-
-    QEventLoop listLoop;
-    QList<QtMeshCloudClient::ProjectSummary> projects;
-    QString listError;
+    QPointer<MainWindow> self(this);
     connect(session, &QtMeshCloudSession::projectsListed, this,
-            [&](const QList<QtMeshCloudClient::ProjectSummary>& listed, const QString& err) {
-                projects = listed;
-                listError = err;
-                listLoop.quit();
+            [self, token, mainAssetPath](const QList<QtMeshCloudClient::ProjectSummary>& projects,
+                                         const QString& listError) {
+                if (!self)
+                    return;
+
+                self->m_cloudUploadProgress->hideProgress();
+                self->statusBar()->clearMessage();
+
+                if (!listError.isEmpty()) {
+                    QMessageBox::warning(self, self->tr("QtMesh Cloud Upload"),
+                                         self->tr("Could not load your cloud projects.\n\n%1")
+                                             .arg(listError));
+                    return;
+                }
+                if (projects.isEmpty()) {
+                    QMessageBox::information(
+                        self, self->tr("QtMesh Cloud Upload"),
+                        self->tr("You do not have any cloud projects yet. Create a project on "
+                                 "QtMesh Cloud first, then upload files into it."));
+                    return;
+                }
+
+                CloudUploadDialog dialog(self);
+                dialog.setAccountLabel(storedCloudDisplayName());
+                dialog.setProjects(projects);
+                dialog.setMainAssetPath(mainAssetPath);
+
+                if (dialog.exec() != QDialog::Accepted)
+                    return;
+
+                if (!dialog.hasSelectedProject()) {
+                    QMessageBox::warning(self, self->tr("QtMesh Cloud Upload"),
+                                         self->tr("Select a cloud project."));
+                    return;
+                }
+
+                const QtMeshCloudClient::ProjectSummary selectedProject = dialog.selectedProject();
+
+                CloudPackageUploadRequest request;
+                request.mainAssetPath = mainAssetPath;
+                request.selectedAbsolutePaths = dialog.selectedAbsolutePathsForUpload();
+                request.projectName = dialog.projectName();
+                request.ownerSlug = selectedProject.ownerSlug;
+                request.projectSlug = selectedProject.projectSlug;
+                request.createNewProject = false;
+                request.runLocalScan = dialog.runLocalScanBeforeUpload();
+
+                self->startCloudPackageUpload(self->cloudSessionForToken(token), request);
             },
             Qt::SingleShotConnection);
+
     session->listProjects();
-    listLoop.exec();
-    progress.close();
+}
 
-    if (!listError.isEmpty()) {
-        QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
-                             tr("Could not load your cloud projects.\n\n%1").arg(listError));
-        return;
-    }
-    if (projects.isEmpty()) {
-        QMessageBox::information(
-            this, tr("QtMesh Cloud Upload"),
-            tr("You do not have any cloud projects yet. Create a project on QtMesh Cloud first, "
-               "then upload files into it."));
-        return;
-    }
-
-    CloudUploadDialog dialog(this);
-    dialog.setAccountLabel(storedCloudDisplayName());
-    dialog.setProjects(projects);
-    dialog.setMainAssetPath(mainAssetPath);
-
-    if (dialog.exec() != QDialog::Accepted)
+void MainWindow::startCloudPackageUpload(QtMeshCloudSession* session,
+                                         const CloudPackageUploadRequest& request)
+{
+    if (!session)
         return;
 
-    if (!dialog.hasSelectedProject()) {
-        QMessageBox::warning(this, tr("QtMesh Cloud Upload"), tr("Select a cloud project."));
-        return;
-    }
+    disconnect(session, &QtMeshCloudSession::uploadProgress, this, nullptr);
+    disconnect(session, &QtMeshCloudSession::uploadFinished, this, nullptr);
+    disconnect(session, &QtMeshCloudSession::uploadCanceled, this, nullptr);
+    disconnect(session, &QtMeshCloudSession::uploadPrepareWarning, this, nullptr);
+    disconnect(m_cloudUploadProgress, &CloudUploadProgress::cancelRequested, session, nullptr);
 
-    const QtMeshCloudClient::ProjectSummary selectedProject = dialog.selectedProject();
-
-    if (dialog.runLocalScanBeforeUpload()) {
-        QProgressDialog scanProgress(tr("Running local scan..."), QString(), 0, 0, this);
-        scanProgress.setWindowModality(Qt::WindowModal);
-        scanProgress.setMinimumDuration(0);
-        scanProgress.show();
-
-        const QFileInfo mainAssetInfo(mainAssetPath);
-        QString scanError;
-        const QByteArray scanJson = AssetScanController::runIsolatedScanJsonSync(
-            mainAssetInfo.absolutePath(), mainAssetInfo.fileName(), &scanError);
-        scanProgress.close();
-
-        if (scanJson.isEmpty()) {
-            QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
-                                 tr("Local scan failed; continuing without scan summary.\n\n%1")
-                                     .arg(scanError));
-        } else {
-            QJsonParseError parseError;
-            const QJsonDocument doc = QJsonDocument::fromJson(scanJson, &parseError);
-            if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-                QMessageBox::warning(
-                    this, tr("QtMesh Cloud Upload"),
-                    tr("Local scan returned invalid JSON; continuing without scan summary.\n\n%1")
-                        .arg(parseError.errorString()));
-            } else {
-                dialog.setScanSummary(doc.object());
-            }
-        }
-    }
-
-    PackageMetadata manifest = dialog.manifest();
-    if (manifest.files.isEmpty()) {
-        QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
-                             tr("Select at least one file to upload."));
-        return;
-    }
-
-    for (const PackageEntry& entry : manifest.files) {
-        if (!QFileInfo::exists(entry.absolutePath)) {
-            QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
-                                 tr("Missing file: %1").arg(QFileInfo(entry.absolutePath).fileName()));
-            return;
-        }
-    }
-
-    session = cloudSessionForToken(token);
-    m_cloudUploadProgress->start(tr("Uploading to QtMesh Cloud…"), manifest.files.size() + 1);
+    m_cloudUploadProgress->start(tr("Preparing QtMesh Cloud upload…"), 1);
 
     connect(session, &QtMeshCloudSession::uploadProgress, this,
             [this](int current, int total, const QString& fileName) {
                 m_cloudUploadProgress->updateProgress(current, total, fileName);
+            });
+    connect(session, &QtMeshCloudSession::uploadPrepareWarning, this,
+            [this](const QString& warning) {
+                if (!warning.isEmpty())
+                    statusBar()->showMessage(warning, 8000);
             });
     connect(m_cloudUploadProgress, &CloudUploadProgress::cancelRequested, session,
             &QtMeshCloudSession::cancel);
@@ -2854,12 +2836,11 @@ void MainWindow::uploadFilesToQtMeshCloud()
     connect(session, &QtMeshCloudSession::uploadCanceled, this, [this]() {
         m_cloudUploadProgress->finish(false, tr("Upload canceled"));
         QTimer::singleShot(3000, m_cloudUploadProgress, &CloudUploadProgress::hideProgress);
-    });
+    }, Qt::SingleShotConnection);
 
     connect(session, &QtMeshCloudSession::uploadFinished, this,
-            [this, fileCount = manifest.files.size()](bool ok, const QString& error,
-                                                      const QString& projectUrl,
-                                                      const QString& scanStatus) {
+            [this](bool ok, const QString& error, const QString& projectUrl,
+                   const QString& scanStatus) {
                 if (!ok) {
                     m_cloudUploadProgress->finish(false, tr("Upload failed"));
                     QMessageBox::warning(this, tr("QtMesh Cloud Upload"),
@@ -2869,14 +2850,23 @@ void MainWindow::uploadFilesToQtMeshCloud()
                 }
 
                 m_cloudUploadProgress->finish(true, tr("Upload complete"));
-                statusBar()->showMessage(tr("Uploaded %1 file(s) to QtMesh Cloud.").arg(fileCount), 5000);
+                statusBar()->showMessage(tr("Uploaded to QtMesh Cloud."), 5000);
 
                 QMessageBox done(this);
-                done.setIcon(QMessageBox::Information);
+                if (!error.isEmpty()) {
+                    done.setIcon(QMessageBox::Warning);
+                } else {
+                    done.setIcon(QMessageBox::Information);
+                }
                 done.setWindowTitle(tr("QtMesh Cloud Upload"));
-                done.setText(tr("Uploaded %1 file(s) to QtMesh Cloud.").arg(fileCount));
-                if (!scanStatus.isEmpty())
-                    done.setInformativeText(tr("Scan status: %1").arg(scanStatus));
+                done.setText(tr("Upload to QtMesh Cloud completed."));
+                QString infoText;
+                if (!error.isEmpty())
+                    infoText = error;
+                else if (!scanStatus.isEmpty())
+                    infoText = tr("Scan status: %1").arg(scanStatus);
+                if (!infoText.isEmpty())
+                    done.setInformativeText(infoText);
                 QPushButton* openButton = nullptr;
                 QPushButton* copyButton = nullptr;
                 if (!projectUrl.isEmpty()) {
@@ -2891,10 +2881,10 @@ void MainWindow::uploadFilesToQtMeshCloud()
                     QApplication::clipboard()->setText(projectUrl);
 
                 QTimer::singleShot(3000, m_cloudUploadProgress, &CloudUploadProgress::hideProgress);
-            });
+            },
+            Qt::SingleShotConnection);
 
-    session->uploadPackage(manifest, selectedProject.ownerSlug, selectedProject.projectSlug,
-                                  false);
+    session->uploadPackageFromAssets(request);
 }
 
 void MainWindow::setPlaying(bool playing)

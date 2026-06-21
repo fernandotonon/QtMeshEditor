@@ -346,6 +346,21 @@ int cmdCloudUpload(int argc, char* argv[])
         return 1;
     }
 
+    QString reportWarning;
+    if (!manifest.scanSummary.isEmpty() && !mainFileId.isEmpty()) {
+        const auto reportResult = QtMeshCloudClient::uploadFileReport(
+            token, project.ownerSlug, project.projectSlug, mainFileId, manifest.scanSummary);
+        if (!reportResult.ok) {
+            reportWarning = QStringLiteral("File uploaded, but analysis report upload failed.");
+            SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                          QStringLiteral("QtMesh Cloud CLI report upload failed"),
+                                          QStringLiteral("warning"));
+            err() << "Warning: " << reportWarning << Qt::endl;
+            if (!reportResult.errorString.isEmpty())
+                err() << reportResult.errorString << Qt::endl;
+        }
+    }
+
     const QString projectUrl = project.projectUrl;
     SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
                                   QStringLiteral("QtMesh Cloud CLI upload completed"));
@@ -355,6 +370,8 @@ int cmdCloudUpload(int argc, char* argv[])
         obj.insert(QStringLiteral("ok"), true);
         obj.insert(QStringLiteral("projectUrl"), projectUrl);
         obj.insert(QStringLiteral("fileCount"), manifest.files.size());
+        if (!reportWarning.isEmpty())
+            obj.insert(QStringLiteral("reportWarning"), reportWarning);
         out() << QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)) << Qt::endl;
     } else {
         out() << "Uploaded " << manifest.files.size() << " file(s).";
