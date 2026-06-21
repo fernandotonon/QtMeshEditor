@@ -29,7 +29,10 @@ MODELS = {
     "roughness": "1x-PBRify_RoughnessV2",
     "height":    "1x-PBRify_Height",
 }
-BASE_URL = "https://github.com/Kim2091/PBRify_Remix/raw/main/Models/{name}.pth"
+# Pin to a specific commit (not the mutable `main`) so exports are reproducible
+# and the source can't change under us. Bump deliberately when re-exporting.
+PBRIFY_REF = "190db5378909749bdbad0f951b5724ba066ea32d"
+BASE_URL = "https://github.com/Kim2091/PBRify_Remix/raw/" + PBRIFY_REF + "/Models/{name}.pth"
 
 
 def download(name: str, dest: str) -> None:

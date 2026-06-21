@@ -1706,6 +1706,10 @@ QJsonObject MCPServer::toolGeneratePbrMaps(const QJsonObject &args)
     if (args.contains("height"))    opts.generateHeight    = args["height"].toBool();
     if (args.contains("tile_size")) opts.tileSize          = args["tile_size"].toInt(256);
     if (args.contains("overwrite")) opts.overwriteCache    = args["overwrite"].toBool();
+    // Mirror the CLI bounds: 0 (whole image) or 32..4096. Reject out-of-range
+    // so a bad MCP/HTTP request can't drive pathological tiling/allocation.
+    if (opts.tileSize != 0 && (opts.tileSize < 32 || opts.tileSize > 4096))
+        return makeErrorResult("'tile_size' must be 0 (whole image) or between 32 and 4096.");
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.pbr_synth"),
         QStringLiteral("MCP generate_pbr_maps from %1")

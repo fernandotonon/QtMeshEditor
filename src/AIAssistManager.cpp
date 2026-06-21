@@ -10,6 +10,7 @@
 #include <QImage>
 #include <QSettings>
 #include <QEventLoop>
+#include <QTimer>
 
 AIAssistManager* AIAssistManager::s_instance = nullptr;
 
@@ -144,11 +145,21 @@ bool AIAssistManager::ensureModelBlocking(Map map)
         [&](const QString& name, const QString&) {
             if (name == label) { ok = false; loop.quit(); }
         });
+    // Hard timeout so a hung/stalled connection (DNS stall, unresponsive host)
+    // can't block the synchronous synthesize call forever — the map then
+    // reports the graceful "model not available" error / roughness falls back.
+    bool timedOut = false;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    connect(&timeout, &QTimer::timeout, &loop, [&]() { timedOut = true; loop.quit(); });
+    timeout.start(120000);  // 120s — generous for a ~1.6 MB model on slow links
     dl->startDownload(url, dest, label);
     loop.exec();
     disconnect(onDone);
     disconnect(onErr);
-    return ok && QFileInfo::exists(dest);
+    if (timedOut && dl)
+        dl->cancelDownload();
+    return ok && !timedOut && QFileInfo::exists(dest);
 }
 
 void AIAssistManager::ensureModel()

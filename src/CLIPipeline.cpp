@@ -3607,7 +3607,12 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
             continue;
         }
         if (arg == "--tile-size" && i + 1 < argc) {
-            pbrTileSize = QString(argv[++i]).toInt();
+            bool tsOk = false;
+            pbrTileSize = QString(argv[++i]).toInt(&tsOk);
+            if (!tsOk) {
+                err() << "Error: --tile-size must be an integer." << Qt::endl;
+                return 2;
+            }
             continue;
         }
         if (arg == "--no-normal")    { pbrNoNormal = true; continue; }
@@ -4033,7 +4038,7 @@ int CLIPipeline::cmdMaterialGeneratePbr(const QString& albedoPath,
     opts.generateHeight = wantHeight;
     opts.tileSize = tileSize;
 
-    const PbrMapSynthResult res =
+    PbrMapSynthResult res =  // non-const: copyBeside() may relocate map paths
         AIAssistManager::instance()->synthesizePbrMaps(albedoPath, opts);
     if (!res.ok) {
         err() << "Error: PBR synthesis failed: "
@@ -4079,9 +4084,27 @@ int CLIPipeline::cmdMaterialGeneratePbr(const QString& albedoPath,
         return 1;
     }
 
-    // Register the albedo's directory so the generated PNGs resolve by name.
+    // The maps were written next to the ALBEDO; the bind below references them
+    // by basename. When -o writes the mesh to a different directory, copy the
+    // maps beside the output mesh so the exported material's texture refs
+    // resolve next to it. (No-op when albedo dir == output dir.)
+    const QString outDir = outFi.absolutePath();
+    auto copyBeside = [&](QString& path) {
+        if (path.isEmpty()) return;
+        const QString dst = QDir(outDir).filePath(QFileInfo(path).fileName());
+        if (QFileInfo(path).absoluteFilePath() != QFileInfo(dst).absoluteFilePath()) {
+            QFile::remove(dst);
+            if (QFile::copy(path, dst))
+                path = dst;
+        }
+    };
+    copyBeside(res.normalPath);
+    copyBeside(res.roughnessPath);
+    copyBeside(res.heightPath);
+
+    // Register the output directory so the (now co-located) PNGs resolve by name.
     Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
-        QFileInfo(albedoPath).absolutePath().toStdString(), "FileSystem",
+        outDir.toStdString(), "FileSystem",
         Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
     auto bindSlot = [&](Ogre::Pass* pass, const char* slot, const QString& path) {

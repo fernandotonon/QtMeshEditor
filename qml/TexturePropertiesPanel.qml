@@ -334,7 +334,13 @@ GroupBox {
         GroupBox {
             id: pbrSlotsGroup
             Layout.fillWidth: true
-            visible: MaterialEditorQML.isPbrMaterial()
+            // Visibility tracks `units` (updated by the Connections block below)
+            // rather than the Q_INVOKABLE isPbrMaterial() — the latter has no
+            // NOTIFY signal so a method-call binding would go stale when slots
+            // are added/removed at runtime (e.g. after Generate PBR).
+            property var pbrSlotNames: ["albedo", "diffuse_map", "normal_map",
+                                        "roughness", "metallic", "ao", "emissive"]
+            visible: units.some(function(u) { return pbrSlotNames.indexOf(u) >= 0 })
             topPadding: 22
             leftPadding: 6
             rightPadding: 6

@@ -55,16 +55,20 @@ std::vector<float> boxBlur3(const std::vector<float>& src, int w, int h, int pas
 
 std::vector<float> toNCHW(const QImage& in, int channels)
 {
+    // Only 1 (luminance) and 3 (RGB) are meaningful here; clamp anything else to
+    // 3 so the allocation always matches the number of planes written below
+    // (a stray channels==2 would otherwise allocate 2 planes but write 3 → OOB).
+    const int ch = (channels == 1) ? 1 : 3;
     const QImage img = in.convertToFormat(QImage::Format_RGB888);
     const int w = img.width(), h = img.height();
-    std::vector<float> out(static_cast<size_t>(std::max(1, channels)) * w * h, 0.0f);
+    std::vector<float> out(static_cast<size_t>(ch) * w * h, 0.0f);
     const size_t plane = static_cast<size_t>(w) * h;
     for (int y = 0; y < h; ++y) {
         const uchar* line = img.constScanLine(y);
         for (int x = 0; x < w; ++x) {
             const uchar* px = line + x * 3;
             const float r = px[0] / 255.0f, g = px[1] / 255.0f, bl = px[2] / 255.0f;
-            if (channels == 1) {
+            if (ch == 1) {
                 out[static_cast<size_t>(y) * w + x] =
                     0.299f * r + 0.587f * g + 0.114f * bl;
             } else {
@@ -257,10 +261,14 @@ bool runModelOnce(Ort::Session& session, Ort::AllocatorWithDefaultOptions& alloc
         auto info = ov.GetTensorTypeAndShapeInfo();
         auto sh = info.GetShape();
         const int oc = (sh.size() == 4) ? static_cast<int>(sh[1]) : 1;
+        // Guard against a model whose output spatial dims differ from the input
+        // (e.g. a >1x scale) — copying plane*3/plane would otherwise read past
+        // the tensor. We only consume same-resolution (1x) outputs.
+        const size_t elems = info.GetElementCount();
         const float* d = ov.GetTensorData<float>();
-        if (oc >= 3 && out.normal.empty()) {
+        if (oc >= 3 && out.normal.empty() && elems >= plane * 3) {
             out.normal.assign(d, d + plane * 3);
-        } else if (oc == 1 && out.height.empty()) {
+        } else if (oc == 1 && out.height.empty() && elems >= plane) {
             out.height.assign(d, d + plane);
         }
     }

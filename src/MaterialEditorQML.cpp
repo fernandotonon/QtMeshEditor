@@ -1998,13 +1998,19 @@ QString MaterialEditorQML::texturePreviewPathForUnit(int unitIndex) const
     const QString tex = textureNameForUnit(unitIndex);
     if (tex.isEmpty())
         return {};
-    // Reuse the (memoized, group-agnostic) resolver used by the single preview.
-    auto cached = m_previewPathCache.constFind(tex);
+    // Use the SAME group-aware cache key as getTexturePreviewPath() so per-slot
+    // and single previews share entries and don't serve a stale thumbnail when
+    // different materials/groups reuse the same texture basename.
+    const QString groupKey = QString::fromStdString(
+        m_ogreMaterial ? m_ogreMaterial->getGroup()
+                       : std::string(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME));
+    const QString cacheKey = groupKey + QLatin1Char('\n') + tex;
+    auto cached = m_previewPathCache.constFind(cacheKey);
     if (cached != m_previewPathCache.constEnd())
         return cached.value();
     const QString resolved = computeTexturePreviewPath(tex);
     if (!resolved.isEmpty())
-        m_previewPathCache.insert(tex, resolved);
+        m_previewPathCache.insert(cacheKey, resolved);
     return resolved;
 }
 
@@ -2023,6 +2029,9 @@ void MaterialEditorQML::setTextureForUnit(int unitIndex, const QString& texName)
 
 bool MaterialEditorQML::loadTextureFileForUnit(int unitIndex, const QString& filePath)
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QStringLiteral("Load texture into slot %1: %2")
+            .arg(unitIndex).arg(QFileInfo(filePath).fileName()));
     if (!getTextureUnitAt(unitIndex)) {
         emit errorOccurred(tr("Invalid texture slot."));
         return false;
@@ -4158,6 +4167,8 @@ bool MaterialEditorQML::aiPbrAvailable() const
 
 void MaterialEditorQML::generatePbrFromDiffuse()
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Generate PBR maps from diffuse"));
 #ifndef ENABLE_ONNX
     emit pbrSynthError(tr("AI PBR synthesis is not enabled. Rebuild with ENABLE_ONNX=ON."));
 #else
