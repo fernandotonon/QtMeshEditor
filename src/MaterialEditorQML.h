@@ -368,6 +368,25 @@ public slots:
     // a regenerated image is re-resolved instead of serving a stale cached PNG).
     void clearTexturePreviewCache() { m_previewPathCache.clear(); }
 
+    // ── Per-slot (texture-unit) access for the multi-slot PBR view ──────────
+    // The single-texture controls above operate on the "current" unit; these
+    // address a unit by its index in textureUnitList so the QML slot grid can
+    // show/edit every unit (albedo/normal_map/roughness/…) at once without
+    // mutating the global current-unit selection.
+    /// True if the current pass has any slice-E PBR-named slot
+    /// (albedo/normal_map/roughness/metallic/ao/emissive) — drives whether the
+    /// "PBR slots" expander is offered.
+    Q_INVOKABLE bool isPbrMaterial() const;
+    /// Texture currently bound to unit `unitIndex` (empty if none/invalid).
+    Q_INVOKABLE QString textureNameForUnit(int unitIndex) const;
+    /// Preview path (file URL) for the texture bound to unit `unitIndex`.
+    Q_INVOKABLE QString texturePreviewPathForUnit(int unitIndex) const;
+    /// Bind an already-loaded texture `texName` to unit `unitIndex` + re-wire RTSS.
+    Q_INVOKABLE void setTextureForUnit(int unitIndex, const QString& texName);
+    /// Load `filePath` and bind it to unit `unitIndex` (registers the dir,
+    /// loads the image, then binds). Returns true on success.
+    Q_INVOKABLE bool loadTextureFileForUnit(int unitIndex, const QString& filePath);
+
     // Export the currently-shown texture (the preview image) to a
     // user-chosen file. Lets the user save a generated texture even
     // when in-app material application isn't working, so they can
@@ -594,6 +613,8 @@ signals:
     void techniqueListChanged();
     void passListChanged();
     void textureUnitListChanged();
+    // Emitted when a per-slot binding changes so the multi-slot view refreshes.
+    void textureUnitsChanged();
     void selectedTechniqueIndexChanged();
     void selectedPassIndexChanged();
     void selectedTextureUnitIndexChanged();
@@ -715,6 +736,8 @@ private:
     void resetPropertiesToDefaults();
     Ogre::Pass* getCurrentPass() const;
     Ogre::TextureUnitState* getCurrentTextureUnit() const;
+    // Live TUS at a given index in the selected pass (for the per-slot view).
+    Ogre::TextureUnitState* getTextureUnitAt(int unitIndex) const;
     Ogre::Technique* getCurrentTechnique() const;
     bool isOgreAvailable() const;
     // Uncached resolution of a texture's preview path (the body behind the

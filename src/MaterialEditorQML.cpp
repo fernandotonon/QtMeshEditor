@@ -1962,6 +1962,91 @@ Ogre::TextureUnitState* MaterialEditorQML::getCurrentTextureUnit() const
     return nullptr;
 }
 
+// Resolve a live TUS by its index in the selected pass, walking the live
+// material (not the cached m_texUnitMap, which can dangle after a recompile).
+Ogre::TextureUnitState* MaterialEditorQML::getTextureUnitAt(int unitIndex) const
+{
+    Ogre::Pass* pass = getCurrentPass();
+    if (!pass || unitIndex < 0
+        || unitIndex >= static_cast<int>(pass->getNumTextureUnitStates()))
+        return nullptr;
+    return pass->getTextureUnitState(static_cast<unsigned short>(unitIndex));
+}
+
+bool MaterialEditorQML::isPbrMaterial() const
+{
+    static const QStringList kPbrSlots = {
+        QStringLiteral("albedo"), QStringLiteral("normal_map"),
+        QStringLiteral("roughness"), QStringLiteral("metallic"),
+        QStringLiteral("ao"), QStringLiteral("emissive")
+    };
+    for (const QString& name : m_textureUnitList)
+        if (kPbrSlots.contains(name))
+            return true;
+    return false;
+}
+
+QString MaterialEditorQML::textureNameForUnit(int unitIndex) const
+{
+    if (Ogre::TextureUnitState* tus = getTextureUnitAt(unitIndex))
+        return QString::fromStdString(tus->getTextureName());
+    return {};
+}
+
+QString MaterialEditorQML::texturePreviewPathForUnit(int unitIndex) const
+{
+    const QString tex = textureNameForUnit(unitIndex);
+    if (tex.isEmpty())
+        return {};
+    // Reuse the (memoized, group-agnostic) resolver used by the single preview.
+    auto cached = m_previewPathCache.constFind(tex);
+    if (cached != m_previewPathCache.constEnd())
+        return cached.value();
+    const QString resolved = computeTexturePreviewPath(tex);
+    if (!resolved.isEmpty())
+        m_previewPathCache.insert(tex, resolved);
+    return resolved;
+}
+
+void MaterialEditorQML::setTextureForUnit(int unitIndex, const QString& texName)
+{
+    Ogre::TextureUnitState* tus = getTextureUnitAt(unitIndex);
+    if (!tus || texName.isEmpty())
+        return;
+    ensureTextureInMaterialGroup(texName);
+    tus->setTextureName(texName.toStdString());
+    regenerateRtssShaders();
+    updateTextureUnitList();
+    updateMaterialText();
+    emit textureUnitsChanged();
+}
+
+bool MaterialEditorQML::loadTextureFileForUnit(int unitIndex, const QString& filePath)
+{
+    if (!getTextureUnitAt(unitIndex)) {
+        emit errorOccurred(tr("Invalid texture slot."));
+        return false;
+    }
+    const QFileInfo file(filePath);
+    if (filePath.isEmpty() || !file.exists()) {
+        emit errorOccurred(tr("Texture file does not exist."));
+        return false;
+    }
+    const bool isTim = file.suffix().compare(QStringLiteral("tim"), Qt::CaseInsensitive) == 0;
+    const QString ogreTexName = isTim ? (file.completeBaseName() + QStringLiteral(".tim"))
+                                      : file.fileName();
+    const std::string group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+    try {
+        if (!Ogre::TextureManager::getSingleton().getByName(ogreTexName.toStdString(), group)) {
+            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+                file.path().toStdString(), "FileSystem", group);
+            Ogre::ResourceGroupManager::getSingleton().initialiseResourceGroup(group);
+        }
+    } catch (...) {}
+    setTextureForUnit(unitIndex, ogreTexName);
+    return !textureNameForUnit(unitIndex).isEmpty();
+}
+
 Ogre::Technique* MaterialEditorQML::getCurrentTechnique() const
 {
     if (!m_ogreMaterial || m_selectedTechniqueIndex < 0) {
@@ -4117,8 +4202,23 @@ void MaterialEditorQML::generatePbrFromDiffuse()
         bindSlot("normal_map", res.normalPath);
         bindSlot("roughness",  res.roughnessPath);
         RTShaderHelper::wirePbrSlotsForFFP(m_ogreMaterial.get());
+        // wirePbrSlotsForFFP only marks the normal unit non-FFP; it does NOT
+        // make RTSS sample it. applyNormalMap wires the SRS_NORMALMAP (or
+        // Cook-Torrance) sub-render-state so the normal map actually perturbs
+        // viewport shading — without this the bind is invisible on the mesh.
+        if (!res.normalPath.isEmpty()) {
+            RTShaderHelper::applyNormalMap(
+                m_ogreMaterial, QFileInfo(res.normalPath).fileName().toStdString());
+        }
         m_ogreMaterial->compile();
+        // The bind above may have CREATED new texture units (normal_map /
+        // roughness); rebuild the cached technique/pass/unit maps so the QML
+        // slot list (and isPbrMaterial) reflect them, then notify the views.
+        updateTechniqueList();   // rebuilds pass map (units read via getCurrentPass)
+        updateTextureUnitList();
         updateMaterialText();
+        emit textureUnitsChanged();
+        emit textureUnitListChanged();
     }
 
     emit pbrSynthCompleted(res.toVariantMap());
