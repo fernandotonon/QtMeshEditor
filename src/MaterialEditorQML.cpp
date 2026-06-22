@@ -23,6 +23,9 @@
 #endif
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
+#include "TextureUpscaler.h"
+#include <QPointer>
+#include <thread>
 #endif
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
@@ -4234,6 +4237,76 @@ void MaterialEditorQML::generatePbrFromDiffuse()
 
     emit pbrSynthCompleted(res.toVariantMap());
 #endif
+}
+
+void MaterialEditorQML::upscaleCurrentTexture(int scale)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(scale);
+    emit upscaleError(tr("AI upscaling is not enabled. Rebuild with ENABLE_ONNX=ON."));
+#else
+    QString src = getTexturePreviewPath();
+    if (src.startsWith(QStringLiteral("file://")))
+        src = QUrl(src).toLocalFile();
+    if (src.isEmpty() || !QFileInfo::exists(src)) {
+        emit upscaleError(tr("No on-disk texture to upscale. Apply or save a texture first."));
+        return;
+    }
+    emit upscaleStarted();
+    // Ensure the model on THIS (GUI) thread first — the download uses a
+    // QEventLoop and ModelDownloader's queued signals, which need a running
+    // event loop. If the model isn't on disk yet, signal the download phase so
+    // the UI can show "Downloading model…" instead of a silent "Upscaling…".
+    AIAssistManager* ai = AIAssistManager::instance();
+    const QString preModel = ai->modelPath(
+        (scale == 2) ? AIAssistManager::Map::UpscaleX2 : AIAssistManager::Map::UpscaleX4);
+    if (!QFileInfo::exists(preModel))
+        emit upscaleDownloading();
+    const QString model = ai->ensureUpscaleModel(scale);
+    if (model.isEmpty()) {
+        emit upscaleError(tr("Upscale model unavailable (offline or download failed)."));
+        return;
+    }
+
+    const QFileInfo fi(src);
+    const QString outPath = QDir(fi.absolutePath())
+        .filePath(fi.completeBaseName() + QStringLiteral("_upscaled_x%1.png").arg(scale));
+
+    // Fresh cancel flag for this run (shared_ptr keeps it alive for the worker).
+    m_upscaleCancel = std::make_shared<std::atomic_bool>(false);
+    auto cancel = m_upscaleCancel;
+    QPointer<MaterialEditorQML> self(this);
+
+    // Then run the pure-CPU tiled inference + save on a worker so the UI doesn't
+    // freeze, reporting per-tile progress + honoring cancel, and marshal results
+    // back via queued invocations. (CLI/MCP keep the synchronous path.)
+    std::thread([self, src, model, outPath, cancel]() {
+        TextureUpscaler::ProgressFn onProgress = [self, cancel](int done, int total) -> bool {
+            if (cancel->load()) return false;  // cancel requested
+            QMetaObject::invokeMethod(qApp, [self, done, total]() {
+                if (self) emit self->upscaleProgress(done, total);
+            }, Qt::QueuedConnection);
+            return true;
+        };
+        const QImage in(src);
+        const TextureUpscaler::Result res =
+            TextureUpscaler::upscale(in, model, {}, onProgress);
+        const bool ok = res.ok && !res.image.isNull() && res.image.save(outPath, "PNG");
+        const QString err = res.error;
+        QMetaObject::invokeMethod(qApp, [self, ok, outPath, err]() {
+            if (!self) return;
+            if (ok) emit self->upscaleCompleted(outPath);
+            else    emit self->upscaleError(err.isEmpty()
+                        ? QObject::tr("Upscale failed.") : err);
+        }, Qt::QueuedConnection);
+    }).detach();
+#endif
+}
+
+void MaterialEditorQML::cancelUpscale()
+{
+    if (m_upscaleCancel)
+        m_upscaleCancel->store(true);
 }
 
 bool MaterialEditorQML::hasSelectedMesh() const

@@ -1,6 +1,7 @@
 #include "AIAssistManager.h"
 
 #include "NormalMapGenerator.h"
+#include "TextureUpscaler.h"
 #include "ModelDownloader.h"
 #include "SentryReporter.h"
 
@@ -32,6 +33,8 @@ const char* mapDownloadLabel(AIAssistManager::Map m) {
         case AIAssistManager::Map::Normal:    return "PBR Normal";
         case AIAssistManager::Map::Roughness: return "PBR Roughness";
         case AIAssistManager::Map::Height:    return "PBR Height";
+        case AIAssistManager::Map::UpscaleX2: return "Upscale 2x";
+        case AIAssistManager::Map::UpscaleX4: return "Upscale 4x";
     }
     return "PBR";
 }
@@ -43,6 +46,8 @@ QString AIAssistManager::mapModelFile(Map map)
         case Map::Normal:    return QStringLiteral("1x-PBRify_NormalV3.onnx");
         case Map::Roughness: return QStringLiteral("1x-PBRify_RoughnessV2.onnx");
         case Map::Height:    return QStringLiteral("1x-PBRify_Height.onnx");
+        case Map::UpscaleX2: return QStringLiteral("RealESRGAN_x2plus.onnx");
+        case Map::UpscaleX4: return QStringLiteral("RealESRGAN_x4plus.onnx");
     }
     return {};
 }
@@ -298,4 +303,58 @@ QVariantMap AIAssistManager::synthesizePbrMapsQml(const QString& albedoPath,
     if (o.contains("invertG"))           opts.invertG           = o["invertG"].toBool();
     if (o.contains("overwriteCache"))    opts.overwriteCache    = o["overwriteCache"].toBool();
     return synthesizePbrMaps(albedoPath, opts).toVariantMap();
+}
+
+QString AIAssistManager::ensureUpscaleModel(int scale)
+{
+    const Map m = (scale == 2) ? Map::UpscaleX2 : Map::UpscaleX4;
+    ensureModelBlocking(m);   // event-loop driven; call on the GUI thread
+    const QString p = modelPath(m);
+    return QFileInfo::exists(p) ? p : QString();
+}
+
+QString AIAssistManager::upscaleTexture(const QString& srcPath, int scale, bool overwrite)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.upscale"),
+        QStringLiteral("upscale %1 x%2").arg(QFileInfo(srcPath).fileName()).arg(scale));
+    emit upscaleStarted();
+
+    auto failUp = [&](const QString& msg) -> QString {
+        emit upscaleError(msg);
+        return {};
+    };
+    const QFileInfo fi(srcPath);
+    if (!fi.exists())
+        return failUp(tr("Texture not found: %1").arg(srcPath));
+    if (scale != 2 && scale != 4)
+        return failUp(tr("Upscale factor must be 2 or 4."));
+
+    // Scale-specific cache name so a cached 2× result is never returned for a
+    // 4× request (and vice versa) on the overwrite=false path.
+    const QString outPath = QDir(fi.absolutePath())
+        .filePath(fi.completeBaseName()
+                  + QStringLiteral("_upscaled_x%1.png").arg(scale));
+    if (!overwrite && QFileInfo::exists(outPath)) {  // cache: skip re-upscale
+        emit upscaleCompleted(outPath);
+        return outPath;
+    }
+
+#ifndef ENABLE_ONNX
+    return failUp(tr("Texture upscaling is not enabled. Rebuild with -DENABLE_ONNX=ON."));
+#else
+    const QImage src(srcPath);
+    if (src.isNull())
+        return failUp(tr("Could not load image: %1").arg(srcPath));
+
+    const Map m = (scale == 2) ? Map::UpscaleX2 : Map::UpscaleX4;
+    ensureModelBlocking(m);
+    const TextureUpscaler::Result res =
+        TextureUpscaler::upscale(src, modelPath(m), {});
+    if (!res.ok)
+        return failUp(res.error.isEmpty() ? tr("Upscale failed.") : res.error);
+    if (!res.image.save(outPath, "PNG"))
+        return failUp(tr("Could not write the upscaled image."));
+    emit upscaleCompleted(outPath);
+    return outPath;
+#endif
 }

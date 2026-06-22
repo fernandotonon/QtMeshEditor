@@ -122,6 +122,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PbrMapSynth.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureUpscaler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIAssistManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MemoryEstimator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DrawCallAnalyzer.cpp

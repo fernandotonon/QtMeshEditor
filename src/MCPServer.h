@@ -160,6 +160,9 @@ private:
     /// returns immediately; progress flows through SD signals.
     QJsonObject toolGenerateMeshTexture(const QJsonObject &args);
     QJsonObject toolGeneratePbrMaps(const QJsonObject &args);
+    /// Issue #405: Real-ESRGAN 2x/4x texture super-resolution. Writes
+    /// <stem>_upscaled.png next to the source; model downloaded on first use.
+    QJsonObject toolUpscaleTexture(const QJsonObject &args);
     QJsonObject toolGetSceneInfo(const QJsonObject &args);
     QJsonObject toolTakeScreenshot(const QJsonObject &args);
     QJsonObject toolCreatePrimitive(const QJsonObject &args);

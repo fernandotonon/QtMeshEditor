@@ -20,14 +20,20 @@ Usage:
 Then host the .onnx files and point AIAssistManager's model URLs at them.
 """
 import argparse
+import hashlib
 import os
 import sys
 import urllib.request
 
+# (stem, sha256) — content-verified before deserializing (.pth is a
+# code-execution boundary). Hashes verified against the pinned PBRIFY_REF commit.
 MODELS = {
-    "normal":    "1x-PBRify_NormalV3",
-    "roughness": "1x-PBRify_RoughnessV2",
-    "height":    "1x-PBRify_Height",
+    "normal":    ("1x-PBRify_NormalV3",
+                  "b0a18270da765f02eaae3c228203bee0677fc28b2854a562515e4aae9c61223b"),
+    "roughness": ("1x-PBRify_RoughnessV2",
+                  "7003c39041af64cdb77d5120bd560a2878538fbb14a07657d8fd12aac5773679"),
+    "height":    ("1x-PBRify_Height",
+                  "5b973ecb8bae9d96d14d77b8a8f1d88fb6a8580bcc1bb55d2872811acdc4277d"),
 }
 # Pin to a specific commit (not the mutable `main`) so exports are reproducible
 # and the source can't change under us. Bump deliberately when re-exporting.
@@ -35,10 +41,26 @@ PBRIFY_REF = "190db5378909749bdbad0f951b5724ba066ea32d"
 BASE_URL = "https://github.com/Kim2091/PBRify_Remix/raw/" + PBRIFY_REF + "/Models/{name}.pth"
 
 
+def sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def download(name: str, dest: str) -> None:
     url = BASE_URL.format(name=name)
     print(f"  downloading {url}")
     urllib.request.urlretrieve(url, dest)
+
+
+def verify(path: str, expected: str) -> None:
+    got = sha256(path)
+    if got != expected:
+        raise SystemExit(
+            f"SHA-256 mismatch for {path}\n  expected {expected}\n  got      {got}\n"
+            "Refusing to deserialize a .pth that doesn't match the pinned hash.")
 
 
 def export_one(pth_path: str, onnx_path: str) -> None:
@@ -82,11 +104,12 @@ def main() -> int:
     os.makedirs(args.pth_dir, exist_ok=True)
     os.makedirs(args.out_dir, exist_ok=True)
 
-    for slot, name in MODELS.items():
+    for slot, (name, digest) in MODELS.items():
         print(f"=== {slot}: {name} ===")
         pth = os.path.join(args.pth_dir, name + ".pth")
         if args.download or not os.path.exists(pth):
             download(name, pth)
+        verify(pth, digest)  # before deserializing (.pth = code-exec boundary)
         export_one(pth, os.path.join(args.out_dir, name + ".onnx"))
     print("ALL EXPORTS OK")
     return 0
