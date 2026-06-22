@@ -558,7 +558,10 @@ jobs:
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-          file: QtMeshEditor-${{github.ref_name}}-setup-Windows.exe
+          # Inno Setup writes to packaging/windows/Output/ (its default OutputDir,
+          # next to the .iss) — the upload must point there, not the repo root,
+          # or the installer asset is never attached to the release.
+          file: packaging/windows/Output/QtMeshEditor-${{github.ref_name}}-setup-Windows.exe
           update_latest_release: true
           overwrite: false
           verbose: true
