@@ -584,12 +584,20 @@ endif()
 # won't be found at runtime.
 if(ENABLE_ONNX)
     target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_onnx)
-    if(QTMESH_ONNX_RUNTIME_LIB)
-        add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${QTMESH_ONNX_RUNTIME_LIB}"
-                    "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
-            COMMENT "Copying ONNX Runtime shared library next to QtMeshEditor")
+    if(QTMESH_ONNX_LIB_DIR)
+        # Copy the versioned lib AND its SONAME symlinks (libonnxruntime.so.1 /
+        # .so) — the loader requests the SONAME, not the resolved versioned name,
+        # so copying only one file breaks `.deb`/Docker packaging.
+        file(GLOB _ort_runtime_libs
+            "${QTMESH_ONNX_LIB_DIR}/libonnxruntime.so*"
+            "${QTMESH_ONNX_LIB_DIR}/libonnxruntime*.dylib"
+            "${QTMESH_ONNX_LIB_DIR}/onnxruntime.dll")
+        foreach(_ortlib ${_ort_runtime_libs})
+            add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_ortlib}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+                COMMENT "Copying ONNX Runtime lib ${_ortlib} next to QtMeshEditor")
+        endforeach()
     endif()
 endif()
 
@@ -697,12 +705,17 @@ if(BUILD_TESTS)
     # Link ONNX Runtime for tests if enabled (#404)
     if(ENABLE_ONNX)
         target_link_libraries(UnitTests qtmesh_onnx)
-        if(QTMESH_ONNX_RUNTIME_LIB)
-            add_custom_command(TARGET UnitTests POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${QTMESH_ONNX_RUNTIME_LIB}"
-                        "$<TARGET_FILE_DIR:UnitTests>"
-                COMMENT "Copying ONNX Runtime shared library next to UnitTests")
+        if(QTMESH_ONNX_LIB_DIR)
+            file(GLOB _ort_test_libs
+                "${QTMESH_ONNX_LIB_DIR}/libonnxruntime.so*"
+                "${QTMESH_ONNX_LIB_DIR}/libonnxruntime*.dylib"
+                "${QTMESH_ONNX_LIB_DIR}/onnxruntime.dll")
+            foreach(_ortlib ${_ort_test_libs})
+                add_custom_command(TARGET UnitTests POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            "${_ortlib}" "$<TARGET_FILE_DIR:UnitTests>"
+                    COMMENT "Copying ONNX Runtime lib ${_ortlib} next to UnitTests")
+            endforeach()
         endif()
     endif()
 
