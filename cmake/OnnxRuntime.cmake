@@ -70,6 +70,13 @@ endif()
 list(GET _ort_libs 0 QTMESH_ONNX_RUNTIME_LIB)
 set(QTMESH_ONNX_RUNTIME_LIB "${QTMESH_ONNX_RUNTIME_LIB}"
     CACHE FILEPATH "Path to the ONNX Runtime shared library to ship next to the binary" FORCE)
+# The lib dir holds the versioned shared lib PLUS its SONAME symlinks
+# (libonnxruntime.so.1 / libonnxruntime.so) that the loader actually requests
+# at runtime — copying only the resolved file leaves the binary unable to find
+# libonnxruntime.so.1. Expose the dir so the POST_BUILD copies the whole set.
+get_filename_component(QTMESH_ONNX_LIB_DIR "${QTMESH_ONNX_RUNTIME_LIB}" DIRECTORY)
+set(QTMESH_ONNX_LIB_DIR "${QTMESH_ONNX_LIB_DIR}"
+    CACHE PATH "Directory of the ONNX Runtime shared library + its SONAME symlinks" FORCE)
 
 add_library(qtmesh_onnx SHARED IMPORTED GLOBAL)
 set_target_properties(qtmesh_onnx PROPERTIES
