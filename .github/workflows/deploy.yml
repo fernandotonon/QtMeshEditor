@@ -228,10 +228,27 @@ jobs:
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Install Doxygen
-      shell: cmd
+      shell: powershell
       run: |
-        curl -L -o doxygen-installer.exe "https://www.doxygen.nl/files/doxygen-1.9.7-setup.exe"
-        doxygen-installer.exe /VERYSILENT
+        # Doxygen is optional for the Ogre build (only used for docs); the
+        # doxygen.nl download is flaky, so retry a few times and never fail the
+        # job on it — Ogre configures fine without it.
+        $url = "https://www.doxygen.nl/files/doxygen-1.9.7-setup.exe"
+        $ok = $false
+        for ($i = 1; $i -le 3; $i++) {
+          try {
+            Invoke-WebRequest -Uri $url -OutFile doxygen-installer.exe -TimeoutSec 120
+            $ok = $true; break
+          } catch {
+            Write-Host "Doxygen download attempt $i failed: $_"
+            Start-Sleep -Seconds 10
+          }
+        }
+        if ($ok) {
+          Start-Process -FilePath .\doxygen-installer.exe -ArgumentList '/VERYSILENT' -Wait
+        } else {
+          Write-Host "::warning::Doxygen unavailable after retries; continuing without it (docs only)."
+        }
             
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Check out ogre repo
