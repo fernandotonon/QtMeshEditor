@@ -23,6 +23,9 @@
 #endif
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
+#include "TextureUpscaler.h"
+#include <QPointer>
+#include <thread>
 #endif
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
@@ -4250,20 +4253,35 @@ void MaterialEditorQML::upscaleCurrentTexture(int scale)
         return;
     }
     emit upscaleStarted();
-    // The facade does the work + emits its own upscale* signals; relay them
-    // once (single-shot) so QML bound to MaterialEditorQML hears the result.
-    AIAssistManager* ai = AIAssistManager::instance();
-    auto* c1 = new QMetaObject::Connection;
-    auto* c2 = new QMetaObject::Connection;
-    auto cleanup = [c1, c2]() {
-        QObject::disconnect(*c1); QObject::disconnect(*c2);
-        delete c1; delete c2;
-    };
-    *c1 = connect(ai, &AIAssistManager::upscaleCompleted, this,
-        [this, cleanup](const QString& out) { emit upscaleCompleted(out); cleanup(); });
-    *c2 = connect(ai, &AIAssistManager::upscaleError, this,
-        [this, cleanup](const QString& e) { emit upscaleError(e); cleanup(); });
-    ai->upscaleTexture(src, scale, /*overwrite=*/true);
+    // Ensure the model on THIS (GUI) thread first — the download uses a
+    // QEventLoop and ModelDownloader's queued signals, which need a running
+    // event loop (a QtConcurrent worker has none). Then run the pure-CPU
+    // tiled inference + save on a worker so the UI doesn't freeze, and marshal
+    // the result back via a queued invocation. (CLI/MCP keep the synchronous
+    // upscaleTexture() path.)
+    const QString model = AIAssistManager::instance()->ensureUpscaleModel(scale);
+    if (model.isEmpty()) {
+        emit upscaleError(tr("Upscale model unavailable (offline or download failed)."));
+        return;
+    }
+    const QFileInfo fi(src);
+    const QString outPath = QDir(fi.absolutePath())
+        .filePath(fi.completeBaseName() + QStringLiteral("_upscaled_x%1.png").arg(scale));
+    QPointer<MaterialEditorQML> self(this);
+    std::thread([self, src, model, outPath]() {
+        const QImage in(src);
+        const TextureUpscaler::Result res = TextureUpscaler::upscale(in, model, {});
+        const bool ok = res.ok && !res.image.isNull() && res.image.save(outPath, "PNG");
+        const QString err = res.error;
+        // Marshal the result back to the GUI thread (signals must be emitted
+        // there). QPointer guards against the singleton/object going away.
+        QMetaObject::invokeMethod(qApp, [self, ok, outPath, err]() {
+            if (!self) return;
+            if (ok) emit self->upscaleCompleted(outPath);
+            else    emit self->upscaleError(err.isEmpty()
+                        ? QObject::tr("Upscale failed.") : err);
+        }, Qt::QueuedConnection);
+    }).detach();
 #endif
 }
 

@@ -19,20 +19,42 @@ Then host the .onnx files and point AIAssistManager's model base URL at them.
 import argparse
 import os
 import sys
+import hashlib
 import urllib.request
 
-# (filename-stem, release tag) — pinned release assets (immutable).
+# (filename-stem, release tag, sha256) — pinned release assets (immutable URLs)
+# AND content-verified: .pth deserialization is a code-execution boundary, so a
+# compromised release must not be loaded. Hashes verified against the upstream
+# BSD-3 xinntao/Real-ESRGAN release assets.
 MODELS = {
-    "x4": ("RealESRGAN_x4plus", "v0.1.0"),
-    "x2": ("RealESRGAN_x2plus", "v0.2.1"),
+    "x4": ("RealESRGAN_x4plus", "v0.1.0",
+           "4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1"),
+    "x2": ("RealESRGAN_x2plus", "v0.2.1",
+           "49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb"),
 }
 BASE_URL = "https://github.com/xinntao/Real-ESRGAN/releases/download/{tag}/{name}.pth"
+
+
+def sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def download(name: str, tag: str, dest: str) -> None:
     url = BASE_URL.format(tag=tag, name=name)
     print(f"  downloading {url}")
     urllib.request.urlretrieve(url, dest)
+
+
+def verify(path: str, expected: str) -> None:
+    got = sha256(path)
+    if got != expected:
+        raise SystemExit(
+            f"SHA-256 mismatch for {path}\n  expected {expected}\n  got      {got}\n"
+            "Refusing to deserialize a .pth that doesn't match the pinned hash.")
 
 
 def export_one(pth_path: str, onnx_path: str) -> None:
@@ -68,11 +90,12 @@ def main() -> int:
     os.makedirs(args.pth_dir, exist_ok=True)
     os.makedirs(args.out_dir, exist_ok=True)
 
-    for key, (name, tag) in MODELS.items():
+    for key, (name, tag, digest) in MODELS.items():
         print(f"=== {key}: {name} ===")
         pth = os.path.join(args.pth_dir, name + ".pth")
         if args.download or not os.path.exists(pth):
             download(name, tag, pth)
+        verify(pth, digest)  # before deserializing (.pth = code-exec boundary)
         export_one(pth, os.path.join(args.out_dir, name + ".onnx"))
     print("ALL EXPORTS OK")
     return 0

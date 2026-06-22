@@ -305,6 +305,14 @@ QVariantMap AIAssistManager::synthesizePbrMapsQml(const QString& albedoPath,
     return synthesizePbrMaps(albedoPath, opts).toVariantMap();
 }
 
+QString AIAssistManager::ensureUpscaleModel(int scale)
+{
+    const Map m = (scale == 2) ? Map::UpscaleX2 : Map::UpscaleX4;
+    ensureModelBlocking(m);   // event-loop driven; call on the GUI thread
+    const QString p = modelPath(m);
+    return QFileInfo::exists(p) ? p : QString();
+}
+
 QString AIAssistManager::upscaleTexture(const QString& srcPath, int scale, bool overwrite)
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.upscale"),
@@ -321,8 +329,11 @@ QString AIAssistManager::upscaleTexture(const QString& srcPath, int scale, bool 
     if (scale != 2 && scale != 4)
         return failUp(tr("Upscale factor must be 2 or 4."));
 
+    // Scale-specific cache name so a cached 2× result is never returned for a
+    // 4× request (and vice versa) on the overwrite=false path.
     const QString outPath = QDir(fi.absolutePath())
-        .filePath(fi.completeBaseName() + QStringLiteral("_upscaled.png"));
+        .filePath(fi.completeBaseName()
+                  + QStringLiteral("_upscaled_x%1.png").arg(scale));
     if (!overwrite && QFileInfo::exists(outPath)) {  // cache: skip re-upscale
         emit upscaleCompleted(outPath);
         return outPath;

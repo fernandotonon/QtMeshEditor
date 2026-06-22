@@ -4201,13 +4201,26 @@ int CLIPipeline::cmdMaterialUpscale(const QString& srcPath, QString outputPath,
         err() << "Error: upscale failed (model unavailable or inference error)." << Qt::endl;
         return 1;
     }
-    // Honour an explicit -o by moving the facade's output there.
+    // Honour an explicit -o strictly: move the facade's output there, falling
+    // back to copy+remove for cross-device moves. If the requested file can't
+    // be produced, fail (exit 1) rather than silently leaving it at the
+    // temp <stem>_upscaled_xN.png path — automation relies on -o.
     QString finalPath = produced;
     if (!outputPath.isEmpty()
         && QFileInfo(outputPath).absoluteFilePath() != QFileInfo(produced).absoluteFilePath()) {
         QFile::remove(outputPath);
-        if (QFile::rename(produced, outputPath))
-            finalPath = outputPath;
+        bool moved = QFile::rename(produced, outputPath);
+        if (!moved && QFile::copy(produced, outputPath)) {
+            QFile::remove(produced);
+            moved = true;
+        }
+        if (!moved) {
+            err() << "Error: could not write the requested output file: "
+                  << outputPath << " (upscaled image is at "
+                  << produced << ")" << Qt::endl;
+            return 1;
+        }
+        finalPath = outputPath;
     }
     const QImage outImg(finalPath);
     cliWrite(QString("Upscaled %1 by %2x → %3 (%4×%5 → %6×%7)\n")

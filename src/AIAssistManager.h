@@ -87,6 +87,12 @@ public:
     Q_INVOKABLE QString upscaleTexture(const QString& srcPath, int scale = 4,
                                        bool overwrite = false);
 
+    /// Ensure the 2×/4× upscale model is present (download + block) — MUST be
+    /// called on a thread with an event loop (the GUI thread). Lets the
+    /// GUI fetch the model first, then run the pure-CPU inference on a worker.
+    /// Returns the model path, or empty if it couldn't be made available.
+    QString ensureUpscaleModel(int scale);
+
 signals:
     void modelReadyChanged();
     void modelDownloadProgress(qint64 received, qint64 total);
