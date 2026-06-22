@@ -53,6 +53,44 @@ QString ownerProjectPath(const QString& ownerSlug, const QString& projectSlug, c
              suffix);
 }
 
+QString jsonStringField(const QJsonObject& object, std::initializer_list<const char*> keys)
+{
+    for (const char* key : keys) {
+        const QJsonValue value = object.value(QString::fromLatin1(key));
+        if (value.isString()) {
+            const QString text = value.toString().trimmed();
+            if (!text.isEmpty())
+                return text;
+        }
+    }
+    return {};
+}
+
+qint64 jsonInt64Field(const QJsonObject& object, std::initializer_list<const char*> keys)
+{
+    for (const char* key : keys) {
+        const QJsonValue value = object.value(QString::fromLatin1(key));
+        if (value.isDouble())
+            return static_cast<qint64>(value.toDouble());
+        if (value.isString()) {
+            bool ok = false;
+            const qint64 parsed = value.toString().trimmed().toLongLong(&ok);
+            if (ok)
+                return parsed;
+        }
+    }
+    return 0;
+}
+
+QString inferSourceFormat(const QString& explicitFormat, const QString& mainFile)
+{
+    const QString fmt = explicitFormat.trimmed().toLower();
+    if (!fmt.isEmpty())
+        return fmt;
+    const QString suffix = QFileInfo(mainFile).suffix().toLower();
+    return suffix.isEmpty() ? QString() : suffix;
+}
+
 bool parseJsonObjectBody(const QByteArray& body, QJsonObject& out, QString& error)
 {
     QJsonParseError perr{};
@@ -628,11 +666,16 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
         summary.projectSlug = project.value(QStringLiteral("slug")).toString();
         if (summary.projectSlug.isEmpty())
             summary.projectSlug = project.value(QStringLiteral("projectSlug")).toString();
-        summary.name = project.value(QStringLiteral("name")).toString();
-        summary.sourceFormat = project.value(QStringLiteral("sourceFormat")).toString();
-        summary.sizeBytes = static_cast<qint64>(project.value(QStringLiteral("sizeBytes")).toDouble(0));
-        summary.updatedAt = project.value(QStringLiteral("updatedAt")).toString();
-        summary.mainFile = project.value(QStringLiteral("mainFile")).toString();
+        summary.name = jsonStringField(project, {"name"});
+        const QString mainFile = jsonStringField(project, {"mainFile", "main_file"});
+        summary.mainFile = mainFile;
+        summary.sourceFormat = inferSourceFormat(
+            jsonStringField(project, {"sourceFormat", "source_format"}), mainFile);
+        summary.sizeBytes = jsonInt64Field(
+            project, {"sizeBytes", "size_bytes", "totalSize", "total_size", "size"});
+        summary.updatedAt = jsonStringField(
+            project, {"updatedAt", "updated_at", "modifiedAt", "modified_at", "lastModified",
+                      "createdAt", "created_at"});
         if (!summary.id.isEmpty()) {
             summary.browserUrl = QStringLiteral("https://qtmesh.dev/projects/%1")
                                      .arg(QString::fromUtf8(QUrl::toPercentEncoding(summary.id)));

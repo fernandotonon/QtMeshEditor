@@ -9,9 +9,9 @@ import CloudProjects 1.0
 Window {
     id: dialog
     title: "My Cloud Projects"
-    width: 720
+    width: 780
     height: 520
-    minimumWidth: 640
+    minimumWidth: 700
     minimumHeight: 420
     flags: Qt.Dialog
     modality: Qt.ApplicationModal
@@ -29,7 +29,17 @@ Window {
         dialog.raise()
         dialog.requestActivate()
         CloudProjectsController.refresh()
-        keyCapture.forceActiveFocus()
+    }
+
+    Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Escape) {
+            if (confirmDelete.visible) {
+                confirmDelete.visible = false
+            } else {
+                dialog.close()
+            }
+            event.accepted = true
+        }
     }
 
     Connections {
@@ -47,28 +57,14 @@ Window {
         }
     }
 
-    Item {
-        id: keyCapture
-        anchors.fill: parent
-        focus: true
-        Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_Escape) {
-                if (confirmDelete.visible) {
-                    confirmDelete.visible = false
-                } else {
-                    dialog.close()
-                }
-                event.accepted = true
-            }
-        }
-    }
-
     component InspectorButton: Rectangle {
         id: btn
         property string label: ""
         property bool buttonEnabled: true
         signal clicked()
         activeFocusOnTab: buttonEnabled
+        implicitWidth: labelText.implicitWidth + 16
+        implicitHeight: 26
         height: 26
         radius: 3
         color: btnMa.containsMouse && buttonEnabled
@@ -80,6 +76,7 @@ Window {
         border.width: btn.activeFocus ? 2 : 1
         opacity: buttonEnabled ? 1.0 : 0.45
         Text {
+            id: labelText
             anchors.centerIn: parent
             text: btn.label
             color: PropertiesPanelController.textColor
@@ -143,6 +140,10 @@ Window {
                     model: CloudProjectsController.projects
 
                     delegate: Rectangle {
+                        id: projectRow
+                        required property var modelData
+                        required property int index
+
                         width: projectList.width
                         height: 72
                         radius: 4
@@ -156,7 +157,7 @@ Window {
 
                             Text {
                                 text: CloudProjectsController.formatIconForSource(
-                                          modelData.sourceFormat || "")
+                                          projectRow.modelData.sourceFormat || "")
                                 font.pixelSize: 22
                                 Layout.alignment: Qt.AlignVCenter
                             }
@@ -165,25 +166,22 @@ Window {
                                 Layout.fillWidth: true
                                 spacing: 2
                                 InspectorLabel {
-                                    text: modelData.name || modelData.projectSlug || modelData.id
+                                    text: projectRow.modelData.name
+                                            || projectRow.modelData.projectSlug
+                                            || projectRow.modelData.id
                                     font.bold: true
                                     font.pixelSize: 12
                                     Layout.fillWidth: true
                                 }
                                 InspectorLabel {
-                                    text: (modelData.sourceFormat || "asset").toUpperCase()
-                                          + " · "
-                                          + CloudProjectsController.formatFileSize(
-                                                modelData.sizeBytes || 0)
-                                          + " · "
-                                          + CloudProjectsController.formatUpdatedAt(
-                                                modelData.updatedAt || "")
+                                    text: CloudProjectsController.formatProjectSubtitle(
+                                              projectRow.modelData)
                                     color: "#9a9a9a"
                                     Layout.fillWidth: true
                                 }
                                 InspectorLabel {
-                                    visible: !!(modelData.mainFile)
-                                    text: modelData.mainFile
+                                    visible: !!(projectRow.modelData.mainFile)
+                                    text: projectRow.modelData.mainFile
                                     color: "#9a9a9a"
                                     font.pixelSize: 10
                                     Layout.fillWidth: true
@@ -193,15 +191,18 @@ Window {
 
                             InspectorButton {
                                 label: "Open in browser"
-                                onClicked: CloudProjectsController.openInBrowser(modelData.id)
+                                Layout.preferredWidth: 118
+                                onClicked: CloudProjectsController.openInBrowser(
+                                               projectRow.modelData.id)
                             }
                             InspectorButton {
                                 label: "Delete"
+                                Layout.preferredWidth: 64
                                 onClicked: {
-                                    dialog.pendingDeleteId = modelData.id
-                                    dialog.pendingDeleteName = modelData.name
-                                                          || modelData.projectSlug
-                                                          || modelData.id
+                                    dialog.pendingDeleteId = projectRow.modelData.id
+                                    dialog.pendingDeleteName = projectRow.modelData.name
+                                                          || projectRow.modelData.projectSlug
+                                                          || projectRow.modelData.id
                                     confirmDelete.visible = true
                                 }
                             }

@@ -185,7 +185,14 @@ QString CloudProjectsController::formatUpdatedAt(const QString& isoTimestamp) co
 {
     if (isoTimestamp.isEmpty())
         return QStringLiteral("—");
-    const QDateTime parsed = QDateTime::fromString(isoTimestamp, Qt::ISODate);
+    QDateTime parsed = QDateTime::fromString(isoTimestamp, Qt::ISODate);
+    if (!parsed.isValid())
+        parsed = QDateTime::fromString(isoTimestamp, Qt::ISODateWithMs);
+    if (!parsed.isValid()) {
+        parsed = QDateTime::fromString(isoTimestamp, QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        if (parsed.isValid())
+            parsed.setTimeSpec(Qt::UTC);
+    }
     if (!parsed.isValid())
         return isoTimestamp;
     return QLocale().toString(parsed.toLocalTime(), QLocale::ShortFormat);
@@ -209,6 +216,26 @@ QString CloudProjectsController::formatIconForSource(const QString& sourceFormat
     return QStringLiteral("📦");
 }
 
+QString CloudProjectsController::formatProjectSubtitle(const QVariant& project) const
+{
+    const QVariantMap map = project.toMap();
+    const QString format = map.value(QStringLiteral("sourceFormat")).toString();
+    const qint64 sizeBytes = static_cast<qint64>(map.value(QStringLiteral("sizeBytes")).toDouble());
+    const QString updatedAt = map.value(QStringLiteral("updatedAt")).toString();
+    if (!format.isEmpty() || sizeBytes > 0 || !updatedAt.isEmpty()) {
+        return QStringLiteral("%1 · %2 · %3")
+            .arg(format.isEmpty() ? QStringLiteral("asset") : format.toUpper(),
+                 formatFileSize(sizeBytes),
+                 formatUpdatedAt(updatedAt));
+    }
+
+    const QString owner = map.value(QStringLiteral("ownerSlug")).toString();
+    const QString slug = map.value(QStringLiteral("projectSlug")).toString();
+    if (!owner.isEmpty() && !slug.isEmpty())
+        return QStringLiteral("%1/%2").arg(owner, slug);
+    return QString();
+}
+
 void CloudProjectsController::appendProjects(const QVariantList& page)
 {
     for (const QVariant& value : page)
@@ -230,7 +257,7 @@ QVariantMap CloudProjectsController::projectToMap(const QtMeshCloudClient::Proje
                    ? QStringLiteral("https://qtmesh.dev/projects/%1").arg(project.id)
                    : project.browserUrl);
     map.insert(QStringLiteral("sourceFormat"), project.sourceFormat);
-    map.insert(QStringLiteral("sizeBytes"), project.sizeBytes);
+    map.insert(QStringLiteral("sizeBytes"), static_cast<double>(project.sizeBytes));
     map.insert(QStringLiteral("updatedAt"), project.updatedAt);
     map.insert(QStringLiteral("mainFile"), project.mainFile);
     return map;
@@ -240,8 +267,12 @@ QString CloudProjectsController::browserUrlForProject(const QString& projectId) 
 {
     for (const QVariant& value : m_projects) {
         const QVariantMap map = value.toMap();
-        if (map.value(QStringLiteral("id")).toString() == projectId)
-            return map.value(QStringLiteral("browserUrl")).toString();
+        if (map.value(QStringLiteral("id")).toString() == projectId) {
+            const QString browser = map.value(QStringLiteral("browserUrl")).toString();
+            if (!browser.isEmpty())
+                return browser;
+            return map.value(QStringLiteral("projectUrl")).toString();
+        }
     }
     return QString();
 }

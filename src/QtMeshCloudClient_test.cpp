@@ -491,6 +491,54 @@ TEST_F(QtMeshCloudClientFetchProjectsHttpTest, ParsesPaginationAndMetadata)
     EXPECT_FALSE(page2.hasMore);
 }
 
+TEST_F(QtMeshCloudClientFetchProjectsHttpTest, ParsesManifestStyleFieldNames)
+{
+    class ManifestStyleMock {
+    public:
+        bool listen()
+        {
+            QObject::connect(&m_server, &QTcpServer::newConnection, [this]() {
+                QTcpSocket* socket = m_server.nextPendingConnection();
+                QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket]() {
+                    QJsonObject project;
+                    project.insert(QStringLiteral("id"), QStringLiteral("proj-manifest"));
+                    project.insert(QStringLiteral("name"), QStringLiteral("Manifest"));
+                    project.insert(QStringLiteral("slug"), QStringLiteral("manifest"));
+                    project.insert(QStringLiteral("ownerSlug"), QStringLiteral("me"));
+                    project.insert(QStringLiteral("totalSize"), 8192);
+                    project.insert(QStringLiteral("main_file"), QStringLiteral("hero.fbx"));
+                    project.insert(QStringLiteral("updated_at"), QStringLiteral("2026-06-02T10:15:00Z"));
+
+                    QJsonObject root;
+                    root.insert(QStringLiteral("projects"), QJsonArray{project});
+                    writeHttpResponse(socket, 200, QJsonDocument(root).toJson(QJsonDocument::Compact));
+                });
+            });
+            return m_server.listen(QHostAddress::LocalHost);
+        }
+
+        QString baseUrl() const
+        {
+            return QStringLiteral("http://127.0.0.1:%1").arg(m_server.serverPort());
+        }
+
+    private:
+        QTcpServer m_server;
+    };
+
+    ManifestStyleMock mock;
+    ASSERT_TRUE(mock.listen());
+    qputenv("QTMESH_API_BASE", mock.baseUrl().toUtf8());
+
+    const auto result = QtMeshCloudClient::fetchProjects(QStringLiteral("token"), QString(), 50, 5000);
+    ASSERT_TRUE(result.ok);
+    ASSERT_EQ(result.projects.size(), 1);
+    EXPECT_EQ(result.projects.first().sourceFormat, QStringLiteral("fbx"));
+    EXPECT_EQ(result.projects.first().sizeBytes, 8192);
+    EXPECT_EQ(result.projects.first().mainFile, QStringLiteral("hero.fbx"));
+    EXPECT_EQ(result.projects.first().updatedAt, QStringLiteral("2026-06-02T10:15:00Z"));
+}
+
 TEST_F(QtMeshCloudClientFetchProjectsHttpTest, DeleteProjectAccepts204)
 {
     const auto result = QtMeshCloudClient::deleteProject(QStringLiteral("token"), QStringLiteral("proj-1"), 5000);

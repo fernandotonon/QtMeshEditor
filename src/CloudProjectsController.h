@@ -42,6 +42,7 @@ public:
     Q_INVOKABLE QString formatFileSize(qint64 bytes) const;
     Q_INVOKABLE QString formatUpdatedAt(const QString& isoTimestamp) const;
     Q_INVOKABLE QString formatIconForSource(const QString& sourceFormat) const;
+    Q_INVOKABLE QString formatProjectSubtitle(const QVariant& project) const;
 
 signals:
     void projectsChanged();
