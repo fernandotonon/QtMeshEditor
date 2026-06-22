@@ -254,11 +254,11 @@ void CloudAccountMenuButton::buildMenu()
     m_menu->addAction(m_headerAction);
     m_headerSeparator = m_menu->addSeparator();
 
-    m_openProjectsAction = m_menu->addAction(tr("Open My Projects"));
+    m_openProjectsAction = m_menu->addAction(tr("My Cloud Projects…"));
     m_openProjectsAction->setObjectName(QStringLiteral("actionQtMeshCloudOpenProjects"));
     connect(m_openProjectsAction, &QAction::triggered, this, [this]() {
         SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("Cloud toolbar: Open My Projects"));
+                                      QStringLiteral("Cloud toolbar: My Cloud Projects"));
         emit openProjectsRequested();
     });
 

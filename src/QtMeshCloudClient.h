@@ -102,6 +102,11 @@ public:
         QString projectSlug;
         QString name;
         QString projectUrl;
+        QString browserUrl;
+        QString sourceFormat;
+        qint64 sizeBytes = 0;
+        QString updatedAt;
+        QString mainFile;
     };
 
     struct ProjectsListResult {
@@ -110,10 +115,15 @@ public:
         QString errorString;
         QString responseBodySnippet;
         QList<ProjectSummary> projects;
+        QString nextCursor;
+        bool hasMore = false;
     };
 
-    /// GET /v1/projects — lists cloud projects the authenticated user can access.
-    static ProjectsListResult fetchProjects(const QString& bearerToken, int timeoutMs = 30000);
+    /// GET /v1/projects?cursor=...&limit=50 — paginated cloud project list.
+    static ProjectsListResult fetchProjects(const QString& bearerToken,
+                                            const QString& cursor = QString(),
+                                            int limit = 50,
+                                            int timeoutMs = 30000);
 
     /// DELETE /v1/projects/{id} — removes a cloud project.
     static UploadResult deleteProject(const QString& bearerToken,

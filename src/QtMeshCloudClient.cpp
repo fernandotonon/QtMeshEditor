@@ -16,6 +16,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
+#include <QUrlQuery>
 
 namespace {
 
@@ -549,6 +550,8 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::logout(const QString& bearerT
 }
 
 QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QString& bearerToken,
+                                                                       const QString& cursor,
+                                                                       int limit,
                                                                        int timeoutMs)
 {
     ProjectsListResult out;
@@ -557,7 +560,16 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
         return out;
     }
 
-    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/projects"));
+    QUrl url(apiBaseUrl() + QStringLiteral("/v1/projects"));
+    {
+        QUrlQuery query;
+        if (!cursor.isEmpty())
+            query.addQueryItem(QStringLiteral("cursor"), cursor);
+        if (limit > 0)
+            query.addQueryItem(QStringLiteral("limit"), QString::number(limit));
+        if (!query.isEmpty())
+            url.setQuery(query);
+    }
     if (!url.isValid()) {
         out.errorString = QStringLiteral("invalid API base URL");
         return out;
@@ -569,8 +581,8 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
     req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
     req.setTransferTimeout(timeoutMs);
 
-    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
-        QStringLiteral("QtMesh Cloud fetchProjects: start"));
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.list"),
+                                  QStringLiteral("QtMesh Cloud fetchProjects: start"));
 
     QNetworkReply* reply = nam.get(req);
     QEventLoop loop;
@@ -588,7 +600,7 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
         out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
         if (!out.responseBodySnippet.isEmpty())
             out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
-        SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.list"),
             QStringLiteral("QtMesh Cloud fetchProjects: failure HTTP %1").arg(out.httpStatus),
             QStringLiteral("warning"));
         return out;
@@ -601,7 +613,7 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
     const QJsonValue projectsValue = root.value(QStringLiteral("projects"));
     if (!projectsValue.isArray()) {
         out.errorString = QStringLiteral("response missing \"projects\" array");
-        SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.list"),
             QStringLiteral("QtMesh Cloud fetchProjects: malformed response"),
             QStringLiteral("warning"));
         return out;
@@ -614,18 +626,30 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
         summary.id = project.value(QStringLiteral("id")).toString();
         summary.ownerSlug = project.value(QStringLiteral("ownerSlug")).toString();
         summary.projectSlug = project.value(QStringLiteral("slug")).toString();
+        if (summary.projectSlug.isEmpty())
+            summary.projectSlug = project.value(QStringLiteral("projectSlug")).toString();
         summary.name = project.value(QStringLiteral("name")).toString();
+        summary.sourceFormat = project.value(QStringLiteral("sourceFormat")).toString();
+        summary.sizeBytes = static_cast<qint64>(project.value(QStringLiteral("sizeBytes")).toDouble(0));
+        summary.updatedAt = project.value(QStringLiteral("updatedAt")).toString();
+        summary.mainFile = project.value(QStringLiteral("mainFile")).toString();
+        if (!summary.id.isEmpty()) {
+            summary.browserUrl = QStringLiteral("https://qtmesh.dev/projects/%1")
+                                     .arg(QString::fromUtf8(QUrl::toPercentEncoding(summary.id)));
+        }
         if (!summary.ownerSlug.isEmpty() && !summary.projectSlug.isEmpty()) {
             summary.projectUrl = QStringLiteral("https://qtmesh.dev/%1/%2")
                 .arg(QString::fromUtf8(QUrl::toPercentEncoding(summary.ownerSlug)),
                      QString::fromUtf8(QUrl::toPercentEncoding(summary.projectSlug)));
         }
-        if (!summary.id.isEmpty() && !summary.ownerSlug.isEmpty() && !summary.projectSlug.isEmpty())
+        if (!summary.id.isEmpty())
             out.projects.append(summary);
     }
 
+    out.nextCursor = root.value(QStringLiteral("nextCursor")).toString();
+    out.hasMore = !out.nextCursor.isEmpty();
     out.ok = true;
-    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.list"),
         QStringLiteral("QtMesh Cloud fetchProjects: ok count=%1").arg(out.projects.size()));
     return out;
 }
@@ -658,7 +682,7 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::deleteProject(const QString& 
     req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
     req.setTransferTimeout(timeoutMs);
 
-    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.delete"),
                                   QStringLiteral("QtMesh Cloud deleteProject: start"));
 
     QNetworkReply* reply = nam.deleteResource(req);
@@ -678,6 +702,9 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::deleteProject(const QString& 
         out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
         if (!out.responseBodySnippet.isEmpty())
             out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+    } else {
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.delete"),
+                                      QStringLiteral("projectId=%1").arg(projectId.trimmed()));
     }
     return out;
 }

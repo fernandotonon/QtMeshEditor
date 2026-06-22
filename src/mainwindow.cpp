@@ -24,10 +24,10 @@
 #include <QPixmap>
 #include <QClipboard>
 #include <QDesktopServices>
+#include <QQuickWindow>
 #include <QQmlApplicationEngine>
 #include <QQmlEngine>
 #include <QJSEngine>
-#include <QQuickWindow>
 #include <QFileInfo>
 #include <QEvent>
 #include "SentryReporter.h"
@@ -48,7 +48,7 @@
 #include "AppSettingsKeys.h"
 #include "CloudAccountMenuButton.h"
 #include "CloudCredentialStore.h"
-#include "CloudProjectsDialog.h"
+#include "CloudProjectsController.h"
 #include "CloudUploadDialog.h"
 #include "CloudUploadPlanner.h"
 #include "CloudUploadProgress.h"
@@ -2668,6 +2668,9 @@ QtMeshCloudSession* MainWindow::cloudSessionForToken(const QString& token)
 
 void MainWindow::showCloudProjectsDialog()
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("My Cloud Projects dialog requested"));
+
     CloudCredentialStore::migrateLegacySettingsIfNeeded();
     if (!CloudCredentialStore::hasSession()) {
         const int choice = QMessageBox::question(
@@ -2681,37 +2684,74 @@ void MainWindow::showCloudProjectsDialog()
             return;
     }
 
-    const QString token = CloudCredentialStore::loadSession().token;
-    QProgressDialog progress(tr("Loading cloud projects..."), tr("Cancel"), 0, 0, this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(0);
-    progress.show();
+    openCloudProjectsQmlDialog();
+}
 
-    QtMeshCloudSession* session = cloudSessionForToken(token);
-
-    QEventLoop loop;
-    QList<QtMeshCloudClient::ProjectSummary> projects;
-    QString error;
-    connect(session, &QtMeshCloudSession::projectsListed, this,
-            [&](const QList<QtMeshCloudClient::ProjectSummary>& listed, const QString& err) {
-                projects = listed;
-                error = err;
-                loop.quit();
-            },
-            Qt::SingleShotConnection);
-    session->listProjects();
-    loop.exec();
-    progress.close();
-
-    if (!error.isEmpty()) {
-        QMessageBox::warning(this, tr("QtMesh Cloud"),
-                             tr("Could not load your cloud projects.\n\n%1").arg(error));
+void MainWindow::openCloudProjectsQmlDialog()
+{
+    if (m_cloudProjectsWindow) {
+        if (auto* window = qobject_cast<QQuickWindow*>(m_cloudProjectsWindow)) {
+            QMetaObject::invokeMethod(window, "open");
+            window->show();
+            window->raise();
+            window->requestActivate();
+        }
         return;
     }
 
-    CloudProjectsDialog dialog(this);
-    dialog.setProjects(projects);
-    dialog.exec();
+    auto* engine = new QQmlApplicationEngine(this);
+    m_cloudProjectsEngine = engine;
+    engine->addImportPath(QStringLiteral("qrc:/"));
+    engine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
+
+    qmlRegisterSingletonType<PropertiesPanelController>(
+        "PropertiesPanel", 1, 0, "PropertiesPanelController",
+        [](QQmlEngine* eng, QJSEngine*) -> QObject* {
+            return PropertiesPanelController::qmlInstance(eng, nullptr);
+        });
+    qmlRegisterSingletonType<CloudProjectsController>(
+        "CloudProjects", 1, 0, "CloudProjectsController",
+        [](QQmlEngine* eng, QJSEngine*) -> QObject* {
+            return CloudProjectsController::qmlInstance(eng, nullptr);
+        });
+
+    connect(engine, &QQmlApplicationEngine::objectCreated, this,
+            [this, engine](QObject* obj, const QUrl&) {
+                if (!obj) {
+                    engine->deleteLater();
+                    m_cloudProjectsEngine = nullptr;
+                    return;
+                }
+
+                m_cloudProjectsWindow = obj;
+                if (auto* window = qobject_cast<QQuickWindow*>(obj)) {
+                    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+                    connect(window, &QQuickWindow::visibleChanged, this,
+                            [this, window, engine](bool visible) {
+                                if (visible || m_cloudProjectsWindow != window)
+                                    return;
+                                m_cloudProjectsWindow = nullptr;
+                                m_cloudProjectsEngine = nullptr;
+                                engine->deleteLater();
+                            });
+
+                    connect(CloudProjectsController::instance(), &CloudProjectsController::signInRequired,
+                            this, [this]() {
+                                signInToQtMeshCloud();
+                                if (CloudCredentialStore::hasSession())
+                                    CloudProjectsController::instance()->refresh();
+                            });
+                    connect(CloudProjectsController::instance(), &CloudProjectsController::uploadRequested,
+                            this, &MainWindow::uploadFilesToQtMeshCloud);
+
+                    QMetaObject::invokeMethod(window, "open");
+                    window->show();
+                    window->raise();
+                    window->requestActivate();
+                }
+            });
+
+    engine->load(QUrl(QStringLiteral("qrc:/CloudProjects/CloudProjectsDialog.qml")));
 }
 
 void MainWindow::uploadFilesToQtMeshCloud()
@@ -2758,7 +2798,8 @@ void MainWindow::uploadFilesToQtMeshCloud()
     QList<QtMeshCloudClient::ProjectSummary> projects;
     QString listError;
     connect(session, &QtMeshCloudSession::projectsListed, this,
-            [&](const QList<QtMeshCloudClient::ProjectSummary>& listed, const QString& err) {
+            [&](const QList<QtMeshCloudClient::ProjectSummary>& listed, const QString& err,
+                const QString&, bool) {
                 projects = listed;
                 listError = err;
                 listLoop.quit();

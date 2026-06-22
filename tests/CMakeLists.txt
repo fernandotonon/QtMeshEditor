@@ -66,7 +66,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudCredentialStore.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudUploadPlanner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudCLIPipeline.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudProjectsDialog.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudProjectsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudUploadDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudUploadProgress.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DependencyResolver.cpp

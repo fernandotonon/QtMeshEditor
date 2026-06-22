@@ -1,5 +1,6 @@
 #include "QtMeshCloudSession.h"
 
+#include "CloudCredentialStore.h"
 #include "CloudUploadPlanner.h"
 #include "SentryReporter.h"
 
@@ -18,24 +19,77 @@ void QtMeshCloudSession::cancel()
     m_canceled.store(true);
 }
 
-void QtMeshCloudSession::listProjects()
+void QtMeshCloudSession::listProjects(const QString& cursor)
 {
     const QString token = m_bearerToken;
     QPointer<QtMeshCloudSession> self(this);
-    QThread* worker = QThread::create([self, token]() {
-        const auto result = QtMeshCloudClient::fetchProjects(token);
-        QMetaObject::invokeMethod(qApp, [self, result]() {
+    QThread* worker = QThread::create([self, token, cursor]() {
+        auto fetch = [](const QString& bearer, const QString& pageCursor) {
+            return QtMeshCloudClient::fetchProjects(bearer, pageCursor);
+        };
+
+        QString activeToken = token;
+        auto result = fetch(activeToken, cursor);
+        if (!result.ok && result.httpStatus == 401) {
+            const QString reloaded = CloudCredentialStore::loadSession().token;
+            if (!reloaded.isEmpty() && reloaded != activeToken) {
+                activeToken = reloaded;
+                result = fetch(activeToken, cursor);
+            }
+        }
+
+        const auto listed = result;
+        QMetaObject::invokeMethod(qApp, [self, listed, activeToken, token]() {
             if (!self)
                 return;
-            if (!result.ok) {
-                emit self->projectsListed({}, result.errorString);
+            if (!listed.ok) {
+                QString err = listed.errorString;
+                if (listed.httpStatus == 401)
+                    err = QStringLiteral("unauthorized");
+                emit self->projectsListed({}, err, {}, false);
                 return;
             }
-            emit self->projectsListed(result.projects, {});
+            if (activeToken != token)
+                self->setBearerToken(activeToken);
+            emit self->projectsListed(listed.projects, {}, listed.nextCursor, listed.hasMore);
         }, Qt::QueuedConnection);
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
     worker->start();
+}
+
+void QtMeshCloudSession::deleteProject(const QString& projectId)
+{
+    const QString token = m_bearerToken;
+    const QString id = projectId.trimmed();
+    QPointer<QtMeshCloudSession> self(this);
+    QThread* worker = QThread::create([self, token, id]() {
+        auto result = QtMeshCloudClient::deleteProject(token, id);
+        if (!result.ok && result.httpStatus == 401) {
+            const QString reloaded = CloudCredentialStore::loadSession().token;
+            if (!reloaded.isEmpty() && reloaded != token)
+                result = QtMeshCloudClient::deleteProject(reloaded, id);
+        }
+        QMetaObject::invokeMethod(qApp, [self, id, result]() {
+            if (!self)
+                return;
+            emit self->projectDeleted(id, result.ok ? QString() : result.errorString);
+        }, Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
+void QtMeshCloudSession::downloadProject(const QString& projectId, const QString& destDir)
+{
+    Q_UNUSED(projectId);
+    Q_UNUSED(destDir);
+    QMetaObject::invokeMethod(this, [this]() {
+        emit downloadComplete(
+            false,
+            QStringLiteral("Download from QtMesh Cloud is not available yet."),
+            QStringLiteral("not-implemented"));
+    }, Qt::QueuedConnection);
 }
 
 void QtMeshCloudSession::uploadPackage(const PackageMetadata& metadata,

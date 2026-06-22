@@ -239,6 +239,9 @@ private:
     void updateToolRailForMode();
     void setupCloudAccountStatusControl();
     void updateCloudAuthActions();
+    void openCloudProjectsQmlDialog();
+    QObject* m_cloudProjectsWindow = nullptr;
+    QQmlApplicationEngine* m_cloudProjectsEngine = nullptr;
 
 #ifdef ENABLE_AUTO_UPDATER
     void showUpdaterDialog(bool runCheck = true);

@@ -1,8 +1,56 @@
 #include <gtest/gtest.h>
 #include <QCoreApplication>
+#include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include "QtMeshCloudClient.h"
 #include "FeedbackDiagnostics.h"
+
+namespace {
+
+struct ParsedHttpRequest {
+    QString method;
+    QString path;
+};
+
+ParsedHttpRequest parseHttpRequest(const QByteArray& raw)
+{
+    ParsedHttpRequest req;
+    const QList<QByteArray> lines = raw.split('\n');
+    if (!lines.isEmpty()) {
+        const QString requestLine = QString::fromUtf8(lines.first()).trimmed();
+        req.method = requestLine.section(QLatin1Char(' '), 0, 0);
+        req.path = requestLine.section(QLatin1Char(' '), 1, 1);
+    }
+    return req;
+}
+
+void writeHttpResponse(QTcpSocket* socket, int status, const QByteArray& body,
+                       const char* statusText = "OK")
+{
+    QByteArray response;
+    response += "HTTP/1.1 ";
+    response += QByteArray::number(status);
+    response += ' ';
+    response += statusText;
+    response += "\r\nContent-Type: application/json\r\n";
+    if (!body.isEmpty()) {
+        response += "Content-Length: ";
+        response += QByteArray::number(body.size());
+        response += "\r\n";
+    }
+    response += "Connection: close\r\n\r\n";
+    response += body;
+    socket->write(response);
+    socket->flush();
+    socket->waitForBytesWritten(2000);
+    socket->disconnectFromHost();
+}
+
+} // namespace
 
 TEST(QtMeshCloudClientValidate, AcceptsMinimalValid)
 {
@@ -183,7 +231,7 @@ TEST(QtMeshCloudClientCreateProject, MissingNameOrSlugReturnsErrorImmediately)
 
 TEST(QtMeshCloudClientFetchProjects, MissingTokenReturnsErrorImmediately)
 {
-    auto result = QtMeshCloudClient::fetchProjects(QString(), /*timeoutMs=*/100);
+    auto result = QtMeshCloudClient::fetchProjects(QString(), QString(), 50, /*timeoutMs=*/100);
     EXPECT_FALSE(result.ok);
     EXPECT_TRUE(result.errorString.contains("missing bearer token", Qt::CaseInsensitive));
 }
@@ -332,4 +380,120 @@ TEST(QtMeshCloudClientFriendlyFeedbackError, MapsHttpStatuses)
                     .contains(QStringLiteral("too large"), Qt::CaseInsensitive));
     EXPECT_TRUE(QtMeshCloudClient::friendlyFeedbackError(401, QString(), QString())
                     .contains(QStringLiteral("Sign in"), Qt::CaseInsensitive));
+}
+
+class CloudProjectsListHttpMock {
+public:
+    bool listen()
+    {
+        QObject::connect(&m_server, &QTcpServer::newConnection, [this]() {
+            QTcpSocket* socket = m_server.nextPendingConnection();
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [this, socket]() {
+                const ParsedHttpRequest req = parseHttpRequest(socket->readAll());
+
+                if (req.method == QStringLiteral("GET") && req.path.startsWith(QStringLiteral("/v1/projects"))) {
+                    ++m_listCalls;
+                    if (m_firstListUnauthorized && m_listCalls == 1) {
+                        writeHttpResponse(socket, 401, QByteArray(R"({"error":"unauthorized"})"), "Unauthorized");
+                        return;
+                    }
+
+                    const bool secondPage = req.path.contains(QStringLiteral("cursor=page2"));
+                    QJsonObject root;
+                    if (secondPage) {
+                        QJsonArray projects;
+                        QJsonObject project;
+                        project.insert(QStringLiteral("id"), QStringLiteral("proj-2"));
+                        project.insert(QStringLiteral("name"), QStringLiteral("Second"));
+                        project.insert(QStringLiteral("slug"), QStringLiteral("second"));
+                        project.insert(QStringLiteral("ownerSlug"), QStringLiteral("me"));
+                        project.insert(QStringLiteral("sourceFormat"), QStringLiteral("fbx"));
+                        project.insert(QStringLiteral("sizeBytes"), 2048);
+                        project.insert(QStringLiteral("updatedAt"), QStringLiteral("2026-06-01T12:00:00Z"));
+                        projects.append(project);
+                        root.insert(QStringLiteral("projects"), projects);
+                    } else {
+                        QJsonArray projects;
+                        QJsonObject project;
+                        project.insert(QStringLiteral("id"), QStringLiteral("proj-1"));
+                        project.insert(QStringLiteral("name"), QStringLiteral("First"));
+                        project.insert(QStringLiteral("slug"), QStringLiteral("first"));
+                        project.insert(QStringLiteral("ownerSlug"), QStringLiteral("me"));
+                        project.insert(QStringLiteral("sourceFormat"), QStringLiteral("glb"));
+                        project.insert(QStringLiteral("sizeBytes"), 1024);
+                        project.insert(QStringLiteral("updatedAt"), QStringLiteral("2026-05-01T08:00:00Z"));
+                        project.insert(QStringLiteral("mainFile"), QStringLiteral("model.glb"));
+                        projects.append(project);
+                        root.insert(QStringLiteral("projects"), projects);
+                        root.insert(QStringLiteral("nextCursor"), QStringLiteral("page2"));
+                    }
+                    writeHttpResponse(socket, 200, QJsonDocument(root).toJson(QJsonDocument::Compact));
+                    return;
+                }
+
+                if (req.method == QStringLiteral("DELETE")
+                    && req.path == QStringLiteral("/v1/projects/proj-1")) {
+                    m_deleteCalled = true;
+                    writeHttpResponse(socket, 204, QByteArray{}, "No Content");
+                    return;
+                }
+
+                writeHttpResponse(socket, 404, QByteArray(R"({"error":"not found"})"), "Not Found");
+            });
+        });
+        return m_server.listen(QHostAddress::LocalHost);
+    }
+
+    QString baseUrl() const
+    {
+        return QStringLiteral("http://127.0.0.1:%1").arg(m_server.serverPort());
+    }
+
+    int listCalls() const { return m_listCalls; }
+    bool deleteCalled() const { return m_deleteCalled; }
+
+    bool m_firstListUnauthorized = false;
+
+private:
+    QTcpServer m_server;
+    int m_listCalls = 0;
+    bool m_deleteCalled = false;
+};
+
+class QtMeshCloudClientFetchProjectsHttpTest : public QtMeshCloudClientApiBaseUrlTest {
+protected:
+    void SetUp() override
+    {
+        QtMeshCloudClientApiBaseUrlTest::SetUp();
+        ASSERT_TRUE(m_mock.listen());
+        qputenv("QTMESH_API_BASE", m_mock.baseUrl().toUtf8());
+    }
+
+    CloudProjectsListHttpMock m_mock;
+};
+
+TEST_F(QtMeshCloudClientFetchProjectsHttpTest, ParsesPaginationAndMetadata)
+{
+    const auto page1 = QtMeshCloudClient::fetchProjects(QStringLiteral("token"), QString(), 50, 5000);
+    ASSERT_TRUE(page1.ok);
+    ASSERT_EQ(page1.projects.size(), 1);
+    EXPECT_EQ(page1.projects.first().id, QStringLiteral("proj-1"));
+    EXPECT_EQ(page1.projects.first().sourceFormat, QStringLiteral("glb"));
+    EXPECT_EQ(page1.projects.first().sizeBytes, 1024);
+    EXPECT_TRUE(page1.projects.first().browserUrl.contains(QStringLiteral("/projects/proj-1")));
+    EXPECT_TRUE(page1.hasMore);
+    EXPECT_EQ(page1.nextCursor, QStringLiteral("page2"));
+
+    const auto page2 = QtMeshCloudClient::fetchProjects(QStringLiteral("token"), page1.nextCursor, 50, 5000);
+    ASSERT_TRUE(page2.ok);
+    ASSERT_EQ(page2.projects.size(), 1);
+    EXPECT_EQ(page2.projects.first().id, QStringLiteral("proj-2"));
+    EXPECT_FALSE(page2.hasMore);
+}
+
+TEST_F(QtMeshCloudClientFetchProjectsHttpTest, DeleteProjectAccepts204)
+{
+    const auto result = QtMeshCloudClient::deleteProject(QStringLiteral("token"), QStringLiteral("proj-1"), 5000);
+    EXPECT_TRUE(result.ok);
+    EXPECT_TRUE(m_mock.deleteCalled());
 }
