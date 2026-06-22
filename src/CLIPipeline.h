@@ -119,6 +119,28 @@ public:
     /// built without ENABLE_ONNX.
     static int cmdMaterialUpscale(const QString& srcPath, QString outputPath,
                                   int scale);
+    /// #406: LLM-assisted material authoring. Headless equivalent of the
+    /// Material Editor's "Generate" prompt — loads a local GGUF model (the
+    /// last-used / first available, or --model), drives LLMManager's async
+    /// material generation synchronously via QEventLoop, parses the generated
+    /// Ogre material script, binds it to every submesh, and re-exports. Exit 1
+    /// with a clear message when no model is available (or the build has no
+    /// llama.cpp). Sentry breadcrumb ai.assist.describe_material.
+    static int cmdMaterialDescribe(const QString& inputPath,
+                                   QString outputPath,
+                                   const QString& prompt,
+                                   const QString& modelName);
+    /// #406 shared core (CLI + MCP): drive a loaded LLMManager to generate a
+    /// material from `prompt` synchronously, strip markdown fences, parse the
+    /// resulting Ogre material script, and bind the parsed material to every
+    /// submesh of `entity`. Returns the bound material name on success; sets
+    /// `error` and returns empty on failure (no model loaded, generation error,
+    /// or unparseable script). Caller owns Ogre init + export. `modelName`
+    /// empty = use last-used / first available GGUF.
+    static QString llmDescribeMaterialToEntity(Ogre::Entity* entity,
+                                               const QString& prompt,
+                                               const QString& modelName,
+                                               QString& error);
     /// Slice G: pack 1-4 grayscale source images into a single RGBA
     /// output texture. Headless / scriptable equivalent of the GUI
     /// "Pack Channels…" dialog.
