@@ -8,6 +8,7 @@
 #include <QHash>
 
 #include <memory>
+#include <atomic>
 #include <QVariantMap>
 #include <QQuickItem>
 #include <QDir>
@@ -574,9 +575,12 @@ public slots:
     Q_INVOKABLE bool aiPbrAvailable() const;
     Q_INVOKABLE void generatePbrFromDiffuse();
     /// #405: upscale the current texture by `scale` (2 or 4) via Real-ESRGAN,
-    /// writing <stem>_upscaled.png next to the source. Relays
-    /// upscaleStarted/Completed/Error from AIAssistManager.
+    /// writing <stem>_upscaled.png next to the source. Runs on a worker thread;
+    /// emits upscaleDownloading (during first-run model fetch), upscaleProgress
+    /// (per tile), and upscaleCompleted/Error.
     Q_INVOKABLE void upscaleCurrentTexture(int scale);
+    /// Request cancellation of an in-flight upscale (checked per tile).
+    Q_INVOKABLE void cancelUpscale();
 
     // Issue #403: mesh-aware texture generation. Same as
     // generateTextureFromPrompt but renders the selected entity's
@@ -721,6 +725,8 @@ signals:
     void pbrSynthCompleted(const QVariantMap &result);
     void pbrSynthError(const QString &error);
     void upscaleStarted();
+    void upscaleDownloading();                       // first-run model fetch in progress
+    void upscaleProgress(int tilesDone, int tilesTotal);
     void upscaleCompleted(const QString &outputPath);
     void upscaleError(const QString &error);
     /** Non-fatal informational message during generation (e.g. degraded mode);
@@ -812,6 +818,10 @@ private:
     // pump the event loop, which could re-enter the getter and run a second
     // GPU-buffer readback nested inside the first. Refuse to recurse.
     mutable bool m_resolvingPreview = false;
+    // #405: set by cancelUpscale(), read per-tile by the upscale worker's
+    // progress callback. shared_ptr so the detached worker keeps it alive even
+    // if a new upscale starts; atomic for cross-thread access.
+    std::shared_ptr<std::atomic_bool> m_upscaleCancel;
     double m_scrollAnimUSpeed = 0.0;
     double m_scrollAnimVSpeed = 0.0;
     

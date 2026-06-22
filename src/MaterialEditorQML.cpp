@@ -4255,26 +4255,44 @@ void MaterialEditorQML::upscaleCurrentTexture(int scale)
     emit upscaleStarted();
     // Ensure the model on THIS (GUI) thread first — the download uses a
     // QEventLoop and ModelDownloader's queued signals, which need a running
-    // event loop (a QtConcurrent worker has none). Then run the pure-CPU
-    // tiled inference + save on a worker so the UI doesn't freeze, and marshal
-    // the result back via a queued invocation. (CLI/MCP keep the synchronous
-    // upscaleTexture() path.)
-    const QString model = AIAssistManager::instance()->ensureUpscaleModel(scale);
+    // event loop. If the model isn't on disk yet, signal the download phase so
+    // the UI can show "Downloading model…" instead of a silent "Upscaling…".
+    AIAssistManager* ai = AIAssistManager::instance();
+    const QString preModel = ai->modelPath(
+        (scale == 2) ? AIAssistManager::Map::UpscaleX2 : AIAssistManager::Map::UpscaleX4);
+    if (!QFileInfo::exists(preModel))
+        emit upscaleDownloading();
+    const QString model = ai->ensureUpscaleModel(scale);
     if (model.isEmpty()) {
         emit upscaleError(tr("Upscale model unavailable (offline or download failed)."));
         return;
     }
+
     const QFileInfo fi(src);
     const QString outPath = QDir(fi.absolutePath())
         .filePath(fi.completeBaseName() + QStringLiteral("_upscaled_x%1.png").arg(scale));
+
+    // Fresh cancel flag for this run (shared_ptr keeps it alive for the worker).
+    m_upscaleCancel = std::make_shared<std::atomic_bool>(false);
+    auto cancel = m_upscaleCancel;
     QPointer<MaterialEditorQML> self(this);
-    std::thread([self, src, model, outPath]() {
+
+    // Then run the pure-CPU tiled inference + save on a worker so the UI doesn't
+    // freeze, reporting per-tile progress + honoring cancel, and marshal results
+    // back via queued invocations. (CLI/MCP keep the synchronous path.)
+    std::thread([self, src, model, outPath, cancel]() {
+        TextureUpscaler::ProgressFn onProgress = [self, cancel](int done, int total) -> bool {
+            if (cancel->load()) return false;  // cancel requested
+            QMetaObject::invokeMethod(qApp, [self, done, total]() {
+                if (self) emit self->upscaleProgress(done, total);
+            }, Qt::QueuedConnection);
+            return true;
+        };
         const QImage in(src);
-        const TextureUpscaler::Result res = TextureUpscaler::upscale(in, model, {});
+        const TextureUpscaler::Result res =
+            TextureUpscaler::upscale(in, model, {}, onProgress);
         const bool ok = res.ok && !res.image.isNull() && res.image.save(outPath, "PNG");
         const QString err = res.error;
-        // Marshal the result back to the GUI thread (signals must be emitted
-        // there). QPointer guards against the singleton/object going away.
         QMetaObject::invokeMethod(qApp, [self, ok, outPath, err]() {
             if (!self) return;
             if (ok) emit self->upscaleCompleted(outPath);
@@ -4283,6 +4301,12 @@ void MaterialEditorQML::upscaleCurrentTexture(int scale)
         }, Qt::QueuedConnection);
     }).detach();
 #endif
+}
+
+void MaterialEditorQML::cancelUpscale()
+{
+    if (m_upscaleCancel)
+        m_upscaleCancel->store(true);
 }
 
 bool MaterialEditorQML::hasSelectedMesh() const

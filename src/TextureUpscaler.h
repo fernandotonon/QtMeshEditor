@@ -2,6 +2,7 @@
 
 #include <QImage>
 #include <QString>
+#include <functional>
 
 /// #405: Real-ESRGAN texture super-resolution via ONNX Runtime.
 ///
@@ -30,10 +31,18 @@ struct Result {
     int scale = 0;          // detected scale factor (e.g. 2 or 4)
 };
 
+/// Progress callback: invoked once per tile with (tilesDone, tilesTotal).
+/// Return false to CANCEL — upscale() then returns ok=false, error="cancelled".
+/// Called on the calling thread (the worker), so the consumer must marshal any
+/// UI update back to the GUI thread itself.
+using ProgressFn = std::function<bool(int done, int total)>;
+
 /// Upscale `src` by running the ONNX model at `modelPath`, tiling per `opts`.
-/// Returns ok=false with a populated `error` when the model can't be
-/// loaded/run (the graceful offline/missing-model path). Without ENABLE_ONNX
+/// `onProgress` (optional) reports per-tile progress and can cancel. Returns
+/// ok=false with a populated `error` when the model can't be loaded/run (the
+/// graceful offline/missing-model path) or when cancelled. Without ENABLE_ONNX
 /// this always returns ok=false ("not built with ONNX").
-Result upscale(const QImage& src, const QString& modelPath, const Options& opts = {});
+Result upscale(const QImage& src, const QString& modelPath, const Options& opts = {},
+               const ProgressFn& onProgress = {});
 
 } // namespace TextureUpscaler

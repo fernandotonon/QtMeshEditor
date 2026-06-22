@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <new>
+#include <thread>
 #include <vector>
 
 #ifdef ENABLE_ONNX
@@ -19,7 +20,7 @@ namespace TextureUpscaler {
 
 #ifndef ENABLE_ONNX
 
-Result upscale(const QImage&, const QString&, const Options&)
+Result upscale(const QImage&, const QString&, const Options&, const ProgressFn&)
 {
     Result r;
     r.error = QStringLiteral(
@@ -85,7 +86,8 @@ bool runTile(Ort::Session& session, Ort::AllocatorWithDefaultOptions& alloc,
 
 } // namespace
 
-Result upscale(const QImage& srcIn, const QString& modelPath, const Options& opts)
+Result upscale(const QImage& srcIn, const QString& modelPath, const Options& opts,
+               const ProgressFn& onProgress)
 {
     Result r;
     if (srcIn.isNull()) { r.error = QStringLiteral("source image is null"); return r; }
@@ -107,7 +109,13 @@ Result upscale(const QImage& srcIn, const QString& modelPath, const Options& opt
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_upscale");
         Ort::SessionOptions so;
-        so.SetIntraOpNumThreads(1);
+        // Real-ESRGAN is CPU-heavy; use all cores for intra-op parallelism
+        // (was pinned to 1, which made large textures take hours). Leave one
+        // core free so the UI/host stays responsive. ONNX Runtime treats 0 as
+        // "let ORT decide", but we cap explicitly for predictability.
+        const unsigned hw = std::thread::hardware_concurrency();
+        const int threads = (hw > 1) ? static_cast<int>(hw - 1) : 1;
+        so.SetIntraOpNumThreads(threads);
         so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 #ifdef __APPLE__
         try {
@@ -173,6 +181,20 @@ Result upscale(const QImage& srcIn, const QString& modelPath, const Options& opt
         const int step = std::max(1, tile - std::max(0, opts.overlap));
         const int s = r.scale;
 
+        // Count tiles up front for progress reporting.
+        int totalTiles = 0;
+        for (int ty = 0; ty < H; ty += step) {
+            for (int tx = 0; tx < W; tx += step) {
+                if (std::min(tile, W - tx) > 0 && std::min(tile, H - ty) > 0) ++totalTiles;
+                if (tx + std::min(tile, W - tx) >= W) break;
+            }
+            if (ty + tile >= H) break;
+        }
+        int tilesDone = 0;
+        if (onProgress && !onProgress(0, totalTiles)) {
+            r.error = QStringLiteral("cancelled"); return r;
+        }
+
         for (int ty = 0; ty < H; ty += step) {
             for (int tx = 0; tx < W; tx += step) {
                 const int tw = std::min(tile, W - tx);
@@ -211,6 +233,10 @@ Result upscale(const QImage& srcIn, const QString& modelPath, const Options& opt
                         for (int c = 0; c < 3; ++c)
                             acc[c * oplane + gi] += to.rgb[c * tplane + ti] * fw;
                     }
+                }
+                ++tilesDone;
+                if (onProgress && !onProgress(tilesDone, totalTiles)) {
+                    r.error = QStringLiteral("cancelled"); return r;
                 }
                 if (tx + tw >= W) break;
             }

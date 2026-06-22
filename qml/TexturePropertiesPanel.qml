@@ -317,20 +317,30 @@ GroupBox {
             }
 
             // #405: AI super-resolution of the current texture (Real-ESRGAN).
-            // Shown on an ONNX build; writes <stem>_upscaled.png next to the source.
+            // Shown on an ONNX build; writes <stem>_upscaled_xN.png next to the source.
+            // `upscaling` disables the scale buttons + shows a Cancel while a run
+            // is in flight (it can take minutes on CPU for large textures).
+            property bool upscaling: false
             ThemedButton {
                 text: "Upscale 2×"
-                visible: MaterialEditorQML.aiPbrAvailable()
+                visible: MaterialEditorQML.aiPbrAvailable() && !parent.upscaling
                 enabled: MaterialEditorQML.textureName !== ""
                     && MaterialEditorQML.textureName !== "*Select a texture*"
-                onClicked: { pbrStatus.text = "Upscaling 2×…"; MaterialEditorQML.upscaleCurrentTexture(2) }
+                onClicked: { parent.upscaling = true; pbrStatus.text = "Upscaling 2×…"
+                             MaterialEditorQML.upscaleCurrentTexture(2) }
             }
             ThemedButton {
                 text: "Upscale 4×"
-                visible: MaterialEditorQML.aiPbrAvailable()
+                visible: MaterialEditorQML.aiPbrAvailable() && !parent.upscaling
                 enabled: MaterialEditorQML.textureName !== ""
                     && MaterialEditorQML.textureName !== "*Select a texture*"
-                onClicked: { pbrStatus.text = "Upscaling 4×…"; MaterialEditorQML.upscaleCurrentTexture(4) }
+                onClicked: { parent.upscaling = true; pbrStatus.text = "Upscaling 4×…"
+                             MaterialEditorQML.upscaleCurrentTexture(4) }
+            }
+            ThemedButton {
+                text: "Cancel"
+                visible: parent.upscaling
+                onClicked: { pbrStatus.text = "Cancelling…"; MaterialEditorQML.cancelUpscale() }
             }
 
             Connections {
@@ -340,10 +350,18 @@ GroupBox {
                                                       : "PBR maps generated."
                 }
                 function onPbrSynthError(err) { pbrStatus.text = "PBR: " + err }
+                function onUpscaleDownloading() { pbrStatus.text = "Downloading upscale model…" }
+                function onUpscaleProgress(done, total) {
+                    pbrStatus.text = "Upscaling… tile " + done + "/" + total
+                }
                 function onUpscaleCompleted(path) {
+                    pbrStatus.parent.upscaling = false
                     pbrStatus.text = "Upscaled → " + path.split('/').pop()
                 }
-                function onUpscaleError(err) { pbrStatus.text = "Upscale: " + err }
+                function onUpscaleError(err) {
+                    pbrStatus.parent.upscaling = false
+                    pbrStatus.text = "Upscale: " + err
+                }
             }
         }
 
