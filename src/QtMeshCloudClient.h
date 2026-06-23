@@ -126,6 +126,10 @@ public:
                                             int limit = 50,
                                             int timeoutMs = 30000);
 
+    /// Fetches every page until `hasMore` is false (for CLI/MCP list callers).
+    static ProjectsListResult fetchAllProjects(const QString& bearerToken,
+                                               int timeoutMs = 30000);
+
     /// Website dashboard URL for a cloud project (owner + slug route).
     static QString projectDashboardUrl(const QString& ownerSlug, const QString& projectSlug);
 

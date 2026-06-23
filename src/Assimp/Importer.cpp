@@ -38,6 +38,19 @@ THE SOFTWARE.
 
 #include <QFileInfo>
 
+namespace {
+
+bool isProtectedOgreMaterialName(const std::string& name)
+{
+    if (name.empty())
+        return true;
+    if (name == "BaseWhite" || name == "BaseWhiteNoLighting" || name == "GUI_Material")
+        return true;
+    return name.rfind("Ogre/", 0) == 0;
+}
+
+} // namespace
+
 Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool convertToLeftHanded, unsigned int additionalFlags) {
     skeleton.reset();  // Clear any skeleton from a previous import
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
@@ -145,9 +158,6 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     if (auto oldSkel = Ogre::SkeletonManager::getSingleton().getByName(modelName + ".skeleton"))
         Ogre::SkeletonManager::getSingleton().remove(oldSkel);
 
-    if (auto oldSkel = Ogre::SkeletonManager::getSingleton().getByName(modelName + ".skeleton"))
-        Ogre::SkeletonManager::getSingleton().remove(oldSkel);
-
     materialProcessor.setSourceDirectory(QFileInfo(QString::fromStdString(path)).absolutePath());
     for (unsigned int mi = 0; mi < scene->mNumMaterials; ++mi) {
         aiString matNameAi;
@@ -156,6 +166,8 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
             continue;
         }
         const std::string matName = matNameAi.C_Str();
+        if (isProtectedOgreMaterialName(matName))
+            continue;
         if (auto existing = Ogre::MaterialManager::getSingleton().getByName(matName))
             Ogre::MaterialManager::getSingleton().remove(existing);
     }

@@ -154,6 +154,21 @@ private:
     int m_manifestCalls = 0;
 };
 
+void waitForProjectsListIdle(CloudProjectsController* controller)
+{
+    if (!controller->loading() && !controller->loadingMore())
+        return;
+
+    QEventLoop loop;
+    QObject::connect(controller, &CloudProjectsController::loadingChanged, &loop,
+                     [controller, &loop]() {
+                         if (!controller->loading() && !controller->loadingMore())
+                             loop.quit();
+                     });
+    QTimer::singleShot(10000, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
 } // namespace
 
 class CloudProjectsControllerTest : public ::testing::Test {
@@ -203,11 +218,8 @@ protected:
 TEST_F(CloudProjectsControllerTest, RefreshLoadsFirstPage)
 {
     auto* controller = CloudProjectsController::instance();
-    QEventLoop loop;
-    QObject::connect(controller, &CloudProjectsController::projectsChanged, &loop, &QEventLoop::quit);
     controller->refresh();
-    QTimer::singleShot(10000, &loop, &QEventLoop::quit);
-    loop.exec();
+    waitForProjectsListIdle(controller);
 
     EXPECT_EQ(controller->projects().size(), 1);
     EXPECT_TRUE(controller->hasMore());
@@ -217,18 +229,12 @@ TEST_F(CloudProjectsControllerTest, RefreshLoadsFirstPage)
 TEST_F(CloudProjectsControllerTest, LoadMoreAppendsSecondPage)
 {
     auto* controller = CloudProjectsController::instance();
-    QEventLoop first;
-    QObject::connect(controller, &CloudProjectsController::projectsChanged, &first, &QEventLoop::quit);
     controller->refresh();
-    QTimer::singleShot(10000, &first, &QEventLoop::quit);
-    first.exec();
+    waitForProjectsListIdle(controller);
     ASSERT_EQ(controller->projects().size(), 1);
 
-    QEventLoop second;
-    QObject::connect(controller, &CloudProjectsController::projectsChanged, &second, &QEventLoop::quit);
     controller->loadMore();
-    QTimer::singleShot(10000, &second, &QEventLoop::quit);
-    second.exec();
+    waitForProjectsListIdle(controller);
 
     EXPECT_EQ(controller->projects().size(), 2);
     EXPECT_GE(m_mock->listCalls(), 2);
@@ -237,15 +243,16 @@ TEST_F(CloudProjectsControllerTest, LoadMoreAppendsSecondPage)
 TEST_F(CloudProjectsControllerTest, DeleteRemovesProjectFromList)
 {
     auto* controller = CloudProjectsController::instance();
-    QEventLoop loaded;
-    QObject::connect(controller, &CloudProjectsController::projectsChanged, &loaded, &QEventLoop::quit);
     controller->refresh();
-    QTimer::singleShot(10000, &loaded, &QEventLoop::quit);
-    loaded.exec();
+    waitForProjectsListIdle(controller);
     ASSERT_EQ(controller->projects().size(), 1);
 
     QEventLoop deleted;
-    QObject::connect(controller, &CloudProjectsController::projectsChanged, &deleted, &QEventLoop::quit);
+    QObject::connect(controller, &CloudProjectsController::projectsChanged, &deleted,
+                     [controller, &deleted]() {
+                         if (controller->projects().isEmpty())
+                             deleted.quit();
+                     });
     controller->deleteProject(QStringLiteral("proj-1"));
     QTimer::singleShot(10000, &deleted, &QEventLoop::quit);
     deleted.exec();
@@ -266,11 +273,8 @@ TEST_F(CloudProjectsControllerTest, FormatHelpersExposeReadableValues)
 TEST_F(CloudProjectsControllerTest, BrowseProjectFilesLoadsManifest)
 {
     auto* controller = CloudProjectsController::instance();
-    QEventLoop loaded;
-    QObject::connect(controller, &CloudProjectsController::projectsChanged, &loaded, &QEventLoop::quit);
     controller->refresh();
-    QTimer::singleShot(10000, &loaded, &QEventLoop::quit);
-    loaded.exec();
+    waitForProjectsListIdle(controller);
     ASSERT_EQ(controller->projects().size(), 1);
 
     QEventLoop filesLoaded;

@@ -710,6 +710,39 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
     return out;
 }
 
+QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchAllProjects(const QString& bearerToken,
+                                                                           int timeoutMs)
+{
+    ProjectsListResult combined;
+    QString cursor;
+    constexpr int kPageLimit = 50;
+
+    for (;;) {
+        const auto page = fetchProjects(bearerToken, cursor, kPageLimit, timeoutMs);
+        if (!page.ok) {
+            if (combined.projects.isEmpty())
+                return page;
+            combined.ok = false;
+            combined.errorString = page.errorString;
+            combined.httpStatus = page.httpStatus;
+            combined.responseBodySnippet = page.responseBodySnippet;
+            return combined;
+        }
+
+        combined.projects.append(page.projects);
+        combined.nextCursor = page.nextCursor;
+        combined.hasMore = page.hasMore;
+        if (!page.hasMore || page.nextCursor.isEmpty())
+            break;
+        cursor = page.nextCursor;
+    }
+
+    combined.ok = true;
+    combined.hasMore = false;
+    combined.nextCursor.clear();
+    return combined;
+}
+
 QtMeshCloudClient::UploadResult QtMeshCloudClient::deleteProject(const QString& bearerToken,
                                                                  const QString& projectId,
                                                                  int timeoutMs)

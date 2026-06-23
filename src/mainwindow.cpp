@@ -270,6 +270,14 @@ MainWindow::MainWindow(QWidget *parent) :
                     m_cloudUploadProgress->start(tr("Downloading from QtMesh Cloud…"), qMax(total, 1));
                 m_cloudUploadProgress->updateProgress(current, qMax(total, 1), fileName);
             });
+    connect(CloudProjectsController::instance(), &CloudProjectsController::signInRequired, this,
+            [this]() {
+                signInToQtMeshCloud();
+                if (CloudCredentialStore::hasSession())
+                    CloudProjectsController::instance()->refresh();
+            });
+    connect(CloudProjectsController::instance(), &CloudProjectsController::uploadRequested,
+            this, &MainWindow::uploadFilesToQtMeshCloud);
 
     updateRecentFilesMenu();
 
@@ -2725,6 +2733,7 @@ void MainWindow::openCloudProjectsQmlDialog(const QString& ownerSlug, const QStr
         return;
     }
 
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
     auto* engine = new QQmlApplicationEngine(this);
     m_cloudProjectsEngine = engine;
     engine->addImportPath(QStringLiteral("qrc:/"));
@@ -2751,7 +2760,6 @@ void MainWindow::openCloudProjectsQmlDialog(const QString& ownerSlug, const QStr
 
                 m_cloudProjectsWindow = obj;
                 if (auto* window = qobject_cast<QQuickWindow*>(obj)) {
-                    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
                     connect(window, &QQuickWindow::visibleChanged, this,
                             [this, window, engine](bool visible) {
                                 if (visible || m_cloudProjectsWindow != window)
@@ -2760,15 +2768,6 @@ void MainWindow::openCloudProjectsQmlDialog(const QString& ownerSlug, const QStr
                                 m_cloudProjectsEngine = nullptr;
                                 engine->deleteLater();
                             });
-
-                    connect(CloudProjectsController::instance(), &CloudProjectsController::signInRequired,
-                            this, [this]() {
-                                signInToQtMeshCloud();
-                                if (CloudCredentialStore::hasSession())
-                                    CloudProjectsController::instance()->refresh();
-                            });
-                    connect(CloudProjectsController::instance(), &CloudProjectsController::uploadRequested,
-                            this, &MainWindow::uploadFilesToQtMeshCloud);
 
                     QMetaObject::invokeMethod(window, "open", Q_ARG(QVariant, ownerSlug),
                                               Q_ARG(QVariant, projectSlug));

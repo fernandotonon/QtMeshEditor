@@ -172,7 +172,7 @@ int cmdCloudList(bool jsonOutput)
         err() << "Error: not signed in. Run `qtmesh cloud login` first." << Qt::endl;
         return 1;
     }
-    const auto result = QtMeshCloudClient::fetchProjects(token);
+    const auto result = QtMeshCloudClient::fetchAllProjects(token);
     if (!result.ok) {
         err() << "Error: " << result.errorString << Qt::endl;
         return 1;
