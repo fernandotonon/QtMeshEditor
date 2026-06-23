@@ -595,10 +595,10 @@ void MainWindow::initToolBar()
 
     // QML Properties Panel (replaces old Transform tab with modern collapsible inspector)
     {
-        // Force software rendering before creating any QQuickWidget to avoid GL conflicts with Ogre
-        qputenv("QSG_RHI_BACKEND", "software");
-        qputenv("QT_QUICK_BACKEND", "software");
-        QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+        // NOTE: the Qt Quick *software* scene-graph backend is forced in main()
+        // BEFORE QApplication (QSG_RHI_BACKEND / setGraphicsApi only take effect
+        // before the scene graph initialises). Setting it here was too late and
+        // left deployed-bundle dock QQuickWidgets rendering blank white.
         registerEditorModeQmlSingletons();
 
         m_propertiesPanel = new QQuickWidget();
