@@ -30,7 +30,7 @@ env:
   # build, fails with "No rule to make target '.../Xcode_26.5/...libz.tbd'"
   # (this broke the 3.9.1 macOS deploy). Bump this whenever the pinned Xcode
   # changes so the SDK is rebuilt against it. (xcode263 = under Pin step Xcode 26.3.)
-  MACOS_CACHE_VERSION: 'sdkpin1'
+  MACOS_CACHE_VERSION: 'xc263pin'
 
 jobs:
 #  send-slack-notification:
@@ -1574,11 +1574,20 @@ jobs:
     steps:
     - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
       run: |
-            # All three macOS jobs must use the SAME Xcode/SDK: the OGRE/Assimp
+            # All macOS jobs MUST use the SAME exact Xcode/SDK: the OGRE/Assimp
             # builds bake the active SDK's absolute libz.tbd path into their
-            # CMake export, and the consumer build links against it. Different
-            # default Xcodes per job → "No rule to make target '<SDK>/libz.tbd'".
-            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            # CMake export, and the consumer links against it. The per-job runner
+            # images carry different *newest* Xcodes (one job got 26.5, another
+            # 26.3), so "sort -V | tail -1" (newest) made jobs disagree and the
+            # cached SDK's baked path failed to link → "No rule to make target
+            # '.../Xcode_XX/...libz.tbd'". Pin a SPECIFIC version present on all
+            # current images (26.3); fall back to newest only if it's absent.
+            PIN="/Applications/Xcode_26.3.app/Contents/Developer"
+            if [ -d "$PIN" ]; then
+                DEV="$PIN"
+            else
+                DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            fi
             if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
@@ -1650,7 +1659,14 @@ jobs:
     steps:
     - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
       run: |
-            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            # Pin a SPECIFIC Xcode present on all macos-latest images (26.3) so
+            # producers and consumer agree on the SDK; "newest" drifts per image.
+            PIN="/Applications/Xcode_26.3.app/Contents/Developer"
+            if [ -d "$PIN" ]; then
+                DEV="$PIN"
+            else
+                DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            fi
             if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
@@ -1731,7 +1747,14 @@ jobs:
     steps:
     - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
       run: |
-            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            # Pin a SPECIFIC Xcode present on all macos-latest images (26.3) so
+            # producers and consumer agree on the SDK; "newest" drifts per image.
+            PIN="/Applications/Xcode_26.3.app/Contents/Developer"
+            if [ -d "$PIN" ]; then
+                DEV="$PIN"
+            else
+                DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            fi
             if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
