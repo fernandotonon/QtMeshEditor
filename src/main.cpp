@@ -15,6 +15,7 @@
 #include <QtQml/qqmlengine.h>
 #include <QtQml/qjsengine.h>
 #include <QtQuickControls2/QQuickStyle>
+#include <QQuickWindow>
 #include "mainwindow.h"
 #include "MaterialEditorQML.h"
 #include "QMLMaterialHighlighter.h"
@@ -140,6 +141,21 @@ int main(int argc, char *argv[])
     // Set Qt Quick Controls style before creating QApplication
     // This prevents issues with native macOS style not supporting customization
     QQuickStyle::setStyle("Basic");
+
+    // Force the Qt Quick *software* scene-graph backend BEFORE QApplication.
+    // Every QML surface (the Inspector / Context / Material QQuickWidgets in
+    // their docks, the ViewCube, etc.) runs software-rendered to avoid GL/Metal
+    // conflicts with Ogre's direct-to-native rendering. The MainWindow ctor used
+    // to set this, but by then Qt has already probed and locked the default RHI
+    // (Metal/GL) on first QQuickWidget init — too late. In a deployed .app the
+    // embedded dock QQuickWidgets then fail to composite and render BLANK WHITE
+    // (issue: Homebrew build shows white Inspector/Context panels) while a
+    // dev-SDK run happened to still paint. `QSGRendererInterface::setGraphicsApi`
+    // / `QSG_RHI_BACKEND` only take effect if set before the scene graph
+    // initialises, so they belong here, ahead of QApplication.
+    qputenv("QSG_RHI_BACKEND", "software");
+    qputenv("QT_QUICK_BACKEND", "software");
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
 
     QApplication a(argc, argv);
 

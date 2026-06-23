@@ -969,19 +969,46 @@ void Manager::loadResources()
     {
         for (const auto& [typeName, archName] : settings)
         {
+            QString archPath = QString::fromStdString(archName);
+            if (QDir::isAbsolutePath(archPath)) {
+                Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+                    archPath.toStdString(), typeName, secName);
+                continue;
+            }
+
             // Resolve relative paths against the application directory so that
             // resources are found regardless of the current working directory
-            // (e.g., when launched from an installed .deb package).
-            QString archPath = QString::fromStdString(archName);
-            if (!QDir::isAbsolutePath(archPath)) {
+            // (installed .deb, .app bundle, dev build). Build candidate roots
+            // and pick the first that actually contains the path.
+            //
+            // On macOS the media/cfg tree lives under Contents/MacOS/ (==
+            // applicationDirPath()), NOT at the .app bundle root. The previous
+            // code resolved relative paths against macBundlePath() (the bundle
+            // root), so in an installed .app every relative resource location —
+            // including the RTSS GLSL programs and material textures — pointed
+            // at a non-existent <App>.app/media/... directory. Ogre then loaded
+            // no shaders/textures and every mesh rendered flat WHITE. Resolving
+            // against applicationDirPath() first fixes it; the bundle-root path
+            // stays as a fallback for any older layout. (#bug: white models in
+            // Homebrew/installed builds, all platforms.)
+            QStringList roots;
+            roots << file;                                   // applicationDirPath()
 #if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
-                archPath = QString::fromStdString(macBundlePath()) + "/" + archPath;
-#else
-                archPath = file + "/" + archPath;
+            roots << QString::fromStdString(macBundlePath()); // .app bundle root (legacy)
 #endif
+            QString resolved;
+            for (const QString& root : roots) {
+                const QString cand = root + "/" + archPath;
+                if (QFileInfo::exists(cand)) { resolved = cand; break; }
             }
+            // If none exist (e.g. an optional location), fall back to the first
+            // candidate so Ogre logs a clear "resource location not found" for it
+            // rather than silently skipping.
+            if (resolved.isEmpty())
+                resolved = roots.first() + "/" + archPath;
+
             Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
-                archPath.toStdString(), typeName, secName);
+                resolved.toStdString(), typeName, secName);
         }
     }
 
