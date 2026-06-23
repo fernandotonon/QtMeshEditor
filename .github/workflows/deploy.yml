@@ -22,6 +22,12 @@ env:
   ASSIMP_VERSION: '6.0.4'
   ASSIMP_DIR_VERSION: '6.0'
   OGRE_VERSION: '14.5.2'
+  # Bump to bust the macOS assimp/ogre caches. The cached OGRE/Assimp SDKs bake
+  # absolute Xcode SDK paths (e.g. .../usr/lib/libz.tbd) into their CMake export;
+  # when the macos-latest runner image bumps Xcode, a stale cache hit makes
+  # build-macos fail with "No rule to make target '<old-SDK>/libz.tbd'". Bump
+  # this whenever the runner's Xcode/SDK changes.
+  MACOS_CACHE_VERSION: 'xcode26'
 
 jobs:
 #  send-slack-notification:
@@ -1585,10 +1591,10 @@ jobs:
                /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-          
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-
+
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Check out Assimp repo
       uses: actions/checkout@master
@@ -1628,10 +1634,10 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-      
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-
+
     - name: Cache Ogre
       id: cache-ogre-macos
       uses: actions/cache@v3
@@ -1639,8 +1645,8 @@ jobs:
         cache-name: cache-ogre-macos
       with:
         path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-    
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
+
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Check out ogre repo
       uses: actions/checkout@master
@@ -1718,8 +1724,8 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-      
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
+
     - name: Cache Ogre
       id: cache-ogre-macos
       uses: actions/cache@v3
@@ -1727,8 +1733,8 @@ jobs:
         cache-name: cache-ogre-macos
       with:
         path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-    
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
+
     - name: Configure CMake
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
