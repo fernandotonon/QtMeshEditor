@@ -39,7 +39,11 @@ THE SOFTWARE.
 #include <QDebug>
 #include <QFile>
 #include <QDir>
+#include <QDirIterator>
+#include <QHash>
 #include <QRegularExpression>
+#include <QSet>
+#include <unordered_set>
 #include <set>
 #include <limits>
 #include <cmath>
@@ -78,6 +82,7 @@ THE SOFTWARE.
 #include "EditableMesh.h"
 #include "EditModeController.h"
 #include <OgreMaterialManager.h>
+#include <OgreRTShaderSystem.h>
 #include <OgreDataStream.h>
 #include <OgrePixelFormat.h>
 
@@ -1398,11 +1403,14 @@ void MeshImporterExporter::applyNormalMapsToEntity(const Ogre::Entity* en)
     }
 }
 
-static void ensureResourceGroup(const QString &path)
+void MeshImporterExporter::registerImportResourceDirectory(const QString& path)
 {
+    if (path.trimmed().isEmpty())
+        return;
+
     const QString absPath = QFileInfo(path).absoluteFilePath();
-    auto group = absPath.toStdString();
-    auto &rgm = Ogre::ResourceGroupManager::getSingleton();
+    const std::string group = absPath.toStdString();
+    auto& rgm = Ogre::ResourceGroupManager::getSingleton();
 
     // If the directory was already registered earlier in this process (common in tests and CLI),
     // Ogre's FileSystem archive may have been initialised before new files were written there.
@@ -1419,7 +1427,6 @@ static void ensureResourceGroup(const QString &path)
         }
     }
 
-    // Ensure the location exists, then (re)initialise to refresh the file listing.
     try {
         if (!rgm.resourceLocationExists(group, group))
             rgm.addResourceLocation(group, "FileSystem", group);
@@ -1428,6 +1435,247 @@ static void ensureResourceGroup(const QString &path)
         Ogre::LogManager::getSingleton().logMessage(
             "Warning during resource group init: " + e.getFullDescription());
     }
+
+    // Assimp's MaterialProcessor loads sidecar textures through the Default
+    // group. Cloud downloads land in a cache folder outside resources.cfg, so
+    // register the import directory there too (recursive for nested textures/).
+    try {
+        if (rgm.resourceLocationExists(group, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+            rgm.removeResourceLocation(group, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        rgm.addResourceLocation(group,
+                                "FileSystem",
+                                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                                false,
+                                true);
+    } catch (const Ogre::Exception& e) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "Warning during Default resource group registration: " + e.getFullDescription());
+    }
+}
+
+void MeshImporterExporter::rebindEntityMaterials(Ogre::Entity* entity,
+                                                   const QStringList& textureSearchRoots)
+{
+    if (!entity)
+        return;
+    if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingletonPtr()->getRenderSystem())
+        return;
+
+    if (!textureSearchRoots.isEmpty())
+        hydrateEntityTexturesFromSearchPaths(entity, textureSearchRoots);
+
+    std::unordered_set<const Ogre::Material*> processedMaterials;
+    std::vector<Ogre::MaterialPtr> syncedMaterials;
+    syncedMaterials.reserve(entity->getNumSubEntities());
+
+    for (unsigned int si = 0; si < entity->getNumSubEntities(); ++si) {
+        Ogre::SubEntity* sub = entity->getSubEntity(si);
+        Ogre::MaterialPtr mat = sub->getMaterial();
+        if (mat.isNull())
+            continue;
+        if (!mat->isLoaded()) {
+            try {
+                mat->load();
+            } catch (const Ogre::Exception&) {
+                continue;
+            }
+        }
+
+        if (processedMaterials.insert(mat.get()).second) {
+            RTShaderHelper::syncMaterialForViewport(mat);
+            syncedMaterials.push_back(mat);
+        }
+    }
+
+    for (const Ogre::MaterialPtr& mat : syncedMaterials) {
+        if (!mat)
+            continue;
+        const std::string matName = mat->getName();
+        for (Ogre::SceneNode* sn : Manager::getSingleton()->getSceneNodes()) {
+            if (sn->getName().empty() || sn->getAttachedObjects().empty())
+                continue;
+            for (auto* obj : sn->getAttachedObjects()) {
+                if (!obj || obj->getMovableType() != "Entity")
+                    continue;
+                auto* sceneEntity = static_cast<Ogre::Entity*>(obj);
+                for (unsigned int si = 0; si < sceneEntity->getNumSubEntities(); ++si) {
+                    Ogre::SubEntity* sub = sceneEntity->getSubEntity(si);
+                    if (sub->getMaterialName() == matName)
+                        sub->setMaterial(mat);
+                }
+            }
+        }
+    }
+}
+
+static QString resolveTexturePathOnDisk(const QString& textureName,
+                                          const QHash<QString, QString>& filesByKey)
+{
+    if (textureName.isEmpty())
+        return QString();
+
+    QString key = QDir::fromNativeSeparators(textureName);
+    while (key.startsWith(QStringLiteral("./")))
+        key = key.mid(2);
+
+    if (filesByKey.contains(key))
+        return filesByKey.value(key);
+
+    const QString base = QFileInfo(key).fileName();
+    if (!base.isEmpty() && filesByKey.contains(base))
+        return filesByKey.value(base);
+
+    return QString();
+}
+
+static bool loadTextureImageIntoGroup(const QString& absolutePath,
+                                      const Ogre::String& resourceName,
+                                      const Ogre::String& group)
+{
+    QFile file(absolutePath);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+
+    const QByteArray bytes = file.readAll();
+    file.close();
+    if (bytes.isEmpty())
+        return false;
+
+    Ogre::Image img;
+    Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(
+        const_cast<char*>(bytes.constData()),
+        static_cast<size_t>(bytes.size()),
+        false,
+        true));
+    img.load(stream, QFileInfo(absolutePath).suffix().toLower().toStdString());
+
+    auto& tm = Ogre::TextureManager::getSingleton();
+    if (tm.resourceExists(resourceName, group)) {
+        try {
+            tm.remove(resourceName, group);
+        } catch (const Ogre::Exception&) {
+        }
+    }
+    tm.loadImage(resourceName, group, img);
+    return true;
+}
+
+void MeshImporterExporter::hydrateEntityTexturesFromSearchPaths(Ogre::Entity* entity,
+                                                                  const QStringList& searchRoots)
+{
+    if (!entity || searchRoots.isEmpty())
+        return;
+
+    QHash<QString, QString> filesByKey;
+    for (const QString& rootRaw : searchRoots) {
+        const QString root = QDir::fromNativeSeparators(QFileInfo(rootRaw).absoluteFilePath());
+        if (root.isEmpty() || !QFileInfo(root).isDir())
+            continue;
+
+        QDirIterator it(root, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            const QFileInfo fi(path);
+            const QString base = fi.fileName();
+            if (!base.isEmpty() && !filesByKey.contains(base))
+                filesByKey.insert(base, path);
+
+            const QString rel = QDir(root).relativeFilePath(path);
+            const QString relNorm = QDir::fromNativeSeparators(rel);
+            if (!relNorm.isEmpty() && !filesByKey.contains(relNorm))
+                filesByKey.insert(relNorm, path);
+        }
+    }
+
+    if (filesByKey.isEmpty())
+        return;
+
+    auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+    QSet<Ogre::Material*> hydratedMaterials;
+
+    for (unsigned int si = 0; si < entity->getNumSubEntities(); ++si) {
+        Ogre::SubEntity* sub = entity->getSubEntity(si);
+        Ogre::MaterialPtr mat = sub->getMaterial();
+        if (mat.isNull() || mat->getNumTechniques() == 0)
+            continue;
+
+        const Ogre::String matGroup = mat->getGroup();
+        if (!rgm.resourceGroupExists(matGroup))
+            rgm.createResourceGroup(matGroup);
+
+        for (unsigned short ti = 0; ti < mat->getNumTechniques(); ++ti) {
+            Ogre::Technique* tech = mat->getTechnique(ti);
+            if (!tech)
+                continue;
+            for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
+                Ogre::Pass* pass = tech->getPass(pi);
+                if (!pass)
+                    continue;
+                for (unsigned short ui = 0; ui < pass->getNumTextureUnitStates(); ++ui) {
+                    Ogre::TextureUnitState* tus = pass->getTextureUnitState(ui);
+                    if (!tus)
+                        continue;
+                    const std::string texName = tus->getTextureName();
+                    if (texName.empty())
+                        continue;
+                    const QString srcPath =
+                        resolveTexturePathOnDisk(QString::fromStdString(texName), filesByKey);
+                    if (srcPath.isEmpty())
+                        continue;
+
+                    const QFileInfo fi(srcPath);
+                    try {
+                        rgm.addResourceLocation(fi.absolutePath().toStdString(),
+                                                "FileSystem",
+                                                matGroup);
+                    } catch (const Ogre::Exception&) {
+                    }
+
+                    if (loadTextureImageIntoGroup(srcPath, texName, matGroup))
+                        hydratedMaterials.insert(mat.get());
+                }
+            }
+        }
+    }
+
+    if (!hydratedMaterials.isEmpty()) {
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("file.import"),
+            QStringLiteral("Hydrated textures for %1 material(s) from cloud/import paths")
+                .arg(hydratedMaterials.size()));
+    }
+}
+
+static void ensureResourceGroup(const QString &path)
+{
+    MeshImporterExporter::registerImportResourceDirectory(path);
+}
+
+QString cloudProjectCacheRoot(const QString& localPath)
+{
+    const QString normalized = QDir::fromNativeSeparators(QFileInfo(localPath).absoluteFilePath());
+    const QString marker = QStringLiteral("/cloud/");
+    const int cloudIdx = normalized.indexOf(marker);
+    if (cloudIdx < 0)
+        return QString();
+
+    const QString tail = normalized.mid(cloudIdx + marker.size());
+    const int ownerEnd = tail.indexOf(QLatin1Char('/'));
+    if (ownerEnd <= 0)
+        return QString();
+    const int slugEnd = tail.indexOf(QLatin1Char('/'), ownerEnd + 1);
+    if (slugEnd < 0)
+        return normalized;
+    return normalized.left(cloudIdx + marker.size() + slugEnd);
+}
+
+void MeshImporterExporter::prepareCloudCachedImport(const QString& localMainFile)
+{
+    const QFileInfo fileInfo(localMainFile);
+    registerImportResourceDirectory(fileInfo.absolutePath());
+    const QString cloudRoot = cloudProjectCacheRoot(fileInfo.absoluteFilePath());
+    if (!cloudRoot.isEmpty() && cloudRoot != fileInfo.absolutePath())
+        registerImportResourceDirectory(cloudRoot);
 }
 
 /** @return true if at least one declared material exists in the manager for this group. */
@@ -1754,7 +2002,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             if(!fileName.size()) continue;
 
             const QFileInfo file(QFileInfo(fileName).absoluteFilePath());
-            ensureResourceGroup(file.absolutePath());
+            registerImportResourceDirectory(file.absolutePath());
+            const QString cloudRoot = cloudProjectCacheRoot(file.absoluteFilePath());
+            if (!cloudRoot.isEmpty() && cloudRoot != file.absolutePath())
+                registerImportResourceDirectory(cloudRoot);
 
             Ogre::SceneNode *sn;
             const Ogre::Entity *en;

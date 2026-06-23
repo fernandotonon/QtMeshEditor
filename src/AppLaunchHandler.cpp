@@ -1,5 +1,6 @@
 #include "AppLaunchHandler.h"
 
+#include "CloudDeepLink.h"
 #include "Manager.h"
 #include "SentryReporter.h"
 
@@ -9,6 +10,7 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QFileOpenEvent>
+#include <QUrl>
 
 namespace {
 
@@ -111,6 +113,14 @@ QStringList AppLaunchHandler::collectGuiLaunchPaths(const QStringList& arguments
         if (isCliSubcommand(arg))
             break;
 
+        CloudDeepLinkTarget cloud;
+        if (CloudDeepLink::parseUrl(arg, &cloud)) {
+            const QString token = CloudDeepLink::encodeLaunchToken(cloud.ownerSlug, cloud.projectSlug);
+            if (!token.isEmpty() && !paths.contains(token))
+                paths.append(token);
+            continue;
+        }
+
         const QFileInfo info(arg);
         if (!isImportableMeshPath(arg))
             continue;
@@ -178,6 +188,13 @@ void AppLaunchHandler::handleIncomingPaths(const QStringList& paths)
 {
     QStringList accepted;
     for (const QString& path : paths) {
+        CloudDeepLinkTarget cloud;
+        if (CloudDeepLink::decodeLaunchToken(path, &cloud)) {
+            SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.open_in_editor"),
+                QStringLiteral("Deep link %1/%2").arg(cloud.ownerSlug, cloud.projectSlug));
+            emit cloudProjectOpenRequested(cloud.ownerSlug, cloud.projectSlug);
+            continue;
+        }
         if (!isImportableMeshPath(path))
             continue;
         const QFileInfo info(path);
@@ -196,6 +213,16 @@ bool AppLaunchHandler::eventFilter(QObject* watched, QEvent* event)
 {
     if (event->type() == QEvent::FileOpen) {
         auto* openEvent = static_cast<QFileOpenEvent*>(event);
+        const QUrl url = openEvent->url();
+        if (url.isValid()) {
+            CloudDeepLinkTarget cloud;
+            if (CloudDeepLink::parseUrl(url, &cloud)) {
+                SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.open_in_editor"),
+                    QStringLiteral("macOS FileOpen URL %1/%2").arg(cloud.ownerSlug, cloud.projectSlug));
+                emit cloudProjectOpenRequested(cloud.ownerSlug, cloud.projectSlug);
+                return true;
+            }
+        }
         const QString path = openEvent->file();
         if (!path.isEmpty() && isImportableMeshPath(path)) {
             SentryReporter::addBreadcrumb(QStringLiteral("app.launch.file_open"),

@@ -3,12 +3,14 @@
 #include "SentryReporter.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLocale>
+#include <QSet>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -16,6 +18,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
+#include <QUrlQuery>
 
 namespace {
 
@@ -52,6 +55,56 @@ QString ownerProjectPath(const QString& ownerSlug, const QString& projectSlug, c
              suffix);
 }
 
+QString jsonStringField(const QJsonObject& object, std::initializer_list<const char*> keys)
+{
+    for (const char* key : keys) {
+        const QJsonValue value = object.value(QString::fromLatin1(key));
+        if (value.isString()) {
+            const QString text = value.toString().trimmed();
+            if (!text.isEmpty())
+                return text;
+        }
+    }
+    return {};
+}
+
+qint64 jsonInt64Field(const QJsonObject& object, std::initializer_list<const char*> keys)
+{
+    for (const char* key : keys) {
+        const QJsonValue value = object.value(QString::fromLatin1(key));
+        if (value.isDouble())
+            return static_cast<qint64>(value.toDouble());
+        if (value.isString()) {
+            bool ok = false;
+            const qint64 parsed = value.toString().trimmed().toLongLong(&ok);
+            if (ok)
+                return parsed;
+        }
+    }
+    return 0;
+}
+
+QString inferSourceFormat(const QString& explicitFormat, const QString& mainFile)
+{
+    const QString fmt = explicitFormat.trimmed().toLower();
+    if (!fmt.isEmpty())
+        return fmt;
+    const QString suffix = QFileInfo(mainFile).suffix().toLower();
+    return suffix.isEmpty() ? QString() : suffix;
+}
+
+} // namespace
+
+QString QtMeshCloudClient::projectDashboardUrl(const QString& ownerSlug, const QString& projectSlug)
+{
+    const QString owner = ownerSlug.trimmed();
+    const QString slug = projectSlug.trimmed();
+    if (owner.isEmpty() || slug.isEmpty())
+        return {};
+    return QStringLiteral("https://qtmesh.dev/#/projects/%1/%2/dashboard").arg(owner, slug);
+}
+
+namespace {
 bool parseJsonObjectBody(const QByteArray& body, QJsonObject& out, QString& error)
 {
     QJsonParseError perr{};
@@ -549,6 +602,8 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::logout(const QString& bearerT
 }
 
 QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QString& bearerToken,
+                                                                       const QString& cursor,
+                                                                       int limit,
                                                                        int timeoutMs)
 {
     ProjectsListResult out;
@@ -557,7 +612,16 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
         return out;
     }
 
-    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/projects"));
+    QUrl url(apiBaseUrl() + QStringLiteral("/v1/projects"));
+    {
+        QUrlQuery query;
+        if (!cursor.isEmpty())
+            query.addQueryItem(QStringLiteral("cursor"), cursor);
+        if (limit > 0)
+            query.addQueryItem(QStringLiteral("limit"), QString::number(limit));
+        if (!query.isEmpty())
+            url.setQuery(query);
+    }
     if (!url.isValid()) {
         out.errorString = QStringLiteral("invalid API base URL");
         return out;
@@ -569,8 +633,8 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
     req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
     req.setTransferTimeout(timeoutMs);
 
-    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
-        QStringLiteral("QtMesh Cloud fetchProjects: start"));
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.list"),
+                                  QStringLiteral("QtMesh Cloud fetchProjects: start"));
 
     QNetworkReply* reply = nam.get(req);
     QEventLoop loop;
@@ -588,7 +652,7 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
         out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
         if (!out.responseBodySnippet.isEmpty())
             out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
-        SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.list"),
             QStringLiteral("QtMesh Cloud fetchProjects: failure HTTP %1").arg(out.httpStatus),
             QStringLiteral("warning"));
         return out;
@@ -601,7 +665,7 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
     const QJsonValue projectsValue = root.value(QStringLiteral("projects"));
     if (!projectsValue.isArray()) {
         out.errorString = QStringLiteral("response missing \"projects\" array");
-        SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.list"),
             QStringLiteral("QtMesh Cloud fetchProjects: malformed response"),
             QStringLiteral("warning"));
         return out;
@@ -614,20 +678,69 @@ QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchProjects(const QSt
         summary.id = project.value(QStringLiteral("id")).toString();
         summary.ownerSlug = project.value(QStringLiteral("ownerSlug")).toString();
         summary.projectSlug = project.value(QStringLiteral("slug")).toString();
-        summary.name = project.value(QStringLiteral("name")).toString();
+        if (summary.projectSlug.isEmpty())
+            summary.projectSlug = project.value(QStringLiteral("projectSlug")).toString();
+        summary.name = jsonStringField(project, {"name"});
+        const QString mainFile = jsonStringField(project, {"mainFile", "main_file"});
+        summary.mainFile = mainFile;
+        summary.sourceFormat = inferSourceFormat(
+            jsonStringField(project, {"sourceFormat", "source_format"}), mainFile);
+        summary.sizeBytes = jsonInt64Field(
+            project, {"sizeBytes", "size_bytes", "totalSize", "total_size", "size"});
+        summary.updatedAt = jsonStringField(
+            project, {"updatedAt", "updated_at", "modifiedAt", "modified_at", "lastModified",
+                      "createdAt", "created_at"});
         if (!summary.ownerSlug.isEmpty() && !summary.projectSlug.isEmpty()) {
-            summary.projectUrl = QStringLiteral("https://qtmesh.dev/%1/%2")
-                .arg(QString::fromUtf8(QUrl::toPercentEncoding(summary.ownerSlug)),
-                     QString::fromUtf8(QUrl::toPercentEncoding(summary.projectSlug)));
+            summary.browserUrl =
+                projectDashboardUrl(summary.ownerSlug, summary.projectSlug);
+            summary.projectUrl = summary.browserUrl;
         }
-        if (!summary.id.isEmpty() && !summary.ownerSlug.isEmpty() && !summary.projectSlug.isEmpty())
+        if (!summary.id.isEmpty()
+            && !summary.ownerSlug.isEmpty()
+            && !summary.projectSlug.isEmpty()) {
             out.projects.append(summary);
+        }
     }
 
+    out.nextCursor = root.value(QStringLiteral("nextCursor")).toString();
+    out.hasMore = !out.nextCursor.isEmpty();
     out.ok = true;
-    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.list"),
         QStringLiteral("QtMesh Cloud fetchProjects: ok count=%1").arg(out.projects.size()));
     return out;
+}
+
+QtMeshCloudClient::ProjectsListResult QtMeshCloudClient::fetchAllProjects(const QString& bearerToken,
+                                                                           int timeoutMs)
+{
+    ProjectsListResult combined;
+    QString cursor;
+    constexpr int kPageLimit = 50;
+
+    for (;;) {
+        const auto page = fetchProjects(bearerToken, cursor, kPageLimit, timeoutMs);
+        if (!page.ok) {
+            if (combined.projects.isEmpty())
+                return page;
+            combined.ok = false;
+            combined.errorString = page.errorString;
+            combined.httpStatus = page.httpStatus;
+            combined.responseBodySnippet = page.responseBodySnippet;
+            return combined;
+        }
+
+        combined.projects.append(page.projects);
+        combined.nextCursor = page.nextCursor;
+        combined.hasMore = page.hasMore;
+        if (!page.hasMore || page.nextCursor.isEmpty())
+            break;
+        cursor = page.nextCursor;
+    }
+
+    combined.ok = true;
+    combined.hasMore = false;
+    combined.nextCursor.clear();
+    return combined;
 }
 
 QtMeshCloudClient::UploadResult QtMeshCloudClient::deleteProject(const QString& bearerToken,
@@ -658,7 +771,7 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::deleteProject(const QString& 
     req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
     req.setTransferTimeout(timeoutMs);
 
-    SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.delete"),
                                   QStringLiteral("QtMesh Cloud deleteProject: start"));
 
     QNetworkReply* reply = nam.deleteResource(req);
@@ -678,6 +791,14 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::deleteProject(const QString& 
         out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
         if (!out.responseBodySnippet.isEmpty())
             out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.delete"),
+                                      QStringLiteral("projectId=%1 failure HTTP %2")
+                                          .arg(projectId.trimmed())
+                                          .arg(out.httpStatus),
+                                      QStringLiteral("warning"));
+    } else {
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.delete"),
+                                      QStringLiteral("projectId=%1").arg(projectId.trimmed()));
     }
     return out;
 }
@@ -746,11 +867,8 @@ QtMeshCloudClient::ProjectResult QtMeshCloudClient::createProject(const QString&
     out.projectId = project.value(QStringLiteral("id")).toString();
     out.ownerSlug = project.value(QStringLiteral("ownerSlug")).toString();
     out.projectSlug = project.value(QStringLiteral("slug")).toString(slug.trimmed().toLower());
-    if (!out.ownerSlug.isEmpty() && !out.projectSlug.isEmpty()) {
-        out.projectUrl = QStringLiteral("https://qtmesh.dev/%1/%2")
-            .arg(QString::fromUtf8(QUrl::toPercentEncoding(out.ownerSlug)),
-                 QString::fromUtf8(QUrl::toPercentEncoding(out.projectSlug)));
-    }
+    if (!out.ownerSlug.isEmpty() && !out.projectSlug.isEmpty())
+        out.projectUrl = projectDashboardUrl(out.ownerSlug, out.projectSlug);
     out.ok = !out.projectId.isEmpty() && !out.ownerSlug.isEmpty() && !out.projectSlug.isEmpty();
     if (!out.ok)
         out.errorString = QStringLiteral("response missing project id, ownerSlug, or slug");
@@ -1201,6 +1319,417 @@ QtMeshCloudClient::ManifestResult QtMeshCloudClient::fetchProjectManifest(const 
     out.ok = true;
     SentryReporter::addBreadcrumb(QStringLiteral("cloud.project"),
         QStringLiteral("QtMesh Cloud fetchProjectManifest: ok"));
+    return out;
+}
+
+namespace {
+
+QString manifestFileRelativePath(const QJsonObject& file)
+{
+    QString relative = file.value(QStringLiteral("originalName")).toString();
+    if (relative.isEmpty())
+        relative = file.value(QStringLiteral("name")).toString();
+    relative.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    while (relative.startsWith(QLatin1Char('/')))
+        relative = relative.mid(1);
+    if (relative.contains(QStringLiteral("..")))
+        relative = QFileInfo(relative).fileName();
+    if (relative.isEmpty())
+        relative = QStringLiteral("asset.bin");
+    return relative;
+}
+
+bool isImportableMeshRelativePath(const QString& relative)
+{
+    return QtMeshCloudClient::isImportableCloudAssetPath(relative);
+}
+
+QString pickManifestMainRelativePath(const QJsonArray& files)
+{
+    QString modelRoleRelative;
+    QString meshFallbackRelative;
+
+    for (const QJsonValue& value : files) {
+        const QJsonObject file = value.toObject();
+        const QString relative = manifestFileRelativePath(file);
+        const QString role = file.value(QStringLiteral("role")).toString().toLower();
+        if ((role == QLatin1String("main") || role == QLatin1String("model"))
+            && modelRoleRelative.isEmpty()) {
+            modelRoleRelative = relative;
+        }
+        if (meshFallbackRelative.isEmpty() && isImportableMeshRelativePath(relative))
+            meshFallbackRelative = relative;
+    }
+
+    if (!modelRoleRelative.isEmpty())
+        return modelRoleRelative;
+    if (!meshFallbackRelative.isEmpty())
+        return meshFallbackRelative;
+    if (files.isEmpty())
+        return QString();
+    return manifestFileRelativePath(files.first().toObject());
+}
+
+bool downloadAuthenticatedUrl(const QString& bearerToken,
+                              const QUrl& url,
+                              const QString& localPath,
+                              int timeoutMs,
+                              QString& errorString)
+{
+    if (bearerToken.isEmpty()) {
+        errorString = QStringLiteral("missing bearer token");
+        return false;
+    }
+    if (!url.isValid()) {
+        errorString = QStringLiteral("invalid download URL");
+        return false;
+    }
+
+    QFileInfo targetInfo(localPath);
+    QDir parent = targetInfo.dir();
+    if (!parent.exists() && !parent.mkpath(QStringLiteral("."))) {
+        errorString = QStringLiteral("could not create directory: %1").arg(parent.absolutePath());
+        return false;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+    req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
+    req.setTransferTimeout(timeoutMs);
+
+    QNetworkReply* reply = nam.get(req);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray body = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || httpStatus < 200 || httpStatus >= 300) {
+        errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(httpStatus);
+        return false;
+    }
+
+    QFile outFile(localPath);
+    if (!outFile.open(QIODevice::WriteOnly)) {
+        errorString = QStringLiteral("could not write file: %1").arg(localPath);
+        return false;
+    }
+    if (outFile.write(body) != body.size()) {
+        errorString = QStringLiteral("incomplete write: %1").arg(localPath);
+        outFile.remove();
+        return false;
+    }
+    outFile.close();
+    return true;
+}
+
+QString relativePathForProjectFileEntry(const QtMeshCloudClient::ProjectFileEntry& entry)
+{
+    QJsonObject file;
+    file.insert(QStringLiteral("originalName"), entry.originalName);
+    file.insert(QStringLiteral("name"), entry.name);
+    return manifestFileRelativePath(file);
+}
+
+} // namespace
+
+bool QtMeshCloudClient::isImportableCloudAssetPath(const QString& relativePath)
+{
+    const QString lower = relativePath.toLower();
+    if (lower.endsWith(QStringLiteral(".scene.glb"))
+        || lower.endsWith(QStringLiteral(".scene.gltf"))) {
+        return true;
+    }
+
+    static const QStringList meshExtensions = {
+        QStringLiteral(".fbx"),
+        QStringLiteral(".glb"),
+        QStringLiteral(".gltf"),
+        QStringLiteral(".gltf2"),
+        QStringLiteral(".obj"),
+        QStringLiteral(".dae"),
+        QStringLiteral(".stl"),
+        QStringLiteral(".ply"),
+        QStringLiteral(".mesh"),
+        QStringLiteral(".xml"),
+        QStringLiteral(".tmd"),
+        QStringLiteral(".rsd"),
+        QStringLiteral(".x"),
+        QStringLiteral(".vrm"),
+    };
+    for (const QString& ext : meshExtensions) {
+        if (lower.endsWith(ext))
+            return true;
+    }
+    return false;
+}
+
+QList<QtMeshCloudClient::ProjectFileEntry> QtMeshCloudClient::projectFilesFromManifest(
+    const QJsonObject& manifest)
+{
+    QList<ProjectFileEntry> entries;
+    const QJsonArray files = manifest.value(QStringLiteral("files")).toArray();
+    entries.reserve(files.size());
+    for (const QJsonValue& value : files) {
+        const QJsonObject file = value.toObject();
+        ProjectFileEntry entry;
+        entry.id = file.value(QStringLiteral("id")).toString();
+        entry.originalName = file.value(QStringLiteral("originalName")).toString();
+        if (entry.originalName.isEmpty())
+            entry.originalName = file.value(QStringLiteral("name")).toString();
+        entry.name = file.value(QStringLiteral("name")).toString();
+        entry.role = file.value(QStringLiteral("role")).toString();
+        entry.extension = file.value(QStringLiteral("extension")).toString();
+        entry.sizeBytes = file.value(QStringLiteral("sizeBytes")).toVariant().toLongLong();
+        entry.downloadUrl = file.value(QStringLiteral("downloadUrl")).toString();
+        if (!entry.id.isEmpty())
+            entries.append(entry);
+    }
+    return entries;
+}
+
+QStringList QtMeshCloudClient::companionFileIdsForOpen(const QList<ProjectFileEntry>& files,
+                                                       const QString& selectedFileId)
+{
+    QStringList ids;
+    if (selectedFileId.isEmpty())
+        return ids;
+
+    ids.append(selectedFileId);
+    for (const ProjectFileEntry& file : files) {
+        if (file.id == selectedFileId)
+            continue;
+        const QString role = file.role.toLower();
+        if (role == QLatin1String("texture")
+            || role == QLatin1String("material")
+            || role == QLatin1String("sidecar")
+            || role == QLatin1String("metadata")) {
+            if (!ids.contains(file.id))
+                ids.append(file.id);
+        }
+    }
+    return ids;
+}
+
+QtMeshCloudClient::ProjectDownloadResult QtMeshCloudClient::downloadManifestFiles(
+    const QString& bearerToken,
+    const QJsonArray& files,
+    const QString& destDir,
+    const QStringList& fileIds,
+    const QString& localOpenRelative,
+    const std::function<void(int, int, const QString&)>& progress,
+    const std::atomic_bool* canceled,
+    int timeoutMs)
+{
+    ProjectDownloadResult out;
+    out.destDirectory = destDir;
+    if (destDir.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("destination directory is required");
+        return out;
+    }
+    if (localOpenRelative.isEmpty()) {
+        out.errorString = QStringLiteral("open file path is required");
+        return out;
+    }
+    if (files.isEmpty()) {
+        out.errorString = QStringLiteral("project has no downloadable files yet");
+        return out;
+    }
+
+    const QDir root(destDir);
+    if (!root.exists() && !root.mkpath(QStringLiteral("."))) {
+        out.errorString = QStringLiteral("could not create destination directory");
+        return out;
+    }
+
+    QSet<QString> allowedIds;
+    if (!fileIds.isEmpty()) {
+        for (const QString& id : fileIds) {
+            if (!id.isEmpty())
+                allowedIds.insert(id);
+        }
+    }
+
+    QVector<QJsonObject> toDownload;
+    toDownload.reserve(files.size());
+    for (const QJsonValue& value : files) {
+        const QJsonObject file = value.toObject();
+        const QString id = file.value(QStringLiteral("id")).toString();
+        if (!allowedIds.isEmpty() && !allowedIds.contains(id))
+            continue;
+        toDownload.append(file);
+    }
+
+    if (toDownload.isEmpty()) {
+        out.errorString = QStringLiteral("no matching files to download");
+        return out;
+    }
+
+    const int total = toDownload.size();
+    for (int i = 0; i < total; ++i) {
+        if (canceled && canceled->load()) {
+            out.errorString = QStringLiteral("download canceled");
+            return out;
+        }
+
+        const QJsonObject file = toDownload.at(i);
+        const QString relative = manifestFileRelativePath(file);
+        const QString downloadUrl = file.value(QStringLiteral("downloadUrl")).toString();
+        if (downloadUrl.isEmpty()) {
+            out.errorString = QStringLiteral("manifest file is missing downloadUrl");
+            return out;
+        }
+
+        if (progress)
+            progress(i + 1, total, relative);
+
+        const QString localPath = root.filePath(relative);
+        QString downloadError;
+        if (!downloadAuthenticatedUrl(bearerToken, QUrl(downloadUrl), localPath, timeoutMs, downloadError)) {
+            out.errorString = downloadError.isEmpty()
+                ? QStringLiteral("download failed for %1").arg(relative)
+                : downloadError;
+            return out;
+        }
+    }
+
+    out.localMainFile = root.filePath(localOpenRelative);
+    if (!QFileInfo::exists(out.localMainFile)) {
+        out.errorString = QStringLiteral("downloaded file is missing");
+        out.localMainFile.clear();
+        return out;
+    }
+
+    out.ok = true;
+    return out;
+}
+
+QtMeshCloudClient::ProjectDownloadResult QtMeshCloudClient::downloadProjectFileBySlug(
+    const QString& bearerToken,
+    const QString& ownerSlug,
+    const QString& projectSlug,
+    const QString& fileId,
+    const QString& destDir,
+    const std::function<void(int, int, const QString& fileName)>& progress,
+    const std::atomic_bool* canceled,
+    int timeoutMs)
+{
+    ProjectDownloadResult out;
+    out.destDirectory = destDir;
+    if (ownerSlug.trimmed().isEmpty() || projectSlug.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("owner and project slugs are required");
+        return out;
+    }
+    if (fileId.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("file id is required");
+        return out;
+    }
+
+    auto manifest = fetchProjectManifest(bearerToken, ownerSlug, projectSlug, timeoutMs);
+    if (!manifest.ok) {
+        out.errorString = manifest.errorString.isEmpty()
+            ? QStringLiteral("could not load project manifest")
+            : manifest.errorString;
+        return out;
+    }
+
+    const QList<ProjectFileEntry> entries = projectFilesFromManifest(manifest.manifest);
+    QString openRelative;
+    for (const ProjectFileEntry& entry : entries) {
+        if (entry.id == fileId) {
+            openRelative = relativePathForProjectFileEntry(entry);
+            break;
+        }
+    }
+    if (openRelative.isEmpty()) {
+        out.errorString = QStringLiteral("file not found in project manifest");
+        return out;
+    }
+    if (!isImportableCloudAssetPath(openRelative)) {
+        out.errorString = QStringLiteral("this file type cannot be opened in the editor");
+        return out;
+    }
+
+    const QStringList ids = companionFileIdsForOpen(entries, fileId);
+    const QJsonArray files = manifest.manifest.value(QStringLiteral("files")).toArray();
+    out = downloadManifestFiles(bearerToken,
+                                  files,
+                                  destDir,
+                                  ids,
+                                  openRelative,
+                                  progress,
+                                  canceled,
+                                  timeoutMs);
+    if (out.ok) {
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.download"),
+            QStringLiteral("QtMesh Cloud downloadProjectFileBySlug: ok %1/%2 file=%3")
+                .arg(ownerSlug, projectSlug, fileId));
+    }
+    return out;
+}
+
+QtMeshCloudClient::ProjectDownloadResult QtMeshCloudClient::downloadProjectBySlug(
+    const QString& bearerToken,
+    const QString& ownerSlug,
+    const QString& projectSlug,
+    const QString& destDir,
+    const std::function<void(int, int, const QString&)>& progress,
+    const std::atomic_bool* canceled,
+    int timeoutMs)
+{
+    ProjectDownloadResult out;
+    out.destDirectory = destDir;
+    if (ownerSlug.trimmed().isEmpty() || projectSlug.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("owner and project slugs are required");
+        return out;
+    }
+    if (destDir.trimmed().isEmpty()) {
+        out.errorString = QStringLiteral("destination directory is required");
+        return out;
+    }
+
+    auto manifest = fetchProjectManifest(bearerToken, ownerSlug, projectSlug, timeoutMs);
+    if (!manifest.ok) {
+        out.errorString = manifest.errorString.isEmpty()
+            ? QStringLiteral("could not load project manifest")
+            : manifest.errorString;
+        return out;
+    }
+
+    const QJsonArray files = manifest.manifest.value(QStringLiteral("files")).toArray();
+    if (files.isEmpty()) {
+        out.errorString = QStringLiteral("project has no downloadable files yet");
+        return out;
+    }
+
+    const QString mainRelative = pickManifestMainRelativePath(files);
+    if (mainRelative.isEmpty()) {
+        out.errorString = QStringLiteral("project has no downloadable files");
+        return out;
+    }
+    if (!isImportableCloudAssetPath(mainRelative)) {
+        out.errorString = QStringLiteral("project has no importable mesh file");
+        return out;
+    }
+
+    out = downloadManifestFiles(bearerToken,
+                                files,
+                                destDir,
+                                {},
+                                mainRelative,
+                                progress,
+                                canceled,
+                                timeoutMs);
+    if (out.ok) {
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.download"),
+            QStringLiteral("QtMesh Cloud downloadProjectBySlug: ok %1/%2")
+                .arg(ownerSlug, projectSlug));
+    }
     return out;
 }
 

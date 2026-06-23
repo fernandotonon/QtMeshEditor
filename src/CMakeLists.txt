@@ -133,7 +133,8 @@ DependencyResolver.cpp
 ProjectPackager.cpp
 QtMeshCloudSession.cpp
 CloudUploadDialog.cpp
-CloudProjectsDialog.cpp
+CloudProjectsController.cpp
+CloudDeepLink.cpp
 CloudUploadProgress.cpp
 CloudCLIPipeline.cpp
 FeedbackDiagnostics.cpp
@@ -260,7 +261,8 @@ DependencyResolver.h
 ProjectPackager.h
 QtMeshCloudSession.h
 CloudUploadDialog.h
-CloudProjectsDialog.h
+CloudProjectsController.h
+CloudDeepLink.h
 CloudUploadProgress.h
 CloudCLIPipeline.h
 FeedbackPrefill.h

@@ -1,7 +1,10 @@
 // LCOV_EXCL_START — requires initialized Ogre RTSS with GPU/render system
 
 #include "RTShaderHelper.h"
+#include "EmbeddedTextureCache.h"
 #include <OgreRTShaderSystem.h>
+#include <OgreMaterialSerializer.h>
+#include <cstring>
 #include <QCoreApplication>
 #include <QDir>
 #include <QString>
@@ -254,6 +257,14 @@ bool isNormalSlotName(const Ogre::String& name)
         || name == "BumpMap" || name == "height_map";
 }
 
+// True for slot names that carry a non-diffuse PBR channel and therefore must
+// NOT be treated as the base-colour fallback below.
+static bool isKnownNonDiffuseSlot(const std::string& n)
+{
+    return isNormalSlotName(n) || n == "ao" || n == "emissive"
+        || n == "metallic" || n == "roughness";
+}
+
 bool textureNameLooksLikeNormalMap(const Ogre::String& texName)
 {
     if (texName.empty())
@@ -474,12 +485,244 @@ void RTShaderHelper::finalizeShaderGenMaterial(Ogre::MaterialPtr& mat,
     mat->compile();
 }
 
-// True for slot names that carry a non-diffuse PBR channel and therefore must
-// NOT be treated as the base-colour fallback below.
-static bool isKnownNonDiffuseSlot(const std::string& n)
+void RTShaderHelper::bindTextureUnitsByPointer(Ogre::MaterialPtr& mat)
 {
-    return isNormalSlotName(n) || n == "ao" || n == "emissive"
-        || n == "metallic" || n == "roughness";
+    if (!mat || mat->getNumTechniques() == 0)
+        return;
+
+    auto& tm = Ogre::TextureManager::getSingleton();
+    const Ogre::String defaultGroup =
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+
+    for (auto* tech : mat->getTechniques()) {
+        for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
+            auto* pass = tech->getPass(pi);
+            if (!pass)
+                continue;
+
+            {
+                const auto amb = pass->getAmbient();
+                if (amb.r < 0.001f && amb.g < 0.001f && amb.b < 0.001f)
+                    pass->setAmbient(Ogre::ColourValue::White);
+            }
+
+            bool hasDiffuseTexture = false;
+            for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+                auto* tus = pass->getTextureUnitState(i);
+                const Ogre::String texName = tus->getTextureName();
+                if (texName.empty())
+                    continue;
+
+                Ogre::TexturePtr tex = tm.getByName(texName);
+                if (!tex) {
+                    try {
+                        tex = tm.load(texName, mat->getGroup());
+                    } catch (...) {
+                        try {
+                            tex = tm.load(texName, defaultGroup);
+                        } catch (...) {
+                        }
+                    }
+                }
+                if (tex)
+                    tus->setTexture(tex);
+
+                const auto& slot = tus->getName();
+                if (isAlbedoSlotName(slot)
+                    || (!isKnownNonDiffuseSlot(slot) && !isNormalSlotName(slot))) {
+                    hasDiffuseTexture = true;
+                }
+            }
+
+            if (hasDiffuseTexture) {
+                const auto d = pass->getDiffuse();
+                if (d.r < 0.001f && d.g < 0.001f && d.b < 0.001f)
+                    pass->setDiffuse(1.0f, 1.0f, 1.0f, d.a);
+            }
+        }
+    }
+}
+
+static std::string sniffImageFormat(const uint8_t* data, std::size_t size)
+{
+    if (size >= 8 && std::memcmp(data, "\x89PNG\r\n\x1a\n", 8) == 0)
+        return "png";
+    if (size >= 2 && data[0] == 0xff && data[1] == 0xd8)
+        return "jpg";
+    return "png";
+}
+
+static void hydrateEmbeddedTexturesForMaterial(Ogre::MaterialPtr& mat)
+{
+    if (!mat || mat->getNumTechniques() == 0)
+        return;
+
+    auto& tm = Ogre::TextureManager::getSingleton();
+    auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+    const Ogre::String matGroup = mat->getGroup();
+    if (!rgm.resourceGroupExists(matGroup))
+        rgm.createResourceGroup(matGroup);
+
+    for (auto* tech : mat->getTechniques()) {
+        for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
+            Ogre::Pass* pass = tech->getPass(pi);
+            if (!pass)
+                continue;
+            for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+                Ogre::TextureUnitState* tus = pass->getTextureUnitState(i);
+                const Ogre::String texName = tus->getTextureName();
+                if (texName.empty())
+                    continue;
+                if (tm.getByName(texName, matGroup))
+                    continue;
+
+                const std::vector<uint8_t> bytes =
+                    EmbeddedTextureCache::retrieve(texName);
+                if (bytes.empty())
+                    continue;
+
+                try {
+                    Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(
+                        const_cast<uint8_t*>(bytes.data()),
+                        bytes.size(),
+                        false,
+                        true));
+                    Ogre::Image img;
+                    img.load(stream, sniffImageFormat(bytes.data(), bytes.size()));
+                    if (tm.resourceExists(texName, matGroup)) {
+                        try {
+                            tm.remove(texName, matGroup);
+                        } catch (...) {
+                        }
+                    }
+                    tm.loadImage(texName, matGroup, img);
+                } catch (...) {
+                }
+            }
+        }
+    }
+}
+
+void RTShaderHelper::syncMaterialForViewport(Ogre::MaterialPtr& mat)
+{
+    if (!mat)
+        return;
+    if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingletonPtr()->getRenderSystem())
+        return;
+
+    const Ogre::String matName = mat->getName();
+    const Ogre::String matGroup = mat->getGroup();
+
+    try {
+        Ogre::MaterialSerializer serializer;
+        serializer.queueForExport(mat, false, false, matName);
+        const std::string script = serializer.getQueuedAsString();
+        if (!script.empty()) {
+            if (Ogre::MaterialManager::getSingleton().resourceExists(matName, matGroup))
+                Ogre::MaterialManager::getSingleton().remove(matName, matGroup);
+
+            std::vector<char> scriptCopy(script.begin(), script.end());
+            Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(
+                scriptCopy.data(),
+                scriptCopy.size(),
+                false,
+                true));
+            Ogre::MaterialManager::getSingleton().parseScript(stream, matGroup);
+            mat = Ogre::MaterialManager::getSingleton().getByName(matName, matGroup);
+        }
+    } catch (...) {
+    }
+
+    if (!mat)
+        return;
+
+    if (!mat->isLoaded()) {
+        try {
+            mat->load();
+        } catch (...) {
+            return;
+        }
+    }
+    if (mat->getNumTechniques() == 0)
+        return;
+
+    hydrateEmbeddedTexturesForMaterial(mat);
+    bindTextureUnitsByPointer(mat);
+
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (shaderGen) {
+        shaderGen->removeAllShaderBasedTechniques(
+            matName, Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+    }
+
+    wirePbrSlotsForFFP(mat.get());
+    mat->compile();
+    applyPbrIfTagged(mat);
+
+    if (mat->getNumTechniques() > 0) {
+        auto* pass = mat->getTechnique(0)->getPass(0);
+        if (pass) {
+            for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+                auto* tus = pass->getTextureUnitState(i);
+                const auto& tusName = tus->getName();
+                if (tusName == "normal_map" || tusName == "NormalMap") {
+                    const std::string texName = tus->getTextureName();
+                    if (!texName.empty())
+                        applyNormalMap(mat, texName);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (shaderGen) {
+        shaderGen->validateMaterial(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat);
+    }
+}
+
+void RTShaderHelper::refreshMaterialForViewport(Ogre::MaterialPtr& mat)
+{
+    if (!mat)
+        return;
+    if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingletonPtr()->getRenderSystem())
+        return;
+    if (!mat->isLoaded()) {
+        try {
+            mat->load();
+        } catch (...) {
+            return;
+        }
+    }
+    if (mat->getNumTechniques() == 0)
+        return;
+
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (shaderGen) {
+        shaderGen->removeAllShaderBasedTechniques(
+            mat->getName(), Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+    }
+
+    wirePbrSlotsForFFP(mat.get());
+    mat->compile();
+    applyPbrIfTagged(mat);
+
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    if (pass) {
+        for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+            auto* tus = pass->getTextureUnitState(i);
+            const auto& tusName = tus->getName();
+            if (tusName == "normal_map" || tusName == "NormalMap") {
+                const std::string texName = tus->getTextureName();
+                if (!texName.empty())
+                    applyNormalMap(mat, texName);
+                break;
+            }
+        }
+    }
+
+    if (shaderGen) {
+        shaderGen->validateMaterial(Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, *mat);
+    }
 }
 
 void RTShaderHelper::wirePbrSlotsForFFP(Ogre::Material* mat)
