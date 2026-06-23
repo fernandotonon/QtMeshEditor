@@ -43,6 +43,7 @@ Window {
         if (!AutoRigController.hasRiggableSelection) return
         const r = AutoRigController.autoRigSelected(
             dialog.templates[dialog.templateIndex],
+            dialog.upAxes[dialog.upAxisIndex],
             dialog.alsoSkin)
         if (r && r.applied) {
             dialog.lastStatus =

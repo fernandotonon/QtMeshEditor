@@ -4202,6 +4202,10 @@ Rectangle {
             autoRigLoader.active = true
         } else if (autoRigLoader.item) {
             autoRigLoader.item.open()
+        } else if (autoRigLoader.status === Loader.Error) {
+            // Failed load left active=true / item=null — reset so a retry works.
+            autoRigLoader.active = false
+            autoRigLoader.active = true
         }
     }
 
