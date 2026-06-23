@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=QtMeshEditor Cloud Link
+Comment=Open a QtMesh Cloud project in QtMeshEditor
+GenericName=QtMesh Cloud Handler
+Exec=qtmesheditor %u
+Icon=qtmesheditor
+Terminal=false
+Type=Application
+NoDisplay=true
+MimeType=x-scheme-handler/qtmesh;
+Categories=Graphics;Viewer;

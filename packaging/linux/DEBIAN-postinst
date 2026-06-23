@@ -6,3 +6,6 @@ fi
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
 fi
+if command -v xdg-mime >/dev/null 2>&1; then
+  xdg-mime default qtmesheditor-url.desktop x-scheme-handler/qtmesh >/dev/null 2>&1 || true
+fi

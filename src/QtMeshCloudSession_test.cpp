@@ -2,6 +2,7 @@
 
 #include "ProjectPackager.h"
 #include "QtMeshCloudSession.h"
+#include "CloudCredentialStore.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -291,6 +292,9 @@ protected:
         if (m_hadApiBase)
             m_originalApiBase = qgetenv("QTMESH_API_BASE");
 
+        CloudCredentialStore::resetCacheForTesting();
+        CloudCredentialStore::clearSession();
+
         m_mock = std::make_unique<CloudProjectsApiMock>();
         ASSERT_TRUE(m_mock->listen());
         qputenv("QTMESH_API_BASE", m_mock->baseUrl().toUtf8());
@@ -298,6 +302,8 @@ protected:
 
     void TearDown() override
     {
+        CloudCredentialStore::clearSession();
+        CloudCredentialStore::resetCacheForTesting();
         if (m_hadApiBase)
             qputenv("QTMESH_API_BASE", m_originalApiBase);
         else

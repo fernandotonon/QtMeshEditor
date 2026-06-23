@@ -131,6 +131,7 @@ ProjectPackager.cpp
 QtMeshCloudSession.cpp
 CloudUploadDialog.cpp
 CloudProjectsController.cpp
+CloudDeepLink.cpp
 CloudUploadProgress.cpp
 CloudCLIPipeline.cpp
 FeedbackDiagnostics.cpp
@@ -258,6 +259,7 @@ ProjectPackager.h
 QtMeshCloudSession.h
 CloudUploadDialog.h
 CloudProjectsController.h
+CloudDeepLink.h
 CloudUploadProgress.h
 CloudCLIPipeline.h
 FeedbackPrefill.h

@@ -98,6 +98,40 @@ public:
                     return;
                 }
 
+                if (req.method == QStringLiteral("GET")
+                    && req.path.contains(QStringLiteral("/manifest"))) {
+                    ++m_manifestCalls;
+                    QJsonArray files;
+                    QJsonObject model;
+                    model.insert(QStringLiteral("id"), QStringLiteral("file-model"));
+                    model.insert(QStringLiteral("originalName"), QStringLiteral("hero.fbx"));
+                    model.insert(QStringLiteral("name"), QStringLiteral("hero.fbx"));
+                    model.insert(QStringLiteral("role"), QStringLiteral("model"));
+                    model.insert(QStringLiteral("extension"), QStringLiteral("fbx"));
+                    model.insert(QStringLiteral("sizeBytes"), 2048);
+                    model.insert(QStringLiteral("downloadUrl"),
+                                 QStringLiteral("http://127.0.0.1:%1/download/hero.fbx")
+                                     .arg(m_server.serverPort()));
+                    files.append(model);
+
+                    QJsonObject texture;
+                    texture.insert(QStringLiteral("id"), QStringLiteral("file-tex"));
+                    texture.insert(QStringLiteral("originalName"), QStringLiteral("albedo.png"));
+                    texture.insert(QStringLiteral("name"), QStringLiteral("albedo.png"));
+                    texture.insert(QStringLiteral("role"), QStringLiteral("texture"));
+                    texture.insert(QStringLiteral("extension"), QStringLiteral("png"));
+                    texture.insert(QStringLiteral("sizeBytes"), 512);
+                    texture.insert(QStringLiteral("downloadUrl"),
+                                   QStringLiteral("http://127.0.0.1:%1/download/albedo.png")
+                                       .arg(m_server.serverPort()));
+                    files.append(texture);
+
+                    QJsonObject root;
+                    root.insert(QStringLiteral("files"), files);
+                    writeHttpResponse(socket, 200, QJsonDocument(root).toJson(QJsonDocument::Compact));
+                    return;
+                }
+
                 writeHttpResponse(socket, 404, QByteArray(R"({"error":"not found"})"));
             });
         });
@@ -111,11 +145,13 @@ public:
 
     int listCalls() const { return m_listCalls; }
     bool deleteCalled() const { return m_deleteCalled; }
+    int manifestCalls() const { return m_manifestCalls; }
 
 private:
     QTcpServer m_server;
     int m_listCalls = 0;
     bool m_deleteCalled = false;
+    int m_manifestCalls = 0;
 };
 
 } // namespace
@@ -224,4 +260,31 @@ TEST_F(CloudProjectsControllerTest, FormatHelpersExposeReadableValues)
     EXPECT_FALSE(controller->formatFileSize(1024).isEmpty());
     EXPECT_FALSE(controller->formatUpdatedAt(QStringLiteral("2026-06-01T00:00:00Z")).isEmpty());
     EXPECT_FALSE(controller->formatIconForSource(QStringLiteral("fbx")).isEmpty());
+    EXPECT_EQ(controller->formatFileRole(QStringLiteral("model")), QStringLiteral("Model"));
+}
+
+TEST_F(CloudProjectsControllerTest, BrowseProjectFilesLoadsManifest)
+{
+    auto* controller = CloudProjectsController::instance();
+    QEventLoop loaded;
+    QObject::connect(controller, &CloudProjectsController::projectsChanged, &loaded, &QEventLoop::quit);
+    controller->refresh();
+    QTimer::singleShot(10000, &loaded, &QEventLoop::quit);
+    loaded.exec();
+    ASSERT_EQ(controller->projects().size(), 1);
+
+    QEventLoop filesLoaded;
+    QObject::connect(controller, &CloudProjectsController::projectFilesChanged, &filesLoaded,
+                     &QEventLoop::quit);
+    controller->browseProjectFiles(QStringLiteral("proj-1"));
+    QTimer::singleShot(10000, &filesLoaded, &QEventLoop::quit);
+    filesLoaded.exec();
+
+    EXPECT_TRUE(controller->viewingProjectFiles());
+    EXPECT_EQ(controller->projectFiles().size(), 2);
+    EXPECT_GE(m_mock->manifestCalls(), 1);
+
+    QVariantMap modelFile = controller->projectFiles().first().toMap();
+    EXPECT_TRUE(modelFile.value(QStringLiteral("canOpen")).toBool());
+    EXPECT_FALSE(controller->canOpenFile(controller->projectFiles().last()));
 }

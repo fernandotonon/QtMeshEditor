@@ -812,6 +812,7 @@ jobs:
             mkdir ./pack-deb/DEBIAN/
             cp ./bin/DEBIAN-control ./pack-deb/DEBIAN/control
             cp ./packaging/linux/qtmesheditor.desktop ./pack-deb/usr/share/applications/
+            cp ./packaging/linux/qtmesheditor-url.desktop ./pack-deb/usr/share/applications/
             cp ./packaging/linux/qtmesheditor-mimetypes.xml ./pack-deb/usr/share/mime/packages/
             cp ./packaging/linux/DEBIAN-postinst ./pack-deb/DEBIAN/postinst
             chmod 755 ./pack-deb/DEBIAN/postinst

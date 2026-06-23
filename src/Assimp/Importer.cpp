@@ -29,11 +29,14 @@ THE SOFTWARE.
 #include "Importer.h"
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <assimp/material.h>
 #include "AnimationProcessor.h"
 #include "BoneProcessor.h"
 #include "MeshProcessor.h"
 #include <algorithm>
 #include <string_view>
+
+#include <QFileInfo>
 
 Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool convertToLeftHanded, unsigned int additionalFlags) {
     skeleton.reset();  // Clear any skeleton from a previous import
@@ -141,6 +144,21 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         Ogre::MeshManager::getSingleton().remove(oldMesh);
     if (auto oldSkel = Ogre::SkeletonManager::getSingleton().getByName(modelName + ".skeleton"))
         Ogre::SkeletonManager::getSingleton().remove(oldSkel);
+
+    if (auto oldSkel = Ogre::SkeletonManager::getSingleton().getByName(modelName + ".skeleton"))
+        Ogre::SkeletonManager::getSingleton().remove(oldSkel);
+
+    materialProcessor.setSourceDirectory(QFileInfo(QString::fromStdString(path)).absolutePath());
+    for (unsigned int mi = 0; mi < scene->mNumMaterials; ++mi) {
+        aiString matNameAi;
+        if (scene->mMaterials[mi]->Get(AI_MATKEY_NAME, matNameAi) != AI_SUCCESS
+            || matNameAi.length == 0) {
+            continue;
+        }
+        const std::string matName = matNameAi.C_Str();
+        if (auto existing = Ogre::MaterialManager::getSingleton().getByName(matName))
+            Ogre::MaterialManager::getSingleton().remove(existing);
+    }
 
     // Process materials
     materialProcessor.loadScene(scene);

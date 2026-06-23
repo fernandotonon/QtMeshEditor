@@ -5,10 +5,12 @@ import MaterialEditorQML 1.0
 import PropertiesPanel 1.0
 import CloudProjects 1.0
 
-// Issue #691: paginated My Cloud Projects list (download stubbed for a follow-up epic).
+// Issue #691: paginated My Cloud Projects list with per-file open.
 Window {
     id: dialog
-    title: "My Cloud Projects"
+    title: CloudProjectsController.viewingProjectFiles
+           ? ("Project files — " + CloudProjectsController.activeProjectName)
+           : "My Cloud Projects"
     width: 780
     height: 520
     minimumWidth: 700
@@ -22,19 +24,24 @@ Window {
     property string statusMessage: ""
     property bool statusIsError: false
 
-    function open() {
+    function open(ownerSlug, projectSlug) {
         dialog.statusMessage = ""
         dialog.statusIsError = false
         dialog.show()
         dialog.raise()
         dialog.requestActivate()
-        CloudProjectsController.refresh()
+        if (ownerSlug && projectSlug)
+            CloudProjectsController.browseProjectBySlug(ownerSlug, projectSlug)
+        else
+            CloudProjectsController.refresh()
     }
 
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape) {
             if (confirmDelete.visible) {
                 confirmDelete.visible = false
+            } else if (CloudProjectsController.viewingProjectFiles) {
+                CloudProjectsController.closeProjectFiles()
             } else {
                 dialog.close()
             }
@@ -54,6 +61,10 @@ Window {
         }
         function onUploadRequested() {
             dialog.close()
+        }
+        function onCloudOpenFailed(error) {
+            dialog.statusMessage = error
+            dialog.statusIsError = true
         }
     }
 
@@ -105,6 +116,7 @@ Window {
 
         RowLayout {
             Layout.fillWidth: true
+            visible: !CloudProjectsController.viewingProjectFiles
             InspectorLabel {
                 text: "Projects on QtMesh Cloud"
                 font.pixelSize: 14
@@ -118,6 +130,35 @@ Window {
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            visible: CloudProjectsController.viewingProjectFiles
+            InspectorButton {
+                label: "← Back"
+                onClicked: CloudProjectsController.closeProjectFiles()
+            }
+            InspectorLabel {
+                text: CloudProjectsController.activeProjectName
+                font.pixelSize: 14
+                font.bold: true
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+            }
+            InspectorButton {
+                label: "Refresh"
+                buttonEnabled: !CloudProjectsController.loadingProjectFiles
+                onClicked: {
+                    if (CloudProjectsController.activeProjectId.length > 0)
+                        CloudProjectsController.browseProjectFiles(
+                            CloudProjectsController.activeProjectId)
+                    else
+                        CloudProjectsController.browseProjectBySlug(
+                            CloudProjectsController.activeOwnerSlug,
+                            CloudProjectsController.activeProjectSlug)
+                }
+            }
+        }
+
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -125,11 +166,13 @@ Window {
             border.color: PropertiesPanelController.borderColor
             radius: 4
 
+            // Project list
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 8
                 spacing: 8
-                visible: CloudProjectsController.projects.length > 0
+                visible: !CloudProjectsController.viewingProjectFiles
+                         && CloudProjectsController.projects.length > 0
 
                 ListView {
                     id: projectList
@@ -196,6 +239,12 @@ Window {
                                                projectRow.modelData.id)
                             }
                             InspectorButton {
+                                label: "Open…"
+                                Layout.preferredWidth: 72
+                                onClicked: CloudProjectsController.browseProjectFiles(
+                                               projectRow.modelData.id)
+                            }
+                            InspectorButton {
                                 label: "Delete"
                                 Layout.preferredWidth: 64
                                 onClicked: {
@@ -224,10 +273,89 @@ Window {
                 }
             }
 
+            // Per-project file list
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 8
+                visible: CloudProjectsController.viewingProjectFiles
+                         && CloudProjectsController.projectFiles.length > 0
+
+                InspectorLabel {
+                    text: "Choose a file to open in the editor. Textures and materials are downloaded automatically when needed."
+                    color: "#9a9a9a"
+                    Layout.fillWidth: true
+                }
+
+                ListView {
+                    id: fileList
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    spacing: 6
+                    model: CloudProjectsController.projectFiles
+
+                    delegate: Rectangle {
+                        id: fileRow
+                        required property var modelData
+                        required property int index
+
+                        width: fileList.width
+                        height: 58
+                        radius: 4
+                        color: PropertiesPanelController.panelColor
+                        border.color: PropertiesPanelController.borderColor
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 10
+
+                            Text {
+                                text: CloudProjectsController.canOpenFile(fileRow.modelData)
+                                      ? "📄" : "📎"
+                                font.pixelSize: 18
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 2
+                                InspectorLabel {
+                                    text: fileRow.modelData.originalName
+                                            || fileRow.modelData.name
+                                            || fileRow.modelData.id
+                                    font.bold: true
+                                    font.pixelSize: 12
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideMiddle
+                                }
+                                InspectorLabel {
+                                    text: CloudProjectsController.formatFileSubtitle(
+                                              fileRow.modelData)
+                                    color: "#9a9a9a"
+                                    Layout.fillWidth: true
+                                }
+                            }
+
+                            InspectorButton {
+                                label: "Open"
+                                Layout.preferredWidth: 64
+                                buttonEnabled: CloudProjectsController.canOpenFile(
+                                                   fileRow.modelData)
+                                onClicked: CloudProjectsController.openProjectFile(
+                                               fileRow.modelData.id)
+                            }
+                        }
+                    }
+                }
+            }
+
             ColumnLayout {
                 anchors.centerIn: parent
                 spacing: 12
-                visible: !CloudProjectsController.loading
+                visible: !CloudProjectsController.viewingProjectFiles
+                         && !CloudProjectsController.loading
                          && CloudProjectsController.projects.length === 0
                          && !CloudProjectsController.listError
 
@@ -245,19 +373,41 @@ Window {
 
             InspectorLabel {
                 anchors.centerIn: parent
-                visible: CloudProjectsController.loading
+                visible: !CloudProjectsController.viewingProjectFiles
+                         && CloudProjectsController.loading
                          && CloudProjectsController.projects.length === 0
                 text: "Loading cloud projects…"
             }
 
             InspectorLabel {
                 anchors.centerIn: parent
+                visible: CloudProjectsController.viewingProjectFiles
+                         && CloudProjectsController.loadingProjectFiles
+                         && CloudProjectsController.projectFiles.length === 0
+                text: "Loading project files…"
+            }
+
+            InspectorLabel {
+                anchors.centerIn: parent
                 anchors.margins: 16
                 width: parent.width - 32
-                visible: !!CloudProjectsController.listError
+                visible: !CloudProjectsController.viewingProjectFiles
+                         && !!CloudProjectsController.listError
                          && CloudProjectsController.projects.length === 0
                 text: CloudProjectsController.listError
                 color: "#e07070"
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            InspectorLabel {
+                anchors.centerIn: parent
+                anchors.margins: 16
+                width: parent.width - 32
+                visible: CloudProjectsController.viewingProjectFiles
+                         && !CloudProjectsController.loadingProjectFiles
+                         && CloudProjectsController.projectFiles.length === 0
+                text: "This project has no uploaded files yet."
+                color: "#9a9a9a"
                 horizontalAlignment: Text.AlignHCenter
             }
         }
@@ -286,14 +436,21 @@ Window {
         color: "#aa000000"
         z: 10
 
+        onVisibleChanged: {
+            if (visible)
+                confirmCancelButton.forceActiveFocus()
+        }
+
         Rectangle {
             anchors.centerIn: parent
             width: Math.min(parent.width - 48, 420)
+            height: confirmContent.implicitHeight + 32
             color: PropertiesPanelController.panelColor
             border.color: PropertiesPanelController.borderColor
             radius: 6
 
             ColumnLayout {
+                id: confirmContent
                 anchors.fill: parent
                 anchors.margins: 16
                 spacing: 12
@@ -312,6 +469,7 @@ Window {
                     Layout.fillWidth: true
                     Item { Layout.fillWidth: true }
                     InspectorButton {
+                        id: confirmCancelButton
                         label: "Cancel"
                         onClicked: confirmDelete.visible = false
                     }

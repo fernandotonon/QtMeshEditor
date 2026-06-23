@@ -23,8 +23,22 @@ public:
     /// DELETE /v1/projects/{id} on a worker thread.
     void deleteProject(const QString& projectId);
 
-    /// Stub for a future download epic — emits downloadComplete(false, …, "not-implemented").
+    /// Stub for listing dialog — prefer downloadProjectBySlug().
     void downloadProject(const QString& projectId, const QString& destDir);
+
+    /// Downloads a cloud project by owner/project slug on a worker thread.
+    void downloadProjectBySlug(const QString& ownerSlug,
+                               const QString& projectSlug,
+                               const QString& destDir = QString());
+
+    /// Fetches manifest file listing on a worker thread.
+    void fetchProjectFiles(const QString& ownerSlug, const QString& projectSlug);
+
+    /// Downloads and opens one manifest file (plus rendering companions).
+    void downloadProjectFile(const QString& ownerSlug,
+                             const QString& projectSlug,
+                             const QString& fileId,
+                             const QString& destDir = QString());
 
     /// Creates a project and uploads the manifest files.
     void uploadPackage(const PackageMetadata& metadata,
@@ -40,8 +54,9 @@ signals:
                         const QString& nextCursor,
                         bool hasMore);
     void projectDeleted(const QString& projectId, const QString& error);
+    void projectFilesFetched(const QVariantList& files, const QString& error);
     void downloadProgress(int current, int total, const QString& fileName);
-    void downloadComplete(bool ok, const QString& error, const QString& code);
+    void downloadComplete(bool ok, const QString& message, const QString& detail);
     void uploadProgress(int current, int total, const QString& fileName);
     void uploadFinished(bool ok,
                         const QString& error,

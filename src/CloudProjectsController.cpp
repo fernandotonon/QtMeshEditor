@@ -110,6 +110,48 @@ void CloudProjectsController::ensureSession()
                     }
                     m_projects = remaining;
                     emit projectsChanged();
+
+                    if (m_activeProjectId == projectId)
+                        closeProjectFiles();
+                });
+
+        connect(m_session, &QtMeshCloudSession::projectFilesFetched, this,
+                [this](const QVariantList& files, const QString& error) {
+                    m_loadingProjectFiles = false;
+                    emit loadingProjectFilesChanged();
+
+                    if (!error.isEmpty()) {
+                        m_projectFiles.clear();
+                        emit projectFilesChanged();
+                        emit cloudOpenFailed(error.isEmpty()
+                                                 ? QStringLiteral("Could not load project files.")
+                                                 : error);
+                        return;
+                    }
+
+                    m_projectFiles = files;
+                    emit projectFilesChanged();
+                    SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.files"),
+                                                  QStringLiteral("count=%1").arg(files.size()));
+                });
+
+        connect(m_session, &QtMeshCloudSession::downloadProgress, this,
+                [this](int current, int total, const QString& fileName) {
+                    emit cloudDownloadProgress(current, total, fileName);
+                });
+        connect(m_session, &QtMeshCloudSession::downloadComplete, this,
+                [this](bool ok, const QString& message, const QString& detail) {
+                    m_downloading = false;
+                    if (ok) {
+                        SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.open_in_editor"),
+                                                        QStringLiteral("import %1").arg(message));
+                        emit cloudProjectReady(message);
+                        return;
+                    }
+                    const QString error = message.isEmpty() ? detail : message;
+                    emit cloudOpenFailed(error.isEmpty()
+                                             ? QStringLiteral("Could not download project from QtMesh Cloud.")
+                                             : error);
                 });
     }
 }
@@ -121,6 +163,7 @@ void CloudProjectsController::refresh()
         return;
     }
 
+    closeProjectFiles();
     m_projects.clear();
     emit projectsChanged();
     m_nextCursor.clear();
@@ -155,6 +198,94 @@ void CloudProjectsController::openInBrowser(const QString& projectId)
     SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.open_in_browser"),
                                   QStringLiteral("projectId=%1").arg(projectId));
     QDesktopServices::openUrl(QUrl(url));
+}
+
+void CloudProjectsController::browseProjectFiles(const QString& projectId)
+{
+    QString ownerSlug;
+    QString projectSlug;
+    QString projectName;
+    if (!lookupProjectSlugs(projectId, &ownerSlug, &projectSlug, &projectName))
+        return;
+    if (!signedIn()) {
+        emit signInRequired();
+        return;
+    }
+
+    beginProjectFilesView(projectId, ownerSlug, projectSlug, projectName);
+    emit browseProjectRequested();
+}
+
+void CloudProjectsController::browseProjectBySlug(const QString& ownerSlug, const QString& projectSlug)
+{
+    if (ownerSlug.trimmed().isEmpty() || projectSlug.trimmed().isEmpty())
+        return;
+    if (!signedIn()) {
+        emit signInRequired();
+        return;
+    }
+
+    const QString owner = ownerSlug.trimmed();
+    const QString slug = projectSlug.trimmed();
+    beginProjectFilesView(QString(), owner, slug, QStringLiteral("%1/%2").arg(owner, slug));
+    emit browseProjectRequested();
+}
+
+void CloudProjectsController::closeProjectFiles()
+{
+    const bool hadView = m_viewingProjectFiles || !m_projectFiles.isEmpty() || m_loadingProjectFiles;
+    m_viewingProjectFiles = false;
+    m_loadingProjectFiles = false;
+    m_activeProjectId.clear();
+    m_activeProjectName.clear();
+    m_activeOwnerSlug.clear();
+    m_activeProjectSlug.clear();
+    m_projectFiles.clear();
+    if (hadView) {
+        emit loadingProjectFilesChanged();
+        emit projectFilesChanged();
+        emit activeProjectChanged();
+    }
+}
+
+void CloudProjectsController::openProjectFile(const QString& fileId)
+{
+    if (fileId.trimmed().isEmpty())
+        return;
+    if (!signedIn()) {
+        emit signInRequired();
+        return;
+    }
+    if (m_activeOwnerSlug.isEmpty() || m_activeProjectSlug.isEmpty())
+        return;
+    if (m_downloading)
+        return;
+
+    for (const QVariant& value : std::as_const(m_projectFiles)) {
+        const QVariantMap map = value.toMap();
+        if (map.value(QStringLiteral("id")).toString() != fileId)
+            continue;
+        if (!canOpenFile(map)) {
+            emit cloudOpenFailed(QStringLiteral("This file type cannot be opened in the editor."));
+            return;
+        }
+        break;
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.projects.open_file"),
+                                  QStringLiteral("%1/%2 file=%3")
+                                      .arg(m_activeOwnerSlug, m_activeProjectSlug, fileId));
+    startFileDownload(fileId.trimmed());
+}
+
+void CloudProjectsController::openInEditor(const QString& projectId)
+{
+    browseProjectFiles(projectId);
+}
+
+void CloudProjectsController::openProjectBySlug(const QString& ownerSlug, const QString& projectSlug)
+{
+    browseProjectBySlug(ownerSlug, projectSlug);
 }
 
 void CloudProjectsController::requestUpload()
@@ -236,6 +367,51 @@ QString CloudProjectsController::formatProjectSubtitle(const QVariant& project) 
     return QString();
 }
 
+QString CloudProjectsController::formatFileRole(const QString& role) const
+{
+    const QString normalized = role.trimmed().toLower();
+    if (normalized == QStringLiteral("model") || normalized == QStringLiteral("main"))
+        return QStringLiteral("Model");
+    if (normalized == QStringLiteral("texture"))
+        return QStringLiteral("Texture");
+    if (normalized == QStringLiteral("material"))
+        return QStringLiteral("Material");
+    if (normalized == QStringLiteral("animation"))
+        return QStringLiteral("Animation");
+    if (normalized == QStringLiteral("skeleton"))
+        return QStringLiteral("Skeleton");
+    if (normalized == QStringLiteral("metadata"))
+        return QStringLiteral("Metadata");
+    if (normalized == QStringLiteral("sidecar"))
+        return QStringLiteral("Sidecar");
+    if (normalized.isEmpty())
+        return QStringLiteral("File");
+    return normalized.at(0).toUpper() + normalized.mid(1);
+}
+
+QString CloudProjectsController::formatFileSubtitle(const QVariant& file) const
+{
+    const QVariantMap map = file.toMap();
+    const QString role = formatFileRole(map.value(QStringLiteral("role")).toString());
+    const qint64 sizeBytes = static_cast<qint64>(map.value(QStringLiteral("sizeBytes")).toDouble());
+    const QString extension = map.value(QStringLiteral("extension")).toString();
+    QStringList parts;
+    parts << role;
+    if (!extension.isEmpty())
+        parts << extension.toUpper();
+    parts << formatFileSize(sizeBytes);
+    return parts.join(QStringLiteral(" · "));
+}
+
+bool CloudProjectsController::canOpenFile(const QVariant& file) const
+{
+    const QVariantMap map = file.toMap();
+    if (map.contains(QStringLiteral("canOpen")))
+        return map.value(QStringLiteral("canOpen")).toBool();
+    const QString name = map.value(QStringLiteral("originalName")).toString();
+    return QtMeshCloudClient::isImportableCloudAssetPath(name);
+}
+
 void CloudProjectsController::appendProjects(const QVariantList& page)
 {
     for (const QVariant& value : page)
@@ -253,9 +429,10 @@ QVariantMap CloudProjectsController::projectToMap(const QtMeshCloudClient::Proje
     map.insert(QStringLiteral("projectSlug"), project.projectSlug);
     map.insert(QStringLiteral("projectUrl"), project.projectUrl);
     map.insert(QStringLiteral("browserUrl"),
-               project.browserUrl.isEmpty()
-                   ? QStringLiteral("https://qtmesh.dev/projects/%1").arg(project.id)
-                   : project.browserUrl);
+               !project.browserUrl.isEmpty()
+                   ? project.browserUrl
+                   : QtMeshCloudClient::projectDashboardUrl(project.ownerSlug,
+                                                            project.projectSlug));
     map.insert(QStringLiteral("sourceFormat"), project.sourceFormat);
     map.insert(QStringLiteral("sizeBytes"), static_cast<double>(project.sizeBytes));
     map.insert(QStringLiteral("updatedAt"), project.updatedAt);
@@ -271,8 +448,68 @@ QString CloudProjectsController::browserUrlForProject(const QString& projectId) 
             const QString browser = map.value(QStringLiteral("browserUrl")).toString();
             if (!browser.isEmpty())
                 return browser;
-            return map.value(QStringLiteral("projectUrl")).toString();
+            const QString owner = map.value(QStringLiteral("ownerSlug")).toString();
+            const QString slug = map.value(QStringLiteral("projectSlug")).toString();
+            if (owner.isEmpty() || slug.isEmpty())
+                return QString();
+            return QtMeshCloudClient::projectDashboardUrl(owner, slug);
         }
     }
     return QString();
+}
+
+bool CloudProjectsController::lookupProjectSlugs(const QString& projectId,
+                                                 QString* ownerSlug,
+                                                 QString* projectSlug,
+                                                 QString* projectName) const
+{
+    if (!ownerSlug || !projectSlug)
+        return false;
+    for (const QVariant& value : m_projects) {
+        const QVariantMap map = value.toMap();
+        if (!projectId.isEmpty() && map.value(QStringLiteral("id")).toString() != projectId)
+            continue;
+        *ownerSlug = map.value(QStringLiteral("ownerSlug")).toString();
+        *projectSlug = map.value(QStringLiteral("projectSlug")).toString();
+        if (projectName) {
+            *projectName = map.value(QStringLiteral("name")).toString();
+            if (projectName->isEmpty())
+                *projectName = *projectSlug;
+        }
+        return !ownerSlug->isEmpty() && !projectSlug->isEmpty();
+    }
+    return false;
+}
+
+void CloudProjectsController::beginProjectFilesView(const QString& projectId,
+                                                    const QString& ownerSlug,
+                                                    const QString& projectSlug,
+                                                    const QString& projectName)
+{
+    ensureSession();
+    m_viewingProjectFiles = true;
+    m_activeProjectId = projectId;
+    m_activeOwnerSlug = ownerSlug;
+    m_activeProjectSlug = projectSlug;
+    m_activeProjectName = projectName.isEmpty() ? projectSlug : projectName;
+    m_projectFiles.clear();
+    m_loadingProjectFiles = true;
+    emit activeProjectChanged();
+    emit projectFilesChanged();
+    emit loadingProjectFilesChanged();
+    m_session->fetchProjectFiles(ownerSlug, projectSlug);
+}
+
+void CloudProjectsController::startDownloadBySlug(const QString& ownerSlug, const QString& projectSlug)
+{
+    ensureSession();
+    m_downloading = true;
+    m_session->downloadProjectBySlug(ownerSlug, projectSlug);
+}
+
+void CloudProjectsController::startFileDownload(const QString& fileId)
+{
+    ensureSession();
+    m_downloading = true;
+    m_session->downloadProjectFile(m_activeOwnerSlug, m_activeProjectSlug, fileId);
 }

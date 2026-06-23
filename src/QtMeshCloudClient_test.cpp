@@ -284,6 +284,63 @@ TEST(QtMeshCloudClientFetchManifest, MissingOwnerReturnsErrorImmediately)
     EXPECT_TRUE(result.errorString.contains("owner", Qt::CaseInsensitive));
 }
 
+TEST(QtMeshCloudClientManifestFiles, PicksModelRoleOverEarlierAnimationFile)
+{
+    QJsonArray files;
+    QJsonObject anim;
+    anim.insert(QStringLiteral("id"), QStringLiteral("anim-1"));
+    anim.insert(QStringLiteral("originalName"), QStringLiteral("walk.fbx"));
+    anim.insert(QStringLiteral("role"), QStringLiteral("animation"));
+    files.append(anim);
+
+    QJsonObject model;
+    model.insert(QStringLiteral("id"), QStringLiteral("model-1"));
+    model.insert(QStringLiteral("originalName"), QStringLiteral("hero.fbx"));
+    model.insert(QStringLiteral("role"), QStringLiteral("model"));
+    files.append(model);
+
+    QJsonObject manifest;
+    manifest.insert(QStringLiteral("files"), files);
+
+    const auto entries = QtMeshCloudClient::projectFilesFromManifest(manifest);
+    ASSERT_EQ(entries.size(), 2);
+    EXPECT_EQ(entries.at(1).role, QStringLiteral("model"));
+
+    const QStringList companions = QtMeshCloudClient::companionFileIdsForOpen(
+        entries, QStringLiteral("model-1"));
+    EXPECT_EQ(companions.size(), 1);
+    EXPECT_EQ(companions.first(), QStringLiteral("model-1"));
+}
+
+TEST(QtMeshCloudClientManifestFiles, CompanionDownloadIncludesTextures)
+{
+    QList<QtMeshCloudClient::ProjectFileEntry> entries;
+    QtMeshCloudClient::ProjectFileEntry model;
+    model.id = QStringLiteral("model-1");
+    model.originalName = QStringLiteral("hero.fbx");
+    model.role = QStringLiteral("model");
+    entries.append(model);
+
+    QtMeshCloudClient::ProjectFileEntry texture;
+    texture.id = QStringLiteral("tex-1");
+    texture.originalName = QStringLiteral("textures/albedo.png");
+    texture.role = QStringLiteral("texture");
+    entries.append(texture);
+
+    const QStringList companions = QtMeshCloudClient::companionFileIdsForOpen(
+        entries, QStringLiteral("model-1"));
+    EXPECT_EQ(companions.size(), 2);
+    EXPECT_TRUE(companions.contains(QStringLiteral("model-1")));
+    EXPECT_TRUE(companions.contains(QStringLiteral("tex-1")));
+}
+
+TEST(QtMeshCloudClientImportableAsset, RecognizesSceneAndMeshExtensions)
+{
+    EXPECT_TRUE(QtMeshCloudClient::isImportableCloudAssetPath(QStringLiteral("scene.scene.glb")));
+    EXPECT_TRUE(QtMeshCloudClient::isImportableCloudAssetPath(QStringLiteral("hero.fbx")));
+    EXPECT_FALSE(QtMeshCloudClient::isImportableCloudAssetPath(QStringLiteral("report.json")));
+}
+
 TEST(QtMeshCloudClientFeedbackPayload, IncludesRequiredFields)
 {
     QtMeshCloudClient::FeedbackSubmission submission;
@@ -480,7 +537,8 @@ TEST_F(QtMeshCloudClientFetchProjectsHttpTest, ParsesPaginationAndMetadata)
     EXPECT_EQ(page1.projects.first().id, QStringLiteral("proj-1"));
     EXPECT_EQ(page1.projects.first().sourceFormat, QStringLiteral("glb"));
     EXPECT_EQ(page1.projects.first().sizeBytes, 1024);
-    EXPECT_TRUE(page1.projects.first().browserUrl.contains(QStringLiteral("/projects/proj-1")));
+    EXPECT_EQ(page1.projects.first().browserUrl,
+              QStringLiteral("https://qtmesh.dev/#/projects/me/first/dashboard"));
     EXPECT_TRUE(page1.hasMore);
     EXPECT_EQ(page1.nextCursor, QStringLiteral("page2"));
 
@@ -537,6 +595,53 @@ TEST_F(QtMeshCloudClientFetchProjectsHttpTest, ParsesManifestStyleFieldNames)
     EXPECT_EQ(result.projects.first().sizeBytes, 8192);
     EXPECT_EQ(result.projects.first().mainFile, QStringLiteral("hero.fbx"));
     EXPECT_EQ(result.projects.first().updatedAt, QStringLiteral("2026-06-02T10:15:00Z"));
+}
+
+TEST_F(QtMeshCloudClientFetchProjectsHttpTest, SkipsProjectsMissingOwnerOrSlug)
+{
+    class IncompleteProjectMock {
+    public:
+        bool listen()
+        {
+            QObject::connect(&m_server, &QTcpServer::newConnection, [this]() {
+                QTcpSocket* socket = m_server.nextPendingConnection();
+                QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket]() {
+                    QJsonObject incomplete;
+                    incomplete.insert(QStringLiteral("id"), QStringLiteral("proj-no-owner"));
+                    incomplete.insert(QStringLiteral("name"), QStringLiteral("Broken"));
+                    incomplete.insert(QStringLiteral("slug"), QStringLiteral("broken"));
+
+                    QJsonObject complete;
+                    complete.insert(QStringLiteral("id"), QStringLiteral("proj-ok"));
+                    complete.insert(QStringLiteral("name"), QStringLiteral("Good"));
+                    complete.insert(QStringLiteral("slug"), QStringLiteral("good"));
+                    complete.insert(QStringLiteral("ownerSlug"), QStringLiteral("me"));
+
+                    QJsonObject root;
+                    root.insert(QStringLiteral("projects"), QJsonArray{incomplete, complete});
+                    writeHttpResponse(socket, 200, QJsonDocument(root).toJson(QJsonDocument::Compact));
+                });
+            });
+            return m_server.listen(QHostAddress::LocalHost);
+        }
+
+        QString baseUrl() const
+        {
+            return QStringLiteral("http://127.0.0.1:%1").arg(m_server.serverPort());
+        }
+
+    private:
+        QTcpServer m_server;
+    };
+
+    IncompleteProjectMock mock;
+    ASSERT_TRUE(mock.listen());
+    qputenv("QTMESH_API_BASE", mock.baseUrl().toUtf8());
+
+    const auto result = QtMeshCloudClient::fetchProjects(QStringLiteral("token"), QString(), 50, 5000);
+    ASSERT_TRUE(result.ok);
+    ASSERT_EQ(result.projects.size(), 1);
+    EXPECT_EQ(result.projects.first().id, QStringLiteral("proj-ok"));
 }
 
 TEST_F(QtMeshCloudClientFetchProjectsHttpTest, DeleteProjectAccepts204)

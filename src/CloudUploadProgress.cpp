@@ -43,7 +43,7 @@ void CloudUploadProgress::updateProgress(int current, int total, const QString& 
 {
     m_bar->setMaximum(qMax(1, total));
     m_bar->setValue(current);
-    m_label->setText(tr("Uploading %1…").arg(fileName));
+    m_label->setText(tr("Processing %1…").arg(fileName));
 }
 
 void CloudUploadProgress::finish(bool ok, const QString& message)

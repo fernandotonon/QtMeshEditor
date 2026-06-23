@@ -9,6 +9,7 @@
 #include <unistd.h>
 #endif
 #include <QSettings>
+#include <QSet>
 #include <QApplication>
 #include <QLibraryInfo>
 #include <QEventLoop>
@@ -48,6 +49,8 @@
 #include "AppSettingsKeys.h"
 #include "CloudAccountMenuButton.h"
 #include "CloudCredentialStore.h"
+#include "CloudDeepLink.h"
+#include "AppLaunchHandler.h"
 #include "CloudProjectsController.h"
 #include "CloudUploadDialog.h"
 #include "CloudUploadPlanner.h"
@@ -245,6 +248,28 @@ MainWindow::MainWindow(QWidget *parent) :
 
     m_cloudUploadProgress = new CloudUploadProgress(this);
     statusBar()->addPermanentWidget(m_cloudUploadProgress, 1);
+
+    connect(CloudProjectsController::instance(), &CloudProjectsController::cloudProjectReady, this,
+            [this](const QString& localMainFile) {
+                m_cloudUploadProgress->finish(true, tr("Download complete"));
+                closeCloudProjectsQmlDialog();
+                QTimer::singleShot(0, this, [this, localMainFile]() {
+                    importCloudDownloadedFile(localMainFile);
+                    QTimer::singleShot(3000, m_cloudUploadProgress, &CloudUploadProgress::hideProgress);
+                });
+            });
+    connect(CloudProjectsController::instance(), &CloudProjectsController::cloudOpenFailed, this,
+            [this](const QString& error) {
+                m_cloudUploadProgress->finish(false, tr("Download failed"));
+                QMessageBox::warning(this, tr("QtMesh Cloud"), error);
+                QTimer::singleShot(3000, m_cloudUploadProgress, &CloudUploadProgress::hideProgress);
+            });
+    connect(CloudProjectsController::instance(), &CloudProjectsController::cloudDownloadProgress, this,
+            [this](int current, int total, const QString& fileName) {
+                if (m_cloudUploadProgress->isHidden())
+                    m_cloudUploadProgress->start(tr("Downloading from QtMesh Cloud…"), qMax(total, 1));
+                m_cloudUploadProgress->updateProgress(current, qMax(total, 1), fileName);
+            });
 
     updateRecentFilesMenu();
 
@@ -2687,11 +2712,12 @@ void MainWindow::showCloudProjectsDialog()
     openCloudProjectsQmlDialog();
 }
 
-void MainWindow::openCloudProjectsQmlDialog()
+void MainWindow::openCloudProjectsQmlDialog(const QString& ownerSlug, const QString& projectSlug)
 {
     if (m_cloudProjectsWindow) {
         if (auto* window = qobject_cast<QQuickWindow*>(m_cloudProjectsWindow)) {
-            QMetaObject::invokeMethod(window, "open");
+            QMetaObject::invokeMethod(window, "open", Q_ARG(QVariant, ownerSlug),
+                                      Q_ARG(QVariant, projectSlug));
             window->show();
             window->raise();
             window->requestActivate();
@@ -2716,7 +2742,7 @@ void MainWindow::openCloudProjectsQmlDialog()
         });
 
     connect(engine, &QQmlApplicationEngine::objectCreated, this,
-            [this, engine](QObject* obj, const QUrl&) {
+            [this, engine, ownerSlug, projectSlug](QObject* obj, const QUrl&) {
                 if (!obj) {
                     engine->deleteLater();
                     m_cloudProjectsEngine = nullptr;
@@ -2744,7 +2770,8 @@ void MainWindow::openCloudProjectsQmlDialog()
                     connect(CloudProjectsController::instance(), &CloudProjectsController::uploadRequested,
                             this, &MainWindow::uploadFilesToQtMeshCloud);
 
-                    QMetaObject::invokeMethod(window, "open");
+                    QMetaObject::invokeMethod(window, "open", Q_ARG(QVariant, ownerSlug),
+                                              Q_ARG(QVariant, projectSlug));
                     window->show();
                     window->raise();
                     window->requestActivate();
@@ -2752,6 +2779,13 @@ void MainWindow::openCloudProjectsQmlDialog()
             });
 
     engine->load(QUrl(QStringLiteral("qrc:/CloudProjects/CloudProjectsDialog.qml")));
+}
+
+void MainWindow::closeCloudProjectsQmlDialog()
+{
+    CloudProjectsController::instance()->closeProjectFiles();
+    if (auto* window = qobject_cast<QQuickWindow*>(m_cloudProjectsWindow))
+        window->close();
 }
 
 void MainWindow::uploadFilesToQtMeshCloud()
@@ -3744,10 +3778,152 @@ void MainWindow::openLaunchFiles(const QStringList& paths)
     activateWindow();
 
     for (const QString& path : paths) {
+        CloudDeepLinkTarget cloud;
+        if (CloudDeepLink::decodeLaunchToken(path, &cloud)) {
+            openCloudProjectFromDeepLink(cloud.ownerSlug, cloud.projectSlug);
+            continue;
+        }
         SentryReporter::addBreadcrumb(QStringLiteral("app.launch.file_open"),
                                       QFileInfo(path).fileName());
         loadFile(path);
     }
+}
+
+void MainWindow::openCloudProjectFromDeepLink(const QString& ownerSlug, const QString& projectSlug)
+{
+    show();
+    raise();
+    activateWindow();
+
+    if (!CloudCredentialStore::hasSession()) {
+        QMessageBox::information(this,
+                                 tr("Sign in to QtMesh Cloud"),
+                                 tr("Sign in to your QtMesh Cloud account to open %1/%2.")
+                                     .arg(ownerSlug, projectSlug));
+        signInToQtMeshCloud();
+        if (!CloudCredentialStore::hasSession())
+            return;
+    }
+
+    openCloudProjectsQmlDialog(ownerSlug, projectSlug);
+}
+
+void MainWindow::importCloudDownloadedFile(const QString& localMainFile)
+{
+    const QFileInfo fileInfo(localMainFile);
+    if (!fileInfo.exists() || !fileInfo.isFile()) {
+        QMessageBox::warning(this,
+                             tr("QtMesh Cloud"),
+                             tr("Downloaded project file was not found on disk."));
+        return;
+    }
+    if (!AppLaunchHandler::isImportableMeshPath(localMainFile)) {
+        QMessageBox::warning(this,
+                             tr("QtMesh Cloud"),
+                             tr("The downloaded project does not contain a supported mesh file."));
+        return;
+    }
+
+    addToRecentFiles(localMainFile);
+    if (m_welcomeController && m_welcomeController->isVisible())
+        m_welcomeController->setVisible(false);
+
+    MeshImporterExporter::prepareCloudCachedImport(localMainFile);
+
+    QSet<QString> entityNamesBefore;
+    for (auto* obj : Manager::getSingleton()->getEntities()) {
+        if (obj && obj->getMovableType() == QLatin1String("Entity"))
+            entityNamesBefore.insert(QString::fromStdString(obj->getName()));
+    }
+
+    auto countEntities = []() {
+        int count = 0;
+        for (auto* obj : Manager::getSingleton()->getEntities()) {
+            if (obj && obj->getMovableType() == QLatin1String("Entity"))
+                ++count;
+        }
+        return count;
+    };
+
+    const int entitiesBefore = countEntities();
+    try {
+        importMeshs({localMainFile});
+    } catch (...) {
+        QMessageBox::warning(this,
+                             tr("QtMesh Cloud"),
+                             tr("Could not import the downloaded project."));
+        throw;
+    }
+
+    if (countEntities() == entitiesBefore) {
+        QMessageBox::warning(this,
+                             tr("QtMesh Cloud"),
+                             tr("Download finished, but the mesh could not be imported."));
+        return;
+    }
+
+    for (auto* obj : Manager::getSingleton()->getEntities()) {
+        if (!obj || obj->getMovableType() != QLatin1String("Entity"))
+            continue;
+        if (entityNamesBefore.contains(QString::fromStdString(obj->getName())))
+            continue;
+
+        QStringList textureRoots;
+        textureRoots << fileInfo.absolutePath();
+        const QString normalized = QDir::fromNativeSeparators(fileInfo.absoluteFilePath());
+        const QString marker = QStringLiteral("/cloud/");
+        const int cloudIdx = normalized.indexOf(marker);
+        if (cloudIdx >= 0) {
+            const QString tail = normalized.mid(cloudIdx + marker.size());
+            const int ownerEnd = tail.indexOf(QLatin1Char('/'));
+            if (ownerEnd > 0) {
+                const int slugEnd = tail.indexOf(QLatin1Char('/'), ownerEnd + 1);
+                const QString cloudRoot = slugEnd < 0
+                    ? normalized
+                    : normalized.left(cloudIdx + marker.size() + slugEnd);
+                if (!cloudRoot.isEmpty() && cloudRoot != fileInfo.absolutePath())
+                    textureRoots << cloudRoot;
+            }
+        }
+
+        auto* entity = static_cast<Ogre::Entity*>(obj);
+        MeshImporterExporter::rebindEntityMaterials(entity, textureRoots);
+    }
+
+    SpaceCamera* cam = nullptr;
+    for (EditorViewport* vp : mDockWidgetList) {
+        if (vp->getOgreWidget()->hasFocus()) {
+            cam = vp->getOgreWidget()->getSpaceCamera();
+            break;
+        }
+    }
+    if (!cam && !mDockWidgetList.isEmpty())
+        cam = mDockWidgetList.first()->getOgreWidget()->getSpaceCamera();
+    if (cam)
+        cam->frameSelection();
+
+    QTimer::singleShot(0, this, [this, localMainFile, entityNamesBefore]() {
+        const QFileInfo fileInfo(localMainFile);
+        for (auto* obj : Manager::getSingleton()->getEntities()) {
+            if (!obj || obj->getMovableType() != QLatin1String("Entity"))
+                continue;
+            if (entityNamesBefore.contains(QString::fromStdString(obj->getName())))
+                continue;
+
+            QStringList textureRoots;
+            textureRoots << fileInfo.absolutePath();
+            MeshImporterExporter::rebindEntityMaterials(static_cast<Ogre::Entity*>(obj), textureRoots);
+        }
+
+        if (m_pRoot && m_pRoot->getRenderSystem()) {
+            try {
+                m_pRoot->renderOneFrame();
+            } catch (...) {
+            }
+        }
+        for (EditorViewport* vp : mDockWidgetList)
+            vp->getOgreWidget()->update();
+    });
 }
 
 void MainWindow::importMeshs(const QStringList &_uriList)
