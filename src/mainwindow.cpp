@@ -3879,26 +3879,9 @@ void MainWindow::importCloudDownloadedFile(const QString& localMainFile)
         if (entityNamesBefore.contains(QString::fromStdString(obj->getName())))
             continue;
 
-        QStringList textureRoots;
-        textureRoots << fileInfo.absolutePath();
-        const QString normalized = QDir::fromNativeSeparators(fileInfo.absoluteFilePath());
-        const QString marker = QStringLiteral("/cloud/");
-        const int cloudIdx = normalized.indexOf(marker);
-        if (cloudIdx >= 0) {
-            const QString tail = normalized.mid(cloudIdx + marker.size());
-            const int ownerEnd = tail.indexOf(QLatin1Char('/'));
-            if (ownerEnd > 0) {
-                const int slugEnd = tail.indexOf(QLatin1Char('/'), ownerEnd + 1);
-                const QString cloudRoot = slugEnd < 0
-                    ? normalized
-                    : normalized.left(cloudIdx + marker.size() + slugEnd);
-                if (!cloudRoot.isEmpty() && cloudRoot != fileInfo.absolutePath())
-                    textureRoots << cloudRoot;
-            }
-        }
-
         auto* entity = static_cast<Ogre::Entity*>(obj);
-        MeshImporterExporter::rebindEntityMaterials(entity, textureRoots);
+        MeshImporterExporter::rebindEntityMaterials(
+            entity, MeshImporterExporter::textureSearchRootsForImportFile(localMainFile));
     }
 
     SpaceCamera* cam = nullptr;
@@ -3914,15 +3897,14 @@ void MainWindow::importCloudDownloadedFile(const QString& localMainFile)
         cam->frameSelection();
 
     QTimer::singleShot(0, this, [this, localMainFile, entityNamesBefore]() {
-        const QFileInfo fileInfo(localMainFile);
+        const QStringList textureRoots =
+            MeshImporterExporter::textureSearchRootsForImportFile(localMainFile);
         for (auto* obj : Manager::getSingleton()->getEntities()) {
             if (!obj || obj->getMovableType() != QLatin1String("Entity"))
                 continue;
             if (entityNamesBefore.contains(QString::fromStdString(obj->getName())))
                 continue;
 
-            QStringList textureRoots;
-            textureRoots << fileInfo.absolutePath();
             MeshImporterExporter::rebindEntityMaterials(static_cast<Ogre::Entity*>(obj), textureRoots);
         }
 
@@ -3939,6 +3921,20 @@ void MainWindow::importCloudDownloadedFile(const QString& localMainFile)
 
 void MainWindow::importMeshs(const QStringList &_uriList)
 {
+    QSet<QString> entityNamesBefore;
+    for (auto* obj : Manager::getSingleton()->getEntities()) {
+        if (obj && obj->getMovableType() == QLatin1String("Entity"))
+            entityNamesBefore.insert(QString::fromStdString(obj->getName()));
+    }
+
+    QStringList textureSearchRoots;
+    for (const QString& uri : _uriList) {
+        for (const QString& root : MeshImporterExporter::textureSearchRootsForImportFile(uri)) {
+            if (!textureSearchRoots.contains(root))
+                textureSearchRoots << root;
+        }
+    }
+
     auto txn = SentryReporter::startTransaction("ui.import", "file.import");
     QList<Ogre::SkeletonPtr> animOnlySkeletons;
     try {
@@ -3948,6 +3944,37 @@ void MainWindow::importMeshs(const QStringList &_uriList)
         throw;
     }
     SentryReporter::finishTransaction(txn);
+
+    for (auto* obj : Manager::getSingleton()->getEntities()) {
+        if (!obj || obj->getMovableType() != QLatin1String("Entity"))
+            continue;
+        if (entityNamesBefore.contains(QString::fromStdString(obj->getName())))
+            continue;
+
+        MeshImporterExporter::rebindEntityMaterials(static_cast<Ogre::Entity*>(obj),
+                                                      textureSearchRoots);
+    }
+
+    QTimer::singleShot(0, this, [this, entityNamesBefore, textureSearchRoots]() {
+        for (auto* obj : Manager::getSingleton()->getEntities()) {
+            if (!obj || obj->getMovableType() != QLatin1String("Entity"))
+                continue;
+            if (entityNamesBefore.contains(QString::fromStdString(obj->getName())))
+                continue;
+
+            MeshImporterExporter::rebindEntityMaterials(static_cast<Ogre::Entity*>(obj),
+                                                          textureSearchRoots);
+        }
+
+        if (m_pRoot && m_pRoot->getRenderSystem()) {
+            try {
+                m_pRoot->renderOneFrame();
+            } catch (...) {
+            }
+        }
+        for (EditorViewport* vp : mDockWidgetList)
+            vp->getOgreWidget()->update();
+    });
 
     // Handle animation-only files: show a notification and offer an immediate merge
     // if a compatible entity is already selected.
