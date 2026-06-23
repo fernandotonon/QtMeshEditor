@@ -107,6 +107,13 @@ inline const QString& cloudLegacyMigrationDone()
     return k;
 }
 
+/** @brief Epoch-ms timestamp of the last successful QtMesh Cloud upload on this machine. */
+inline const QString& cloudLastUploadAt()
+{
+    static const QString k(QStringLiteral("Cloud/lastUploadAt"));
+    return k;
+}
+
 /** @brief Last platform profile id used for Validation-mode asset folder scan (issue #370). */
 inline const QString& validationPlatformProfileId()
 {

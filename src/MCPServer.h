@@ -301,6 +301,7 @@ private:
 
     /// Epic #684 slice H: QtMesh Cloud account + upload tools.
     QJsonObject toolCloudStatus(const QJsonObject &args);
+    QJsonObject toolCloudLimits(const QJsonObject &args);
     QJsonObject toolCloudLogin(const QJsonObject &args);
     QJsonObject toolCloudLogout(const QJsonObject &args);
     QJsonObject toolCloudListProjects(const QJsonObject &args);

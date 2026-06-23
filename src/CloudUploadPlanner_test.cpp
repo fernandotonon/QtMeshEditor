@@ -60,3 +60,18 @@ TEST(CloudUploadPlanner, BuildsDescriptorsFromPaths)
     EXPECT_EQ(descriptors.first().sizeBytes, 4);
     EXPECT_FALSE(descriptors.first().mimeType.isEmpty());
 }
+
+TEST(CloudUploadPlanner, MainFileAlwaysIncludedEvenWhenExcluded)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString main = dir.filePath(QStringLiteral("hero.fbx"));
+    QFile file(main);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("x");
+
+    const QStringList selected = CloudUploadPlanner::selectedPathsForUpload(
+        main, {}, {QStringLiteral("**/*")});
+    ASSERT_EQ(selected.size(), 1);
+    EXPECT_EQ(selected.first(), QFileInfo(main).absoluteFilePath());
+}

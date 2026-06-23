@@ -10,6 +10,9 @@ namespace CloudUploadPlanner {
 
 QString makeProjectSlug(const QString& name, const QString& fallback = QStringLiteral("qtmesh-project"));
 QString inferAssetRole(const QString& fileName);
+QStringList selectedPathsForUpload(const QString& mainAssetPath,
+                                   const QStringList& includeGlobs = {},
+                                   const QStringList& excludeGlobs = {});
 QList<QtMeshCloudClient::AssetFileDescriptor> buildAssetFileDescriptors(const QStringList& paths);
 
 } // namespace CloudUploadPlanner

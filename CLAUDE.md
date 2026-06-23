@@ -109,9 +109,18 @@ qtmesh uv model.fbx --unwrap --channel 1 --resolution 2048 -o lightmap.glb  # wr
 qtmesh skin model.fbx --max-influences 4 --falloff 4 -o skinned.fbx  # auto skin weights (inverse-distance) for a mesh+skeleton (#402)
 qtmesh rig model.obj --skeleton humanoid -o rigged.fbx  # native auto-rig: embed a skeleton template into an unrigged mesh (#407)
 qtmesh rig model.obj --skeleton humanoid --skin -o rigged.fbx  # one-click rig + skin (chains #402); templates: humanoid|biped|quadruped|generic; --up-axis x|y|z (default y)
+qtmesh cloud login                            # device flow (prints URL + code); stores session locally
+qtmesh cloud login --api-key <token>          # direct API-key login (CI)
+qtmesh cloud logout                           # revoke + clear saved session
+qtmesh cloud status [--json]                  # connection, email, limits, last upload time
+qtmesh cloud limits [--json]                  # server-reported upload size limits
+qtmesh cloud list [--json]                    # list cloud projects
+qtmesh cloud upload model.fbx [--name Hero] [--include "*.png,*.fbx"] [--exclude "*.tmp"]
+                                              # [--no-scan] [--no-confirm] [--json]
+qtmesh cloud delete <project-id>              # delete a cloud project
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `isometric`, `scan`, `material`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`, `uv`, `retopo`, `skin`, `rig`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `isometric`, `scan`, `material`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`, `uv`, `retopo`, `skin`, `rig`, `cloud`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 
@@ -203,6 +212,15 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - **ApplyAtlas** (`src/ApplyAtlas.h/cpp`, Phase 6 slice E2): the consumption side of slice E. Reads a packer manifest (the JSON written by `manifestToJson`) and applies it to an `Ogre::Entity` — for every submesh whose diffuse texture matches a manifest tile (by basename or full path), scale+bias UV0 from `[0..1]` into the tile's `[u0..u1, v0..v1]` sub-rect AND rebind the submesh's diffuse TUS to the atlas image. Material walks are two-pass so submeshes that share an `Ogre::Material` (very common — Mixamo exports re-use one `Skin_MAT` across many submeshes) all see the original texture name before any mutation. UVs outside `[0..1]` are clamped by default (matches every other game-engine atlas tool); pass `clampOutOfRangeUVs=false` (CLI `--no-clamp`) to leave them untouched and surface them as `outOfRangeUVs` in the report. After each unique material is mutated we call `RTShaderHelper::wirePbrSlotsForFFP` + `mat->compile() / reload()` so the FFP+RTSS lighting path recomputes against the new binding (without this, lighting reads back the cached pre-swap binding and looks subtly off). By default non-diffuse texture slots (normal / AO / emissive / metallic / roughness) on affected materials are stripped because they sample UV0 — now diffuse-atlas-relative — and would render against the wrong region. `--keep-extras` (CLI) / `keep_extras: true` (MCP) / the dialog checkbox opt out, only sensible when you have also atlased those channels with a matching layout. The per-submesh report includes a `strippedExtraTextures` count so the caller can confirm what got removed. Surfaced via `qtmesh atlas-apply mesh.fbx -o atlased.fbx --manifest atlas.json --atlas atlas.png [--match {basename|fullpath}] [--no-clamp] [--keep-extras] [--json]`, the `apply_atlas` MCP tool, and the "Apply to Mesh…" button inside the Pack Atlas dialog (`qml/ApplyAtlasDialog.qml`). The Apply dialog is launched from inside the pack dialog (not from the panel toolbar) — slice E2 is a niche follow-up, so it avoids taking general-UI space. The launcher auto-fills the freshly-packed atlas + manifest paths so a "pack → apply" flow is one extra click.
 - **Optimize pipeline** (Phase 6 slice G, lives entirely inside `CLIPipeline::cmdOptimize`): sequences the slice C / C4 / D optimizations end-to-end on a single asset and writes the result. Stages run in order — vertex-cache reorder (per submesh, Forsyth) → decimate (single entity, slice D) → animation simplify (`AnimationMerger::simplifyAnimation`) — on the same loaded Ogre scene with no intermediate file I/O. Defaults to vertex-cache + simplify-anim when no flags are given; `--reduction <r>` / `--target-tris N` / `--target-verts N` adds decimation. Emits a per-stage applied/summary report (text or `--json`). Same surface on MCP via `optimize_mesh` (file in / file out). Rumba Dancing.fbx → optimize with `--reduction 0.5` shrinks 6.3 MB → 1.4 MB (77.7%), ACMR 0.822 → 0.648, 42% of redundant keyframes stripped.
 
+### QtMesh Cloud
+
+- **Connection** (`CloudCredentialStore`, `QtMeshCloudClient`): device-flow login (`qtmesh cloud login`) or API-key login (`--api-key`, MCP `cloud_login`). Session bearer tokens persist in per-user `QSettings` (non-prompting; see `CloudCredentialStore` for rationale). `QtMeshCloudSession` runs network I/O on worker threads; GUI/MCP callbacks stay on the main thread.
+- **Packaging** (`DependencyResolver`, `ProjectPackager`, `CloudUploadPlanner`): upload packages discover sidecar textures/materials/animations, build a sanitised manifest (`ProjectPackager::jsonPassesPathSanitisationLint`), and honour CLI/MCP `--include` / `--exclude` globs via `CloudUploadPlanner::selectedPathsForUpload`.
+- **Upload protocol** (`QtMeshCloudClient`, `QtMeshCloudSession`): `POST /v1/projects` → `POST …/files/upload-urls` → signed `PUT` per file → `POST …/files/complete` → optional scan report `PUT …/files/:id/report` (5 MB client cap). Progress surfaces through `QtMeshCloudSession::uploadProgress`; CLI streams events to stderr (`--json` emits structured progress/complete objects).
+- **Projects** (`CloudProjectsController`, `CloudDeepLink`): paginated list/delete/download in the QML My Cloud Projects dialog; `qtmesh://cloud/open?owner=…&project=…` deep links open the file browser. CLI/MCP parity: `cloud list`, `cloud delete`, `cloud upload`, `cloud status`, `cloud limits`.
+- **Security**: bearer tokens are never logged in Sentry breadcrumbs; manifests must not contain absolute paths/usernames. Upload requires an explicit user action in the GUI; CLI uses `--no-confirm` for CI. API base override: `QTMESH_API_BASE` (tests + self-hosted).
+- **Limits**: `qtmesh cloud limits` / MCP `cloud_limits` read server caps from `GET /v1/auth/me` when exposed; scan reports are capped at 5 MB client-side.
+
 ### MCP Server
 
 - **MCPServer** (`src/MCPServer.h/cpp`): JSON-RPC 2.0 over stdio + HTTP REST API on configurable port.
@@ -214,7 +232,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### CLI Pipeline
 
 - **CLIPipeline** (`src/CLIPipeline.h/cpp`): Headless command-line interface for mesh operations. All static methods — entry point is `CLIPipeline::run(argc, argv)`.
-- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`, `turntable`, `isometric`, `scan`, `material`, `pack-textures`, `normal-from-height`, `memory`, `analyze`, `vertex-cache`, `decimate`, `atlas`, `atlas-apply`, `optimize`.
+- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`, `turntable`, `isometric`, `scan`, `material`, `pack-textures`, `normal-from-height`, `memory`, `analyze`, `vertex-cache`, `decimate`, `atlas`, `atlas-apply`, `optimize`, `cloud` (login/logout/status/limits/list/upload/delete).
 - Activated via `qtmesh` symlink (created at build time), `--cli` flag, or recognized subcommand as first arg.
 - Redirects stdout to stderr (Ogre/Qt noise) and writes CLI output to the original stdout fd. Uses `_exit()` to avoid Ogre static destructor crashes on macOS.
 - **AnimationMerger** (`src/AnimationMerger.h/cpp`): Public `renameAnimation()` static method used by both CLI and GUI for animation renaming.

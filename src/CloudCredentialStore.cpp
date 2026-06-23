@@ -221,3 +221,16 @@ void CloudCredentialStore::migrateLegacySettingsIfNeeded()
     settings.setValue(AppSettingsKeys::cloudLegacyMigrationDone(), true);
     settings.sync();
 }
+
+void CloudCredentialStore::setLastUploadAt(const qint64 epochMs)
+{
+    QSettings settings;
+    settings.setValue(AppSettingsKeys::cloudLastUploadAt(), epochMs);
+    settings.sync();
+}
+
+qint64 CloudCredentialStore::lastUploadAt()
+{
+    QSettings settings;
+    return settings.value(AppSettingsKeys::cloudLastUploadAt()).toLongLong();
+}

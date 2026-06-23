@@ -554,6 +554,79 @@ QtMeshCloudClient::CurrentUserResult QtMeshCloudClient::fetchCurrentUser(const Q
     return out;
 }
 
+QtMeshCloudClient::UploadLimitsResult QtMeshCloudClient::fetchUploadLimits(const QString& bearerToken,
+                                                                           int timeoutMs)
+{
+    UploadLimitsResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+
+    const QUrl url(apiBaseUrl() + QStringLiteral("/v1/auth/me"));
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qtmesheditor"));
+    req.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + bearerToken.toUtf8());
+    req.setTransferTimeout(timeoutMs);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+                                  QStringLiteral("QtMesh Cloud fetchUploadLimits: start"));
+
+    QNetworkReply* reply = nam.get(req);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!responseBody.isEmpty())
+            out.errorString += QStringLiteral(" — ") + trimSnippet(responseBody);
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+                                      QStringLiteral("QtMesh Cloud fetchUploadLimits: failure %1").arg(out.errorString),
+                                      QStringLiteral("warning"));
+        return out;
+    }
+
+    QJsonObject root;
+    QString parseError;
+    if (!parseJsonObjectBody(responseBody, root, parseError)) {
+        out.errorString = parseError;
+        return out;
+    }
+
+    QJsonObject limits = root.value(QStringLiteral("limits")).toObject();
+    if (limits.isEmpty())
+        limits = root.value(QStringLiteral("user")).toObject().value(QStringLiteral("limits")).toObject();
+    if (limits.isEmpty())
+        limits = root.value(QStringLiteral("account")).toObject().value(QStringLiteral("limits")).toObject();
+
+    out.maxFileSizeBytes = jsonInt64Field(limits,
+                                          {"maxFileSizeBytes", "max_file_size_bytes", "maxFileSize"});
+    out.maxProjectSizeBytes = jsonInt64Field(limits,
+                                             {"maxProjectSizeBytes", "max_project_size_bytes",
+                                              "maxProjectSize", "maxTotalSizeBytes", "max_total_size_bytes"});
+    out.maxReportSizeBytes = jsonInt64Field(limits,
+                                            {"maxReportSizeBytes", "max_report_size_bytes"});
+    if (out.maxReportSizeBytes <= 0)
+        out.maxReportSizeBytes = 5LL * 1024LL * 1024LL;
+    out.ok = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
+                                  QStringLiteral("QtMesh Cloud fetchUploadLimits: ok"));
+    return out;
+}
+
 QtMeshCloudClient::UploadResult QtMeshCloudClient::logout(const QString& bearerToken, int timeoutMs)
 {
     UploadResult out;
