@@ -1159,8 +1159,11 @@ QJsonObject MCPServer::toolDescribeMaterial(const QJsonObject &args)
                 "select an entity first.");
     }
 
+    // Record only safe metadata — the prompt is user-controlled and may carry
+    // proprietary descriptions or pasted secrets we must not ship to telemetry.
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.describe_material"),
-        QStringLiteral("MCP describe_material: %1").arg(prompt));
+        QStringLiteral("MCP describe_material prompt accepted (%1 chars)")
+            .arg(prompt.size()));
 
     // Shared core (same as the CLI --describe path): loads/uses a local LLM,
     // generates + parses the material script, binds it to every submesh.
@@ -1178,6 +1181,8 @@ QJsonObject MCPServer::toolDescribeMaterial(const QJsonObject &args)
             return makeErrorResult(
                 QString("Error: material '%1' applied, but the entity has no scene "
                         "node to export from").arg(matName));
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("MCP describe_material export to %1").arg(outputPath));
         const int rc = MeshImporterExporter::exporter(
             node, outputPath, CLIPipeline::formatForExtension(outputPath));
         if (rc != 0)

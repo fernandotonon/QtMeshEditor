@@ -489,7 +489,14 @@ TEST_F(CLIPipelineCmdMaterialCoverageTest, DescribeNoModelFailsCleanly)
     ASSERT_TRUE(emptyModels.isValid());
     auto* llm = LLMManager::instance();
     ASSERT_NE(llm, nullptr);
+    // Restore the global models dir unconditionally — a fatal assertion below
+    // must not leak the mutated dir into later test suites.
     const QString prevDir = llm->modelsDirectory();
+    struct ModelsDirRestore {
+        LLMManager* llm;
+        QString prev;
+        ~ModelsDirRestore() { if (llm) llm->setModelsDirectory(prev); }
+    } restore{llm, prevDir};
     llm->setModelsDirectory(emptyModels.path());
 
     QTemporaryDir out;
@@ -501,8 +508,6 @@ TEST_F(CLIPipelineCmdMaterialCoverageTest, DescribeNoModelFailsCleanly)
                       "-o", outMesh});
     EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
     EXPECT_FALSE(QFile::exists(outMesh)) << "no mesh should be written on failure";
-
-    llm->setModelsDirectory(prevDir);
 }
 
 } // namespace

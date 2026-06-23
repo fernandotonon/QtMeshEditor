@@ -47,6 +47,8 @@
 #include <QEventLoop>
 #include <QImage>
 #include <QRegularExpression>
+#include <QTimer>
+#include <QUuid>
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
 #include "PbrMapSynth.h"
@@ -4077,14 +4079,24 @@ QString CLIPipeline::llmDescribeMaterialToEntity(Ogre::Entity* entity,
     }
     if (!llm->isModelLoaded() || llm->currentModelName() != chosen) {
         QEventLoop loadLoop;
-        bool loadOk = false;
+        // `done` guards the case where loadModel() emits its result signal
+        // SYNCHRONOUSLY (e.g. an explicit missing-model name fails validation
+        // before returning) — quit() before exec() is a no-op, so we must skip
+        // exec() entirely or the loop would block forever. A safety timeout
+        // covers a worker that neither completes nor errors.
+        bool done = false, loadOk = false;
         QString loadErr;
         QObject::connect(llm, &LLMManager::modelLoadCompleted, &loadLoop,
-            [&](const QString&) { loadOk = true; loadLoop.quit(); });
+            [&](const QString&) { done = true; loadOk = true; loadLoop.quit(); });
         QObject::connect(llm, &LLMManager::modelLoadError, &loadLoop,
-            [&](const QString& e) { loadErr = e; loadLoop.quit(); });
+            [&](const QString& e) { done = true; loadErr = e; loadLoop.quit(); });
         llm->loadModel(chosen);
-        loadLoop.exec();
+        if (!done) {
+            QTimer::singleShot(180000, &loadLoop, [&]() {
+                if (!done) { loadErr = QStringLiteral("timed out loading model"); loadLoop.quit(); }
+            });
+            loadLoop.exec();
+        }
         if (!loadOk || !llm->isModelLoaded()) {
             error = QStringLiteral("failed to load LLM model '%1': %2")
                 .arg(chosen, loadErr.isEmpty() ? QStringLiteral("unknown error") : loadErr);
@@ -4093,18 +4105,25 @@ QString CLIPipeline::llmDescribeMaterialToEntity(Ogre::Entity* entity,
     }
 
     // Drive material generation synchronously. generateMaterial guards against
-    // an unloaded model itself and would emit generationError in that case.
+    // an unloaded model itself and would emit generationError in that case —
+    // possibly synchronously, so guard exec() with the same `done` flag.
     QEventLoop genLoop;
+    bool genDone = false;
     QString script, genErr;
     QObject::connect(llm, &LLMManager::generationCompleted, &genLoop,
-        [&](const QString& s) { script = s; genLoop.quit(); });
+        [&](const QString& s) { genDone = true; script = s; genLoop.quit(); });
     QObject::connect(llm, &LLMManager::generationError, &genLoop,
-        [&](const QString& e) { genErr = e; genLoop.quit(); });
+        [&](const QString& e) { genDone = true; genErr = e; genLoop.quit(); });
     QObject::connect(llm, &LLMManager::generationStopped, &genLoop,
-        [&]() { genErr = QStringLiteral("generation stopped"); genLoop.quit(); });
+        [&]() { genDone = true; genErr = QStringLiteral("generation stopped"); genLoop.quit(); });
 
     llm->generateMaterial(prompt, QString(), QStringList());
-    genLoop.exec();
+    if (!genDone) {
+        QTimer::singleShot(300000, &genLoop, [&]() {
+            if (!genDone) { genErr = QStringLiteral("timed out generating material"); genLoop.quit(); }
+        });
+        genLoop.exec();
+    }
 
     if (script.trimmed().isEmpty()) {
         error = genErr.isEmpty() ? QStringLiteral("LLM produced no material script")
@@ -4123,26 +4142,34 @@ QString CLIPipeline::llmDescribeMaterialToEntity(Ogre::Entity* entity,
         cleaned = cleaned.left(cleaned.length() - 3);
     cleaned = cleaned.trimmed();
 
-    // Extract the material name from the `material <name>` header so we can both
-    // parse uniquely and bind it afterwards. Give it a unique suffix to avoid
-    // colliding with an existing material of the same name in the scene.
-    QString matName;
+    // Extract the `material <name>` header, then REWRITE it to a unique name
+    // before parsing. The LLM often emits a generic name ("material Material"),
+    // which would otherwise collide with — and clobber — an unrelated material
+    // already in the scene. Rewriting (rather than removing the existing
+    // resource) keeps other scene materials intact.
+    int nameStart = -1, nameLen = 0;
+    QString origName;
     {
-        const QRegularExpression re(QStringLiteral(R"(material\s+([^\s{]+))"));
+        const QRegularExpression re(QStringLiteral(R"(^\s*material\s+([^\s{]+))"),
+                                    QRegularExpression::MultilineOption);
         const auto m = re.match(cleaned);
-        if (m.hasMatch()) matName = m.captured(1).trimmed();
+        if (m.hasMatch()) {
+            origName  = m.captured(1).trimmed();
+            nameStart = static_cast<int>(m.capturedStart(1));
+            nameLen   = static_cast<int>(m.capturedLength(1));
+        }
     }
-    if (matName.isEmpty()) {
+    if (origName.isEmpty()) {
         error = QStringLiteral("generated script has no 'material <name>' header");
         return {};
     }
+    const QString matName = QStringLiteral("%1_%2")
+        .arg(origName, QUuid::createUuid().toString(QUuid::Id128));
+    cleaned.replace(nameStart, nameLen, matName);
 
-    // Parse the script into Ogre's MaterialManager. Remove any pre-existing
-    // material of the same name first so the new definition wins.
+    // Parse the (now uniquely-named) script into Ogre's MaterialManager.
     try {
         auto& mm = Ogre::MaterialManager::getSingleton();
-        if (mm.resourceExists(matName.toStdString()))
-            mm.remove(matName.toStdString());
         const Ogre::String s = cleaned.toStdString();
         Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
             (void*)s.c_str(), s.length() * sizeof(char)));
@@ -4224,6 +4251,8 @@ int CLIPipeline::cmdMaterialDescribe(const QString& inputPath,
     }
 
     Ogre::SceneNode* node = entity->getParentSceneNode();
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Exporting file %1").arg(outFi.absoluteFilePath()));
     const int result = MeshImporterExporter::exporter(
         node, outFi.absoluteFilePath(), formatForExtension(outputPath));
     if (result != 0) {
@@ -4231,9 +4260,40 @@ int CLIPipeline::cmdMaterialDescribe(const QString& inputPath,
         return 1;
     }
 
+    // Persist the generated material next to the mesh (mirrors the preset
+    // path). Without this an exported .mesh references `matName` with no
+    // material definition on disk.
+    QString sidecarPath;
+    if (auto* matMgr = Ogre::MaterialManager::getSingletonPtr()) {
+        const std::string matNameStd = matName.toStdString();
+        Ogre::MaterialPtr mat = matMgr->resourceExists(matNameStd)
+            ? matMgr->getByName(matNameStd) : Ogre::MaterialPtr();
+        if (mat) {
+            Ogre::MaterialSerializer ms;
+            ms.queueForExport(mat, false, false, matNameStd);
+            const QString matText = QString::fromStdString(ms.getQueuedAsString());
+            sidecarPath = QDir(outFi.absolutePath())
+                .filePath(outFi.completeBaseName() + ".material");
+            QFile matFile(sidecarPath);
+            if (matFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                matFile.write(matText.toUtf8());
+                matFile.close();
+                SentryReporter::addBreadcrumb("file.export",
+                    QString("Wrote material sidecar %1").arg(sidecarPath));
+            } else {
+                err() << "Error: Failed to write material sidecar: "
+                      << sidecarPath << Qt::endl;
+                return 1;
+            }
+        }
+    }
+
     cliWrite(QString("Generated material from description for %1.\n"
-                     "  prompt: \"%2\"\n  material: %3\n  saved: %4\n")
-        .arg(fi.fileName(), prompt, matName, outFi.fileName()));
+                     "  prompt: \"%2\"\n  material: %3\n  saved: %4%5\n")
+        .arg(fi.fileName(), prompt, matName, outFi.fileName(),
+             sidecarPath.isEmpty()
+                 ? QString()
+                 : QStringLiteral(" (+ %1)").arg(QFileInfo(sidecarPath).fileName())));
     return 0;
 }
 
