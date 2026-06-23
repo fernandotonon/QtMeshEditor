@@ -23,6 +23,7 @@
 #include "UvUnwrap.h"
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
+#include "AutoRig.h"
 #include "MeshDecimator.h"
 #include "EditableMesh.h"
 #include "TexturePaintBuffer.h"
@@ -1499,6 +1500,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "uv") rc = cmdUv(argc, argv);
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
+    else if (cmd == "rig") rc = cmdRig(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
     else if (cmd == "nodeanim") rc = cmdNodeAnim(argc, argv);
     else if (cmd == "cloud") rc = CloudCLIPipeline::run(argc, argv);
@@ -8159,6 +8161,123 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
             QJsonDocument(SkinWeights::reportToJson(report)).toJson(QJsonDocument::Indented)) + "\n");
     } else {
         cliWrite(SkinWeights::reportToText(report)
+                 + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
+    }
+    return 0;
+}
+
+int CLIPipeline::cmdRig(int argc, char* argv[])
+{
+    // Parse: rig <file> [--skeleton humanoid|biped|quadruped|generic]
+    //        [--skin] [--up-axis x|y|z] -o <out> [--json]
+    QString inputPath, outputPath, templateName = QStringLiteral("humanoid");
+    bool jsonOutput = false;
+    bool alsoSkin = false;
+    int upAxis = 1;   // +Y default
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == "rig" || arg == "--cli") continue;
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if (arg == "--skin") { alsoSkin = true; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if ((arg == "--skeleton" || arg == "--template") && i + 1 < argc) {
+            templateName = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--up-axis" && i + 1 < argc) {
+            const QString a = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (a == "x") upAxis = 0;
+            else if (a == "y") upAxis = 1;
+            else if (a == "z") upAxis = 2;
+            else { err() << "Error: --up-axis must be x, y, or z." << Qt::endl; return 2; }
+            continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) {
+            inputPath = arg; continue;
+        }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh rig <file> [--skeleton humanoid|biped|quadruped|generic] "
+                 "[--skin] [--up-axis x|y|z] -o <out> [--json]" << Qt::endl;
+        return 2;
+    }
+    if (outputPath.isEmpty()) {
+        err() << "Error: -o <output> required." << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: file not found: " << inputPath << Qt::endl; return 1;
+    }
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.auto_rig"),
+        QString("rig .%1 template=%2 skin=%3")
+            .arg(fi.suffix(), templateName).arg(alsoSkin));
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QString("Importing %1").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    QList<Ogre::Entity*> meshEntities;
+    for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
+        if (e && e->getMovableType() == "Entity")
+            meshEntities.push_back(e);
+    }
+    if (meshEntities.isEmpty()) {
+        err() << "Error: failed to load " << inputPath << Qt::endl; return 1;
+    }
+    if (meshEntities.size() > 1) {
+        err() << "Error: " << inputPath
+              << " contains multiple mesh entities. `qtmesh rig` supports one "
+                 "entity per file." << Qt::endl;
+        return 1;
+    }
+    Ogre::Entity* entity = meshEntities.first();
+
+    AutoRig::Options opts;
+    opts.tmpl   = AutoRig::templateFromString(templateName);
+    opts.upAxis = upAxis;
+
+    AutoRig::Report report = AutoRig::rigEntity(entity, opts);
+    if (!report.applied) {
+        err() << "Error: auto-rig failed — " << report.error << Qt::endl;
+        return 1;
+    }
+
+    // Optionally chain skin weights so the exported asset deforms.
+    bool skinned = false;
+    if (alsoSkin) {
+        const auto sw = SkinWeights::computeAndApply(entity, {});
+        skinned = sw.applied;
+        if (!sw.applied) {
+            err() << "Error: rigged, but skinning failed — " << sw.error << Qt::endl;
+            return 1;
+        }
+    }
+
+    auto* node = entity->getParentSceneNode();
+    const QString fmt = formatForExtension(outputPath);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QString("Exporting %1").arg(QFileInfo(outputPath).absoluteFilePath()));
+    if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed." << Qt::endl;
+        return 1;
+    }
+
+    if (jsonOutput) {
+        QJsonObject j = AutoRig::reportToJson(report);
+        j["skinned"] = skinned;
+        cliWrite(QString::fromUtf8(
+            QJsonDocument(j).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        cliWrite(AutoRig::reportToText(report)
+                 + (alsoSkin ? QString("  skinned: %1\n").arg(skinned ? "yes" : "no")
+                             : QString())
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
     return 0;
