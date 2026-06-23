@@ -282,6 +282,13 @@ TEST_F(MainWindowTest, ModeBarLoadsAndModeChangeUpdatesStatusIndicator)
     ASSERT_EQ(window->m_modeBar->status(), QQuickWidget::Ready);
     EXPECT_GE(window->m_modeBar->minimumWidth(), 560);
     EXPECT_EQ(window->toolBarArea(window->m_modeBarShell), Qt::TopToolBarArea);
+    // QToolBar::isHidden() reflects effective visibility, which is only
+    // meaningful once the parent window has been shown. The fixture constructs
+    // MainWindow without show()ing it, so under Xvfb this assertion was flaky
+    // (the shell reports hidden until the window is mapped). Show the window and
+    // drain events so the toolbar's visibility is realized before asserting.
+    window->show();
+    app->processEvents();
     EXPECT_FALSE(window->m_modeBarShell->isHidden());
     ASSERT_NE(window->m_editModeLabel, nullptr);
 
