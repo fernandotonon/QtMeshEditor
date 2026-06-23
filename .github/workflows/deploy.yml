@@ -1616,9 +1616,12 @@ jobs:
                /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}
+        # NOTE: assimp is NOT Xcode-keyed (unlike ogre): it's a plain static lib
+        # that doesn't bake absolute SDK paths, so one assimp cache works across
+        # Xcode versions and stays shared so the ogre-rebuild-on-miss can use it.
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}-
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-
 
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Check out Assimp repo
@@ -1677,9 +1680,9 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}-
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-
 
     - name: Cache Ogre
       id: cache-ogre-macos
@@ -1785,7 +1788,7 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
 
     - name: Cache Ogre
       id: cache-ogre-macos
