@@ -232,8 +232,14 @@ public:
     {
         QObject::connect(&m_server, &QTcpServer::newConnection, [this]() {
             QTcpSocket* socket = m_server.nextPendingConnection();
-            QObject::connect(socket, &QTcpSocket::readyRead, socket, [this, socket]() {
-                const ParsedHttpRequest req = parseHttpRequest(socket->readAll());
+            auto buffer = std::make_shared<QByteArray>();
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [this, socket, buffer]() {
+                buffer->append(socket->readAll());
+                const int headerEnd = buffer->indexOf("\r\n\r\n");
+                if (headerEnd < 0)
+                    return;
+
+                const ParsedHttpRequest req = parseHttpRequest(*buffer);
 
                 if (req.method == QStringLiteral("GET") && req.path.startsWith(QStringLiteral("/v1/projects"))) {
                     ++m_listCalls;
