@@ -38,11 +38,15 @@
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #include "MeshDepthRenderer.h"
+#endif
+// #406: the LLM "describe material" path is always compiled (LLMManager itself
+// is always built; only the llama.cpp linking is gated by ENABLE_LOCAL_LLM), so
+// these must live OUTSIDE the ENABLE_STABLE_DIFFUSION guard above. QImage is
+// also used by always-on subcommands (turntable/isometric/upscale).
 #include "LLMManager.h"
 #include <QEventLoop>
-#include <QRegularExpression>
 #include <QImage>
-#endif
+#include <QRegularExpression>
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
 #include "PbrMapSynth.h"
