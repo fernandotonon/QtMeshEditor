@@ -30,6 +30,7 @@
 #include <OgreMaterialManager.h>
 
 #include "CLIPipeline.h"
+#include "LLMManager.h"
 #include "MaterialPresetLibrary.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
@@ -439,6 +440,74 @@ TEST_F(CLIPipelineCmdMaterialCoverageTest, UpscaleNoModelFailsCleanly)
                       "--upscale", "4", "-o", out});
     EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
     EXPECT_FALSE(QFile::exists(out)) << "no output on failure";
+}
+
+// ── #406: --describe (LLM-assisted material) ────────────────────────────────
+// CI has no GGUF model in the models dir, so (like the SD/PBR tests above)
+// these exercise the validation + clean no-model fallback. The model-loaded
+// generation path needs a real model and isn't run here.
+
+// --describe with no description value → it's dropped by the parser (needs a
+// following arg), so with only a mesh and no preset/describe this falls into
+// the generic usage error (2). A nonexistent file with a valid description is a
+// separate guard (1).
+TEST_F(CLIPipelineCmdMaterialCoverageTest, DescribeNonexistentFileReturnsError)
+{
+    ArgvBuilder args({"qtmesh", "material",
+                      "/tmp/qtmesh_describe_no_such_file_zz.mesh",
+                      "--describe", "rusty bronze armor"});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
+}
+
+// --describe with an empty description string → usage error (2), before any
+// import or model work.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, DescribeEmptyPromptIsUsageError)
+{
+    QTemporaryDir src;
+    ASSERT_TRUE(src.isValid());
+    const QString mesh = copyRobotInto(src);
+    ASSERT_FALSE(mesh.isEmpty()) << "robot.mesh fixture unavailable";
+
+    ArgvBuilder args({"qtmesh", "material", mesh, "--describe", "   "});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 2);
+}
+
+// Valid mesh + description but no local LLM model available → exit 1 and NO
+// output mesh written. This is the graceful fallback the issue requires; it
+// holds whether or not the build has llama.cpp (no model loaded either way).
+// Point the LLM at an empty models dir so the resolver finds nothing and bails
+// before any (potentially blocking) load — deterministic even on a dev box that
+// happens to have a GGUF model installed.
+TEST_F(CLIPipelineCmdMaterialCoverageTest, DescribeNoModelFailsCleanly)
+{
+    QTemporaryDir src;
+    ASSERT_TRUE(src.isValid());
+    const QString mesh = copyRobotInto(src);
+    ASSERT_FALSE(mesh.isEmpty()) << "robot.mesh fixture unavailable";
+
+    QTemporaryDir emptyModels;
+    ASSERT_TRUE(emptyModels.isValid());
+    auto* llm = LLMManager::instance();
+    ASSERT_NE(llm, nullptr);
+    // Restore the global models dir unconditionally — a fatal assertion below
+    // must not leak the mutated dir into later test suites.
+    const QString prevDir = llm->modelsDirectory();
+    struct ModelsDirRestore {
+        LLMManager* llm;
+        QString prev;
+        ~ModelsDirRestore() { if (llm) llm->setModelsDirectory(prev); }
+    } restore{llm, prevDir};
+    llm->setModelsDirectory(emptyModels.path());
+
+    QTemporaryDir out;
+    ASSERT_TRUE(out.isValid());
+    const QString outMesh = out.filePath("describe_out.mesh");
+
+    ArgvBuilder args({"qtmesh", "material", mesh,
+                      "--describe", "rusty bronze armor",
+                      "-o", outMesh});
+    EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 1);
+    EXPECT_FALSE(QFile::exists(outMesh)) << "no mesh should be written on failure";
 }
 
 } // namespace

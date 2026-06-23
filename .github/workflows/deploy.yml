@@ -22,6 +22,12 @@ env:
   ASSIMP_VERSION: '6.0.4'
   ASSIMP_DIR_VERSION: '6.0'
   OGRE_VERSION: '14.5.2'
+  # Bump to bust the macOS assimp/ogre caches. The cached OGRE/Assimp SDKs bake
+  # absolute Xcode SDK paths (e.g. .../usr/lib/libz.tbd) into their CMake export;
+  # when the macos-latest runner image bumps Xcode, a stale cache hit makes
+  # build-macos fail with "No rule to make target '<old-SDK>/libz.tbd'". Bump
+  # this whenever the runner's Xcode/SDK changes.
+  MACOS_CACHE_VERSION: 'xcode26b'
 
 jobs:
 #  send-slack-notification:
@@ -1563,6 +1569,18 @@ jobs:
     needs: scan-assets-qtmesh
     runs-on: macos-latest
     steps:
+    - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
+      run: |
+            # All three macOS jobs must use the SAME Xcode/SDK: the OGRE/Assimp
+            # builds bake the active SDK's absolute libz.tbd path into their
+            # CMake export, and the consumer build links against it. Different
+            # default Xcodes per job → "No rule to make target '<SDK>/libz.tbd'".
+            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
+            echo "Selected Xcode: $DEV"
+            sudo xcode-select -s "$DEV"
+            echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
+
     - name: change folder permissions
       run: |
             sudo mkdir /usr/local/lib
@@ -1585,10 +1603,10 @@ jobs:
                /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-          
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-
+
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Check out Assimp repo
       uses: actions/checkout@master
@@ -1607,7 +1625,15 @@ jobs:
  build-n-cache-ogre-macos:
     needs: build-n-cache-assimp-macos
     runs-on: macos-latest
-    steps:    
+    steps:
+    - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
+      run: |
+            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
+            echo "Selected Xcode: $DEV"
+            sudo xcode-select -s "$DEV"
+            echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
+
     - name: change folder permissions
       run: |
           sudo mkdir /usr/local/lib
@@ -1628,10 +1654,10 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-      
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-
+
     - name: Cache Ogre
       id: cache-ogre-macos
       uses: actions/cache@v3
@@ -1639,8 +1665,8 @@ jobs:
         cache-name: cache-ogre-macos
       with:
         path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-    
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
+
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Check out ogre repo
       uses: actions/checkout@master
@@ -1665,6 +1691,14 @@ jobs:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
     runs-on: macos-latest
     steps:
+    - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
+      run: |
+            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
+            echo "Selected Xcode: $DEV"
+            sudo xcode-select -s "$DEV"
+            echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
+
     - name: change folder permissions
       run: |
             sudo mkdir -p /usr/local/lib
@@ -1718,8 +1752,8 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-      
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
+
     - name: Cache Ogre
       id: cache-ogre-macos
       uses: actions/cache@v3
@@ -1727,8 +1761,8 @@ jobs:
         cache-name: cache-ogre-macos
       with:
         path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-    
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
+
     - name: Configure CMake
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/

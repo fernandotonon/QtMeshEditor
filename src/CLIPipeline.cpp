@@ -38,15 +38,27 @@
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #include "MeshDepthRenderer.h"
+#endif
+// #406: the LLM "describe material" path is always compiled (LLMManager itself
+// is always built; only the llama.cpp linking is gated by ENABLE_LOCAL_LLM), so
+// these must live OUTSIDE the ENABLE_STABLE_DIFFUSION guard above. QImage is
+// also used by always-on subcommands (turntable/isometric/upscale).
+#include "LLMManager.h"
 #include <QEventLoop>
 #include <QImage>
-#endif
+#include <QRegularExpression>
+#include <QTimer>
+#include <QUuid>
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
 #include "PbrMapSynth.h"
 #include "TextureUpscaler.h"
-#include "RTShaderHelper.h"
 #endif
+// RTShaderHelper is a core RTSS helper (no ONNX/SD/LLM dependency) used
+// unconditionally by the #406 describe-material path, so it must NOT sit inside
+// the ENABLE_ONNX guard above — Windows MinGW builds ONNX off and would
+// otherwise fail with "'RTShaderHelper' has not been declared".
+#include "RTShaderHelper.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
 #include <QWidget>
@@ -3590,6 +3602,8 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     double controlStrength = 0.9;
     int genWidth = 512, genHeight = 512;
     bool listPresets = false;
+    // #406: LLM-assisted material authoring from a natural-language prompt.
+    QString describePrompt, llmModel;
     // #404 PBR map synthesis from a diffuse texture.
     QString pbrAlbedo;
     bool generatePbr = false;
@@ -3608,6 +3622,10 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
         }
         if (arg == "--generate-texture" && i + 1 < argc) {
             genPrompt = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--describe" && i + 1 < argc) {
+            describePrompt = QString(argv[++i]);
             continue;
         }
         if (arg == "--generate-pbr") { generatePbr = true; continue; }
@@ -3687,6 +3705,14 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
                                           controlStrength, genWidth, genHeight);
     }
 
+    // #406: LLM-assisted material from a natural-language description. --model
+    // selects the GGUF model (shared flag with the SD path; harmless overlap
+    // since the two are never used together in one invocation).
+    if (!describePrompt.isEmpty()) {
+        llmModel = sdModel;
+        return cmdMaterialDescribe(inputPath, outputPath, describePrompt, llmModel);
+    }
+
     auto* lib = MaterialPresetLibrary::instance();
     const QStringList names = lib->presetNames();
 
@@ -3701,6 +3727,7 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     if (inputPath.isEmpty() || presetName.isEmpty()) {
         err() << "Error: Missing required arguments." << Qt::endl;
         err() << "Usage: qtmesh material <file> --preset <name> [-o <output>]" << Qt::endl;
+        err() << "       qtmesh material <file> --describe \"<description>\" [--model <name>] [-o <output>]" << Qt::endl;
         err() << "       qtmesh material --list-presets" << Qt::endl;
         return 2;
     }
@@ -4021,6 +4048,259 @@ int CLIPipeline::cmdMaterialGenerateTexture(const QString& inputPath,
         .arg(texName).arg(boundCount).arg(outFi.fileName()));
     return 0;
 #endif
+}
+
+QString CLIPipeline::llmDescribeMaterialToEntity(Ogre::Entity* entity,
+                                                 const QString& prompt,
+                                                 const QString& modelName,
+                                                 QString& error)
+{
+    error.clear();
+    if (!entity || !entity->getMesh()) {
+        error = QStringLiteral("no mesh to apply the material to");
+        return {};
+    }
+
+    LLMManager* llm = LLMManager::instance();
+    if (!llm) {
+        error = QStringLiteral("local LLM unavailable in this build "
+            "(rebuild with -DENABLE_LOCAL_LLM=ON).");
+        return {};
+    }
+
+    // Resolve + load a GGUF model synchronously. modelName overrides; otherwise
+    // fall back to last-used / first available (mirrors the SD texture path).
+    llm->scanForModels();
+    QString chosen = modelName;
+    if (chosen.isEmpty()) chosen = llm->lastModelName();
+    if (chosen.isEmpty()) {
+        const QStringList avail = llm->availableModels();
+        if (!avail.isEmpty()) chosen = avail.first();
+    }
+    if (chosen.isEmpty()) {
+        error = QStringLiteral("no LLM model found in the models directory (%1). "
+            "Download a GGUF model from AI Settings or pass --model.")
+            .arg(llm->modelsDirectory());
+        return {};
+    }
+    if (!llm->isModelLoaded() || llm->currentModelName() != chosen) {
+        QEventLoop loadLoop;
+        // `done` guards the case where loadModel() emits its result signal
+        // SYNCHRONOUSLY (e.g. an explicit missing-model name fails validation
+        // before returning) — quit() before exec() is a no-op, so we must skip
+        // exec() entirely or the loop would block forever. A safety timeout
+        // covers a worker that neither completes nor errors.
+        bool done = false, loadOk = false;
+        QString loadErr;
+        QObject::connect(llm, &LLMManager::modelLoadCompleted, &loadLoop,
+            [&](const QString&) { done = true; loadOk = true; loadLoop.quit(); });
+        QObject::connect(llm, &LLMManager::modelLoadError, &loadLoop,
+            [&](const QString& e) { done = true; loadErr = e; loadLoop.quit(); });
+        llm->loadModel(chosen);
+        if (!done) {
+            QTimer::singleShot(180000, &loadLoop, [&]() {
+                if (!done) { loadErr = QStringLiteral("timed out loading model"); loadLoop.quit(); }
+            });
+            loadLoop.exec();
+        }
+        if (!loadOk || !llm->isModelLoaded()) {
+            error = QStringLiteral("failed to load LLM model '%1': %2")
+                .arg(chosen, loadErr.isEmpty() ? QStringLiteral("unknown error") : loadErr);
+            return {};
+        }
+    }
+
+    // Drive material generation synchronously. generateMaterial guards against
+    // an unloaded model itself and would emit generationError in that case —
+    // possibly synchronously, so guard exec() with the same `done` flag.
+    QEventLoop genLoop;
+    bool genDone = false;
+    QString script, genErr;
+    QObject::connect(llm, &LLMManager::generationCompleted, &genLoop,
+        [&](const QString& s) { genDone = true; script = s; genLoop.quit(); });
+    QObject::connect(llm, &LLMManager::generationError, &genLoop,
+        [&](const QString& e) { genDone = true; genErr = e; genLoop.quit(); });
+    QObject::connect(llm, &LLMManager::generationStopped, &genLoop,
+        [&]() { genDone = true; genErr = QStringLiteral("generation stopped"); genLoop.quit(); });
+
+    llm->generateMaterial(prompt, QString(), QStringList());
+    if (!genDone) {
+        QTimer::singleShot(300000, &genLoop, [&]() {
+            if (!genDone) { genErr = QStringLiteral("timed out generating material"); genLoop.quit(); }
+        });
+        genLoop.exec();
+    }
+
+    if (script.trimmed().isEmpty()) {
+        error = genErr.isEmpty() ? QStringLiteral("LLM produced no material script")
+                                 : genErr;
+        return {};
+    }
+
+    // Strip markdown code fences the model may wrap the script in (same cleanup
+    // the GUI's onLLMGenerationCompleted does before applying).
+    QString cleaned = script.trimmed();
+    if (cleaned.startsWith(QStringLiteral("```"))) {
+        const int nl = cleaned.indexOf('\n');
+        if (nl != -1) cleaned = cleaned.mid(nl + 1);
+    }
+    if (cleaned.endsWith(QStringLiteral("```")))
+        cleaned = cleaned.left(cleaned.length() - 3);
+    cleaned = cleaned.trimmed();
+
+    // Extract the `material <name>` header, then REWRITE it to a unique name
+    // before parsing. The LLM often emits a generic name ("material Material"),
+    // which would otherwise collide with — and clobber — an unrelated material
+    // already in the scene. Rewriting (rather than removing the existing
+    // resource) keeps other scene materials intact.
+    int nameStart = -1, nameLen = 0;
+    QString origName;
+    {
+        const QRegularExpression re(QStringLiteral(R"(^\s*material\s+([^\s{]+))"),
+                                    QRegularExpression::MultilineOption);
+        const auto m = re.match(cleaned);
+        if (m.hasMatch()) {
+            origName  = m.captured(1).trimmed();
+            nameStart = static_cast<int>(m.capturedStart(1));
+            nameLen   = static_cast<int>(m.capturedLength(1));
+        }
+    }
+    if (origName.isEmpty()) {
+        error = QStringLiteral("generated script has no 'material <name>' header");
+        return {};
+    }
+    const QString matName = QStringLiteral("%1_%2")
+        .arg(origName, QUuid::createUuid().toString(QUuid::Id128));
+    cleaned.replace(nameStart, nameLen, matName);
+
+    // Parse the (now uniquely-named) script into Ogre's MaterialManager.
+    try {
+        auto& mm = Ogre::MaterialManager::getSingleton();
+        const Ogre::String s = cleaned.toStdString();
+        Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
+            (void*)s.c_str(), s.length() * sizeof(char)));
+        mm.parseScript(ds, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+        Ogre::MaterialPtr mat = mm.getByName(matName.toStdString());
+        if (!mat) {
+            error = QStringLiteral("failed to parse generated material '%1'")
+                .arg(matName);
+            return {};
+        }
+        mat->compile();
+        // Honor a pbr_workflow tag if the model emitted one (upgrade to
+        // Cook-Torrance), matching the Material Editor's apply path.
+        RTShaderHelper::applyPbrIfTagged(mat);
+
+        const std::string stdName = matName.toStdString();
+        for (unsigned int s2 = 0; s2 < entity->getNumSubEntities(); ++s2)
+            entity->getSubEntity(s2)->setMaterialName(stdName);
+        entity->setMaterialName(stdName);
+    } catch (const Ogre::Exception& e) {
+        error = QStringLiteral("Ogre error applying generated material: %1")
+            .arg(e.what());
+        return {};
+    }
+
+    return matName;
+}
+
+int CLIPipeline::cmdMaterialDescribe(const QString& inputPath,
+                                     QString outputPath,
+                                     const QString& prompt,
+                                     const QString& modelName)
+{
+    if (inputPath.isEmpty()) {
+        err() << "Error: missing <file> for --describe." << Qt::endl;
+        return 2;
+    }
+    if (prompt.trimmed().isEmpty()) {
+        err() << "Error: --describe requires a non-empty description." << Qt::endl;
+        return 2;
+    }
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << inputPath << Qt::endl;
+        return 1;
+    }
+    if (outputPath.isEmpty()) outputPath = inputPath;
+    const QFileInfo outFi(outputPath);
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.describe_material"),
+        QStringLiteral("CLI describe-material .%1 -> .%2")
+            .arg(fi.suffix(), outFi.suffix()));
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing file %1").arg(fi.absoluteFilePath()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    auto& entities = Manager::getSingleton()->getEntities();
+    Ogre::Entity* entity = nullptr;
+    for (auto* obj : entities) {
+        if (obj && obj->getMovableType() == "Entity") {
+            entity = static_cast<Ogre::Entity*>(obj);
+            break;
+        }
+    }
+    if (!entity || !entity->getMesh()) {
+        err() << "Error: Failed to load a mesh from: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    QString error;
+    const QString matName =
+        llmDescribeMaterialToEntity(entity, prompt, modelName, error);
+    if (matName.isEmpty()) {
+        err() << "Error: " << error << Qt::endl;
+        return 1;
+    }
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    SentryReporter::addBreadcrumb("file.export",
+        QString("Exporting file %1").arg(outFi.absoluteFilePath()));
+    const int result = MeshImporterExporter::exporter(
+        node, outFi.absoluteFilePath(), formatForExtension(outputPath));
+    if (result != 0) {
+        err() << "Error: Export failed." << Qt::endl;
+        return 1;
+    }
+
+    // Persist the generated material next to the mesh (mirrors the preset
+    // path). Without this an exported .mesh references `matName` with no
+    // material definition on disk.
+    QString sidecarPath;
+    if (auto* matMgr = Ogre::MaterialManager::getSingletonPtr()) {
+        const std::string matNameStd = matName.toStdString();
+        Ogre::MaterialPtr mat = matMgr->resourceExists(matNameStd)
+            ? matMgr->getByName(matNameStd) : Ogre::MaterialPtr();
+        if (mat) {
+            Ogre::MaterialSerializer ms;
+            ms.queueForExport(mat, false, false, matNameStd);
+            const QString matText = QString::fromStdString(ms.getQueuedAsString());
+            sidecarPath = QDir(outFi.absolutePath())
+                .filePath(outFi.completeBaseName() + ".material");
+            QFile matFile(sidecarPath);
+            if (matFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                matFile.write(matText.toUtf8());
+                matFile.close();
+                SentryReporter::addBreadcrumb("file.export",
+                    QString("Wrote material sidecar %1").arg(sidecarPath));
+            } else {
+                err() << "Error: Failed to write material sidecar: "
+                      << sidecarPath << Qt::endl;
+                return 1;
+            }
+        }
+    }
+
+    cliWrite(QString("Generated material from description for %1.\n"
+                     "  prompt: \"%2\"\n  material: %3\n  saved: %4%5\n")
+        .arg(fi.fileName(), prompt, matName, outFi.fileName(),
+             sidecarPath.isEmpty()
+                 ? QString()
+                 : QStringLiteral(" (+ %1)").arg(QFileInfo(sidecarPath).fileName())));
+    return 0;
 }
 
 int CLIPipeline::cmdMaterialGeneratePbr(const QString& albedoPath,

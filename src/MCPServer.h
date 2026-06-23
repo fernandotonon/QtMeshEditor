@@ -133,6 +133,10 @@ private:
     QJsonObject toolApplyMaterial(const QJsonObject &args);
     QJsonObject toolListMaterialPresets(const QJsonObject &args);
     QJsonObject toolApplyMaterialPreset(const QJsonObject &args);
+    /// #406: LLM-assisted material from a natural-language description. Drives
+    /// the local LLM synchronously and binds the generated material to the
+    /// target/selected mesh. Errors gracefully when no model is loaded.
+    QJsonObject toolDescribeMaterial(const QJsonObject &args);
     QJsonObject toolLoadMesh(const QJsonObject &args);
     QJsonObject toolGetMeshInfo(const QJsonObject &args);
     QJsonObject toolTransformMesh(const QJsonObject &args);
