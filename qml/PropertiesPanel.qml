@@ -331,6 +331,23 @@ Rectangle {
                 Component.onCompleted: content = skinningToolsComponent
             }
 
+            // ---- Rigging (Animation mode) ----
+            // Issue #407: native auto-rig. Shown in Animation Mode for a
+            // STATIC (skeleton-less) selection — embedding a skeleton is the
+            // step that turns a static mesh into an animatable one, so it
+            // belongs next to Skinning. Gated on hasRiggableSelection (a
+            // static mesh); already-rigged meshes show the Skinning section
+            // instead.
+            CollapsibleSection {
+                title: "Rigging"
+                sectionVisible: root.currentTab === root.modeToolsTab
+                    && root.modeToolMatches(EditorModeController.AnimationMode)
+                    && AutoRigController.hasRiggableSelection
+                expanded: false
+
+                Component.onCompleted: content = riggingToolsComponent
+            }
+
             // ---- Texture Paint (Material mode) ----
             // (Brush color/radius/strength/falloff live on the toolbar
             //  paint-brush popup. The Inspector panel keeps only the
@@ -1262,6 +1279,74 @@ Rectangle {
                     ToolTip.text: SkinWeightsController.hasSkinnedSelection
                         ? "Compute per-vertex bone weights via inverse-distance to bone segments. Mesh must have a skeleton."
                         : "Select a skinned mesh (with a skeleton) first."
+                }
+            }
+        }
+    }
+
+    // ---- Rigging Tools Content (Animation mode) ----
+    // Issue #407: native auto-rig. The "Auto-Rig…" button opens the dialog
+    // (template picker + skin checkbox); it disables on non-static meshes
+    // (AutoRigController.hasRiggableSelection).
+    Component {
+        id: riggingToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Embed a skeleton template (humanoid / biped / quadruped / "
+                    + "generic) into the selected unrigged mesh, optionally skinning "
+                    + "it in one click. Best on upright, manifold, T/A-pose meshes."
+            }
+
+            Rectangle {
+                id: rigBtn
+                width: Math.min(parent.width - 16, rigLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                opacity: AutoRigController.hasRiggableSelection ? 1.0 : 0.45
+                color: rigMa.containsMouse && AutoRigController.hasRiggableSelection
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                activeFocusOnTab: AutoRigController.hasRiggableSelection
+                Accessible.role: Accessible.Button
+                Accessible.name: "Auto-Rig"
+                Keys.onSpacePressed: if (AutoRigController.hasRiggableSelection) root.openAutoRigDialog()
+                Keys.onReturnPressed: if (AutoRigController.hasRiggableSelection) root.openAutoRigDialog()
+                Keys.onEnterPressed: if (AutoRigController.hasRiggableSelection) root.openAutoRigDialog()
+                border.color: rigBtn.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: rigBtn.activeFocus ? 2 : 1
+
+                Text {
+                    id: rigLabel
+                    anchors.centerIn: parent
+                    text: "Auto-Rig…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: rigMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: AutoRigController.hasRiggableSelection
+                    cursorShape: AutoRigController.hasRiggableSelection
+                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                    onClicked: root.openAutoRigDialog()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 500
+                    ToolTip.text: AutoRigController.hasRiggableSelection
+                        ? "Generate a skeleton for this static mesh by embedding a template."
+                        : "Select a static (unrigged) mesh first."
                 }
             }
         }
@@ -4101,6 +4186,22 @@ Rectangle {
             skinWeightsLoader.active = true
         } else if (skinWeightsLoader.item) {
             skinWeightsLoader.item.open()
+        }
+    }
+
+    // Issue #407: native auto-rig dialog. Same lazy-load idiom.
+    Loader {
+        id: autoRigLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/AutoRigDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+    }
+    function openAutoRigDialog() {
+        if (!autoRigLoader.active) {
+            autoRigLoader.active = true
+        } else if (autoRigLoader.item) {
+            autoRigLoader.item.open()
         }
     }
 
