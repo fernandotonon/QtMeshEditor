@@ -1660,7 +1660,7 @@ scopes:
             <h3 className={s.subsection}>What does not get uploaded</h3>
             <ul className={s.para} style={{ marginTop: '0.6rem', paddingLeft: '1.25rem' }}>
               <li>Your OS username, home directory, or full local paths (paths are sanitised before upload).</li>
-              <li>Access or refresh tokens — these stay in the OS keychain / credential store on your machine.</li>
+              <li>Access or refresh tokens — these stay in your local QtMeshEditor preferences file on this machine (per-user <Code>QSettings</Code> store), not in upload payloads.</li>
               <li>Files outside the resolved dependency set unless you explicitly include them via <Code>--include</Code> globs.</li>
               <li>Anything until you confirm an upload (GUI dialog, CLI prompt, or MCP explicit call).</li>
             </ul>
@@ -1668,7 +1668,8 @@ scopes:
             <h3 className={s.subsection}>How sign-in works</h3>
             <p className={s.para}>
               Sign-in uses the OAuth device flow (browser verification code) or a direct API key (<Code>qtmesh cloud login --api-key</Code>).
-              Tokens are stored via the platform credential APIs (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux).
+              Session bearer tokens are saved in per-user <Code>QSettings</Code> (the same app-preferences store as other editor settings).
+              Older builds may have migrated tokens once from macOS Keychain or Windows Credential Manager; new sign-ins do not use those stores.
               The editor refreshes expired access tokens automatically; <Code>qtmesh cloud logout</Code> revokes and clears stored credentials.
             </p>
             <p className={s.para}>

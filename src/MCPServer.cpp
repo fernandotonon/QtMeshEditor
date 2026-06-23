@@ -6870,7 +6870,7 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject loginProps;
         loginProps["api_key"] = QJsonObject{
             {"type", "string"},
-            {"description", "Bearer token / API key to store in the OS keychain. Device flow is CLI-only."}};
+            {"description", "Bearer token / API key to store in per-user QSettings. Device flow is CLI-only."}};
         appendTool(
             "cloud_login",
             "Store a QtMesh Cloud API key in secure local storage.",
