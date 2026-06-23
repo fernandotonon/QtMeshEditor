@@ -39,6 +39,9 @@ public:
     static void clearSession();
     static bool hasSession();
 
+    static void setLastUploadAt(qint64 epochMs);
+    static qint64 lastUploadAt();
+
     /** Moves legacy Cloud/token* values from QSettings into secure storage. */
     static void migrateLegacySettingsIfNeeded();
 

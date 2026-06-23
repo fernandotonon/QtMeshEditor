@@ -42,6 +42,7 @@ const NAV = [
   ]},
   { section: 'Integration', items: [
     { id: 'qtmesh-cloud', label: 'QtMesh Cloud Badges' },
+    { id: 'cloud-privacy', label: 'Cloud Privacy & Security' },
     { id: 'docker', label: 'Docker' },
     { id: 'github-actions', label: 'GitHub Actions' },
     { id: 'gitlab-ci', label: 'GitLab CI' },
@@ -1638,6 +1639,41 @@ scopes:
 
             <p className={s.para}>
               Badge values update after each successful upload to <Code>/v1/ingest/scan</Code>.
+            </p>
+          </section>
+
+          <section className={s.section} id="cloud-privacy">
+            <h2 className={s.sectionTitle}>QtMesh Cloud — Privacy &amp; Security</h2>
+            <p className={s.para}>
+              QtMeshEditor can upload <strong>asset projects</strong> from the GUI, CLI (<Code>qtmesh cloud upload</Code>),
+              or MCP (<Code>cloud_upload</Code>). This is separate from CI scan-badge ingestion above — both use your
+              QtMesh Cloud account, but upload different payloads.
+            </p>
+
+            <h3 className={s.subsection}>What gets uploaded</h3>
+            <ul className={s.para} style={{ marginTop: '0.6rem', paddingLeft: '1.25rem' }}>
+              <li>The main model file you choose and any dependencies discovered next to it (textures, materials, sidecars).</li>
+              <li>A JSON manifest describing relative paths, roles, and sizes — never absolute filesystem paths.</li>
+              <li>An optional local scan report (JSON) summarising lint results for the package.</li>
+            </ul>
+
+            <h3 className={s.subsection}>What does not get uploaded</h3>
+            <ul className={s.para} style={{ marginTop: '0.6rem', paddingLeft: '1.25rem' }}>
+              <li>Your OS username, home directory, or full local paths (paths are sanitised before upload).</li>
+              <li>Access or refresh tokens — these stay in your local QtMeshEditor preferences file on this machine (per-user <Code>QSettings</Code> store), not in upload payloads.</li>
+              <li>Files outside the resolved dependency set unless you explicitly include them via <Code>--include</Code> globs.</li>
+              <li>Anything until you confirm an upload (GUI dialog, CLI prompt, or MCP explicit call).</li>
+            </ul>
+
+            <h3 className={s.subsection}>How sign-in works</h3>
+            <p className={s.para}>
+              Sign-in uses the OAuth device flow (browser verification code) or a direct API key (<Code>qtmesh cloud login --api-key</Code>).
+              Session bearer tokens are saved in per-user <Code>QSettings</Code> (the same app-preferences store as other editor settings).
+              Older builds may have migrated tokens once from macOS Keychain or Windows Credential Manager; new sign-ins do not use those stores.
+              The editor refreshes expired access tokens automatically; <Code>qtmesh cloud logout</Code> revokes and clears stored credentials.
+            </p>
+            <p className={s.para}>
+              Sentry breadcrumbs for cloud actions are token-free: they record step names and counts only, never bearer tokens or signed URL contents.
             </p>
           </section>
 

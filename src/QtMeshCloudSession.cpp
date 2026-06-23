@@ -10,6 +10,7 @@
 #include <QJsonParseError>
 #include <QPointer>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QThread>
@@ -41,8 +42,12 @@ void invokeUploadFinished(const QPointer<QtMeshCloudSession>& self,
         return;
     QMetaObject::invokeMethod(qApp,
                               [self, ok, error, projectUrl, scanStatus]() {
-                                  if (self)
-                                      emit self->uploadFinished(ok, error, projectUrl, scanStatus);
+                                  if (!self)
+                                      return;
+                                  if (ok)
+                                      CloudCredentialStore::setLastUploadAt(
+                                          QDateTime::currentMSecsSinceEpoch());
+                                  emit self->uploadFinished(ok, error, projectUrl, scanStatus);
                               },
                               Qt::QueuedConnection);
 }
