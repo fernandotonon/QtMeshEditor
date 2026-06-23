@@ -53,8 +53,12 @@
 #include "AIAssistManager.h"
 #include "PbrMapSynth.h"
 #include "TextureUpscaler.h"
-#include "RTShaderHelper.h"
 #endif
+// RTShaderHelper is a core RTSS helper (no ONNX/SD/LLM dependency) used
+// unconditionally by the #406 describe-material path, so it must NOT sit inside
+// the ENABLE_ONNX guard above — Windows MinGW builds ONNX off and would
+// otherwise fail with "'RTShaderHelper' has not been declared".
+#include "RTShaderHelper.h"
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
 #include <QWidget>
