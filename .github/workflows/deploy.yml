@@ -23,11 +23,14 @@ env:
   ASSIMP_DIR_VERSION: '6.0'
   OGRE_VERSION: '14.5.2'
   # Bump to bust the macOS assimp/ogre caches. The cached OGRE/Assimp SDKs bake
-  # absolute Xcode SDK paths (e.g. .../usr/lib/libz.tbd) into their CMake export;
-  # when the macos-latest runner image bumps Xcode, a stale cache hit makes
-  # build-macos fail with "No rule to make target '<old-SDK>/libz.tbd'". Bump
-  # this whenever the runner's Xcode/SDK changes.
-  MACOS_CACHE_VERSION: 'xcode26b'
+  # an absolute Xcode SDK path (e.g. .../usr/lib/libz.tbd) into their CMake
+  # export. The Pin-Xcode step below selects a CONSISTENT Xcode across all macOS
+  # jobs (currently 26.3), but a cache built earlier under a different Xcode
+  # (26.5) still carries that old libz.tbd path and, when restored into a 26.3
+  # build, fails with "No rule to make target '.../Xcode_26.5/...libz.tbd'"
+  # (this broke the 3.9.1 macOS deploy). Bump this whenever the pinned Xcode
+  # changes so the SDK is rebuilt against it. (xcode263 = under Pin step Xcode 26.3.)
+  MACOS_CACHE_VERSION: 'xcode263'
 
 jobs:
 #  send-slack-notification:
