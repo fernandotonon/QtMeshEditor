@@ -27,7 +27,7 @@ env:
   # when the macos-latest runner image bumps Xcode, a stale cache hit makes
   # build-macos fail with "No rule to make target '<old-SDK>/libz.tbd'". Bump
   # this whenever the runner's Xcode/SDK changes.
-  MACOS_CACHE_VERSION: 'xcode26'
+  MACOS_CACHE_VERSION: 'xcode26b'
 
 jobs:
 #  send-slack-notification:
@@ -1569,6 +1569,18 @@ jobs:
     needs: scan-assets-qtmesh
     runs-on: macos-latest
     steps:
+    - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
+      run: |
+            # All three macOS jobs must use the SAME Xcode/SDK: the OGRE/Assimp
+            # builds bake the active SDK's absolute libz.tbd path into their
+            # CMake export, and the consumer build links against it. Different
+            # default Xcodes per job → "No rule to make target '<SDK>/libz.tbd'".
+            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
+            echo "Selected Xcode: $DEV"
+            sudo xcode-select -s "$DEV"
+            echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
+
     - name: change folder permissions
       run: |
             sudo mkdir /usr/local/lib
@@ -1613,7 +1625,15 @@ jobs:
  build-n-cache-ogre-macos:
     needs: build-n-cache-assimp-macos
     runs-on: macos-latest
-    steps:    
+    steps:
+    - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
+      run: |
+            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
+            echo "Selected Xcode: $DEV"
+            sudo xcode-select -s "$DEV"
+            echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
+
     - name: change folder permissions
       run: |
           sudo mkdir /usr/local/lib
@@ -1671,6 +1691,14 @@ jobs:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
     runs-on: macos-latest
     steps:
+    - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
+      run: |
+            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
+            if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
+            echo "Selected Xcode: $DEV"
+            sudo xcode-select -s "$DEV"
+            echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
+
     - name: change folder permissions
       run: |
             sudo mkdir -p /usr/local/lib
