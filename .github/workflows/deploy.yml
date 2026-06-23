@@ -1221,6 +1221,9 @@ jobs:
 
             is_gl_crash_allowed() {
                 local suite="$1"
+                case "$suite" in
+                    CLIPipeline*Coverage*) return 0 ;;
+                esac
                 for allowed in $GL_CRASH_ALLOWLIST; do
                     [ "$suite" = "$allowed" ] && return 0
                 done

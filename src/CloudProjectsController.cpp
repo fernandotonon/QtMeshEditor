@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QLocale>
+#include <QTimeZone>
 #include <QUrl>
 
 CloudProjectsController* CloudProjectsController::m_pSingleton = nullptr;
@@ -322,7 +323,7 @@ QString CloudProjectsController::formatUpdatedAt(const QString& isoTimestamp) co
     if (!parsed.isValid()) {
         parsed = QDateTime::fromString(isoTimestamp, QStringLiteral("yyyy-MM-dd HH:mm:ss"));
         if (parsed.isValid())
-            parsed.setTimeSpec(Qt::UTC);
+            parsed.setTimeZone(QTimeZone::UTC);
     }
     if (!parsed.isValid())
         return isoTimestamp;

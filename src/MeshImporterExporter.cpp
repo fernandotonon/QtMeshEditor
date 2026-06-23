@@ -2550,8 +2550,6 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             }
 
             configureCamera(en);
-            if (en)
-                rebindEntityMaterials(const_cast<Ogre::Entity*>(en));
         }
     }
     catch (Ogre::Exception& e)
