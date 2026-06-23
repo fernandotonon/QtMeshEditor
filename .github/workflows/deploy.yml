@@ -23,11 +23,14 @@ env:
   ASSIMP_DIR_VERSION: '6.0'
   OGRE_VERSION: '14.5.2'
   # Bump to bust the macOS assimp/ogre caches. The cached OGRE/Assimp SDKs bake
-  # absolute Xcode SDK paths (e.g. .../usr/lib/libz.tbd) into their CMake export;
-  # when the macos-latest runner image bumps Xcode, a stale cache hit makes
-  # build-macos fail with "No rule to make target '<old-SDK>/libz.tbd'". Bump
-  # this whenever the runner's Xcode/SDK changes.
-  MACOS_CACHE_VERSION: 'xcode26b'
+  # an absolute Xcode SDK path (e.g. .../usr/lib/libz.tbd) into their CMake
+  # export. The Pin-Xcode step below selects a CONSISTENT Xcode across all macOS
+  # jobs (currently 26.3), but a cache built earlier under a different Xcode
+  # (26.5) still carries that old libz.tbd path and, when restored into a 26.3
+  # build, fails with "No rule to make target '.../Xcode_26.5/...libz.tbd'"
+  # (this broke the 3.9.1 macOS deploy). Bump this whenever the pinned Xcode
+  # changes so the SDK is rebuilt against it. (xcode263 = under Pin step Xcode 26.3.)
+  MACOS_CACHE_VERSION: 'sdkpin1'
 
 jobs:
 #  send-slack-notification:
@@ -1580,6 +1583,22 @@ jobs:
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
             echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
+            # Pin SDKROOT too. xcode-select / DEVELOPER_DIR alone don't stop
+            # CMake's find_package(ZLIB) from resolving to whatever SDK `xcrun`
+            # defaults to (on these images that was Xcode 26.5 even with 26.3
+            # selected), so OGRE's CMake export baked a 26.5 libz.tbd path that
+            # then failed to link under 26.3. Exporting SDKROOT makes clang AND
+            # CMake resolve system libs under the SAME pinned SDK everywhere.
+            SDKROOT_PATH="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+            [ -n "$SDKROOT_PATH" ] && echo "SDKROOT=$SDKROOT_PATH" >> "$GITHUB_ENV"
+            echo "Pinned SDKROOT: $SDKROOT_PATH"
+            # The per-job runner images can carry DIFFERENT newest Xcodes
+            # (e.g. producer image has 26.5, consumer image only 26.3). Fold the
+            # resolved Xcode app into the cache key so each job only restores a
+            # cache built under its OWN Xcode; build-macos rebuilds OGRE on a
+            # miss (steps below) so a mismatch self-heals instead of failing
+            # with "No rule to make target '.../Xcode_XX/...libz.tbd'".
+            echo "XCODE_TAG=$(basename "$(dirname "$(dirname "$DEV")")")" >> "$GITHUB_ENV"
 
     - name: change folder permissions
       run: |
@@ -1603,6 +1622,9 @@ jobs:
                /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
+        # NOTE: assimp is NOT Xcode-keyed (unlike ogre): it's a plain static lib
+        # that doesn't bake absolute SDK paths, so one assimp cache works across
+        # Xcode versions and stays shared so the ogre-rebuild-on-miss can use it.
         key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-
@@ -1633,6 +1655,22 @@ jobs:
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
             echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
+            # Pin SDKROOT too. xcode-select / DEVELOPER_DIR alone don't stop
+            # CMake's find_package(ZLIB) from resolving to whatever SDK `xcrun`
+            # defaults to (on these images that was Xcode 26.5 even with 26.3
+            # selected), so OGRE's CMake export baked a 26.5 libz.tbd path that
+            # then failed to link under 26.3. Exporting SDKROOT makes clang AND
+            # CMake resolve system libs under the SAME pinned SDK everywhere.
+            SDKROOT_PATH="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+            [ -n "$SDKROOT_PATH" ] && echo "SDKROOT=$SDKROOT_PATH" >> "$GITHUB_ENV"
+            echo "Pinned SDKROOT: $SDKROOT_PATH"
+            # The per-job runner images can carry DIFFERENT newest Xcodes
+            # (e.g. producer image has 26.5, consumer image only 26.3). Fold the
+            # resolved Xcode app into the cache key so each job only restores a
+            # cache built under its OWN Xcode; build-macos rebuilds OGRE on a
+            # miss (steps below) so a mismatch self-heals instead of failing
+            # with "No rule to make target '.../Xcode_XX/...libz.tbd'".
+            echo "XCODE_TAG=$(basename "$(dirname "$(dirname "$DEV")")")" >> "$GITHUB_ENV"
 
     - name: change folder permissions
       run: |
@@ -1665,7 +1703,7 @@ jobs:
         cache-name: cache-ogre-macos
       with:
         path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}
 
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Check out ogre repo
@@ -1698,6 +1736,22 @@ jobs:
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
             echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
+            # Pin SDKROOT too. xcode-select / DEVELOPER_DIR alone don't stop
+            # CMake's find_package(ZLIB) from resolving to whatever SDK `xcrun`
+            # defaults to (on these images that was Xcode 26.5 even with 26.3
+            # selected), so OGRE's CMake export baked a 26.5 libz.tbd path that
+            # then failed to link under 26.3. Exporting SDKROOT makes clang AND
+            # CMake resolve system libs under the SAME pinned SDK everywhere.
+            SDKROOT_PATH="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+            [ -n "$SDKROOT_PATH" ] && echo "SDKROOT=$SDKROOT_PATH" >> "$GITHUB_ENV"
+            echo "Pinned SDKROOT: $SDKROOT_PATH"
+            # The per-job runner images can carry DIFFERENT newest Xcodes
+            # (e.g. producer image has 26.5, consumer image only 26.3). Fold the
+            # resolved Xcode app into the cache key so each job only restores a
+            # cache built under its OWN Xcode; build-macos rebuilds OGRE on a
+            # miss (steps below) so a mismatch self-heals instead of failing
+            # with "No rule to make target '.../Xcode_XX/...libz.tbd'".
+            echo "XCODE_TAG=$(basename "$(dirname "$(dirname "$DEV")")")" >> "$GITHUB_ENV"
 
     - name: change folder permissions
       run: |
@@ -1761,7 +1815,31 @@ jobs:
         cache-name: cache-ogre-macos
       with:
         path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}
+
+    # If this runner image's Xcode differs from the one the producer cached
+    # under, the key above misses. Rebuild OGRE here under THIS job's Xcode so
+    # the SDK's baked libz.tbd path matches what we link against (self-heals the
+    # cross-image Xcode mismatch instead of failing on a stale libz.tbd path).
+    - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
+      name: Check out ogre repo (cache miss)
+      uses: actions/checkout@master
+      with:
+          repository: OGRECave/ogre
+          ref: v${{ env.OGRE_VERSION }}
+          path: ${{github.workspace}}/ogre
+
+    - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
+      name: Build Ogre3D repo (cache miss)
+      run: |
+            cd ${{github.workspace}}/ogre/
+            sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
+            -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
+            -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
+            -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
+            -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            sudo make install -j8
 
     - name: Configure CMake
       env:
