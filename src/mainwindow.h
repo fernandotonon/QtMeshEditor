@@ -32,6 +32,7 @@ class QToolButton;
 class CloudAccountMenuButton;
 class CloudUploadProgress;
 class QtMeshCloudSession;
+struct CloudPackageUploadRequest;
 class OgreWidget;
 
 namespace Ui {
@@ -207,8 +208,11 @@ private:
     CloudUploadProgress* m_cloudUploadProgress = nullptr;
     QtMeshCloudSession* m_cloudSession = nullptr;
     QAction* m_cloudUploadMenuAction = nullptr;
+    bool m_cloudUploadListingInFlight = false;
 
     void updateCloudUploadActionState();
+    void startCloudPackageUpload(QtMeshCloudSession* session,
+                                 const CloudPackageUploadRequest& request);
 
     /// View menu entries for bottom tabbed docks — checked state follows user
     /// preference, not QDockWidget::isVisible() (inactive tabs would otherwise

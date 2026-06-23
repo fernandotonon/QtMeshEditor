@@ -166,6 +166,42 @@ bool CloudUploadDialog::runLocalScanBeforeUpload() const
     return m_runScanCheck->isChecked();
 }
 
+QStringList CloudUploadDialog::selectedAbsolutePathsForUpload() const
+{
+    return selectedAbsolutePaths();
+}
+
+PackageMetadata CloudUploadDialog::buildManifestForUpload(const QString& mainAssetPath,
+                                                          const QStringList& selectedAbsolutePaths,
+                                                          const QString& projectName,
+                                                          const QJsonObject& scanSummary)
+{
+    const QString mainCanonical = QFileInfo(mainAssetPath).absoluteFilePath();
+    QSet<QString> selected;
+    for (const QString& path : selectedAbsolutePaths)
+        selected.insert(QFileInfo(path).absoluteFilePath());
+
+    QStringList extras;
+    for (const QString& path : selected) {
+        if (path != mainCanonical)
+            extras.append(path);
+    }
+    PackageMetadata metadata =
+        ProjectPackager::buildManifest(mainAssetPath, extras, projectName);
+    metadata.files.erase(
+        std::remove_if(metadata.files.begin(), metadata.files.end(),
+                       [&](const PackageEntry& entry) {
+                           return !selected.contains(entry.absolutePath);
+                       }),
+        metadata.files.end());
+    metadata.totalSize = 0;
+    for (const PackageEntry& entry : metadata.files)
+        metadata.totalSize += entry.size;
+    if (!scanSummary.isEmpty())
+        metadata.scanSummary = scanSummary;
+    return metadata;
+}
+
 QStringList CloudUploadDialog::selectedAbsolutePaths() const
 {
     QStringList extras;
@@ -179,28 +215,6 @@ QStringList CloudUploadDialog::selectedAbsolutePaths() const
 
 PackageMetadata CloudUploadDialog::manifest() const
 {
-    const QString mainCanonical = QFileInfo(m_mainAssetPath).absoluteFilePath();
-    QSet<QString> selected;
-    for (const QString& path : selectedAbsolutePaths())
-        selected.insert(QFileInfo(path).absoluteFilePath());
-
-    QStringList extras;
-    for (const QString& path : selected) {
-        if (path != mainCanonical)
-            extras.append(path);
-    }
-    PackageMetadata metadata =
-        ProjectPackager::buildManifest(m_mainAssetPath, extras, projectName());
-    metadata.files.erase(
-        std::remove_if(metadata.files.begin(), metadata.files.end(),
-                       [&](const PackageEntry& entry) {
-                           return !selected.contains(entry.absolutePath);
-                       }),
-        metadata.files.end());
-    metadata.totalSize = 0;
-    for (const PackageEntry& entry : metadata.files)
-        metadata.totalSize += entry.size;
-    if (!m_scanSummary.isEmpty())
-        metadata.scanSummary = m_scanSummary;
-    return metadata;
+    return buildManifestForUpload(m_mainAssetPath, selectedAbsolutePaths(), projectName(),
+                                m_scanSummary);
 }

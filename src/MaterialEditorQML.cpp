@@ -21,6 +21,12 @@
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
 #endif
+#ifdef ENABLE_ONNX
+#include "AIAssistManager.h"
+#include "TextureUpscaler.h"
+#include <QPointer>
+#include <thread>
+#endif
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 #include "RTShaderHelper.h"
@@ -1957,6 +1963,100 @@ Ogre::TextureUnitState* MaterialEditorQML::getCurrentTextureUnit() const
         }
     }
     return nullptr;
+}
+
+// Resolve a live TUS by its index in the selected pass, walking the live
+// material (not the cached m_texUnitMap, which can dangle after a recompile).
+Ogre::TextureUnitState* MaterialEditorQML::getTextureUnitAt(int unitIndex) const
+{
+    Ogre::Pass* pass = getCurrentPass();
+    if (!pass || unitIndex < 0
+        || unitIndex >= static_cast<int>(pass->getNumTextureUnitStates()))
+        return nullptr;
+    return pass->getTextureUnitState(static_cast<unsigned short>(unitIndex));
+}
+
+bool MaterialEditorQML::isPbrMaterial() const
+{
+    static const QStringList kPbrSlots = {
+        QStringLiteral("albedo"), QStringLiteral("normal_map"),
+        QStringLiteral("roughness"), QStringLiteral("metallic"),
+        QStringLiteral("ao"), QStringLiteral("emissive")
+    };
+    for (const QString& name : m_textureUnitList)
+        if (kPbrSlots.contains(name))
+            return true;
+    return false;
+}
+
+QString MaterialEditorQML::textureNameForUnit(int unitIndex) const
+{
+    if (Ogre::TextureUnitState* tus = getTextureUnitAt(unitIndex))
+        return QString::fromStdString(tus->getTextureName());
+    return {};
+}
+
+QString MaterialEditorQML::texturePreviewPathForUnit(int unitIndex) const
+{
+    const QString tex = textureNameForUnit(unitIndex);
+    if (tex.isEmpty())
+        return {};
+    // Use the SAME group-aware cache key as getTexturePreviewPath() so per-slot
+    // and single previews share entries and don't serve a stale thumbnail when
+    // different materials/groups reuse the same texture basename.
+    const QString groupKey = QString::fromStdString(
+        m_ogreMaterial ? m_ogreMaterial->getGroup()
+                       : std::string(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME));
+    const QString cacheKey = groupKey + QLatin1Char('\n') + tex;
+    auto cached = m_previewPathCache.constFind(cacheKey);
+    if (cached != m_previewPathCache.constEnd())
+        return cached.value();
+    const QString resolved = computeTexturePreviewPath(tex);
+    if (!resolved.isEmpty())
+        m_previewPathCache.insert(cacheKey, resolved);
+    return resolved;
+}
+
+void MaterialEditorQML::setTextureForUnit(int unitIndex, const QString& texName)
+{
+    Ogre::TextureUnitState* tus = getTextureUnitAt(unitIndex);
+    if (!tus || texName.isEmpty())
+        return;
+    ensureTextureInMaterialGroup(texName);
+    tus->setTextureName(texName.toStdString());
+    regenerateRtssShaders();
+    updateTextureUnitList();
+    updateMaterialText();
+    emit textureUnitsChanged();
+}
+
+bool MaterialEditorQML::loadTextureFileForUnit(int unitIndex, const QString& filePath)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QStringLiteral("Load texture into slot %1: %2")
+            .arg(unitIndex).arg(QFileInfo(filePath).fileName()));
+    if (!getTextureUnitAt(unitIndex)) {
+        emit errorOccurred(tr("Invalid texture slot."));
+        return false;
+    }
+    const QFileInfo file(filePath);
+    if (filePath.isEmpty() || !file.exists()) {
+        emit errorOccurred(tr("Texture file does not exist."));
+        return false;
+    }
+    const bool isTim = file.suffix().compare(QStringLiteral("tim"), Qt::CaseInsensitive) == 0;
+    const QString ogreTexName = isTim ? (file.completeBaseName() + QStringLiteral(".tim"))
+                                      : file.fileName();
+    const std::string group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+    try {
+        if (!Ogre::TextureManager::getSingleton().getByName(ogreTexName.toStdString(), group)) {
+            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+                file.path().toStdString(), "FileSystem", group);
+            Ogre::ResourceGroupManager::getSingleton().initialiseResourceGroup(group);
+        }
+    } catch (...) {}
+    setTextureForUnit(unitIndex, ogreTexName);
+    return !textureNameForUnit(unitIndex).isEmpty();
 }
 
 Ogre::Technique* MaterialEditorQML::getCurrentTechnique() const
@@ -4057,6 +4157,156 @@ void MaterialEditorQML::generateTextureFromPrompt(const QString &prompt, int wid
     Q_UNUSED(height);
     emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
 #endif
+}
+
+bool MaterialEditorQML::aiPbrAvailable() const
+{
+#ifdef ENABLE_ONNX
+    return AIAssistManager::instance()->isAvailable();
+#else
+    return false;
+#endif
+}
+
+void MaterialEditorQML::generatePbrFromDiffuse()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Generate PBR maps from diffuse"));
+#ifndef ENABLE_ONNX
+    emit pbrSynthError(tr("AI PBR synthesis is not enabled. Rebuild with ENABLE_ONNX=ON."));
+#else
+    // Resolve the current texture's on-disk path via the same group-agnostic
+    // resolver the preview uses.
+    QString src = getTexturePreviewPath();
+    if (src.startsWith(QStringLiteral("file://")))
+        src = QUrl(src).toLocalFile();
+    if (src.isEmpty() || !QFileInfo::exists(src)) {
+        emit pbrSynthError(tr("No on-disk diffuse texture to synthesize from. "
+                              "Apply or save a diffuse texture first."));
+        return;
+    }
+
+    emit pbrSynthStarted();
+    const PbrMapSynthResult res =
+        AIAssistManager::instance()->synthesizePbrMaps(src, {});
+    if (!res.ok) {
+        emit pbrSynthError(res.error.isEmpty()
+            ? tr("PBR synthesis failed.") : res.error);
+        return;
+    }
+
+    // Bind the generated maps into the active material's canonical slots.
+    if (m_ogreMaterial) {
+        auto bindSlot = [&](const char* slot, const QString& path) {
+            if (path.isEmpty()) return;
+            ensureTextureInMaterialGroup(QFileInfo(path).fileName());
+            for (auto* tech : m_ogreMaterial->getTechniques()) {
+                for (unsigned short p = 0; p < tech->getNumPasses(); ++p) {
+                    Ogre::Pass* pass = tech->getPass(p);
+                    Ogre::TextureUnitState* tus = nullptr;
+                    for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i)
+                        if (pass->getTextureUnitState(i)->getName() == slot) {
+                            tus = pass->getTextureUnitState(i); break;
+                        }
+                    if (!tus) { tus = pass->createTextureUnitState(); tus->setName(slot); }
+                    tus->setTextureName(QFileInfo(path).fileName().toStdString());
+                }
+            }
+        };
+        bindSlot("normal_map", res.normalPath);
+        bindSlot("roughness",  res.roughnessPath);
+        RTShaderHelper::wirePbrSlotsForFFP(m_ogreMaterial.get());
+        // wirePbrSlotsForFFP only marks the normal unit non-FFP; it does NOT
+        // make RTSS sample it. applyNormalMap wires the SRS_NORMALMAP (or
+        // Cook-Torrance) sub-render-state so the normal map actually perturbs
+        // viewport shading — without this the bind is invisible on the mesh.
+        if (!res.normalPath.isEmpty()) {
+            RTShaderHelper::applyNormalMap(
+                m_ogreMaterial, QFileInfo(res.normalPath).fileName().toStdString());
+        }
+        m_ogreMaterial->compile();
+        // The bind above may have CREATED new texture units (normal_map /
+        // roughness); rebuild the cached technique/pass/unit maps so the QML
+        // slot list (and isPbrMaterial) reflect them, then notify the views.
+        updateTechniqueList();   // rebuilds pass map (units read via getCurrentPass)
+        updateTextureUnitList();
+        updateMaterialText();
+        emit textureUnitsChanged();
+        emit textureUnitListChanged();
+    }
+
+    emit pbrSynthCompleted(res.toVariantMap());
+#endif
+}
+
+void MaterialEditorQML::upscaleCurrentTexture(int scale)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(scale);
+    emit upscaleError(tr("AI upscaling is not enabled. Rebuild with ENABLE_ONNX=ON."));
+#else
+    QString src = getTexturePreviewPath();
+    if (src.startsWith(QStringLiteral("file://")))
+        src = QUrl(src).toLocalFile();
+    if (src.isEmpty() || !QFileInfo::exists(src)) {
+        emit upscaleError(tr("No on-disk texture to upscale. Apply or save a texture first."));
+        return;
+    }
+    emit upscaleStarted();
+    // Ensure the model on THIS (GUI) thread first — the download uses a
+    // QEventLoop and ModelDownloader's queued signals, which need a running
+    // event loop. If the model isn't on disk yet, signal the download phase so
+    // the UI can show "Downloading model…" instead of a silent "Upscaling…".
+    AIAssistManager* ai = AIAssistManager::instance();
+    const QString preModel = ai->modelPath(
+        (scale == 2) ? AIAssistManager::Map::UpscaleX2 : AIAssistManager::Map::UpscaleX4);
+    if (!QFileInfo::exists(preModel))
+        emit upscaleDownloading();
+    const QString model = ai->ensureUpscaleModel(scale);
+    if (model.isEmpty()) {
+        emit upscaleError(tr("Upscale model unavailable (offline or download failed)."));
+        return;
+    }
+
+    const QFileInfo fi(src);
+    const QString outPath = QDir(fi.absolutePath())
+        .filePath(fi.completeBaseName() + QStringLiteral("_upscaled_x%1.png").arg(scale));
+
+    // Fresh cancel flag for this run (shared_ptr keeps it alive for the worker).
+    m_upscaleCancel = std::make_shared<std::atomic_bool>(false);
+    auto cancel = m_upscaleCancel;
+    QPointer<MaterialEditorQML> self(this);
+
+    // Then run the pure-CPU tiled inference + save on a worker so the UI doesn't
+    // freeze, reporting per-tile progress + honoring cancel, and marshal results
+    // back via queued invocations. (CLI/MCP keep the synchronous path.)
+    std::thread([self, src, model, outPath, cancel]() {
+        TextureUpscaler::ProgressFn onProgress = [self, cancel](int done, int total) -> bool {
+            if (cancel->load()) return false;  // cancel requested
+            QMetaObject::invokeMethod(qApp, [self, done, total]() {
+                if (self) emit self->upscaleProgress(done, total);
+            }, Qt::QueuedConnection);
+            return true;
+        };
+        const QImage in(src);
+        const TextureUpscaler::Result res =
+            TextureUpscaler::upscale(in, model, {}, onProgress);
+        const bool ok = res.ok && !res.image.isNull() && res.image.save(outPath, "PNG");
+        const QString err = res.error;
+        QMetaObject::invokeMethod(qApp, [self, ok, outPath, err]() {
+            if (!self) return;
+            if (ok) emit self->upscaleCompleted(outPath);
+            else    emit self->upscaleError(err.isEmpty()
+                        ? QObject::tr("Upscale failed.") : err);
+        }, Qt::QueuedConnection);
+    }).detach();
+#endif
+}
+
+void MaterialEditorQML::cancelUpscale()
+{
+    if (m_upscaleCancel)
+        m_upscaleCancel->store(true);
 }
 
 bool MaterialEditorQML::hasSelectedMesh() const

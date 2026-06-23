@@ -41,6 +41,12 @@
 #include <QEventLoop>
 #include <QImage>
 #endif
+#ifdef ENABLE_ONNX
+#include "AIAssistManager.h"
+#include "PbrMapSynth.h"
+#include "TextureUpscaler.h"
+#include "RTShaderHelper.h"
+#endif
 #include <OgreMaterialSerializer.h>
 #include <QApplication>
 #include <QWidget>
@@ -601,6 +607,15 @@ void CLIPipeline::printUsage()
         "                                  generation; binds result as diffuse and\n"
         "                                  re-exports (needs an SD build + base model;\n"
         "                                  run 'uv --unwrap' first if the mesh lacks UVs)\n"
+        "  material --texture <low.png> --upscale {2|4} [-o <high.png>]\n"
+        "                                  AI super-resolution (Real-ESRGAN); 2x/4x\n"
+        "                                  (needs an ONNX build + first-run model download)\n"
+        "  material --texture <albedo.png> --generate-pbr [<mesh>] [-o <output>]\n"
+        "                  [--tile-size N] [--no-normal] [--no-roughness] [--no-height]\n"
+        "                                  AI PBR map synthesis (normal/roughness/height)\n"
+        "                                  from a diffuse texture; writes maps next to it,\n"
+        "                                  and if <mesh> given binds them + re-exports\n"
+        "                                  (needs an ONNX build + first-run model download)\n"
         "\n"
         "Scan options:\n"
         "  --target <id>             Alias for --profile (CI-friendly). Built-in: ps1, n64, nds, dreamcast,\n"
@@ -777,6 +792,7 @@ void CLIPipeline::printUsage()
         "  cloud list [--json]               List cloud projects for the signed-in account.\n"
         "  cloud upload <file> [--name <n>] [--no-scan] [--json]\n"
         "                                    Package the asset + dependencies and upload to QtMesh Cloud.\n"
+        "                                    After files/complete, uploads the local scan report to the main file.\n"
         "  cloud delete <project-id>         Delete a cloud project by id.\n"
         "\n"
         "Global options:\n"
@@ -3572,6 +3588,13 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     double controlStrength = 0.9;
     int genWidth = 512, genHeight = 512;
     bool listPresets = false;
+    // #404 PBR map synthesis from a diffuse texture.
+    QString pbrAlbedo;
+    bool generatePbr = false;
+    int pbrTileSize = 256;
+    bool pbrNoNormal = false, pbrNoRoughness = false, pbrNoHeight = false;
+    // #405 Real-ESRGAN upscaling (shares --texture as the input).
+    int upscaleFactor = 0;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -3585,6 +3608,32 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
             genPrompt = QString(argv[++i]);
             continue;
         }
+        if (arg == "--generate-pbr") { generatePbr = true; continue; }
+        if (arg == "--upscale" && i + 1 < argc) {
+            bool usOk = false;
+            upscaleFactor = QString(argv[++i]).toInt(&usOk);
+            if (!usOk) {
+                err() << "Error: --upscale must be an integer (2 or 4)." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--texture" && i + 1 < argc) {
+            pbrAlbedo = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--tile-size" && i + 1 < argc) {
+            bool tsOk = false;
+            pbrTileSize = QString(argv[++i]).toInt(&tsOk);
+            if (!tsOk) {
+                err() << "Error: --tile-size must be an integer." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--no-normal")    { pbrNoNormal = true; continue; }
+        if (arg == "--no-roughness") { pbrNoRoughness = true; continue; }
+        if (arg == "--no-height")    { pbrNoHeight = true; continue; }
         if (arg == "--model" && i + 1 < argc) {
             sdModel = QString(argv[++i]);
             continue;
@@ -3618,6 +3667,18 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     // Depth-conditioned mesh-aware texture generation (issue #403). Distinct
     // enough (async SD worker, model loading, depth RTT) to live in its own
     // helper; presets continue below.
+    // #405: Real-ESRGAN texture upscaling (--texture in, -o out).
+    if (upscaleFactor != 0) {
+        return cmdMaterialUpscale(pbrAlbedo, outputPath, upscaleFactor);
+    }
+
+    // #404: PBR map synthesis (normal/roughness/height) from a diffuse via ONNX.
+    if (generatePbr) {
+        return cmdMaterialGeneratePbr(pbrAlbedo, inputPath, outputPath,
+                                      pbrTileSize, !pbrNoNormal,
+                                      !pbrNoRoughness, !pbrNoHeight);
+    }
+
     if (!genPrompt.isEmpty()) {
         return cmdMaterialGenerateTexture(inputPath, outputPath, genPrompt,
                                           sdModel, controlNetPath,
@@ -3956,6 +4017,217 @@ int CLIPipeline::cmdMaterialGenerateTexture(const QString& inputPath,
                  : QStringLiteral(" (depth-conditioned via %1)")
                        .arg(QFileInfo(controlNetPath).fileName()))
         .arg(texName).arg(boundCount).arg(outFi.fileName()));
+    return 0;
+#endif
+}
+
+int CLIPipeline::cmdMaterialGeneratePbr(const QString& albedoPath,
+                                        const QString& meshPath,
+                                        QString outputPath,
+                                        int tileSize, bool wantNormal,
+                                        bool wantRoughness, bool wantHeight)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(albedoPath); Q_UNUSED(meshPath); Q_UNUSED(outputPath);
+    Q_UNUSED(tileSize); Q_UNUSED(wantNormal); Q_UNUSED(wantRoughness);
+    Q_UNUSED(wantHeight);
+    err() << "Error: this build was compiled without AI PBR map synthesis "
+             "(rebuild with -DENABLE_ONNX=ON)." << Qt::endl;
+    return 1;
+#else
+    if (albedoPath.isEmpty()) {
+        err() << "Error: --generate-pbr requires --texture <albedo.png>." << Qt::endl;
+        return 2;
+    }
+    if (!QFileInfo::exists(albedoPath)) {
+        err() << "Error: albedo not found: " << albedoPath << Qt::endl;
+        return 1;
+    }
+    if (tileSize != 0 && (tileSize < 32 || tileSize > 4096)) {
+        err() << "Error: --tile-size must be 0 (whole image) or between 32 and 4096." << Qt::endl;
+        return 2;
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.pbr_synth"),
+        QStringLiteral("CLI generate-pbr from %1 (n=%2 r=%3 h=%4)")
+            .arg(QFileInfo(albedoPath).fileName())
+            .arg(wantNormal).arg(wantRoughness).arg(wantHeight));
+
+    PbrMapSynth::Options opts;
+    opts.generateNormal = wantNormal;
+    opts.generateRoughness = wantRoughness;
+    opts.generateHeight = wantHeight;
+    opts.tileSize = tileSize;
+
+    PbrMapSynthResult res =  // non-const: copyBeside() may relocate map paths
+        AIAssistManager::instance()->synthesizePbrMaps(albedoPath, opts);
+    if (!res.ok) {
+        err() << "Error: PBR synthesis failed: "
+              << (res.error.isEmpty() ? QStringLiteral("unknown error") : res.error)
+              << Qt::endl;
+        return 1;
+    }
+
+    // If no mesh was given, the maps + an optional .material sidecar are the
+    // whole deliverable. Write a minimal sidecar referencing the generated maps.
+    if (meshPath.isEmpty()) {
+        cliWrite(QString("Generated PBR maps from %1:\n%2%3%4")
+            .arg(QFileInfo(albedoPath).fileName())
+            .arg(res.normalPath.isEmpty() ? QString()
+                 : QStringLiteral("  normal:    %1\n").arg(QFileInfo(res.normalPath).fileName()))
+            .arg(res.roughnessPath.isEmpty() ? QString()
+                 : QStringLiteral("  roughness: %1\n").arg(QFileInfo(res.roughnessPath).fileName()))
+            .arg(res.heightPath.isEmpty() ? QString()
+                 : QStringLiteral("  height:    %1\n").arg(QFileInfo(res.heightPath).fileName())));
+        return 0;
+    }
+
+    // Mesh target: import, bind maps into the canonical slice-E slots, export.
+    const QFileInfo meshFi(meshPath);
+    if (!meshFi.exists()) {
+        err() << "Error: mesh not found: " << meshPath << Qt::endl;
+        return 1;
+    }
+    if (outputPath.isEmpty()) outputPath = meshPath;
+    const QFileInfo outFi(outputPath);
+
+    if (!initOgreHeadless()) return 1;
+    MeshImporterExporter::importer({meshFi.absoluteFilePath()});
+    auto& entities = Manager::getSingleton()->getEntities();
+    Ogre::Entity* entity = nullptr;
+    for (auto* obj : entities) {
+        if (obj && obj->getMovableType() == "Entity") {
+            entity = static_cast<Ogre::Entity*>(obj); break;
+        }
+    }
+    if (!entity) {
+        err() << "Error: no mesh entity loaded from: " << meshPath << Qt::endl;
+        return 1;
+    }
+
+    // The maps were written next to the ALBEDO; the bind below references them
+    // by basename. When -o writes the mesh to a different directory, copy the
+    // maps beside the output mesh so the exported material's texture refs
+    // resolve next to it. (No-op when albedo dir == output dir.)
+    const QString outDir = outFi.absolutePath();
+    auto copyBeside = [&](QString& path) {
+        if (path.isEmpty()) return;
+        const QString dst = QDir(outDir).filePath(QFileInfo(path).fileName());
+        if (QFileInfo(path).absoluteFilePath() != QFileInfo(dst).absoluteFilePath()) {
+            QFile::remove(dst);
+            if (QFile::copy(path, dst))
+                path = dst;
+        }
+    };
+    copyBeside(res.normalPath);
+    copyBeside(res.roughnessPath);
+    copyBeside(res.heightPath);
+
+    // Register the output directory so the (now co-located) PNGs resolve by name.
+    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+        outDir.toStdString(), "FileSystem",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto bindSlot = [&](Ogre::Pass* pass, const char* slot, const QString& path) {
+        if (path.isEmpty()) return;
+        const std::string tex = QFileInfo(path).fileName().toStdString();
+        Ogre::TextureUnitState* tus = nullptr;
+        for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i)
+            if (pass->getTextureUnitState(i)->getName() == slot) { tus = pass->getTextureUnitState(i); break; }
+        if (!tus) { tus = pass->createTextureUnitState(); tus->setName(slot); }
+        tus->setTextureName(tex);
+    };
+
+    int bound = 0;
+    for (unsigned int s = 0; s < entity->getNumSubEntities(); ++s) {
+        const auto mat = entity->getSubEntity(s)->getMaterial();
+        if (!mat || mat->getNumTechniques() == 0) continue;
+        auto* tech = mat->getTechnique(0);
+        if (tech->getNumPasses() == 0) continue;
+        auto* pass = tech->getPass(0);
+        bindSlot(pass, "normal_map", res.normalPath);
+        bindSlot(pass, "roughness",  res.roughnessPath);
+        RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+        mat->compile();
+        ++bound;
+    }
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    if (MeshImporterExporter::exporter(node, outFi.absoluteFilePath(),
+                                       formatForExtension(outputPath)) != 0) {
+        err() << "Error: Export failed." << Qt::endl;
+        return 1;
+    }
+
+    cliWrite(QString("Generated PBR maps from %1 and bound to %2 submesh(es).\n"
+                     "  saved: %3\n")
+        .arg(QFileInfo(albedoPath).fileName()).arg(bound).arg(outFi.fileName()));
+    return 0;
+#endif
+}
+
+int CLIPipeline::cmdMaterialUpscale(const QString& srcPath, QString outputPath,
+                                    int scale)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(srcPath); Q_UNUSED(outputPath); Q_UNUSED(scale);
+    err() << "Error: this build was compiled without AI texture upscaling "
+             "(rebuild with -DENABLE_ONNX=ON)." << Qt::endl;
+    return 1;
+#else
+    if (srcPath.isEmpty()) {
+        err() << "Error: --upscale requires --texture <image>." << Qt::endl;
+        return 2;
+    }
+    if (scale != 2 && scale != 4) {
+        err() << "Error: --upscale must be 2 or 4." << Qt::endl;
+        return 2;
+    }
+    if (!QFileInfo::exists(srcPath)) {
+        err() << "Error: texture not found: " << srcPath << Qt::endl;
+        return 1;
+    }
+    const QImage src(srcPath);
+    if (src.isNull()) {
+        err() << "Error: could not load image: " << srcPath << Qt::endl;
+        return 1;
+    }
+
+    // The facade handles model download (first-run) + run + cache; it writes
+    // <stem>_upscaled.png next to the source. (Breadcrumb emitted there.)
+    const QString produced =
+        AIAssistManager::instance()->upscaleTexture(srcPath, scale, /*overwrite=*/true);
+    if (produced.isEmpty()) {
+        err() << "Error: upscale failed (model unavailable or inference error)." << Qt::endl;
+        return 1;
+    }
+    // Honour an explicit -o strictly: move the facade's output there, falling
+    // back to copy+remove for cross-device moves. If the requested file can't
+    // be produced, fail (exit 1) rather than silently leaving it at the
+    // temp <stem>_upscaled_xN.png path — automation relies on -o.
+    QString finalPath = produced;
+    if (!outputPath.isEmpty()
+        && QFileInfo(outputPath).absoluteFilePath() != QFileInfo(produced).absoluteFilePath()) {
+        QFile::remove(outputPath);
+        bool moved = QFile::rename(produced, outputPath);
+        if (!moved && QFile::copy(produced, outputPath)) {
+            QFile::remove(produced);
+            moved = true;
+        }
+        if (!moved) {
+            err() << "Error: could not write the requested output file: "
+                  << outputPath << " (upscaled image is at "
+                  << produced << ")" << Qt::endl;
+            return 1;
+        }
+        finalPath = outputPath;
+    }
+    const QImage outImg(finalPath);
+    cliWrite(QString("Upscaled %1 by %2x → %3 (%4×%5 → %6×%7)\n")
+        .arg(QFileInfo(srcPath).fileName()).arg(scale)
+        .arg(QFileInfo(finalPath).fileName())
+        .arg(src.width()).arg(src.height())
+        .arg(outImg.width()).arg(outImg.height()));
     return 0;
 #endif
 }

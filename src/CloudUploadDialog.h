@@ -27,8 +27,14 @@ public:
     bool hasSelectedProject() const;
     QtMeshCloudClient::ProjectSummary selectedProject() const;
     QString projectName() const;
+    QStringList selectedAbsolutePathsForUpload() const;
     PackageMetadata manifest() const;
     bool runLocalScanBeforeUpload() const;
+
+    static PackageMetadata buildManifestForUpload(const QString& mainAssetPath,
+                                                  const QStringList& selectedAbsolutePaths,
+                                                  const QString& projectName,
+                                                  const QJsonObject& scanSummary = QJsonObject());
 
 private:
     void rebuildDependencyList();

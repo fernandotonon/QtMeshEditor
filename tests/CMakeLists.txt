@@ -121,6 +121,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PbrMapSynth.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureUpscaler.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIAssistManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MemoryEstimator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DrawCallAnalyzer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexCacheOptimizer.cpp
@@ -435,6 +438,13 @@ if(BUILD_TESTS)
 
     if(ENABLE_SENTRY)
         list(APPEND TEST_SUPPORT_LIBRARIES sentry)
+    endif()
+
+    # #404: PbrMapSynth.cpp links ONNX Runtime when ENABLE_ONNX is set, so the
+    # QML component test executables (which compile it via this common lib) need
+    # the imported target on the link line too.
+    if(ENABLE_ONNX)
+        list(APPEND TEST_SUPPORT_LIBRARIES qtmesh_onnx)
     endif()
 
     add_library(qtmesh_test_common STATIC ${TEST_SRC_FILES} ${TEST_HEADER_FILES})

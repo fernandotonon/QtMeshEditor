@@ -29,6 +29,7 @@
 #include "UvUnwrap.h"
 #include "AssetScanController.h"
 #include "CloudCredentialStore.h"
+#include "DependencyResolver.h"
 #include "ProjectPackager.h"
 #include "QtMeshCloudClient.h"
 #include "QtMeshCloudSession.h"
@@ -40,6 +41,11 @@
 #include "ModelIsometricRenderer.h"
 #ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
+#endif
+#ifdef ENABLE_ONNX
+#include "AIAssistManager.h"
+#include "PbrMapSynth.h"
+#include "RTShaderHelper.h"
 #endif
 #include <QEventLoop>
 #include <QDebug>
@@ -568,6 +574,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("retopologize"),         &MCPServer::toolRetopologize},
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
+        {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
+        {QStringLiteral("upscale_texture"), &MCPServer::toolUpscaleTexture},
         {QStringLiteral("get_scene_info"), &MCPServer::toolGetSceneInfo},
         {QStringLiteral("take_screenshot"), &MCPServer::toolTakeScreenshot},
         {QStringLiteral("create_primitive"), &MCPServer::toolCreatePrimitive},
@@ -1675,6 +1683,123 @@ QJsonObject MCPServer::toolGenerateMeshTexture(const QJsonObject &args)
     result["controlNetUsed"]  = !controlNetPath.isEmpty();
     result["depthSize"]       = depthSize;
     result["controlStrength"] = strength;
+    return result;
+#endif
+}
+
+QJsonObject MCPServer::toolGeneratePbrMaps(const QJsonObject &args)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "This build was compiled without AI PBR map synthesis "
+        "(rebuild with -DENABLE_ONNX=ON).");
+#else
+    const QString albedoPath = args.value("albedo_path").toString();
+    if (albedoPath.trimmed().isEmpty())
+        return makeErrorResult("'albedo_path' is required.");
+    if (!QFileInfo::exists(albedoPath))
+        return makeErrorResult(
+            QStringLiteral("albedo not found: %1").arg(albedoPath));
+
+    PbrMapSynth::Options opts;
+    if (args.contains("normal"))    opts.generateNormal    = args["normal"].toBool();
+    if (args.contains("roughness")) opts.generateRoughness = args["roughness"].toBool();
+    if (args.contains("height"))    opts.generateHeight    = args["height"].toBool();
+    if (args.contains("tile_size")) opts.tileSize          = args["tile_size"].toInt(256);
+    if (args.contains("overwrite")) opts.overwriteCache    = args["overwrite"].toBool();
+    // Mirror the CLI bounds: 0 (whole image) or 32..4096. Reject out-of-range
+    // so a bad MCP/HTTP request can't drive pathological tiling/allocation.
+    if (opts.tileSize != 0 && (opts.tileSize < 32 || opts.tileSize > 4096))
+        return makeErrorResult("'tile_size' must be 0 (whole image) or between 32 and 4096.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.pbr_synth"),
+        QStringLiteral("MCP generate_pbr_maps from %1")
+            .arg(QFileInfo(albedoPath).fileName()));
+
+    const PbrMapSynthResult res =
+        AIAssistManager::instance()->synthesizePbrMaps(albedoPath, opts);
+    if (!res.ok)
+        return makeErrorResult(res.error.isEmpty()
+            ? QStringLiteral("PBR synthesis failed") : res.error);
+
+    // If a mesh is selected, bind the maps into the canonical slice-E slots.
+    int bound = 0;
+    if (hasSelectedEntities()) {
+        SelectionSet* sel = SelectionSet::getSingleton();
+        const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                                  : QList<Ogre::Entity*>{};
+        Ogre::Entity* entity = resolved.isEmpty() ? nullptr : resolved.first();
+        if (entity) {
+            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+                QFileInfo(albedoPath).absolutePath().toStdString(), "FileSystem",
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            auto bindSlot = [](Ogre::Pass* pass, const char* slot, const QString& p) {
+                if (p.isEmpty()) return;
+                const std::string tex = QFileInfo(p).fileName().toStdString();
+                Ogre::TextureUnitState* tus = nullptr;
+                for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i)
+                    if (pass->getTextureUnitState(i)->getName() == slot) { tus = pass->getTextureUnitState(i); break; }
+                if (!tus) { tus = pass->createTextureUnitState(); tus->setName(slot); }
+                tus->setTextureName(tex);
+            };
+            for (unsigned int s = 0; s < entity->getNumSubEntities(); ++s) {
+                const auto mat = entity->getSubEntity(s)->getMaterial();
+                if (!mat || mat->getNumTechniques() == 0) continue;
+                auto* tech = mat->getTechnique(0);
+                if (tech->getNumPasses() == 0) continue;
+                auto* pass = tech->getPass(0);
+                bindSlot(pass, "normal_map", res.normalPath);
+                bindSlot(pass, "roughness",  res.roughnessPath);
+                RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+                mat->compile();
+                ++bound;
+            }
+        }
+    }
+
+    QJsonObject result = makeSuccessResult(QStringLiteral(
+        "Generated PBR maps from '%1'%2.")
+        .arg(QFileInfo(albedoPath).fileName())
+        .arg(bound > 0 ? QStringLiteral(" and bound to %1 submesh(es)").arg(bound)
+                       : QString()));
+    result["normalPath"]    = res.normalPath;
+    result["roughnessPath"] = res.roughnessPath;
+    result["heightPath"]    = res.heightPath;
+    result["fromCache"]     = res.fromCache;
+    result["boundSubmeshes"] = bound;
+    return result;
+#endif
+}
+
+QJsonObject MCPServer::toolUpscaleTexture(const QJsonObject &args)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "This build was compiled without AI texture upscaling "
+        "(rebuild with -DENABLE_ONNX=ON).");
+#else
+    const QString srcPath = args.value("texture_path").toString();
+    if (srcPath.trimmed().isEmpty())
+        return makeErrorResult("'texture_path' is required.");
+    if (!QFileInfo::exists(srcPath))
+        return makeErrorResult(QStringLiteral("texture not found: %1").arg(srcPath));
+    const int scale = args.contains("scale") ? args["scale"].toInt(4) : 4;
+    if (scale != 2 && scale != 4)
+        return makeErrorResult("'scale' must be 2 or 4.");
+    const bool overwrite = args.value("overwrite").toBool();
+
+    const QString out =
+        AIAssistManager::instance()->upscaleTexture(srcPath, scale, overwrite);
+    if (out.isEmpty())
+        return makeErrorResult(
+            "Upscale failed (model unavailable/offline or inference error).");
+
+    QJsonObject result = makeSuccessResult(QStringLiteral(
+        "Upscaled '%1' by %2x.").arg(QFileInfo(srcPath).fileName()).arg(scale));
+    result["outputPath"] = out;
+    result["scale"] = scale;
     return result;
 #endif
 }
@@ -5274,46 +5399,71 @@ QJsonObject MCPServer::toolCloudUpload(const QJsonObject &args)
     if (projectName.isEmpty())
         projectName = QFileInfo(filePath).completeBaseName();
 
-    PackageMetadata manifest = ProjectPackager::buildManifest(filePath, {}, projectName);
     const bool runScan = !args.contains(QStringLiteral("scan")) || args.value(QStringLiteral("scan")).toBool(true);
-    if (runScan) {
-        QString scanError;
-        const QByteArray scanJson = AssetScanController::runIsolatedScanJsonSync(
-            QFileInfo(filePath).absolutePath(), QFileInfo(filePath).fileName(), &scanError);
-        if (!scanJson.isEmpty()) {
-            QJsonParseError parseError;
-            const QJsonDocument doc = QJsonDocument::fromJson(scanJson, &parseError);
-            if (parseError.error == QJsonParseError::NoError && doc.isObject())
-                manifest.scanSummary = doc.object();
-        }
+
+    const QString mainCanonical = QFileInfo(filePath).canonicalFilePath();
+    QStringList selectedPaths;
+    selectedPaths.append(mainCanonical);
+    for (const DependencyEntry& entry : DependencyResolver::detect(filePath)) {
+        if (!entry.exists || !entry.checkedByDefault)
+            continue;
+        const QString absolute = QFileInfo(entry.absolutePath).absoluteFilePath();
+        if (absolute == mainCanonical)
+            continue;
+        selectedPaths.append(absolute);
     }
+
+    CloudPackageUploadRequest request;
+    request.mainAssetPath = filePath;
+    request.selectedAbsolutePaths = selectedPaths;
+    request.projectName = projectName;
+    request.createNewProject = true;
+    request.runLocalScan = runScan;
 
     QtMeshCloudSession session(token);
     QEventLoop loop;
     QString projectUrl;
     QString error;
+    QString reportWarning;
+    bool uploadOk = false;
+    const int uploadedFileCount = selectedPaths.size();
     connect(&session, &QtMeshCloudSession::uploadFinished, &loop,
             [&](bool ok, const QString& err, const QString& url, const QString&) {
+                uploadOk = ok;
                 projectUrl = url;
-                error = err;
-                if (!ok && error.isEmpty())
-                    error = QStringLiteral("Upload failed");
+                if (ok && !err.isEmpty())
+                    reportWarning = err;
+                else if (!ok)
+                    error = err.isEmpty() ? QStringLiteral("Upload failed") : err;
                 loop.quit();
             });
     connect(&session, &QtMeshCloudSession::uploadCanceled, &loop, [&]() {
+        uploadOk = false;
         error = QStringLiteral("Upload canceled");
         loop.quit();
     });
-    session.uploadPackage(manifest);
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    timeout.setInterval(10 * 60 * 1000);
+    connect(&timeout, &QTimer::timeout, &loop, [&]() {
+        session.cancel();
+        uploadOk = false;
+        error = QStringLiteral("Upload timed out");
+        loop.quit();
+    });
+    timeout.start();
+    session.uploadPackageFromAssets(request);
     loop.exec();
 
-    if (!error.isEmpty())
+    if (!uploadOk)
         return makeErrorResult(error);
 
     QJsonObject content;
     content[QStringLiteral("ok")] = true;
     content[QStringLiteral("projectUrl")] = projectUrl;
-    content[QStringLiteral("fileCount")] = manifest.files.size();
+    content[QStringLiteral("fileCount")] = uploadedFileCount;
+    if (!reportWarning.isEmpty())
+        content[QStringLiteral("reportWarning")] = reportWarning;
     return makeSuccessResult(
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
@@ -6098,6 +6248,62 @@ QJsonArray MCPServer::buildToolsList()
         );
     }
 #endif // ENABLE_STABLE_DIFFUSION
+
+    // generate_pbr_maps (#404) — only advertised when ONNX is compiled in.
+#ifdef ENABLE_ONNX
+    {
+        QJsonObject props;
+        props["albedo_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Path to the source albedo/diffuse texture on disk. The generated "
+             "maps are written next to it (<stem>_normal.png / _roughness.png / "
+             "_height.png)."}};
+        props["normal"]    = QJsonObject{{"type", "boolean"},
+            {"description", "Generate the tangent-space normal map (default true)."}};
+        props["roughness"] = QJsonObject{{"type", "boolean"},
+            {"description", "Generate the roughness map (default true). Derived "
+             "from albedo luminance — needs no model, works offline."}};
+        props["height"]    = QJsonObject{{"type", "boolean"},
+            {"description", "Generate the height map (default true)."}};
+        props["tile_size"] = QJsonObject{{"type", "integer"},
+            {"description", "Model input tile size (default 256). 0 = whole image."}};
+        props["overwrite"] = QJsonObject{{"type", "boolean"},
+            {"description", "Re-run even if cached output PNGs already exist."}};
+        appendTool(
+            "generate_pbr_maps",
+            "AI PBR map synthesis (issue #404). Predicts normal + height maps "
+            "from a single albedo texture via an ONNX UNet (downloaded on first "
+            "use) and derives roughness from albedo luminance. Writes the maps "
+            "next to the source albedo; if a mesh is selected, binds normal/"
+            "roughness into the material's canonical PBR slots. Normal/height "
+            "need the model (graceful error if unavailable); roughness works "
+            "offline.",
+            props,
+            QJsonArray{"albedo_path"}
+        );
+    }
+    // upscale_texture (#405)
+    {
+        QJsonObject props;
+        props["texture_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Path to the image to upscale. The result is written next to it as "
+             "<stem>_upscaled.png."}};
+        props["scale"] = QJsonObject{{"type", "integer"},
+            {"description", "Upscale factor: 2 or 4 (default 4)."}};
+        props["overwrite"] = QJsonObject{{"type", "boolean"},
+            {"description", "Re-run even if a cached _upscaled.png already exists."}};
+        appendTool(
+            "upscale_texture",
+            "AI texture super-resolution (issue #405). Upscales an image 2x or 4x "
+            "with Real-ESRGAN via an ONNX model (downloaded on first use). Useful "
+            "for low-res imported textures or AI-generated outputs. Fails "
+            "gracefully when the model is unavailable/offline.",
+            props,
+            QJsonArray{"texture_path"}
+        );
+    }
+#endif // ENABLE_ONNX
 
     // retopologize
     {

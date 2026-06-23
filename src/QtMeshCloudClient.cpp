@@ -1141,6 +1141,93 @@ QtMeshCloudClient::CompleteUploadResult QtMeshCloudClient::completeUpload(
     return out;
 }
 
+QtMeshCloudClient::UploadResult QtMeshCloudClient::uploadFileReport(
+    const QString& bearerToken,
+    const QString& ownerSlug,
+    const QString& projectSlug,
+    const QString& fileId,
+    const QJsonObject& report,
+    int timeoutMs)
+{
+    UploadResult out;
+    if (bearerToken.isEmpty()) {
+        out.errorString = QStringLiteral("missing bearer token");
+        return out;
+    }
+    if (ownerSlug.isEmpty() || projectSlug.isEmpty() || fileId.isEmpty()) {
+        out.errorString = QStringLiteral("owner slug, project slug, and fileId are required");
+        return out;
+    }
+    if (report.isEmpty()) {
+        out.errorString = QStringLiteral("report JSON is empty");
+        return out;
+    }
+
+    const QByteArray payload = QJsonDocument(report).toJson(QJsonDocument::Compact);
+    static constexpr int kMaxReportBytes = 5 * 1024 * 1024;
+    if (payload.size() > kMaxReportBytes) {
+        out.errorString = QStringLiteral("report exceeds 5 MB limit");
+        return out;
+    }
+
+    const QString path = ownerProjectPath(ownerSlug, projectSlug,
+                                          QStringLiteral("files/%1/report")
+                                              .arg(QString::fromUtf8(QUrl::toPercentEncoding(fileId))));
+    const QUrl url(apiBaseUrl() + path);
+    if (!url.isValid()) {
+        out.errorString = QStringLiteral("invalid API base URL");
+        return out;
+    }
+
+    QNetworkAccessManager nam;
+    QNetworkRequest req = authorizedJsonRequest(url, bearerToken, timeoutMs);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+        QStringLiteral("QtMesh Cloud uploadFileReport: start fileId=%1 bytes=%2")
+            .arg(fileId, QString::number(payload.size())));
+
+    QNetworkReply* reply = nam.put(req, payload);
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    out.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray responseBody = reply->readAll();
+    const auto nerr = reply->error();
+    const QString transportErr = reply->errorString();
+    reply->deleteLater();
+
+    if (nerr != QNetworkReply::NoError || out.httpStatus < 200 || out.httpStatus >= 300) {
+        out.responseBodySnippet = trimSnippet(responseBody);
+        out.errorString = nerr != QNetworkReply::NoError ? transportErr : QStringLiteral("HTTP %1").arg(out.httpStatus);
+        if (!out.responseBodySnippet.isEmpty())
+            out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+            QStringLiteral("QtMesh Cloud uploadFileReport: failure HTTP %1").arg(out.httpStatus),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    QJsonObject root;
+    if (!parseJsonObjectBody(responseBody, root, out.errorString))
+        return out;
+    if (root.contains(QStringLiteral("ok")) && !root.value(QStringLiteral("ok")).toBool()) {
+        out.errorString = jsonErrorCode(root);
+        if (out.errorString.isEmpty())
+            out.errorString = QStringLiteral("report upload rejected");
+        out.responseBodySnippet = trimSnippet(responseBody);
+        SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+            QStringLiteral("QtMesh Cloud uploadFileReport: rejected"),
+            QStringLiteral("warning"));
+        return out;
+    }
+
+    out.ok = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("cloud.upload"),
+        QStringLiteral("QtMesh Cloud uploadFileReport: ok fileId=%1").arg(fileId));
+    return out;
+}
+
 QtMeshCloudClient::ManifestResult QtMeshCloudClient::fetchProjectManifest(const QString& bearerToken,
                                                                           const QString& ownerSlug,
                                                                           const QString& projectSlug,

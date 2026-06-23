@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
 #include "ProjectPackager.h"
-#include "QtMeshCloudSession.h"
 #include "CloudCredentialStore.h"
+#include "QtMeshCloudSession.h"
 
 #include <QCoreApplication>
 #include <QDir>

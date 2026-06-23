@@ -228,10 +228,27 @@ jobs:
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Install Doxygen
-      shell: cmd
+      shell: powershell
       run: |
-        curl -L -o doxygen-installer.exe "https://www.doxygen.nl/files/doxygen-1.9.7-setup.exe"
-        doxygen-installer.exe /VERYSILENT
+        # Doxygen is optional for the Ogre build (only used for docs); the
+        # doxygen.nl download is flaky, so retry a few times and never fail the
+        # job on it — Ogre configures fine without it.
+        $url = "https://www.doxygen.nl/files/doxygen-1.9.7-setup.exe"
+        $ok = $false
+        for ($i = 1; $i -le 3; $i++) {
+          try {
+            Invoke-WebRequest -Uri $url -OutFile doxygen-installer.exe -TimeoutSec 120
+            $ok = $true; break
+          } catch {
+            Write-Host "Doxygen download attempt $i failed: $_"
+            Start-Sleep -Seconds 10
+          }
+        }
+        if ($ok) {
+          Start-Process -FilePath .\doxygen-installer.exe -ArgumentList '/VERYSILENT' -Wait
+        } else {
+          Write-Host "::warning::Doxygen unavailable after retries; continuing without it (docs only)."
+        }
             
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Check out ogre repo
@@ -558,7 +575,10 @@ jobs:
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-          file: QtMeshEditor-${{github.ref_name}}-setup-Windows.exe
+          # Inno Setup writes to packaging/windows/Output/ (its default OutputDir,
+          # next to the .iss) — the upload must point there, not the repo root,
+          # or the installer asset is never attached to the release.
+          file: packaging/windows/Output/QtMeshEditor-${{github.ref_name}}-setup-Windows.exe
           update_latest_release: true
           overwrite: false
           verbose: true
@@ -749,6 +769,7 @@ jobs:
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
+            -DENABLE_ONNX=ON \
             -DENABLE_AUTO_UPDATER=OFF \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
@@ -1033,7 +1054,8 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
             -DBUILD_QT_MESH_EDITOR=OFF \
             -DENABLE_SENTRY=OFF \
-            -DENABLE_PS1_RIP=ON
+            -DENABLE_PS1_RIP=ON \
+            -DENABLE_ONNX=ON
 
     - name: Run build-wrapper
       env:
@@ -1726,6 +1748,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DCMAKE_CXX_FLAGS="-g" -DCMAKE_C_FLAGS="-g" \
             -DENABLE_STABLE_DIFFUSION=ON \
+            -DENABLE_ONNX=ON \
             -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \

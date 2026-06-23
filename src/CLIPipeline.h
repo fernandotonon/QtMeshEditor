@@ -105,6 +105,20 @@ public:
                                           QString controlNetPath,
                                           double controlStrength,
                                           int width, int height);
+    /// #404: ONNX PBR map synthesis from a diffuse texture. Produces
+    /// normal/roughness/height PNGs next to the albedo; if a mesh is given,
+    /// binds them into the slice-E canonical slots and re-exports. Exit 1 when
+    /// built without ENABLE_ONNX.
+    static int cmdMaterialGeneratePbr(const QString& albedoPath,
+                                      const QString& meshPath,
+                                      QString outputPath,
+                                      int tileSize, bool wantNormal,
+                                      bool wantRoughness, bool wantHeight);
+    /// #405: Real-ESRGAN texture upscaling (2x/4x) via ONNX. Reads --texture,
+    /// writes the upscaled PNG to -o (or <stem>_upscaled.png). Exit 1 when
+    /// built without ENABLE_ONNX.
+    static int cmdMaterialUpscale(const QString& srcPath, QString outputPath,
+                                  int scale);
     /// Slice G: pack 1-4 grayscale source images into a single RGBA
     /// output texture. Headless / scriptable equivalent of the GUI
     /// "Pack Channels…" dialog.
