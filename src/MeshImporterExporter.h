@@ -94,6 +94,9 @@ public:
     /// Directories to search for sidecar textures after import (file dir + cloud cache root).
     static QStringList textureSearchRootsForImportFile(const QString& localPath);
 
+    /// Texture search roots for an entity from its mesh `qtme.source_path` binding.
+    static QStringList textureSearchRootsForEntity(const Ogre::Entity* entity);
+
     /// Recompile RTSS materials and force SubEntity technique refresh (post-import).
     static void rebindEntityMaterials(Ogre::Entity* entity,
                                       const QStringList& textureSearchRoots = {});

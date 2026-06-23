@@ -1683,6 +1683,26 @@ QStringList MeshImporterExporter::textureSearchRootsForImportFile(const QString&
     return roots;
 }
 
+QStringList MeshImporterExporter::textureSearchRootsForEntity(const Ogre::Entity* entity)
+{
+    if (!entity)
+        return {};
+    const Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh)
+        return {};
+    const Ogre::Any& any = mesh->getUserObjectBindings().getUserAny("qtme.source_path");
+    if (!any.has_value())
+        return {};
+    try {
+        const std::string sourcePath = Ogre::any_cast<std::string>(any);
+        if (sourcePath.empty())
+            return {};
+        return textureSearchRootsForImportFile(QString::fromStdString(sourcePath));
+    } catch (const Ogre::Exception&) {
+        return {};
+    }
+}
+
 void MeshImporterExporter::prepareCloudCachedImport(const QString& localMainFile)
 {
     for (const QString& root : textureSearchRootsForImportFile(localMainFile))

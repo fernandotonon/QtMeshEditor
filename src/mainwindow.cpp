@@ -3927,14 +3927,6 @@ void MainWindow::importMeshs(const QStringList &_uriList)
             entityNamesBefore.insert(QString::fromStdString(obj->getName()));
     }
 
-    QStringList textureSearchRoots;
-    for (const QString& uri : _uriList) {
-        for (const QString& root : MeshImporterExporter::textureSearchRootsForImportFile(uri)) {
-            if (!textureSearchRoots.contains(root))
-                textureSearchRoots << root;
-        }
-    }
-
     auto txn = SentryReporter::startTransaction("ui.import", "file.import");
     QList<Ogre::SkeletonPtr> animOnlySkeletons;
     try {
@@ -3951,19 +3943,21 @@ void MainWindow::importMeshs(const QStringList &_uriList)
         if (entityNamesBefore.contains(QString::fromStdString(obj->getName())))
             continue;
 
-        MeshImporterExporter::rebindEntityMaterials(static_cast<Ogre::Entity*>(obj),
-                                                      textureSearchRoots);
+        auto* entity = static_cast<Ogre::Entity*>(obj);
+        MeshImporterExporter::rebindEntityMaterials(
+            entity, MeshImporterExporter::textureSearchRootsForEntity(entity));
     }
 
-    QTimer::singleShot(0, this, [this, entityNamesBefore, textureSearchRoots]() {
+    QTimer::singleShot(0, this, [this, entityNamesBefore]() {
         for (auto* obj : Manager::getSingleton()->getEntities()) {
             if (!obj || obj->getMovableType() != QLatin1String("Entity"))
                 continue;
             if (entityNamesBefore.contains(QString::fromStdString(obj->getName())))
                 continue;
 
-            MeshImporterExporter::rebindEntityMaterials(static_cast<Ogre::Entity*>(obj),
-                                                          textureSearchRoots);
+            auto* entity = static_cast<Ogre::Entity*>(obj);
+            MeshImporterExporter::rebindEntityMaterials(
+                entity, MeshImporterExporter::textureSearchRootsForEntity(entity));
         }
 
         if (m_pRoot && m_pRoot->getRenderSystem()) {
