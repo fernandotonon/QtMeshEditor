@@ -1706,41 +1706,57 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
                  AutoRig::templateToString(opts.tmpl))
             .arg(alsoSkin));
 
+    // Validate output_path type up front (like 'skin'/'template') — a
+    // non-string would otherwise coerce to "" and silently skip the export
+    // while still reporting success.
+    if (args.contains("output_path") && !args["output_path"].isString())
+        return makeErrorResult("Error: 'output_path' must be a string.");
+    const QString outputPath = args.value("output_path").toString();
+
     AutoRig::Report report;
     bool skinned = false;
+    // Wrap the full mutating + export section so export failures and
+    // std::runtime_error (not just Ogre::Exception) reach the MCP error path.
     try {
         report = AutoRig::rigEntity(entity, opts);
-        if (report.applied && alsoSkin) {
+        if (!report.applied)
+            return makeErrorResult(
+                QStringLiteral("Auto-rig failed: %1").arg(report.error));
+
+        if (alsoSkin) {
             const auto sw = SkinWeights::computeAndApply(entity, {});
             skinned = sw.applied;
+            // A requested skin that failed is a hard error — don't export an
+            // unskinned asset and report success.
             if (!sw.applied)
-                report.error = QStringLiteral("rigged, but skinning failed: %1")
-                    .arg(sw.error);
+                return makeErrorResult(QStringLiteral(
+                    "Auto-rig succeeded, but the requested skinning failed: %1")
+                    .arg(sw.error));
+        }
+
+        // Optional re-export of the now-rigged mesh.
+        if (!outputPath.isEmpty()) {
+            Ogre::SceneNode* node = entity->getParentSceneNode();
+            if (!node)
+                return makeErrorResult(
+                    QStringLiteral("Error: rigged, but the entity has no scene "
+                                   "node to export from"));
+            // Don't leak the full local path (usernames / private dirs) to Sentry.
+            SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                QStringLiteral("auto_rig export requested"));
+            const int rc = MeshImporterExporter::exporter(
+                node, outputPath, CLIPipeline::formatForExtension(outputPath));
+            if (rc != 0)
+                return makeErrorResult(
+                    QStringLiteral("Error: rigged but export to '%1' failed (code %2)")
+                        .arg(outputPath).arg(rc));
         }
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")
             .arg(QString::fromStdString(e.getFullDescription())));
-    }
-
-    if (!report.applied)
-        return makeErrorResult(QStringLiteral("Auto-rig failed: %1").arg(report.error));
-
-    // Optional re-export of the now-rigged mesh.
-    const QString outputPath = args["output_path"].toString();
-    if (!outputPath.isEmpty()) {
-        Ogre::SceneNode* node = entity->getParentSceneNode();
-        if (!node)
-            return makeErrorResult(
-                QStringLiteral("Error: rigged, but the entity has no scene node to "
-                               "export from"));
-        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-            QStringLiteral("auto_rig export to %1").arg(outputPath));
-        const int rc = MeshImporterExporter::exporter(
-            node, outputPath, CLIPipeline::formatForExtension(outputPath));
-        if (rc != 0)
-            return makeErrorResult(
-                QStringLiteral("Error: rigged but export to '%1' failed (code %2)")
-                    .arg(outputPath).arg(rc));
+    } catch (const std::exception& e) {
+        return makeErrorResult(QStringLiteral("Auto-rig error: %1")
+            .arg(QString::fromUtf8(e.what())));
     }
 
     QJsonObject result = makeSuccessResult(AutoRig::reportToText(report));

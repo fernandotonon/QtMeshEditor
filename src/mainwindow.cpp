@@ -101,6 +101,7 @@
 #include "UvUnwrapController.h"
 #include "QuadRetopoController.h"
 #include "SkinWeightsController.h"
+#include "AutoRigController.h"
 #include "MeshDepthRenderer.h"
 #include "MaterialPresetLibrary.h"
 #include "MaterialPreviewRenderer.h"
@@ -648,6 +649,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "SkinWeightsController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return SkinWeightsController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<AutoRigController>(
+            "PropertiesPanel", 1, 0, "AutoRigController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AutoRigController::qmlInstance(engine, nullptr);
             });
 #ifdef ENABLE_AUTO_UPDATER
         qmlRegisterSingletonType<UpdaterController>(

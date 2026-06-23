@@ -51,13 +51,15 @@ bool AutoRigController::hasRiggableSelection() const
 }
 
 QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
+                                               const QString& upAxis,
                                                bool alsoSkin)
 {
     QVariantMap result;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-        QStringLiteral("Auto-rig requested (%1%2)")
-            .arg(templateName, alsoSkin ? QStringLiteral(", +skin") : QString()));
+        QStringLiteral("Auto-rig requested (%1, up=%2%3)")
+            .arg(templateName, upAxis,
+                 alsoSkin ? QStringLiteral(", +skin") : QString()));
 
     auto* sel = SelectionSet::getSingleton();
     const auto entities = sel ? sel->getResolvedEntities() : QList<Ogre::Entity*>{};
@@ -79,6 +81,10 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
 
     AutoRig::Options opts;
     opts.tmpl = AutoRig::templateFromString(templateName);
+    const QString ax = upAxis.trimmed().toLower();
+    if (ax == QStringLiteral("x")) opts.upAxis = 0;
+    else if (ax == QStringLiteral("z")) opts.upAxis = 2;
+    else opts.upAxis = 1;   // y (default)
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.auto_rig"),
         QStringLiteral("UI auto-rig entity=%1 template=%2")

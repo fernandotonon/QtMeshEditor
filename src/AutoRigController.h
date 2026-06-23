@@ -35,6 +35,7 @@ public:
     /// Returns a QVariantMap mirroring AutoRig::Report (+ a `skinned` bool).
     /// Emits `rigged(report)` on success or `error(msg)` on failure.
     Q_INVOKABLE QVariantMap autoRigSelected(const QString& templateName,
+                                            const QString& upAxis,
                                             bool alsoSkin);
 
 signals:

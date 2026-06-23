@@ -225,6 +225,12 @@ bool appendPositions(Ogre::VertexData* vd, std::vector<float>& out)
     const size_t stride = vbuf->getVertexSize();
     auto* base = static_cast<unsigned char*>(
         vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+    if (!base) {
+        // Lock can fail (write-only buffer with no shadow copy, etc.). Shrink
+        // back to the pre-grow size so the unread slots don't inflate vcount.
+        out.resize(base0);
+        return false;
+    }
     for (size_t i = 0; i < vd->vertexCount; ++i) {
         float* p = nullptr;
         posElem->baseVertexPointerToElement(base + i * stride, &p);
@@ -330,6 +336,13 @@ AutoRig::Report AutoRig::rigEntity(Ogre::Entity* entity, const Options& opts)
     } catch (const Ogre::Exception& e) {
         report.error = QStringLiteral("Ogre error building skeleton: %1")
             .arg(QString::fromStdString(e.getFullDescription()));
+        // Detach the half-built skeleton from the mesh BEFORE removing the
+        // resource. _notifySkeleton(skel) ran before entity->_initialise; if
+        // the latter threw, the mesh still references the skeleton, so
+        // mesh->hasSkeleton() would stay true — a later rigEntity() would bail
+        // with "mesh already has a skeleton" and exporters could pick up the
+        // half-built rig. Reset it to a clean static mesh.
+        mesh->_notifySkeleton(Ogre::SkeletonPtr());
         if (skel && skelMgr.resourceExists(skelName)) skelMgr.remove(skelName);
         report.applied = false;
     }
