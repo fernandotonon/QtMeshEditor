@@ -16,6 +16,7 @@ if(BUILD_TESTS)
     set(TEST_SRC_FILES 
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/about.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AppConsoleLog.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AppLaunchHandler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ConsoleLogSanitize.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationBlender.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationControlController.cpp
@@ -64,9 +65,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CLIPipeline.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudClient.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudCredentialStore.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudDeepLink.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudUploadPlanner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudCLIPipeline.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudProjectsDialog.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudProjectsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudUploadDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudUploadProgress.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DependencyResolver.cpp
@@ -221,6 +223,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GlobalDefinitions.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Euler.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/about.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AppLaunchHandler.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/mainwindow.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Manager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/material.h
@@ -264,6 +267,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshInfoOverlay.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CLIPipeline.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudDeepLink.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudClient.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewCube/ViewCubeController.h

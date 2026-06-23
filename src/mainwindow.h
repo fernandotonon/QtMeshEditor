@@ -69,6 +69,8 @@ public:
     void loadFile(const QString& filePath);
     /// Focus the window and queue one or more OS launch paths for import.
     void openLaunchFiles(const QStringList& paths);
+    void openCloudProjectFromDeepLink(const QString& ownerSlug, const QString& projectSlug);
+    void importCloudDownloadedFile(const QString& localMainFile);
     void setMCPServer(MCPServer* server);
 
     /// Recreate Ogre render windows (e.g. after MSAA samples change in Preferences).
@@ -243,6 +245,11 @@ private:
     void updateToolRailForMode();
     void setupCloudAccountStatusControl();
     void updateCloudAuthActions();
+    void openCloudProjectsQmlDialog(const QString& ownerSlug = QString(),
+                                    const QString& projectSlug = QString());
+    void closeCloudProjectsQmlDialog();
+    QObject* m_cloudProjectsWindow = nullptr;
+    QQmlApplicationEngine* m_cloudProjectsEngine = nullptr;
 
 #ifdef ENABLE_AUTO_UPDATER
     void showUpdaterDialog(bool runCheck = true);

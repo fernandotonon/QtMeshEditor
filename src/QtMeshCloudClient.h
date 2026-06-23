@@ -6,6 +6,7 @@
 #include <QJsonObject>
 
 #include <atomic>
+#include <functional>
 
 /// HTTP client for QtMesh Cloud ingest API (remote rules + scan upload).
 class QtMeshCloudClient {
@@ -102,6 +103,11 @@ public:
         QString projectSlug;
         QString name;
         QString projectUrl;
+        QString browserUrl;
+        QString sourceFormat;
+        qint64 sizeBytes = 0;
+        QString updatedAt;
+        QString mainFile;
     };
 
     struct ProjectsListResult {
@@ -110,10 +116,22 @@ public:
         QString errorString;
         QString responseBodySnippet;
         QList<ProjectSummary> projects;
+        QString nextCursor;
+        bool hasMore = false;
     };
 
-    /// GET /v1/projects — lists cloud projects the authenticated user can access.
-    static ProjectsListResult fetchProjects(const QString& bearerToken, int timeoutMs = 30000);
+    /// GET /v1/projects?cursor=...&limit=50 — paginated cloud project list.
+    static ProjectsListResult fetchProjects(const QString& bearerToken,
+                                            const QString& cursor = QString(),
+                                            int limit = 50,
+                                            int timeoutMs = 30000);
+
+    /// Fetches every page until `hasMore` is false (for CLI/MCP list callers).
+    static ProjectsListResult fetchAllProjects(const QString& bearerToken,
+                                               int timeoutMs = 30000);
+
+    /// Website dashboard URL for a cloud project (owner + slug route).
+    static QString projectDashboardUrl(const QString& ownerSlug, const QString& projectSlug);
 
     /// DELETE /v1/projects/{id} — removes a cloud project.
     static UploadResult deleteProject(const QString& bearerToken,
@@ -219,6 +237,66 @@ public:
                                                const QString& ownerSlug,
                                                const QString& projectSlug,
                                                int timeoutMs = 30000);
+
+    struct ProjectFileEntry {
+        QString id;
+        QString originalName;
+        QString name;
+        QString role;
+        QString extension;
+        qint64 sizeBytes = 0;
+        QString downloadUrl;
+    };
+
+    struct ProjectDownloadResult {
+        bool ok = false;
+        QString errorString;
+        QString localMainFile;
+        QString destDirectory;
+    };
+
+    /// Parse `files[]` from a manifest JSON object.
+    static QList<ProjectFileEntry> projectFilesFromManifest(const QJsonObject& manifest);
+
+    /// True when the file can be opened in the editor viewport (mesh or scene).
+    static bool isImportableCloudAssetPath(const QString& relativePath);
+
+    /// Selected file plus textures/materials/sidecars needed for rendering.
+    static QStringList companionFileIdsForOpen(const QList<ProjectFileEntry>& files,
+                                               const QString& selectedFileId);
+
+    /// Download manifest files into @p destDir. When @p fileIds is empty, all files are fetched.
+    /// @p localOpenRelative must match one of the downloaded relative paths.
+    static ProjectDownloadResult downloadManifestFiles(
+        const QString& bearerToken,
+        const QJsonArray& files,
+        const QString& destDir,
+        const QStringList& fileIds,
+        const QString& localOpenRelative,
+        const std::function<void(int current, int total, const QString& fileName)>& progress = {},
+        const std::atomic_bool* canceled = nullptr,
+        int timeoutMs = 120000);
+
+    /// Downloads all manifest files into @p destDir and returns the local main asset path.
+    static ProjectDownloadResult downloadProjectBySlug(
+        const QString& bearerToken,
+        const QString& ownerSlug,
+        const QString& projectSlug,
+        const QString& destDir,
+        const std::function<void(int current, int total, const QString& fileName)>& progress = {},
+        const std::atomic_bool* canceled = nullptr,
+        int timeoutMs = 120000);
+
+    /// Downloads one manifest file (plus rendering companions) and returns its local path.
+    static ProjectDownloadResult downloadProjectFileBySlug(
+        const QString& bearerToken,
+        const QString& ownerSlug,
+        const QString& projectSlug,
+        const QString& fileId,
+        const QString& destDir,
+        const std::function<void(int current, int total, const QString& fileName)>& progress = {},
+        const std::atomic_bool* canceled = nullptr,
+        int timeoutMs = 120000);
 
     struct FeedbackSubmission {
         QString type;

@@ -3,6 +3,12 @@
 #include "EmbeddedTextureCache.h"
 
 #include <cstddef>
+#include <cstring>
+
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QIODevice>
 
 #include <OgreRTShaderSystem.h>
 
@@ -27,6 +33,7 @@ static Ogre::Pass* ensureFirstPass(const Ogre::MaterialPtr& mat)
 
 void MaterialProcessor::loadScene(const aiScene* scene)
 {
+    materials.clear();
     for(auto i = 0u; i < scene->mNumMaterials; i++) {
         aiMaterial* material = scene->mMaterials[i];
         Ogre::MaterialPtr ogreMaterial = processMaterial(material, scene);
@@ -67,14 +74,7 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
                 texPath.substr(texPath.find_last_of("/\\") + 1);
             if (filename.empty())
                 return false;
-            Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().getByName(filename);
-            if (!tex) {
-                try {
-                    tex = loadTexture(filename, path, scene);
-                } catch (...) {
-                    return false;
-                }
-            }
+            Ogre::TexturePtr tex = resolveTexture(filename, path, scene);
             if (!tex)
                 return false;
             stagedNormalTex = tex->getName();
@@ -99,11 +99,7 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
             std::string sp = p.C_Str();
             std::string fn = sp.substr(sp.find_last_of("/\\") + 1);
             if (fn.empty()) return;
-            Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().getByName(fn);
-            if (!tex) {
-                try { tex = loadTexture(fn, p, scene); }
-                catch (...) { return; }
-            }
+            Ogre::TexturePtr tex = resolveTexture(fn, p, scene);
             if (!tex) return;
             auto* tus = xPass->createTextureUnitState(tex->getName());
             tus->setName(slotName);
@@ -164,13 +160,11 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     if(AI_SUCCESS == material->GetTexture(aiTextureType_DIFFUSE, 0, &path)) {
         std::string texturePath = path.C_Str();
         std::string textureFilename = texturePath.substr(texturePath.find_last_of("/\\") + 1);
-        Ogre::TexturePtr texturePtr = Ogre::TextureManager::getSingleton().getByName(textureFilename);
-
-        if(!texturePtr){
-            texturePtr = loadTexture(textureFilename, path, scene);
+        Ogre::TexturePtr texturePtr = resolveTexture(textureFilename, path, scene);
+        if (texturePtr) {
+            auto* tus = pass->createTextureUnitState(texturePtr->getName());
+            tus->setName("diffuse_map");
         }
-        auto* tus = pass->createTextureUnitState(texturePtr->getName());
-        tus->setName("diffuse_map");
     }
 
     // Handle normal maps via RTSS. Probe in order:
@@ -189,14 +183,7 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         const std::string filename = texPath.substr(texPath.find_last_of("/\\") + 1);
         if (filename.empty())
             return false;
-        Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().getByName(filename);
-        if (!tex) {
-            try {
-                tex = loadTexture(filename, path, scene);
-            } catch (...) {
-                return false;
-            }
-        }
+        Ogre::TexturePtr tex = resolveTexture(filename, path, scene);
         if (!tex)
             return false;
         stagedNormalTex = tex->getName();
@@ -228,16 +215,7 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         const std::string sp = p.C_Str();
         const std::string fn = sp.substr(sp.find_last_of("/\\") + 1);
         if (fn.empty()) return false;
-        Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().getByName(fn);
-        if (!tex) {
-            try { tex = loadTexture(fn, p, scene); }
-            catch (...) {
-                Ogre::LogManager::getSingleton().logMessage(
-                    "MaterialProcessor: Failed to load PBR map '" + fn +
-                    "' for slot '" + slotName + "'");
-                return false;
-            }
-        }
+        Ogre::TexturePtr tex = resolveTexture(fn, p, scene);
         if (!tex) return false;
 
         auto* tus = pass->createTextureUnitState(tex->getName());
@@ -365,7 +343,77 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     return ogreMaterial;
 }
 
-Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, const aiString &path, const aiScene* scene) const
+Ogre::TexturePtr MaterialProcessor::resolveTexture(const std::string& filename,
+                                                   const aiString& path,
+                                                   const aiScene* scene)
+{
+    if (filename.empty())
+        return {};
+
+    const Ogre::String resourceName(filename);
+    auto& tm = Ogre::TextureManager::getSingleton();
+
+    // When importing from a known directory (cloud cache / local folder),
+    // purge any stale TextureManager entry so we reload from disk instead
+    // of reusing a placeholder from a previous failed lookup.
+    if (!m_sourceDirectory.isEmpty()) {
+        if (tm.resourceExists(resourceName,
+                               Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+            try {
+                tm.remove(resourceName,
+                          Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            } catch (...) {
+            }
+        }
+        try {
+            return loadTexture(resourceName, path, scene);
+        } catch (...) {
+            return {};
+        }
+    }
+
+    if (auto existing = tm.getByName(resourceName))
+        return existing;
+    try {
+        return loadTexture(resourceName, path, scene);
+    } catch (...) {
+        return {};
+    }
+}
+
+Ogre::TexturePtr MaterialProcessor::loadTextureFromFile(const QString& absolutePath,
+                                                        const Ogre::String& resourceName)
+{
+    QFile file(absolutePath);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+
+    const QByteArray bytes = file.readAll();
+    file.close();
+    if (bytes.isEmpty())
+        return {};
+
+    Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(
+        const_cast<char*>(bytes.constData()),
+        static_cast<size_t>(bytes.size()),
+        false,
+        true));
+    Ogre::Image img;
+    img.load(stream, QFileInfo(absolutePath).suffix().toLower().toStdString());
+
+    auto& tm = Ogre::TextureManager::getSingleton();
+    if (tm.resourceExists(resourceName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+        try {
+            tm.remove(resourceName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        } catch (...) {
+        }
+    }
+    return tm.loadImage(resourceName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, img);
+}
+
+Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String& filename,
+                                                  const aiString& path,
+                                                  const aiScene* scene)
 {
     if(auto texture = scene->GetEmbeddedTexture(path.C_Str())) {
         //returned pointer is not null, read texture from memory
@@ -413,8 +461,80 @@ Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, co
                 );
         }
     }
+
+    if (!m_sourceDirectory.isEmpty()) {
+        QString relative = QString::fromUtf8(path.C_Str()).trimmed();
+        relative.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        while (relative.startsWith(QStringLiteral("./")))
+            relative = relative.mid(2);
+
+        QStringList candidates;
+        if (!relative.isEmpty())
+            candidates << QDir(m_sourceDirectory).filePath(relative);
+        candidates << QDir(m_sourceDirectory).filePath(QString::fromStdString(filename));
+
+        const QString cloudRoot = [&]() -> QString {
+            const QString normalized = QDir::fromNativeSeparators(m_sourceDirectory);
+            const QString marker = QStringLiteral("/cloud/");
+            const int cloudIdx = normalized.indexOf(marker);
+            if (cloudIdx < 0)
+                return QString();
+            const QString tail = normalized.mid(cloudIdx + marker.size());
+            const int ownerEnd = tail.indexOf(QLatin1Char('/'));
+            if (ownerEnd <= 0)
+                return QString();
+            const int slugEnd = tail.indexOf(QLatin1Char('/'), ownerEnd + 1);
+            if (slugEnd < 0)
+                return normalized;
+            return normalized.left(cloudIdx + marker.size() + slugEnd);
+        }();
+        if (!cloudRoot.isEmpty() && cloudRoot != m_sourceDirectory) {
+            if (!relative.isEmpty())
+                candidates << QDir(cloudRoot).filePath(relative);
+            candidates << QDir(cloudRoot).filePath(QString::fromStdString(filename));
+        }
+
+        for (const QString& candidate : candidates) {
+            const QFileInfo info(candidate);
+            if (!info.exists() || !info.isFile())
+                continue;
+            if (auto tex = loadTextureFromFile(info.absoluteFilePath(), filename))
+                return tex;
+        }
+    }
+
+    auto& tm = Ogre::TextureManager::getSingleton();
+    if (tm.resourceExists(filename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+        try {
+            tm.remove(filename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        } catch (...) {
+        }
+    }
+
+    const std::vector<uint8_t> cached = EmbeddedTextureCache::retrieve(filename);
+    if (!cached.empty()) {
+        try {
+            Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(
+                const_cast<uint8_t*>(cached.data()),
+                cached.size(),
+                false,
+                true));
+            Ogre::Image img;
+            const char* hint = "";
+            if (cached.size() >= 8 && std::memcmp(cached.data(), "\x89PNG\r\n\x1a\n", 8) == 0)
+                hint = "png";
+            else if (cached.size() >= 2 && cached[0] == 0xff && cached[1] == 0xd8)
+                hint = "jpg";
+            img.load(stream, hint);
+            return tm.loadImage(filename,
+                                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                                img);
+        } catch (...) {
+        }
+    }
+
     //regular file, check if it exists and read it
-    return Ogre::TextureManager::getSingleton().load(filename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    return tm.load(filename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 }
 
 void MaterialProcessor::applyRTSSNormalMap(Ogre::MaterialPtr mat, const Ogre::String& normalMapName)

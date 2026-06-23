@@ -5338,7 +5338,7 @@ QJsonObject MCPServer::toolCloudListProjects(const QJsonObject & /*args*/)
     if (token.isEmpty())
         return makeErrorResult("Error: not signed in. Use cloud_login first.");
 
-    const auto result = QtMeshCloudClient::fetchProjects(token);
+    const auto result = QtMeshCloudClient::fetchAllProjects(token);
     if (!result.ok)
         return makeErrorResult(result.errorString);
 

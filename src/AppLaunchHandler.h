@@ -36,6 +36,7 @@ public:
 
 signals:
     void filesRequested(const QStringList& paths);
+    void cloudProjectOpenRequested(const QString& ownerSlug, const QString& projectSlug);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

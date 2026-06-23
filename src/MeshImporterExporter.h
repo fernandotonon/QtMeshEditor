@@ -84,6 +84,20 @@ public:
     /// be re-applied. (Chunk 4b: Edit Mode topology ops use this to
     /// preserve bump mapping after subdivide / extrude / etc.)
     static void applyNormalMapsToEntity(const Ogre::Entity* entity);
+
+    /// Register a directory for mesh sidecars and Assimp texture lookup.
+    static void registerImportResourceDirectory(const QString& absoluteDir);
+
+    /// Register cloud cache paths before importing a downloaded project file.
+    static void prepareCloudCachedImport(const QString& localMainFile);
+
+    /// Recompile RTSS materials and force SubEntity technique refresh (post-import).
+    static void rebindEntityMaterials(Ogre::Entity* entity,
+                                      const QStringList& textureSearchRoots = {});
+
+    /// Load on-disk textures into each material's resource group (RTSS lookup).
+    static void hydrateEntityTexturesFromSearchPaths(Ogre::Entity* entity,
+                                                       const QStringList& searchRoots);
 };
 
 #endif // MESHIMPORTEREXPORTER_H

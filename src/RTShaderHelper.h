@@ -51,4 +51,15 @@ namespace RTShaderHelper {
     /// stale RTSS programs, and rebuilds ShaderGenerator shading once.
     void finalizeShaderGenMaterial(Ogre::MaterialPtr& mat,
                                    const Ogre::String& normalMapTexName = {});
+
+    /// Full viewport refresh after import (matches Material Editor Apply).
+    void refreshMaterialForViewport(Ogre::MaterialPtr& mat);
+
+    /// Resolve every TUS texture by TexturePtr (embedded FBX textures often
+    /// fail RTSS name lookup across resource groups).
+    void bindTextureUnitsByPointer(Ogre::MaterialPtr& mat);
+
+    /// Full viewport sync matching Material Editor script Apply + updateMaterialText:
+    /// round-trip material script, hydrate embedded textures, rebuild RTSS, rebind TUS.
+    void syncMaterialForViewport(Ogre::MaterialPtr& mat);
 }

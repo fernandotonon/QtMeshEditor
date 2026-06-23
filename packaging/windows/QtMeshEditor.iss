@@ -89,5 +89,10 @@ Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.tmd"; ValueType: string
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.tmd\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.tmd\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
+Root: HKCU; Subkey: "Software\Classes\qtmesh"; ValueType: string; ValueName: ""; ValueData: "URL:QtMeshEditor Protocol"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\qtmesh"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\qtmesh\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"",0"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\qtmesh\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
+
 [Run]
 Filename: "{app}\bin\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent

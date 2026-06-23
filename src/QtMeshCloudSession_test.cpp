@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "ProjectPackager.h"
+#include "CloudCredentialStore.h"
 #include "QtMeshCloudSession.h"
 
 #include <QCoreApplication>
@@ -223,4 +224,179 @@ TEST_F(QtMeshCloudSessionUploadReportTest, ReportFailureDoesNotFailBinaryUpload)
     EXPECT_TRUE(m_mock->reportCalled());
     EXPECT_TRUE(uploadError.contains(QStringLiteral("analysis report upload failed"),
                                      Qt::CaseInsensitive));
+}
+
+class CloudProjectsApiMock {
+public:
+    bool listen()
+    {
+        QObject::connect(&m_server, &QTcpServer::newConnection, [this]() {
+            QTcpSocket* socket = m_server.nextPendingConnection();
+            auto buffer = std::make_shared<QByteArray>();
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [this, socket, buffer]() {
+                buffer->append(socket->readAll());
+                const int headerEnd = buffer->indexOf("\r\n\r\n");
+                if (headerEnd < 0)
+                    return;
+
+                const ParsedHttpRequest req = parseHttpRequest(*buffer);
+
+                if (req.method == QStringLiteral("GET") && req.path.startsWith(QStringLiteral("/v1/projects"))) {
+                    ++m_listCalls;
+                    if (m_failFirstListWith401 && m_listCalls == 1) {
+                        writeHttpResponse(socket, 401, QByteArray(R"({"error":"unauthorized"})"));
+                        return;
+                    }
+
+                    QJsonObject root;
+                    QJsonArray projects;
+                    QJsonObject project;
+                    project.insert(QStringLiteral("id"), QStringLiteral("proj-1"));
+                    project.insert(QStringLiteral("name"), QStringLiteral("Demo"));
+                    project.insert(QStringLiteral("slug"), QStringLiteral("demo"));
+                    project.insert(QStringLiteral("ownerSlug"), QStringLiteral("me"));
+                    projects.append(project);
+                    root.insert(QStringLiteral("projects"), projects);
+                    writeHttpResponse(socket, 200, QJsonDocument(root).toJson(QJsonDocument::Compact));
+                    return;
+                }
+
+                if (req.method == QStringLiteral("DELETE")
+                    && req.path.endsWith(QStringLiteral("/proj-1"))) {
+                    m_deleteCalled = true;
+                    writeHttpResponse(socket, 204, QByteArray{});
+                    return;
+                }
+
+                writeHttpResponse(socket, 404, QByteArray(R"({"error":"not found"})"));
+            });
+        });
+        return m_server.listen(QHostAddress::LocalHost);
+    }
+
+    QString baseUrl() const
+    {
+        return QStringLiteral("http://127.0.0.1:%1").arg(m_server.serverPort());
+    }
+
+    int listCalls() const { return m_listCalls; }
+    bool deleteCalled() const { return m_deleteCalled; }
+
+    bool m_failFirstListWith401 = false;
+
+private:
+    QTcpServer m_server;
+    int m_listCalls = 0;
+    bool m_deleteCalled = false;
+};
+
+class QtMeshCloudSessionProjectsTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        m_hadApiBase = qEnvironmentVariableIsSet("QTMESH_API_BASE");
+        if (m_hadApiBase)
+            m_originalApiBase = qgetenv("QTMESH_API_BASE");
+
+        CloudCredentialStore::resetCacheForTesting();
+        CloudCredentialStore::clearSession();
+
+        m_mock = std::make_unique<CloudProjectsApiMock>();
+        ASSERT_TRUE(m_mock->listen());
+        qputenv("QTMESH_API_BASE", m_mock->baseUrl().toUtf8());
+    }
+
+    void TearDown() override
+    {
+        CloudCredentialStore::clearSession();
+        CloudCredentialStore::resetCacheForTesting();
+        if (m_hadApiBase)
+            qputenv("QTMESH_API_BASE", m_originalApiBase);
+        else
+            qunsetenv("QTMESH_API_BASE");
+    }
+
+    std::unique_ptr<CloudProjectsApiMock> m_mock;
+    QByteArray m_originalApiBase;
+    bool m_hadApiBase = false;
+};
+
+TEST_F(QtMeshCloudSessionProjectsTest, ListProjectsHappyPath)
+{
+    QtMeshCloudSession session(QStringLiteral("session-token"));
+    QEventLoop loop;
+    int count = 0;
+    QObject::connect(&session, &QtMeshCloudSession::projectsListed, &loop,
+                     [&](const QList<QtMeshCloudClient::ProjectSummary>& projects,
+                         const QString& error,
+                         const QString&,
+                         bool hasMore) {
+                         EXPECT_TRUE(error.isEmpty());
+                         count = projects.size();
+                         EXPECT_FALSE(hasMore);
+                         loop.quit();
+                     });
+    session.listProjects();
+    QTimer::singleShot(10000, &loop, &QEventLoop::quit);
+    loop.exec();
+    EXPECT_EQ(count, 1);
+}
+
+TEST_F(QtMeshCloudSessionProjectsTest, DeleteProjectHappyPath)
+{
+    QtMeshCloudSession session(QStringLiteral("session-token"));
+    QEventLoop loop;
+    QString deletedId;
+    QString deleteError;
+    QObject::connect(&session, &QtMeshCloudSession::projectDeleted, &loop,
+                     [&](const QString& id, const QString& error) {
+                         deletedId = id;
+                         deleteError = error;
+                         loop.quit();
+                     });
+    session.deleteProject(QStringLiteral("proj-1"));
+    QTimer::singleShot(10000, &loop, &QEventLoop::quit);
+    loop.exec();
+    EXPECT_EQ(deletedId, QStringLiteral("proj-1"));
+    EXPECT_TRUE(deleteError.isEmpty());
+    EXPECT_TRUE(m_mock->deleteCalled());
+}
+
+TEST_F(QtMeshCloudSessionProjectsTest, ListProjects401SurfacesUnauthorized)
+{
+    m_mock->m_failFirstListWith401 = true;
+    QtMeshCloudSession session(QStringLiteral("session-token"));
+    QEventLoop loop;
+    QString listError;
+    QObject::connect(&session, &QtMeshCloudSession::projectsListed, &loop,
+                     [&](const QList<QtMeshCloudClient::ProjectSummary>&,
+                         const QString& error,
+                         const QString&,
+                         bool) {
+                         listError = error;
+                         loop.quit();
+                     });
+    session.listProjects();
+    QTimer::singleShot(10000, &loop, &QEventLoop::quit);
+    loop.exec();
+    EXPECT_EQ(listError, QStringLiteral("unauthorized"));
+}
+
+TEST_F(QtMeshCloudSessionProjectsTest, DownloadProjectStubNotImplemented)
+{
+    QtMeshCloudSession session(QStringLiteral("session-token"));
+    QEventLoop loop;
+    bool ok = true;
+    QString code;
+    QObject::connect(&session, &QtMeshCloudSession::downloadComplete, &loop,
+                     [&](bool success, const QString&, const QString& errorCode) {
+                         ok = success;
+                         code = errorCode;
+                         loop.quit();
+                     });
+    session.downloadProject(QStringLiteral("proj-1"), QStringLiteral("/tmp"));
+    QTimer::singleShot(1000, &loop, &QEventLoop::quit);
+    loop.exec();
+    EXPECT_FALSE(ok);
+    EXPECT_EQ(code, QStringLiteral("not-implemented"));
 }

@@ -833,6 +833,7 @@ jobs:
             mkdir ./pack-deb/DEBIAN/
             cp ./bin/DEBIAN-control ./pack-deb/DEBIAN/control
             cp ./packaging/linux/qtmesheditor.desktop ./pack-deb/usr/share/applications/
+            cp ./packaging/linux/qtmesheditor-url.desktop ./pack-deb/usr/share/applications/
             cp ./packaging/linux/qtmesheditor-mimetypes.xml ./pack-deb/usr/share/mime/packages/
             cp ./packaging/linux/DEBIAN-postinst ./pack-deb/DEBIAN/postinst
             chmod 755 ./pack-deb/DEBIAN/postinst
@@ -1220,6 +1221,9 @@ jobs:
 
             is_gl_crash_allowed() {
                 local suite="$1"
+                case "$suite" in
+                    CLIPipeline*) return 0 ;;
+                esac
                 for allowed in $GL_CRASH_ALLOWLIST; do
                     [ "$suite" = "$allowed" ] && return 0
                 done

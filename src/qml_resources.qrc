@@ -68,4 +68,8 @@
   <qresource prefix="/AssetBrowser">
     <file alias="AssetBrowser.qml">../qml/AssetBrowser.qml</file>
   </qresource>
+  <qresource prefix="/CloudProjects">
+    <file alias="CloudProjectsDialog.qml">../qml/CloudProjects/CloudProjectsDialog.qml</file>
+    <file alias="qmldir">../qml/CloudProjects/qmldir</file>
+  </qresource>
 </RCC>

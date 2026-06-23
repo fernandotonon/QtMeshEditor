@@ -278,6 +278,8 @@ int main(int argc, char *argv[])
         QObject::disconnect(&launchHandler, &AppLaunchHandler::filesRequested, nullptr, nullptr);
         QObject::connect(&launchHandler, &AppLaunchHandler::filesRequested, &w,
                          &MainWindow::openLaunchFiles);
+        QObject::connect(&launchHandler, &AppLaunchHandler::cloudProjectOpenRequested, &w,
+                         &MainWindow::openCloudProjectFromDeepLink);
 
         if (!queuedLaunchPaths.isEmpty()) {
             QTimer::singleShot(0, &w, [&w, queuedLaunchPaths]() {
