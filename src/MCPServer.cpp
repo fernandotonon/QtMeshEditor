@@ -15,6 +15,7 @@
 #include "SelectionSet.h"
 #include "TransformOperator.h"
 #include "MeshImporterExporter.h"
+#include "CLIPipeline.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
 #include "AnimationWidget.h"
@@ -563,6 +564,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("apply_material"), &MCPServer::toolApplyMaterial},
         {QStringLiteral("list_material_presets"), &MCPServer::toolListMaterialPresets},
         {QStringLiteral("apply_material_preset"), &MCPServer::toolApplyMaterialPreset},
+        {QStringLiteral("describe_material"), &MCPServer::toolDescribeMaterial},
         {QStringLiteral("load_mesh"), &MCPServer::toolLoadMesh},
         {QStringLiteral("get_mesh_info"), &MCPServer::toolGetMeshInfo},
         {QStringLiteral("transform_mesh"), &MCPServer::toolTransformMesh},
@@ -1118,6 +1120,84 @@ QJsonObject MCPServer::toolApplyMaterialPreset(const QJsonObject &args)
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
+}
+
+QJsonObject MCPServer::toolDescribeMaterial(const QJsonObject &args)
+{
+    const QString prompt = args["prompt"].toString().trimmed();
+    if (prompt.isEmpty())
+        return makeErrorResult(
+            "Error: 'prompt' is required (a natural-language material description, "
+            "e.g. \"rusty bronze armor\").");
+
+    const QString modelName = args["model"].toString();   // optional GGUF override
+
+    // Resolve the target entity: explicit name (mesh/entity/...) else selection.
+    QString meshName = args["mesh"].toString();
+    if (meshName.isEmpty()) meshName = args["mesh_name"].toString();
+    if (meshName.isEmpty()) meshName = args["entity"].toString();
+    if (meshName.isEmpty()) meshName = args["entity_name"].toString();
+
+    if (!Manager::getSingletonPtr())
+        return makeErrorResult("Error: Manager not available");
+
+    Ogre::Entity* entity = nullptr;
+    if (!meshName.isEmpty()) {
+        entity = findEntityByName(meshName);
+        if (!entity)
+            return makeErrorResult(QString("Error: Mesh '%1' not found").arg(meshName));
+    } else {
+        // Fall back to the first selected entity (resolved through nodes too).
+        auto* sel = SelectionSet::getSingleton();
+        if (sel) {
+            const auto resolved = sel->getResolvedEntities();
+            if (!resolved.isEmpty()) entity = resolved.first();
+        }
+        if (!entity)
+            return makeErrorResult(
+                "Error: No mesh specified and no entity selected. Pass 'mesh' or "
+                "select an entity first.");
+    }
+
+    // Record only safe metadata — the prompt is user-controlled and may carry
+    // proprietary descriptions or pasted secrets we must not ship to telemetry.
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.describe_material"),
+        QStringLiteral("MCP describe_material prompt accepted (%1 chars)")
+            .arg(prompt.size()));
+
+    // Shared core (same as the CLI --describe path): loads/uses a local LLM,
+    // generates + parses the material script, binds it to every submesh.
+    QString error;
+    const QString matName =
+        CLIPipeline::llmDescribeMaterialToEntity(entity, prompt, modelName, error);
+    if (matName.isEmpty())
+        return makeErrorResult(QString("Error: %1").arg(error));
+
+    // Optionally re-export the mesh with the new material baked into the asset.
+    const QString outputPath = args["output_path"].toString();
+    if (!outputPath.isEmpty()) {
+        Ogre::SceneNode* node = entity->getParentSceneNode();
+        if (!node)
+            return makeErrorResult(
+                QString("Error: material '%1' applied, but the entity has no scene "
+                        "node to export from").arg(matName));
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("MCP describe_material export to %1").arg(outputPath));
+        const int rc = MeshImporterExporter::exporter(
+            node, outputPath, CLIPipeline::formatForExtension(outputPath));
+        if (rc != 0)
+            return makeErrorResult(
+                QString("Error: material '%1' applied but export to '%2' failed "
+                        "(code %3)").arg(matName, outputPath).arg(rc));
+        return makeSuccessResult(
+            QString("Generated material '%1' from \"%2\" and saved to %3")
+                .arg(matName, prompt, outputPath));
+    }
+
+    return makeSuccessResult(
+        QString("Generated material '%1' from \"%2\" and applied it to %3")
+            .arg(matName, prompt, meshName.isEmpty()
+                 ? QStringLiteral("the selected mesh") : meshName));
 }
 
 QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
@@ -5585,6 +5665,36 @@ QJsonArray MCPServer::buildToolsList()
         tools.append(buildToolDefinition(
             "apply_material_preset",
             "Apply a built-in material preset to a mesh. PBR templates (Metallic-Roughness / Specular-Glossiness / Unlit PBR) create the canonical 6-slot texture-unit layout (albedo / normal_map / metallic / roughness / ao / emissive) and tag the pass with a 'pbr_workflow' user binding so PBR-aware shaders can detect intent.",
+            inputSchema
+        ));
+    }
+
+    // describe_material (#406)
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["prompt"] = QJsonObject{{"type", "string"},
+            {"description", "Natural-language material description, e.g. "
+                            "\"rusty bronze armor\" or \"glossy red plastic\"."}};
+        properties["mesh"] = QJsonObject{{"type", "string"},
+            {"description", "Optional mesh/entity name. When omitted, applies to "
+                            "the current selection."}};
+        properties["model"] = QJsonObject{{"type", "string"},
+            {"description", "Optional GGUF model filename to use. Defaults to the "
+                            "last-used / first available local model."}};
+        properties["output_path"] = QJsonObject{{"type", "string"},
+            {"description", "Optional path to re-export the mesh with the generated "
+                            "material baked in. When omitted, the material is applied "
+                            "to the in-session scene only."}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"prompt"};
+        tools.append(buildToolDefinition(
+            "describe_material",
+            "Generate a material from a natural-language description using the local "
+            "LLM (llama.cpp), then bind it to the target/selected mesh (issue #406). "
+            "Mirrors the Material Editor's 'Generate' prompt. Fails gracefully with a "
+            "clear error when no local model is loaded or the build has no LLM support.",
             inputSchema
         ));
     }
