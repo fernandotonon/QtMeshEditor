@@ -1,9 +1,13 @@
 #include "CloudUploadPlanner.h"
 
+#include "DependencyResolver.h"
+#include "ScanEngine.h"
+
 #include <QFileInfo>
 #include <QMimeDatabase>
 #include <QRegularExpression>
 #include <QSet>
+#include <QDir>
 
 namespace {
 
@@ -59,6 +63,55 @@ QString CloudUploadPlanner::inferAssetRole(const QString& fileName)
     if (hasExtension(ext, {QStringLiteral("rsd"), QStringLiteral("ply")}))
         return QStringLiteral("sidecar");
     return QStringLiteral("file");
+}
+
+QStringList CloudUploadPlanner::selectedPathsForUpload(const QString& mainAssetPath,
+                                                     const QStringList& includeGlobs,
+                                                     const QStringList& excludeGlobs)
+{
+    const QFileInfo mainInfo(mainAssetPath);
+    const QString mainCanonical = mainInfo.absoluteFilePath();
+    const QString rootDir = mainInfo.absolutePath();
+
+    QSet<QString> selected;
+    selected.insert(mainCanonical);
+
+    for (const DependencyEntry& entry : DependencyResolver::detect(mainAssetPath)) {
+        if (!entry.exists || !entry.checkedByDefault)
+            continue;
+        const QString absolute = QFileInfo(entry.absolutePath).absoluteFilePath();
+        if (!absolute.isEmpty())
+            selected.insert(absolute);
+    }
+
+    if (includeGlobs.isEmpty() && excludeGlobs.isEmpty())
+        return selected.values();
+
+    QSet<QString> filtered;
+    filtered.insert(mainCanonical);
+    for (const QString& absolute : selected) {
+        if (absolute == mainCanonical)
+            continue;
+        const QString rel = QDir(rootDir).relativeFilePath(absolute);
+        bool keep = includeGlobs.isEmpty();
+        for (const QString& pattern : includeGlobs) {
+            if (ScanEngine::matchesGlob(rel, pattern)) {
+                keep = true;
+                break;
+            }
+        }
+        if (!keep)
+            continue;
+        for (const QString& pattern : excludeGlobs) {
+            if (ScanEngine::matchesGlob(rel, pattern)) {
+                keep = false;
+                break;
+            }
+        }
+        if (keep)
+            filtered.insert(absolute);
+    }
+    return filtered.values();
 }
 
 QList<QtMeshCloudClient::AssetFileDescriptor>

@@ -83,6 +83,18 @@ public:
     /// GET /v1/auth/me — validates a stored session token and returns the current user.
     static CurrentUserResult fetchCurrentUser(const QString& bearerToken, int timeoutMs = 30000);
 
+    struct UploadLimitsResult {
+        bool ok = false;
+        int httpStatus = 0;
+        QString errorString;
+        qint64 maxFileSizeBytes = 0;
+        qint64 maxProjectSizeBytes = 0;
+        qint64 maxReportSizeBytes = 0;
+    };
+
+    /// GET /v1/auth/me — server-reported upload size limits (when exposed by the API).
+    static UploadLimitsResult fetchUploadLimits(const QString& bearerToken, int timeoutMs = 30000);
+
     /// POST /v1/auth/logout — best-effort session invalidation.
     static UploadResult logout(const QString& bearerToken, int timeoutMs = 30000);
 

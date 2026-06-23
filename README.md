@@ -272,6 +272,7 @@ Split View|Skeleton Animation Controls
 ### 🎮 Features
 
 - **Asset scanning** — ESLint for 3D assets: check naming, complexity, skeletons, formats
+- **QtMesh Cloud** — sign in, upload asset projects (model + textures + materials + animations), browse/open from [qtmesh.dev](https://qtmesh.dev); CLI (`qtmesh cloud …`) and MCP (`cloud_*` tools) parity
 - **40+ format support** — FBX, glTF, OBJ, Collada, STL, Ogre Mesh, and more
 - **Animation merge** — combine Mixamo clips into one file
 - **Animation resampling** — reduce keyframe density for game engines
@@ -282,7 +283,7 @@ Split View|Skeleton Animation Controls
 - **Skeleton inspection** — bone weights, debug overlays, animation preview
 - **Scene management** — duplicate (Ctrl+D), group (Ctrl+G), snap, pivot modes
 - **AI chat** — natural language scene editing via local LLMs
-- **MCP server** — 51 tools for AI agents (Claude, Cursor, etc.)
+- **MCP server** — 52 tools for AI agents (Claude, Cursor, etc.), including QtMesh Cloud (`cloud_*`)
 - **REST API** — HTTP interface for external automation
 
 ---

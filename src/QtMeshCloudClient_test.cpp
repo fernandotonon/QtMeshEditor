@@ -320,6 +320,68 @@ TEST(QtMeshCloudClientCurrentUser, MissingTokenReturnsErrorImmediately)
     EXPECT_TRUE(result.errorString.contains("missing bearer token", Qt::CaseInsensitive));
 }
 
+TEST(QtMeshCloudClientUploadLimits, MissingTokenReturnsErrorImmediately)
+{
+    auto result = QtMeshCloudClient::fetchUploadLimits(QString(), /*timeoutMs=*/100);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.errorString.contains("missing bearer token", Qt::CaseInsensitive));
+}
+
+TEST(QtMeshCloudClientUploadLimits, ParsesAuthMeLimits)
+{
+    class LimitsMock {
+    public:
+        bool listen()
+        {
+            QObject::connect(&m_server, &QTcpServer::newConnection, [this]() {
+                QTcpSocket* socket = m_server.nextPendingConnection();
+                auto buffer = std::make_shared<QByteArray>();
+                QObject::connect(socket, &QTcpSocket::readyRead, socket, [this, socket, buffer]() {
+                    buffer->append(socket->readAll());
+                    const int headerEnd = buffer->indexOf("\r\n\r\n");
+                    if (headerEnd < 0)
+                        return;
+
+                    const ParsedHttpRequest req = parseHttpRequest(*buffer);
+                    if (headerValue(req.headers, QStringLiteral("Authorization"))
+                            == QStringLiteral("Bearer secret-token"))
+                        m_sawBearer = true;
+
+                    QJsonObject root;
+                    QJsonObject limits;
+                    limits.insert(QStringLiteral("maxFileSizeBytes"), 104857600);
+                    limits.insert(QStringLiteral("maxProjectSizeBytes"), 524288000);
+                    root.insert(QStringLiteral("limits"), limits);
+                    writeHttpResponse(socket, 200, QJsonDocument(root).toJson(QJsonDocument::Compact));
+                });
+            });
+            return m_server.listen(QHostAddress::LocalHost);
+        }
+
+        QString baseUrl() const
+        {
+            return QStringLiteral("http://127.0.0.1:%1").arg(m_server.serverPort());
+        }
+
+        bool sawBearer() const { return m_sawBearer; }
+
+    private:
+        QTcpServer m_server;
+        bool m_sawBearer = false;
+    };
+
+    LimitsMock mock;
+    ASSERT_TRUE(mock.listen());
+    qputenv("QTMESH_API_BASE", mock.baseUrl().toUtf8());
+
+    const auto result = QtMeshCloudClient::fetchUploadLimits(QStringLiteral("secret-token"), 5000);
+    ASSERT_TRUE(result.ok);
+    EXPECT_EQ(result.maxFileSizeBytes, 104857600);
+    EXPECT_EQ(result.maxProjectSizeBytes, 524288000);
+    EXPECT_EQ(result.maxReportSizeBytes, 5LL * 1024LL * 1024LL);
+    EXPECT_TRUE(mock.sawBearer());
+}
+
 TEST(QtMeshCloudClientLogout, MissingTokenReturnsErrorImmediately)
 {
     auto result = QtMeshCloudClient::logout(QString(), /*timeoutMs=*/100);

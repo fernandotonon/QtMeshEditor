@@ -29,6 +29,7 @@
 #include "UvUnwrap.h"
 #include "AssetScanController.h"
 #include "CloudCredentialStore.h"
+#include "CloudUploadPlanner.h"
 #include "DependencyResolver.h"
 #include "ProjectPackager.h"
 #include "QtMeshCloudClient.h"
@@ -643,6 +644,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("load_pose_library"), &MCPServer::toolLoadPoseLibrary},
         {QStringLiteral("apply_pose_masked"), &MCPServer::toolApplyPoseMasked},
         {QStringLiteral("cloud_status"), &MCPServer::toolCloudStatus},
+        {QStringLiteral("cloud_limits"), &MCPServer::toolCloudLimits},
         {QStringLiteral("cloud_login"), &MCPServer::toolCloudLogin},
         {QStringLiteral("cloud_logout"), &MCPServer::toolCloudLogout},
         {QStringLiteral("cloud_list_projects"), &MCPServer::toolCloudListProjects},
@@ -5284,12 +5286,53 @@ QJsonObject MCPServer::toolCloudStatus(const QJsonObject & /*args*/)
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("cloud_status"));
     CloudCredentialStore::migrateLegacySettingsIfNeeded();
     const bool connected = CloudCredentialStore::hasSession();
-    const CloudSession session = CloudCredentialStore::loadSession();
+    CloudSession session = CloudCredentialStore::loadSession();
+    QtMeshCloudClient::UploadLimitsResult limits;
+    if (connected) {
+        const auto me = QtMeshCloudClient::fetchCurrentUser(session.token);
+        if (me.ok && !me.user.value(QStringLiteral("email")).toString().isEmpty()) {
+            session.email = me.user.value(QStringLiteral("email")).toString();
+            CloudCredentialStore::saveSession(session);
+        }
+        limits = QtMeshCloudClient::fetchUploadLimits(session.token);
+    }
+    const qint64 lastUploadAt = CloudCredentialStore::lastUploadAt();
 
     QJsonObject content;
     content[QStringLiteral("connected")] = connected;
-    if (connected && !session.email.isEmpty())
-        content[QStringLiteral("email")] = session.email;
+    if (connected) {
+        if (!session.email.isEmpty())
+            content[QStringLiteral("email")] = session.email;
+        if (lastUploadAt > 0)
+            content[QStringLiteral("lastUploadAt")] = lastUploadAt;
+        if (limits.ok) {
+            QJsonObject limitsObj;
+            limitsObj.insert(QStringLiteral("maxFileSizeBytes"), limits.maxFileSizeBytes);
+            limitsObj.insert(QStringLiteral("maxProjectSizeBytes"), limits.maxProjectSizeBytes);
+            limitsObj.insert(QStringLiteral("maxReportSizeBytes"), limits.maxReportSizeBytes);
+            content[QStringLiteral("limits")] = limitsObj;
+        }
+    }
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolCloudLimits(const QJsonObject & /*args*/)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("cloud_limits"));
+    CloudCredentialStore::migrateLegacySettingsIfNeeded();
+    const QString token = CloudCredentialStore::loadSession().token;
+    if (token.isEmpty())
+        return makeErrorResult("Error: not signed in. Use cloud_login first.");
+
+    const auto limits = QtMeshCloudClient::fetchUploadLimits(token);
+    if (!limits.ok)
+        return makeErrorResult(limits.errorString);
+
+    QJsonObject content;
+    content.insert(QStringLiteral("maxFileSizeBytes"), limits.maxFileSizeBytes);
+    content.insert(QStringLiteral("maxProjectSizeBytes"), limits.maxProjectSizeBytes);
+    content.insert(QStringLiteral("maxReportSizeBytes"), limits.maxReportSizeBytes);
     return makeSuccessResult(
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
@@ -5401,17 +5444,19 @@ QJsonObject MCPServer::toolCloudUpload(const QJsonObject &args)
 
     const bool runScan = !args.contains(QStringLiteral("scan")) || args.value(QStringLiteral("scan")).toBool(true);
 
-    const QString mainCanonical = QFileInfo(filePath).canonicalFilePath();
-    QStringList selectedPaths;
-    selectedPaths.append(mainCanonical);
-    for (const DependencyEntry& entry : DependencyResolver::detect(filePath)) {
-        if (!entry.exists || !entry.checkedByDefault)
-            continue;
-        const QString absolute = QFileInfo(entry.absolutePath).absoluteFilePath();
-        if (absolute == mainCanonical)
-            continue;
-        selectedPaths.append(absolute);
+    QStringList includeGlobs;
+    if (args.contains(QStringLiteral("include"))) {
+        for (const QJsonValue& value : args.value(QStringLiteral("include")).toArray())
+            includeGlobs.append(value.toString().trimmed());
     }
+    QStringList excludeGlobs;
+    if (args.contains(QStringLiteral("exclude"))) {
+        for (const QJsonValue& value : args.value(QStringLiteral("exclude")).toArray())
+            excludeGlobs.append(value.toString().trimmed());
+    }
+
+    const QStringList selectedPaths =
+        CloudUploadPlanner::selectedPathsForUpload(filePath, includeGlobs, excludeGlobs);
 
     CloudPackageUploadRequest request;
     request.mainAssetPath = filePath;
@@ -6817,6 +6862,11 @@ QJsonArray MCPServer::buildToolsList()
             "Return whether a QtMesh Cloud session is stored locally (never includes the token).",
             QJsonObject{},
             QJsonArray{});
+        appendTool(
+            "cloud_limits",
+            "Return server-reported QtMesh Cloud upload size limits for the signed-in account.",
+            QJsonObject{},
+            QJsonArray{});
         QJsonObject loginProps;
         loginProps["api_key"] = QJsonObject{
             {"type", "string"},
@@ -6855,6 +6905,14 @@ QJsonArray MCPServer::buildToolsList()
         uploadProps["scan"] = QJsonObject{
             {"type", "boolean"},
             {"description", "Run a local asset scan before upload and attach the report. Default true."}};
+        uploadProps["include"] = QJsonObject{
+            {"type", "array"},
+            {"items", QJsonObject{{"type", "string"}}},
+            {"description", "Optional glob patterns limiting which dependency files are packaged."}};
+        uploadProps["exclude"] = QJsonObject{
+            {"type", "array"},
+            {"items", QJsonObject{{"type", "string"}}},
+            {"description", "Optional glob patterns excluding dependency files from the package."}};
         appendTool(
             "cloud_upload",
             "Package an asset plus detected dependencies and upload to QtMesh Cloud. "
