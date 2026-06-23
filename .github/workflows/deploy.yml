@@ -23,11 +23,14 @@ env:
   ASSIMP_DIR_VERSION: '6.0'
   OGRE_VERSION: '14.5.2'
   # Bump to bust the macOS assimp/ogre caches. The cached OGRE/Assimp SDKs bake
-  # absolute Xcode SDK paths (e.g. .../usr/lib/libz.tbd) into their CMake export;
-  # when the macos-latest runner image bumps Xcode, a stale cache hit makes
-  # build-macos fail with "No rule to make target '<old-SDK>/libz.tbd'". Bump
-  # this whenever the runner's Xcode/SDK changes.
-  MACOS_CACHE_VERSION: 'xcode26b'
+  # an absolute Xcode SDK path (e.g. .../usr/lib/libz.tbd) into their CMake
+  # export. The Pin-Xcode step below now selects a CONSISTENT Xcode across all
+  # macOS jobs (currently 26.3), but a cache built earlier under a different
+  # Xcode (26.5) still carries that old libz.tbd path and, when restored into a
+  # 26.3 build, fails with "No rule to make target '.../Xcode_26.5/...libz.tbd'".
+  # Bump this whenever the pinned Xcode changes so the SDK is rebuilt against it.
+  # (xcode263 = rebuilt under the Pin step's Xcode 26.3.)
+  MACOS_CACHE_VERSION: 'xcode263'
 
 jobs:
 #  send-slack-notification:
@@ -1580,15 +1583,6 @@ jobs:
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
             echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
-            # Fold the EXACT Xcode/SDK into the macOS cache key. "newest"
-            # (sort -V | tail -1) can resolve to DIFFERENT versions across the
-            # per-job runner images (producer built OGRE on 26.3, consumer linked
-            # on 26.5), and the cached OGRE/Assimp SDKs bake an absolute libz.tbd
-            # path for the SDK they were built against -> "No rule to make target
-            # '<SDK>/libz.tbd'". Keying on the resolved version makes a consumer
-            # on a different Xcode cache-miss and rebuild against its own SDK.
-            XV=$(basename "$(dirname "$(dirname "$DEV")")" | tr -d '/ ')
-            echo "XCODE_TAG=${XV}" >> "$GITHUB_ENV"
 
     - name: change folder permissions
       run: |
@@ -1612,9 +1606,9 @@ jobs:
                /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}-
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-
 
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Check out Assimp repo
@@ -1642,15 +1636,6 @@ jobs:
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
             echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
-            # Fold the EXACT Xcode/SDK into the macOS cache key. "newest"
-            # (sort -V | tail -1) can resolve to DIFFERENT versions across the
-            # per-job runner images (producer built OGRE on 26.3, consumer linked
-            # on 26.5), and the cached OGRE/Assimp SDKs bake an absolute libz.tbd
-            # path for the SDK they were built against -> "No rule to make target
-            # '<SDK>/libz.tbd'". Keying on the resolved version makes a consumer
-            # on a different Xcode cache-miss and rebuild against its own SDK.
-            XV=$(basename "$(dirname "$(dirname "$DEV")")" | tr -d '/ ')
-            echo "XCODE_TAG=${XV}" >> "$GITHUB_ENV"
 
     - name: change folder permissions
       run: |
@@ -1672,9 +1657,9 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}-
+          ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-
 
     - name: Cache Ogre
       id: cache-ogre-macos
@@ -1683,7 +1668,7 @@ jobs:
         cache-name: cache-ogre-macos
       with:
         path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
 
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Check out ogre repo
@@ -1716,15 +1701,6 @@ jobs:
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
             echo "DEVELOPER_DIR=$DEV" >> "$GITHUB_ENV"
-            # Fold the EXACT Xcode/SDK into the macOS cache key. "newest"
-            # (sort -V | tail -1) can resolve to DIFFERENT versions across the
-            # per-job runner images (producer built OGRE on 26.3, consumer linked
-            # on 26.5), and the cached OGRE/Assimp SDKs bake an absolute libz.tbd
-            # path for the SDK they were built against -> "No rule to make target
-            # '<SDK>/libz.tbd'". Keying on the resolved version makes a consumer
-            # on a different Xcode cache-miss and rebuild against its own SDK.
-            XV=$(basename "$(dirname "$(dirname "$DEV")")" | tr -d '/ ')
-            echo "XCODE_TAG=${XV}" >> "$GITHUB_ENV"
 
     - name: change folder permissions
       run: |
@@ -1779,7 +1755,7 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
 
     - name: Cache Ogre
       id: cache-ogre-macos
@@ -1788,7 +1764,7 @@ jobs:
         cache-name: cache-ogre-macos
       with:
         path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}-${{ env.XCODE_TAG }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ env.MACOS_CACHE_VERSION }}
 
     - name: Configure CMake
       env:
