@@ -583,12 +583,37 @@ bool AutoRig::unrigEntity(Ogre::Entity* entity)
     // Remember the skeleton resource name so we can free it after detaching.
     const std::string skelName = mesh->getSkeletonName();
 
+    // Strip the BLEND_INDICES/BLEND_WEIGHTS vertex elements that the skin step
+    // (`_compileBoneAssignments`) added. CRUCIAL for undo when the rig was
+    // committed with skinning: clearing the bone-assignment LIST is not enough
+    // — Ogre's `_compileBoneAssignments` only *removes* the blend elements
+    // inside `compileBoneAssignments`, which it skips entirely when the list is
+    // empty (maxBones == 0). So a plain clear leaves the vertex declaration
+    // advertising blend elements while the entity has no skeleton, and the next
+    // `_initialise`/render dereferences a null SkeletonInstance → crash. We
+    // mirror Ogre's own removal block (unset the buffer, drop both elements).
+    auto stripBlend = [](Ogre::VertexData* vd) {
+        if (!vd) return;
+        Ogre::VertexDeclaration* decl = vd->vertexDeclaration;
+        Ogre::VertexBufferBinding* bind = vd->vertexBufferBinding;
+        const Ogre::VertexElement* e =
+            decl->findElementBySemantic(Ogre::VES_BLEND_INDICES);
+        if (!e) return;
+        bind->unsetBinding(e->getSource());
+        decl->removeElement(Ogre::VES_BLEND_INDICES);
+        decl->removeElement(Ogre::VES_BLEND_WEIGHTS);
+    };
+
     // Drop every bone assignment (shared + per-submesh) so the mesh carries no
-    // stale weights once it's static again.
+    // stale weights once it's static again, then strip the blend elements.
     mesh->clearBoneAssignments();
+    stripBlend(mesh->sharedVertexData);
     for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
-        if (Ogre::SubMesh* sub = mesh->getSubMesh(si))
+        if (Ogre::SubMesh* sub = mesh->getSubMesh(si)) {
             sub->clearBoneAssignments();
+            if (!sub->useSharedVertices)
+                stripBlend(sub->vertexData);
+        }
     }
 
     // Detach the skeleton and force the entity back to its static form (mirror

@@ -1,6 +1,7 @@
 #include "commands/AutoRigCommand.h"
 #include "Manager.h"
 #include "SkinWeights.h"
+#include "AutoRigController.h"
 
 #include <Ogre.h>
 #include <OgreEntity.h>
@@ -51,11 +52,17 @@ void AutoRigCommand::redo()
             mReport.error = QStringLiteral("rigged, but skinning failed: %1")
                                 .arg(sw.error);
     }
+    if (mReport.applied)
+        AutoRigController::instance()->notifyRiggingChanged(mEntityName);
 }
 
 void AutoRigCommand::undo()
 {
     if (!mReport.applied) return;   // nothing was attached
-    if (Ogre::Entity* entity = resolveEntity())
-        AutoRig::unrigEntity(entity);
+    Ogre::Entity* entity = resolveEntity();
+    if (!entity) return;
+    // Drop any skeleton-debug overlay BEFORE detaching the skeleton (it would
+    // otherwise dangle), then revert to a static mesh.
+    AutoRigController::instance()->notifyRiggingChanged(mEntityName);
+    AutoRig::unrigEntity(entity);
 }

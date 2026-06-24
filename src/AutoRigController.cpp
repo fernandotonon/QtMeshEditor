@@ -7,6 +7,7 @@
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
 #include "UndoManager.h"
+#include "PropertiesPanelController.h"
 #include "commands/AutoRigCommand.h"
 
 #include <Ogre.h>
@@ -311,6 +312,17 @@ void AutoRigController::cancelMarkerPlacement()
     clearMarkerOverlays();
     emit markerModeChanged();
     emit markerCountChanged();
+}
+
+void AutoRigController::notifyRiggingChanged(const std::string& entityName)
+{
+    // Drop any skeleton-debug overlay on this entity — once the skeleton state
+    // flips (rig ↔ unrig on undo/redo) a previously-shown overlay references a
+    // skeleton instance that's being recreated/destroyed, which would dangle.
+    if (auto* ppc = PropertiesPanelController::instance())
+        ppc->toggleSkeletonDebug(QString::fromStdString(entityName), false);
+    // Re-evaluate the Inspector Rigging / Skeleton section visibility.
+    emit selectionChanged();
 }
 
 void AutoRigController::skipCurrentMarker()

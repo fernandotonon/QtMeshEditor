@@ -82,6 +82,12 @@ public:
     /// Returns true if the click was consumed (so the operator skips select).
     bool handleMarkerClick(OgreWidget* widget, const QPoint& screenPos);
 
+    /// Called by AutoRigCommand after a rig/unrig (incl. undo/redo). Drops any
+    /// active skeleton-debug overlay on the entity (it would dangle once the
+    /// skeleton state flips) and emits selectionChanged so the Inspector
+    /// re-evaluates the Rigging / Skeleton sections.
+    void notifyRiggingChanged(const std::string& entityName);
+
 signals:
     void selectionChanged();
     void busyChanged();
