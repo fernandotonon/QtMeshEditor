@@ -99,6 +99,7 @@
 #include "MeshValidator.h"
 #include "AssetScanController.h"
 #include "UvUnwrapController.h"
+#include "UVEditorController.h"
 #include "QuadRetopoController.h"
 #include "SkinWeightsController.h"
 #include "MeshDepthRenderer.h"
@@ -468,6 +469,7 @@ MainWindow::~MainWindow()
         CurveEditModel::kill();
         MeshLodController::kill();
         UvUnwrapController::kill();
+        UVEditorController::kill();
         QuadRetopoController::kill();
         SkinWeightsController::kill();
         IsometricSpritesController::kill();
@@ -638,6 +640,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "UvUnwrapController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return UvUnwrapController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<UVEditorController>(
+            "PropertiesPanel", 1, 0, "UVEditorController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return UVEditorController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<QuadRetopoController>(
             "PropertiesPanel", 1, 0, "QuadRetopoController",
@@ -938,6 +945,36 @@ void MainWindow::initToolBar()
         });
     }
 
+    // UV Editor dock — read-only UV layout viewer (issue #459).
+    {
+        auto* uvEditorWidget = new QQuickWidget(); // NOSONAR — Qt parent ownership
+        uvEditorWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        uvEditorWidget->setMinimumHeight(kBottomToolHeight);
+        uvEditorWidget->setMaximumHeight(kBottomToolHeight);
+        uvEditorWidget->setFocusPolicy(Qt::StrongFocus);
+        uvEditorWidget->setSource(QUrl("qrc:/UVEditor/UVEditorPanel.qml"));
+
+        m_uvEditorDock = new QDockWidget(tr("UV Editor"), this); // NOSONAR
+        m_uvEditorDock->setWidget(uvEditorWidget);
+        m_uvEditorDock->setObjectName("UVEditorDock");
+        configureBottomToolDock(m_uvEditorDock);
+        addDockWidget(Qt::BottomDockWidgetArea, m_uvEditorDock);
+        m_uvEditorDock->hide();
+
+        connect(m_uvEditorDock, &QDockWidget::visibilityChanged, this, [this](bool vis) {
+            SentryReporter::addBreadcrumb("ui.action",
+                vis ? "UV Editor shown" : "UV Editor hidden");
+            if (vis) {
+                UVEditorController::instance()->refresh();
+                if (auto* root = qobject_cast<QQuickWidget*>(m_uvEditorDock->widget())) {
+                    if (root->rootObject())
+                        QMetaObject::invokeMethod(root->rootObject(), "fitToView");
+                }
+            }
+            QSettings().setValue(QStringLiteral("View/showUVEditor"), vis);
+        });
+    }
+
     // Console dock — Qt message log (tabbed with other bottom tools)
     {
         auto* consoleContainer = new QWidget();
@@ -1187,6 +1224,15 @@ void MainWindow::initToolBar()
         [this]() {
             SentryReporter::addBreadcrumb("ui.action", "Rail: Curve Editor");
             showBottomToolDock(m_curveEditorDock);
+        });
+
+    addRailButton(
+        QStringLiteral("UV"),
+        tr("Show UV Editor"),
+        QStringLiteral("modeUVEditorAction"),
+        [this]() {
+            SentryReporter::addBreadcrumb("ui.action", "Rail: UV Editor");
+            showBottomToolDock(m_uvEditorDock);
         });
 
     addRailButton(
@@ -2225,6 +2271,26 @@ void MainWindow::initToolBar()
             });
         });
     }
+    if (m_uvEditorDock && ui->menuView) {
+        QAction* uvAct = m_uvEditorDock->toggleViewAction();
+        uvAct->setText(tr("UV Editor"));
+        uvAct->setChecked(
+            QSettings().value(QStringLiteral("View/showUVEditor"), false).toBool());
+        ui->menuView->addAction(uvAct);
+        connect(uvAct, &QAction::triggered, this, [this](bool checked) {
+            if (!checked || !m_uvEditorDock)
+                return;
+
+            QTimer::singleShot(0, this, [this]() {
+                showBottomToolDock(m_uvEditorDock);
+            });
+        });
+        if (uvAct->isChecked()) {
+            QTimer::singleShot(0, this, [this]() {
+                showBottomToolDock(m_uvEditorDock);
+            });
+        }
+    }
     if (m_bottomContextDock && m_consoleDock && ui->menuView) {
         m_contextPanelViewAction = new QAction(tr("Context Panel"), this);
         m_contextPanelViewAction->setObjectName(QStringLiteral("actionView_Context_Panel"));
@@ -3115,6 +3181,11 @@ void MainWindow::revealBottomTool(const QString& toolId)
         dock = m_consoleDock;
         breadcrumb = QStringLiteral("Rail: Console");
     }
+    else if (toolId == QStringLiteral("uvEditor"))
+    {
+        dock = m_uvEditorDock;
+        breadcrumb = QStringLiteral("Rail: UV Editor");
+    }
 
     if (dock) {
         SentryReporter::addBreadcrumb("ui.action", breadcrumb);
@@ -3194,7 +3265,8 @@ void MainWindow::tabifyBottomToolDocks()
         m_consoleDock,
         m_assetBrowserDock,
         m_dopeSheetDock,
-        m_curveEditorDock
+        m_curveEditorDock,
+        m_uvEditorDock
     };
 
     QDockWidget* anchor = nullptr;
