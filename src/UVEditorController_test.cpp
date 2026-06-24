@@ -83,7 +83,7 @@ TEST_F(UVEditorControllerTest, SingleTriangleOneIsland)
     EditableMesh em;
     ASSERT_TRUE(em.loadFromMesh(mesh));
 
-    const auto result = UVEditorController::computeIslandsFromEditableMesh(em, 0);
+    const auto result = UVEditorController::computeIslandsFromEditableMesh(em);
     EXPECT_EQ(result.islandCount, 1);
     ASSERT_EQ(result.faceIslandIds.size(), 1u);
     EXPECT_EQ(result.faceIslandIds[0], 0);
@@ -95,7 +95,7 @@ TEST_F(UVEditorControllerTest, TwoSubmeshesTwoIslands)
     EditableMesh em;
     ASSERT_TRUE(em.loadFromMesh(mesh));
 
-    const auto result = UVEditorController::computeIslandsFromEditableMesh(em, 0);
+    const auto result = UVEditorController::computeIslandsFromEditableMesh(em);
     EXPECT_EQ(result.islandCount, 2);
 }
 
@@ -108,7 +108,7 @@ TEST_F(UVEditorControllerTest, UvSeamSplitsIslands)
     EditableMesh em;
     ASSERT_TRUE(em.loadFromMesh(mesh));
 
-    const auto result = UVEditorController::computeIslandsFromEditableMesh(em, 0);
+    const auto result = UVEditorController::computeIslandsFromEditableMesh(em);
     EXPECT_EQ(result.islandCount, 2);
     ASSERT_EQ(result.faceIslandIds.size(), 2u);
     EXPECT_NE(result.faceIslandIds[0], result.faceIslandIds[1]);
@@ -136,4 +136,17 @@ TEST_F(UVEditorControllerTest, ControllerRefreshTracksSelection)
     EXPECT_TRUE(ctrl->hasMesh());
     EXPECT_EQ(ctrl->islandCount(), 1);
     EXPECT_EQ(ctrl->triangles().size(), 1);
+}
+
+TEST_F(UVEditorControllerTest, ShowTextureBackgroundToggle)
+{
+    UVEditorController* ctrl = UVEditorController::instance();
+    QSignalSpy spy(ctrl, &UVEditorController::showTextureBackgroundChanged);
+
+    const bool initial = ctrl->showTextureBackground();
+    ctrl->setShowTextureBackground(!initial);
+    EXPECT_EQ(ctrl->showTextureBackground(), !initial);
+    EXPECT_GE(spy.count(), 1);
+
+    ctrl->setShowTextureBackground(initial);
 }

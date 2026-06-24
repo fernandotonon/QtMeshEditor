@@ -6,12 +6,14 @@
 #include "EmbeddedTextureCache.h"
 #include "Manager.h"
 #include "SelectionSet.h"
+#include "SentryReporter.h"
 
 #include <QImage>
 #include <QColor>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QUrl>
 
@@ -26,6 +28,7 @@
 
 #include <queue>
 #include <cmath>
+#include <algorithm>
 
 UVEditorController* UVEditorController::s_instance = nullptr;
 
@@ -197,8 +200,7 @@ UVEditorController::IslandResult UVEditorController::computeIslandsFromHalfEdgeM
     return result;
 }
 
-UVEditorController::IslandResult UVEditorController::computeIslandsFromEditableMesh(const EditableMesh& mesh,
-                                                                                    int uvChannel)
+UVEditorController::IslandResult UVEditorController::computeIslandsFromEditableMesh(const EditableMesh& mesh)
 {
     if (mesh.subMeshes().empty())
         return {};
@@ -207,9 +209,32 @@ UVEditorController::IslandResult UVEditorController::computeIslandsFromEditableM
     if (!hem.buildFromEditableMesh(mesh))
         return {};
 
-    Q_UNUSED(uvChannel);
     return computeIslandsFromHalfEdgeMesh(hem);
 }
+
+namespace {
+
+QString safePreviewBaseName(const QString& texName)
+{
+    QString base = QFileInfo(texName).fileName();
+    base.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]")),
+                 QStringLiteral("_"));
+    if (base.isEmpty())
+        base = QStringLiteral("texture");
+    return base;
+}
+
+#ifdef Q_OS_MACOS
+QString macAppBundleRoot()
+{
+    const QString bundleRoot =
+        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../.."));
+    const QString canonical = QFileInfo(bundleRoot).canonicalFilePath();
+    return canonical.isEmpty() ? bundleRoot : canonical;
+}
+#endif
+
+} // namespace
 
 static QString fileUrl(const QString& path)
 {
@@ -267,8 +292,11 @@ QString UVEditorController::resolveDiffuseTextureSource(Ogre::Entity* entity, in
 
     if (auto texPtr = findLoadedTextureByName(texName.toStdString())) {
         const QString origin = QString::fromStdString(texPtr->getOrigin());
-        if (!origin.isEmpty() && QFileInfo::exists(origin))
+        if (!origin.isEmpty() && QFileInfo::exists(origin)) {
+            SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                QStringLiteral("UV editor texture from Ogre origin: %1").arg(texName));
             return fileUrl(origin);
+        }
     }
 
     const std::vector<uint8_t> embedded = EmbeddedTextureCache::retrieve(texName.toStdString());
@@ -277,24 +305,37 @@ QString UVEditorController::resolveDiffuseTextureSource(Ogre::Entity* entity, in
             QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
                 .filePath(QStringLiteral("uv_editor_previews"));
         QDir().mkpath(outDir);
-        const QString outPath = QDir(outDir).filePath(texName + QStringLiteral("_uvbg.png"));
+        const QString outPath =
+            QDir(outDir).filePath(safePreviewBaseName(texName) + QStringLiteral("_uvbg.png"));
         if (!QFileInfo::exists(outPath)) {
             QImage img;
-            if (img.loadFromData(embedded.data(), static_cast<int>(embedded.size())))
+            if (img.loadFromData(embedded.data(), static_cast<int>(embedded.size()))) {
                 img.save(outPath, "PNG");
+                SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                    QStringLiteral("UV editor embedded preview: %1").arg(texName));
+            }
         }
         if (QFileInfo::exists(outPath))
             return fileUrl(outPath);
     }
 
-    const QStringList candidates = {
+    QStringList candidates = {
         QStringLiteral("media/materials/textures/%1").arg(texName),
-        QDir(QCoreApplication::applicationDirPath()).filePath(texName),
         QDir::current().filePath(texName)
     };
+#ifdef Q_OS_MACOS
+    candidates.prepend(QDir(macAppBundleRoot()).filePath(
+        QStringLiteral("media/materials/textures/%1").arg(texName)));
+    candidates.append(QDir(macAppBundleRoot()).filePath(texName));
+#else
+    candidates.append(QDir(QCoreApplication::applicationDirPath()).filePath(texName));
+#endif
     for (const QString& path : candidates) {
-        if (QFileInfo::exists(path))
+        if (QFileInfo::exists(path)) {
+            SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                QStringLiteral("UV editor texture from disk: %1").arg(texName));
             return fileUrl(QFileInfo(path).absoluteFilePath());
+        }
     }
     return {};
 }
@@ -400,7 +441,9 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
         m_uvBounds = QRectF(0, 0, 1, 1);
     }
 
-    const int previewSub = submeshFilter.isEmpty() ? 0 : *submeshFilter.constBegin();
+    const int previewSub = submeshFilter.isEmpty()
+        ? 0
+        : *std::min_element(submeshFilter.begin(), submeshFilter.end());
     m_textureBackgroundSource = resolveDiffuseTextureSource(entity, previewSub);
     return m_hasMesh;
 }

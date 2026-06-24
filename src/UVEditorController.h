@@ -69,7 +69,8 @@ public:
     Q_INVOKABLE void refresh();
 
     /// Connected UV islands for a mesh snapshot (headless tests).
-    static IslandResult computeIslandsFromEditableMesh(const EditableMesh& mesh, int uvChannel = 0);
+    /// Caller must populate `EditableMesh` UVs for the channel under test.
+    static IslandResult computeIslandsFromEditableMesh(const EditableMesh& mesh);
 
 signals:
     void uvChannelChanged();
