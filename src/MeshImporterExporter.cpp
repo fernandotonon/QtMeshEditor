@@ -1669,13 +1669,44 @@ QString cloudProjectCacheRoot(const QString& localPath)
     return normalized.left(cloudIdx + marker.size() + slugEnd);
 }
 
-void MeshImporterExporter::prepareCloudCachedImport(const QString& localMainFile)
+QStringList MeshImporterExporter::textureSearchRootsForImportFile(const QString& localPath)
 {
-    const QFileInfo fileInfo(localMainFile);
-    registerImportResourceDirectory(fileInfo.absolutePath());
+    QStringList roots;
+    const QFileInfo fileInfo(localPath);
+    if (!fileInfo.exists())
+        return roots;
+
+    roots << fileInfo.absolutePath();
     const QString cloudRoot = cloudProjectCacheRoot(fileInfo.absoluteFilePath());
     if (!cloudRoot.isEmpty() && cloudRoot != fileInfo.absolutePath())
-        registerImportResourceDirectory(cloudRoot);
+        roots << cloudRoot;
+    return roots;
+}
+
+QStringList MeshImporterExporter::textureSearchRootsForEntity(const Ogre::Entity* entity)
+{
+    if (!entity)
+        return {};
+    const Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh)
+        return {};
+    const Ogre::Any& any = mesh->getUserObjectBindings().getUserAny("qtme.source_path");
+    if (!any.has_value())
+        return {};
+    try {
+        const std::string sourcePath = Ogre::any_cast<std::string>(any);
+        if (sourcePath.empty())
+            return {};
+        return textureSearchRootsForImportFile(QString::fromStdString(sourcePath));
+    } catch (const Ogre::Exception&) {
+        return {};
+    }
+}
+
+void MeshImporterExporter::prepareCloudCachedImport(const QString& localMainFile)
+{
+    for (const QString& root : textureSearchRootsForImportFile(localMainFile))
+        registerImportResourceDirectory(root);
 }
 
 /** @return true if at least one declared material exists in the manager for this group. */

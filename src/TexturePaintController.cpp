@@ -159,6 +159,103 @@ private:
     bool m_skipFirstRedo = true;
 };
 
+Ogre::TexturePtr findTextureAcrossGroups(const std::string& name)
+{
+    auto texPtr = Ogre::TextureManager::getSingleton().getByName(name);
+    if (texPtr)
+        return texPtr;
+    auto it = Ogre::TextureManager::getSingleton().getResourceIterator();
+    while (it.hasMoreElements()) {
+        const Ogre::ResourcePtr r = it.getNext();
+        if (r && r->getName() == name)
+            return Ogre::static_pointer_cast<Ogre::Texture>(r);
+    }
+    return {};
+}
+
+bool copyQImageToPaintBuffer(TexturePaintBuffer& buffer, const QImage& source)
+{
+    QImage qimg = source;
+    if (qimg.isNull())
+        return false;
+    if (qimg.format() != QImage::Format_RGBA8888)
+        qimg = qimg.convertToFormat(QImage::Format_RGBA8888);
+    const int w = qimg.width();
+    const int h = qimg.height();
+    if (w <= 0 || h <= 0)
+        return false;
+    buffer.resize(w, h);
+    for (int y = 0; y < h; ++y) {
+        std::memcpy(buffer.data().data() + static_cast<size_t>(y) * static_cast<size_t>(w) * 4u,
+                    qimg.constScanLine(y),
+                    static_cast<size_t>(w) * 4u);
+    }
+    buffer.clearDirty();
+    return true;
+}
+
+bool loadPaintBufferFromImageBytes(TexturePaintBuffer& buffer,
+                                   const uint8_t* data,
+                                   std::size_t size)
+{
+    QImage qimg;
+    if (!qimg.loadFromData(data, static_cast<int>(size)))
+        return false;
+    return copyQImageToPaintBuffer(buffer, qimg);
+}
+
+bool loadPaintBufferFromDiskPath(TexturePaintBuffer& buffer, const QString& path)
+{
+    if (path.isEmpty() || !QFileInfo::exists(path))
+        return false;
+    return copyQImageToPaintBuffer(buffer, QImage(path));
+}
+
+// CPU-side sources first — same order as MaterialEditorQML::previewUrlFromOgreTexture.
+// GPU readback (convertToImage / blitToMemory) is unreliable for imported FBX textures.
+bool loadPaintBufferFromNonGpuSources(TexturePaintBuffer& buffer,
+                                      const Ogre::TexturePtr& texPtr,
+                                      const QString& texName)
+{
+    if (texName.isEmpty())
+        return false;
+
+    if (texPtr) {
+        const QString origin = QString::fromStdString(texPtr->getOrigin());
+        if (!origin.isEmpty() && loadPaintBufferFromDiskPath(buffer, origin))
+            return true;
+
+        const QString group = QString::fromStdString(texPtr->getGroup());
+        if (!group.isEmpty()) {
+            if (loadPaintBufferFromDiskPath(buffer, group + QLatin1Char('/') + texName))
+                return true;
+            if (!origin.isEmpty()
+                && loadPaintBufferFromDiskPath(buffer, group + QLatin1Char('/') + origin)) {
+                return true;
+            }
+        }
+    }
+
+    const std::vector<uint8_t> bytes =
+        EmbeddedTextureCache::retrieve(texName.toStdString());
+    if (!bytes.empty()
+        && loadPaintBufferFromImageBytes(buffer, bytes.data(), bytes.size())) {
+        return true;
+    }
+
+    const QString baseName = QFileInfo(texName).fileName();
+    if (baseName != texName) {
+        const std::vector<uint8_t> baseBytes =
+            EmbeddedTextureCache::retrieve(baseName.toStdString());
+        if (!baseBytes.empty()
+            && loadPaintBufferFromImageBytes(buffer, baseBytes.data(), baseBytes.size())) {
+            return true;
+        }
+    }
+
+    return loadPaintBufferFromDiskPath(buffer, texName);
+}
+
 } // namespace
 
 TexturePaintController* TexturePaintController::instance()
@@ -539,9 +636,7 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
     Ogre::TexturePtr originalTex;
     if (!existingTex.isEmpty()) {
         try {
-            originalTex = Ogre::TextureManager::getSingleton().getByName(
-                existingTex.toStdString(),
-                Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+            originalTex = findTextureAcrossGroups(existingTex.toStdString());
         } catch (...) {}
     }
     m_originalTexture = originalTex;
@@ -551,16 +646,22 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
         // come from inline FBX embeds (no disk file), legacy on-disk
         // files, or auto-generated render targets. Each strategy
         // succeeds for a different source.
-        //
+        Ogre::TexturePtr existing = originalTex;
+        if (!existing) {
+            try {
+                existing = findTextureAcrossGroups(existingTex.toStdString());
+            } catch (...) {}
+        }
+
+        // 0. CPU-side: embedded FBX bytes, on-disk origin, resource-group path.
+        if (loadPaintBufferFromNonGpuSources(m_buffer, existing, existingTex)) {
+            loadedExisting = true;
+            loadError.clear();
+        }
+
         // 1. TextureManager → convertToImage (works when Ogre keeps
         //    pixels in an Image buffer beside the GPU upload).
-        Ogre::TexturePtr existing;
-        try {
-            existing = Ogre::TextureManager::getSingleton().getByName(
-                existingTex.toStdString(),
-                Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
-        } catch (...) {}
-        if (existing) {
+        if (!loadedExisting && existing) {
             try {
                 if (!existing->isLoaded()) existing->load();
                 Ogre::Image img;
@@ -581,7 +682,7 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
             } catch (...) {
                 loadError = QStringLiteral("convertToImage exception");
             }
-        } else {
+        } else if (!loadedExisting && !existing) {
             loadError = QStringLiteral("texture not found in TextureManager");
         }
 
