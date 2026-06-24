@@ -46,6 +46,10 @@
     <file alias="AnimationCurveEditor.qml">../qml/AnimationCurveEditor.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
   </qresource>
+  <qresource prefix="/UVEditor">
+    <file alias="UVEditorPanel.qml">../qml/UVEditorPanel.qml</file>
+    <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
+  </qresource>
   <qresource prefix="/AIChatPanel">
     <file alias="AIChatPanel.qml">../qml/AIChatPanel.qml</file>
   </qresource>

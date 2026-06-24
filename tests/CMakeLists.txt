@@ -133,6 +133,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDecimatorController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrapController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UVEditorController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopoController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeights.cpp

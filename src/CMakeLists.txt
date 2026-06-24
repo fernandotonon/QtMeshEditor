@@ -86,6 +86,7 @@ MeshOptimizerLod.cpp
 ExportOptimizer.cpp
 UvUnwrap.cpp
 UvUnwrapController.cpp
+UVEditorController.cpp
 QuadRetopo.cpp
 QuadRetopoController.cpp
 SkinWeights.cpp
@@ -225,6 +226,7 @@ MeshOptimizerLod.h
 ExportOptimizer.h
 UvUnwrap.h
 UvUnwrapController.h
+UVEditorController.h
 QuadRetopo.h
 QuadRetopoController.h
 SkinWeights.h
