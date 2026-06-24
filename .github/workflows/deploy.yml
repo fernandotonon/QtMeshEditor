@@ -24,13 +24,12 @@ env:
   OGRE_VERSION: '14.5.2'
   # Bump to bust the macOS assimp/ogre caches. The cached OGRE/Assimp SDKs bake
   # an absolute Xcode SDK path (e.g. .../usr/lib/libz.tbd) into their CMake
-  # export. The Pin-Xcode step below selects a CONSISTENT Xcode across all macOS
-  # jobs (currently 26.3), but a cache built earlier under a different Xcode
-  # (26.5) still carries that old libz.tbd path and, when restored into a 26.3
-  # build, fails with "No rule to make target '.../Xcode_26.5/...libz.tbd'"
-  # (this broke the 3.9.1 macOS deploy). Bump this whenever the pinned Xcode
-  # changes so the SDK is rebuilt against it. (xcode263 = under Pin step Xcode 26.3.)
-  MACOS_CACHE_VERSION: 'xc263pin'
+  # export. The Pin-Xcode step also pins SDKROOT so CMake's ZLIB resolves under
+  # the selected Xcode (xcode-select alone didn't stop find_package(ZLIB) from
+  # picking xcrun's default 26.5 SDK). Bump this whenever the pinned Xcode/SDK
+  # changes so the SDK is rebuilt against it and stale libz.tbd paths are
+  # discarded. (sdkpin1 = first build under the SDKROOT-pinned environment.)
+  MACOS_CACHE_VERSION: 'sdkpin1'
 
 jobs:
 #  send-slack-notification:
@@ -1574,20 +1573,11 @@ jobs:
     steps:
     - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
       run: |
-            # All macOS jobs MUST use the SAME exact Xcode/SDK: the OGRE/Assimp
+            # All three macOS jobs must use the SAME Xcode/SDK: the OGRE/Assimp
             # builds bake the active SDK's absolute libz.tbd path into their
-            # CMake export, and the consumer links against it. The per-job runner
-            # images carry different *newest* Xcodes (one job got 26.5, another
-            # 26.3), so "sort -V | tail -1" (newest) made jobs disagree and the
-            # cached SDK's baked path failed to link → "No rule to make target
-            # '.../Xcode_XX/...libz.tbd'". Pin a SPECIFIC version present on all
-            # current images (26.3); fall back to newest only if it's absent.
-            PIN="/Applications/Xcode_26.3.app/Contents/Developer"
-            if [ -d "$PIN" ]; then
-                DEV="$PIN"
-            else
-                DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
-            fi
+            # CMake export, and the consumer build links against it. Different
+            # default Xcodes per job → "No rule to make target '<SDK>/libz.tbd'".
+            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
             if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
@@ -1659,14 +1649,7 @@ jobs:
     steps:
     - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
       run: |
-            # Pin a SPECIFIC Xcode present on all macos-latest images (26.3) so
-            # producers and consumer agree on the SDK; "newest" drifts per image.
-            PIN="/Applications/Xcode_26.3.app/Contents/Developer"
-            if [ -d "$PIN" ]; then
-                DEV="$PIN"
-            else
-                DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
-            fi
+            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
             if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
@@ -1747,14 +1730,7 @@ jobs:
     steps:
     - name: Pin newest stable Xcode (consistent SDK across all macOS jobs)
       run: |
-            # Pin a SPECIFIC Xcode present on all macos-latest images (26.3) so
-            # producers and consumer agree on the SDK; "newest" drifts per image.
-            PIN="/Applications/Xcode_26.3.app/Contents/Developer"
-            if [ -d "$PIN" ]; then
-                DEV="$PIN"
-            else
-                DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
-            fi
+            DEV=$(ls -d /Applications/Xcode_*.app/Contents/Developer 2>/dev/null | sort -V | tail -1)
             if [ -z "$DEV" ]; then DEV="$(xcode-select -p)"; fi
             echo "Selected Xcode: $DEV"
             sudo xcode-select -s "$DEV"
