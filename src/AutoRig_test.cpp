@@ -155,3 +155,275 @@ TEST(AutoRigCore, ReportSerialization)
     fail.error = "boom";
     EXPECT_TRUE(AutoRig::reportToText(fail).contains("boom"));
 }
+
+// ---- Marker-driven fit (#407 Mixamo-style) ------------------------------
+
+namespace {
+// Distance between two joint positions.
+double jdist(const AutoRig::Joint& a, const AutoRig::Joint& b)
+{
+    double dx = a.pos[0] - b.pos[0];
+    double dy = a.pos[1] - b.pos[1];
+    double dz = a.pos[2] - b.pos[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+int jindex(const std::vector<AutoRig::Joint>& js, const QString& name)
+{
+    for (int i = 0; i < static_cast<int>(js.size()); ++i)
+        if (js[i].name == name) return i;
+    return -1;
+}
+} // namespace
+
+TEST(AutoRigMarkers, OrderAndLabelsAreStable)
+{
+    const auto order = AutoRig::humanoidMarkerOrder();
+    ASSERT_EQ(order.size(), 6u);
+    EXPECT_EQ(order[0], AutoRig::MarkerId::Chin);
+    EXPECT_EQ(order[5], AutoRig::MarkerId::Hips);
+    for (auto id : order)
+        EXPECT_FALSE(AutoRig::markerLabel(id).isEmpty());
+}
+
+TEST(AutoRigMarkers, EmptyMarkersMatchPlainFit)
+{
+    auto cloud = uprightCloud();
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;  // +Y up, humanoid
+
+    int recenterA = 0, recenterB = 0, applied = -1;
+    auto plain   = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                        static_cast<int>(cloud.size() / 3),
+                                        opts, &recenterA);
+    auto marked  = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                                        static_cast<int>(cloud.size() / 3),
+                                        {}, opts, &recenterB, &applied);
+    ASSERT_EQ(plain.size(), marked.size());
+    EXPECT_EQ(applied, 0);
+    for (size_t i = 0; i < plain.size(); ++i)
+        EXPECT_LT(jdist(plain[i], marked[i]), 1e-6) << "joint " << i;
+}
+
+TEST(AutoRigMarkers, WristMarkerLaysWholeArmChainTowardIt)
+{
+    auto cloud = uprightCloud();
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;
+
+    // Skip if this template doesn't expose the named arm chain.
+    auto base = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3), opts);
+    const int iShoulder = jindex(base, "LeftShoulder");
+    const int iArm      = jindex(base, "LeftArm");
+    const int iFore     = jindex(base, "LeftForeArm");
+    const int iHand     = jindex(base, "LeftHand");
+    if (iShoulder < 0 || iArm < 0 || iFore < 0 || iHand < 0)
+        GTEST_SKIP() << "no left-arm chain";
+
+    AutoRig::Marker wrist;
+    wrist.id  = AutoRig::MarkerId::LeftWrist;
+    wrist.set = true;
+    wrist.pos = {1.25, 1.55, 0.10};   // far out from the body
+
+    int applied = 0;
+    auto marked = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3),
+                                     {wrist}, opts, nullptr, &applied);
+    EXPECT_EQ(applied, 1);
+
+    // Hand lands exactly on the marker.
+    EXPECT_LT(std::abs(marked[iHand].pos[0] - wrist.pos[0]), 1e-6);
+    EXPECT_LT(std::abs(marked[iHand].pos[1] - wrist.pos[1]), 1e-6);
+    EXPECT_LT(std::abs(marked[iHand].pos[2] - wrist.pos[2]), 1e-6);
+
+    // Shoulder (the anchor) is unchanged from the template fit.
+    EXPECT_LT(jdist(marked[iShoulder], base[iShoulder]), 1e-6);
+
+    // The intermediate joints lie evenly on the shoulder→hand segment:
+    // LeftArm at 1/3, LeftForeArm at 2/3.
+    const auto& a = marked[iShoulder].pos;
+    for (int k = 0; k < 3; ++k) {
+        const double arm13  = a[k] + (wrist.pos[k] - a[k]) * (1.0 / 3.0);
+        const double fore23 = a[k] + (wrist.pos[k] - a[k]) * (2.0 / 3.0);
+        EXPECT_LT(std::abs(marked[iArm].pos[k]  - arm13),  1e-6) << "arm axis " << k;
+        EXPECT_LT(std::abs(marked[iFore].pos[k] - fore23), 1e-6) << "fore axis " << k;
+    }
+
+    // The upper arm (LeftArm) actually moved OUT toward the wrist — the bug we
+    // fixed was that it stayed at its tucked template x while only the wrist moved.
+    EXPECT_GT(std::abs(marked[iArm].pos[0]), std::abs(base[iArm].pos[0]));
+}
+
+TEST(AutoRigMarkers, HipsMarkerAnchorsPelvisOnly)
+{
+    auto cloud = uprightCloud();
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;
+
+    auto base = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3), opts);
+    const int iHips = jindex(base, "Hips");
+    if (iHips < 0) GTEST_SKIP() << "no Hips joint";
+
+    AutoRig::Marker hips;
+    hips.id  = AutoRig::MarkerId::Hips;
+    hips.set = true;
+    hips.pos = {0.05, 0.9, 0.0};
+
+    int applied = 0;
+    auto marked = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3),
+                                     {hips}, opts, nullptr, &applied);
+    EXPECT_EQ(applied, 1);
+    EXPECT_LT(jdist(marked[iHips], AutoRig::Joint{"", -1, hips.pos}), 1e-6);
+}
+
+TEST(AutoRigMarkers, OrderHasTenWithAttachPointsBeforeTips)
+{
+    const auto order = AutoRig::humanoidMarkerOrder();
+    ASSERT_EQ(order.size(), 10u);
+    auto pos = [&](AutoRig::MarkerId id) {
+        for (size_t i = 0; i < order.size(); ++i) if (order[i] == id) return (int)i;
+        return -1;
+    };
+    // Attach points precede their tips: shoulder→wrist, hip→knee.
+    EXPECT_GE(pos(AutoRig::MarkerId::LeftShoulder), 0);
+    EXPECT_GE(pos(AutoRig::MarkerId::LeftUpLeg), 0);
+    EXPECT_LT(pos(AutoRig::MarkerId::LeftShoulder),  pos(AutoRig::MarkerId::LeftWrist));
+    EXPECT_LT(pos(AutoRig::MarkerId::RightShoulder), pos(AutoRig::MarkerId::RightWrist));
+    EXPECT_LT(pos(AutoRig::MarkerId::LeftUpLeg),  pos(AutoRig::MarkerId::LeftKnee));
+    EXPECT_LT(pos(AutoRig::MarkerId::RightUpLeg), pos(AutoRig::MarkerId::RightKnee));
+    EXPECT_FALSE(AutoRig::markerLabel(AutoRig::MarkerId::LeftUpLeg).isEmpty());
+    EXPECT_FALSE(AutoRig::markerLabel(AutoRig::MarkerId::LeftShoulder).isEmpty());
+}
+
+TEST(AutoRigMarkers, ChinAndHipsLaySpineBetweenThem)
+{
+    auto cloud = uprightCloud();
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;
+
+    auto base = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3), opts);
+    const int iHips  = jindex(base, "Hips");
+    const int iSpine = jindex(base, "Spine");
+    const int iChest = jindex(base, "Chest");
+    const int iNeck  = jindex(base, "Neck");
+    const int iHead  = jindex(base, "Head");
+    if (iHips < 0 || iSpine < 0 || iChest < 0 || iNeck < 0 || iHead < 0)
+        GTEST_SKIP() << "no spine chain";
+
+    AutoRig::Marker hips;
+    hips.id = AutoRig::MarkerId::Hips; hips.set = true; hips.pos = {0.0, 0.80, 0.0};
+    AutoRig::Marker chin;
+    chin.id = AutoRig::MarkerId::Chin; chin.set = true; chin.pos = {0.0, 2.20, 0.0};
+
+    int applied = 0;
+    auto marked = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3),
+                                     {hips, chin}, opts, nullptr, &applied);
+    EXPECT_EQ(applied, 2);
+
+    // Head=chin, Hips=hips, and Spine/Chest/Neck distributed evenly on the
+    // segment: last = 3 spine joints + Head = 4 steps, so Spine@1/4, Chest@2/4,
+    // Neck@3/4 between hips and chin.
+    EXPECT_LT(jdist(marked[iHead], AutoRig::Joint{"", -1, chin.pos}), 1e-6);
+    EXPECT_LT(jdist(marked[iHips], AutoRig::Joint{"", -1, hips.pos}), 1e-6);
+    const auto& a = hips.pos;
+    auto onSeg = [&](double t) {
+        return std::array<double,3>{ a[0]+(chin.pos[0]-a[0])*t,
+                                     a[1]+(chin.pos[1]-a[1])*t,
+                                     a[2]+(chin.pos[2]-a[2])*t };
+    };
+    EXPECT_LT(jdist(marked[iSpine], AutoRig::Joint{"", -1, onSeg(1.0/4)}), 1e-6);
+    EXPECT_LT(jdist(marked[iChest], AutoRig::Joint{"", -1, onSeg(2.0/4)}), 1e-6);
+    EXPECT_LT(jdist(marked[iNeck],  AutoRig::Joint{"", -1, onSeg(3.0/4)}), 1e-6);
+}
+
+TEST(AutoRigMarkers, HipsCarriesThighRootsAndKneeLaysLowerLeg)
+{
+    auto cloud = uprightCloud();
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;
+
+    auto base = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3), opts);
+    const int iHips  = jindex(base, "Hips");
+    const int iUpLeg = jindex(base, "LeftUpLeg");
+    const int iKnee  = jindex(base, "LeftLeg");
+    const int iFoot  = jindex(base, "LeftFoot");
+    if (iHips < 0 || iUpLeg < 0 || iKnee < 0 || iFoot < 0)
+        GTEST_SKIP() << "no left-leg chain";
+
+    AutoRig::Marker hips;
+    hips.id  = AutoRig::MarkerId::Hips;
+    hips.set = true;
+    hips.pos = {0.0, 1.05, 0.0};
+    AutoRig::Marker knee;
+    knee.id  = AutoRig::MarkerId::LeftKnee;
+    knee.set = true;
+    knee.pos = {0.40, 0.55, 0.05};
+
+    // Expected thigh-root shift = the hips delta (UpLeg is carried with Hips).
+    const auto& bH = base[iHips].pos;
+    const std::array<double,3> d = { hips.pos[0]-bH[0], hips.pos[1]-bH[1], hips.pos[2]-bH[2] };
+    const std::array<double,3> expUpLeg = { base[iUpLeg].pos[0]+d[0],
+                                            base[iUpLeg].pos[1]+d[1],
+                                            base[iUpLeg].pos[2]+d[2] };
+
+    int applied = 0;
+    auto marked = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3),
+                                     {hips, knee}, opts, nullptr, &applied);
+    EXPECT_EQ(applied, 2);
+
+    // Thigh root tracked the hips marker (didn't stay at its template pos).
+    EXPECT_LT(jdist(marked[iUpLeg], AutoRig::Joint{"", -1, expUpLeg}), 1e-6);
+    // Knee landed on its marker.
+    EXPECT_LT(jdist(marked[iKnee], AutoRig::Joint{"", -1, knee.pos}), 1e-6);
+    // Foot continues below the knee along thigh→knee (knee + (knee - upLeg)).
+    const auto& U = marked[iUpLeg].pos;
+    const std::array<double,3> expFoot = { knee.pos[0] + (knee.pos[0]-U[0]),
+                                           knee.pos[1] + (knee.pos[1]-U[1]),
+                                           knee.pos[2] + (knee.pos[2]-U[2]) };
+    EXPECT_LT(jdist(marked[iFoot], AutoRig::Joint{"", -1, expFoot}), 1e-6);
+}
+
+TEST(AutoRigMarkers, ShoulderMarkerAnchorsAttachAndArmLaysFromIt)
+{
+    auto cloud = uprightCloud();
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;
+
+    auto base = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3), opts);
+    const int iShoulder = jindex(base, "LeftShoulder");
+    const int iArm      = jindex(base, "LeftArm");
+    const int iHand     = jindex(base, "LeftHand");
+    if (iShoulder < 0 || iArm < 0 || iHand < 0) GTEST_SKIP() << "no left-arm chain";
+
+    AutoRig::Marker shoulder;
+    shoulder.id  = AutoRig::MarkerId::LeftShoulder;
+    shoulder.set = true;
+    shoulder.pos = {0.35, 1.60, 0.0};
+    AutoRig::Marker wrist;
+    wrist.id  = AutoRig::MarkerId::LeftWrist;
+    wrist.set = true;
+    wrist.pos = {1.30, 1.55, 0.10};
+
+    int applied = 0;
+    auto marked = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3),
+                                     {shoulder, wrist}, opts, nullptr, &applied);
+    EXPECT_EQ(applied, 2);
+
+    // Shoulder lands on its marker; the arm chain lays from THAT point, so
+    // LeftArm = lerp(shoulderMarker, wristMarker, 1/3).
+    EXPECT_LT(jdist(marked[iShoulder], AutoRig::Joint{"", -1, shoulder.pos}), 1e-6);
+    for (int k = 0; k < 3; ++k) {
+        const double arm13 =
+            shoulder.pos[k] + (wrist.pos[k] - shoulder.pos[k]) * (1.0 / 3.0);
+        EXPECT_LT(std::abs(marked[iArm].pos[k] - arm13), 1e-6) << "axis " << k;
+    }
+    EXPECT_LT(jdist(marked[iHand], AutoRig::Joint{"", -1, wrist.pos}), 1e-6);
+}

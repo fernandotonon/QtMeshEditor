@@ -348,6 +348,25 @@ Rectangle {
                 Component.onCompleted: content = riggingToolsComponent
             }
 
+            // ---- Skeleton (Animation mode) ----
+            // Bone/skeleton visualization toggles (skeleton overlay + bone-weight
+            // heat-map). Lives in its OWN section, independent of animation clips,
+            // so it surfaces for ANY skinned mesh — including a skeleton-bearing
+            // mesh with no animations yet (e.g. a freshly auto-rigged static
+            // mesh). Previously these toggles were buried per-animation-group
+            // inside the Animations section and never appeared without clips.
+            // This is the home for future bone-level features (bone select,
+            // per-bone transforms, etc.).
+            CollapsibleSection {
+                title: "Skeleton"
+                sectionVisible: root.currentTab === root.modeToolsTab
+                    && root.modeToolMatches(EditorModeController.AnimationMode)
+                    && PropertiesPanelController.hasSkeletonSelection
+                expanded: false
+
+                Component.onCompleted: content = skeletonToolsComponent
+            }
+
             // ---- Texture Paint (Material mode) ----
             // (Brush color/radius/strength/falloff live on the toolbar
             //  paint-brush popup. The Inspector panel keeps only the
@@ -1347,6 +1366,96 @@ Rectangle {
                     ToolTip.text: AutoRigController.hasRiggableSelection
                         ? "Generate a skeleton for this static mesh by embedding a template."
                         : "Select a static (unrigged) mesh first."
+                }
+            }
+        }
+    }
+
+    // ---- Skeleton Tools Content (Animation mode) ----
+    // Per-entity skeleton/bone visualization toggles, sourced from
+    // PropertiesPanelController.skeletonData() (skeleton-bearing entities,
+    // independent of animation clips). Refreshes on selectionChanged /
+    // animationStateChanged so a just-auto-rigged mesh shows up immediately.
+    Component {
+        id: skeletonToolsComponent
+
+        Column {
+            id: skeletonToolsCol
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            property var skelGroups: PropertiesPanelController.skeletonData()
+            Connections {
+                target: PropertiesPanelController
+                function onAnimationStateChanged() {
+                    skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                }
+                function onSelectionChanged() {
+                    skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Visualize the skeleton and per-vertex bone weights for the "
+                    + "selected skinned mesh."
+            }
+
+            Repeater {
+                model: skeletonToolsCol.skelGroups
+                delegate: Column {
+                    required property var modelData
+                    width: skeletonToolsCol.width - 16
+                    spacing: 4
+
+                    // Entity name (only worth showing when multiple are selected).
+                    Text {
+                        visible: skeletonToolsCol.skelGroups.length > 1
+                        text: modelData.entity
+                        color: PropertiesPanelController.textColor
+                        opacity: 0.7
+                        font.pixelSize: 10
+                    }
+
+                    Row {
+                        spacing: 8
+                        Rectangle {
+                            width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                            border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                            color: modelData.showSkeleton ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
+                            Text { anchors.centerIn: parent; text: modelData.showSkeleton ? "✓" : ""; color: "white"; font.pixelSize: 10 }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    PropertiesPanelController.toggleSkeletonDebug(modelData.entity, !modelData.showSkeleton)
+                                    skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                                }
+                            }
+                        }
+                        Text { text: "Skeleton"; color: PropertiesPanelController.textColor; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+
+                        Rectangle {
+                            width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                            border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                            color: modelData.showWeights ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
+                            Text { anchors.centerIn: parent; text: modelData.showWeights ? "✓" : ""; color: "white"; font.pixelSize: 10 }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    PropertiesPanelController.toggleBoneWeights(modelData.entity, !modelData.showWeights)
+                                    skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                                }
+                            }
+                        }
+                        Text { text: "Weights"; color: PropertiesPanelController.textColor; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+                    }
                 }
             }
         }
@@ -5326,29 +5435,9 @@ Rectangle {
                             }
                         }
 
-                        // Skeleton/Weights row (if has skeleton)
-                        Row {
-                            visible: grp.hasSkeleton
-                            spacing: 8; topPadding: 4
-
-                            Rectangle {
-                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
-                                border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                                color: grp.showSkeleton ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
-                                Text { anchors.centerIn: parent; text: grp.showSkeleton ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-                                MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.toggleSkeletonDebug(grp.entity, !grp.showSkeleton) }
-                            }
-                            Text { text: "Skeleton"; color: PropertiesPanelController.textColor; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
-
-                            Rectangle {
-                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
-                                border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                                color: grp.showWeights ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
-                                Text { anchors.centerIn: parent; text: grp.showWeights ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-                                MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.toggleBoneWeights(grp.entity, !grp.showWeights) }
-                            }
-                            Text { text: "Weights"; color: PropertiesPanelController.textColor; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
-                        }
+                        // (Skeleton / Weights viz toggles moved to the dedicated
+                        // "Skeleton" section so they surface for skinned meshes
+                        // regardless of whether they have animation clips.)
 
                         // Export Pose button (if has skeleton)
                         Rectangle {

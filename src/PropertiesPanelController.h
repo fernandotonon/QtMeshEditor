@@ -215,6 +215,18 @@ public:
     Q_INVOKABLE bool reparentNode(const QString& nodeName, const QString& newParentName);
     void setAnimationWidget(class AnimationWidget* widget) { mAnimationWidget = widget; }
 
+    // Skeleton (bone/skeleton viz — independent of animation clips).
+    // Returns one entry per selected entity that HAS a skeleton, regardless of
+    // whether it has any animation states. Each entry: { entity, showSkeleton,
+    // showWeights }. This is the data behind the "Skeleton" inspector section,
+    // which must surface for skinned-but-non-animated meshes (e.g. a freshly
+    // auto-rigged static mesh) — unlike animationData() which skips entities
+    // with no animation clips.
+    Q_INVOKABLE QVariantList skeletonData() const;
+    /// True when the first resolved selection has a skeleton. Drives the
+    /// "Skeleton" section's visibility.
+    Q_INVOKABLE bool hasSkeletonSelection() const;
+
     // Animation
     Q_INVOKABLE QVariantList animationData() const;  // grouped per entity
     Q_INVOKABLE void toggleAnimationEnabled(const QString& entityName, const QString& animName, bool enabled);

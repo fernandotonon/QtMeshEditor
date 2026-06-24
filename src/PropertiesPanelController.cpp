@@ -732,6 +732,31 @@ bool PropertiesPanelController::hasAnimations() const
     return false;
 }
 
+QVariantList PropertiesPanelController::skeletonData() const
+{
+    QVariantList result;
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities)
+    {
+        if (!ent || !ent->hasSkeleton()) continue;   // skeleton viz, no anim gate
+
+        QVariantMap entry;
+        entry["entity"] = QString::fromStdString(ent->getName());
+        entry["showSkeleton"] = mAnimationWidget ? mAnimationWidget->isSkeletonDebugActive(ent) : false;
+        entry["showWeights"]  = mAnimationWidget ? mAnimationWidget->isBoneWeightsShown(ent) : false;
+        result.append(entry);
+    }
+    return result;
+}
+
+bool PropertiesPanelController::hasSkeletonSelection() const
+{
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities)
+        if (ent && ent->hasSkeleton()) return true;
+    return false;
+}
+
 QVariantList PropertiesPanelController::animationData() const
 {
     QVariantList result;

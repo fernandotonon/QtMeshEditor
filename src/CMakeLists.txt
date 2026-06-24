@@ -75,6 +75,7 @@ commands/NodeAnimCommands.cpp
 commands/PoseLibraryCommands.cpp
 commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
+commands/AutoRigCommand.cpp
 BoneDragRelease.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp

@@ -91,6 +91,36 @@ public:
         double slabFraction = 0.06;
     };
 
+    // Mixamo-style placement markers (humanoid). The user clicks these on the
+    // mesh surface; the marker positions anchor the corresponding joints and
+    // the limb chains interpolate between them, so the rig follows the actual
+    // body proportions instead of a fixed proportional template. Every marker
+    // is OPTIONAL — an unset marker leaves its joint(s) at the template fit.
+    enum class MarkerId {
+        Chin,           // anchors Head; spine/neck interpolate Hips→Chin
+        LeftShoulder,   // anchors LeftShoulder (arm-chain attach point)
+        RightShoulder,  // anchors RightShoulder
+        LeftWrist,      // anchors LeftHand  (+ LeftArm/LeftForeArm chain)
+        RightWrist,     // anchors RightHand (+ RightArm/RightForeArm chain)
+        LeftUpLeg,      // anchors LeftUpLeg (leg-chain attach / hip socket)
+        RightUpLeg,     // anchors RightUpLeg
+        LeftKnee,       // anchors LeftLeg   (+ LeftFoot extrapolated)
+        RightKnee,      // anchors RightLeg  (+ RightFoot extrapolated)
+        Hips,           // anchors Hips (pelvis height/centre)
+        Count
+    };
+
+    struct Marker {
+        MarkerId id = MarkerId::Count;
+        bool set = false;                 // false = not placed → joint uses template
+        std::array<double, 3> pos = {0, 0, 0};   // mesh-local position
+    };
+
+    // Stable label for a marker slot (UI + tests).
+    static QString markerLabel(MarkerId id);
+    // The ordered marker set the humanoid flow asks for (10 markers).
+    static std::vector<MarkerId> humanoidMarkerOrder();
+
     struct Report {
         QString meshName;
         QString skeletonName;
@@ -98,6 +128,7 @@ public:
         int     boneCount         = 0;
         int     verticesSampled   = 0;
         int     jointsRecentered  = 0;
+        int     markersApplied    = 0;     // how many placed markers drove the fit
         bool     applied          = false;
         QString  error;
     };
@@ -111,6 +142,24 @@ public:
     // it has no usable geometry). After this returns applied=true, the
     // caller may chain SkinWeights::computeAndApply(entity) for weights.
     static Report rigEntity(Ogre::Entity* entity, const Options& opts = {});
+
+    // Marker-guided variant: same as rigEntity but anchors the placed markers
+    // (and interpolates the limb chains between them) before building the
+    // skeleton. Markers are in mesh-local space. Unset markers fall back to the
+    // proportional template fit. report.markersApplied counts the placed ones.
+    static Report rigEntityWithMarkers(Ogre::Entity* entity,
+                                       const std::vector<Marker>& markers,
+                                       const Options& opts = {});
+
+    // Revert a mesh auto-rigged by rigEntity[WithMarkers] back to a static
+    // (skeleton-less) mesh: clears every submesh's (and the shared) bone
+    // assignments, detaches the skeleton, re-initialises the entity, and
+    // removes the `*_autorig` SkeletonManager resource. This is the undo
+    // primitive for AutoRigCommand — it only makes sense for a mesh that was
+    // static before rigging (which is the only thing auto-rig accepts), so it
+    // unconditionally strips the skeleton rather than restoring a prior one.
+    // Returns true if a skeleton was present and removed.
+    static bool unrigEntity(Ogre::Entity* entity);
 
     // --- Pure-data core (unit-testable, no Ogre) -------------------------
 
@@ -128,6 +177,18 @@ public:
                                            int vertexCount,
                                            const Options& opts,
                                            int* outRecentered = nullptr);
+
+    // Marker-driven fit: runs fitTemplate, then anchors the placed markers and
+    // interpolates the limb chains between them (unset markers keep the
+    // template fit). `outMarkersApplied` (optional) receives how many set
+    // markers actually drove a joint. Pure-data — the heart of the marker flow.
+    static std::vector<Joint> fitTemplateWithMarkers(const std::vector<Joint>& tmpl,
+                                                     const float* vertexPositions,
+                                                     int vertexCount,
+                                                     const std::vector<Marker>& markers,
+                                                     const Options& opts,
+                                                     int* outRecentered = nullptr,
+                                                     int* outMarkersApplied = nullptr);
 
     static QString    templateToString(Template t);
     static Template   templateFromString(const QString& s);

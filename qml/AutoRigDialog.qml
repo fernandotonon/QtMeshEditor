@@ -17,8 +17,13 @@ Window {
     minimumWidth: 480
     minimumHeight: 380
     flags: Qt.Dialog
-    modality: Qt.ApplicationModal
+    // NON-modal: marker placement needs the user to click in the 3D viewport,
+    // which an application-modal dialog would block. Stays on top instead.
+    modality: Qt.NonModal
     color: PropertiesPanelController.panelColor
+
+    // Leaving the dialog must not strand the viewport in marker-capture mode.
+    onClosing: if (AutoRigController.markerMode) AutoRigController.cancelMarkerPlacement()
 
     property var    templates: ["humanoid", "biped", "quadruped", "generic"]
     property int    templateIndex: 0
@@ -50,6 +55,21 @@ Window {
                 "Rigged: " + r.boneCount + " bones, "
                 + r.verticesSampled + " verts sampled, "
                 + r.jointsRecentered + " joints recentered"
+                + (dialog.alsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+            dialog.lastWasError = false
+        } else {
+            dialog.lastStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
+            dialog.lastWasError = true
+        }
+    }
+
+    function runMarkerRig() {
+        if (AutoRigController.busy) return
+        const r = AutoRigController.commitMarkerRig(dialog.alsoSkin)
+        if (r && r.applied) {
+            dialog.lastStatus =
+                "Rigged from markers: " + r.boneCount + " bones, "
+                + r.markersApplied + " markers applied"
                 + (dialog.alsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
             dialog.lastWasError = false
         } else {
@@ -247,6 +267,93 @@ Window {
                 label: "Also compute skin weights (one-click rig + skin)"
                 checked: dialog.alsoSkin
                 onToggled: dialog.alsoSkin = !dialog.alsoSkin
+            }
+        }
+
+        // ── Mixamo-style marker placement ───────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.topMargin: 6
+            height: markerCol.implicitHeight + 16
+            color: PropertiesPanelController.headerColor
+            border.color: PropertiesPanelController.borderColor
+            border.width: 1
+            radius: 3
+
+            ColumnLayout {
+                id: markerCol
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 6
+
+                InspectorLabel {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    opacity: 0.85
+                    text: "Better fit: place markers on the mesh (Mixamo-style). "
+                        + "Click each point in the viewport; the skeleton fits the "
+                        + "marked limbs instead of fixed proportions. Unmarked → template."
+                }
+
+                // Active-mode guidance: which marker to click + progress.
+                InspectorLabel {
+                    Layout.fillWidth: true
+                    visible: AutoRigController.markerMode
+                    wrapMode: Text.WordWrap
+                    color: PropertiesPanelController.highlightColor
+                    text: AutoRigController.currentMarkerLabel.length > 0
+                        ? ("Click: " + AutoRigController.currentMarkerLabel
+                           + "   (" + AutoRigController.markerCount + "/"
+                           + AutoRigController.markerTotal + " placed)")
+                        : ("All markers placed (" + AutoRigController.markerCount
+                           + "/" + AutoRigController.markerTotal + ") — click 'Rig from markers'")
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    // Enter marker mode.
+                    InspectorButton {
+                        visible: !AutoRigController.markerMode
+                        label: "Place markers…"
+                        Layout.preferredWidth: 130
+                        buttonEnabled: !AutoRigController.busy
+                            && AutoRigController.hasRiggableSelection
+                        onClicked: AutoRigController.beginMarkerPlacement(dialog.upAxes[dialog.upAxisIndex])
+                    }
+                    // In-session controls.
+                    InspectorButton {
+                        visible: AutoRigController.markerMode
+                        label: "Skip"
+                        Layout.preferredWidth: 64
+                        buttonEnabled: AutoRigController.currentMarkerLabel.length > 0
+                        onClicked: AutoRigController.skipCurrentMarker()
+                    }
+                    InspectorButton {
+                        visible: AutoRigController.markerMode
+                        label: "Undo"
+                        Layout.preferredWidth: 64
+                        buttonEnabled: AutoRigController.markerCount > 0
+                        onClicked: AutoRigController.undoLastMarker()
+                    }
+                    InspectorButton {
+                        visible: AutoRigController.markerMode
+                        label: "Cancel"
+                        Layout.preferredWidth: 72
+                        onClicked: AutoRigController.cancelMarkerPlacement()
+                    }
+                    Item { Layout.fillWidth: true }
+                    InspectorButton {
+                        visible: AutoRigController.markerMode
+                        label: AutoRigController.busy ? "Rigging…" : "Rig from markers"
+                        Layout.preferredWidth: 150
+                        // Allow committing once at least one marker is placed
+                        // (the rest fall back to the template).
+                        buttonEnabled: !AutoRigController.busy
+                            && AutoRigController.markerCount > 0
+                        onClicked: dialog.runMarkerRig()
+                    }
+                }
             }
         }
 

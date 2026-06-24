@@ -4,11 +4,23 @@
 #include <QObject>
 #include <QQmlEngine>
 #include <QVariantMap>
+#include <QPoint>
+#include <vector>
+
+#include "AutoRig.h"
+
+class OgreWidget;
+namespace Ogre { class Entity; class SceneNode; }
 
 // QML-facing singleton for native auto-rigging (issue #407).
 // Wraps `AutoRig::rigEntity` (+ optional `SkinWeights::computeAndApply`)
 // and exposes selection state so the Animation-Mode button can disable
 // itself when the selection isn't a riggable static mesh.
+//
+// It also drives the Mixamo-style MARKER placement flow: the user enters
+// marker mode, clicks the 10 humanoid markers on the mesh in the viewport
+// (routed in via TransformOperator), and commits — the markers anchor the
+// matching joints and the limb chains interpolate between them.
 class AutoRigController : public QObject
 {
     Q_OBJECT
@@ -20,6 +32,11 @@ class AutoRigController : public QObject
     // and empty selections disable the button.
     Q_PROPERTY(bool hasRiggableSelection READ hasRiggableSelection NOTIFY selectionChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    // Marker-placement session state (for the QML guided UX).
+    Q_PROPERTY(bool markerMode READ markerMode NOTIFY markerModeChanged)
+    Q_PROPERTY(int markerCount READ markerCount NOTIFY markerCountChanged)
+    Q_PROPERTY(int markerTotal READ markerTotal NOTIFY markerModeChanged)
+    Q_PROPERTY(QString currentMarkerLabel READ currentMarkerLabel NOTIFY markerCountChanged)
 
 public:
     static AutoRigController* instance();
@@ -38,18 +55,58 @@ public:
                                             const QString& upAxis,
                                             bool alsoSkin);
 
+    // ---- Marker placement (Mixamo-style) -------------------------------
+    bool markerMode() const { return m_markerMode; }
+    int markerCount() const;                     // markers placed so far
+    int markerTotal() const;                     // total expected (10 for humanoid)
+    QString currentMarkerLabel() const;          // label of the next marker to place
+
+    /// Enter marker mode for the selected static mesh. Subsequent viewport
+    /// clicks place the markers (chin, L/R shoulder, L/R wrist, L/R hip,
+    /// L/R knee, hips/pelvis in order).
+    Q_INVOKABLE bool beginMarkerPlacement(const QString& upAxis);
+    /// Leave marker mode, discarding any placed markers + their overlays.
+    Q_INVOKABLE void cancelMarkerPlacement();
+    /// Skip the current marker (leaves that joint at the template fit).
+    Q_INVOKABLE void skipCurrentMarker();
+    /// Remove the last placed marker (undo one click).
+    Q_INVOKABLE void undoLastMarker();
+    /// Build the rig from the placed markers (+ optional skin). Returns a
+    /// QVariantMap like autoRigSelected.
+    Q_INVOKABLE QVariantMap commitMarkerRig(bool alsoSkin);
+
+    /// Called by TransformOperator when a viewport click happens while marker
+    /// mode is active. Ray-casts to the mesh surface and records the marker.
+    /// Returns true if the click was consumed (so the operator skips select).
+    bool handleMarkerClick(OgreWidget* widget, const QPoint& screenPos);
+
 signals:
     void selectionChanged();
     void busyChanged();
     void rigged(const QVariantMap& report);
     void error(const QString& message);
+    void markerModeChanged();
+    void markerCountChanged();
+    void markerPlaced(const QString& label);
 
 private:
     AutoRigController();
     ~AutoRigController() override = default;
 
+    Ogre::Entity* selectedRiggableEntity() const;
+    void clearMarkerOverlays();
+    void refreshMarkerOverlays();
+
     static AutoRigController* m_pSingleton;
     bool m_busy = false;
+
+    // Marker session.
+    bool m_markerMode = false;
+    int  m_upAxis = 1;                                  // resolved at begin
+    std::vector<AutoRig::MarkerId> m_markerOrder;       // the 10, in click order
+    std::vector<AutoRig::Marker>   m_markers;           // accumulated (set flag)
+    std::vector<Ogre::SceneNode*>  m_markerNodes;       // viewport sphere overlays
+    std::string m_markerEntityName;                     // entity being marked
 };
 
 #endif // AUTO_RIG_CONTROLLER_H
