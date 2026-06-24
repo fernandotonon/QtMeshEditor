@@ -69,8 +69,10 @@ Rectangle {
     Connections {
         target: UVEditorController
         function onMeshDataChanged() {
+            const prevRevision = root.cachedRevision
             root.rebuildTriangleCache()
-            if (UVEditorController.hasMesh)
+            if (UVEditorController.meshRevision !== prevRevision
+                    && UVEditorController.hasMesh)
                 Qt.callLater(root.fitToView)
         }
         function onFitToViewRequested() { root.fitToView() }
@@ -212,8 +214,8 @@ Rectangle {
                 visible: UVEditorController.showTextureBackground
                          && UVEditorController.textureBackgroundSource.length > 0
                          && UVEditorController.hasMesh
-                x: Math.min(root.uvToScreen(0, 1).x, root.uvToScreen(1, 0).x)
-                y: Math.min(root.uvToScreen(0, 1).y, root.uvToScreen(1, 0).y)
+                x: viewCanvas.x + Math.min(root.uvToScreen(0, 1).x, root.uvToScreen(1, 0).x)
+                y: viewCanvas.y + Math.min(root.uvToScreen(0, 1).y, root.uvToScreen(1, 0).y)
                 width: Math.abs(root.uvToScreen(1, 0).x - root.uvToScreen(0, 1).x)
                 height: Math.abs(root.uvToScreen(0, 0).y - root.uvToScreen(0, 1).y)
                 source: UVEditorController.textureBackgroundSource

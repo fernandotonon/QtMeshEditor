@@ -67,6 +67,7 @@ protected:
     void SetUp() override {
         Manager::kill();
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "GL context unavailable (Xvfb required in CI)";
         createStandardOgreMaterials();
         UVEditorController::kill();
     }
@@ -101,9 +102,6 @@ TEST_F(UVEditorControllerTest, TwoSubmeshesTwoIslands)
 
 TEST_F(UVEditorControllerTest, UvSeamSplitsIslands)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "GL context unavailable";
-
     auto mesh = createSeamedQuadMesh("UVEditor_seamed_quad");
     EditableMesh em;
     ASSERT_TRUE(em.loadFromMesh(mesh));
@@ -116,9 +114,6 @@ TEST_F(UVEditorControllerTest, UvSeamSplitsIslands)
 
 TEST_F(UVEditorControllerTest, ControllerRefreshTracksSelection)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "GL context unavailable";
-
     auto mesh = createInMemoryTriangleMesh("UVEditor_ctrl_tri");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UVEditor_node");

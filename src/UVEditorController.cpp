@@ -91,7 +91,6 @@ void UVEditorController::setShowTextureBackground(bool on)
         return;
     m_showTextureBackground = on;
     emit showTextureBackgroundChanged();
-    emit meshDataChanged();
 }
 
 void UVEditorController::refresh()
@@ -143,10 +142,13 @@ void UVEditorController::applyUvChannel(EditableMesh& mesh, Ogre::Entity* entity
         const Ogre::SubMesh* sub = ogreMesh->getSubMesh(static_cast<unsigned short>(si));
         const Ogre::VertexData* vd = sub->useSharedVertices ? ogreMesh->sharedVertexData : sub->vertexData;
         std::vector<Ogre::Vector2> uvs;
-        if (!readUvChannel(vd, channel, uvs))
-            continue;
-
         auto& verts = mesh.subMeshes()[si].vertices;
+        if (!readUvChannel(vd, channel, uvs)) {
+            for (auto& v : verts)
+                v.hasUV = false;
+            continue;
+        }
+
         const size_t n = std::min(verts.size(), uvs.size());
         for (size_t vi = 0; vi < n; ++vi) {
             verts[vi].uv = uvs[vi];
@@ -179,19 +181,22 @@ UVEditorController::IslandResult UVEditorController::computeIslandsFromHalfEdgeM
             const int faceIdx = q.front();
             q.pop();
 
-            for (const int edgeIdx : hem.faceEdges(faceIdx)) {
-                const int heIdx = hem.edge(edgeIdx).halfEdge;
-                if (heIdx < 0)
-                    continue;
-                const int twinIdx = hem.halfEdge(heIdx).twin;
-                if (twinIdx < 0)
-                    continue;
-                const int adjFace = hem.halfEdge(twinIdx).face;
-                if (adjFace < 0 || result.faceIslandIds[adjFace] >= 0)
-                    continue;
-                result.faceIslandIds[adjFace] = result.islandCount;
-                q.push(adjFace);
-            }
+            const int startHE = hem.face(faceIdx).halfEdge;
+            if (startHE < 0)
+                continue;
+
+            int he = startHE;
+            do {
+                const int twinIdx = hem.halfEdge(he).twin;
+                if (twinIdx >= 0) {
+                    const int adjFace = hem.halfEdge(twinIdx).face;
+                    if (adjFace >= 0 && result.faceIslandIds[adjFace] < 0) {
+                        result.faceIslandIds[adjFace] = result.islandCount;
+                        q.push(adjFace);
+                    }
+                }
+                he = hem.halfEdge(he).next;
+            } while (he != startHE);
         }
 
         ++result.islandCount;
@@ -388,9 +393,9 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
 
     int heFaceIdx = 0;
     for (const auto& sub : mesh.subMeshes()) {
-        for (const auto& tri : sub.triangles) {
+        auto emitTriangle = [&](const EditableTriangle& tri) {
             if (heFaceIdx >= static_cast<int>(islands.faceIslandIds.size()))
-                break;
+                return;
 
             Ogre::Vector2 uvs[3];
             bool ok = true;
@@ -402,10 +407,8 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
                 }
                 uvs[c] = sub.vertices[vi].uv;
             }
-            if (!ok) {
-                ++heFaceIdx;
-                continue;
-            }
+            if (!ok)
+                return;
 
             uMin = std::min({uMin, uvs[0].x, uvs[1].x, uvs[2].x});
             vMin = std::min({vMin, uvs[0].y, uvs[1].y, uvs[2].y});
@@ -423,7 +426,26 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
                 {QStringLiteral("island"), islandId},
                 {QStringLiteral("color"), colorForIsland(islandId)}
             });
-            ++heFaceIdx;
+        };
+
+        if (!sub.faces.empty()) {
+            for (const auto& face : sub.faces) {
+                if (!face.isValid())
+                    continue;
+                for (size_t i = 1; i + 1 < face.indices.size(); ++i) {
+                    EditableTriangle tri;
+                    tri.indices[0] = face.indices[0];
+                    tri.indices[1] = face.indices[i];
+                    tri.indices[2] = face.indices[i + 1];
+                    emitTriangle(tri);
+                }
+                ++heFaceIdx;
+            }
+        } else {
+            for (const auto& tri : sub.triangles) {
+                emitTriangle(tri);
+                ++heFaceIdx;
+            }
         }
     }
 
