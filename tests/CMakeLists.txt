@@ -120,6 +120,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PoseLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/PoseLibraryCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
@@ -138,6 +139,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopoController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeights.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AutoRig.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AutoRigController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDepthRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.cpp

@@ -157,6 +157,9 @@ private:
     /// Issue #402: compute skin weights via inverse-distance
     /// heuristic. Mesh must have a skeleton attached.
     QJsonObject toolComputeSkinWeights(const QJsonObject &args);
+    /// #407: native auto-rig of the selected static mesh (template embedding),
+    /// optional skin chain + re-export.
+    QJsonObject toolAutoRig(const QJsonObject &args);
     /// Issue #403: mesh-aware (depth-conditioned) texture
     /// generation. Renders the selected entity's depth map and
     /// conditions sd.cpp on it via a ControlNet depth model, then

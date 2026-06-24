@@ -25,6 +25,7 @@
 #include "commands/BoneTransformCommand.h"
 #include "BoneDragRelease.h"
 #include "EditModeController.h"
+#include "AutoRigController.h"
 #include "TexturePaintController.h"
 #include "AnimationControlController.h"
 #include "PropertiesPanelController.h"
@@ -994,6 +995,16 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 {
     if (e->button()==Qt::LeftButton)
     {
+        // Auto-rig marker placement (Mixamo-style) is active: left-click drops
+        // the next marker on the mesh surface. Highest priority — like the
+        // knife session, nothing else (selection/transform) fires while placing
+        // markers. Dismissed via the dialog's Cancel/Commit.
+        if (AutoRigController::instance()->markerMode())
+        {
+            AutoRigController::instance()->handleMarkerClick(m_pActiveWidget, e->pos());
+            return;
+        }
+
         auto* editCtrl = EditModeController::instance();
 
         // Knife session is active: left-click adds a cut point at the

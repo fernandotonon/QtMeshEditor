@@ -20,6 +20,154 @@ Rectangle {
     property bool showAllModeTools: false
     property var bottomToolHost: null
 
+    // ---- Auto-rig (#407) inline state, lives in the Inspector Rigging section
+    // (replaces the old modal AutoRigDialog) ----
+    property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic"]
+    property int    rigTemplateIndex: 0
+    property var    rigUpAxes: ["x", "y", "z"]
+    property int    rigUpAxisIndex: 1           // +Y default
+    property bool   rigAlsoSkin: true
+    property bool   rigShowAdvanced: false      // template / up-axis pickers
+    property string rigStatus: ""
+    property bool   rigStatusError: false
+
+    function runAutoRig() {
+        if (AutoRigController.busy || !AutoRigController.hasRiggableSelection) return
+        const r = AutoRigController.autoRigSelected(
+            root.rigTemplates[root.rigTemplateIndex],
+            root.rigUpAxes[root.rigUpAxisIndex],
+            root.rigAlsoSkin)
+        if (r && r.applied) {
+            root.rigStatus = "Rigged: " + r.boneCount + " bones, "
+                + r.verticesSampled + " verts, "
+                + r.jointsRecentered + " recentered"
+                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+            root.rigStatusError = false
+        } else {
+            root.rigStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
+            root.rigStatusError = true
+        }
+    }
+
+    function runMarkerRig() {
+        if (AutoRigController.busy) return
+        const r = AutoRigController.commitMarkerRig(root.rigAlsoSkin)
+        if (r && r.applied) {
+            root.rigStatus = "Rigged from markers: " + r.boneCount + " bones, "
+                + r.markersApplied + " markers"
+                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+            root.rigStatusError = false
+        } else {
+            root.rigStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
+            root.rigStatusError = true
+        }
+    }
+
+    Connections {
+        target: AutoRigController
+        function onError(msg) {
+            root.rigStatus = "Failed: " + msg
+            root.rigStatusError = true
+        }
+    }
+
+    // ---- Small inline Inspector primitives reused by the Rigging section ----
+    component RigButton: Rectangle {
+        id: rb
+        property string label: ""
+        property bool buttonEnabled: true
+        signal clicked()
+        implicitWidth: rbText.implicitWidth + 18
+        height: 24
+        radius: 3
+        opacity: rb.buttonEnabled ? 1.0 : 0.45
+        color: rbMa.containsMouse && rb.buttonEnabled
+            ? PropertiesPanelController.highlightColor
+            : PropertiesPanelController.headerColor
+        border.color: PropertiesPanelController.borderColor
+        border.width: 1
+        Text {
+            id: rbText
+            anchors.centerIn: parent
+            text: rb.label
+            color: PropertiesPanelController.textColor
+            font.pixelSize: 11
+        }
+        MouseArea {
+            id: rbMa
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: rb.buttonEnabled
+            cursorShape: rb.buttonEnabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+            onClicked: rb.clicked()
+        }
+    }
+
+    component RigCheckbox: Row {
+        id: rcb
+        property string label: ""
+        property bool checked: false
+        signal toggled()
+        spacing: 6
+        Rectangle {
+            width: 14; height: 14; radius: 2
+            anchors.verticalCenter: parent.verticalCenter
+            color: PropertiesPanelController.inputColor
+            border.color: PropertiesPanelController.borderColor
+            border.width: 1
+            Text {
+                anchors.centerIn: parent
+                text: rcb.checked ? "✓" : ""
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+        }
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: rcb.label
+            color: PropertiesPanelController.textColor
+            font.pixelSize: 11
+        }
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: rcb.toggled()
+        }
+    }
+
+    component RigSegments: Row {
+        id: rseg
+        property var options: []
+        property int index: 0
+        signal picked(int i)
+        spacing: 4
+        Repeater {
+            model: rseg.options
+            Rectangle {
+                width: Math.max(56, rsegText.implicitWidth + 16)
+                height: 22
+                radius: 3
+                color: index === rseg.index
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: rsegText
+                    anchors.centerIn: parent
+                    text: modelData
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: rseg.picked(index)
+                }
+            }
+        }
+    }
+
     function revealBottomTool(toolId) {
         if (bottomToolHost && bottomToolHost.revealBottomTool)
             bottomToolHost.revealBottomTool(toolId)
@@ -329,6 +477,50 @@ Rectangle {
                 expanded: false
 
                 Component.onCompleted: content = skinningToolsComponent
+            }
+
+            // ---- Rigging (Animation mode) ----
+            // Issue #407: native auto-rig. Shown in Animation Mode for a
+            // STATIC (skeleton-less) selection — embedding a skeleton is the
+            // step that turns a static mesh into an animatable one, so it
+            // belongs next to Skinning. Gated on hasRiggableSelection (a
+            // static mesh); already-rigged meshes show the Skinning section
+            // instead.
+            CollapsibleSection {
+                id: riggingSection
+                title: "Rigging"
+                sectionVisible: root.currentTab === root.modeToolsTab
+                    && root.modeToolMatches(EditorModeController.AnimationMode)
+                    && AutoRigController.hasRiggableSelection
+                expanded: false
+
+                Component.onCompleted: content = riggingToolsComponent
+
+                // Don't strand the viewport in marker-capture mode if the
+                // section disappears (mode change, deselect, re-rig) — the
+                // inline UI replaced the dialog's onClosing cancel.
+                onSectionVisibleChanged: if (!sectionVisible
+                        && AutoRigController.markerMode)
+                    AutoRigController.cancelMarkerPlacement()
+            }
+
+            // ---- Skeleton (Animation mode) ----
+            // Bone/skeleton visualization toggles (skeleton overlay + bone-weight
+            // heat-map). Lives in its OWN section, independent of animation clips,
+            // so it surfaces for ANY skinned mesh — including a skeleton-bearing
+            // mesh with no animations yet (e.g. a freshly auto-rigged static
+            // mesh). Previously these toggles were buried per-animation-group
+            // inside the Animations section and never appeared without clips.
+            // This is the home for future bone-level features (bone select,
+            // per-bone transforms, etc.).
+            CollapsibleSection {
+                title: "Skeleton"
+                sectionVisible: root.currentTab === root.modeToolsTab
+                    && root.modeToolMatches(EditorModeController.AnimationMode)
+                    && PropertiesPanelController.hasSkeletonSelection
+                expanded: false
+
+                Component.onCompleted: content = skeletonToolsComponent
             }
 
             // ---- Texture Paint (Material mode) ----
@@ -1262,6 +1454,263 @@ Rectangle {
                     ToolTip.text: SkinWeightsController.hasSkinnedSelection
                         ? "Compute per-vertex bone weights via inverse-distance to bone segments. Mesh must have a skeleton."
                         : "Select a skinned mesh (with a skeleton) first."
+                }
+            }
+        }
+    }
+
+    // ---- Rigging Tools Content (Animation mode) ----
+    // Issue #407: native auto-rig, inline in the Inspector (no modal dialog).
+    // Smart show/hide:
+    //   * marker mode active  → only the guidance + in-session controls show,
+    //   * idle                → the two entry points (markers / template),
+    //                           skin checkbox, and a collapsible "Advanced"
+    //                           block (template + up-axis pickers).
+    // All gated on AutoRigController.hasRiggableSelection (a static mesh).
+    Component {
+        id: riggingToolsComponent
+
+        Column {
+            id: rigCol
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            readonly property bool canRig: AutoRigController.hasRiggableSelection
+            readonly property bool marking: AutoRigController.markerMode
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: rigCol.marking
+                    ? "Click each highlighted point on the mesh in the viewport."
+                    : (rigCol.canRig
+                        ? "Embed a skeleton into this unrigged mesh. Use markers for a "
+                          + "better fit (Mixamo-style), or a plain template. Optionally "
+                          + "skin in one click."
+                        : "Select a static (unrigged) mesh to enable rigging.")
+            }
+
+            // ── Marker mode: guidance + in-session controls only ──────────
+            Column {
+                width: parent.width - 16
+                spacing: 6
+                visible: rigCol.marking
+
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 11
+                    color: PropertiesPanelController.highlightColor
+                    text: AutoRigController.currentMarkerLabel.length > 0
+                        ? ("Place: " + AutoRigController.currentMarkerLabel
+                           + "   (" + AutoRigController.markerCount + "/"
+                           + AutoRigController.markerTotal + ")")
+                        : ("All " + AutoRigController.markerCount + "/"
+                           + AutoRigController.markerTotal
+                           + " placed — click 'Rig from markers'")
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 6
+                    RigButton {
+                        label: "Skip"
+                        buttonEnabled: AutoRigController.currentMarkerLabel.length > 0
+                        onClicked: AutoRigController.skipCurrentMarker()
+                    }
+                    RigButton {
+                        label: "Undo"
+                        buttonEnabled: AutoRigController.markerCount > 0
+                        onClicked: AutoRigController.undoLastMarker()
+                    }
+                    RigButton {
+                        label: "Cancel"
+                        onClicked: AutoRigController.cancelMarkerPlacement()
+                    }
+                    RigButton {
+                        label: AutoRigController.busy ? "Rigging…" : "Rig from markers"
+                        buttonEnabled: !AutoRigController.busy
+                            && AutoRigController.markerPlacedCount > 0
+                        onClicked: root.runMarkerRig()
+                    }
+                }
+            }
+
+            // ── Idle: skeleton type + entry points + options ──────────────
+            Column {
+                width: parent.width - 16
+                spacing: 8
+                visible: !rigCol.marking
+
+                // Skeleton type — a primary choice, always visible.
+                Text {
+                    text: "Skeleton type"
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.8
+                    font.pixelSize: 10
+                }
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    RigSegments {
+                        options: root.rigTemplates
+                        index: root.rigTemplateIndex
+                        onPicked: function(i) { root.rigTemplateIndex = i }
+                    }
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 6
+                    RigButton {
+                        // Markers are a humanoid concept (chin/shoulders/wrists/
+                        // hips/knees) — only offered for the humanoid template.
+                        label: "Place markers…"
+                        buttonEnabled: rigCol.canRig && !AutoRigController.busy
+                            && root.rigTemplates[root.rigTemplateIndex] === "humanoid"
+                        onClicked: AutoRigController.beginMarkerPlacement(
+                            root.rigUpAxes[root.rigUpAxisIndex])
+                    }
+                    RigButton {
+                        label: AutoRigController.busy ? "Rigging…" : "Auto-Rig (template)"
+                        buttonEnabled: rigCol.canRig && !AutoRigController.busy
+                        onClicked: root.runAutoRig()
+                    }
+                }
+
+                RigCheckbox {
+                    label: "Also compute skin weights"
+                    checked: root.rigAlsoSkin
+                    onToggled: root.rigAlsoSkin = !root.rigAlsoSkin
+                }
+
+                // Advanced options toggle (just the up-axis picker for now).
+                RigCheckbox {
+                    label: "Advanced options"
+                    checked: root.rigShowAdvanced
+                    onToggled: root.rigShowAdvanced = !root.rigShowAdvanced
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: 6
+                    visible: root.rigShowAdvanced
+
+                    Text {
+                        text: "Up axis (+Y is the in-app default)"
+                        color: PropertiesPanelController.textColor
+                        opacity: 0.8
+                        font.pixelSize: 10
+                    }
+                    RigSegments {
+                        options: root.rigUpAxes
+                        index: root.rigUpAxisIndex
+                        onPicked: function(i) { root.rigUpAxisIndex = i }
+                    }
+                }
+            }
+
+            // ── Status line (both modes) ──────────────────────────────────
+            Text {
+                width: parent.width - 16
+                visible: root.rigStatus.length > 0
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                text: root.rigStatus
+                color: root.rigStatusError ? "#cc4444" : "#3a8c3a"
+            }
+        }
+    }
+
+    // ---- Skeleton Tools Content (Animation mode) ----
+    // Per-entity skeleton/bone visualization toggles, sourced from
+    // PropertiesPanelController.skeletonData() (skeleton-bearing entities,
+    // independent of animation clips). Refreshes on selectionChanged /
+    // animationStateChanged so a just-auto-rigged mesh shows up immediately.
+    Component {
+        id: skeletonToolsComponent
+
+        Column {
+            id: skeletonToolsCol
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            property var skelGroups: PropertiesPanelController.skeletonData()
+            Connections {
+                target: PropertiesPanelController
+                function onAnimationStateChanged() {
+                    skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                }
+                function onSelectionChanged() {
+                    skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Visualize the skeleton and per-vertex bone weights for the "
+                    + "selected skinned mesh."
+            }
+
+            Repeater {
+                model: skeletonToolsCol.skelGroups
+                delegate: Column {
+                    required property var modelData
+                    width: skeletonToolsCol.width - 16
+                    spacing: 4
+
+                    // Entity name (only worth showing when multiple are selected).
+                    Text {
+                        visible: skeletonToolsCol.skelGroups.length > 1
+                        text: modelData.entity
+                        color: PropertiesPanelController.textColor
+                        opacity: 0.7
+                        font.pixelSize: 10
+                    }
+
+                    Row {
+                        spacing: 8
+                        Rectangle {
+                            width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                            border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                            color: modelData.showSkeleton ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
+                            Text { anchors.centerIn: parent; text: modelData.showSkeleton ? "✓" : ""; color: "white"; font.pixelSize: 10 }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    PropertiesPanelController.toggleSkeletonDebug(modelData.entity, !modelData.showSkeleton)
+                                    skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                                }
+                            }
+                        }
+                        Text { text: "Skeleton"; color: PropertiesPanelController.textColor; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+
+                        Rectangle {
+                            width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                            border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                            color: modelData.showWeights ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
+                            Text { anchors.centerIn: parent; text: modelData.showWeights ? "✓" : ""; color: "white"; font.pixelSize: 10 }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    PropertiesPanelController.toggleBoneWeights(modelData.entity, !modelData.showWeights)
+                                    skeletonToolsCol.skelGroups = PropertiesPanelController.skeletonData()
+                                }
+                            }
+                        }
+                        Text { text: "Weights"; color: PropertiesPanelController.textColor; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+                    }
                 }
             }
         }
@@ -4104,6 +4553,10 @@ Rectangle {
         }
     }
 
+    // Issue #407: native auto-rig now lives inline in the Inspector Rigging
+    // section (riggingToolsComponent) — no modal dialog. The old AutoRigDialog
+    // Loader / openAutoRigDialog() were removed.
+
     Loader {
         id: isometricSpritesLoader
         active: false
@@ -5221,29 +5674,9 @@ Rectangle {
                             }
                         }
 
-                        // Skeleton/Weights row (if has skeleton)
-                        Row {
-                            visible: grp.hasSkeleton
-                            spacing: 8; topPadding: 4
-
-                            Rectangle {
-                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
-                                border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                                color: grp.showSkeleton ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
-                                Text { anchors.centerIn: parent; text: grp.showSkeleton ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-                                MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.toggleSkeletonDebug(grp.entity, !grp.showSkeleton) }
-                            }
-                            Text { text: "Skeleton"; color: PropertiesPanelController.textColor; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
-
-                            Rectangle {
-                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
-                                border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                                color: grp.showWeights ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
-                                Text { anchors.centerIn: parent; text: grp.showWeights ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-                                MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.toggleBoneWeights(grp.entity, !grp.showWeights) }
-                            }
-                            Text { text: "Weights"; color: PropertiesPanelController.textColor; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
-                        }
+                        // (Skeleton / Weights viz toggles moved to the dedicated
+                        // "Skeleton" section so they surface for skinned meshes
+                        // regardless of whether they have animation clips.)
 
                         // Export Pose button (if has skeleton)
                         Rectangle {

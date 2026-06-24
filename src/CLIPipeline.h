@@ -207,6 +207,11 @@ public:
     /// distance heuristic. Issue #402.
     static int cmdSkin(int argc, char* argv[]);
 
+    /// Native auto-rig: embed a skeleton template (humanoid / biped /
+    /// quadruped / generic) into an unrigged mesh, optionally chain
+    /// skin weights (--skin), and export. Issue #407.
+    static int cmdRig(int argc, char* argv[]);
+
     /// List the morph targets / blend shapes on a mesh file. Slice A1
     /// surfaces a `--list` mode only; subsequent slices add `--set`,
     /// `--add`, `--delete` once the in-memory authoring path lands.

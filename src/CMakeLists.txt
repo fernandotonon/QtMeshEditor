@@ -75,6 +75,7 @@ commands/NodeAnimCommands.cpp
 commands/PoseLibraryCommands.cpp
 commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
+commands/AutoRigCommand.cpp
 BoneDragRelease.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp
@@ -91,6 +92,8 @@ QuadRetopo.cpp
 QuadRetopoController.cpp
 SkinWeights.cpp
 SkinWeightsController.cpp
+AutoRig.cpp
+AutoRigController.cpp
 MeshDepthRenderer.cpp
 MultiViewTextureBaker.cpp
 TextureChannelPacker.cpp
@@ -231,6 +234,8 @@ QuadRetopo.h
 QuadRetopoController.h
 SkinWeights.h
 SkinWeightsController.h
+AutoRig.h
+AutoRigController.h
 MeshDepthRenderer.h
 MultiViewTextureBaker.h
 TextureChannelPacker.h

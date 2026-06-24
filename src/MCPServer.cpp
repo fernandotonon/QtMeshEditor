@@ -39,6 +39,7 @@
 #include "ScanEngine.h"
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
+#include "AutoRig.h"
 #include "MeshDepthRenderer.h"
 #include "ModelIsometricRenderer.h"
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -576,6 +577,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("auto_uv_unwrap"),       &MCPServer::toolAutoUvUnwrap},
         {QStringLiteral("retopologize"),         &MCPServer::toolRetopologize},
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
+        {QStringLiteral("auto_rig"), &MCPServer::toolAutoRig},
         {QStringLiteral("generate_mesh_texture"), &MCPServer::toolGenerateMeshTexture},
         {QStringLiteral("generate_pbr_maps"), &MCPServer::toolGeneratePbrMaps},
         {QStringLiteral("upscale_texture"), &MCPServer::toolUpscaleTexture},
@@ -1661,6 +1663,106 @@ QJsonObject MCPServer::toolComputeSkinWeights(const QJsonObject &args)
 
     QJsonObject result = makeSuccessResult(SkinWeights::reportToText(report));
     result["skin"] = SkinWeights::reportToJson(report);
+    return result;
+}
+
+QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
+{
+    // Issue #407: native auto-rig of the selected STATIC mesh. Generates a
+    // skeleton from a template, binds it, optionally chains skin weights, and
+    // optionally re-exports.
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    if (args.contains("skin") && !args["skin"].isBool())
+        return makeErrorResult("Error: 'skin' must be a boolean.");
+
+    AutoRig::Options opts;
+    if (args.contains("template")) {
+        if (!args["template"].isString())
+            return makeErrorResult("Error: 'template' must be a string.");
+        opts.tmpl = AutoRig::templateFromString(args["template"].toString());
+    }
+    if (args.contains("up_axis")) {
+        const QString a = args["up_axis"].toString().toLower();
+        if (a == "x") opts.upAxis = 0;
+        else if (a == "y") opts.upAxis = 1;
+        else if (a == "z") opts.upAxis = 2;
+        else return makeErrorResult("Error: 'up_axis' must be 'x', 'y', or 'z'.");
+    }
+    const bool alsoSkin = args.value("skin").toBool(false);
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities()
+                                              : QList<Ogre::Entity*>{};
+    if (resolved.isEmpty())
+        return makeErrorResult("No selected entity.");
+    Ogre::Entity* entity = resolved.first();
+    if (!entity) return makeErrorResult("Selected entity is null.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.auto_rig"),
+        QStringLiteral("auto_rig entity=%1 template=%2 skin=%3")
+            .arg(QString::fromStdString(entity->getName()),
+                 AutoRig::templateToString(opts.tmpl))
+            .arg(alsoSkin));
+
+    // Validate output_path type up front (like 'skin'/'template') — a
+    // non-string would otherwise coerce to "" and silently skip the export
+    // while still reporting success.
+    if (args.contains("output_path") && !args["output_path"].isString())
+        return makeErrorResult("Error: 'output_path' must be a string.");
+    const QString outputPath = args.value("output_path").toString();
+
+    AutoRig::Report report;
+    bool skinned = false;
+    // Wrap the full mutating + export section so export failures and
+    // std::runtime_error (not just Ogre::Exception) reach the MCP error path.
+    try {
+        report = AutoRig::rigEntity(entity, opts);
+        if (!report.applied)
+            return makeErrorResult(
+                QStringLiteral("Auto-rig failed: %1").arg(report.error));
+
+        if (alsoSkin) {
+            const auto sw = SkinWeights::computeAndApply(entity, {});
+            skinned = sw.applied;
+            // A requested skin that failed is a hard error — don't export an
+            // unskinned asset and report success.
+            if (!sw.applied)
+                return makeErrorResult(QStringLiteral(
+                    "Auto-rig succeeded, but the requested skinning failed: %1")
+                    .arg(sw.error));
+        }
+
+        // Optional re-export of the now-rigged mesh.
+        if (!outputPath.isEmpty()) {
+            Ogre::SceneNode* node = entity->getParentSceneNode();
+            if (!node)
+                return makeErrorResult(
+                    QStringLiteral("Error: rigged, but the entity has no scene "
+                                   "node to export from"));
+            // Don't leak the full local path (usernames / private dirs) to Sentry.
+            SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                QStringLiteral("auto_rig export requested"));
+            const int rc = MeshImporterExporter::exporter(
+                node, outputPath, CLIPipeline::formatForExtension(outputPath));
+            if (rc != 0)
+                return makeErrorResult(
+                    QStringLiteral("Error: rigged but export to '%1' failed (code %2)")
+                        .arg(outputPath).arg(rc));
+        }
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    } catch (const std::exception& e) {
+        return makeErrorResult(QStringLiteral("Auto-rig error: %1")
+            .arg(QString::fromUtf8(e.what())));
+    }
+
+    QJsonObject result = makeSuccessResult(AutoRig::reportToText(report));
+    QJsonObject j = AutoRig::reportToJson(report);
+    j["skinned"] = skinned;
+    result["rig"] = j;
     return result;
 }
 
@@ -6361,6 +6463,35 @@ QJsonArray MCPServer::buildToolsList()
             "its attached skeleton. Uses an inverse-distance heuristic (closest-point-"
             "on-bone smooth bind) — the same approach Maya / 3dsMax use as their "
             "default. The mesh must have a skeleton attached. Issue #402.",
+            props
+        );
+    }
+
+    // auto_rig (#407)
+    {
+        QJsonObject props;
+        props["template"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Skeleton template: 'humanoid' (19-bone, default), 'biped', "
+             "'quadruped', or 'generic' (3-joint spine fallback)."}};
+        props["skin"] = QJsonObject{{"type", "boolean"},
+            {"description",
+             "When true, also compute + apply skin weights so the mesh deforms "
+             "immediately (chains compute_skin_weights). Default false."}};
+        props["up_axis"] = QJsonObject{{"type", "string"},
+            {"description", "Mesh up axis: 'x', 'y' (default), or 'z'."}};
+        props["output_path"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Optional path to re-export the rigged mesh. When omitted, the rig is "
+             "applied to the in-session scene only."}};
+        appendTool(
+            "auto_rig",
+            "Auto-rig the currently selected STATIC (unrigged) mesh by embedding a "
+            "skeleton template into it (issue #407). Native heuristic (no external "
+            "deps): maps a proportional joint graph into the mesh AABB and recentres "
+            "joints toward the mesh's medial mass. Best on roughly upright, manifold, "
+            "T/A-pose meshes with +Y up. Already-skinned meshes are rejected. Pair "
+            "skin:true for a one-click rig+skin.",
             props
         );
     }
