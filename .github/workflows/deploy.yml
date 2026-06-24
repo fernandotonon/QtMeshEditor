@@ -28,8 +28,11 @@ env:
   # the selected Xcode (xcode-select alone didn't stop find_package(ZLIB) from
   # picking xcrun's default 26.5 SDK). Bump this whenever the pinned Xcode/SDK
   # changes so the SDK is rebuilt against it and stale libz.tbd paths are
-  # discarded. (sdkpin1 = first build under the SDKROOT-pinned environment.)
-  MACOS_CACHE_VERSION: 'sdkpin1'
+  # discarded. (sdkpin1 = first build under the SDKROOT-pinned environment;
+  # sdkpin2 = bust the stale assimp cache that still baked the Xcode 26.5
+  # libz.tbd path — "No rule to make target .../MacOSX26.5.sdk/.../libz.tbd"
+  # when OGRE consumed it under the pinned 26.3.)
+  MACOS_CACHE_VERSION: 'sdkpin2'
 
 jobs:
 #  send-slack-notification:

@@ -178,9 +178,9 @@ int jindex(const std::vector<AutoRig::Joint>& js, const QString& name)
 TEST(AutoRigMarkers, OrderAndLabelsAreStable)
 {
     const auto order = AutoRig::humanoidMarkerOrder();
-    ASSERT_EQ(order.size(), 6u);
-    EXPECT_EQ(order[0], AutoRig::MarkerId::Chin);
-    EXPECT_EQ(order[5], AutoRig::MarkerId::Hips);
+    ASSERT_EQ(order.size(), 10u);
+    EXPECT_EQ(order.front(), AutoRig::MarkerId::Chin);   // top-down: chin first
+    EXPECT_EQ(order.back(),  AutoRig::MarkerId::Hips);   // pelvis last
     for (auto id : order)
         EXPECT_FALSE(AutoRig::markerLabel(id).isEmpty());
 }
