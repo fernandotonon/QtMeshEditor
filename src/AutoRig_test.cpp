@@ -427,3 +427,150 @@ TEST(AutoRigMarkers, ShoulderMarkerAnchorsAttachAndArmLaysFromIt)
     }
     EXPECT_LT(jdist(marked[iHand], AutoRig::Joint{"", -1, wrist.pos}), 1e-6);
 }
+
+// ---- Inference: unmarked joints derived from marked neighbours ----------
+
+TEST(AutoRigMarkers, ShoulderInferredFromHipsAndChinSpan)
+{
+    // Mark only chin + hips (no shoulders): each shoulder should be inferred
+    // ALONG the hips→head line (never above the head), not left at template.
+    auto cloud = uprightCloud();
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;
+    auto base = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3), opts);
+    const int iLSh  = jindex(base, "LeftShoulder");
+    const int iHead = jindex(base, "Head");
+    const int iHips = jindex(base, "Hips");
+    if (iLSh < 0 || iHead < 0 || iHips < 0) GTEST_SKIP() << "no spine/shoulder";
+
+    AutoRig::Marker hips;
+    hips.id = AutoRig::MarkerId::Hips; hips.set = true; hips.pos = {0.0, 0.80, 0.0};
+    AutoRig::Marker chin;
+    chin.id = AutoRig::MarkerId::Chin; chin.set = true; chin.pos = {0.0, 2.00, 0.0};
+
+    int applied = 0;
+    auto m = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                static_cast<int>(cloud.size() / 3), {hips, chin}, opts, nullptr, &applied);
+    EXPECT_EQ(applied, 2);
+    // Shoulder up-coord lies strictly between hips and head (axis 1 = +Y).
+    EXPECT_GT(m[iLSh].pos[1], hips.pos[1]);
+    EXPECT_LT(m[iLSh].pos[1], chin.pos[1]);
+}
+
+TEST(AutoRigMarkers, HipsInferredFromUpLegsWhenUnmarked)
+{
+    // Mark only the two up-legs (no hips): pelvis should land at their midpoint
+    // plus the template socket→pelvis rise — not at the template hips.
+    auto cloud = uprightCloud();
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;
+    auto base = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3), opts);
+    const int iHips = jindex(base, "Hips");
+    if (iHips < 0) GTEST_SKIP() << "no hips";
+
+    AutoRig::Marker lu, ru;
+    lu.id = AutoRig::MarkerId::LeftUpLeg;  lu.set = true; lu.pos = {0.30, 0.70, 0.0};
+    ru.id = AutoRig::MarkerId::RightUpLeg; ru.set = true; ru.pos = {-0.30, 0.70, 0.0};
+
+    int applied = 0;
+    auto m = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                static_cast<int>(cloud.size() / 3), {lu, ru}, opts, nullptr, &applied);
+    EXPECT_EQ(applied, 2);
+    // Pelvis centred between the sockets (x ≈ 0) and lifted above them (y > 0.70).
+    EXPECT_LT(std::abs(m[iHips].pos[0] - 0.0), 1e-6);
+    EXPECT_GT(m[iHips].pos[1], 0.70);
+}
+
+TEST(AutoRigMarkers, UnmarkedShoulderMirrorsMarkedOne)
+{
+    // Mark one shoulder; the other should mirror across the body (opposite
+    // side-axis sign, ~symmetric), not stay at the template.
+    auto cloud = uprightCloud();
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;
+    auto base = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3), opts);
+    const int iLSh = jindex(base, "LeftShoulder");
+    const int iRSh = jindex(base, "RightShoulder");
+    if (iLSh < 0 || iRSh < 0) GTEST_SKIP() << "no shoulders";
+
+    AutoRig::Marker ls;
+    ls.id = AutoRig::MarkerId::LeftShoulder; ls.set = true; ls.pos = {0.55, 1.50, 0.10};
+
+    int applied = 0;
+    auto m = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                static_cast<int>(cloud.size() / 3), {ls}, opts, nullptr, &applied);
+    EXPECT_EQ(applied, 1);
+    EXPECT_LT(jdist(m[iLSh], AutoRig::Joint{"", -1, ls.pos}), 1e-6);
+    // Right shoulder is on the opposite side (x sign flipped relative to L).
+    EXPECT_LT(m[iRSh].pos[0], 0.0);
+    // Same height + depth as the marked one (pure mirror across the side axis).
+    EXPECT_LT(std::abs(m[iRSh].pos[1] - ls.pos[1]), 1e-6);
+}
+
+TEST(AutoRigMarkers, ShoulderMarkedWristSkippedStillLaysArm)
+{
+    // Shoulder marked, wrist skipped: the hand should reach out from the marked
+    // shoulder by the template arm vector (not collapse onto the shoulder).
+    auto cloud = uprightCloud();
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;
+    auto base = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3), opts);
+    const int iSh   = jindex(base, "LeftShoulder");
+    const int iHand = jindex(base, "LeftHand");
+    if (iSh < 0 || iHand < 0) GTEST_SKIP() << "no left arm";
+    const double tArmLen = std::sqrt(
+        std::pow(base[iHand].pos[0]-base[iSh].pos[0],2) +
+        std::pow(base[iHand].pos[1]-base[iSh].pos[1],2) +
+        std::pow(base[iHand].pos[2]-base[iSh].pos[2],2));
+
+    AutoRig::Marker ls;
+    ls.id = AutoRig::MarkerId::LeftShoulder; ls.set = true; ls.pos = {0.60, 1.55, 0.0};
+
+    int applied = 0;
+    auto m = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                static_cast<int>(cloud.size() / 3), {ls}, opts, nullptr, &applied);
+    EXPECT_EQ(applied, 1);
+    EXPECT_LT(jdist(m[iSh], AutoRig::Joint{"", -1, ls.pos}), 1e-6);
+    // Hand is ~one template arm-length away from the marked shoulder.
+    const double handLen = std::sqrt(
+        std::pow(m[iHand].pos[0]-ls.pos[0],2) +
+        std::pow(m[iHand].pos[1]-ls.pos[1],2) +
+        std::pow(m[iHand].pos[2]-ls.pos[2],2));
+    EXPECT_GT(handLen, tArmLen * 0.5);
+}
+
+TEST(AutoRigMarkers, UpLegSetKneeSkippedClampsFootToMeshFloor)
+{
+    // Up-leg marked, knee skipped: the foot must land at (not below) the mesh
+    // floor, and the knee must sit between the up-leg and the foot. Previously
+    // the template thigh-vector extrapolation pushed the foot past the mesh.
+    auto cloud = uprightCloud();   // y in [0, 2] → floor = 0
+    auto tmpl  = AutoRig::templateJoints(AutoRig::Template::Humanoid);
+    AutoRig::Options opts;
+    auto base = AutoRig::fitTemplate(tmpl, cloud.data(),
+                                     static_cast<int>(cloud.size() / 3), opts);
+    const int iUp   = jindex(base, "LeftUpLeg");
+    const int iKnee = jindex(base, "LeftLeg");
+    const int iFoot = jindex(base, "LeftFoot");
+    if (iUp < 0 || iKnee < 0 || iFoot < 0) GTEST_SKIP() << "no left leg";
+
+    AutoRig::Marker up;
+    up.id = AutoRig::MarkerId::LeftUpLeg; up.set = true; up.pos = {0.30, 0.90, 0.0};
+
+    int applied = 0;
+    auto m = AutoRig::fitTemplateWithMarkers(tmpl, cloud.data(),
+                static_cast<int>(cloud.size() / 3), {up}, opts, nullptr, &applied);
+    EXPECT_EQ(applied, 1);
+
+    const double floor = 0.0;
+    // Foot sits on (not below) the mesh floor.
+    EXPECT_GE(m[iFoot].pos[1], floor - 1e-6);
+    EXPECT_LT(std::abs(m[iFoot].pos[1] - floor), 1e-6);
+    // Knee strictly between the up-leg (0.90) and the foot (0.0) in height.
+    EXPECT_LT(m[iKnee].pos[1], m[iUp].pos[1]);
+    EXPECT_GT(m[iKnee].pos[1], m[iFoot].pos[1]);
+}

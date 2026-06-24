@@ -290,6 +290,20 @@ void layChain(std::vector<AutoRig::Joint>& js,
     }
 }
 
+// Find a placed joint's position by name; returns `fallback` if absent.
+std::array<double,3> jointPosOr(const std::vector<AutoRig::Joint>& js,
+                                const char* name,
+                                const std::array<double,3>& fallback)
+{
+    for (const auto& j : js) if (j.name == QLatin1String(name)) return j.pos;
+    return fallback;
+}
+
+std::array<double,3> add3(const std::array<double,3>& a, const std::array<double,3>& b)
+{ return { a[0]+b[0], a[1]+b[1], a[2]+b[2] }; }
+std::array<double,3> sub3(const std::array<double,3>& a, const std::array<double,3>& b)
+{ return { a[0]-b[0], a[1]-b[1], a[2]-b[2] }; }
+
 } // namespace
 
 std::vector<AutoRig::Joint> AutoRig::fitTemplateWithMarkers(
@@ -299,7 +313,11 @@ std::vector<AutoRig::Joint> AutoRig::fitTemplateWithMarkers(
         const Options& opts,
         int* outRecentered, int* outMarkersApplied)
 {
-    // Start from the proportional fit; markers refine it.
+    // Proportional baseline — gives sensible default joint positions AND the
+    // template relationships (segment vectors, lateral offsets) we use to
+    // INFER unmarked joints from marked ones, so a partial marker set produces
+    // a coherent skeleton (no shoulder-above-head etc.) instead of mixing
+    // marked anchors with stranded template joints.
     std::vector<Joint> placed = fitTemplate(tmpl, verts, vertexCount, opts, outRecentered);
     if (outMarkersApplied) *outMarkersApplied = 0;
 
@@ -308,115 +326,185 @@ std::vector<AutoRig::Joint> AutoRig::fitTemplateWithMarkers(
             if (m.id == id && m.set) return &m;
         return nullptr;
     };
+
+    // No markers placed → the proportional fit is the answer, untouched (keeps
+    // the "empty marker set ≡ fitTemplate" contract; nothing to infer from).
+    bool anySet = false;
+    for (const auto& m : markers) if (m.set) { anySet = true; break; }
+    if (!anySet) return placed;
+
     int applied = 0;
 
-    // Hips: anchor the pelvis directly, and carry the thigh roots
-    // (LeftUpLeg / RightUpLeg — children of Hips in the template) along with it
-    // by the same delta, so marking the hips moves the whole pelvis+thigh-root
-    // cluster as a unit instead of leaving the thighs floating at their
-    // template position. (An explicit L/R-hip marker below overrides its root.)
-    if (const Marker* m = get(MarkerId::Hips)) {
-        if (auto* hips = findJoint(placed, "Hips")) {
-            const std::array<double,3> d = { m->pos[0] - hips->pos[0],
-                                             m->pos[1] - hips->pos[1],
-                                             m->pos[2] - hips->pos[2] };
-            hips->pos = m->pos;
-            for (const char* leg : {"LeftUpLeg", "RightUpLeg"}) {
-                if (auto* j = findJoint(placed, leg))
-                    j->pos = { j->pos[0]+d[0], j->pos[1]+d[1], j->pos[2]+d[2] };
-            }
-            ++applied;
+    // Mesh AABB (mesh-local space, same coords the fit works in) — used to
+    // CLAMP inferred joints to the model's extent so an extrapolated limb
+    // (e.g. up-leg set but knee skipped) can't shoot a foot below the mesh.
+    std::array<double,3> mn = { 1e30,  1e30,  1e30};
+    std::array<double,3> mx = {-1e30, -1e30, -1e30};
+    for (int i = 0; i < vertexCount; ++i) {
+        for (int a = 0; a < 3; ++a) {
+            const double v = verts[3 * i + a];
+            mn[a] = std::min(mn[a], v);
+            mx[a] = std::max(mx[a], v);
         }
     }
-    // Chin: anchor Head, then lay the SPINE straight from the pelvis up to the
-    // head so the torso follows the marked hips↔chin span instead of leaving
-    // Spine/Chest/Neck stranded at their template heights. The spine joints are
-    // distributed evenly between Hips and Head by index (cartoon torsos vary a
-    // lot in length, so a proportional template guess is usually wrong).
-    if (const Marker* m = get(MarkerId::Chin)) {
-        if (auto* head = findJoint(placed, "Head")) {
-            head->pos = m->pos;
-            ++applied;
-            // Anchor at the (marked-or-template) Hips; lay Spine→Chest→Neck→Head.
-            if (auto* hips = findJoint(placed, "Hips")) {
-                // Spine chain joints in parent→child order, Head is the tip.
-                static const char* kSpine[] =
-                    { "Spine", "Chest", "Neck" };  // between Hips and Head
-                const auto a = hips->pos;
-                const int last = static_cast<int>(std::size(kSpine)) + 1; // +Head
-                for (int i = 0; i < static_cast<int>(std::size(kSpine)); ++i) {
-                    if (auto* j = findJoint(placed, kSpine[i]))
-                        j->pos = lerp3(a, m->pos,
-                                       static_cast<double>(i + 1) / last);
-                }
-            } else if (auto* neck = findJoint(placed, "Neck")) {
-                // No hips reference — fall back to the old neck lift.
-                if (auto* chest = findJoint(placed, "Chest"))
-                    neck->pos = lerp3(chest->pos, m->pos, 0.5);
-            }
-        }
+
+    // ---- Template reference positions (the proportional fit) -------------
+    const auto tHips  = jointPosOr(placed, "Hips",          {0,0,0});
+    const auto tHead  = jointPosOr(placed, "Head",          tHips);
+    const auto tLSh   = jointPosOr(placed, "LeftShoulder",  tHips);
+    const auto tRSh   = jointPosOr(placed, "RightShoulder", tHips);
+    const auto tLHand = jointPosOr(placed, "LeftHand",      tLSh);
+    const auto tRHand = jointPosOr(placed, "RightHand",     tRSh);
+    const auto tLUp   = jointPosOr(placed, "LeftUpLeg",     tHips);
+    const auto tRUp   = jointPosOr(placed, "RightUpLeg",    tHips);
+    const auto tLKnee = jointPosOr(placed, "LeftLeg",       tLUp);
+    const auto tRKnee = jointPosOr(placed, "RightLeg",      tRUp);
+
+    // Reflect a point across the body's sagittal plane (the plane through Hips
+    // perpendicular to the side axis). Used to mirror a marked left limb onto
+    // an unmarked right one (and vice-versa). The side axis is whichever of the
+    // two non-up axes the template shoulders are most separated along.
+    const int up = std::clamp(opts.upAxis, 0, 2);
+    int sideAxis = (up == 0) ? 1 : 0;            // first non-up axis
+    {
+        const int a1 = (up == 0) ? 1 : 0;
+        const int a2 = (up == 2) ? 1 : 2;
+        if (std::abs(tLSh[a2] - tRSh[a2]) > std::abs(tLSh[a1] - tRSh[a1]))
+            sideAxis = a2;
     }
-    // Shoulders: anchor the arm-chain attach point. Applied BEFORE the wrist
-    // chains so layChain (which uses the shoulder as its fixed anchor) lays the
-    // arm out from the marked shoulder rather than the template one. A shoulder
-    // marker on its own (no wrist) still repositions the attach point.
-    if (const Marker* m = get(MarkerId::LeftShoulder)) {
-        if (auto* j = findJoint(placed, "LeftShoulder")) { j->pos = m->pos; ++applied; }
-    }
-    if (const Marker* m = get(MarkerId::RightShoulder)) {
-        if (auto* j = findJoint(placed, "RightShoulder")) { j->pos = m->pos; ++applied; }
-    }
-    // Arms: the wrist marker is the hand position. Lay the whole arm chain
-    // straight from the SHOULDER (anchor — its marked-or-template position) out
-    // to the marker — LeftShoulder → LeftArm → LeftForeArm → LeftHand(=marker) —
-    // distributing the upper-arm/forearm joints along the way so the entire
-    // arm reaches toward the wrist, not just the hand.
-    if (const Marker* m = get(MarkerId::LeftWrist)) {
-        layChain(placed, {"LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand"}, m->pos);
-        ++applied;
-    }
-    if (const Marker* m = get(MarkerId::RightWrist)) {
-        layChain(placed, {"RightShoulder", "RightArm", "RightForeArm", "RightHand"}, m->pos);
-        ++applied;
-    }
-    // Hip sockets: anchor each thigh root (UpLeg) at its marker. Applied BEFORE
-    // the knee chains so layLeg lays the lower leg from the marked socket. This
-    // OVERRIDES the hips-carried position above, so an explicit hip marker wins
-    // (matters for cartoon models where the thighs splay out at odd angles a
-    // template/pelvis-carry can't capture). A hip marker on its own (no knee)
-    // still repositions the socket.
-    if (const Marker* m = get(MarkerId::LeftUpLeg)) {
-        if (auto* j = findJoint(placed, "LeftUpLeg")) { j->pos = m->pos; ++applied; }
-    }
-    if (const Marker* m = get(MarkerId::RightUpLeg)) {
-        if (auto* j = findJoint(placed, "RightUpLeg")) { j->pos = m->pos; ++applied; }
-    }
-    // Legs: the knee marker is the knee (LeftLeg) position. The thigh root
-    // (UpLeg) is the anchor — it sits at the hip socket (its marked position,
-    // else carried by the hips marker, else the template fit). Anchor the knee
-    // at the marker
-    // and continue the foot below it along the thigh→knee direction (~equal
-    // length), so the WHOLE leg — thigh root → knee → foot — lays out to follow
-    // the marked hips + knee instead of leaving the upper leg at its template
-    // position. (UpLeg→Leg is a 2-joint segment: anchor + tip, so layChain
-    // would just set the knee; we keep the explicit form to also place the
-    // extrapolated foot.)
-    auto layLeg = [&](const char* up, const char* knee, const char* foot,
-                      const std::array<double, 3>& kneePos) {
-        AutoRig::Joint* hip = findJoint(placed, up);
-        AutoRig::Joint* kn  = findJoint(placed, knee);
-        if (!hip || !kn) return;
-        kn->pos = kneePos;
-        // Foot continues below the knee, same direction as thigh→knee, ~equal len.
-        if (auto* ft = findJoint(placed, foot)) {
-            const auto d = std::array<double,3>{ kneePos[0]-hip->pos[0],
-                                                 kneePos[1]-hip->pos[1],
-                                                 kneePos[2]-hip->pos[2] };
-            ft->pos = { kneePos[0] + d[0], kneePos[1] + d[1], kneePos[2] + d[2] };
-        }
+    auto mirror = [&](std::array<double,3> p, const std::array<double,3>& center) {
+        p[sideAxis] = center[sideAxis] - (p[sideAxis] - center[sideAxis]);
+        return p;
     };
-    if (const Marker* m = get(MarkerId::LeftKnee))  { layLeg("LeftUpLeg",  "LeftLeg",  "LeftFoot",  m->pos); ++applied; }
-    if (const Marker* m = get(MarkerId::RightKnee)) { layLeg("RightUpLeg", "RightLeg", "RightFoot", m->pos); ++applied; }
+
+    // ---- Resolve anchor positions (marked → inferred → template) ---------
+    // Each `resolve` records whether a USER marker drove it (for applied count).
+    const Marker* mHead  = get(MarkerId::Chin);
+    const Marker* mHips  = get(MarkerId::Hips);
+    const Marker* mLSh   = get(MarkerId::LeftShoulder);
+    const Marker* mRSh   = get(MarkerId::RightShoulder);
+    const Marker* mLWr   = get(MarkerId::LeftWrist);
+    const Marker* mRWr   = get(MarkerId::RightWrist);
+    const Marker* mLUp   = get(MarkerId::LeftUpLeg);
+    const Marker* mRUp   = get(MarkerId::RightUpLeg);
+    const Marker* mLKn   = get(MarkerId::LeftKnee);
+    const Marker* mRKn   = get(MarkerId::RightKnee);
+    for (const Marker* m : {mHead,mHips,mLSh,mRSh,mLWr,mRWr,mLUp,mRUp,mLKn,mRKn})
+        if (m) ++applied;
+
+    // HIPS: marked → else from the up-legs (midpoint, lifted by the template
+    // socket→pelvis rise) → else template.
+    std::array<double,3> pHips = tHips;
+    if (mHips) pHips = mHips->pos;
+    else if (mLUp && mRUp) {
+        pHips = { 0.5*(mLUp->pos[0]+mRUp->pos[0]),
+                  0.5*(mLUp->pos[1]+mRUp->pos[1]),
+                  0.5*(mLUp->pos[2]+mRUp->pos[2]) };
+        const auto lift = sub3(tHips, { 0.5*(tLUp[0]+tRUp[0]),
+                                        0.5*(tLUp[1]+tRUp[1]),
+                                        0.5*(tLUp[2]+tRUp[2]) });
+        pHips = add3(pHips, lift);
+    }
+
+    // HEAD (chin): marked → else template lifted to keep the marked-hips offset.
+    std::array<double,3> pHead = mHead ? mHead->pos : add3(pHips, sub3(tHead, tHips));
+
+    // UP-LEGS: marked → else mirror the other marked one across the pelvis →
+    // else pelvis + template socket offset.
+    std::array<double,3> pLUp, pRUp;
+    pLUp = mLUp ? mLUp->pos : (mRUp ? mirror(mRUp->pos, pHips) : add3(pHips, sub3(tLUp, tHips)));
+    pRUp = mRUp ? mRUp->pos : (mLUp ? mirror(mLUp->pos, pHips) : add3(pHips, sub3(tRUp, tHips)));
+
+    // SHOULDERS: marked → else mirror the other → else from the spine: place at
+    // the template's shoulder-height fraction along the live Hips→Head line,
+    // plus the template lateral offset (so chin+hips imply the shoulders).
+    auto shoulderFromSpine = [&](const std::array<double,3>& tSh) {
+        const double denomUp = (tHead[up] - tHips[up]);
+        const double f = std::abs(denomUp) > 1e-9
+            ? (tSh[up] - tHips[up]) / denomUp : 0.78;
+        std::array<double,3> p = lerp3(pHips, pHead, std::clamp(f, 0.0, 1.0));
+        // lateral / depth offset of the template shoulder from the spine line
+        const std::array<double,3> tSpineAtSh = lerp3(tHips, tHead, std::clamp(f,0.0,1.0));
+        const auto off = sub3(tSh, tSpineAtSh);
+        return add3(p, off);
+    };
+    std::array<double,3> pLSh, pRSh;
+    pLSh = mLSh ? mLSh->pos : (mRSh ? mirror(mRSh->pos, pHead) : shoulderFromSpine(tLSh));
+    pRSh = mRSh ? mRSh->pos : (mLSh ? mirror(mLSh->pos, pHead) : shoulderFromSpine(tRSh));
+
+    // HANDS (wrist): marked → else shoulder + template arm vector (so a marked
+    // shoulder with a skipped wrist still lays a full arm reaching out).
+    std::array<double,3> pLHand, pRHand;
+    pLHand = mLWr ? mLWr->pos : add3(pLSh, sub3(tLHand, tLSh));
+    pRHand = mRWr ? mRWr->pos : add3(pRSh, sub3(tRHand, tRSh));
+
+    // KNEES + FEET: resolve both, clamped to the mesh's lower extent so an
+    // inferred leg never punches through the bottom of the model.
+    //   * knee marked   → knee at the marker, foot extrapolated below
+    //                     (knee + thigh→knee), then clamped to the floor.
+    //   * knee unmarked  → drop the foot to the mesh FLOOR (mn[up]) straight
+    //                     below the up-leg, and put the knee halfway between the
+    //                     up-leg and that foot. (Template thigh-vector
+    //                     extrapolation is what shot feet past the mesh limit;
+    //                     anchoring the foot to the floor fixes that.)
+    const double floorUp = mn[up];
+    auto resolveLeg = [&](const std::array<double,3>& upPos,
+                          const std::array<double,3>& tKnee,
+                          const std::array<double,3>& tUp,
+                          const Marker* kneeMk,
+                          std::array<double,3>& knee,
+                          std::array<double,3>& foot) {
+        if (kneeMk) {
+            knee = kneeMk->pos;
+            foot = add3(knee, sub3(knee, upPos));   // continue below the knee
+        } else {
+            // Foot straight below the up-leg, sitting on the mesh floor.
+            foot = upPos; foot[up] = floorUp;
+            knee = { 0.5*(upPos[0]+foot[0]),
+                     0.5*(upPos[1]+foot[1]),
+                     0.5*(upPos[2]+foot[2]) };
+            // Nudge the knee slightly forward (template thigh→knee in-plane
+            // direction) so it isn't a perfectly straight, lockable line.
+            const auto tIn = sub3(tKnee, tUp);
+            for (int a = 0; a < 3; ++a) if (a != up) knee[a] += tIn[a] * 0.25;
+        }
+        // Never let the foot go below the mesh floor (clamp the up coord).
+        if (foot[up] < floorUp) foot[up] = floorUp;
+        // Keep the knee strictly between the up-leg and the foot in up-coord.
+        const double lo = std::min(upPos[up], foot[up]);
+        const double hi = std::max(upPos[up], foot[up]);
+        knee[up] = std::clamp(knee[up], lo, hi);
+    };
+    std::array<double,3> pLKnee, pLFoot, pRKnee, pRFoot;
+    resolveLeg(pLUp, tLKnee, tLUp, mLKn, pLKnee, pLFoot);
+    resolveLeg(pRUp, tRKnee, tRUp, mRKn, pRKnee, pRFoot);
+
+    // ---- Write the resolved anchors back, then lay the dependent chains --
+    auto setJoint = [&](const char* name, const std::array<double,3>& p) {
+        if (auto* j = findJoint(placed, name)) j->pos = p;
+    };
+    setJoint("Hips", pHips);
+    setJoint("Head", pHead);
+    setJoint("LeftShoulder", pLSh);
+    setJoint("RightShoulder", pRSh);
+    setJoint("LeftUpLeg", pLUp);
+    setJoint("RightUpLeg", pRUp);
+
+    // Spine: distribute Spine/Chest/Neck evenly between Hips and Head.
+    {
+        static const char* kSpine[] = { "Spine", "Chest", "Neck" };
+        const int last = static_cast<int>(std::size(kSpine)) + 1;   // +Head
+        for (int i = 0; i < static_cast<int>(std::size(kSpine)); ++i)
+            setJoint(kSpine[i], lerp3(pHips, pHead,
+                                      static_cast<double>(i + 1) / last));
+    }
+    // Arms: lay the full chain shoulder→arm→forearm→hand toward the resolved hand.
+    layChain(placed, {"LeftShoulder",  "LeftArm",  "LeftForeArm",  "LeftHand"},  pLHand);
+    layChain(placed, {"RightShoulder", "RightArm", "RightForeArm", "RightHand"}, pRHand);
+
+    // Legs: write the resolved (and floor-clamped) knee + foot anchors.
+    setJoint("LeftLeg",   pLKnee);  setJoint("LeftFoot",  pLFoot);
+    setJoint("RightLeg",  pRKnee);  setJoint("RightFoot", pRFoot);
 
     if (outMarkersApplied) *outMarkersApplied = applied;
     return placed;
