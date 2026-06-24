@@ -62,6 +62,24 @@ static Ogre::MeshPtr createSeamedQuadMesh(const std::string& name)
     return mesh;
 }
 
+static EditableMesh makeUvQuadMesh()
+{
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.vertices = {
+        EditableVertex{.position = {0, 0, 0}, .uv = {0, 0}, .hasUV = true},
+        EditableVertex{.position = {1, 0, 0}, .uv = {1, 0}, .hasUV = true},
+        EditableVertex{.position = {1, 1, 0}, .uv = {1, 1}, .hasUV = true},
+        EditableVertex{.position = {0, 1, 0}, .uv = {0, 1}, .hasUV = true},
+    };
+    EditableFace face;
+    face.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(face));
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+    return mesh;
+}
+
 class UVEditorControllerTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -110,6 +128,37 @@ TEST_F(UVEditorControllerTest, UvSeamSplitsIslands)
     EXPECT_EQ(result.islandCount, 2);
     ASSERT_EQ(result.faceIslandIds.size(), 2u);
     EXPECT_NE(result.faceIslandIds[0], result.faceIslandIds[1]);
+}
+
+TEST_F(UVEditorControllerTest, CanonicalQuadFaceOneIsland)
+{
+    const auto result =
+        UVEditorController::computeIslandsFromEditableMesh(makeUvQuadMesh());
+    EXPECT_EQ(result.islandCount, 1);
+    ASSERT_EQ(result.faceIslandIds.size(), 1u);
+    EXPECT_EQ(result.faceIslandIds[0], 0);
+}
+
+TEST_F(UVEditorControllerTest, MissingUvChannelClearsLayout)
+{
+    auto mesh = createInMemoryTriangleMesh("UVEditor_uv0_only");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UVEditor_uv1_node");
+    auto* entity = sceneMgr->createEntity("UVEditor_uv1_entity", mesh);
+    node->attachObject(entity);
+
+    UVEditorController* ctrl = UVEditorController::instance();
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    ctrl->setUvChannel(0);
+    ctrl->refresh();
+    EXPECT_TRUE(ctrl->hasMesh());
+    EXPECT_EQ(ctrl->triangles().size(), 1);
+
+    ctrl->setUvChannel(1);
+    ctrl->refresh();
+    EXPECT_FALSE(ctrl->hasMesh());
+    EXPECT_TRUE(ctrl->triangles().isEmpty());
 }
 
 TEST_F(UVEditorControllerTest, ControllerRefreshTracksSelection)
