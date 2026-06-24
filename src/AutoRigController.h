@@ -36,6 +36,7 @@ class AutoRigController : public QObject
     Q_PROPERTY(bool markerMode READ markerMode NOTIFY markerModeChanged)
     Q_PROPERTY(int markerCount READ markerCount NOTIFY markerCountChanged)
     Q_PROPERTY(int markerTotal READ markerTotal NOTIFY markerModeChanged)
+    Q_PROPERTY(int markerPlacedCount READ markerPlacedCount NOTIFY markerCountChanged)
     Q_PROPERTY(QString currentMarkerLabel READ currentMarkerLabel NOTIFY markerCountChanged)
 
 public:
@@ -57,8 +58,9 @@ public:
 
     // ---- Marker placement (Mixamo-style) -------------------------------
     bool markerMode() const { return m_markerMode; }
-    int markerCount() const;                     // markers placed so far
+    int markerCount() const;                     // slots resolved (placed+skipped)
     int markerTotal() const;                     // total expected (10 for humanoid)
+    int markerPlacedCount() const;               // only the placed (set) markers
     QString currentMarkerLabel() const;          // label of the next marker to place
 
     /// Enter marker mode for the selected static mesh. Subsequent viewport
@@ -100,11 +102,16 @@ private:
     static AutoRigController* m_pSingleton;
     bool m_busy = false;
 
-    // Marker session.
+    // Marker session. Progress is a CURSOR into m_markerOrder: slots before the
+    // cursor are resolved (either placed in m_markers, or skipped — absent from
+    // m_markers). The cursor — not the contents of m_markers — drives which
+    // marker is "current", so Skip advances past a slot without placing it and
+    // the cursor never sticks. m_markers holds only the placed (set) markers.
     bool m_markerMode = false;
     int  m_upAxis = 1;                                  // resolved at begin
+    int  m_markerCursor = 0;                            // next slot to resolve
     std::vector<AutoRig::MarkerId> m_markerOrder;       // the 10, in click order
-    std::vector<AutoRig::Marker>   m_markers;           // accumulated (set flag)
+    std::vector<AutoRig::Marker>   m_markers;           // PLACED markers (set)
     std::vector<Ogre::SceneNode*>  m_markerNodes;       // viewport sphere overlays
     std::string m_markerEntityName;                     // entity being marked
 };

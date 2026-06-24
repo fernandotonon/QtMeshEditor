@@ -255,9 +255,9 @@ Ogre::Entity* AutoRigController::selectedRiggableEntity() const
 
 int AutoRigController::markerCount() const
 {
-    int n = 0;
-    for (const auto& m : m_markers) if (m.set) ++n;
-    return n;
+    // Slots resolved so far (placed OR skipped) = the cursor position. Drives
+    // the "N/total" progress readout in the UI.
+    return m_markerCursor;
 }
 
 int AutoRigController::markerTotal() const
@@ -265,15 +265,18 @@ int AutoRigController::markerTotal() const
     return static_cast<int>(m_markerOrder.size());
 }
 
+int AutoRigController::markerPlacedCount() const
+{
+    // Only the actually-placed (set) markers — what "Rig from markers" needs.
+    return static_cast<int>(m_markers.size());
+}
+
 QString AutoRigController::currentMarkerLabel() const
 {
-    // The next unset marker in order.
-    for (auto id : m_markerOrder) {
-        bool placed = false;
-        for (const auto& m : m_markers) if (m.id == id && m.set) { placed = true; break; }
-        if (!placed) return AutoRig::markerLabel(id);
-    }
-    return QString();   // all placed
+    // The slot at the cursor (empty once every slot is resolved).
+    if (m_markerCursor < 0 || m_markerCursor >= static_cast<int>(m_markerOrder.size()))
+        return QString();
+    return AutoRig::markerLabel(m_markerOrder[m_markerCursor]);
 }
 
 bool AutoRigController::beginMarkerPlacement(const QString& upAxis)
@@ -286,6 +289,7 @@ bool AutoRigController::beginMarkerPlacement(const QString& upAxis)
     m_markerEntityName = e->getName();
     m_markerOrder = AutoRig::humanoidMarkerOrder();
     m_markers.clear();
+    m_markerCursor = 0;
     clearMarkerOverlays();
     m_markerMode = true;
 
@@ -303,6 +307,7 @@ void AutoRigController::cancelMarkerPlacement()
     m_markerMode = false;
     m_markers.clear();
     m_markerOrder.clear();
+    m_markerCursor = 0;
     clearMarkerOverlays();
     emit markerModeChanged();
     emit markerCountChanged();
@@ -311,24 +316,24 @@ void AutoRigController::cancelMarkerPlacement()
 void AutoRigController::skipCurrentMarker()
 {
     if (!m_markerMode) return;
-    // Record an explicit "skipped" placeholder (set=false but consumed) by
-    // advancing past the current marker: insert an unset marker so current
-    // MarkerLabel moves on.
-    const QString cur = currentMarkerLabel();
-    if (cur.isEmpty()) return;
-    for (auto id : m_markerOrder) {
-        if (AutoRig::markerLabel(id) != cur) continue;
-        AutoRig::Marker m; m.id = id; m.set = false;
-        m_markers.push_back(m);   // unset → keeps template, but consumes the slot
-        break;
-    }
+    if (m_markerCursor >= static_cast<int>(m_markerOrder.size())) return;
+    // Just advance the cursor past this slot — no marker is stored, so the
+    // joint keeps its template fit. (No m_markers entry; the cursor is what
+    // makes currentMarkerLabel move on.)
+    ++m_markerCursor;
     emit markerCountChanged();
 }
 
 void AutoRigController::undoLastMarker()
 {
-    if (!m_markerMode || m_markers.empty()) return;
-    m_markers.pop_back();
+    if (!m_markerMode || m_markerCursor <= 0) return;
+    // Step back one slot. If that slot was PLACED (its id is in m_markers),
+    // drop the marker too; if it was skipped, there's nothing to remove.
+    --m_markerCursor;
+    const AutoRig::MarkerId id = m_markerOrder[m_markerCursor];
+    for (auto it = m_markers.begin(); it != m_markers.end(); ++it) {
+        if (it->id == id) { m_markers.erase(it); break; }
+    }
     refreshMarkerOverlays();
     emit markerCountChanged();
 }
@@ -336,8 +341,10 @@ void AutoRigController::undoLastMarker()
 bool AutoRigController::handleMarkerClick(OgreWidget* widget, const QPoint& screenPos)
 {
     if (!m_markerMode || !widget) return false;
-    const QString cur = currentMarkerLabel();
-    if (cur.isEmpty()) return true;   // all placed; consume click but do nothing
+    if (m_markerCursor < 0 || m_markerCursor >= static_cast<int>(m_markerOrder.size()))
+        return true;   // all slots resolved; consume click but do nothing
+    const AutoRig::MarkerId curId = m_markerOrder[m_markerCursor];
+    const QString cur = AutoRig::markerLabel(curId);
 
     Ogre::Entity* e = selectedRiggableEntity();
     if (!e || e->getName() != m_markerEntityName) {
@@ -374,15 +381,13 @@ bool AutoRigController::handleMarkerClick(OgreWidget* widget, const QPoint& scre
     const Ogre::Vector3 local = node
         ? node->_getFullTransform().inverse() * hit : hit;
 
-    // Find which MarkerId is current and record it.
-    for (auto id : m_markerOrder) {
-        if (AutoRig::markerLabel(id) != cur) continue;
-        AutoRig::Marker m;
-        m.id = id; m.set = true;
-        m.pos = { local.x, local.y, local.z };
-        m_markers.push_back(m);
-        break;
-    }
+    // Record the marker for the current slot and advance the cursor.
+    AutoRig::Marker m;
+    m.id = curId; m.set = true;
+    m.pos = { local.x, local.y, local.z };
+    m_markers.push_back(m);
+    ++m_markerCursor;
+
     refreshMarkerOverlays();
     emit markerPlaced(cur);
     emit markerCountChanged();

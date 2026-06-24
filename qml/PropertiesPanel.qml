@@ -20,6 +20,154 @@ Rectangle {
     property bool showAllModeTools: false
     property var bottomToolHost: null
 
+    // ---- Auto-rig (#407) inline state, lives in the Inspector Rigging section
+    // (replaces the old modal AutoRigDialog) ----
+    property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic"]
+    property int    rigTemplateIndex: 0
+    property var    rigUpAxes: ["x", "y", "z"]
+    property int    rigUpAxisIndex: 1           // +Y default
+    property bool   rigAlsoSkin: true
+    property bool   rigShowAdvanced: false      // template / up-axis pickers
+    property string rigStatus: ""
+    property bool   rigStatusError: false
+
+    function runAutoRig() {
+        if (AutoRigController.busy || !AutoRigController.hasRiggableSelection) return
+        const r = AutoRigController.autoRigSelected(
+            root.rigTemplates[root.rigTemplateIndex],
+            root.rigUpAxes[root.rigUpAxisIndex],
+            root.rigAlsoSkin)
+        if (r && r.applied) {
+            root.rigStatus = "Rigged: " + r.boneCount + " bones, "
+                + r.verticesSampled + " verts, "
+                + r.jointsRecentered + " recentered"
+                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+            root.rigStatusError = false
+        } else {
+            root.rigStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
+            root.rigStatusError = true
+        }
+    }
+
+    function runMarkerRig() {
+        if (AutoRigController.busy) return
+        const r = AutoRigController.commitMarkerRig(root.rigAlsoSkin)
+        if (r && r.applied) {
+            root.rigStatus = "Rigged from markers: " + r.boneCount + " bones, "
+                + r.markersApplied + " markers"
+                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+            root.rigStatusError = false
+        } else {
+            root.rigStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
+            root.rigStatusError = true
+        }
+    }
+
+    Connections {
+        target: AutoRigController
+        function onError(msg) {
+            root.rigStatus = "Failed: " + msg
+            root.rigStatusError = true
+        }
+    }
+
+    // ---- Small inline Inspector primitives reused by the Rigging section ----
+    component RigButton: Rectangle {
+        id: rb
+        property string label: ""
+        property bool buttonEnabled: true
+        signal clicked()
+        implicitWidth: rbText.implicitWidth + 18
+        height: 24
+        radius: 3
+        opacity: rb.buttonEnabled ? 1.0 : 0.45
+        color: rbMa.containsMouse && rb.buttonEnabled
+            ? PropertiesPanelController.highlightColor
+            : PropertiesPanelController.headerColor
+        border.color: PropertiesPanelController.borderColor
+        border.width: 1
+        Text {
+            id: rbText
+            anchors.centerIn: parent
+            text: rb.label
+            color: PropertiesPanelController.textColor
+            font.pixelSize: 11
+        }
+        MouseArea {
+            id: rbMa
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: rb.buttonEnabled
+            cursorShape: rb.buttonEnabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+            onClicked: rb.clicked()
+        }
+    }
+
+    component RigCheckbox: Row {
+        id: rcb
+        property string label: ""
+        property bool checked: false
+        signal toggled()
+        spacing: 6
+        Rectangle {
+            width: 14; height: 14; radius: 2
+            anchors.verticalCenter: parent.verticalCenter
+            color: PropertiesPanelController.inputColor
+            border.color: PropertiesPanelController.borderColor
+            border.width: 1
+            Text {
+                anchors.centerIn: parent
+                text: rcb.checked ? "✓" : ""
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+        }
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: rcb.label
+            color: PropertiesPanelController.textColor
+            font.pixelSize: 11
+        }
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: rcb.toggled()
+        }
+    }
+
+    component RigSegments: Row {
+        id: rseg
+        property var options: []
+        property int index: 0
+        signal picked(int i)
+        spacing: 4
+        Repeater {
+            model: rseg.options
+            Rectangle {
+                width: Math.max(56, rsegText.implicitWidth + 16)
+                height: 22
+                radius: 3
+                color: index === rseg.index
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: rsegText
+                    anchors.centerIn: parent
+                    text: modelData
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: rseg.picked(index)
+                }
+            }
+        }
+    }
+
     function revealBottomTool(toolId) {
         if (bottomToolHost && bottomToolHost.revealBottomTool)
             bottomToolHost.revealBottomTool(toolId)
@@ -339,6 +487,7 @@ Rectangle {
             // static mesh); already-rigged meshes show the Skinning section
             // instead.
             CollapsibleSection {
+                id: riggingSection
                 title: "Rigging"
                 sectionVisible: root.currentTab === root.modeToolsTab
                     && root.modeToolMatches(EditorModeController.AnimationMode)
@@ -346,6 +495,13 @@ Rectangle {
                 expanded: false
 
                 Component.onCompleted: content = riggingToolsComponent
+
+                // Don't strand the viewport in marker-capture mode if the
+                // section disappears (mode change, deselect, re-rig) — the
+                // inline UI replaced the dialog's onClosing cancel.
+                onSectionVisibleChanged: if (!sectionVisible
+                        && AutoRigController.markerMode)
+                    AutoRigController.cancelMarkerPlacement()
             }
 
             // ---- Skeleton (Animation mode) ----
@@ -1304,16 +1460,24 @@ Rectangle {
     }
 
     // ---- Rigging Tools Content (Animation mode) ----
-    // Issue #407: native auto-rig. The "Auto-Rig…" button opens the dialog
-    // (template picker + skin checkbox); it disables on non-static meshes
-    // (AutoRigController.hasRiggableSelection).
+    // Issue #407: native auto-rig, inline in the Inspector (no modal dialog).
+    // Smart show/hide:
+    //   * marker mode active  → only the guidance + in-session controls show,
+    //   * idle                → the two entry points (markers / template),
+    //                           skin checkbox, and a collapsible "Advanced"
+    //                           block (template + up-axis pickers).
+    // All gated on AutoRigController.hasRiggableSelection (a static mesh).
     Component {
         id: riggingToolsComponent
 
         Column {
+            id: rigCol
             width: parent ? parent.width : 200
             padding: 8
-            spacing: 6
+            spacing: 8
+
+            readonly property bool canRig: AutoRigController.hasRiggableSelection
+            readonly property bool marking: AutoRigController.markerMode
 
             Text {
                 width: parent.width - 16
@@ -1321,52 +1485,143 @@ Rectangle {
                 opacity: 0.8
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
-                text: "Embed a skeleton template (humanoid / biped / quadruped / "
-                    + "generic) into the selected unrigged mesh, optionally skinning "
-                    + "it in one click. Best on upright, manifold, T/A-pose meshes."
+                text: rigCol.marking
+                    ? "Click each highlighted point on the mesh in the viewport."
+                    : (rigCol.canRig
+                        ? "Embed a skeleton into this unrigged mesh. Use markers for a "
+                          + "better fit (Mixamo-style), or a plain template. Optionally "
+                          + "skin in one click."
+                        : "Select a static (unrigged) mesh to enable rigging.")
             }
 
-            Rectangle {
-                id: rigBtn
-                width: Math.min(parent.width - 16, rigLabel.implicitWidth + 16)
-                height: 26
-                radius: 3
-                opacity: AutoRigController.hasRiggableSelection ? 1.0 : 0.45
-                color: rigMa.containsMouse && AutoRigController.hasRiggableSelection
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                activeFocusOnTab: AutoRigController.hasRiggableSelection
-                Accessible.role: Accessible.Button
-                Accessible.name: "Auto-Rig"
-                Keys.onSpacePressed: if (AutoRigController.hasRiggableSelection) root.openAutoRigDialog()
-                Keys.onReturnPressed: if (AutoRigController.hasRiggableSelection) root.openAutoRigDialog()
-                Keys.onEnterPressed: if (AutoRigController.hasRiggableSelection) root.openAutoRigDialog()
-                border.color: rigBtn.activeFocus
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.borderColor
-                border.width: rigBtn.activeFocus ? 2 : 1
+            // ── Marker mode: guidance + in-session controls only ──────────
+            Column {
+                width: parent.width - 16
+                spacing: 6
+                visible: rigCol.marking
 
                 Text {
-                    id: rigLabel
-                    anchors.centerIn: parent
-                    text: "Auto-Rig…"
-                    color: PropertiesPanelController.textColor
+                    width: parent.width
+                    wrapMode: Text.Wrap
                     font.pixelSize: 11
+                    color: PropertiesPanelController.highlightColor
+                    text: AutoRigController.currentMarkerLabel.length > 0
+                        ? ("Place: " + AutoRigController.currentMarkerLabel
+                           + "   (" + AutoRigController.markerCount + "/"
+                           + AutoRigController.markerTotal + ")")
+                        : ("All " + AutoRigController.markerCount + "/"
+                           + AutoRigController.markerTotal
+                           + " placed — click 'Rig from markers'")
                 }
-                MouseArea {
-                    id: rigMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    enabled: AutoRigController.hasRiggableSelection
-                    cursorShape: AutoRigController.hasRiggableSelection
-                        ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-                    onClicked: root.openAutoRigDialog()
-                    ToolTip.visible: containsMouse
-                    ToolTip.delay: 500
-                    ToolTip.text: AutoRigController.hasRiggableSelection
-                        ? "Generate a skeleton for this static mesh by embedding a template."
-                        : "Select a static (unrigged) mesh first."
+
+                Flow {
+                    width: parent.width
+                    spacing: 6
+                    RigButton {
+                        label: "Skip"
+                        buttonEnabled: AutoRigController.currentMarkerLabel.length > 0
+                        onClicked: AutoRigController.skipCurrentMarker()
+                    }
+                    RigButton {
+                        label: "Undo"
+                        buttonEnabled: AutoRigController.markerCount > 0
+                        onClicked: AutoRigController.undoLastMarker()
+                    }
+                    RigButton {
+                        label: "Cancel"
+                        onClicked: AutoRigController.cancelMarkerPlacement()
+                    }
+                    RigButton {
+                        label: AutoRigController.busy ? "Rigging…" : "Rig from markers"
+                        buttonEnabled: !AutoRigController.busy
+                            && AutoRigController.markerPlacedCount > 0
+                        onClicked: root.runMarkerRig()
+                    }
                 }
+            }
+
+            // ── Idle: skeleton type + entry points + options ──────────────
+            Column {
+                width: parent.width - 16
+                spacing: 8
+                visible: !rigCol.marking
+
+                // Skeleton type — a primary choice, always visible.
+                Text {
+                    text: "Skeleton type"
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.8
+                    font.pixelSize: 10
+                }
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    RigSegments {
+                        options: root.rigTemplates
+                        index: root.rigTemplateIndex
+                        onPicked: function(i) { root.rigTemplateIndex = i }
+                    }
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 6
+                    RigButton {
+                        // Markers are a humanoid concept (chin/shoulders/wrists/
+                        // hips/knees) — only offered for the humanoid template.
+                        label: "Place markers…"
+                        buttonEnabled: rigCol.canRig && !AutoRigController.busy
+                            && root.rigTemplates[root.rigTemplateIndex] === "humanoid"
+                        onClicked: AutoRigController.beginMarkerPlacement(
+                            root.rigUpAxes[root.rigUpAxisIndex])
+                    }
+                    RigButton {
+                        label: AutoRigController.busy ? "Rigging…" : "Auto-Rig (template)"
+                        buttonEnabled: rigCol.canRig && !AutoRigController.busy
+                        onClicked: root.runAutoRig()
+                    }
+                }
+
+                RigCheckbox {
+                    label: "Also compute skin weights"
+                    checked: root.rigAlsoSkin
+                    onToggled: root.rigAlsoSkin = !root.rigAlsoSkin
+                }
+
+                // Advanced options toggle (just the up-axis picker for now).
+                RigCheckbox {
+                    label: "Advanced options"
+                    checked: root.rigShowAdvanced
+                    onToggled: root.rigShowAdvanced = !root.rigShowAdvanced
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: 6
+                    visible: root.rigShowAdvanced
+
+                    Text {
+                        text: "Up axis (+Y is the in-app default)"
+                        color: PropertiesPanelController.textColor
+                        opacity: 0.8
+                        font.pixelSize: 10
+                    }
+                    RigSegments {
+                        options: root.rigUpAxes
+                        index: root.rigUpAxisIndex
+                        onPicked: function(i) { root.rigUpAxisIndex = i }
+                    }
+                }
+            }
+
+            // ── Status line (both modes) ──────────────────────────────────
+            Text {
+                width: parent.width - 16
+                visible: root.rigStatus.length > 0
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                text: root.rigStatus
+                color: root.rigStatusError ? "#cc4444" : "#3a8c3a"
             }
         }
     }
@@ -4298,25 +4553,9 @@ Rectangle {
         }
     }
 
-    // Issue #407: native auto-rig dialog. Same lazy-load idiom.
-    Loader {
-        id: autoRigLoader
-        active: false
-        anchors.centerIn: parent
-        source: "qrc:/MaterialEditorQML/AutoRigDialog.qml"
-        onLoaded: if (item && item.open) item.open()
-    }
-    function openAutoRigDialog() {
-        if (!autoRigLoader.active) {
-            autoRigLoader.active = true
-        } else if (autoRigLoader.item) {
-            autoRigLoader.item.open()
-        } else if (autoRigLoader.status === Loader.Error) {
-            // Failed load left active=true / item=null — reset so a retry works.
-            autoRigLoader.active = false
-            autoRigLoader.active = true
-        }
-    }
+    // Issue #407: native auto-rig now lives inline in the Inspector Rigging
+    // section (riggingToolsComponent) — no modal dialog. The old AutoRigDialog
+    // Loader / openAutoRigDialog() were removed.
 
     Loader {
         id: isometricSpritesLoader
