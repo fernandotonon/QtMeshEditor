@@ -8187,7 +8187,14 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
         if ((arg == "--skeleton" || arg == "--template") && i + 1 < argc) {
             templateName = QString::fromLocal8Bit(argv[++i]); continue;
         }
-        if (arg == "--algo" && i + 1 < argc) {
+        if (arg == "--algo") {
+            // Reject a missing value (e.g. `--algo -o out`) instead of silently
+            // swallowing the next flag and falling back to the default.
+            if (i + 1 >= argc || QString::fromLocal8Bit(argv[i + 1]).startsWith("-")) {
+                err() << "Error: --algo requires 'pinocchio', 'unirig', or 'rignet'."
+                      << Qt::endl;
+                return 2;
+            }
             algoName = QString::fromLocal8Bit(argv[++i]).toLower();
             if (algoName != "pinocchio" && algoName != "unirig" && algoName != "rignet") {
                 err() << "Error: --algo must be 'pinocchio' or 'unirig' (got '"

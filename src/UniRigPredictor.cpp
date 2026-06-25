@@ -207,6 +207,13 @@ UniRigPredictor::Result UniRigPredictor::detokenize(
         if (!djoints[j].isRoot && !samePos(djoints[j].pos, djoints[j].parentPos)) {
             for (int k = static_cast<int>(j) - 1; k >= 0; --k)
                 if (samePos(djoints[(size_t)k].pos, djoints[j].parentPos)) { parent = k; break; }
+            // A non-root joint whose explicit parent triple matches no earlier
+            // joint is a malformed decode — reject so the caller falls back
+            // rather than silently emitting it as a spurious extra root.
+            if (parent < 0)
+                return failResult(QStringLiteral(
+                    "UniRig: a branch parent did not match any earlier joint "
+                    "(malformed decode)."));
         }
         std::array<double,3> p = djoints[j].pos;
         p = { p[0]*scale + centre[0], p[1]*scale + centre[1], p[2]*scale + centre[2] };
@@ -265,6 +272,11 @@ QString UniRigPredictor::embedModelPath()
 
 QString UniRigPredictor::ensureModelBlocking()
 {
+#ifndef ENABLE_ONNX
+    // A non-ONNX build can't run the model — don't touch disk/network or kick
+    // off a ~1.4 GB first-use download that would never be used.
+    return {};
+#else
     const QString enc = encoderModelPath();
     const QString dec = decoderModelPath();
     const QString emb = embedModelPath();
@@ -341,6 +353,7 @@ QString UniRigPredictor::ensureModelBlocking()
     // ALL THREE must exist for success.
     return (QFileInfo::exists(enc) && QFileInfo::exists(dec)
             && QFileInfo::exists(emb)) ? enc : QString();
+#endif  // ENABLE_ONNX
 }
 
 #ifndef ENABLE_ONNX

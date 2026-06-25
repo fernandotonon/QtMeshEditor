@@ -149,14 +149,26 @@ Rectangle {
         Repeater {
             model: rseg.options
             Rectangle {
+                id: segRect
                 width: Math.max(56, rsegText.implicitWidth + 16)
                 height: 22
                 radius: 3
                 color: index === rseg.index
                     ? PropertiesPanelController.highlightColor
                     : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
+                // Keyboard accessibility: each segment is tab-focusable, with a
+                // focus ring; Space/Enter selects it. (Mouse still works too.)
+                activeFocusOnTab: true
+                border.color: segRect.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: segRect.activeFocus ? 2 : 1
+                Accessible.role: Accessible.RadioButton
+                Accessible.name: modelData
+                Accessible.checked: index === rseg.index
+                Keys.onSpacePressed: rseg.picked(index)
+                Keys.onReturnPressed: rseg.picked(index)
+                Keys.onEnterPressed: rseg.picked(index)
                 Text {
                     id: rsegText
                     anchors.centerIn: parent
@@ -167,7 +179,7 @@ Rectangle {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: rseg.picked(index)
+                    onClicked: { segRect.forceActiveFocus(); rseg.picked(index) }
                 }
             }
         }
