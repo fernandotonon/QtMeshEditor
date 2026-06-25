@@ -665,7 +665,8 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
                     indices.empty() ? nullptr : indices.data(),
                     static_cast<int>(indices.size()),
                     UniRigPredictor::encoderModelPath(),
-                    UniRigPredictor::decoderModelPath(), rnOpts);
+                    UniRigPredictor::decoderModelPath(),
+                    UniRigPredictor::embedModelPath(), rnOpts);
                 if (rn.ok && rn.joints.size() >= 2) {
                     placed.reserve(rn.joints.size());
                     for (const auto& j : rn.joints) {

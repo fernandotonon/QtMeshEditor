@@ -22,11 +22,17 @@ namespace {
 // export is the encoder (Michelangelo SAL perceiver) + the AR decoder.
 constexpr const char* kEncoderFile = "encoder.onnx";
 constexpr const char* kDecoderFile = "decoder.onnx";
+constexpr const char* kEmbedFile   = "embed.onnx";
 constexpr const char* kDefaultModelBaseUrl =
     "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/unirig/";
 constexpr const char* kBaseUrlSettingsKey = "ai/unirigModelBaseUrl";
 constexpr const char* kEncoderLabel = "UniRig encoder model";
 constexpr const char* kDecoderLabel = "UniRig decoder model";
+constexpr const char* kEmbedLabel   = "UniRig embed model";
+
+// cls token id for articulation-xl (the released checkpoint's training class).
+// Seed = [latents ; embed([bos, cls])]  (matches UniRigAR.generate).
+constexpr int kClsArticulationXL = 266;
 
 // ---------------------------------------------------------------------------
 // TOKENIZER CONSTANTS — EXACT replica of UniRig's
@@ -249,11 +255,20 @@ QString UniRigPredictor::decoderModelPath()
         QStringLiteral("ai_models/unirig/") + QString::fromLatin1(kDecoderFile));
 }
 
+QString UniRigPredictor::embedModelPath()
+{
+    const QString dataPath =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    return QDir(dataPath).filePath(
+        QStringLiteral("ai_models/unirig/") + QString::fromLatin1(kEmbedFile));
+}
+
 QString UniRigPredictor::ensureModelBlocking()
 {
     const QString enc = encoderModelPath();
     const QString dec = decoderModelPath();
-    if (QFileInfo::exists(enc) && QFileInfo::exists(dec))
+    const QString emb = embedModelPath();
+    if (QFileInfo::exists(enc) && QFileInfo::exists(dec) && QFileInfo::exists(emb))
         return enc;
 
     // Offline / test guard — never hit the network when set.
@@ -315,16 +330,21 @@ QString UniRigPredictor::ensureModelBlocking()
         !downloadOne(QString::fromLatin1(kDecoderFile), dec,
                      QString::fromLatin1(kDecoderLabel)))
         return {};
+    if (!QFileInfo::exists(emb) &&
+        !downloadOne(QString::fromLatin1(kEmbedFile), emb,
+                     QString::fromLatin1(kEmbedLabel)))
+        return {};
 
-    // BOTH must exist for success.
-    return (QFileInfo::exists(enc) && QFileInfo::exists(dec)) ? enc : QString();
+    // ALL THREE must exist for success.
+    return (QFileInfo::exists(enc) && QFileInfo::exists(dec)
+            && QFileInfo::exists(emb)) ? enc : QString();
 }
 
 #ifndef ENABLE_ONNX
 
 UniRigPredictor::Result UniRigPredictor::predict(
         const float*, int, const uint32_t*, int,
-        const QString&, const QString&, const Options&)
+        const QString&, const QString&, const QString&, const Options&)
 {
     return failResult(QStringLiteral(
         "UniRig needs an ONNX-enabled build — rebuild with -DENABLE_ONNX "
@@ -447,6 +467,7 @@ UniRigPredictor::Result UniRigPredictor::predict(
         const uint32_t* indices, int indexCount,
         const QString& encoderModelPath,
         const QString& decoderModelPath,
+        const QString& embedModelPath,
         const Options& opts)
 {
     if (!positions || vertexCount < 4)
@@ -459,6 +480,10 @@ UniRigPredictor::Result UniRigPredictor::predict(
         return failResult(QStringLiteral(
             "UniRig decoder model not available at '%1' — connect to the "
             "internet to download it on first use.").arg(decoderModelPath));
+    if (!QFileInfo::exists(embedModelPath))
+        return failResult(QStringLiteral(
+            "UniRig embed model not available at '%1' — connect to the "
+            "internet to download it on first use.").arg(embedModelPath));
 
     const int up = std::clamp(opts.upAxis, 0, 2);
 
@@ -520,8 +545,27 @@ UniRigPredictor::Result UniRigPredictor::predict(
 
         Ort::Session encoder = openSession(encoderModelPath);
         Ort::Session decoder = openSession(decoderModelPath);
+        Ort::Session embed   = openSession(embedModelPath);
         Ort::AllocatorWithDefaultOptions alloc;
         Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+        // embed.onnx: input_ids[1,S] (int64) -> token_embeds[1,S,hidden]. Turns
+        // the seed tokens + each generated token into the inputs_embeds the
+        // decoder consumes (the exported decoder takes embeddings, not ids —
+        // UniRig conditions the LM by prepending the encoder latents as embeds).
+        auto embedTokens = [&](const std::vector<int64_t>& ids) -> std::vector<float> {
+            const int64_t shp[2] = {1, static_cast<int64_t>(ids.size())};
+            Ort::Value in = Ort::Value::CreateTensor<int64_t>(
+                mem, const_cast<int64_t*>(ids.data()), ids.size(), shp, 2);
+            auto inName  = embed.GetInputNameAllocated(0, alloc);
+            auto outName = embed.GetOutputNameAllocated(0, alloc);
+            const char* inN[]  = { inName.get() };
+            const char* outN[] = { outName.get() };
+            auto out = embed.Run(Ort::RunOptions{nullptr}, inN, &in, 1, outN, 1);
+            const float* d = out[0].GetTensorData<float>();
+            const size_t cnt = (size_t)out[0].GetTensorTypeAndShapeInfo().GetElementCount();
+            return std::vector<float>(d, d + cnt);
+        };
 
         // =====================================================================
         // (2) ENCODER: pc[1,N,3] + feats[1,N,3] (normals) → latents prefix.
@@ -661,10 +705,8 @@ UniRigPredictor::Result UniRigPredictor::predict(
         if (embedsInIdx < 0)
             return failResult(QStringLiteral(
                 "UniRig: decoder lacks an inputs_embeds slot for the latent prefix."));
-        if (idsInIdx < 0)
-            return failResult(QStringLiteral(
-                "UniRig: decoder export must expose an 'input_ids' slot for the "
-                "autoregressive token loop (greedy port limitation)."));
+        (void)idsInIdx;   // decoder takes inputs_embeds only; tokens are embedded
+                          // via embed.onnx (no input_ids slot in the export).
 
         // ---- FSM VALIDITY MASK + transition. -----------------------------------
         // The tokenizer is a finite-state machine over the token stream. At each
@@ -801,11 +843,12 @@ UniRigPredictor::Result UniRigPredictor::predict(
         // or the ids slot. The KV-cache past tensors are appended automatically
         // and refreshed from the present outputs. Returns the step's outputs
         // (valid until the NEXT call, since the cache is deep-copied out here).
-        auto stepDecoder = [&](Ort::Value inputVal, bool isEmbeds) -> std::vector<Ort::Value> {
+        // Always feeds inputs_embeds (the only non-cache decoder input).
+        auto stepDecoder = [&](Ort::Value embedsVal) -> std::vector<Ort::Value> {
             std::vector<const char*> inN;
             std::vector<Ort::Value>  inV;
-            inN.push_back(decInNames[isEmbeds ? embedsInIdx : idsInIdx].c_str());
-            inV.push_back(std::move(inputVal));
+            inN.push_back(decInNames[embedsInIdx].c_str());
+            inV.push_back(std::move(embedsVal));
             for (size_t k = 0; k < pastInIdx.size(); ++k) {
                 inN.push_back(decInNames[pastInIdx[k]].c_str());
                 inV.push_back(std::move(kvCache[k]));
@@ -833,76 +876,76 @@ UniRigPredictor::Result UniRigPredictor::predict(
             return outVals;
         };
 
-        // ---- STEP 0: latent prefix as inputs_embeds. ---------------------------
-        const int64_t embShape[3] = {1, numLatents, hidden};
-        Ort::Value prefixEmb = Ort::Value::CreateTensor<float>(
-            mem, latents.data(), latents.size(), embShape, 3);
-        (void)stepDecoder(std::move(prefixEmb), /*isEmbeds=*/true);
-
-        // ---- TOKEN LOOP. -------------------------------------------------------
-        // Seed the stream with BOS(257), then greedily decode token-by-token,
-        // feeding each emitted id through input_ids and masking the next logits
-        // to the FSM's valid set before argmax. Stop at EOS or kMaxNewTokens.
-        std::vector<int> tokens;          // decoded id stream (excludes the prefix)
-        tokens.reserve(kMaxNewTokens + 2);
-        tokens.push_back(kTokBos);
-        phase = Phase::AfterBos;
-        coordsRemaining = 0; inBranch = false; haveAnyJoint = false;
-
-        int lastTok = kTokBos;
-        for (int gen = 0; gen < kMaxNewTokens; ++gen) {
-            // Feed the LAST emitted token id (shape [1,1]).
-            int64_t idBuf[1] = { static_cast<int64_t>(lastTok) };
-            const int64_t idShape[2] = {1, 1};
-            Ort::Value idVal = Ort::Value::CreateTensor<int64_t>(
-                mem, idBuf, 1, idShape, 2);
-            std::vector<Ort::Value> outVals = stepDecoder(std::move(idVal), /*isEmbeds=*/false);
-
-            // Pull logits — the float output whose last dim == kVocabSize. Take
-            // the LAST sequence position's row [vocab].
-            const float* logits = nullptr;
-            int64_t vocab = 0, seqT = 0;
+        // Pull the LAST-position logits row [vocab] from a decoder step's outputs.
+        auto lastLogitsRow = [&](std::vector<Ort::Value>& outVals,
+                                 const float** outRow) -> bool {
             for (size_t i = 0; i < outVals.size(); ++i) {
                 if (!outVals[i].IsTensor()) continue;
                 auto info = outVals[i].GetTensorTypeAndShapeInfo();
                 if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) continue;
                 auto shp = info.GetShape();
                 if (!shp.empty() && shp.back() == kVocabSize) {
-                    vocab  = shp.back();
-                    seqT   = (shp.size() >= 2) ? shp[shp.size()-2] : 1;
-                    logits = outVals[i].GetTensorData<float>();
-                    break;
+                    const int64_t seqT = (shp.size() >= 2) ? shp[shp.size()-2] : 1;
+                    const float* logits = outVals[i].GetTensorData<float>();
+                    *outRow = logits + static_cast<size_t>(seqT - 1) * kVocabSize;
+                    return true;
                 }
             }
-            if (!logits || vocab != kVocabSize)
+            return false;
+        };
+
+        // ---- STEP 0: seed = [latents ; embed([bos, cls=articulation-xl])]. -----
+        // UniRigAR.generate prepends the encoder latents to the embedded start
+        // tokens, runs the LM, and decodes from the last position. We replicate
+        // that: build the seed inputs_embeds, run once, and read its last row to
+        // pick the first generated token.
+        std::vector<int> tokens;          // decoded id stream (incl. the seed)
+        tokens.reserve(kMaxNewTokens + 4);
+        tokens.push_back(kTokBos);
+        tokens.push_back(kClsArticulationXL);
+        phase = Phase::AfterBos;
+        coordsRemaining = 0; inBranch = false; haveAnyJoint = false;
+        advanceFsm(kClsArticulationXL);   // bos is implicit; advance past cls → AfterCls
+
+        const std::vector<float> seedTokEmb =
+            embedTokens({ kTokBos, (int64_t)kClsArticulationXL });   // [1,2,hidden]
+        std::vector<float> seed = latents;                            // copy [L*hidden]
+        seed.insert(seed.end(), seedTokEmb.begin(), seedTokEmb.end());
+        const int64_t seedLen = numLatents + 2;
+        const int64_t seedShape[3] = {1, seedLen, hidden};
+        std::vector<Ort::Value> outVals =
+            stepDecoder(Ort::Value::CreateTensor<float>(
+                mem, seed.data(), seed.size(), seedShape, 3));
+
+        // ---- TOKEN LOOP (constrained greedy, KV-cached). -----------------------
+        for (int gen = 0; gen < kMaxNewTokens; ++gen) {
+            const float* row = nullptr;
+            if (!lastLogitsRow(outVals, &row))
                 return failResult(QStringLiteral(
                     "UniRig: decoder produced no [.,vocab=267] logits output."));
 
-            const float* row = logits + static_cast<size_t>(seqT - 1) * vocab;
-
-            // Build the FSM validity mask for the CURRENT state, then argmax over
-            // the valid ids only (constrained greedy decode).
             std::vector<char> valid;
             buildValidMask(valid);
             int best = -1; float bestLogit = -std::numeric_limits<float>::infinity();
             for (int t = 0; t < kVocabSize; ++t) {
-                if (!valid[t]) continue;
-                if (row[t] > bestLogit) { bestLogit = row[t]; best = t; }
+                if (valid[t] && row[t] > bestLogit) { bestLogit = row[t]; best = t; }
             }
             if (best < 0) {
-                // Mask empty — terminate gracefully at a boundary if we have
-                // joints, else error.
                 if (haveAnyJoint) { tokens.push_back(kTokEos); break; }
                 return failResult(QStringLiteral(
                     "UniRig: constrained decode reached a dead state."));
             }
-
             tokens.push_back(best);
             if (best == kTokEos) break;
             if (!advanceFsm(best))
                 return failResult(QStringLiteral(
                     "UniRig: decoder emitted a token the FSM rejected."));
-            lastTok = best;
+            // Embed the just-emitted token and step the decoder for the next one.
+            const std::vector<float> te = embedTokens({ (int64_t)best });  // [1,1,hidden]
+            const int64_t stepShape[3] = {1, 1, hidden};
+            std::vector<float> teBuf = te;   // own the storage across the call
+            outVals = stepDecoder(Ort::Value::CreateTensor<float>(
+                mem, teBuf.data(), teBuf.size(), stepShape, 3));
         }
 
         // =====================================================================

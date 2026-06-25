@@ -84,21 +84,26 @@ public:
     // (AppData/ai_models/unirig/encoder.onnx). Same per-user cache convention
     // as the #404 PBR models. modelPath() is kept as an alias of the encoder
     // path so callers written against the single-path RigNet API still link.
-    static QString modelPath();          // == encoderModelPath()
+    // UniRig's exported skeleton stage is THREE ONNX files (verified against the
+    // VAST-AI/UniRig checkpoint): the Michelangelo encoder, the OPT-350m decoder
+    // (inputs_embeds + KV-cache), and a token-embedding lookup the decode loop
+    // uses to embed each generated token (the decoder takes embeddings, not ids).
+    static QString modelPath();          // == encoderModelPath() (legacy alias)
     static QString encoderModelPath();
     static QString decoderModelPath();   // AppData/ai_models/unirig/decoder.onnx
+    static QString embedModelPath();     // AppData/ai_models/unirig/embed.onnx
 
-    // Ensure BOTH models exist on disk, downloading whichever is missing on
+    // Ensure ALL THREE models exist on disk, downloading whichever is missing on
     // first use (blocks via a local event loop, like
     // AIAssistManager::ensureModelBlocking). Returns the encoder path on
-    // success (BOTH present), or empty when offline / disabled / a download
+    // success (all present), or empty when offline / disabled / a download
     // failed. Honours QTMESH_UNIRIG_NO_DOWNLOAD (tests/offline) and the
     // base-URL override QTMESH_UNIRIG_MODEL_BASE_URL / QSettings
     // ai/unirigModelBaseUrl.
     static QString ensureModelBlocking();
 
-    // Run UniRig against the encoder + decoder .onnx files. `positions` is
-    // tightly packed xyz (3 floats/vertex); `indices` is triangle vertex
+    // Run UniRig against the encoder + decoder + embed .onnx files. `positions`
+    // is tightly packed xyz (3 floats/vertex); `indices` is triangle vertex
     // indices (3/face). Returns predicted joints in mesh-local space, or
     // ok=false with a reason (missing/failed model, degenerate mesh,
     // ONNX-disabled build) so the caller can fall back. Never throws.
@@ -106,6 +111,7 @@ public:
                           const uint32_t* indices, int indexCount,
                           const QString& encoderModelPath,
                           const QString& decoderModelPath,
+                          const QString& embedModelPath,
                           const Options& opts = {});
 
     // ---- Pure-data tokenizer helpers (no ONNX / no Ogre — unit-testable) ----

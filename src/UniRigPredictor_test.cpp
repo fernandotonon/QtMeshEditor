@@ -351,7 +351,8 @@ TEST(UniRigPredictor, MissingModelFailsGracefully)
         v.data(), static_cast<int>(v.size() / 3),
         idx.data(), static_cast<int>(idx.size()),
         QStringLiteral("/nonexistent/encoder.onnx"),
-        QStringLiteral("/nonexistent/decoder.onnx"));
+        QStringLiteral("/nonexistent/decoder.onnx"),
+        QStringLiteral("/nonexistent/embed.onnx"));
     EXPECT_FALSE(r.ok);
     EXPECT_FALSE(r.error.isEmpty());   // a reason AutoRig can log on fallback
     EXPECT_TRUE(r.joints.empty());
@@ -363,7 +364,8 @@ TEST(UniRigPredictor, TooFewVerticesFails)
     const auto r = UniRigPredictor::predict(
         v.data(), 2, nullptr, 0,
         QStringLiteral("/nonexistent/encoder.onnx"),
-        QStringLiteral("/nonexistent/decoder.onnx"));
+        QStringLiteral("/nonexistent/decoder.onnx"),
+        QStringLiteral("/nonexistent/embed.onnx"));
     EXPECT_FALSE(r.ok);
     EXPECT_FALSE(r.error.isEmpty());
 }
@@ -373,7 +375,8 @@ TEST(UniRigPredictor, NullPositionsFails)
     const auto r = UniRigPredictor::predict(
         nullptr, 100, nullptr, 0,
         QStringLiteral("/nonexistent/encoder.onnx"),
-        QStringLiteral("/nonexistent/decoder.onnx"));
+        QStringLiteral("/nonexistent/decoder.onnx"),
+        QStringLiteral("/nonexistent/embed.onnx"));
     EXPECT_FALSE(r.ok);
 }
 
