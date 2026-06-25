@@ -50,6 +50,10 @@ class PropertiesPanelController : public QObject
 
     // Animation
     Q_PROPERTY(bool hasAnimations READ hasAnimations NOTIFY selectionChanged)
+    // Reactive so the Skeleton section binding re-evaluates on selection /
+    // rig changes (was a Q_INVOKABLE, so QML read it once and went stale —
+    // leaving an empty Skeleton group on a not-yet-rigged mesh).
+    Q_PROPERTY(bool hasSkeletonSelection READ hasSkeletonSelection NOTIFY selectionChanged)
     Q_PROPERTY(bool playing READ isPlaying WRITE setPlaying NOTIFY playingChanged)
 
     // Pivot mode
@@ -224,8 +228,9 @@ public:
     // with no animation clips.
     Q_INVOKABLE QVariantList skeletonData() const;
     /// True when the first resolved selection has a skeleton. Drives the
-    /// "Skeleton" section's visibility.
-    Q_INVOKABLE bool hasSkeletonSelection() const;
+    /// "Skeleton" section's visibility. Exposed as a NOTIFY'd Q_PROPERTY above
+    /// so the QML binding stays reactive across selection / rig changes.
+    bool hasSkeletonSelection() const;
 
     // Animation
     Q_INVOKABLE QVariantList animationData() const;  // grouped per entity
@@ -277,6 +282,12 @@ public slots:
     void onTransformChanged();
     void onSceneChanged();
     void refreshTheme();
+
+    /// Re-emit selectionChanged so selection-derived bindings (e.g. the
+    /// Skeleton section's hasSkeletonSelection) re-evaluate when the SELECTION
+    /// itself didn't change but a property of it did — notably after a rig/unrig
+    /// flips the entity's skeleton state. Called by AutoRigController.
+    void notifySelectionMetadataChanged() { emit selectionChanged(); }
 
 signals:
     void transformChanged();
