@@ -148,13 +148,14 @@ bool AutoRigController::hasRiggableSelection() const
 
 QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
                                                const QString& upAxis,
-                                               bool alsoSkin)
+                                               bool alsoSkin,
+                                               const QString& algo)
 {
     QVariantMap result;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-        QStringLiteral("Auto-rig requested (%1, up=%2%3)")
-            .arg(templateName, upAxis,
+        QStringLiteral("Auto-rig requested (%1, algo=%2, up=%3%4)")
+            .arg(templateName, algo, upAxis,
                  alsoSkin ? QStringLiteral(", +skin") : QString()));
 
     auto* sel = SelectionSet::getSingleton();
@@ -177,15 +178,17 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
 
     AutoRig::Options opts;
     opts.tmpl = AutoRig::templateFromString(templateName);
+    opts.algorithm = AutoRig::algorithmFromString(algo);
     const QString ax = upAxis.trimmed().toLower();
     if (ax == QStringLiteral("x")) opts.upAxis = 0;
     else if (ax == QStringLiteral("z")) opts.upAxis = 2;
     else opts.upAxis = 1;   // y (default)
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.auto_rig"),
-        QStringLiteral("UI auto-rig entity=%1 template=%2")
+        QStringLiteral("UI auto-rig entity=%1 template=%2 algo=%3")
             .arg(QString::fromStdString(entity->getName()),
-                 AutoRig::templateToString(opts.tmpl)));
+                 AutoRig::templateToString(opts.tmpl),
+                 AutoRig::algorithmToString(opts.algorithm)));
 
     // Pre-check here so a non-static mesh fails cleanly WITHOUT leaving a
     // no-op entry on the undo stack (QUndoStack::push runs redo()).
@@ -229,10 +232,12 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
     result["meshName"]         = report.meshName;
     result["skeletonName"]     = report.skeletonName;
     result["template"]         = report.templateName;
+    result["algorithm"]        = AutoRig::algorithmToString(report.algorithmUsed);
     result["boneCount"]        = report.boneCount;
     result["verticesSampled"]  = report.verticesSampled;
     result["jointsRecentered"] = report.jointsRecentered;
     result["skinned"]          = skinned;
+    if (!report.fallbackReason.isEmpty()) result["fallbackReason"] = report.fallbackReason;
     if (!report.error.isEmpty()) result["error"] = report.error;
 
     if (report.applied) emit rigged(result);

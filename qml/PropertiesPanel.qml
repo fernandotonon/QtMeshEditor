@@ -24,10 +24,12 @@ Rectangle {
     // (replaces the old modal AutoRigDialog) ----
     property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic"]
     property int    rigTemplateIndex: 0
+    property var    rigAlgos: ["pinocchio", "rignet"]
+    property int    rigAlgoIndex: 0             // pinocchio (offline) default
     property var    rigUpAxes: ["x", "y", "z"]
     property int    rigUpAxisIndex: 1           // +Y default
     property bool   rigAlsoSkin: true
-    property bool   rigShowAdvanced: false      // template / up-axis pickers
+    property bool   rigShowAdvanced: false      // up-axis picker
     property string rigStatus: ""
     property bool   rigStatusError: false
 
@@ -36,12 +38,15 @@ Rectangle {
         const r = AutoRigController.autoRigSelected(
             root.rigTemplates[root.rigTemplateIndex],
             root.rigUpAxes[root.rigUpAxisIndex],
-            root.rigAlsoSkin)
+            root.rigAlsoSkin,
+            root.rigAlgos[root.rigAlgoIndex])
         if (r && r.applied) {
-            root.rigStatus = "Rigged: " + r.boneCount + " bones, "
+            root.rigStatus = "Rigged (" + (r.algorithm ? r.algorithm : "pinocchio")
+                + "): " + r.boneCount + " bones, "
                 + r.verticesSampled + " verts, "
                 + r.jointsRecentered + " recentered"
                 + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+                + (r.fallbackReason ? "\n" + r.fallbackReason : "")
             root.rigStatusError = false
         } else {
             root.rigStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
@@ -1546,7 +1551,36 @@ Rectangle {
                 spacing: 8
                 visible: !rigCol.marking
 
-                // Skeleton type — a primary choice, always visible.
+                // Skeleton algorithm — Pinocchio (native template, offline) or
+                // RigNet (ML, ONNX; falls back to the template when unavailable).
+                Text {
+                    text: "Algorithm"
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.8
+                    font.pixelSize: 10
+                }
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    RigSegments {
+                        options: root.rigAlgos
+                        index: root.rigAlgoIndex
+                        onPicked: function(i) { root.rigAlgoIndex = i }
+                    }
+                }
+                Text {
+                    width: parent.width
+                    visible: root.rigAlgos[root.rigAlgoIndex] === "rignet"
+                    wrapMode: Text.Wrap
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.6
+                    font.pixelSize: 9
+                    text: "RigNet predicts the skeleton from geometry (ML). Needs an "
+                        + "ONNX build + first-run model download; falls back to the "
+                        + "template below when unavailable."
+                }
+
+                // Skeleton type — used by Pinocchio (and as the RigNet fallback).
                 Text {
                     text: "Skeleton type"
                     color: PropertiesPanelController.textColor

@@ -61,6 +61,21 @@ public:
         Generic      // a simple 3-joint spine chain (fallback for anything)
     };
 
+    // Skeleton-prediction backend (issue #408).
+    //   Pinocchio — the native template-embedding heuristic (#407). Default:
+    //               zero deps, fully offline, deterministic.
+    //   RigNet    — ML model (RigNet, 2020) via ONNX Runtime (#404 infra).
+    //               Predicts joints + bone connectivity from the mesh graph,
+    //               handling arbitrary topology / non-humanoid shapes better
+    //               than a fixed template. Needs ENABLE_ONNX + a first-run
+    //               model download; FALLS BACK to Pinocchio when the model or
+    //               ONNX runtime is unavailable (the report records which
+    //               backend actually ran + the fallback reason).
+    enum class Algorithm {
+        Pinocchio,
+        RigNet
+    };
+
     // One joint of a template / placed skeleton.
     struct Joint {
         QString name;
@@ -82,6 +97,8 @@ public:
         // GCC rejects: "default member initializer for 'tmpl' needed ...").
         Options();
         Template tmpl = Template::Humanoid;
+        // Skeleton-prediction backend. Default Pinocchio (offline, deterministic).
+        Algorithm algorithm = Algorithm::Pinocchio;
         // Up axis: 0=X, 1=Y, 2=Z. Default +Y (the in-app / glTF / FBX
         // convention after import normalisation).
         int upAxis = 1;
@@ -129,6 +146,12 @@ public:
         int     verticesSampled   = 0;
         int     jointsRecentered  = 0;
         int     markersApplied    = 0;     // how many placed markers drove the fit
+        // Which backend actually produced the skeleton (RigNet falls back to
+        // Pinocchio when its model / ONNX runtime is unavailable).
+        Algorithm algorithmUsed   = Algorithm::Pinocchio;
+        // Set when the requested algorithm wasn't usable and we fell back
+        // (empty when the requested algorithm ran). Surfaced to the user.
+        QString  fallbackReason;
         bool     applied          = false;
         QString  error;
     };
@@ -192,6 +215,8 @@ public:
 
     static QString    templateToString(Template t);
     static Template   templateFromString(const QString& s);
+    static QString    algorithmToString(Algorithm a);   // "pinocchio" | "rignet"
+    static Algorithm  algorithmFromString(const QString& s);  // unknown → Pinocchio
     static QJsonObject reportToJson(const Report& r);
     static QString     reportToText(const Report& r);
 };

@@ -48,13 +48,16 @@ public:
     bool busy() const { return m_busy; }
 
     /// Auto-rig the first resolved selected entity with `templateName`
-    /// (humanoid / biped / quadruped / generic). When `alsoSkin` is true,
+    /// (humanoid / biped / quadruped / generic) using `algo`
+    /// ('pinocchio' default, or 'rignet' — falls back to pinocchio when the
+    /// RigNet model / ONNX runtime is unavailable). When `alsoSkin` is true,
     /// chains SkinWeights::computeAndApply so the mesh deforms immediately.
     /// Returns a QVariantMap mirroring AutoRig::Report (+ a `skinned` bool).
     /// Emits `rigged(report)` on success or `error(msg)` on failure.
     Q_INVOKABLE QVariantMap autoRigSelected(const QString& templateName,
                                             const QString& upAxis,
-                                            bool alsoSkin);
+                                            bool alsoSkin,
+                                            const QString& algo = QStringLiteral("pinocchio"));
 
     // ---- Marker placement (Mixamo-style) -------------------------------
     bool markerMode() const { return m_markerMode; }

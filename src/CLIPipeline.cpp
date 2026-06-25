@@ -8169,8 +8169,9 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
 int CLIPipeline::cmdRig(int argc, char* argv[])
 {
     // Parse: rig <file> [--skeleton humanoid|biped|quadruped|generic]
-    //        [--skin] [--up-axis x|y|z] -o <out> [--json]
+    //        [--algo pinocchio|rignet] [--skin] [--up-axis x|y|z] -o <out> [--json]
     QString inputPath, outputPath, templateName = QStringLiteral("humanoid");
+    QString algoName = QStringLiteral("pinocchio");
     bool jsonOutput = false;
     bool alsoSkin = false;
     int upAxis = 1;   // +Y default
@@ -8185,6 +8186,15 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
         }
         if ((arg == "--skeleton" || arg == "--template") && i + 1 < argc) {
             templateName = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--algo" && i + 1 < argc) {
+            algoName = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (algoName != "pinocchio" && algoName != "rignet") {
+                err() << "Error: --algo must be 'pinocchio' or 'rignet' (got '"
+                      << algoName << "')." << Qt::endl;
+                return 2;
+            }
+            continue;
         }
         if (arg == "--up-axis" && i + 1 < argc) {
             const QString a = QString::fromLocal8Bit(argv[++i]).toLower();
@@ -8202,7 +8212,7 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
         err() << "Usage: qtmesh rig <file> [--skeleton humanoid|biped|quadruped|generic] "
-                 "[--skin] [--up-axis x|y|z] -o <out> [--json]" << Qt::endl;
+                 "[--algo pinocchio|rignet] [--skin] [--up-axis x|y|z] -o <out> [--json]" << Qt::endl;
         return 2;
     }
     if (outputPath.isEmpty()) {
@@ -8217,8 +8227,8 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
     if (!initOgreHeadless()) return 1;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.auto_rig"),
-        QString("rig .%1 template=%2 skin=%3")
-            .arg(fi.suffix(), templateName).arg(alsoSkin));
+        QString("rig .%1 template=%2 algo=%3 skin=%4")
+            .arg(fi.suffix(), templateName, algoName).arg(alsoSkin));
     SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
         QString("Importing %1").arg(fi.absoluteFilePath()));
 
@@ -8240,10 +8250,15 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
     Ogre::Entity* entity = meshEntities.first();
 
     AutoRig::Options opts;
-    opts.tmpl   = AutoRig::templateFromString(templateName);
-    opts.upAxis = upAxis;
+    opts.tmpl      = AutoRig::templateFromString(templateName);
+    opts.algorithm = AutoRig::algorithmFromString(algoName);
+    opts.upAxis    = upAxis;
 
     AutoRig::Report report = AutoRig::rigEntity(entity, opts);
+    // Surface a RigNet→Pinocchio fallback so the user knows why the result is
+    // template-based (e.g. offline / model not yet hosted / non-ONNX build).
+    if (!report.fallbackReason.isEmpty())
+        err() << "Note: " << report.fallbackReason << Qt::endl;
     if (!report.applied) {
         err() << "Error: auto-rig failed — " << report.error << Qt::endl;
         return 1;

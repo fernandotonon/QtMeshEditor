@@ -1,8 +1,10 @@
 #include "AutoRig.h"
+#include "RigNetPredictor.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 #include <iterator>
 #include <string>
@@ -544,6 +546,36 @@ bool appendPositions(Ogre::VertexData* vd, std::vector<float>& out)
     return true;
 }
 
+// Append a submesh's triangle indices (offset by `vertexBase`, the running
+// shared/per-submesh vertex offset) so RigNet sees one combined index buffer
+// over the same vertex order appendPositions produced. Only used for the
+// RigNet path. Returns the number of vertices this submesh contributed (to
+// advance vertexBase). Shared-vertex submeshes are still emitted but reference
+// the shared block at offset 0.
+int appendIndices(Ogre::SubMesh* sub, Ogre::Mesh* mesh,
+                  uint32_t sharedBase, uint32_t ownBase,
+                  std::vector<uint32_t>& out)
+{
+    if (!sub || !sub->indexData || !sub->indexData->indexBuffer) return 0;
+    Ogre::IndexData* id = sub->indexData;
+    const uint32_t base = sub->useSharedVertices ? sharedBase : ownBase;
+    auto ibuf = id->indexBuffer;
+    const bool is32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
+    auto* p = static_cast<unsigned char*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+    if (!p) return 0;
+    const auto* i32 = reinterpret_cast<const uint32_t*>(p);
+    const auto* i16 = reinterpret_cast<const uint16_t*>(p);
+    const size_t n = id->indexCount;
+    out.reserve(out.size() + n);
+    for (size_t k = 0; k + 2 < n; k += 3) {
+        out.push_back(base + (is32 ? i32[k]   : i16[k]));
+        out.push_back(base + (is32 ? i32[k+1] : i16[k+1]));
+        out.push_back(base + (is32 ? i32[k+2] : i16[k+2]));
+    }
+    ibuf->unlock();
+    return 0;
+}
+
 } // namespace
 
 AutoRig::Report AutoRig::rigEntity(Ogre::Entity* entity, const Options& opts)
@@ -572,13 +604,26 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
         return report;
     }
 
-    // Gather all vertex positions (shared + per-submesh).
+    // Gather all vertex positions (shared + per-submesh). The vertex order is
+    // shared-block first, then each non-shared submesh — appendIndices uses the
+    // same offsets so the RigNet index buffer matches.
     std::vector<float> verts;
-    if (mesh->sharedVertexData) appendPositions(mesh->sharedVertexData, verts);
+    const uint32_t sharedBase = 0;
+    uint32_t ownBase = 0;
+    if (mesh->sharedVertexData) {
+        appendPositions(mesh->sharedVertexData, verts);
+        ownBase = static_cast<uint32_t>(mesh->sharedVertexData->vertexCount);
+    }
+    // Per-submesh vertex offsets, captured before we know whether RigNet needs
+    // them (cheap). offsets[si] = first vertex index of submesh si's own block.
+    std::vector<uint32_t> ownOffset(mesh->getNumSubMeshes(), 0);
     for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
         Ogre::SubMesh* sub = mesh->getSubMesh(si);
-        if (sub && !sub->useSharedVertices && sub->vertexData)
+        if (sub && !sub->useSharedVertices && sub->vertexData) {
+            ownOffset[si] = ownBase;
             appendPositions(sub->vertexData, verts);
+            ownBase += static_cast<uint32_t>(sub->vertexData->vertexCount);
+        }
     }
     const int vcount = static_cast<int>(verts.size() / 3);
     if (vcount == 0) {
@@ -587,14 +632,63 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
     }
     report.verticesSampled = vcount;
 
-    // Fit the template — marker-driven when markers are supplied, else the
-    // plain proportional fit.
-    int recentered = 0, markersApplied = 0;
     const std::vector<Joint> tmpl = templateJoints(opts.tmpl);
-    const std::vector<Joint> placed = markers.empty()
-        ? fitTemplate(tmpl, verts.data(), vcount, opts, &recentered)
-        : fitTemplateWithMarkers(tmpl, verts.data(), vcount, markers, opts,
-                                 &recentered, &markersApplied);
+    int recentered = 0, markersApplied = 0;
+    std::vector<Joint> placed;
+    report.algorithmUsed = Algorithm::Pinocchio;   // updated to RigNet on success
+
+    // --- RigNet (#408): ML skeleton prediction, with graceful fallback ------
+    // Markers are a Pinocchio/template concept, so RigNet only runs for the
+    // plain (marker-less) rig; a marker-driven call always uses the template.
+    bool rigNetUsed = false;
+    if (opts.algorithm == Algorithm::RigNet && markers.empty()) {
+        QString reason;
+        if (!RigNetPredictor::isAvailable()) {
+            reason = QStringLiteral("RigNet needs an ONNX-enabled build");
+        } else {
+            const QString model = RigNetPredictor::ensureModelBlocking();
+            if (model.isEmpty()) {
+                reason = QStringLiteral("RigNet model unavailable (offline or not yet hosted)");
+            } else {
+                // Build the combined index buffer over the appendPositions order.
+                std::vector<uint32_t> indices;
+                for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si)
+                    appendIndices(mesh->getSubMesh(si), mesh.get(),
+                                  sharedBase, ownOffset[si], indices);
+                RigNetPredictor::Options rnOpts;
+                rnOpts.upAxis = opts.upAxis;
+                const auto rn = RigNetPredictor::predict(
+                    verts.data(), vcount,
+                    indices.empty() ? nullptr : indices.data(),
+                    static_cast<int>(indices.size()), model, rnOpts);
+                if (rn.ok && rn.joints.size() >= 2) {
+                    placed.reserve(rn.joints.size());
+                    for (const auto& j : rn.joints) {
+                        Joint pj; pj.name = j.name; pj.parent = j.parent;
+                        pj.pos = j.pos; pj.recenter = false;
+                        placed.push_back(std::move(pj));
+                    }
+                    report.algorithmUsed = Algorithm::RigNet;
+                    rigNetUsed = true;
+                } else {
+                    reason = rn.error.isEmpty()
+                        ? QStringLiteral("RigNet prediction returned no usable skeleton")
+                        : rn.error;
+                }
+            }
+        }
+        if (!rigNetUsed)
+            report.fallbackReason =
+                QStringLiteral("%1 — used the native template rig instead.").arg(reason);
+    }
+
+    // --- Pinocchio / template fit (default, and the RigNet fallback) --------
+    if (!rigNetUsed) {
+        placed = markers.empty()
+            ? fitTemplate(tmpl, verts.data(), vcount, opts, &recentered)
+            : fitTemplateWithMarkers(tmpl, verts.data(), vcount, markers, opts,
+                                     &recentered, &markersApplied);
+    }
     report.jointsRecentered = recentered;
     report.markersApplied   = markersApplied;
 
@@ -736,6 +830,23 @@ AutoRig::Template AutoRig::templateFromString(const QString& s)
     return Template::Humanoid;   // default
 }
 
+QString AutoRig::algorithmToString(Algorithm a)
+{
+    switch (a) {
+        case Algorithm::Pinocchio: return QStringLiteral("pinocchio");
+        case Algorithm::RigNet:    return QStringLiteral("rignet");
+    }
+    return QStringLiteral("pinocchio");
+}
+
+AutoRig::Algorithm AutoRig::algorithmFromString(const QString& s)
+{
+    const QString l = s.trimmed().toLower();
+    if (l == "rignet")    return Algorithm::RigNet;
+    if (l == "pinocchio" || l == "native" || l == "template") return Algorithm::Pinocchio;
+    return Algorithm::Pinocchio;   // default / unknown → offline-reliable native
+}
+
 QJsonObject AutoRig::reportToJson(const Report& r)
 {
     QJsonObject o;
@@ -743,9 +854,11 @@ QJsonObject AutoRig::reportToJson(const Report& r)
     o["meshName"]         = r.meshName;
     o["skeletonName"]     = r.skeletonName;
     o["template"]         = r.templateName;
+    o["algorithm"]        = algorithmToString(r.algorithmUsed);
     o["boneCount"]        = r.boneCount;
     o["verticesSampled"]  = r.verticesSampled;
     o["jointsRecentered"] = r.jointsRecentered;
+    if (!r.fallbackReason.isEmpty()) o["fallbackReason"] = r.fallbackReason;
     if (!r.error.isEmpty()) o["error"] = r.error;
     return o;
 }
@@ -755,9 +868,12 @@ QString AutoRig::reportToText(const Report& r)
     if (!r.applied)
         return QStringLiteral("Auto-rig failed: %1\n")
             .arg(r.error.isEmpty() ? QStringLiteral("unknown error") : r.error);
-    return QStringLiteral(
-        "Auto-rigged %1 with the '%2' template.\n"
-        "  bones: %3\n  vertices sampled: %4\n  joints recentered: %5\n")
-        .arg(r.meshName, r.templateName)
+    QString s = QStringLiteral(
+        "Auto-rigged %1 with the '%2' template (%3 backend).\n"
+        "  bones: %4\n  vertices sampled: %5\n  joints recentered: %6\n")
+        .arg(r.meshName, r.templateName, algorithmToString(r.algorithmUsed))
         .arg(r.boneCount).arg(r.verticesSampled).arg(r.jointsRecentered);
+    if (!r.fallbackReason.isEmpty())
+        s += QStringLiteral("  note: %1\n").arg(r.fallbackReason);
+    return s;
 }

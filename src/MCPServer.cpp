@@ -1683,6 +1683,14 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
             return makeErrorResult("Error: 'template' must be a string.");
         opts.tmpl = AutoRig::templateFromString(args["template"].toString());
     }
+    if (args.contains("algo")) {
+        if (!args["algo"].isString())
+            return makeErrorResult("Error: 'algo' must be a string.");
+        const QString a = args["algo"].toString().toLower();
+        if (a != "pinocchio" && a != "rignet")
+            return makeErrorResult("Error: 'algo' must be 'pinocchio' or 'rignet'.");
+        opts.algorithm = AutoRig::algorithmFromString(a);
+    }
     if (args.contains("up_axis")) {
         const QString a = args["up_axis"].toString().toLower();
         if (a == "x") opts.upAxis = 0;
@@ -1701,9 +1709,10 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
     if (!entity) return makeErrorResult("Selected entity is null.");
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.auto_rig"),
-        QStringLiteral("auto_rig entity=%1 template=%2 skin=%3")
+        QStringLiteral("auto_rig entity=%1 template=%2 algo=%3 skin=%4")
             .arg(QString::fromStdString(entity->getName()),
-                 AutoRig::templateToString(opts.tmpl))
+                 AutoRig::templateToString(opts.tmpl),
+                 AutoRig::algorithmToString(opts.algorithm))
             .arg(alsoSkin));
 
     // Validate output_path type up front (like 'skin'/'template') — a
@@ -6473,7 +6482,14 @@ QJsonArray MCPServer::buildToolsList()
         props["template"] = QJsonObject{{"type", "string"},
             {"description",
              "Skeleton template: 'humanoid' (19-bone, default), 'biped', "
-             "'quadruped', or 'generic' (3-joint spine fallback)."}};
+             "'quadruped', or 'generic' (3-joint spine fallback). Used by the "
+             "'pinocchio' algorithm (and as the 'rignet' fallback)."}};
+        props["algo"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Skeleton-prediction backend: 'pinocchio' (native template embedding, "
+             "offline, default) or 'rignet' (ML model via ONNX — better on arbitrary/"
+             "non-humanoid topology; needs an ONNX build + first-run model download, "
+             "and falls back to pinocchio when unavailable)."}};
         props["skin"] = QJsonObject{{"type", "boolean"},
             {"description",
              "When true, also compute + apply skin weights so the mesh deforms "
