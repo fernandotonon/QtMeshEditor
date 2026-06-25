@@ -84,8 +84,20 @@ def build_model(repo: str, ckpt: str):
     state = sd.get("state_dict", sd)
     cleaned = {(k[len("model."):] if k.startswith("model.") else k): v
                for k, v in state.items()}            # strip the LightningModule prefix
+    # strict=False is deliberate: the monolithic UniRig checkpoint carries
+    # modules we don't export for the skeleton stage (e.g. the PTv3 / skin
+    # heads), which legitimately show up as `unexpected`. But a MISSING key
+    # means a tensor the exported graphs DO need wasn't loaded — that would
+    # silently emit an ONNX model with random weights, so fail loudly on it.
     missing, unexpected = model.load_state_dict(cleaned, strict=False)
-    print(f"  ckpt loaded: {len(cleaned)} tensors; missing={len(missing)} unexpected={len(unexpected)}")
+    print(f"  ckpt loaded: {len(cleaned)} tensors; "
+          f"missing={len(missing)} unexpected={len(unexpected)}")
+    if missing:
+        preview = ", ".join(missing[:10])
+        raise RuntimeError(
+            f"checkpoint is missing {len(missing)} weight tensor(s) the export "
+            f"needs — refusing to export a model with uninitialised weights. "
+            f"First few: {preview}")
     model.eval()
     return model, tokenizer
 
@@ -93,11 +105,15 @@ def build_model(repo: str, ckpt: str):
 def export_encoder(model, out_dir):
     print("=== encoder (Michelangelo SAL + output_proj) ===")
     class Enc(nn.Module):
-        def __init__(s, m): super().__init__(); s.m = m
+        def __init__(s, m):
+            super().__init__()
+            s.m = m
+
         def forward(s, vertices, normals):
             return s.m.encode_mesh_cond(vertices=vertices, normals=normals)
     enc = Enc(model).eval()
-    v = torch.randn(1, 2048, 3); n = torch.randn(1, 2048, 3)
+    v = torch.randn(1, 2048, 3)
+    n = torch.randn(1, 2048, 3)
     with torch.no_grad():
         print("  encoder out:", tuple(enc(v, n).shape))
     torch.onnx.export(enc, (v, n), os.path.join(out_dir, "encoder.onnx"),
@@ -113,19 +129,24 @@ def export_decoder(model, out_dir):
     # plus a token-embedding lookup the C++ uses to embed generated tokens.
     print("=== decoder (OPT-350m, inputs_embeds + KV-cache) ===")
     from transformers.cache_utils import DynamicCache
-    lm = model.transformer.eval(); cfg = lm.config
+    lm = model.transformer.eval()
+    cfg = lm.config
     L, H = cfg.num_hidden_layers, cfg.num_attention_heads
     Dh = cfg.hidden_size // cfg.num_attention_heads
 
     class Step(nn.Module):
-        def __init__(s, lm): super().__init__(); s.lm = lm
+        def __init__(s, lm):
+            super().__init__()
+            s.lm = lm
+
         def forward(s, inputs_embeds, *past):
             pkv = DynamicCache.from_legacy_cache(
                 tuple((past[2*i], past[2*i+1]) for i in range(L))) if past else None
             out = s.lm(inputs_embeds=inputs_embeds, past_key_values=pkv,
                        use_cache=True, return_dict=True)
             flat = []
-            for (k, v) in out.past_key_values.to_legacy_cache(): flat += [k, v]
+            for (k, v) in out.past_key_values.to_legacy_cache():
+                flat += [k, v]
             return (out.logits, *flat)
 
     emb = torch.randn(1, 4, cfg.hidden_size)
@@ -134,8 +155,10 @@ def export_decoder(model, out_dir):
     out_names = ["logits"]        + sum(([f"present.{i}.key", f"present.{i}.value"] for i in range(L)), [])
     dyn = {"inputs_embeds": {1: "S"}, "logits": {1: "S"}}
     for i in range(L):
-        dyn[f"past.{i}.key"] = {2: "P"}; dyn[f"past.{i}.value"] = {2: "P"}
-        dyn[f"present.{i}.key"] = {2: "T"}; dyn[f"present.{i}.value"] = {2: "T"}
+        dyn[f"past.{i}.key"] = {2: "P"}
+        dyn[f"past.{i}.value"] = {2: "P"}
+        dyn[f"present.{i}.key"] = {2: "T"}
+        dyn[f"present.{i}.value"] = {2: "T"}
     with torch.no_grad():
         torch.onnx.export(Step(lm).eval(), (emb, *past0),
                           os.path.join(out_dir, "decoder.onnx"),
@@ -144,8 +167,12 @@ def export_decoder(model, out_dir):
     print("  wrote decoder.onnx")
 
     class Embed(nn.Module):
-        def __init__(s, lm): super().__init__(); s.e = lm.get_input_embeddings()
-        def forward(s, input_ids): return s.e(input_ids)
+        def __init__(s, lm):
+            super().__init__()
+            s.e = lm.get_input_embeddings()
+
+        def forward(s, input_ids):
+            return s.e(input_ids)
     with torch.no_grad():
         torch.onnx.export(Embed(lm).eval(), (torch.zeros(1, 1, dtype=torch.long),),
                           os.path.join(out_dir, "embed.onnx"),
