@@ -29,6 +29,8 @@
 #include <queue>
 #include <cmath>
 #include <algorithm>
+#include <unordered_map>
+#include <utility>
 
 UVEditorController* UVEditorController::s_instance = nullptr;
 
@@ -72,6 +74,8 @@ void UVEditorController::connectSignals()
     if (auto* edit = EditModeController::instance()) {
         connect(edit, &EditModeController::meshDataChanged, this, &UVEditorController::refresh);
         connect(edit, &EditModeController::editModeChanged, this, &UVEditorController::refresh);
+        connect(edit, &EditModeController::editSelectionChanged, this,
+                &UVEditorController::onEditSelectionChanged);
     }
 }
 
@@ -83,6 +87,534 @@ void UVEditorController::setUvChannel(int channel)
     m_uvChannel = channel;
     emit uvChannelChanged();
     rebuildMeshCache();
+}
+
+void UVEditorController::setSelectionMode(int mode)
+{
+    mode = std::max(0, std::min(mode, 2));
+    const auto next = static_cast<SelectionMode>(mode);
+    if (m_selectionMode == next)
+        return;
+    m_selectionMode = next;
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("UV editor selection mode: %1").arg(mode));
+    emit selectionModeChanged();
+}
+
+void UVEditorController::setSelectionSyncEnabled(bool on)
+{
+    if (m_selectionSyncEnabled == on)
+        return;
+    m_selectionSyncEnabled = on;
+    emit selectionSyncEnabledChanged();
+    if (on)
+        pullSelectionFromEdit();
+    notifyUvSelectionChanged();
+}
+
+void UVEditorController::clearUvSelection()
+{
+    if (m_selectedUvVerts.isEmpty() && m_selectedUvEdges.isEmpty() && m_selectedUvFaces.isEmpty())
+        return;
+    m_selectedUvVerts.clear();
+    m_selectedUvEdges.clear();
+    m_selectedUvFaces.clear();
+    notifyUvSelectionChanged();
+    if (m_selectionSyncEnabled && !m_syncInProgress)
+        pushSelectionToEdit();
+}
+
+void UVEditorController::notifyUvSelectionChanged()
+{
+    ++m_selectionRevision;
+    emit uvSelectionChanged();
+}
+
+namespace {
+
+constexpr float kUvEpsilon = 1e-5f;
+
+uint64_t packUvKey(float u, float v)
+{
+    const auto iu = static_cast<int64_t>(std::llround(static_cast<double>(u) / kUvEpsilon));
+    const auto iv = static_cast<int64_t>(std::llround(static_cast<double>(v) / kUvEpsilon));
+    return (static_cast<uint64_t>(static_cast<uint32_t>(iu)) << 32)
+           | static_cast<uint32_t>(iv);
+}
+
+bool pointInTriangle(double u, double v, float u0, float v0, float u1, float v1, float u2, float v2)
+{
+    const double dX = static_cast<double>(u) - static_cast<double>(u2);
+    const double dY = static_cast<double>(v) - static_cast<double>(v2);
+    const double dX21 = static_cast<double>(u2) - static_cast<double>(u1);
+    const double dY12 = static_cast<double>(v1) - static_cast<double>(v2);
+    const double D = dY12 * (static_cast<double>(u0) - static_cast<double>(u2))
+                     + dX21 * (static_cast<double>(v0) - static_cast<double>(v2));
+    if (std::abs(D) < 1e-12)
+        return false;
+    const double s = dY12 * dX + dX21 * dY;
+    const double t = (static_cast<double>(v2) - static_cast<double>(v0)) * dX
+                     + (static_cast<double>(u0) - static_cast<double>(u2)) * dY;
+    if (D < 0)
+        return s <= 0 && t <= 0 && s + t >= D;
+    return s >= 0 && t >= 0 && s + t <= D;
+}
+
+double distPointToSegmentSq(double u, double v, float u0, float v0, float u1, float v1)
+{
+    const double dx = static_cast<double>(u1) - static_cast<double>(u0);
+    const double dy = static_cast<double>(v1) - static_cast<double>(v0);
+    const double lenSq = dx * dx + dy * dy;
+    if (lenSq < 1e-18)
+        return (u - u0) * (u - u0) + (v - v0) * (v - v0);
+    double t = ((u - u0) * dx + (v - v0) * dy) / lenSq;
+    t = std::max(0.0, std::min(1.0, t));
+    const double px = u0 + t * dx;
+    const double py = v0 + t * dy;
+    const double ddx = u - px;
+    const double ddy = v - py;
+    return ddx * ddx + ddy * ddy;
+}
+
+bool segmentIntersectsRect(double u0, double v0, double u1, double v1,
+                           double minU, double minV, double maxU, double maxV)
+{
+    if ((u0 >= minU && u0 <= maxU && v0 >= minV && v0 <= maxV)
+        || (u1 >= minU && u1 <= maxU && v1 >= minV && v1 <= maxV))
+        return true;
+    const auto inside = [&](double u, double v) {
+        return u >= minU && u <= maxU && v >= minV && v <= maxV;
+    };
+    const double rectU[4] = {minU, maxU, maxU, minU};
+    const double rectV[4] = {minV, minV, maxV, maxV};
+    for (int i = 0; i < 4; ++i) {
+        const double ru0 = rectU[i];
+        const double rv0 = rectV[i];
+        const double ru1 = rectU[(i + 1) % 4];
+        const double rv1 = rectV[(i + 1) % 4];
+        const double d1x = u1 - u0;
+        const double d1y = v1 - v0;
+        const double d2x = ru1 - ru0;
+        const double d2y = rv1 - rv0;
+        const double denom = d1x * d2y - d1y * d2x;
+        if (std::abs(denom) < 1e-18)
+            continue;
+        const double t = ((ru0 - u0) * d2y - (rv0 - v0) * d2x) / denom;
+        const double s = ((ru0 - u0) * d1y - (rv0 - v0) * d1x) / denom;
+        if (t >= 0.0 && t <= 1.0 && s >= 0.0 && s <= 1.0)
+            return true;
+    }
+    return inside(u0, v0) || inside(u1, v1);
+}
+
+bool triangleTouchesRect(const float u[3], const float v[3],
+                         double minU, double minV, double maxU, double maxV)
+{
+    for (int c = 0; c < 3; ++c) {
+        if (u[c] >= minU && u[c] <= maxU && v[c] >= minV && v[c] <= maxV)
+            return true;
+    }
+    const double cx = (u[0] + u[1] + u[2]) / 3.0;
+    const double cy = (v[0] + v[1] + v[2]) / 3.0;
+    if (cx >= minU && cx <= maxU && cy >= minV && cy <= maxV)
+        return true;
+    for (int e = 0; e < 3; ++e) {
+        const int n = (e + 1) % 3;
+        if (segmentIntersectsRect(u[e], v[e], u[n], v[n], minU, minV, maxU, maxV))
+            return true;
+    }
+    return pointInTriangle((minU + maxU) * 0.5, (minV + maxV) * 0.5,
+                           u[0], v[0], u[1], v[1], u[2], v[2]);
+}
+
+class UnionFind {
+public:
+    explicit UnionFind(int n) : parent(n), rank(n, 0)
+    {
+        for (int i = 0; i < n; ++i)
+            parent[i] = i;
+    }
+
+    int find(int x)
+    {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    }
+
+    void unite(int a, int b)
+    {
+        a = find(a);
+        b = find(b);
+        if (a == b)
+            return;
+        if (rank[a] < rank[b])
+            std::swap(a, b);
+        parent[b] = a;
+        if (rank[a] == rank[b])
+            ++rank[a];
+    }
+
+private:
+    std::vector<int> parent;
+    std::vector<int> rank;
+};
+
+} // namespace
+
+void UVEditorController::applySelectionSet(const QSet<int>& verts, const QSet<int>& edges,
+                                           const QSet<int>& faces, int modifiers)
+{
+    const bool add = (modifiers & static_cast<int>(ShiftModifier)) != 0;
+    const bool toggle = (modifiers & static_cast<int>(ControlModifier)) != 0;
+
+    if (!add && !toggle) {
+        m_selectedUvVerts = verts;
+        m_selectedUvEdges = edges;
+        m_selectedUvFaces = faces;
+    } else if (add) {
+        m_selectedUvVerts.unite(verts);
+        m_selectedUvEdges.unite(edges);
+        m_selectedUvFaces.unite(faces);
+    } else {
+        for (int id : verts) {
+            if (m_selectedUvVerts.contains(id))
+                m_selectedUvVerts.remove(id);
+            else
+                m_selectedUvVerts.insert(id);
+        }
+        for (int id : edges) {
+            if (m_selectedUvEdges.contains(id))
+                m_selectedUvEdges.remove(id);
+            else
+                m_selectedUvEdges.insert(id);
+        }
+        for (int id : faces) {
+            if (m_selectedUvFaces.contains(id))
+                m_selectedUvFaces.remove(id);
+            else
+                m_selectedUvFaces.insert(id);
+        }
+    }
+
+    notifyUvSelectionChanged();
+    if (m_selectionSyncEnabled && !m_syncInProgress)
+        pushSelectionToEdit();
+}
+
+void UVEditorController::pickAt(double u, double v, int modifiers, double pickRadiusUv)
+{
+    if (!m_hasMesh || m_uvTris.empty())
+        return;
+
+    const double pickRadiusSq = pickRadiusUv * pickRadiusUv;
+    QSet<int> verts;
+    QSet<int> edges;
+    QSet<int> faces;
+
+    if (m_selectionMode == FaceMode) {
+        int bestFace = -1;
+        double bestDistSq = 1e30;
+        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
+            const auto& tri = m_uvTris[fi];
+            if (pointInTriangle(u, v, tri.u[0], tri.v[0], tri.u[1], tri.v[1], tri.u[2], tri.v[2])) {
+                bestFace = static_cast<int>(fi);
+                break;
+            }
+            const double cx = (tri.u[0] + tri.u[1] + tri.u[2]) / 3.0;
+            const double cy = (tri.v[0] + tri.v[1] + tri.v[2]) / 3.0;
+            const double d = (u - cx) * (u - cx) + (v - cy) * (v - cy);
+            if (d < bestDistSq) {
+                bestDistSq = d;
+                bestFace = static_cast<int>(fi);
+            }
+        }
+        if (bestFace >= 0)
+            faces.insert(bestFace);
+    } else if (m_selectionMode == EdgeMode) {
+        int bestEdge = -1;
+        double bestDistSq = 1e30;
+        for (size_t ei = 0; ei < m_uvEdges.size(); ++ei) {
+            const auto& edge = m_uvEdges[ei];
+            if (edge.v0 < 0 || edge.v1 < 0
+                || edge.v0 >= static_cast<int>(m_uvVerts.size())
+                || edge.v1 >= static_cast<int>(m_uvVerts.size()))
+                continue;
+            const auto& a = m_uvVerts[edge.v0];
+            const auto& b = m_uvVerts[edge.v1];
+            const double d = distPointToSegmentSq(u, v, a.u, a.v, b.u, b.v);
+            if (d < bestDistSq) {
+                bestDistSq = d;
+                bestEdge = static_cast<int>(ei);
+            }
+        }
+        if (bestEdge >= 0 && bestDistSq <= pickRadiusSq)
+            edges.insert(bestEdge);
+    } else {
+        int bestVert = -1;
+        double bestDistSq = 1e30;
+        for (size_t vi = 0; vi < m_uvVerts.size(); ++vi) {
+            const auto& vert = m_uvVerts[vi];
+            const double d = (u - vert.u) * (u - vert.u) + (v - vert.v) * (v - vert.v);
+            if (d < bestDistSq) {
+                bestDistSq = d;
+                bestVert = static_cast<int>(vi);
+            }
+        }
+        if (bestVert >= 0 && bestDistSq <= pickRadiusSq)
+            verts.insert(bestVert);
+    }
+
+    applySelectionSet(verts, edges, faces, modifiers);
+}
+
+void UVEditorController::boxSelect(double uMin, double vMin, double uMax, double vMax, int modifiers)
+{
+    if (!m_hasMesh)
+        return;
+
+    if (uMin > uMax)
+        std::swap(uMin, uMax);
+    if (vMin > vMax)
+        std::swap(vMin, vMax);
+
+    QSet<int> verts;
+    QSet<int> edges;
+    QSet<int> faces;
+
+    if (m_selectionMode == VertexMode) {
+        for (size_t vi = 0; vi < m_uvVerts.size(); ++vi) {
+            const auto& vert = m_uvVerts[vi];
+            if (vert.u >= uMin && vert.u <= uMax && vert.v >= vMin && vert.v <= vMax)
+                verts.insert(static_cast<int>(vi));
+        }
+    } else if (m_selectionMode == EdgeMode) {
+        for (size_t ei = 0; ei < m_uvEdges.size(); ++ei) {
+            const auto& edge = m_uvEdges[ei];
+            if (edge.v0 < 0 || edge.v1 < 0
+                || edge.v0 >= static_cast<int>(m_uvVerts.size())
+                || edge.v1 >= static_cast<int>(m_uvVerts.size()))
+                continue;
+            const auto& a = m_uvVerts[edge.v0];
+            const auto& b = m_uvVerts[edge.v1];
+            if (segmentIntersectsRect(a.u, a.v, b.u, b.v, uMin, vMin, uMax, vMax))
+                edges.insert(static_cast<int>(ei));
+        }
+    } else {
+        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
+            if (triangleTouchesRect(m_uvTris[fi].u, m_uvTris[fi].v, uMin, vMin, uMax, vMax))
+                faces.insert(static_cast<int>(fi));
+        }
+    }
+
+    applySelectionSet(verts, edges, faces, modifiers);
+}
+
+QVariantList UVEditorController::selectionVertices() const
+{
+    QVariantList out;
+    for (int id : m_selectedUvVerts) {
+        if (id < 0 || id >= static_cast<int>(m_uvVerts.size()))
+            continue;
+        const auto& v = m_uvVerts[id];
+        out.push_back(QVariantMap{
+            {QStringLiteral("u"), v.u},
+            {QStringLiteral("v"), v.v}
+        });
+    }
+    return out;
+}
+
+QVariantList UVEditorController::selectionEdges() const
+{
+    QVariantList out;
+    for (int id : m_selectedUvEdges) {
+        if (id < 0 || id >= static_cast<int>(m_uvEdges.size()))
+            continue;
+        const auto& e = m_uvEdges[id];
+        if (e.v0 < 0 || e.v1 < 0
+            || e.v0 >= static_cast<int>(m_uvVerts.size())
+            || e.v1 >= static_cast<int>(m_uvVerts.size()))
+            continue;
+        const auto& a = m_uvVerts[e.v0];
+        const auto& b = m_uvVerts[e.v1];
+        out.push_back(QVariantMap{
+            {QStringLiteral("u0"), a.u},
+            {QStringLiteral("v0"), a.v},
+            {QStringLiteral("u1"), b.u},
+            {QStringLiteral("v1"), b.v}
+        });
+    }
+    return out;
+}
+
+QVariantList UVEditorController::selectionFaces() const
+{
+    QVariantList out;
+    for (int id : m_selectedUvFaces) {
+        if (id < 0 || id >= static_cast<int>(m_uvTris.size()))
+            continue;
+        const auto& tri = m_uvTris[id];
+        out.push_back(QVariantMap{
+            {QStringLiteral("u0"), tri.u[0]},
+            {QStringLiteral("v0"), tri.v[0]},
+            {QStringLiteral("u1"), tri.u[1]},
+            {QStringLiteral("v1"), tri.v[1]},
+            {QStringLiteral("u2"), tri.u[2]},
+            {QStringLiteral("v2"), tri.v[2]}
+        });
+    }
+    return out;
+}
+
+QVariantList UVEditorController::contextIslandFaces() const
+{
+    QVariantList out;
+    for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
+        if (!m_contextIslandIds.contains(m_uvTris[fi].island))
+            continue;
+        const auto& tri = m_uvTris[fi];
+        out.push_back(QVariantMap{
+            {QStringLiteral("u0"), tri.u[0]},
+            {QStringLiteral("v0"), tri.v[0]},
+            {QStringLiteral("u1"), tri.u[1]},
+            {QStringLiteral("v1"), tri.v[1]},
+            {QStringLiteral("u2"), tri.u[2]},
+            {QStringLiteral("v2"), tri.v[2]}
+        });
+    }
+    return out;
+}
+
+void UVEditorController::onEditSelectionChanged()
+{
+    updateContextIslandsFromEdit();
+    if (m_selectionSyncEnabled && !m_syncInProgress)
+        pullSelectionFromEdit();
+    else
+        notifyUvSelectionChanged();
+}
+
+void UVEditorController::updateContextIslandsFromEdit()
+{
+    m_contextIslandIds.clear();
+    auto* edit = EditModeController::instance();
+    if (!edit || !edit->isEditModeActive() || !m_activeEntity
+        || edit->editEntity() != m_activeEntity)
+        return;
+
+    QSet<int> islands;
+    for (int gv : edit->selectedVertices()) {
+        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
+            const auto& tri = m_uvTris[fi];
+            for (int c = 0; c < 3; ++c) {
+                if (tri.meshGlobalVert[c] == gv)
+                    islands.insert(tri.island);
+            }
+        }
+    }
+    for (const auto& edge : edit->selectedEdges()) {
+        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
+            const auto& tri = m_uvTris[fi];
+            for (int e = 0; e < 3; ++e) {
+                const int n = (e + 1) % 3;
+                const int a = tri.meshGlobalVert[e];
+                const int b = tri.meshGlobalVert[n];
+                if ((a == edge.first && b == edge.second)
+                    || (a == edge.second && b == edge.first))
+                    islands.insert(tri.island);
+            }
+        }
+    }
+    for (int gt : edit->selectedFaces()) {
+        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
+            if (m_uvTris[fi].meshGlobalTri == gt)
+                islands.insert(m_uvTris[fi].island);
+        }
+    }
+
+    m_contextIslandIds = islands;
+}
+
+void UVEditorController::pullSelectionFromEdit()
+{
+    auto* edit = EditModeController::instance();
+    if (!edit || !edit->isEditModeActive() || !m_activeEntity
+        || edit->editEntity() != m_activeEntity)
+        return;
+
+    const bool prevSync = m_syncInProgress;
+    m_syncInProgress = true;
+    QSet<int> verts;
+    QSet<int> edges;
+    QSet<int> faces;
+
+    for (int gv : edit->selectedVertices()) {
+        for (size_t vi = 0; vi < m_uvVerts.size(); ++vi) {
+            if (m_uvVerts[vi].meshGlobalVert == gv)
+                verts.insert(static_cast<int>(vi));
+        }
+    }
+    for (const auto& ge : edit->selectedEdges()) {
+        for (size_t ei = 0; ei < m_uvEdges.size(); ++ei) {
+            const auto& ue = m_uvEdges[ei];
+            if ((ue.meshGlobalV0 == ge.first && ue.meshGlobalV1 == ge.second)
+                || (ue.meshGlobalV0 == ge.second && ue.meshGlobalV1 == ge.first))
+                edges.insert(static_cast<int>(ei));
+        }
+    }
+    for (int gt : edit->selectedFaces()) {
+        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
+            if (m_uvTris[fi].meshGlobalTri == gt)
+                faces.insert(static_cast<int>(fi));
+        }
+    }
+
+    m_selectedUvVerts = verts;
+    m_selectedUvEdges = edges;
+    m_selectedUvFaces = faces;
+    m_syncInProgress = prevSync;
+    notifyUvSelectionChanged();
+}
+
+void UVEditorController::pushSelectionToEdit()
+{
+    auto* edit = EditModeController::instance();
+    if (!edit || !edit->isEditModeActive() || !m_activeEntity
+        || edit->editEntity() != m_activeEntity)
+        return;
+
+    m_syncInProgress = true;
+    edit->setSelectionMode(static_cast<int>(m_selectionMode));
+    edit->deselectAll();
+
+    bool first = true;
+    if (m_selectionMode == FaceMode) {
+        for (int fi : m_selectedUvFaces) {
+            if (fi < 0 || fi >= static_cast<int>(m_uvTris.size()))
+                continue;
+            edit->selectFace(m_uvTris[fi].meshGlobalTri, !first);
+            first = false;
+        }
+    } else if (m_selectionMode == EdgeMode) {
+        for (int ei : m_selectedUvEdges) {
+            if (ei < 0 || ei >= static_cast<int>(m_uvEdges.size()))
+                continue;
+            const auto& e = m_uvEdges[ei];
+            edit->selectEdge(e.meshGlobalV0, e.meshGlobalV1, !first);
+            first = false;
+        }
+    } else {
+        for (int vi : m_selectedUvVerts) {
+            if (vi < 0 || vi >= static_cast<int>(m_uvVerts.size()))
+                continue;
+            edit->selectVertex(m_uvVerts[vi].meshGlobalVert, !first);
+            first = false;
+        }
+    }
+    m_syncInProgress = false;
 }
 
 void UVEditorController::setShowTextureBackground(bool on)
@@ -365,6 +897,10 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
     if (!entity)
         return false;
 
+    m_uvVerts.clear();
+    m_uvTris.clear();
+    m_uvEdges.clear();
+
     EditableMesh displayMesh;
     if (auto* edit = EditModeController::instance()) {
         if (edit->isEditModeActive() && edit->editEntity() == entity && edit->currentMesh()) {
@@ -392,10 +928,19 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
     tris.reserve(static_cast<int>(hem.faceCount()));
 
     int heFaceIdx = 0;
-    for (const auto& sub : mesh.subMeshes()) {
+    int globalVertOffset = 0;
+    int globalTriIndex = 0;
+
+    for (size_t subIdx = 0; subIdx < mesh.subMeshes().size(); ++subIdx) {
+        const auto& sub = mesh.subMeshes()[subIdx];
+
         auto emitTriangle = [&](const EditableTriangle& tri) {
             if (heFaceIdx >= static_cast<int>(islands.faceIslandIds.size()))
                 return;
+
+            UvTri uvTri;
+            uvTri.meshGlobalTri = globalTriIndex++;
+            uvTri.island = islands.faceIslandIds[heFaceIdx];
 
             Ogre::Vector2 uvs[3];
             bool ok = true;
@@ -406,6 +951,9 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
                     break;
                 }
                 uvs[c] = sub.vertices[vi].uv;
+                uvTri.u[c] = uvs[c].x;
+                uvTri.v[c] = uvs[c].y;
+                uvTri.meshGlobalVert[c] = globalVertOffset + static_cast<int>(vi);
             }
             if (!ok)
                 return;
@@ -426,6 +974,7 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
                 {QStringLiteral("island"), islandId},
                 {QStringLiteral("color"), colorForIsland(islandId)}
             });
+            m_uvTris.push_back(uvTri);
         };
 
         if (!sub.faces.empty()) {
@@ -447,6 +996,97 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
                 ++heFaceIdx;
             }
         }
+
+        globalVertOffset += static_cast<int>(sub.vertices.size());
+    }
+
+    // Weld UV corners on shared manifold edges and build UV-edge list.
+    const int cornerCount = static_cast<int>(m_uvTris.size()) * 3;
+    UnionFind uf(cornerCount);
+
+    struct EdgeOcc {
+        int tri = -1;
+        int c0 = -1;
+        int c1 = -1;
+    };
+    std::unordered_map<uint64_t, std::vector<EdgeOcc>> edgeOccMap;
+    edgeOccMap.reserve(m_uvTris.size() * 3);
+
+    auto cornerIndex = [](int tri, int corner) { return tri * 3 + corner; };
+
+    for (size_t ti = 0; ti < m_uvTris.size(); ++ti) {
+        const auto& tri = m_uvTris[ti];
+        for (int e = 0; e < 3; ++e) {
+            const int n = (e + 1) % 3;
+            const uint64_t key = (packUvKey(tri.u[e], tri.v[e]) << 1)
+                                 ^ packUvKey(tri.u[n], tri.v[n]);
+            edgeOccMap[key].push_back({static_cast<int>(ti), e, n});
+        }
+    }
+
+    for (const auto& [key, occs] : edgeOccMap) {
+        if (occs.size() != 2)
+            continue;
+        const EdgeOcc& a = occs[0];
+        const EdgeOcc& b = occs[1];
+        const auto& ta = m_uvTris[a.tri];
+        const auto& tb = m_uvTris[b.tri];
+
+        auto weldCorner = [&](int triA, int cornerA, int triB, int cornerB) {
+            if (std::abs(ta.u[cornerA] - tb.u[cornerB]) > kUvEpsilon
+                || std::abs(ta.v[cornerA] - tb.v[cornerB]) > kUvEpsilon)
+                return;
+            uf.unite(cornerIndex(triA, cornerA), cornerIndex(triB, cornerB));
+        };
+
+        weldCorner(a.tri, a.c0, b.tri, b.c0);
+        weldCorner(a.tri, a.c1, b.tri, b.c1);
+    }
+
+    std::unordered_map<int, int> rootToUvVert;
+    rootToUvVert.reserve(cornerCount);
+    for (int ci = 0; ci < cornerCount; ++ci) {
+        const int tri = ci / 3;
+        const int corner = ci % 3;
+        const int root = uf.find(ci);
+        auto it = rootToUvVert.find(root);
+        if (it == rootToUvVert.end()) {
+            const int vid = static_cast<int>(m_uvVerts.size());
+            UvVert vert;
+            vert.u = m_uvTris[tri].u[corner];
+            vert.v = m_uvTris[tri].v[corner];
+            vert.meshGlobalVert = m_uvTris[tri].meshGlobalVert[corner];
+            m_uvVerts.push_back(vert);
+            rootToUvVert.emplace(root, vid);
+            it = rootToUvVert.find(root);
+        }
+        m_uvTris[tri].uvVertId[corner] = it->second;
+    }
+
+    std::unordered_map<uint64_t, int> edgeDedup;
+    edgeDedup.reserve(m_uvTris.size() * 3);
+    for (size_t ti = 0; ti < m_uvTris.size(); ++ti) {
+        const auto& tri = m_uvTris[ti];
+        for (int e = 0; e < 3; ++e) {
+            const int n = (e + 1) % 3;
+            int v0 = tri.uvVertId[e];
+            int v1 = tri.uvVertId[n];
+            if (v0 < 0 || v1 < 0)
+                continue;
+            if (v0 > v1)
+                std::swap(v0, v1);
+            const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(v0)) << 32)
+                                 | static_cast<uint32_t>(v1);
+            if (edgeDedup.find(key) != edgeDedup.end())
+                continue;
+            UvEdge edge;
+            edge.v0 = v0;
+            edge.v1 = v1;
+            edge.meshGlobalV0 = tri.meshGlobalVert[e];
+            edge.meshGlobalV1 = tri.meshGlobalVert[n];
+            edgeDedup.emplace(key, static_cast<int>(m_uvEdges.size()));
+            m_uvEdges.push_back(edge);
+        }
     }
 
     m_triangles = tris;
@@ -467,20 +1107,28 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
         ? 0
         : *std::min_element(submeshFilter.begin(), submeshFilter.end());
     m_textureBackgroundSource = resolveDiffuseTextureSource(entity, previewSub);
+    m_activeEntity = entity;
     return m_hasMesh;
 }
 
 void UVEditorController::rebuildMeshCache()
 {
+    Ogre::Entity* prevEntity = m_activeEntity;
     m_triangles.clear();
+    m_uvVerts.clear();
+    m_uvTris.clear();
+    m_uvEdges.clear();
     m_hasMesh = false;
     m_islandCount = 0;
     m_textureBackgroundSource.clear();
     m_uvBounds = QRectF(0, 0, 1, 1);
     m_statusText = tr("Select a mesh to view UVs.");
+    m_activeEntity = nullptr;
 
     auto* sel = SelectionSet::getSingleton();
     if (!sel) {
+        clearUvSelection();
+        m_contextIslandIds.clear();
         ++m_meshRevision;
         emit meshDataChanged();
         return;
@@ -516,6 +1164,8 @@ void UVEditorController::rebuildMeshCache()
     }
 
     if (!entity) {
+        clearUvSelection();
+        m_contextIslandIds.clear();
         ++m_meshRevision;
         emit meshDataChanged();
         return;
@@ -525,7 +1175,13 @@ void UVEditorController::rebuildMeshCache()
         ? tr("UV layout — %1").arg(QString::fromStdString(entity->getName()))
         : tr("UV layout — %1 (sub-mesh selection)").arg(QString::fromStdString(entity->getName()));
 
-    buildFromEntity(entity, submeshFilter, m_uvChannel);
+    const bool built = buildFromEntity(entity, submeshFilter, m_uvChannel);
+    if (!built || entity != prevEntity) {
+        clearUvSelection();
+    }
+    updateContextIslandsFromEdit();
     ++m_meshRevision;
     emit meshDataChanged();
+    if (m_selectionSyncEnabled && !m_syncInProgress)
+        pullSelectionFromEdit();
 }
