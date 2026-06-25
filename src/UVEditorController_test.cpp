@@ -288,6 +288,24 @@ TEST_F(UVEditorControllerTest, SelectionModeEmitsBreadcrumbSignal)
     EXPECT_GE(spy.count(), 1);
 }
 
+TEST_F(UVEditorControllerTest, FacePickMissesEmptySpaceOutsideRadius)
+{
+    auto mesh = createInMemoryTriangleMesh("UVEditor_pick_miss");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UVEditor_pick_miss_node");
+    auto* entity = sceneMgr->createEntity("UVEditor_pick_miss_entity", mesh);
+    node->attachObject(entity);
+
+    UVEditorController* ctrl = UVEditorController::instance();
+    SelectionSet::getSingleton()->selectOne(entity);
+    ctrl->setSelectionMode(UVEditorController::FaceMode);
+    ctrl->refresh();
+    ASSERT_TRUE(ctrl->hasMesh());
+
+    ctrl->pickAt(5.0, 5.0, UVEditorController::NoModifier, 0.1);
+    EXPECT_EQ(ctrl->selectedFaceCount(), 0);
+}
+
 TEST_F(UVEditorControllerTest, ContextIslandsHighlightWithoutSync)
 {
     auto mesh = createInMemoryTriangleMesh("UVEditor_ctx_island");

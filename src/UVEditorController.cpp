@@ -134,14 +134,6 @@ namespace {
 
 constexpr float kUvEpsilon = 1e-5f;
 
-uint64_t packUvKey(float u, float v)
-{
-    const auto iu = static_cast<int64_t>(std::llround(static_cast<double>(u) / kUvEpsilon));
-    const auto iv = static_cast<int64_t>(std::llround(static_cast<double>(v) / kUvEpsilon));
-    return (static_cast<uint64_t>(static_cast<uint32_t>(iu)) << 32)
-           | static_cast<uint32_t>(iv);
-}
-
 bool pointInTriangle(double u, double v, float u0, float v0, float u1, float v1, float u2, float v2)
 {
     const double dX = static_cast<double>(u) - static_cast<double>(u2);
@@ -317,10 +309,12 @@ void UVEditorController::pickAt(double u, double v, int modifiers, double pickRa
     if (m_selectionMode == FaceMode) {
         int bestFace = -1;
         double bestDistSq = 1e30;
+        bool insideTri = false;
         for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
             const auto& tri = m_uvTris[fi];
             if (pointInTriangle(u, v, tri.u[0], tri.v[0], tri.u[1], tri.v[1], tri.u[2], tri.v[2])) {
                 bestFace = static_cast<int>(fi);
+                insideTri = true;
                 break;
             }
             const double cx = (tri.u[0] + tri.u[1] + tri.u[2]) / 3.0;
@@ -331,7 +325,7 @@ void UVEditorController::pickAt(double u, double v, int modifiers, double pickRa
                 bestFace = static_cast<int>(fi);
             }
         }
-        if (bestFace >= 0)
+        if (insideTri || (bestFace >= 0 && bestDistSq <= pickRadiusSq))
             faces.insert(bestFace);
     } else if (m_selectionMode == EdgeMode) {
         int bestEdge = -1;
@@ -928,18 +922,45 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
     tris.reserve(static_cast<int>(hem.faceCount()));
 
     int heFaceIdx = 0;
-    int globalVertOffset = 0;
-    int globalTriIndex = 0;
 
-    for (size_t subIdx = 0; subIdx < mesh.subMeshes().size(); ++subIdx) {
-        const auto& sub = mesh.subMeshes()[subIdx];
+    std::vector<size_t> sourceSubIndices;
+    sourceSubIndices.reserve(displayMesh.subMeshes().size());
+    if (submeshFilter.isEmpty()) {
+        for (size_t si = 0; si < displayMesh.subMeshes().size(); ++si)
+            sourceSubIndices.push_back(si);
+    } else {
+        for (size_t si = 0; si < displayMesh.subMeshes().size(); ++si) {
+            if (submeshFilter.contains(static_cast<int>(si)))
+                sourceSubIndices.push_back(si);
+        }
+    }
 
-        auto emitTriangle = [&](const EditableTriangle& tri) {
+    auto globalVertOffsetForSub = [&](size_t sourceSubIdx) {
+        int off = 0;
+        for (size_t si = 0; si < sourceSubIdx; ++si)
+            off += static_cast<int>(displayMesh.subMeshes()[si].vertices.size());
+        return off;
+    };
+
+    auto globalTriOffsetForSub = [&](size_t sourceSubIdx) {
+        int off = 0;
+        for (size_t si = 0; si < sourceSubIdx; ++si)
+            off += static_cast<int>(displayMesh.subMeshes()[si].triangles.size());
+        return off;
+    };
+
+    for (size_t meshSubIdx = 0; meshSubIdx < mesh.subMeshes().size(); ++meshSubIdx) {
+        const size_t sourceSubIdx = sourceSubIndices[meshSubIdx];
+        const auto& sub = mesh.subMeshes()[meshSubIdx];
+        const int globalVertOffset = globalVertOffsetForSub(sourceSubIdx);
+        const int globalTriOffset = globalTriOffsetForSub(sourceSubIdx);
+
+        auto emitTriangle = [&](const EditableTriangle& tri, int meshGlobalTri) {
             if (heFaceIdx >= static_cast<int>(islands.faceIslandIds.size()))
                 return;
 
             UvTri uvTri;
-            uvTri.meshGlobalTri = globalTriIndex++;
+            uvTri.meshGlobalTri = meshGlobalTri;
             uvTri.island = islands.faceIslandIds[heFaceIdx];
 
             Ogre::Vector2 uvs[3];
@@ -978,26 +999,31 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
         };
 
         if (!sub.faces.empty()) {
+            size_t localTriCursor = 0;
             for (const auto& face : sub.faces) {
                 if (!face.isValid())
                     continue;
+                const int faceBaseGlobalTri =
+                    globalTriOffset + static_cast<int>(localTriCursor);
                 for (size_t i = 1; i + 1 < face.indices.size(); ++i) {
                     EditableTriangle tri;
                     tri.indices[0] = face.indices[0];
                     tri.indices[1] = face.indices[i];
                     tri.indices[2] = face.indices[i + 1];
-                    emitTriangle(tri);
+                    emitTriangle(tri, faceBaseGlobalTri);
                 }
+                if (face.indices.size() >= 3)
+                    localTriCursor += face.indices.size() - 2;
                 ++heFaceIdx;
             }
         } else {
+            size_t localTri = 0;
             for (const auto& tri : sub.triangles) {
-                emitTriangle(tri);
+                emitTriangle(tri, globalTriOffset + static_cast<int>(localTri));
+                ++localTri;
                 ++heFaceIdx;
             }
         }
-
-        globalVertOffset += static_cast<int>(sub.vertices.size());
     }
 
     // Weld UV corners on shared manifold edges and build UV-edge list.
@@ -1018,8 +1044,12 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
         const auto& tri = m_uvTris[ti];
         for (int e = 0; e < 3; ++e) {
             const int n = (e + 1) % 3;
-            const uint64_t key = (packUvKey(tri.u[e], tri.v[e]) << 1)
-                                 ^ packUvKey(tri.u[n], tri.v[n]);
+            int gv0 = tri.meshGlobalVert[e];
+            int gv1 = tri.meshGlobalVert[n];
+            if (gv0 > gv1)
+                std::swap(gv0, gv1);
+            const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(gv0)) << 32)
+                                 | static_cast<uint32_t>(gv1);
             edgeOccMap[key].push_back({static_cast<int>(ti), e, n});
         }
     }
@@ -1177,7 +1207,12 @@ void UVEditorController::rebuildMeshCache()
 
     const bool built = buildFromEntity(entity, submeshFilter, m_uvChannel);
     if (!built || entity != prevEntity) {
+        const bool pendingPull = m_selectionSyncEnabled && built && entity != prevEntity;
+        if (pendingPull)
+            m_syncInProgress = true;
         clearUvSelection();
+        if (pendingPull)
+            m_syncInProgress = false;
     }
     updateContextIslandsFromEdit();
     ++m_meshRevision;
