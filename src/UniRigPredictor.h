@@ -4,6 +4,7 @@
 #include <QString>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 // UniRig ML skeleton prediction (issue #408 retarget — replaces RigNetPredictor),
@@ -92,6 +93,8 @@ public:
     static QString encoderModelPath();
     static QString decoderModelPath();   // AppData/ai_models/unirig/decoder.onnx
     static QString embedModelPath();     // AppData/ai_models/unirig/embed.onnx
+    // True when all three model files already exist on disk (no download needed).
+    static bool modelsPresent();
 
     // Ensure ALL THREE models exist on disk, downloading whichever is missing on
     // first use (blocks via a local event loop, like
@@ -102,17 +105,26 @@ public:
     // ai/unirigModelBaseUrl.
     static QString ensureModelBlocking();
 
+    // Progress/cancel callback for the (long) autoregressive decode. Invoked
+    // once per generated token with (stepsDone, maxSteps); return false to
+    // CANCEL the decode (predict then returns ok=false, error="cancelled").
+    // The encode + decode run on whatever thread calls predict() — the GUI
+    // runs it on a worker so the callback marshals progress to the UI thread.
+    using ProgressFn = std::function<bool(int stepsDone, int maxSteps)>;
+
     // Run UniRig against the encoder + decoder + embed .onnx files. `positions`
     // is tightly packed xyz (3 floats/vertex); `indices` is triangle vertex
-    // indices (3/face). Returns predicted joints in mesh-local space, or
-    // ok=false with a reason (missing/failed model, degenerate mesh,
-    // ONNX-disabled build) so the caller can fall back. Never throws.
+    // indices (3/face). `progress` (optional) is called per decode step and can
+    // cancel. Returns predicted joints in mesh-local space, or ok=false with a
+    // reason (missing/failed model, degenerate mesh, ONNX-disabled build,
+    // cancelled) so the caller can fall back. Never throws.
     static Result predict(const float* positions, int vertexCount,
                           const uint32_t* indices, int indexCount,
                           const QString& encoderModelPath,
                           const QString& decoderModelPath,
                           const QString& embedModelPath,
-                          const Options& opts = {});
+                          const Options& opts = {},
+                          const ProgressFn& progress = {});
 
     // ---- Pure-data tokenizer helpers (no ONNX / no Ogre — unit-testable) ----
     // These replicate UniRig's src/tokenizer/tokenizer_part.py exactly and are

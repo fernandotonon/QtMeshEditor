@@ -5,6 +5,8 @@
 #include <QJsonObject>
 #include <QList>
 #include <array>
+#include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace Ogre {
@@ -107,6 +109,12 @@ public:
         // the mesh extent along the up axis. Larger = smoother spine,
         // less responsive to local mass. Range (0, 0.5]; default 0.06.
         double slabFraction = 0.06;
+        // Pre-predicted joints (mesh-local). When non-empty AND algorithm is
+        // UniRig, rigEntity SKIPS the (slow, ONNX) prediction and builds the
+        // Ogre skeleton directly from these. The GUI uses this to run UniRig
+        // inference on a worker thread (off the UI thread, with a progress bar)
+        // and then build the skeleton on the main thread. Empty = predict inline.
+        std::vector<Joint> prePredictedJoints;
     };
 
     // Mixamo-style placement markers (humanoid). The user clicks these on the
@@ -166,6 +174,26 @@ public:
     // it has no usable geometry). After this returns applied=true, the
     // caller may chain SkinWeights::computeAndApply(entity) for weights.
     static Report rigEntity(Ogre::Entity* entity, const Options& opts = {});
+
+    // --- Threaded UniRig helpers (GUI worker path) -----------------------
+    // Split so the GUI can run the slow ONNX inference OFF the UI thread while
+    // keeping Ogre access on the main thread:
+    //   1. gatherGeometry(entity, ...) — MAIN thread: reads the mesh's vertex
+    //      positions + triangle indices (locks Ogre HW buffers) into plain
+    //      vectors. Returns false if there's no readable geometry.
+    //   2. predictUniRig(verts, indices, upAxis, progress) — WORKER thread:
+    //      pure ONNX (no Ogre), returns predicted joints (empty on failure/
+    //      cancel; `outError` gets the reason). Feed the joints back via
+    //      Options::prePredictedJoints + rigEntity() on the MAIN thread.
+    static bool gatherGeometry(Ogre::Entity* entity,
+                               std::vector<float>& outVerts,
+                               std::vector<uint32_t>& outIndices);
+    static std::vector<Joint> predictUniRig(
+        const std::vector<float>& verts,
+        const std::vector<uint32_t>& indices,
+        int upAxis,
+        const std::function<bool(int,int)>& progress,
+        QString* outError);
 
     // Marker-guided variant: same as rigEntity but anchors the placed markers
     // (and interpolates the limb chains between them) before building the

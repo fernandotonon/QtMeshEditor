@@ -578,6 +578,73 @@ int appendIndices(Ogre::SubMesh* sub, Ogre::Mesh* mesh,
 
 } // namespace
 
+bool AutoRig::gatherGeometry(Ogre::Entity* entity,
+                             std::vector<float>& outVerts,
+                             std::vector<uint32_t>& outIndices)
+{
+    outVerts.clear();
+    outIndices.clear();
+    if (!entity || !entity->getMesh()) return false;
+    Ogre::MeshPtr mesh = entity->getMesh();
+    const uint32_t sharedBase = 0;
+    uint32_t ownBase = 0;
+    if (mesh->sharedVertexData) {
+        appendPositions(mesh->sharedVertexData, outVerts);
+        ownBase = static_cast<uint32_t>(mesh->sharedVertexData->vertexCount);
+    }
+    std::vector<uint32_t> ownOffset(mesh->getNumSubMeshes(), 0);
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (sub && !sub->useSharedVertices && sub->vertexData) {
+            ownOffset[si] = ownBase;
+            appendPositions(sub->vertexData, outVerts);
+            ownBase += static_cast<uint32_t>(sub->vertexData->vertexCount);
+        }
+    }
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si)
+        appendIndices(mesh->getSubMesh(si), mesh.get(), sharedBase, ownOffset[si], outIndices);
+    return !outVerts.empty();
+}
+
+std::vector<AutoRig::Joint> AutoRig::predictUniRig(
+        const std::vector<float>& verts,
+        const std::vector<uint32_t>& indices,
+        int upAxis,
+        const std::function<bool(int,int)>& progress,
+        QString* outError)
+{
+    std::vector<Joint> out;
+    const int vcount = static_cast<int>(verts.size() / 3);
+    if (vcount < 4) { if (outError) *outError = QStringLiteral("mesh has too few vertices"); return out; }
+    if (!UniRigPredictor::isAvailable()) {
+        if (outError) *outError = QStringLiteral("UniRig needs an ONNX-enabled build");
+        return out;
+    }
+    const QString enc = UniRigPredictor::ensureModelBlocking();   // may download (worker thread)
+    if (enc.isEmpty()) {
+        if (outError) *outError = QStringLiteral("UniRig model unavailable (offline or not yet hosted)");
+        return out;
+    }
+    UniRigPredictor::Options rnOpts;
+    rnOpts.upAxis = upAxis;
+    const auto rn = UniRigPredictor::predict(
+        verts.data(), vcount,
+        indices.empty() ? nullptr : indices.data(), static_cast<int>(indices.size()),
+        UniRigPredictor::encoderModelPath(), UniRigPredictor::decoderModelPath(),
+        UniRigPredictor::embedModelPath(), rnOpts, progress);
+    if (!rn.ok || rn.joints.size() < 2) {
+        if (outError) *outError = rn.error.isEmpty()
+            ? QStringLiteral("UniRig prediction returned no usable skeleton") : rn.error;
+        return out;
+    }
+    out.reserve(rn.joints.size());
+    for (const auto& j : rn.joints) {
+        Joint pj; pj.name = j.name; pj.parent = j.parent; pj.pos = j.pos; pj.recenter = false;
+        out.push_back(std::move(pj));
+    }
+    return out;
+}
+
 AutoRig::Report AutoRig::rigEntity(Ogre::Entity* entity, const Options& opts)
 {
     return rigEntityWithMarkers(entity, /*markers=*/{}, opts);
@@ -643,7 +710,15 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
     bool mlUsed = false;
     if (opts.algorithm == Algorithm::UniRig && markers.empty()) {
         QString reason;
-        if (!UniRigPredictor::isAvailable()) {
+        if (!opts.prePredictedJoints.empty()) {
+            // GUI worker path: inference already ran off-thread; just adopt the
+            // joints (skip the slow ONNX predict here — we're on the main thread
+            // building the Ogre skeleton).
+            placed = opts.prePredictedJoints;
+            for (auto& j : placed) j.recenter = false;
+            report.algorithmUsed = Algorithm::UniRig;
+            mlUsed = true;
+        } else if (!UniRigPredictor::isAvailable()) {
             reason = QStringLiteral("UniRig needs an ONNX-enabled build");
         } else {
             // ensureModelBlocking() returns the encoder path only when BOTH the

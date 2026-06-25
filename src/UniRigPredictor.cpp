@@ -270,6 +270,13 @@ QString UniRigPredictor::embedModelPath()
         QStringLiteral("ai_models/unirig/") + QString::fromLatin1(kEmbedFile));
 }
 
+bool UniRigPredictor::modelsPresent()
+{
+    return QFileInfo::exists(encoderModelPath())
+        && QFileInfo::exists(decoderModelPath())
+        && QFileInfo::exists(embedModelPath());
+}
+
 QString UniRigPredictor::ensureModelBlocking()
 {
 #ifndef ENABLE_ONNX
@@ -360,7 +367,8 @@ QString UniRigPredictor::ensureModelBlocking()
 
 UniRigPredictor::Result UniRigPredictor::predict(
         const float*, int, const uint32_t*, int,
-        const QString&, const QString&, const QString&, const Options&)
+        const QString&, const QString&, const QString&, const Options&,
+        const ProgressFn&)
 {
     return failResult(QStringLiteral(
         "UniRig needs an ONNX-enabled build — rebuild with -DENABLE_ONNX "
@@ -484,7 +492,8 @@ UniRigPredictor::Result UniRigPredictor::predict(
         const QString& encoderModelPath,
         const QString& decoderModelPath,
         const QString& embedModelPath,
-        const Options& opts)
+        const Options& opts,
+        const ProgressFn& progress)
 {
     if (!positions || vertexCount < 4)
         return failResult(QStringLiteral("UniRig: mesh has too few vertices."));
@@ -935,6 +944,11 @@ UniRigPredictor::Result UniRigPredictor::predict(
 
         // ---- TOKEN LOOP (constrained greedy, KV-cached). -----------------------
         for (int gen = 0; gen < kMaxNewTokens; ++gen) {
+            // Report progress + honour cancellation (the GUI runs this on a
+            // worker and marshals the callback to the UI thread).
+            if (progress && !progress(gen, kMaxNewTokens))
+                return failResult(QStringLiteral("cancelled"));
+
             const float* row = nullptr;
             if (!lastLogitsRow(outVals, &row))
                 return failResult(QStringLiteral(
