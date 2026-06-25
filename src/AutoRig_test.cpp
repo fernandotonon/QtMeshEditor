@@ -581,15 +581,17 @@ TEST(AutoRigAlgorithm, ToStringStable)
 {
     EXPECT_EQ(AutoRig::algorithmToString(AutoRig::Algorithm::Pinocchio),
               QStringLiteral("pinocchio"));
-    EXPECT_EQ(AutoRig::algorithmToString(AutoRig::Algorithm::RigNet),
-              QStringLiteral("rignet"));
+    EXPECT_EQ(AutoRig::algorithmToString(AutoRig::Algorithm::UniRig),
+              QStringLiteral("unirig"));
 }
 
 TEST(AutoRigAlgorithm, FromStringParsesKnownAndDefaults)
 {
     EXPECT_EQ(AutoRig::algorithmFromString("pinocchio"), AutoRig::Algorithm::Pinocchio);
-    EXPECT_EQ(AutoRig::algorithmFromString("RigNet"),    AutoRig::Algorithm::RigNet);
-    EXPECT_EQ(AutoRig::algorithmFromString("RIGNET"),    AutoRig::Algorithm::RigNet);
+    EXPECT_EQ(AutoRig::algorithmFromString("UniRig"),    AutoRig::Algorithm::UniRig);
+    EXPECT_EQ(AutoRig::algorithmFromString("UNIRIG"),    AutoRig::Algorithm::UniRig);
+    // "rignet" kept as a deprecated alias for the ML backend.
+    EXPECT_EQ(AutoRig::algorithmFromString("rignet"),    AutoRig::Algorithm::UniRig);
     // Aliases / unknown → offline-reliable Pinocchio.
     EXPECT_EQ(AutoRig::algorithmFromString("native"),    AutoRig::Algorithm::Pinocchio);
     EXPECT_EQ(AutoRig::algorithmFromString("template"),  AutoRig::Algorithm::Pinocchio);
@@ -599,7 +601,7 @@ TEST(AutoRigAlgorithm, FromStringParsesKnownAndDefaults)
 
 TEST(AutoRigAlgorithm, RoundTrip)
 {
-    for (auto a : {AutoRig::Algorithm::Pinocchio, AutoRig::Algorithm::RigNet})
+    for (auto a : {AutoRig::Algorithm::Pinocchio, AutoRig::Algorithm::UniRig})
         EXPECT_EQ(AutoRig::algorithmFromString(AutoRig::algorithmToString(a)), a);
 }
 
@@ -607,10 +609,10 @@ TEST(AutoRigAlgorithm, ReportJsonCarriesAlgorithm)
 {
     AutoRig::Report r;
     r.applied = true;
-    r.algorithmUsed = AutoRig::Algorithm::RigNet;
+    r.algorithmUsed = AutoRig::Algorithm::UniRig;
     r.fallbackReason = QStringLiteral("model offline — used template");
     const QJsonObject j = AutoRig::reportToJson(r);
-    EXPECT_EQ(j.value("algorithm").toString(), QStringLiteral("rignet"));
+    EXPECT_EQ(j.value("algorithm").toString(), QStringLiteral("unirig"));
     EXPECT_EQ(j.value("fallbackReason").toString(),
               QStringLiteral("model offline — used template"));
 }

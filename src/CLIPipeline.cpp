@@ -8169,7 +8169,7 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
 int CLIPipeline::cmdRig(int argc, char* argv[])
 {
     // Parse: rig <file> [--skeleton humanoid|biped|quadruped|generic]
-    //        [--algo pinocchio|rignet] [--skin] [--up-axis x|y|z] -o <out> [--json]
+    //        [--algo pinocchio|unirig] [--skin] [--up-axis x|y|z] -o <out> [--json]
     QString inputPath, outputPath, templateName = QStringLiteral("humanoid");
     QString algoName = QStringLiteral("pinocchio");
     bool jsonOutput = false;
@@ -8189,8 +8189,8 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
         }
         if (arg == "--algo" && i + 1 < argc) {
             algoName = QString::fromLocal8Bit(argv[++i]).toLower();
-            if (algoName != "pinocchio" && algoName != "rignet") {
-                err() << "Error: --algo must be 'pinocchio' or 'rignet' (got '"
+            if (algoName != "pinocchio" && algoName != "unirig" && algoName != "rignet") {
+                err() << "Error: --algo must be 'pinocchio' or 'unirig' (got '"
                       << algoName << "')." << Qt::endl;
                 return 2;
             }
@@ -8212,7 +8212,7 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
         err() << "Usage: qtmesh rig <file> [--skeleton humanoid|biped|quadruped|generic] "
-                 "[--algo pinocchio|rignet] [--skin] [--up-axis x|y|z] -o <out> [--json]" << Qt::endl;
+                 "[--algo pinocchio|unirig] [--skin] [--up-axis x|y|z] -o <out> [--json]" << Qt::endl;
         return 2;
     }
     if (outputPath.isEmpty()) {

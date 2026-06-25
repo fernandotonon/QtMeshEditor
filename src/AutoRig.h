@@ -64,16 +64,17 @@ public:
     // Skeleton-prediction backend (issue #408).
     //   Pinocchio — the native template-embedding heuristic (#407). Default:
     //               zero deps, fully offline, deterministic.
-    //   RigNet    — ML model (RigNet, 2020) via ONNX Runtime (#404 infra).
-    //               Predicts joints + bone connectivity from the mesh graph,
-    //               handling arbitrary topology / non-humanoid shapes better
-    //               than a fixed template. Needs ENABLE_ONNX + a first-run
-    //               model download; FALLS BACK to Pinocchio when the model or
-    //               ONNX runtime is unavailable (the report records which
-    //               backend actually ran + the fallback reason).
+    //   UniRig    — ML model (UniRig, SIGGRAPH 2025, MIT) via ONNX Runtime
+    //               (#404 infra). An autoregressive transformer that predicts a
+    //               skeleton from the mesh geometry, handling arbitrary topology
+    //               / non-humanoid shapes better than a fixed template. Needs
+    //               ENABLE_ONNX + a first-run model download; FALLS BACK to
+    //               Pinocchio when the model or ONNX runtime is unavailable (the
+    //               report records which backend actually ran + the fallback
+    //               reason).
     enum class Algorithm {
         Pinocchio,
-        RigNet
+        UniRig
     };
 
     // One joint of a template / placed skeleton.

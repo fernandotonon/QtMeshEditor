@@ -1687,8 +1687,8 @@ QJsonObject MCPServer::toolAutoRig(const QJsonObject &args)
         if (!args["algo"].isString())
             return makeErrorResult("Error: 'algo' must be a string.");
         const QString a = args["algo"].toString().toLower();
-        if (a != "pinocchio" && a != "rignet")
-            return makeErrorResult("Error: 'algo' must be 'pinocchio' or 'rignet'.");
+        if (a != "pinocchio" && a != "unirig" && a != "rignet")
+            return makeErrorResult("Error: 'algo' must be 'pinocchio' or 'unirig'.");
         opts.algorithm = AutoRig::algorithmFromString(a);
     }
     if (args.contains("up_axis")) {
@@ -6483,13 +6483,13 @@ QJsonArray MCPServer::buildToolsList()
             {"description",
              "Skeleton template: 'humanoid' (19-bone, default), 'biped', "
              "'quadruped', or 'generic' (3-joint spine fallback). Used by the "
-             "'pinocchio' algorithm (and as the 'rignet' fallback)."}};
+             "'pinocchio' algorithm (and as the 'unirig' fallback)."}};
         props["algo"] = QJsonObject{{"type", "string"},
             {"description",
              "Skeleton-prediction backend: 'pinocchio' (native template embedding, "
-             "offline, default) or 'rignet' (ML model via ONNX — better on arbitrary/"
-             "non-humanoid topology; needs an ONNX build + first-run model download, "
-             "and falls back to pinocchio when unavailable)."}};
+             "offline, default) or 'unirig' (UniRig ML model via ONNX — better on "
+             "arbitrary/non-humanoid topology; needs an ONNX build + first-run model "
+             "download, and falls back to pinocchio when unavailable)."}};
         props["skin"] = QJsonObject{{"type", "boolean"},
             {"description",
              "When true, also compute + apply skin weights so the mesh deforms "

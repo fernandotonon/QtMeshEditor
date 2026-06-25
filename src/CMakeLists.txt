@@ -94,7 +94,7 @@ SkinWeights.cpp
 SkinWeightsController.cpp
 AutoRig.cpp
 AutoRigController.cpp
-RigNetPredictor.cpp
+UniRigPredictor.cpp
 MeshDepthRenderer.cpp
 MultiViewTextureBaker.cpp
 TextureChannelPacker.cpp
@@ -237,7 +237,7 @@ SkinWeights.h
 SkinWeightsController.h
 AutoRig.h
 AutoRigController.h
-RigNetPredictor.h
+UniRigPredictor.h
 MeshDepthRenderer.h
 MultiViewTextureBaker.h
 TextureChannelPacker.h

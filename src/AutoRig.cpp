@@ -1,5 +1,5 @@
 #include "AutoRig.h"
-#include "RigNetPredictor.h"
+#include "UniRigPredictor.h"
 
 #include <algorithm>
 #include <cmath>
@@ -635,32 +635,37 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
     const std::vector<Joint> tmpl = templateJoints(opts.tmpl);
     int recentered = 0, markersApplied = 0;
     std::vector<Joint> placed;
-    report.algorithmUsed = Algorithm::Pinocchio;   // updated to RigNet on success
+    report.algorithmUsed = Algorithm::Pinocchio;   // updated to UniRig on success
 
-    // --- RigNet (#408): ML skeleton prediction, with graceful fallback ------
-    // Markers are a Pinocchio/template concept, so RigNet only runs for the
+    // --- UniRig (#408): ML skeleton prediction, with graceful fallback ------
+    // Markers are a Pinocchio/template concept, so UniRig only runs for the
     // plain (marker-less) rig; a marker-driven call always uses the template.
-    bool rigNetUsed = false;
-    if (opts.algorithm == Algorithm::RigNet && markers.empty()) {
+    bool mlUsed = false;
+    if (opts.algorithm == Algorithm::UniRig && markers.empty()) {
         QString reason;
-        if (!RigNetPredictor::isAvailable()) {
-            reason = QStringLiteral("RigNet needs an ONNX-enabled build");
+        if (!UniRigPredictor::isAvailable()) {
+            reason = QStringLiteral("UniRig needs an ONNX-enabled build");
         } else {
-            const QString model = RigNetPredictor::ensureModelBlocking();
-            if (model.isEmpty()) {
-                reason = QStringLiteral("RigNet model unavailable (offline or not yet hosted)");
+            // ensureModelBlocking() returns the encoder path only when BOTH the
+            // encoder and decoder models are present (it downloads the missing
+            // one on first use); empty == unavailable/offline/not-yet-hosted.
+            const QString encModel = UniRigPredictor::ensureModelBlocking();
+            if (encModel.isEmpty()) {
+                reason = QStringLiteral("UniRig model unavailable (offline or not yet hosted)");
             } else {
                 // Build the combined index buffer over the appendPositions order.
                 std::vector<uint32_t> indices;
                 for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si)
                     appendIndices(mesh->getSubMesh(si), mesh.get(),
                                   sharedBase, ownOffset[si], indices);
-                RigNetPredictor::Options rnOpts;
+                UniRigPredictor::Options rnOpts;
                 rnOpts.upAxis = opts.upAxis;
-                const auto rn = RigNetPredictor::predict(
+                const auto rn = UniRigPredictor::predict(
                     verts.data(), vcount,
                     indices.empty() ? nullptr : indices.data(),
-                    static_cast<int>(indices.size()), model, rnOpts);
+                    static_cast<int>(indices.size()),
+                    UniRigPredictor::encoderModelPath(),
+                    UniRigPredictor::decoderModelPath(), rnOpts);
                 if (rn.ok && rn.joints.size() >= 2) {
                     placed.reserve(rn.joints.size());
                     for (const auto& j : rn.joints) {
@@ -668,22 +673,22 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
                         pj.pos = j.pos; pj.recenter = false;
                         placed.push_back(std::move(pj));
                     }
-                    report.algorithmUsed = Algorithm::RigNet;
-                    rigNetUsed = true;
+                    report.algorithmUsed = Algorithm::UniRig;
+                    mlUsed = true;
                 } else {
                     reason = rn.error.isEmpty()
-                        ? QStringLiteral("RigNet prediction returned no usable skeleton")
+                        ? QStringLiteral("UniRig prediction returned no usable skeleton")
                         : rn.error;
                 }
             }
         }
-        if (!rigNetUsed)
+        if (!mlUsed)
             report.fallbackReason =
                 QStringLiteral("%1 — used the native template rig instead.").arg(reason);
     }
 
-    // --- Pinocchio / template fit (default, and the RigNet fallback) --------
-    if (!rigNetUsed) {
+    // --- Pinocchio / template fit (default, and the UniRig fallback) --------
+    if (!mlUsed) {
         placed = markers.empty()
             ? fitTemplate(tmpl, verts.data(), vcount, opts, &recentered)
             : fitTemplateWithMarkers(tmpl, verts.data(), vcount, markers, opts,
@@ -834,7 +839,7 @@ QString AutoRig::algorithmToString(Algorithm a)
 {
     switch (a) {
         case Algorithm::Pinocchio: return QStringLiteral("pinocchio");
-        case Algorithm::RigNet:    return QStringLiteral("rignet");
+        case Algorithm::UniRig:    return QStringLiteral("unirig");
     }
     return QStringLiteral("pinocchio");
 }
@@ -842,7 +847,8 @@ QString AutoRig::algorithmToString(Algorithm a)
 AutoRig::Algorithm AutoRig::algorithmFromString(const QString& s)
 {
     const QString l = s.trimmed().toLower();
-    if (l == "rignet")    return Algorithm::RigNet;
+    if (l == "unirig" || l == "rignet")  // "rignet" kept as a deprecated alias
+        return Algorithm::UniRig;
     if (l == "pinocchio" || l == "native" || l == "template") return Algorithm::Pinocchio;
     return Algorithm::Pinocchio;   // default / unknown → offline-reliable native
 }

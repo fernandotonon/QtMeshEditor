@@ -24,7 +24,7 @@ Rectangle {
     // (replaces the old modal AutoRigDialog) ----
     property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic"]
     property int    rigTemplateIndex: 0
-    property var    rigAlgos: ["pinocchio", "rignet"]
+    property var    rigAlgos: ["pinocchio", "unirig"]
     property int    rigAlgoIndex: 0             // pinocchio (offline) default
     property var    rigUpAxes: ["x", "y", "z"]
     property int    rigUpAxisIndex: 1           // +Y default
@@ -1552,7 +1552,7 @@ Rectangle {
                 visible: !rigCol.marking
 
                 // Skeleton algorithm — Pinocchio (native template, offline) or
-                // RigNet (ML, ONNX; falls back to the template when unavailable).
+                // UniRig (ML, ONNX; falls back to the template when unavailable).
                 Text {
                     text: "Algorithm"
                     color: PropertiesPanelController.textColor
@@ -1570,17 +1570,18 @@ Rectangle {
                 }
                 Text {
                     width: parent.width
-                    visible: root.rigAlgos[root.rigAlgoIndex] === "rignet"
+                    visible: root.rigAlgos[root.rigAlgoIndex] === "unirig"
                     wrapMode: Text.Wrap
                     color: PropertiesPanelController.textColor
                     opacity: 0.6
                     font.pixelSize: 9
-                    text: "RigNet predicts the skeleton from geometry (ML). Needs an "
-                        + "ONNX build + first-run model download; falls back to the "
-                        + "template below when unavailable."
+                    text: "UniRig (MIT, SIGGRAPH 2025) predicts the skeleton from geometry "
+                        + "(ML). Needs an ONNX build + first-run model download; falls back "
+                        + "to the template below when unavailable. Skeletons trained on "
+                        + "Articulation-XL2.0 (CC-BY-4.0)."
                 }
 
-                // Skeleton type — used by Pinocchio (and as the RigNet fallback).
+                // Skeleton type — used by Pinocchio (and as the UniRig fallback).
                 Text {
                     text: "Skeleton type"
                     color: PropertiesPanelController.textColor
