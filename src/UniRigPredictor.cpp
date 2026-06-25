@@ -313,7 +313,10 @@ QString UniRigPredictor::ensureModelBlocking()
         timeout.setSingleShot(true);
         QObject::connect(&timeout, &QTimer::timeout, &loop,
             [&]() { timedOut = true; loop.quit(); });
-        timeout.start(600000);   // 600s — the decoder is ~350M params (large)
+        // 30 min — UniRig is large (~1.44 GB across the 3 files; the decoder
+        // alone is 1.2 GB), so a generous cap for slow links; a truly dead
+        // connection still can't hang the synchronous rig call forever.
+        timeout.start(1800000);
         dl->startDownload(url, dest, label);
         loop.exec();
         QObject::disconnect(onDone);
