@@ -1547,9 +1547,15 @@ Rectangle {
 
             // ── Idle: skeleton type + entry points + options ──────────────
             Column {
+                id: rigIdle
                 width: parent.width - 16
                 spacing: 8
                 visible: !rigCol.marking
+
+                // True when the ML (UniRig) backend is selected. UniRig predicts
+                // the whole skeleton from geometry, so the template type, markers
+                // and up-axis (all template-only inputs) are hidden for it.
+                readonly property bool isUnirig: root.rigAlgos[root.rigAlgoIndex] === "unirig"
 
                 // Skeleton algorithm — Pinocchio (native template, offline) or
                 // UniRig (ML, ONNX; falls back to the template when unavailable).
@@ -1568,21 +1574,27 @@ Rectangle {
                         onPicked: function(i) { root.rigAlgoIndex = i }
                     }
                 }
+                // AI-powered notice — shown only for UniRig, makes the local-model
+                // nature explicit.
                 Text {
                     width: parent.width
-                    visible: root.rigAlgos[root.rigAlgoIndex] === "unirig"
+                    visible: rigIdle.isUnirig
                     wrapMode: Text.Wrap
                     color: PropertiesPanelController.textColor
-                    opacity: 0.6
+                    opacity: 0.7
                     font.pixelSize: 9
-                    text: "UniRig (MIT, SIGGRAPH 2025) predicts the skeleton from geometry "
-                        + "(ML). Needs an ONNX build + first-run model download; falls back "
-                        + "to the template below when unavailable. Skeletons trained on "
-                        + "Articulation-XL2.0 (CC-BY-4.0)."
+                    text: "✨ AI-powered. UniRig (MIT, SIGGRAPH 2025) predicts the full "
+                        + "skeleton from the mesh geometry using a local ML model — no "
+                        + "template or markers needed. The model (~1.4 GB) downloads once "
+                        + "on first use and then runs entirely on your machine (offline). "
+                        + "Falls back to the template rig if the model can't be loaded. "
+                        + "Trained on Articulation-XL2.0 (CC-BY-4.0)."
                 }
 
+                // ---- Template-only controls (hidden when UniRig is selected) ----
                 // Skeleton type — used by Pinocchio (and as the UniRig fallback).
                 Text {
+                    visible: !rigIdle.isUnirig
                     text: "Skeleton type"
                     color: PropertiesPanelController.textColor
                     opacity: 0.8
@@ -1590,6 +1602,7 @@ Rectangle {
                 }
                 Flow {
                     width: parent.width
+                    visible: !rigIdle.isUnirig
                     spacing: 4
                     RigSegments {
                         options: root.rigTemplates
@@ -1602,8 +1615,9 @@ Rectangle {
                     width: parent.width
                     spacing: 6
                     RigButton {
-                        // Markers are a humanoid concept (chin/shoulders/wrists/
-                        // hips/knees) — only offered for the humanoid template.
+                        // Markers are a humanoid TEMPLATE concept — UniRig predicts
+                        // its own structure, so this is hidden for the ML backend.
+                        visible: !rigIdle.isUnirig
                         label: "Place markers…"
                         buttonEnabled: rigCol.canRig && !AutoRigController.busy
                             && root.rigTemplates[root.rigTemplateIndex] === "humanoid"
@@ -1611,7 +1625,10 @@ Rectangle {
                             root.rigUpAxes[root.rigUpAxisIndex])
                     }
                     RigButton {
-                        label: AutoRigController.busy ? "Rigging…" : "Auto-Rig (template)"
+                        // Label reflects the backend: AI prediction vs template embed.
+                        label: AutoRigController.busy
+                            ? "Rigging…"
+                            : (rigIdle.isUnirig ? "Generate Rig (AI)" : "Auto-Rig (template)")
                         buttonEnabled: rigCol.canRig && !AutoRigController.busy
                         onClicked: root.runAutoRig()
                     }
@@ -1623,8 +1640,9 @@ Rectangle {
                     onToggled: root.rigAlsoSkin = !root.rigAlsoSkin
                 }
 
-                // Advanced options toggle (just the up-axis picker for now).
+                // Advanced options toggle — template-only (up-axis), hidden for UniRig.
                 RigCheckbox {
+                    visible: !rigIdle.isUnirig
                     label: "Advanced options"
                     checked: root.rigShowAdvanced
                     onToggled: root.rigShowAdvanced = !root.rigShowAdvanced
@@ -1633,7 +1651,7 @@ Rectangle {
                 Column {
                     width: parent.width
                     spacing: 6
-                    visible: root.rigShowAdvanced
+                    visible: root.rigShowAdvanced && !rigIdle.isUnirig
 
                     Text {
                         text: "Up axis (+Y is the in-app default)"
