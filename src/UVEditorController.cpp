@@ -101,17 +101,6 @@ void UVEditorController::setSelectionMode(int mode)
     emit selectionModeChanged();
 }
 
-void UVEditorController::setSelectionSyncEnabled(bool on)
-{
-    if (m_selectionSyncEnabled == on)
-        return;
-    m_selectionSyncEnabled = on;
-    emit selectionSyncEnabledChanged();
-    if (on)
-        pullSelectionFromEdit();
-    notifyUvSelectionChanged();
-}
-
 void UVEditorController::clearUvSelection()
 {
     if (m_selectedUvVerts.isEmpty() && m_selectedUvEdges.isEmpty() && m_selectedUvFaces.isEmpty())
@@ -120,8 +109,6 @@ void UVEditorController::clearUvSelection()
     m_selectedUvEdges.clear();
     m_selectedUvFaces.clear();
     notifyUvSelectionChanged();
-    if (m_selectionSyncEnabled && !m_syncInProgress)
-        pushSelectionToEdit();
 }
 
 void UVEditorController::notifyUvSelectionChanged()
@@ -292,8 +279,6 @@ void UVEditorController::applySelectionSet(const QSet<int>& verts, const QSet<in
     }
 
     notifyUvSelectionChanged();
-    if (m_selectionSyncEnabled && !m_syncInProgress)
-        pushSelectionToEdit();
 }
 
 void UVEditorController::pickAt(double u, double v, int modifiers, double pickRadiusUv)
@@ -485,10 +470,7 @@ QVariantList UVEditorController::contextIslandFaces() const
 void UVEditorController::onEditSelectionChanged()
 {
     updateContextIslandsFromEdit();
-    if (m_selectionSyncEnabled && !m_syncInProgress)
-        pullSelectionFromEdit();
-    else
-        notifyUvSelectionChanged();
+    notifyUvSelectionChanged();
 }
 
 void UVEditorController::updateContextIslandsFromEdit()
@@ -530,85 +512,6 @@ void UVEditorController::updateContextIslandsFromEdit()
     }
 
     m_contextIslandIds = islands;
-}
-
-void UVEditorController::pullSelectionFromEdit()
-{
-    auto* edit = EditModeController::instance();
-    if (!edit || !edit->isEditModeActive() || !m_activeEntity
-        || edit->editEntity() != m_activeEntity)
-        return;
-
-    const bool prevSync = m_syncInProgress;
-    m_syncInProgress = true;
-    QSet<int> verts;
-    QSet<int> edges;
-    QSet<int> faces;
-
-    for (int gv : edit->selectedVertices()) {
-        for (size_t vi = 0; vi < m_uvVerts.size(); ++vi) {
-            if (m_uvVerts[vi].meshGlobalVert == gv)
-                verts.insert(static_cast<int>(vi));
-        }
-    }
-    for (const auto& ge : edit->selectedEdges()) {
-        for (size_t ei = 0; ei < m_uvEdges.size(); ++ei) {
-            const auto& ue = m_uvEdges[ei];
-            if ((ue.meshGlobalV0 == ge.first && ue.meshGlobalV1 == ge.second)
-                || (ue.meshGlobalV0 == ge.second && ue.meshGlobalV1 == ge.first))
-                edges.insert(static_cast<int>(ei));
-        }
-    }
-    for (int gt : edit->selectedFaces()) {
-        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
-            if (m_uvTris[fi].meshGlobalTri == gt)
-                faces.insert(static_cast<int>(fi));
-        }
-    }
-
-    m_selectedUvVerts = verts;
-    m_selectedUvEdges = edges;
-    m_selectedUvFaces = faces;
-    m_syncInProgress = prevSync;
-    notifyUvSelectionChanged();
-}
-
-void UVEditorController::pushSelectionToEdit()
-{
-    auto* edit = EditModeController::instance();
-    if (!edit || !edit->isEditModeActive() || !m_activeEntity
-        || edit->editEntity() != m_activeEntity)
-        return;
-
-    m_syncInProgress = true;
-    edit->setSelectionMode(static_cast<int>(m_selectionMode));
-    edit->deselectAll();
-
-    bool first = true;
-    if (m_selectionMode == FaceMode) {
-        for (int fi : m_selectedUvFaces) {
-            if (fi < 0 || fi >= static_cast<int>(m_uvTris.size()))
-                continue;
-            edit->selectFace(m_uvTris[fi].meshGlobalTri, !first);
-            first = false;
-        }
-    } else if (m_selectionMode == EdgeMode) {
-        for (int ei : m_selectedUvEdges) {
-            if (ei < 0 || ei >= static_cast<int>(m_uvEdges.size()))
-                continue;
-            const auto& e = m_uvEdges[ei];
-            edit->selectEdge(e.meshGlobalV0, e.meshGlobalV1, !first);
-            first = false;
-        }
-    } else {
-        for (int vi : m_selectedUvVerts) {
-            if (vi < 0 || vi >= static_cast<int>(m_uvVerts.size()))
-                continue;
-            edit->selectVertex(m_uvVerts[vi].meshGlobalVert, !first);
-            first = false;
-        }
-    }
-    m_syncInProgress = false;
 }
 
 void UVEditorController::setShowTextureBackground(bool on)
@@ -1206,17 +1109,9 @@ void UVEditorController::rebuildMeshCache()
         : tr("UV layout — %1 (sub-mesh selection)").arg(QString::fromStdString(entity->getName()));
 
     const bool built = buildFromEntity(entity, submeshFilter, m_uvChannel);
-    if (!built || entity != prevEntity) {
-        const bool pendingPull = m_selectionSyncEnabled && built && entity != prevEntity;
-        if (pendingPull)
-            m_syncInProgress = true;
+    if (!built || entity != prevEntity)
         clearUvSelection();
-        if (pendingPull)
-            m_syncInProgress = false;
-    }
     updateContextIslandsFromEdit();
     ++m_meshRevision;
     emit meshDataChanged();
-    if (m_selectionSyncEnabled && !m_syncInProgress)
-        pullSelectionFromEdit();
 }

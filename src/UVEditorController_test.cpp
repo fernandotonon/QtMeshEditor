@@ -306,7 +306,7 @@ TEST_F(UVEditorControllerTest, FacePickMissesEmptySpaceOutsideRadius)
     EXPECT_EQ(ctrl->selectedFaceCount(), 0);
 }
 
-TEST_F(UVEditorControllerTest, ContextIslandsHighlightWithoutSync)
+TEST_F(UVEditorControllerTest, ContextIslandsHighlightFromEditSelection)
 {
     auto mesh = createInMemoryTriangleMesh("UVEditor_ctx_island");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -325,35 +325,11 @@ TEST_F(UVEditorControllerTest, ContextIslandsHighlightWithoutSync)
 
     edit->setSelectionMode(EditModeController::FaceMode);
     edit->selectFace(0);
-    EXPECT_FALSE(ctrl->selectionSyncEnabled());
     EXPECT_EQ(ctrl->selectedFaceCount(), 0);
     EXPECT_FALSE(ctrl->contextIslandFaces().isEmpty());
 }
 
-TEST_F(UVEditorControllerTest, SyncPullsEditSelectionIntoUv)
-{
-    auto mesh = createInMemoryTriangleMesh("UVEditor_sync_pull");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UVEditor_sync_pull_node");
-    auto* entity = sceneMgr->createEntity("UVEditor_sync_pull_entity", mesh);
-    node->attachObject(entity);
-
-    UVEditorController* ctrl = UVEditorController::instance();
-    SelectionSet::getSingleton()->selectOne(entity);
-    ctrl->refresh();
-    ASSERT_TRUE(ctrl->hasMesh());
-
-    auto* edit = EditModeController::instance();
-    ASSERT_TRUE(edit->enterEditMode());
-    ctrl->refresh();
-
-    edit->selectVertex(0);
-    ctrl->setSelectionSyncEnabled(true);
-    EXPECT_GE(ctrl->selectedVertexCount(), 1);
-    EXPECT_EQ(edit->selectedVertexCount(), ctrl->selectedVertexCount());
-}
-
-TEST_F(UVEditorControllerTest, FacePickWorksInEditModeWithoutSync)
+TEST_F(UVEditorControllerTest, FacePickWorksInEditMode)
 {
     auto mesh = createInMemoryTriangleMesh("UVEditor_edit_pick");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -375,74 +351,4 @@ TEST_F(UVEditorControllerTest, FacePickWorksInEditModeWithoutSync)
 
     ctrl->pickAt(0.25, 0.25, UVEditorController::NoModifier, 0.5);
     EXPECT_GE(ctrl->selectedFaceCount(), 1);
-}
-
-TEST_F(UVEditorControllerTest, SyncPickKeepsSelectionWhenEditModeInactive)
-{
-    auto mesh = createInMemoryTriangleMesh("UVEditor_sync_no_edit");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UVEditor_sync_no_edit_node");
-    auto* entity = sceneMgr->createEntity("UVEditor_sync_no_edit_entity", mesh);
-    node->attachObject(entity);
-
-    UVEditorController* ctrl = UVEditorController::instance();
-    SelectionSet::getSingleton()->selectOne(entity);
-    ctrl->setSelectionMode(UVEditorController::FaceMode);
-    ctrl->setSelectionSyncEnabled(true);
-    ctrl->refresh();
-    ASSERT_TRUE(ctrl->hasMesh());
-
-    ctrl->pickAt(0.25, 0.25, UVEditorController::NoModifier, 0.5);
-    EXPECT_GE(ctrl->selectedFaceCount(), 1);
-}
-
-TEST_F(UVEditorControllerTest, SyncPushesUvSelectionToEdit)
-{
-    auto mesh = createInMemoryTriangleMesh("UVEditor_sync_push");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UVEditor_sync_push_node");
-    auto* entity = sceneMgr->createEntity("UVEditor_sync_push_entity", mesh);
-    node->attachObject(entity);
-
-    UVEditorController* ctrl = UVEditorController::instance();
-    SelectionSet::getSingleton()->selectOne(entity);
-    ctrl->setSelectionMode(UVEditorController::FaceMode);
-    ctrl->refresh();
-    ASSERT_TRUE(ctrl->hasMesh());
-
-    auto* edit = EditModeController::instance();
-    ASSERT_TRUE(edit->enterEditMode());
-    ctrl->setSelectionSyncEnabled(true);
-    ctrl->refresh();
-    ASSERT_TRUE(ctrl->hasMesh());
-    ASSERT_GE(ctrl->triangles().size(), 1);
-
-    ctrl->pickAt(0.25, 0.25, UVEditorController::NoModifier, 0.5);
-    EXPECT_GE(ctrl->selectedFaceCount(), 1);
-    EXPECT_GE(edit->selectedFaceCount(), 1);
-}
-
-TEST_F(UVEditorControllerTest, SyncDoesNotLoopOnUvPick)
-{
-    auto mesh = createInMemoryTriangleMesh("UVEditor_sync_loop");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UVEditor_sync_loop_node");
-    auto* entity = sceneMgr->createEntity("UVEditor_sync_loop_entity", mesh);
-    node->attachObject(entity);
-
-    UVEditorController* ctrl = UVEditorController::instance();
-    SelectionSet::getSingleton()->selectOne(entity);
-    ctrl->setSelectionMode(UVEditorController::FaceMode);
-    ctrl->refresh();
-    ASSERT_TRUE(ctrl->hasMesh());
-
-    auto* edit = EditModeController::instance();
-    ASSERT_TRUE(edit->enterEditMode());
-    ctrl->setSelectionSyncEnabled(true);
-    ctrl->refresh();
-
-    QSignalSpy editSpy(edit, &EditModeController::editSelectionChanged);
-    ctrl->pickAt(0.25, 0.25, UVEditorController::NoModifier, 0.5);
-    EXPECT_GE(ctrl->selectedFaceCount(), 1);
-    EXPECT_LT(editSpy.count(), 8);
 }

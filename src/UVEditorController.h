@@ -20,7 +20,7 @@ class VertexData;
 
 /// QML-facing singleton for the UV editor panel (issues #459 / #460).
 /// Extracts UV layouts, groups islands, supports UV-space component
-/// selection (vertex / edge / face), and optional sync with Edit Mode.
+/// selection (vertex / edge / face), with read-only island tint from Edit Mode.
 class UVEditorController : public QObject
 {
     Q_OBJECT
@@ -38,8 +38,6 @@ class UVEditorController : public QObject
     Q_PROPERTY(int islandCount READ islandCount NOTIFY meshDataChanged)
 
     Q_PROPERTY(int selectionMode READ selectionMode WRITE setSelectionMode NOTIFY selectionModeChanged)
-    Q_PROPERTY(bool selectionSyncEnabled READ selectionSyncEnabled WRITE setSelectionSyncEnabled
-                   NOTIFY selectionSyncEnabledChanged)
     Q_PROPERTY(int selectionRevision READ selectionRevision NOTIFY uvSelectionChanged)
     Q_PROPERTY(int selectedVertexCount READ selectedVertexCount NOTIFY uvSelectionChanged)
     Q_PROPERTY(int selectedEdgeCount READ selectedEdgeCount NOTIFY uvSelectionChanged)
@@ -86,9 +84,6 @@ public:
     int selectionMode() const { return static_cast<int>(m_selectionMode); }
     void setSelectionMode(int mode);
 
-    bool selectionSyncEnabled() const { return m_selectionSyncEnabled; }
-    void setSelectionSyncEnabled(bool on);
-
     int selectionRevision() const { return m_selectionRevision; }
     int selectedVertexCount() const { return static_cast<int>(m_selectedUvVerts.size()); }
     int selectedEdgeCount() const { return static_cast<int>(m_selectedUvEdges.size()); }
@@ -103,7 +98,7 @@ public:
     Q_INVOKABLE QVariantList selectionEdges() const;
     Q_INVOKABLE QVariantList selectionFaces() const;
 
-    /// Read-only island tint for the current 3D Edit Mode selection (sync off).
+    /// Read-only island tint for the current 3D Edit Mode selection.
     Q_INVOKABLE QVariantList contextIslandFaces() const;
 
     Q_INVOKABLE void clearUvSelection();
@@ -124,7 +119,6 @@ signals:
     void meshDataChanged();
     void fitToViewRequested();
     void selectionModeChanged();
-    void selectionSyncEnabledChanged();
     void uvSelectionChanged();
 
 private:
@@ -161,8 +155,6 @@ private:
     void notifyUvSelectionChanged();
     void onEditSelectionChanged();
     void updateContextIslandsFromEdit();
-    void pullSelectionFromEdit();
-    void pushSelectionToEdit();
     static IslandResult computeIslandsFromHalfEdgeMesh(const HalfEdgeMesh& hem);
     static bool readUvChannel(const Ogre::VertexData* vertexData, int channel,
                               std::vector<Ogre::Vector2>& outUvs);
@@ -184,7 +176,6 @@ private:
     QVariantList m_triangles;
 
     SelectionMode m_selectionMode = VertexMode;
-    bool m_selectionSyncEnabled = false;
     int m_selectionRevision = 0;
     QSet<int> m_selectedUvVerts;
     QSet<int> m_selectedUvEdges;
@@ -196,7 +187,6 @@ private:
     std::vector<UvEdge> m_uvEdges;
 
     Ogre::Entity* m_activeEntity = nullptr;
-    bool m_syncInProgress = false;
 };
 
 #endif // UV_EDITOR_CONTROLLER_H

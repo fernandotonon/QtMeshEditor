@@ -199,38 +199,6 @@ Rectangle {
                 }
             }
 
-            Row {
-                spacing: 4
-                anchors.verticalCenter: parent.verticalCenter
-                Rectangle {
-                    width: 18; height: 18; radius: 3
-                    color: UVEditorController.selectionSyncEnabled
-                        ? ThemeManager.highlightColor
-                        : ThemeManager.inputColor
-                    border.color: ThemeManager.borderColor
-                    border.width: 1
-                    anchors.verticalCenter: parent.verticalCenter
-                    Text {
-                        anchors.centerIn: parent
-                        text: UVEditorController.selectionSyncEnabled ? "\u2713" : ""
-                        color: ThemeManager.textColor
-                        font.pixelSize: 10
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: UVEditorController.selectionSyncEnabled
-                            = !UVEditorController.selectionSyncEnabled
-                    }
-                }
-                Text {
-                    text: "Sync"
-                    color: ThemeManager.textColor
-                    font.pixelSize: 11
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-
             Text {
                 text: "Channel"
                 color: ThemeManager.disabledTextColor
