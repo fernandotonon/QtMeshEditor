@@ -133,7 +133,11 @@ UniRigPredictor::Result UniRigPredictor::detokenize(
     size_t end = ids.size();
     while (end > begin && ids[end-1] == kTokPad) --end;
     if (end <= begin) return failResult(QStringLiteral("UniRig: empty token stream."));
-    if (ids[end-1] == kTokEos) --end;
+    // The last real token MUST be EOS (matches the reference tokenizer, which
+    // raises "last token is not eos"). Drop it before the walk.
+    if (ids[end-1] != kTokEos)
+        return failResult(QStringLiteral("UniRig: token stream does not end with EOS."));
+    --end;
 
     struct DJoint { std::array<double,3> pos; std::array<double,3> parentPos; bool isRoot; };
     std::vector<DJoint> djoints;
@@ -205,37 +209,12 @@ UniRigPredictor::Result UniRigPredictor::detokenize(
         r.joints.push_back(std::move(jt));
     }
 
-    // Parent-before-child ordering (Ogre bone creation needs a valid topo order).
-    {
-        const int n = static_cast<int>(r.joints.size());
-        std::vector<std::vector<int>> kids(n);
-        std::vector<int> roots;
-        for (int k = 0; k < n; ++k) {
-            if (r.joints[k].parent < 0) roots.push_back(k);
-            else kids[r.joints[k].parent].push_back(k);
-        }
-        std::vector<int> order; order.reserve(n);
-        std::vector<int> stack(roots.rbegin(), roots.rend());
-        std::vector<bool> seen(n, false);
-        while (!stack.empty()) {
-            int cur = stack.back(); stack.pop_back();
-            if (seen[cur]) continue;
-            seen[cur] = true; order.push_back(cur);
-            for (auto it = kids[cur].rbegin(); it != kids[cur].rend(); ++it) stack.push_back(*it);
-        }
-        for (int k = 0; k < n; ++k) if (!seen[k]) order.push_back(k);
-        if (static_cast<int>(order.size()) == n) {
-            std::vector<int> remap(n);
-            for (int newIdx = 0; newIdx < n; ++newIdx) remap[order[newIdx]] = newIdx;
-            std::vector<Joint> reordered; reordered.reserve(n);
-            for (int oldIdx : order) {
-                Joint jt = r.joints[oldIdx];
-                jt.parent = jt.parent < 0 ? -1 : remap[jt.parent];
-                reordered.push_back(std::move(jt));
-            }
-            r.joints = std::move(reordered);
-        }
-    }
+    // NOTE: joints are returned in EMISSION order, which is already a valid
+    // parent-before-child topo order — every joint's parent (last_joint, or an
+    // earlier joint via a branch's explicit parent triple) was emitted before
+    // it, so parent index < own index by construction. We deliberately do NOT
+    // reorder here: callers (and tests) rely on emission-order indexing, and
+    // Ogre bone creation is happy with any order where parents precede children.
     r.ok = true;
     return r;
 }
