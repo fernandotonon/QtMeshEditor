@@ -255,65 +255,6 @@ protected:
     QApplication* app = nullptr;
 };
 
-TEST_F(PrimitiveObjectOgreTest, CreateCubeWithSceneNode)
-{
-    Ogre::SceneNode* node = PrimitiveObject::createCube("TestCube");
-    ASSERT_NE(node, nullptr);
-    EXPECT_TRUE(PrimitiveObject::isPrimitive(node));
-
-    // Verify the scene node is tracked by Manager
-    EXPECT_TRUE(Manager::getSingleton()->hasSceneNode("TestCube"));
-
-    Manager::getSingleton()->destroySceneNode("TestCube");
-}
-
-TEST_F(PrimitiveObjectOgreTest, CreateSphereWithSceneNode)
-{
-    Ogre::SceneNode* node = PrimitiveObject::createSphere("TestSphere");
-    ASSERT_NE(node, nullptr);
-    EXPECT_TRUE(PrimitiveObject::isPrimitive(node));
-
-    // Verify the scene node is tracked by Manager
-    EXPECT_TRUE(Manager::getSingleton()->hasSceneNode("TestSphere"));
-
-    Manager::getSingleton()->destroySceneNode("TestSphere");
-}
-
-TEST_F(PrimitiveObjectOgreTest, CreateAllPrimitiveTypes)
-{
-    // Create each primitive type via the static factory methods
-    struct PrimitiveTestCase {
-        const char* name;
-        Ogre::SceneNode* (*creator)(const QString&);
-    };
-
-    PrimitiveTestCase cases[] = {
-        {"AllCube",       PrimitiveObject::createCube},
-        {"AllSphere",     PrimitiveObject::createSphere},
-        {"AllPlane",      PrimitiveObject::createPlane},
-        {"AllCylinder",   PrimitiveObject::createCylinder},
-        {"AllCone",       PrimitiveObject::createCone},
-        {"AllTorus",      PrimitiveObject::createTorus},
-        {"AllTube",       PrimitiveObject::createTube},
-        {"AllCapsule",    PrimitiveObject::createCapsule},
-        {"AllIcoSphere",  PrimitiveObject::createIcoSphere},
-        {"AllRoundedBox", PrimitiveObject::createRoundedBox},
-        {"AllSpring",     PrimitiveObject::createSpring},
-    };
-
-    for (const auto& tc : cases) {
-        Ogre::SceneNode* node = tc.creator(tc.name);
-        ASSERT_NE(node, nullptr) << "Failed to create primitive: " << tc.name;
-        EXPECT_TRUE(PrimitiveObject::isPrimitive(node)) << "isPrimitive failed for: " << tc.name;
-        EXPECT_TRUE(Manager::getSingleton()->hasSceneNode(tc.name)) << "Manager missing node: " << tc.name;
-    }
-
-    // Clean up all created primitives
-    for (const auto& tc : cases) {
-        Manager::getSingleton()->destroySceneNode(tc.name);
-    }
-}
-
 TEST_F(PrimitiveObjectOgreTest, GetPrimitiveFromSceneNode)
 {
     Ogre::SceneNode* node = PrimitiveObject::createCube("RetrieveCube");

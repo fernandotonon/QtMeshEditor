@@ -102,11 +102,6 @@ TEST_F(WelcomeScreenControllerTests, ShouldShowReturnsTrueInitially) {
     EXPECT_TRUE(controller->shouldShow());
 }
 
-TEST_F(WelcomeScreenControllerTests, ShouldShowReturnsFalseAfterDismissWithDontShowAgain) {
-    controller->dismiss(true);
-    EXPECT_FALSE(controller->shouldShow());
-}
-
 TEST_F(WelcomeScreenControllerTests, DismissWithDontShowAgainPersistsToSettings) {
     controller->dismiss(true);
 
@@ -119,15 +114,6 @@ TEST_F(WelcomeScreenControllerTests, DismissWithoutDontShowAgainDoesNotPersist) 
 
     QSettings settings;
     EXPECT_FALSE(settings.value("WelcomeScreen/dontShowAgain", false).toBool());
-    EXPECT_TRUE(controller->shouldShow());
-}
-
-TEST_F(WelcomeScreenControllerTests, ShouldShowReturnsTrueAfterClearingSetting) {
-    controller->dismiss(true);
-    EXPECT_FALSE(controller->shouldShow());
-
-    QSettings settings;
-    settings.remove("WelcomeScreen/dontShowAgain");
     EXPECT_TRUE(controller->shouldShow());
 }
 

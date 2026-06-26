@@ -35,11 +35,6 @@ protected:
     }
 };
 
-TEST_F(MaterialTest, ConstructionDoesNotCrash) {
-    Material materialWidget;
-    EXPECT_TRUE(true);
-}
-
 TEST_F(MaterialTest, UIElementsExist) {
     Material materialWidget;
 

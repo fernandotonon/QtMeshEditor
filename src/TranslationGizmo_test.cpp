@@ -137,14 +137,6 @@ TEST_F(TranslationGizmoTests, CreateUnamedGizmo) {
     ASSERT_EQ(unamedGizmo.getZAxis().getName(), "Z");
 }
 
-TEST_F(TranslationGizmoTests, CreateAxis) {
-    mTranslationGizmo->createAxis();
-
-    ASSERT_NE(&mTranslationGizmo->getXAxis(), nullptr);
-    ASSERT_NE(&mTranslationGizmo->getYAxis(), nullptr);
-    ASSERT_NE(&mTranslationGizmo->getZAxis(), nullptr);
-}
-
 TEST_F(TranslationGizmoTests, SetScale) {
     mTranslationGizmo->setScale(2.0);
     EXPECT_EQ(mTranslationGizmo->getScale(), 2.0);

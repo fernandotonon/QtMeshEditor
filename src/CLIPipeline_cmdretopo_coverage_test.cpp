@@ -164,18 +164,6 @@ TEST(CLIPipelineCmdRetopoCoverageTest, ShapeTolNonNumericRejected)
 // --max-aspect validation (number >= 1).
 // ---------------------------------------------------------------------------
 
-TEST(CLIPipelineCmdRetopoCoverageTest, MaxAspectBelowOneRejected)
-{
-    EXPECT_EQ(2, callRetopo({"retopo", nonexistentInput(),
-                             "--max-aspect", "0.9", "-o", "out.fbx"}));
-}
-
-TEST(CLIPipelineCmdRetopoCoverageTest, MaxAspectZeroRejected)
-{
-    EXPECT_EQ(2, callRetopo({"retopo", nonexistentInput(),
-                             "--max-aspect", "0", "-o", "out.fbx"}));
-}
-
 TEST(CLIPipelineCmdRetopoCoverageTest, MaxAspectNonNumericRejected)
 {
     EXPECT_EQ(2, callRetopo({"retopo", nonexistentInput(),

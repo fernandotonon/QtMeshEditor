@@ -44,16 +44,6 @@ protected:
 
 // -- RTShaderLib directory ---------------------------------------------------
 
-TEST_F(RTSSResourcesTest, RTShaderLibDirectoryExists)
-{
-    EXPECT_TRUE(QDir(rtssDir).exists()) << rtssDir.toStdString();
-}
-
-TEST_F(RTSSResourcesTest, MainDirectoryExists)
-{
-    EXPECT_TRUE(QDir(mainDir).exists()) << mainDir.toStdString();
-}
-
 // -- Core GLSL shader files --------------------------------------------------
 
 TEST_F(RTSSResourcesTest, HasFFPLibTransform)

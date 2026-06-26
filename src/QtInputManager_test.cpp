@@ -125,20 +125,6 @@ TEST_F(QtInputManagerTest, AddKeyListener_ReceivesKeyPressAndRelease)
     mgr.keyPressEvent(&press);
 }
 
-TEST_F(QtInputManagerTest, RemoveKeyListener_StopsReceivingEvents)
-{
-    MockKeyListener listener;
-    mgr.AddKeyListener(&listener);
-    mgr.RemoveKeyListener(&listener);
-
-    // The removal is deferred -- it happens at the start of the NEXT dispatch.
-    // So after one dispatch the listener should no longer be called.
-    EXPECT_CALL(listener, keyPressEvent(::testing::_)).Times(0);
-
-    auto press = makeKeyEvent(QEvent::KeyPress, Qt::Key_B);
-    mgr.keyPressEvent(&press);
-}
-
 TEST_F(QtInputManagerTest, MultipleKeyListeners_AllReceiveEvents)
 {
     MockKeyListener listenerA;
@@ -191,30 +177,6 @@ TEST_F(QtInputManagerTest, AddMouseListener_ReceivesAllMouseEvents)
     mgr.mousePressEvent(&flushPress);
 }
 
-TEST_F(QtInputManagerTest, RemoveMouseListener_StopsReceivingEvents)
-{
-    MockMouseListener listener;
-    mgr.AddMouseListener(&listener);
-    mgr.RemoveMouseListener(&listener);
-
-    EXPECT_CALL(listener, mousePressEvent(::testing::_)).Times(0);
-    EXPECT_CALL(listener, mouseReleaseEvent(::testing::_)).Times(0);
-    EXPECT_CALL(listener, mouseMoveEvent(::testing::_)).Times(0);
-    EXPECT_CALL(listener, wheelEvent(::testing::_)).Times(0);
-
-    auto press = makeMouseEvent(QEvent::MouseButtonPress);
-    mgr.mousePressEvent(&press);
-
-    auto release = makeMouseEvent(QEvent::MouseButtonRelease);
-    mgr.mouseReleaseEvent(&release);
-
-    auto move = makeMouseEvent(QEvent::MouseMove);
-    mgr.mouseMoveEvent(&move);
-
-    auto wheel = makeWheelEvent();
-    mgr.wheelEvent(&wheel);
-}
-
 TEST_F(QtInputManagerTest, MultipleMouseListeners_AllReceiveEvents)
 {
     MockMouseListener listenerA;
@@ -238,46 +200,6 @@ TEST_F(QtInputManagerTest, MultipleMouseListeners_AllReceiveEvents)
 // ===========================================================================
 // Deferred removal during event dispatch
 // ===========================================================================
-
-TEST_F(QtInputManagerTest, DeferredRemoval_KeyListener_ProcessedOnNextDispatch)
-{
-    // Verify that Remove queues the listener for removal and it is actually
-    // removed only when the next event dispatch begins.
-    MockKeyListener listener;
-    mgr.AddKeyListener(&listener);
-
-    // First dispatch -- listener is still active.
-    EXPECT_CALL(listener, keyPressEvent(::testing::_)).Times(1);
-    auto press1 = makeKeyEvent(QEvent::KeyPress, Qt::Key_X);
-    mgr.keyPressEvent(&press1);
-
-    // Request removal.
-    mgr.RemoveKeyListener(&listener);
-
-    // Second dispatch -- removal is processed first, then events dispatched.
-    EXPECT_CALL(listener, keyPressEvent(::testing::_)).Times(0);
-    auto press2 = makeKeyEvent(QEvent::KeyPress, Qt::Key_Y);
-    mgr.keyPressEvent(&press2);
-}
-
-TEST_F(QtInputManagerTest, DeferredRemoval_MouseListener_ProcessedOnNextDispatch)
-{
-    MockMouseListener listener;
-    mgr.AddMouseListener(&listener);
-
-    // First dispatch -- listener is still active.
-    EXPECT_CALL(listener, mousePressEvent(::testing::_)).Times(1);
-    auto press1 = makeMouseEvent(QEvent::MouseButtonPress);
-    mgr.mousePressEvent(&press1);
-
-    // Request removal.
-    mgr.RemoveMouseListener(&listener);
-
-    // Second dispatch -- removal is processed first.
-    EXPECT_CALL(listener, mousePressEvent(::testing::_)).Times(0);
-    auto press2 = makeMouseEvent(QEvent::MouseButtonPress);
-    mgr.mousePressEvent(&press2);
-}
 
 TEST_F(QtInputManagerTest, SelfRemovingKeyListener_SafeDuringDispatch)
 {

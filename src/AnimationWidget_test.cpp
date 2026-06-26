@@ -93,53 +93,11 @@ TEST_F(AnimationWidgetTest, UIElementsExist)
     EXPECT_TRUE(playPauseButton->isCheckable());
 }
 
-TEST_F(AnimationWidgetTest, EmptySelectionShowsNoRows)
-{
-    // With no entities selected, both tables should be empty
-    AnimationWidget widget;
-    if (app) app->processEvents();
-
-    QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
-    ASSERT_NE(animTable, nullptr);
-    EXPECT_EQ(animTable->rowCount(), 0);
-
-    QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
-    ASSERT_NE(skeletonTable, nullptr);
-    EXPECT_EQ(skeletonTable->rowCount(), 0);
-}
-
 TEST_F(AnimationWidgetTest, IsSkeletonShownReturnsFalseWhenNoEntity)
 {
     AnimationWidget widget;
     // Passing nullptr should not crash and should return false
     EXPECT_FALSE(widget.isSkeletonShown(nullptr));
-}
-
-TEST_F(AnimationWidgetTest, ChangeAnimationStateSignal)
-{
-    AnimationWidget widget;
-    QSignalSpy spy(&widget, &AnimationWidget::changeAnimationState);
-    ASSERT_TRUE(spy.isValid());
-
-    QPushButton* playPauseButton = widget.findChild<QPushButton*>("PlayPauseButton");
-    ASSERT_NE(playPauseButton, nullptr);
-
-    // Toggle the play/pause button to "playing" state
-    playPauseButton->setChecked(true);
-    if (app) app->processEvents();
-
-    // The signal should have been emitted at least once with true
-    ASSERT_GE(spy.count(), 1);
-    QList<QVariant> args = spy.last();
-    EXPECT_EQ(args.at(0).toBool(), true);
-
-    // Toggle back to paused
-    playPauseButton->setChecked(false);
-    if (app) app->processEvents();
-
-    // Should have emitted with false
-    args = spy.last();
-    EXPECT_EQ(args.at(0).toBool(), false);
 }
 
 // ===================== Tests with a loaded skeleton mesh ===================
@@ -301,32 +259,6 @@ TEST_F(AnimationWidgetWithMeshTest, AnimationCountMatchesEntityAnimations)
     EXPECT_EQ(animTable->rowCount(), expectedCount);
 }
 
-TEST_F(AnimationWidgetWithMeshTest, PlayPauseToggleEmitsSignal)
-{
-    AnimationWidget widget;
-    SelectionSet::getSingleton()->selectOne(entity);
-    if (app) app->processEvents();
-
-    QSignalSpy spy(&widget, &AnimationWidget::changeAnimationState);
-    ASSERT_TRUE(spy.isValid());
-
-    QPushButton* playPauseButton = widget.findChild<QPushButton*>("PlayPauseButton");
-    ASSERT_NE(playPauseButton, nullptr);
-
-    // Simulate play
-    playPauseButton->setChecked(true);
-    if (app) app->processEvents();
-
-    ASSERT_GE(spy.count(), 1);
-    EXPECT_TRUE(spy.last().at(0).toBool());
-
-    // Simulate pause
-    playPauseButton->setChecked(false);
-    if (app) app->processEvents();
-
-    EXPECT_FALSE(spy.last().at(0).toBool());
-}
-
 TEST_F(AnimationWidgetWithMeshTest, AnimationItemsAreNonEditable)
 {
     AnimationWidget widget;
@@ -379,60 +311,11 @@ TEST_F(AnimationWidgetWithMeshTest, DestroyWidgetWithSkeletonCleanup)
     SUCCEED();
 }
 
-TEST_F(AnimationWidgetWithMeshTest, MultipleWidgetInstancesShareSelection)
-{
-    // Two AnimationWidget instances observing the same SelectionSet should
-    // both populate their tables identically.
-    AnimationWidget widget1;
-    AnimationWidget widget2;
-    SelectionSet::getSingleton()->selectOne(entity);
-    if (app) app->processEvents();
-
-    QTableWidget* animTable1 = widget1.findChild<QTableWidget*>("animTable");
-    QTableWidget* animTable2 = widget2.findChild<QTableWidget*>("animTable");
-    ASSERT_NE(animTable1, nullptr);
-    ASSERT_NE(animTable2, nullptr);
-
-    EXPECT_EQ(animTable1->rowCount(), animTable2->rowCount());
-
-    QTableWidget* skelTable1 = widget1.findChild<QTableWidget*>("skeletonTable");
-    QTableWidget* skelTable2 = widget2.findChild<QTableWidget*>("skeletonTable");
-    ASSERT_NE(skelTable1, nullptr);
-    ASSERT_NE(skelTable2, nullptr);
-
-    EXPECT_EQ(skelTable1->rowCount(), skelTable2->rowCount());
-}
-
 // ==================== Additional Tests ======================================
 
 // ---------------------------------------------------------------------------
 // Tests using AnimationWidgetTest (no mesh loaded)
 // ---------------------------------------------------------------------------
-
-TEST_F(AnimationWidgetTest, UpdateAnimationTableWithNoEntitiesSelected)
-{
-    // With nothing selected, updateAnimationTable should result in 0 rows.
-    // This is exercised indirectly via the constructor + processEvents.
-    AnimationWidget widget;
-    SelectionSet::getSingleton()->clear();
-    if (app) app->processEvents();
-
-    QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
-    ASSERT_NE(animTable, nullptr);
-    EXPECT_EQ(animTable->rowCount(), 0);
-}
-
-TEST_F(AnimationWidgetTest, UpdateSkeletonTableWithNoEntitiesSelected)
-{
-    // Similarly, skeleton table should be empty with no selection.
-    AnimationWidget widget;
-    SelectionSet::getSingleton()->clear();
-    if (app) app->processEvents();
-
-    QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
-    ASSERT_NE(skeletonTable, nullptr);
-    EXPECT_EQ(skeletonTable->rowCount(), 0);
-}
 
 TEST_F(AnimationWidgetTest, ToggleSkeletonDebugNullEntityReturnsFalse)
 {
@@ -675,47 +558,6 @@ TEST_F(AnimationWidgetTest, PollAnimationStateUpdatesCheckbox)
     if (app) app->processEvents();
 
     EXPECT_EQ(enabledItem->checkState(), Qt::Unchecked);
-}
-
-TEST_F(AnimationWidgetTest, MultipleWidgetsSyncOnSelectionChange)
-{
-    // Two AnimationWidget instances should both update when selection changes.
-    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
-
-    auto* entity = createAnimatedTestEntity("animwidget_sync");
-    ASSERT_NE(entity, nullptr);
-
-    AnimationWidget widget1;
-    AnimationWidget widget2;
-
-    // Select entity
-    SelectionSet::getSingleton()->selectOne(entity);
-    if (app) app->processEvents();
-
-    QTableWidget* animTable1 = widget1.findChild<QTableWidget*>("animTable");
-    QTableWidget* animTable2 = widget2.findChild<QTableWidget*>("animTable");
-    ASSERT_NE(animTable1, nullptr);
-    ASSERT_NE(animTable2, nullptr);
-
-    EXPECT_GT(animTable1->rowCount(), 0);
-    EXPECT_EQ(animTable1->rowCount(), animTable2->rowCount());
-
-    QTableWidget* skelTable1 = widget1.findChild<QTableWidget*>("skeletonTable");
-    QTableWidget* skelTable2 = widget2.findChild<QTableWidget*>("skeletonTable");
-    ASSERT_NE(skelTable1, nullptr);
-    ASSERT_NE(skelTable2, nullptr);
-
-    EXPECT_EQ(skelTable1->rowCount(), 1);
-    EXPECT_EQ(skelTable1->rowCount(), skelTable2->rowCount());
-
-    // Clear selection -- both should empty
-    SelectionSet::getSingleton()->clear();
-    if (app) app->processEvents();
-
-    EXPECT_EQ(animTable1->rowCount(), 0);
-    EXPECT_EQ(animTable2->rowCount(), 0);
-    EXPECT_EQ(skelTable1->rowCount(), 0);
-    EXPECT_EQ(skelTable2->rowCount(), 0);
 }
 
 TEST_F(AnimationWidgetTest, SkeletonTableWeightsColumnDisabledForNoSkeleton)

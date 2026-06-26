@@ -291,22 +291,10 @@ MainWindow::MainWindow(QWidget *parent) :
     if(mCurrentPalette == "light"){
             ui->actionLight->setChecked(true);
     } else if(mCurrentPalette == "custom"){
-        // Reflect the checked state synchronously, but DEFER the actual
-        // QApplication::setPalette() to after the constructor returns. Calling
-        // it here dispatches ApplicationPaletteChange events synchronously into
-        // a half-built widget tree (the two QColorDialogs are already alive from
-        // the init list) — under headless Xvfb that re-entrancy could wedge the
-        // event loop for tens of seconds (the MainWindowTest
-        // ConstructorAppliesCustomPaletteFromSettings CI hang). Deferring via a
-        // queued single-shot applies it once the window is fully built and the
-        // loop is spinning — exactly the path a runtime color-pick takes.
-        const QColor customColor = settings.value("customPalette").value<QColor>();
+        custom_Palette_Color_Selected(settings.value("customPalette").value<QColor>());
         ui->actionCustom->blockSignals(true);
         ui->actionCustom->setChecked(true);
         ui->actionCustom->blockSignals(false);
-        QTimer::singleShot(0, this, [this, customColor]() {
-            custom_Palette_Color_Selected(customColor);
-        });
     } else {
         ui->actionDark->setChecked(true);
     }

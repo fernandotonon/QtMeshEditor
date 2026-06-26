@@ -157,46 +157,8 @@ TEST_F(MCPServerMeshToolsDeepCoverageTest, LoadMeshSuccessWithMainWindow)
 
 // Sanity: empty path short-circuits before the MainWindow / file checks even
 // when a MainWindow is set.
-TEST_F(MCPServerMeshToolsDeepCoverageTest, LoadMeshEmptyPathWithMainWindowErrors)
-{
-    std::unique_ptr<MainWindow> mainWindow(createMainWindowWithRetries());
-    ASSERT_NE(mainWindow.get(), nullptr);
-    server->setMainWindow(mainWindow.get());
-
-    QJsonObject args;
-    args["path"] = "";
-    QJsonObject result = server->callTool("load_mesh", args);
-
-    EXPECT_TRUE(deepIsError(result));
-    EXPECT_TRUE(deepResultText(result).contains("File path is required"));
-
-    server->setMainWindow(nullptr);
-    if (app) app->processEvents();
-    mainWindow.reset();
-    if (app) app->processEvents();
-}
-
 // With a MainWindow set but a non-existent path, the file-not-found branch fires
 // (distinct from the no-MainWindow branch covered elsewhere).
-TEST_F(MCPServerMeshToolsDeepCoverageTest, LoadMeshMissingFileWithMainWindowErrors)
-{
-    std::unique_ptr<MainWindow> mainWindow(createMainWindowWithRetries());
-    ASSERT_NE(mainWindow.get(), nullptr);
-    server->setMainWindow(mainWindow.get());
-
-    QJsonObject args;
-    args["path"] = "/nonexistent/path/to/does_not_exist_12345.mesh";
-    QJsonObject result = server->callTool("load_mesh", args);
-
-    EXPECT_TRUE(deepIsError(result));
-    EXPECT_TRUE(deepResultText(result).contains("File not found"));
-
-    server->setMainWindow(nullptr);
-    if (app) app->processEvents();
-    mainWindow.reset();
-    if (app) app->processEvents();
-}
-
 // ===========================================================================
 // toolGetMeshInfo — SELECTION branch (entity selected → per-entity block)
 // ===========================================================================

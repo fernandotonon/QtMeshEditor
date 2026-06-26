@@ -131,12 +131,6 @@ TEST_F(SDManagerTest, ModelsDirectory)
     EXPECT_TRUE(dir.contains("sd_models"));
 }
 
-TEST_F(SDManagerTest, ScanForModels)
-{
-    // Should not crash even with empty directory
-    manager->scanForModels();
-}
-
 TEST_F(SDManagerTest, ScanForModelsFindsSupportedExtensionsAndMarksRecommendationsDownloaded)
 {
     QString originalDir = manager->modelsDirectory();

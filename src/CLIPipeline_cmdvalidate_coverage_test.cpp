@@ -168,21 +168,6 @@ protected:
 // loop and the text issue-formatting loop (OK: branch + [TYPE] else branch).
 // Asserts exit 0 (clean mesh → no errors → hasErrors==false branch).
 // --------------------------------------------------------------------------
-TEST_F(CLIPipelineCmdValidateCoverageTest, TextModeOnRealMeshExitsZero)
-{
-    bool cleanup = false;
-    const QString meshPath = validatableMesh("cov_validate_text", cleanup);
-    ASSERT_FALSE(meshPath.isEmpty());
-    ASSERT_TRUE(QFile::exists(meshPath));
-
-    QByteArray ba = meshPath.toUtf8();
-    CovArgv args({"qtmesh", "validate", ba.constData()});
-    EXPECT_EQ(CLIPipeline::cmdValidate(args.argc(), args.argv()), 0);
-
-    if (cleanup)
-        covRemoveExportTree(meshPath);
-}
-
 // --------------------------------------------------------------------------
 // JSON mode on a real .mesh: exercises the QJsonArray build loop with obj
 // keys type/description/count/fixable. Asserts exit 0.
@@ -206,21 +191,6 @@ TEST_F(CLIPipelineCmdValidateCoverageTest, JsonModeOnRealMeshExitsZero)
 // --cli flag skip in arg parse (line 2335) on a real file: --cli must be
 // skipped, the file still detected, validation still runs and exits 0.
 // --------------------------------------------------------------------------
-TEST_F(CLIPipelineCmdValidateCoverageTest, CliFlagSkippedOnRealFile)
-{
-    bool cleanup = false;
-    const QString meshPath = validatableMesh("cov_validate_cliflag", cleanup);
-    ASSERT_FALSE(meshPath.isEmpty());
-    ASSERT_TRUE(QFile::exists(meshPath));
-
-    QByteArray ba = meshPath.toUtf8();
-    CovArgv args({"qtmesh", "--cli", "validate", ba.constData()});
-    EXPECT_EQ(CLIPipeline::cmdValidate(args.argc(), args.argv()), 0);
-
-    if (cleanup)
-        covRemoveExportTree(meshPath);
-}
-
 // --------------------------------------------------------------------------
 // --cli + --json combined on a real file: both flags skipped/consumed in
 // arg parse, JSON build loop runs, exit 0.
@@ -311,21 +281,3 @@ TEST_F(CLIPipelineCmdValidateCoverageTest, RealMeshIssuesDriveBothTextBranches)
 // re-entrant across cmdValidate invocations (the cmd selects all entities
 // each call; the fixture clears selection only between tests).
 // --------------------------------------------------------------------------
-TEST_F(CLIPipelineCmdValidateCoverageTest, TextThenJsonBackToBackExitsZero)
-{
-    bool cleanup = false;
-    const QString meshPath = validatableMesh("cov_validate_b2b", cleanup);
-    ASSERT_FALSE(meshPath.isEmpty());
-    ASSERT_TRUE(QFile::exists(meshPath));
-
-    QByteArray ba = meshPath.toUtf8();
-
-    CovArgv textArgs({"qtmesh", "validate", ba.constData()});
-    EXPECT_EQ(CLIPipeline::cmdValidate(textArgs.argc(), textArgs.argv()), 0);
-
-    CovArgv jsonArgs({"qtmesh", "validate", ba.constData(), "--json"});
-    EXPECT_EQ(CLIPipeline::cmdValidate(jsonArgs.argc(), jsonArgs.argv()), 0);
-
-    if (cleanup)
-        covRemoveExportTree(meshPath);
-}

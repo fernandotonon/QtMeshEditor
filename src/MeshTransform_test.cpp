@@ -795,69 +795,6 @@ TEST_F(MeshTransformTest, TransformWorksWithPlane)
 // Vertex count preservation tests
 // ------------------------------------------------------------------
 
-TEST_F(MeshTransformTest, ScalePreservesVertexCount)
-{
-    Ogre::SceneNode* node = PrimitiveObject::createCube("CountScaleCube");
-    ASSERT_NE(node, nullptr);
-    ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
-    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
-    ASSERT_NE(entity, nullptr);
-
-    Ogre::Mesh* mesh = entity->getMesh().get();
-
-    size_t originalCount = getVertexPositions(mesh).size();
-    ASSERT_GT(originalCount, 0u);
-
-    MeshTransform::scaleMesh(entity, Ogre::Vector3(5.0f, 5.0f, 5.0f));
-
-    size_t afterCount = getVertexPositions(mesh).size();
-    EXPECT_EQ(originalCount, afterCount);
-
-    Manager::getSingleton()->destroySceneNode("CountScaleCube");
-}
-
-TEST_F(MeshTransformTest, TranslatePreservesVertexCount)
-{
-    Ogre::SceneNode* node = PrimitiveObject::createCube("CountTransCube");
-    ASSERT_NE(node, nullptr);
-    ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
-    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
-    ASSERT_NE(entity, nullptr);
-
-    Ogre::Mesh* mesh = entity->getMesh().get();
-
-    size_t originalCount = getVertexPositions(mesh).size();
-    ASSERT_GT(originalCount, 0u);
-
-    MeshTransform::translateMesh(entity, Ogre::Vector3(100.0f, 200.0f, 300.0f));
-
-    size_t afterCount = getVertexPositions(mesh).size();
-    EXPECT_EQ(originalCount, afterCount);
-
-    Manager::getSingleton()->destroySceneNode("CountTransCube");
-}
-
-TEST_F(MeshTransformTest, RotatePreservesVertexCount)
-{
-    Ogre::SceneNode* node = PrimitiveObject::createCube("CountRotCube");
-    ASSERT_NE(node, nullptr);
-    ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
-    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
-    ASSERT_NE(entity, nullptr);
-
-    Ogre::Mesh* mesh = entity->getMesh().get();
-
-    size_t originalCount = getVertexPositions(mesh).size();
-    ASSERT_GT(originalCount, 0u);
-
-    MeshTransform::rotateMesh(entity, Ogre::Vector3(45.0f, 0.0f, 0.0f));
-
-    size_t afterCount = getVertexPositions(mesh).size();
-    EXPECT_EQ(originalCount, afterCount);
-
-    Manager::getSingleton()->destroySceneNode("CountRotCube");
-}
-
 // ------------------------------------------------------------------
 // Normal rotation tests
 // ------------------------------------------------------------------

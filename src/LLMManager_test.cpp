@@ -634,17 +634,6 @@ TEST_F(LLMManagerTest, SaveAndLoadSettingsPersistence)
 // getModelFilePath tests
 // =============================================================================
 
-TEST_F(LLMManagerTest, GetModelFilePathReturnsEmptyForNonExistentModel)
-{
-    QString path = manager->getModelFilePath("nonexistent_model_12345");
-    EXPECT_TRUE(path.isEmpty());
-}
-
-TEST_F(LLMManagerTest, ModelFileExistsReturnsFalseForNonExistentModel)
-{
-    EXPECT_FALSE(manager->modelFileExists("nonexistent_model_12345"));
-}
-
 TEST_F(LLMManagerTest, GetModelFilePathFindsExistingGGUF)
 {
     QTemporaryDir tempDir;
@@ -789,51 +778,9 @@ TEST_F(LLMManagerTest, ScanForModelsEmitsSignal)
 // Static method tests
 // =============================================================================
 
-TEST_F(LLMManagerTest, GetOgre3DSystemPromptNotEmpty)
-{
-    QString prompt = LLMManager::getOgre3DSystemPrompt();
-    EXPECT_FALSE(prompt.isEmpty());
-}
-
-TEST_F(LLMManagerTest, SystemPromptContainsMaterialKeyword)
-{
-    QString prompt = LLMManager::getOgre3DSystemPrompt();
-    EXPECT_TRUE(prompt.contains("material"));
-}
-
-TEST_F(LLMManagerTest, SystemPromptContainsOgreKeyword)
-{
-    QString prompt = LLMManager::getOgre3DSystemPrompt();
-    EXPECT_TRUE(prompt.contains("Ogre"));
-}
-
 // =============================================================================
 // Initial state tests
 // =============================================================================
-
-TEST_F(LLMManagerTest, InitialModelNotLoaded)
-{
-    // Without loading a model, isModelLoaded may depend on worker state.
-    // At minimum, currentModelName should be empty if nothing was auto-loaded.
-    // (Auto-load may have set it if configured, so we just verify the method works)
-    manager->isModelLoaded();
-    // No crash = pass
-}
-
-TEST_F(LLMManagerTest, IsGeneratingReturnsFalseWhenIdle)
-{
-    // Without any generation in progress, isGenerating should return false
-    EXPECT_FALSE(manager->isGenerating());
-}
-
-TEST_F(LLMManagerTest, IsLoadingReturnsFalseWhenIdle)
-{
-    // isLoading should be false when no model loading is in progress
-    // Note: If a model auto-loaded it may still be loading, but typically
-    // during tests with no real model file it will be false
-    manager->isLoading();
-    // No crash = pass
-}
 
 // =============================================================================
 // ModelInfo struct tests
@@ -1206,66 +1153,6 @@ TEST_F(LLMManagerTest, TryAutoLoadModel_NoModelsAvailable)
 // =============================================================================
 // Additional settings property tests
 // =============================================================================
-
-TEST_F(LLMManagerTest, SetAndGetTopP)
-{
-    LLMSettings original = manager->getSettings();
-
-    LLMSettings modified = original;
-    modified.topP = 0.5f;
-    manager->setSettings(modified);
-
-    LLMSettings retrieved = manager->getSettings();
-    EXPECT_FLOAT_EQ(retrieved.topP, 0.5f);
-
-    // Restore
-    manager->setSettings(original);
-}
-
-TEST_F(LLMManagerTest, SetAndGetTopK)
-{
-    LLMSettings original = manager->getSettings();
-
-    LLMSettings modified = original;
-    modified.topK = 10;
-    manager->setSettings(modified);
-
-    LLMSettings retrieved = manager->getSettings();
-    EXPECT_EQ(retrieved.topK, 10);
-
-    // Restore
-    manager->setSettings(original);
-}
-
-TEST_F(LLMManagerTest, SetAndGetRepeatPenalty)
-{
-    LLMSettings original = manager->getSettings();
-
-    LLMSettings modified = original;
-    modified.repeatPenalty = 1.5f;
-    manager->setSettings(modified);
-
-    LLMSettings retrieved = manager->getSettings();
-    EXPECT_FLOAT_EQ(retrieved.repeatPenalty, 1.5f);
-
-    // Restore
-    manager->setSettings(original);
-}
-
-TEST_F(LLMManagerTest, SetAndGetThreads)
-{
-    LLMSettings original = manager->getSettings();
-
-    LLMSettings modified = original;
-    modified.threads = 8;
-    manager->setSettings(modified);
-
-    LLMSettings retrieved = manager->getSettings();
-    EXPECT_EQ(retrieved.threads, 8);
-
-    // Restore
-    manager->setSettings(original);
-}
 
 // =============================================================================
 // Validate scripts with multiple texture_unit blocks

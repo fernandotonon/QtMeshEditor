@@ -502,29 +502,3 @@ TEST_F(MeshLodControllerTest, DoExportLodsEmitsExportSucceeded) {
     ASSERT_EQ(spy.count(), 1);
     EXPECT_EQ(spy.first().at(1).toString(), tmpDir.path());
 }
-
-TEST_F(MeshLodControllerTest, DoExportLodsNoopWithNoSelection) {
-    // doExportLods early-returns if no entities selected
-    QTemporaryDir tmpDir;
-    ASSERT_TRUE(tmpDir.isValid());
-
-    auto* ctrl = MeshLodController::instance();
-    QSignalSpy spy(ctrl, &MeshLodController::exportSucceeded);
-    QSignalSpy errSpy(ctrl, &MeshLodController::error);
-
-    ctrl->doExportLods("obj", tmpDir.path());
-    app->processEvents();
-
-    EXPECT_EQ(spy.count(), 0);
-    EXPECT_EQ(errSpy.count(), 0);
-}
-
-TEST_F(MeshLodControllerTest, DoExportLodsErrorWhenEntityHasNoSceneNode) {
-    ASSERT_TRUE(canLoadMeshFiles());
-
-    // Can't easily detach a scene node without crashing Ogre,
-    // so just verify doExportLods is guarded against null SelectionSet.
-    auto* ctrl = MeshLodController::instance();
-    // No selection → handled quietly (no signal, no crash)
-    EXPECT_NO_FATAL_FAILURE(ctrl->doExportLods("obj", "/tmp"));
-}

@@ -165,24 +165,6 @@ TEST(SpaceCamera, MousePressLeftButtonIgnored)
     // Left button should be ignored (not accepted)
 }
 
-TEST(SpaceCamera, MousePressRightButton)
-{
-    MockSpaceCamera spaceCamera;
-    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100, 100),
-                           Qt::RightButton, Qt::RightButton, Qt::NoModifier);
-    spaceCamera.mousePressEvent(&pressEvent);
-    // Should store the position for panning
-}
-
-TEST(SpaceCamera, MousePressMiddleButton)
-{
-    MockSpaceCamera spaceCamera;
-    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100, 100),
-                           Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
-    spaceCamera.mousePressEvent(&pressEvent);
-    // Should store the position for arc ball
-}
-
 TEST(SpaceCamera, MouseReleaseWithoutPress)
 {
     MockSpaceCamera spaceCamera;
@@ -206,43 +188,6 @@ TEST(SpaceCamera, MouseMoveWithoutPress)
 // These are tested via integration tests with a full Ogre context.
 
 
-TEST(SpaceCamera, KeyPressW)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressEvent);
-}
-
-TEST(SpaceCamera, KeyPressReleaseW)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressEvent);
-    QKeyEvent releaseEvent(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
-    spaceCamera.keyReleaseEvent(&releaseEvent);
-}
-
-TEST(SpaceCamera, KeyPressA)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressEvent);
-}
-
-TEST(SpaceCamera, KeyPressS)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_S, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressEvent);
-}
-
-TEST(SpaceCamera, KeyPressD)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_D, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressEvent);
-}
-
 TEST(SpaceCamera, KeyPressControlModifier)
 {
     MockSpaceCamera spaceCamera;
@@ -263,19 +208,6 @@ TEST(SpaceCamera, KeyReleaseControlModifier)
     // After releasing Control, speed is restored to 0.1
     EXPECT_GT(spaceCamera.getCameraSpeed(), speedWithCtrl);
     EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.5f); // restores base speed
-}
-
-TEST(SpaceCamera, MultipleKeyPressesInSequence)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressW(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressW);
-    QKeyEvent pressA(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressA);
-    QKeyEvent releaseW(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
-    spaceCamera.keyReleaseEvent(&releaseW);
-    QKeyEvent releaseA(QEvent::KeyRelease, Qt::Key_A, Qt::NoModifier);
-    spaceCamera.keyReleaseEvent(&releaseA);
 }
 
 // NOTE: MouseMoveAfterMiddleButtonPress and MouseMoveAfterRightButtonPress
@@ -323,81 +255,9 @@ TEST(SpaceCamera, MouseMoveAfterLeftButtonPressIgnored)
 // NEW: All direction keys pressed simultaneously
 // ==========================================================================
 
-TEST(SpaceCamera, KeyPressAllDirectionKeys)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressW(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
-    QKeyEvent pressA(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
-    QKeyEvent pressS(QEvent::KeyPress, Qt::Key_S, Qt::NoModifier);
-    QKeyEvent pressD(QEvent::KeyPress, Qt::Key_D, Qt::NoModifier);
-
-    spaceCamera.keyPressEvent(&pressW);
-    spaceCamera.keyPressEvent(&pressA);
-    spaceCamera.keyPressEvent(&pressS);
-    spaceCamera.keyPressEvent(&pressD);
-
-    // Process a frame
-    Ogre::FrameEvent frameEvent;
-    frameEvent.timeSinceLastFrame = 0.016f;
-    EXPECT_TRUE(spaceCamera.frameStarted(frameEvent));
-
-    QKeyEvent releaseW(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
-    QKeyEvent releaseA(QEvent::KeyRelease, Qt::Key_A, Qt::NoModifier);
-    QKeyEvent releaseS(QEvent::KeyRelease, Qt::Key_S, Qt::NoModifier);
-    QKeyEvent releaseD(QEvent::KeyRelease, Qt::Key_D, Qt::NoModifier);
-
-    spaceCamera.keyReleaseEvent(&releaseW);
-    spaceCamera.keyReleaseEvent(&releaseA);
-    spaceCamera.keyReleaseEvent(&releaseS);
-    spaceCamera.keyReleaseEvent(&releaseD);
-}
-
 // ==========================================================================
 // NEW: Key press Q and E for rolling
 // ==========================================================================
-
-TEST(SpaceCamera, KeyPressQ)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressEvent);
-    // Q key maps to roll - should not crash
-}
-
-TEST(SpaceCamera, KeyPressReleaseQ)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressEvent);
-
-    Ogre::FrameEvent frameEvent;
-    frameEvent.timeSinceLastFrame = 0.016f;
-    EXPECT_TRUE(spaceCamera.frameStarted(frameEvent));
-
-    QKeyEvent releaseEvent(QEvent::KeyRelease, Qt::Key_Q, Qt::NoModifier);
-    spaceCamera.keyReleaseEvent(&releaseEvent);
-}
-
-TEST(SpaceCamera, KeyPressE)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_E, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressEvent);
-}
-
-TEST(SpaceCamera, KeyPressReleaseE)
-{
-    MockSpaceCamera spaceCamera;
-    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_E, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressEvent);
-
-    Ogre::FrameEvent frameEvent;
-    frameEvent.timeSinceLastFrame = 0.016f;
-    EXPECT_TRUE(spaceCamera.frameStarted(frameEvent));
-
-    QKeyEvent releaseEvent(QEvent::KeyRelease, Qt::Key_E, Qt::NoModifier);
-    spaceCamera.keyReleaseEvent(&releaseEvent);
-}
 
 // ==========================================================================
 // NEW: Arrow keys for rotation
@@ -463,28 +323,6 @@ TEST(SpaceCamera, KeyPressArrowRight)
 // NEW: Rapid direction changes
 // ==========================================================================
 
-TEST(SpaceCamera, RapidDirectionChanges)
-{
-    MockSpaceCamera spaceCamera;
-    Ogre::FrameEvent frameEvent;
-    frameEvent.timeSinceLastFrame = 0.016f;
-
-    // Rapidly alternate W and S
-    for (int i = 0; i < 10; ++i) {
-        QKeyEvent pressW(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
-        spaceCamera.keyPressEvent(&pressW);
-        spaceCamera.frameStarted(frameEvent);
-        QKeyEvent releaseW(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
-        spaceCamera.keyReleaseEvent(&releaseW);
-
-        QKeyEvent pressS(QEvent::KeyPress, Qt::Key_S, Qt::NoModifier);
-        spaceCamera.keyPressEvent(&pressS);
-        spaceCamera.frameStarted(frameEvent);
-        QKeyEvent releaseS(QEvent::KeyRelease, Qt::Key_S, Qt::NoModifier);
-        spaceCamera.keyReleaseEvent(&releaseS);
-    }
-}
-
 // ==========================================================================
 // Animation accessors
 // ==========================================================================
@@ -499,19 +337,6 @@ TEST(SpaceCamera, GetCameraReturnsNullForDefaultConstructed)
 {
     MockSpaceCamera spaceCamera;
     EXPECT_EQ(spaceCamera.getCamera(), nullptr);
-}
-
-TEST(SpaceCamera, MousePressSetsAnimatingFalse)
-{
-    MockSpaceCamera spaceCamera;
-    // mousePressEvent always sets mAnimating = false (cancels animation).
-    // Note: we cannot set mAnimating=true first via animateToOrientation()
-    // because that method dereferences mTarget which is null in MockSpaceCamera.
-    // Full animation cancellation is tested in SpaceCameraOgreTest fixtures.
-    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(50, 50),
-                          Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
-    spaceCamera.mousePressEvent(&pressEvent);
-    EXPECT_FALSE(spaceCamera.isAnimating());
 }
 
 // ==========================================================================

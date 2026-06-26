@@ -37,12 +37,6 @@ protected:
     QApplication* app = nullptr;
 };
 
-TEST_F(MaterialComboDelegateTest, Constructor)
-{
-    MaterialComboDelegate delegate;
-    EXPECT_NE(&delegate, nullptr);
-}
-
 TEST_F(MaterialComboDelegateTest, CreateEditorReturnsComboBox)
 {
     MaterialComboDelegate delegate;

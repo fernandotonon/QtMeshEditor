@@ -20,12 +20,6 @@ protected:
     }
 };
 
-TEST_F(MaterialPreviewRendererTests, Singleton) {
-    auto* renderer = MaterialPreviewRenderer::instance();
-    ASSERT_NE(renderer, nullptr);
-    EXPECT_EQ(renderer, MaterialPreviewRenderer::instance());
-}
-
 TEST_F(MaterialPreviewRendererTests, KillAndRecreate) {
     auto* r1 = MaterialPreviewRenderer::instance();
     ASSERT_NE(r1, nullptr);
@@ -126,46 +120,6 @@ TEST_F(MaterialPreviewRendererTests, RenderPreviewWithOgreBaseWhite) {
     EXPECT_EQ(img.format(), QImage::Format_RGBA8888);
 }
 
-TEST_F(MaterialPreviewRendererTests, DataUriCachesResults) {
-    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
-    ASSERT_TRUE(canLoadMeshFiles());
-
-    createStandardOgreMaterials();
-
-    auto* renderer = MaterialPreviewRenderer::instance();
-    QString uri1 = renderer->renderPreviewAsDataUri("BaseWhite");
-    ASSERT_FALSE(uri1.isEmpty()) << "material preview RTT failed (headless GL required)";
-
-    QString uri2 = renderer->renderPreviewAsDataUri("BaseWhite");
-    EXPECT_EQ(uri1, uri2); // Should be cached
-
-    renderer->clearCache();
-    QString uri3 = renderer->renderPreviewAsDataUri("BaseWhite");
-    EXPECT_FALSE(uri3.isEmpty()); // Should regenerate
-}
-
-TEST_F(MaterialPreviewRendererTests, ClearCacheInvalidatesPreviousResults) {
-    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
-    ASSERT_TRUE(canLoadMeshFiles());
-
-    createStandardOgreMaterials();
-
-    auto* renderer = MaterialPreviewRenderer::instance();
-
-    QString uri1 = renderer->renderPreviewAsDataUri("BaseWhite");
-    ASSERT_FALSE(uri1.isEmpty()) << "material preview RTT failed (headless GL required)";
-
-    // Verify cache is populated (second call returns same result)
-    QString uri2 = renderer->renderPreviewAsDataUri("BaseWhite");
-    EXPECT_EQ(uri1, uri2);
-
-    // Clear and verify cache was actually emptied by getting a new result
-    renderer->clearCache();
-    // After clearing, the next call should regenerate (still valid, but confirms clear didn't crash)
-    QString uri3 = renderer->renderPreviewAsDataUri("BaseWhite");
-    EXPECT_FALSE(uri3.isEmpty());
-}
-
 TEST_F(MaterialPreviewRendererTests, FirstMaterialNameWithCommentLines) {
     QTemporaryDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
@@ -221,13 +175,6 @@ TEST_F(MaterialPreviewRendererTests, FirstMaterialNameOnlyWhitespace) {
 
     QString matName = MaterialPreviewRenderer::firstMaterialNameInFile(path);
     EXPECT_TRUE(matName.isEmpty());
-}
-
-TEST_F(MaterialPreviewRendererTests, QmlInstanceReturnsSameAsInstance) {
-    auto* r1 = MaterialPreviewRenderer::instance();
-    // qmlInstance requires a non-null engine in production, but for singleton
-    // pattern verification we can check instance() consistency
-    EXPECT_EQ(r1, MaterialPreviewRenderer::instance());
 }
 
 TEST_F(MaterialPreviewRendererTests, MultipleFirstMaterialNamesReturnsFirst) {

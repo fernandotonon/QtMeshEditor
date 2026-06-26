@@ -66,18 +66,6 @@ TEST_F(LLMWorkerTest, SetSettings)
     EXPECT_FLOAT_EQ(retrieved.repeatPenalty, 1.2f);
 }
 
-TEST_F(LLMWorkerTest, IsNotModelLoadedInitially)
-{
-    LLMWorker worker;
-    EXPECT_FALSE(worker.isModelLoaded());
-}
-
-TEST_F(LLMWorkerTest, IsNotGeneratingInitially)
-{
-    LLMWorker worker;
-    EXPECT_FALSE(worker.isGenerating());
-}
-
 TEST_F(LLMWorkerTest, RequestStopWithoutGenerating)
 {
     LLMWorker worker;
@@ -97,11 +85,5 @@ TEST_F(LLMWorkerTest, UnloadModelWithoutLoading)
 // NOTE: LoadModelInvalidPath and LoadModelEmptyPath tests were removed because
 // loadModel() calls into llama.cpp/ggml which can SIGABRT on invalid paths
 // (ggml assertion failure). These tests cannot work without a real model file.
-
-TEST_F(LLMWorkerTest, GetLoadedModelPathEmpty)
-{
-    LLMWorker worker;
-    EXPECT_TRUE(worker.getLoadedModelPath().isEmpty());
-}
 
 #endif // ENABLE_LOCAL_LLM

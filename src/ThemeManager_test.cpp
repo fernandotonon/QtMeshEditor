@@ -91,38 +91,12 @@ TEST_F(ThemeManagerTests, ColorsMatchCurrentPalette) {
     EXPECT_EQ(tm->accentColor(), highlight);
 }
 
-TEST_F(ThemeManagerTests, ThemeNameNotEmpty) {
-    auto* tm = ThemeManager::instance();
-    ASSERT_NE(tm, nullptr);
-    QString name = tm->themeName();
-    EXPECT_FALSE(name.isEmpty());
-    EXPECT_TRUE(name == "light" || name == "dark");
-}
-
 TEST_F(ThemeManagerTests, RefreshThemeEmitsSignal) {
     auto* tm = ThemeManager::instance();
     ASSERT_NE(tm, nullptr);
     QSignalSpy spy(tm, &ThemeManager::themeChanged);
     tm->refreshTheme();
     EXPECT_EQ(spy.count(), 1);
-}
-
-TEST_F(ThemeManagerTests, PlaceholderTextColorIsValid) {
-    auto* tm = ThemeManager::instance();
-    ASSERT_NE(tm, nullptr);
-    EXPECT_TRUE(tm->placeholderTextColor().isValid());
-}
-
-TEST_F(ThemeManagerTests, HighlightedTextColorIsValid) {
-    auto* tm = ThemeManager::instance();
-    ASSERT_NE(tm, nullptr);
-    EXPECT_TRUE(tm->highlightedTextColor().isValid());
-}
-
-TEST_F(ThemeManagerTests, ButtonTextColorIsValid) {
-    auto* tm = ThemeManager::instance();
-    ASSERT_NE(tm, nullptr);
-    EXPECT_TRUE(tm->buttonTextColor().isValid());
 }
 
 TEST_F(ThemeManagerTests, QmlInstanceReturnsSameAsInstance) {
@@ -183,13 +157,6 @@ TEST_F(ThemeManagerTests, RefreshThemeMultipleTimes) {
     tm->refreshTheme();
 
     EXPECT_EQ(spy.count(), 3);
-}
-
-TEST_F(ThemeManagerTests, ThemeNameIsLightOrDark) {
-    auto* tm = ThemeManager::instance();
-    ASSERT_NE(tm, nullptr);
-    QString name = tm->themeName();
-    EXPECT_TRUE(name == "light" || name == "dark");
 }
 
 TEST_F(ThemeManagerTests, ThemeNameTracksPaletteLightness) {

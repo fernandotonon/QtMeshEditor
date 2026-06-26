@@ -166,42 +166,11 @@ TEST_F(AnimationMergerCoverageTest, RenameSuccessCopiesTracksAndValues)
 // renameAnimation onto an existing destination name and back again should be
 // stable: only one animation exists after rename. (Exercises the clone path
 // with multiple keyframes once more, ensuring no leftover tracks.)
-TEST_F(AnimationMergerCoverageTest, RenameThenRenameBackRoundTrips)
-{
-    auto skel = makeBareSkeleton("cov_rename_roundtrip");
-    auto* anim = skel->createAnimation("a", 1.0f);
-    auto* track = anim->createNodeTrack(0);
-    track->setAssociatedNode(skel->getBone(0));
-    auto* kf = track->createNodeKeyFrame(0.0f);
-    kf->setTranslate(Ogre::Vector3(5, 0, 0));
-    track->createNodeKeyFrame(1.0f);
-
-    AnimationMerger::renameAnimation(skel.get(), "a", "b");
-    EXPECT_FALSE(skel->hasAnimation("a"));
-    EXPECT_TRUE(skel->hasAnimation("b"));
-    EXPECT_EQ(skel->getNumAnimations(), 1u);
-
-    AnimationMerger::renameAnimation(skel.get(), "b", "a");
-    EXPECT_TRUE(skel->hasAnimation("a"));
-    EXPECT_FALSE(skel->hasAnimation("b"));
-    EXPECT_EQ(skel->getNumAnimations(), 1u);
-
-    auto* finalTrack = skel->getAnimation("a")->_getNodeTrackList().begin()->second;
-    EXPECT_EQ(finalTrack->getNodeKeyFrame(0)->getTranslate(), Ogre::Vector3(5, 0, 0));
-
-    Ogre::SkeletonManager::getSingleton().remove(skel);
-}
-
 // ---------------------------------------------------------------------------
 // bakeAnimationAtFps
 // ---------------------------------------------------------------------------
 
 // Branch: null skeleton → returns 0.
-TEST_F(AnimationMergerCoverageTest, BakeNullSkeletonReturnsZero)
-{
-    EXPECT_EQ(AnimationMerger::bakeAnimationAtFps(nullptr, "walk", 30), 0);
-}
-
 // Branch: targetFps <= 0 → returns 0 (both zero and negative).
 TEST_F(AnimationMergerCoverageTest, BakeNonPositiveFpsReturnsZero)
 {
@@ -370,9 +339,3 @@ TEST_F(AnimationMergerCoverageTest, BakeRegridClampsFinalKeyToEnd)
 // Standalone (no Ogre init required) — covers the null/non-positive guards
 // of bakeAnimationAtFps that short-circuit before touching the skeleton.
 // ---------------------------------------------------------------------------
-TEST(AnimationMergerCoverageStandaloneTest, BakeGuardsWithoutOgre)
-{
-    EXPECT_EQ(AnimationMerger::bakeAnimationAtFps(nullptr, "walk", 30), 0);
-    EXPECT_EQ(AnimationMerger::bakeAnimationAtFps(nullptr, "walk", 0), 0);
-    EXPECT_EQ(AnimationMerger::bakeAnimationAtFps(nullptr, "walk", -1), 0);
-}

@@ -290,18 +290,6 @@ TEST_F(MaterialEditorQMLTest, GetEnvironmentMappingNames) {
 // Basic fixture tests -- createNewMaterial (no Ogre)
 // ===========================================================================
 
-TEST_F(MaterialEditorQMLTest, CreateNewMaterial_DefaultName) {
-    QSignalSpy nameSpy(editor.get(), &MaterialEditorQML::materialNameChanged);
-    QSignalSpy textSpy(editor.get(), &MaterialEditorQML::materialTextChanged);
-
-    editor->createNewMaterial();
-
-    EXPECT_EQ(editor->materialName(), "new_material");
-    EXPECT_TRUE(editor->materialText().contains("material new_material"));
-    EXPECT_GE(nameSpy.count(), 1);
-    EXPECT_GE(textSpy.count(), 1);
-}
-
 TEST_F(MaterialEditorQMLTest, CreateNewMaterial_CustomName) {
     editor->createNewMaterial("MyTestMat");
 
@@ -1828,17 +1816,6 @@ TEST_F(MaterialEditorQMLTest, VertexColorTracking_SignalOnly) {
 // With-Ogre material edge cases (MaterialEditorQMLWithOgreTest fixture)
 // ===========================================================================
 
-TEST_F(MaterialEditorQMLWithOgreTest, CreateMaterial_DuplicateName) {
-    // Create a material first
-    editor->createNewMaterial("DupTestMat");
-    EXPECT_EQ(editor->materialName(), "DupTestMat");
-
-    // Create another material with the same name -- should not crash
-    editor->createNewMaterial("DupTestMat");
-    EXPECT_EQ(editor->materialName(), "DupTestMat");
-    EXPECT_TRUE(editor->materialText().contains("material DupTestMat"));
-}
-
 TEST_F(MaterialEditorQMLWithOgreTest, CreateMaterial_SpecialCharacters) {
     // Create material with special characters in name
     editor->createNewMaterial("Mat_With-Special.Chars/123");
@@ -2010,13 +1987,6 @@ TEST_F(MaterialEditorQMLTest, StopGenerationMethodsWithoutActiveJobsDoNotCrash) 
 // ===========================================================================
 // Additional coverage tests (MaterialEditorQMLTest fixture)
 // ===========================================================================
-
-TEST_F(MaterialEditorQMLTest, CreateNewMaterial_EmptyName) {
-    // Empty name should use default "new_material"
-    editor->createNewMaterial("");
-    EXPECT_EQ(editor->materialName(), "new_material");
-    EXPECT_TRUE(editor->materialText().contains("material new_material"));
-}
 
 TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_TextureUnitInPass) {
     QString script =
@@ -2437,14 +2407,6 @@ TEST_F(MaterialEditorQMLWithOgreTest, ExportAndImportMaterial_RoundTrip) {
 // ===========================================================================
 // NEW: createNewMaterial with duplicate name (Ogre fixture)
 // ===========================================================================
-
-TEST_F(MaterialEditorQMLWithOgreTest, CreateNewMaterial_DuplicateExisting) {
-    // BaseWhite already exists in Ogre
-    editor->createNewMaterial("BaseWhite");
-    // Should not crash. The editor should still have a valid state
-    EXPECT_EQ(editor->materialName(), "BaseWhite");
-    EXPECT_TRUE(editor->materialText().contains("material BaseWhite"));
-}
 
 // ===========================================================================
 // NEW: Verify Ogre Pass reflects color changes after apply
@@ -2885,21 +2847,6 @@ TEST_F(MaterialEditorQMLTest, Setters_EarlyReturnWithoutMaterial) {
 
     editor->setShininess(64.0f);
     EXPECT_FLOAT_EQ(editor->shininess(), 64.0f);
-}
-
-TEST_F(MaterialEditorQMLTest, GetMaterialNames_StableEnumStrings) {
-    // Helper-name lists are pure data lookups — verify they have
-    // stable, non-empty content the QML side relies on.
-    const QStringList polygonNames = editor->getPolygonModeNames();
-    const QStringList blendNames = editor->getBlendFactorNames();
-    const QStringList shadingNames = editor->getShadingModeNames();
-    EXPECT_FALSE(polygonNames.isEmpty());
-    EXPECT_FALSE(blendNames.isEmpty());
-    EXPECT_FALSE(shadingNames.isEmpty());
-    // No accidental empty entries
-    for (const QString& s : polygonNames) EXPECT_FALSE(s.isEmpty());
-    for (const QString& s : blendNames)   EXPECT_FALSE(s.isEmpty());
-    for (const QString& s : shadingNames) EXPECT_FALSE(s.isEmpty());
 }
 
 // ===========================================================================

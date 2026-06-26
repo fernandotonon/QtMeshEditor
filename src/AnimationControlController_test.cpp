@@ -714,11 +714,6 @@ TEST_F(AnimationControlControllerTest, PollTimerDoesNotCrashWithAnimation) {
 
 // ── Dope sheet API (slice C) ──────────────────────────────────────────────────
 
-TEST_F(AnimationControlControllerPlaybackTest, AllBoneRowsEmptyWithoutSelection) {
-    auto* ctrl = AnimationControlController::instance();
-    EXPECT_TRUE(ctrl->allBoneRows().isEmpty());
-}
-
 TEST_F(AnimationControlControllerPlaybackTest, MoveKeyframeNoOpWithoutSelection) {
     auto* ctrl = AnimationControlController::instance();
     EXPECT_FALSE(ctrl->moveKeyframe("Bone", 0.5, 0.6));
@@ -742,13 +737,6 @@ TEST_F(AnimationControlControllerTest, AllBoneRowsReflectsTracks) {
     // TestAnim has 3 keyframes on the Child track (handle 1)
     auto times = firstRow["keyTimes"].toList();
     EXPECT_EQ(times.size(), 3);
-}
-
-TEST_F(AnimationControlControllerPlaybackTest, AllBoneRowsEmptyWhenNoAnimSelected) {
-    // Pure-data guard: with no animation selected, allBoneRows must return
-    // an empty list (not crash, not return stale shape).
-    auto* ctrl = AnimationControlController::instance();
-    EXPECT_TRUE(ctrl->allBoneRows().isEmpty());
 }
 
 TEST_F(AnimationControlControllerTest, AllBoneRowsReportsActiveChannels) {

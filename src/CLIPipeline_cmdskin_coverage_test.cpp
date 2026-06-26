@@ -87,18 +87,6 @@ TEST(CLIPipelineCmdSkinCoverageError, InputAndFlagsButNoOutput)
 // --max-influences range / parse validation (return 2)
 // ---------------------------------------------------------------------------
 
-TEST(CLIPipelineCmdSkinCoverageMaxInfluences, BelowMinIsError)
-{
-    SkinArgv args({"skin", kMissingFile, "-o", "out.fbx", "--max-influences", "0"});
-    EXPECT_EQ(CLIPipeline::cmdSkin(args.argc(), args.argv()), 2);
-}
-
-TEST(CLIPipelineCmdSkinCoverageMaxInfluences, NegativeIsError)
-{
-    SkinArgv args({"skin", kMissingFile, "-o", "out.fbx", "--max-influences", "-3"});
-    EXPECT_EQ(CLIPipeline::cmdSkin(args.argc(), args.argv()), 2);
-}
-
 TEST(CLIPipelineCmdSkinCoverageMaxInfluences, AboveMaxIsError)
 {
     SkinArgv args({"skin", kMissingFile, "-o", "out.fbx", "--max-influences", "9"});

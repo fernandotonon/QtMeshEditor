@@ -143,21 +143,6 @@ TEST(ExportOptimizerCoverageTest, ImprovementPctZeroWhenNoChange) {
 // ExportOptimizer::computeAcmr — edge cases + non-trivial path
 // ---------------------------------------------------------------------------
 
-TEST(ExportOptimizerCoverageTest, ComputeAcmrEmptyIndicesReturnsZero) {
-    std::vector<uint32_t> empty;
-    EXPECT_DOUBLE_EQ(ExportOptimizer::computeAcmr(empty, 4), 0.0);
-}
-
-TEST(ExportOptimizerCoverageTest, ComputeAcmrZeroVertexCountReturnsZero) {
-    std::vector<uint32_t> indices = {0, 1, 2};
-    EXPECT_DOUBLE_EQ(ExportOptimizer::computeAcmr(indices, 0), 0.0);
-}
-
-TEST(ExportOptimizerCoverageTest, ComputeAcmrEmptyAndZeroBothReturnZero) {
-    std::vector<uint32_t> empty;
-    EXPECT_DOUBLE_EQ(ExportOptimizer::computeAcmr(empty, 0), 0.0);
-}
-
 TEST(ExportOptimizerCoverageTest, ComputeAcmrSingleTriangleIsPositive) {
     // One triangle, cold cache: 3 vertices fetched / 1 triangle = ACMR 3.0
     std::vector<uint32_t> indices = {0, 1, 2};

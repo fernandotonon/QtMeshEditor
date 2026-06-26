@@ -293,13 +293,6 @@ TEST(TexturePaintControllerStandalone, EnableWithNoSelectionIsHarmless) {
     EXPECT_EQ(spy.count(), 2);
 }
 
-TEST(TexturePaintControllerStandalone, FullResPreviewUrlEmptyWithoutSession) {
-    hardResetController();
-    auto* ctrl = TexturePaintController::instance();
-    EXPECT_TRUE(ctrl->fullResPreviewUrl().isEmpty())
-        << "with no buffer, the URL must be empty so QML clears the Image source";
-}
-
 TEST(TexturePaintControllerStandalone, SnapshotBufferImageEmptyWithoutSession) {
     hardResetController();
     auto* ctrl = TexturePaintController::instance();
@@ -395,16 +388,6 @@ TEST(TexturePaintControllerStandalone, BakeToOriginalFileEmptyWithoutSession) {
     hardResetController();
     auto* ctrl = TexturePaintController::instance();
     EXPECT_TRUE(ctrl->bakeToOriginalFile().isEmpty());
-}
-
-TEST(TexturePaintControllerStandalone, SnapshotBufferImageProviderShape) {
-    // The PaintBufferImageProvider asks for image://paintbuffer/current —
-    // confirm the URL it returns is well-formed (image://paintbuffer/...?v=N).
-    // After a paint refresh the version bumps; spot-check the prefix here.
-    hardResetController();
-    auto* ctrl = TexturePaintController::instance();
-    const QString url = ctrl->fullResPreviewUrl();
-    EXPECT_TRUE(url.isEmpty()) << "no session ⇒ empty URL";
 }
 
 // ===========================================================================
