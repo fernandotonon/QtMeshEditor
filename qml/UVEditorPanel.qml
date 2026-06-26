@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import PropertiesPanel 1.0
 import ThemeManager 1.0
 
-// Read-only UV layout viewer (issue #459). Software Canvas2D — no GL.
+// UV layout viewer with component selection (issues #459 / #460).
 Rectangle {
     id: root
     color: ThemeManager.panelColor
@@ -17,6 +17,21 @@ Rectangle {
 
     property var triCache: []
     property int cachedRevision: -1
+    property int cachedSelectionRevision: -1
+    property var selVertCache: []
+    property var selEdgeCache: []
+    property var selFaceCache: []
+    property var ctxIslandCache: []
+
+    property bool draggingSelect: false
+    property real dragStartX: 0
+    property real dragStartY: 0
+    property real dragEndX: 0
+    property real dragEndY: 0
+
+    readonly property int modNone: 0
+    readonly property int modShift: 0x02000000
+    readonly property int modCtrl: 0x04000000
 
     function uvToScreen(u, v) {
         return Qt.point(
@@ -33,11 +48,30 @@ Rectangle {
     }
 
     function rebuildTriangleCache() {
-        if (UVEditorController.meshRevision === cachedRevision)
+        if (UVEditorController.meshRevision === cachedRevision
+                && UVEditorController.selectionRevision === cachedSelectionRevision)
             return
         cachedRevision = UVEditorController.meshRevision
+        cachedSelectionRevision = UVEditorController.selectionRevision
         triCache = UVEditorController.triangles()
+        selVertCache = UVEditorController.selectionVertices()
+        selEdgeCache = UVEditorController.selectionEdges()
+        selFaceCache = UVEditorController.selectionFaces()
+        ctxIslandCache = UVEditorController.contextIslandFaces()
         viewCanvas.requestPaint()
+    }
+
+    function pickRadiusUv() {
+        return 8.0 / Math.max(1, root.zoom)
+    }
+
+    function eventModifiers(event) {
+        let m = modNone
+        if (event.modifiers & Qt.ShiftModifier)
+            m |= modShift
+        if (event.modifiers & Qt.ControlModifier)
+            m |= modCtrl
+        return m
     }
 
     function resetView() {
@@ -77,6 +111,8 @@ Rectangle {
         }
         function onFitToViewRequested() { root.fitToView() }
         function onShowTextureBackgroundChanged() { viewCanvas.requestPaint() }
+        function onUvSelectionChanged() { root.rebuildTriangleCache() }
+        function onSelectionModeChanged() { viewCanvas.requestPaint() }
     }
 
     Component.onCompleted: {
@@ -90,6 +126,15 @@ Rectangle {
             event.accepted = true
         } else if (event.key === Qt.Key_Home) {
             resetView()
+            event.accepted = true
+        } else if (event.key === Qt.Key_1) {
+            UVEditorController.selectionMode = 0
+            event.accepted = true
+        } else if (event.key === Qt.Key_2) {
+            UVEditorController.selectionMode = 1
+            event.accepted = true
+        } else if (event.key === Qt.Key_3) {
+            UVEditorController.selectionMode = 2
             event.accepted = true
         }
     }
@@ -117,6 +162,41 @@ Rectangle {
                       : ""
                 color: ThemeManager.disabledTextColor
                 font.pixelSize: 10
+            }
+
+            Row {
+                spacing: 2
+                Repeater {
+                    model: [
+                        { label: "V", mode: 0, tip: "UV Vertex (1)" },
+                        { label: "E", mode: 1, tip: "UV Edge (2)" },
+                        { label: "F", mode: 2, tip: "UV Face (3)" }
+                    ]
+                    delegate: Rectangle {
+                        width: 20; height: 18; radius: 3
+                        color: UVEditorController.selectionMode === modelData.mode
+                            ? ThemeManager.highlightColor
+                            : ThemeManager.inputColor
+                        border.color: ThemeManager.borderColor
+                        border.width: 1
+                        ToolTip.visible: modeMa.containsMouse
+                        ToolTip.text: modelData.tip
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: ThemeManager.textColor
+                            font.pixelSize: 10
+                            font.bold: UVEditorController.selectionMode === modelData.mode
+                        }
+                        MouseArea {
+                            id: modeMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: UVEditorController.selectionMode = modelData.mode
+                        }
+                    }
+                }
             }
 
             Text {
@@ -247,7 +327,9 @@ Rectangle {
                     }
 
                     drawGrid(ctx)
+                    drawContextIslands(ctx)
                     drawTriangles(ctx)
+                    drawSelection(ctx)
                     drawUnitBoundary(ctx)
                 }
 
@@ -289,6 +371,68 @@ Rectangle {
                     ctx.restore()
                 }
 
+                function drawContextIslands(ctx) {
+                    if (ctxIslandCache.length === 0)
+                        return
+                    ctx.save()
+                    for (let i = 0; i < ctxIslandCache.length; ++i) {
+                        const t = ctxIslandCache[i]
+                        const p0 = root.uvToScreen(t.u0, t.v0)
+                        const p1 = root.uvToScreen(t.u1, t.v1)
+                        const p2 = root.uvToScreen(t.u2, t.v2)
+                        ctx.beginPath()
+                        ctx.moveTo(p0.x, p0.y)
+                        ctx.lineTo(p1.x, p1.y)
+                        ctx.lineTo(p2.x, p2.y)
+                        ctx.closePath()
+                        ctx.fillStyle = Qt.rgba(ThemeManager.accentColor.r,
+                                                ThemeManager.accentColor.g,
+                                                ThemeManager.accentColor.b, 0.18)
+                        ctx.fill()
+                    }
+                    ctx.restore()
+                }
+
+                function drawSelection(ctx) {
+                    ctx.save()
+                    for (let i = 0; i < selFaceCache.length; ++i) {
+                        const t = selFaceCache[i]
+                        const p0 = root.uvToScreen(t.u0, t.v0)
+                        const p1 = root.uvToScreen(t.u1, t.v1)
+                        const p2 = root.uvToScreen(t.u2, t.v2)
+                        ctx.beginPath()
+                        ctx.moveTo(p0.x, p0.y)
+                        ctx.lineTo(p1.x, p1.y)
+                        ctx.lineTo(p2.x, p2.y)
+                        ctx.closePath()
+                        ctx.fillStyle = Qt.rgba(ThemeManager.highlightColor.r,
+                                                ThemeManager.highlightColor.g,
+                                                ThemeManager.highlightColor.b, 0.35)
+                        ctx.fill()
+                    }
+                    ctx.lineWidth = 2
+                    ctx.strokeStyle = ThemeManager.highlightColor
+                    for (let i = 0; i < selEdgeCache.length; ++i) {
+                        const e = selEdgeCache[i]
+                        const a = root.uvToScreen(e.u0, e.v0)
+                        const b = root.uvToScreen(e.u1, e.v1)
+                        ctx.beginPath()
+                        ctx.moveTo(a.x, a.y)
+                        ctx.lineTo(b.x, b.y)
+                        ctx.stroke()
+                    }
+                    const r = 4
+                    ctx.fillStyle = ThemeManager.highlightColor
+                    for (let i = 0; i < selVertCache.length; ++i) {
+                        const v = selVertCache[i]
+                        const p = root.uvToScreen(v.u, v.v)
+                        ctx.beginPath()
+                        ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+                        ctx.fill()
+                    }
+                    ctx.restore()
+                }
+
                 function drawTriangles(ctx) {
                     if (!UVEditorController.hasMesh)
                         return
@@ -323,20 +467,56 @@ Rectangle {
                 font.pixelSize: 12
             }
 
+            // Drag marquee for box select (issue #460).
+            Canvas {
+                id: marqueeCanvas
+                anchors.fill: viewCanvas
+                visible: root.draggingSelect
+                renderTarget: Canvas.Immediate
+                onPaint: {
+                    const ctx = getContext("2d")
+                    ctx.clearRect(0, 0, width, height)
+                    if (!root.draggingSelect)
+                        return
+                    const x = Math.min(root.dragStartX, root.dragEndX)
+                    const y = Math.min(root.dragStartY, root.dragEndY)
+                    const w = Math.abs(root.dragEndX - root.dragStartX)
+                    const h = Math.abs(root.dragEndY - root.dragStartY)
+                    ctx.strokeStyle = ThemeManager.highlightColor
+                    ctx.lineWidth = 1
+                    ctx.setLineDash([4, 3])
+                    ctx.strokeRect(x, y, w, h)
+                    ctx.fillStyle = Qt.rgba(ThemeManager.highlightColor.r,
+                                            ThemeManager.highlightColor.g,
+                                            ThemeManager.highlightColor.b, 0.12)
+                    ctx.fillRect(x, y, w, h)
+                }
+            }
+
             MouseArea {
+                id: selectMa
                 anchors.fill: parent
-                acceptedButtons: Qt.MiddleButton | Qt.NoButton
+                acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                 hoverEnabled: true
                 preventStealing: false
 
                 property real lastX: 0
                 property real lastY: 0
+                property int activeModifiers: modNone
 
                 onPressed: function(mouse) {
+                    activeModifiers = eventModifiers(mouse)
                     if (mouse.button === Qt.MiddleButton) {
                         lastX = mouse.x
                         lastY = mouse.y
+                        return
                     }
+                    root.draggingSelect = true
+                    root.dragStartX = mouse.x
+                    root.dragStartY = mouse.y
+                    root.dragEndX = mouse.x
+                    root.dragEndY = mouse.y
+                    marqueeCanvas.requestPaint()
                 }
                 onPositionChanged: function(mouse) {
                     if (mouse.buttons & Qt.MiddleButton) {
@@ -347,7 +527,38 @@ Rectangle {
                         lastX = mouse.x
                         lastY = mouse.y
                         viewCanvas.requestPaint()
+                        return
                     }
+                    if (root.draggingSelect) {
+                        root.dragEndX = mouse.x
+                        root.dragEndY = mouse.y
+                        marqueeCanvas.requestPaint()
+                    }
+                }
+                onReleased: function(mouse) {
+                    if (mouse.button === Qt.MiddleButton)
+                        return
+                    if (!root.draggingSelect)
+                        return
+                    root.draggingSelect = false
+                    marqueeCanvas.requestPaint()
+
+                    const dx = mouse.x - root.dragStartX
+                    const dy = mouse.y - root.dragStartY
+                    const dist = Math.sqrt(dx * dx + dy * dy)
+                    const mods = activeModifiers
+
+                    if (dist < 4) {
+                        const uv = root.screenToUv(mouse.x - viewCanvas.x, mouse.y - viewCanvas.y)
+                        UVEditorController.pickAt(uv.x, uv.y, mods, root.pickRadiusUv())
+                    } else {
+                        const a = root.screenToUv(root.dragStartX - viewCanvas.x,
+                                                  root.dragStartY - viewCanvas.y)
+                        const b = root.screenToUv(root.dragEndX - viewCanvas.x,
+                                                  root.dragEndY - viewCanvas.y)
+                        UVEditorController.boxSelect(a.x, a.y, b.x, b.y, mods)
+                    }
+                    root.rebuildTriangleCache()
                 }
             }
 
