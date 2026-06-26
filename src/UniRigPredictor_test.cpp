@@ -193,22 +193,21 @@ TEST(UniRigPredictor, DetokenizeBranchTokenYieldsExplicitParent)
     const std::array<double, 3> a    = {  0.25, 0.25, 0.0 };
     const std::array<double, 3> b    = {  0.75,-0.25,-0.5 };
 
-    // The explicit parent-triple is the root's quantized position, so it
-    // resolves to joint index 0 (not the previous joint, joint 1).
-    const std::array<double, 3> parentOfB = {
-        refUndiscretize(refDiscretize(root[0])),
-        refUndiscretize(refDiscretize(root[1])),
-        refUndiscretize(refDiscretize(root[2])),
-    };
-
+    // The explicit parent-triple must encode the SAME bins the root joint was
+    // emitted with (the model emits a quantized parent position that exactly
+    // re-states an earlier joint's bins), so the detokenizer's position match
+    // resolves it back to joint 0. Encode discretize(root) directly — NOT
+    // discretize(undiscretize(discretize(root))): the +0.5 bin-centre offset
+    // makes that double round-trip land one bin higher, which would no longer
+    // match joint 0's stored position.
     std::vector<int> ids;
     ids.push_back(kBos);
     ids.push_back(kClsNone);
     for (double c : root) ids.push_back(refDiscretize(c));      // joint 0
     for (double c : a)    ids.push_back(refDiscretize(c));      // joint 1 (chain)
     ids.push_back(kBranch);                                     // explicit parent next
-    for (double c : parentOfB) ids.push_back(refDiscretize(c)); // parent triple == root
-    for (double c : b)         ids.push_back(refDiscretize(c)); // joint 2
+    for (double c : root) ids.push_back(refDiscretize(c));      // parent triple == root bins
+    for (double c : b)    ids.push_back(refDiscretize(c));      // joint 2
     ids.push_back(kEos);
 
     const std::array<double, 3> centre = { 0, 0, 0 };

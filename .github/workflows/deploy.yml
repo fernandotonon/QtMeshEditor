@@ -1290,16 +1290,21 @@ jobs:
                 # FBX (Twist Dance) inside every test case (~50 tests
                 # × ~20s/import on the CI runner ≈ 4–6 min total),
                 # which intermittently exceeded the prior 5-min cap.
-                # Bump to 10 min — still tight enough to catch a real
-                # deadlock (a hung Qt event loop never finishes anyway)
-                # but generous enough for legitimate slow suites under
-                # the GitHub-Linux runner's variable I/O.
+                # Bumped to 20 min: MainWindowTest (78 cases) reconstructs the
+                # full MainWindow per case (~7–8s each on the software-GL CI
+                # runner ≈ ~10 min), and CLIPipelineCmdTest re-imports an FBX
+                # per case — both legitimately exceed the old 10-min cap on a
+                # slow runner. The job timeout is 90 min, so 20 min/suite still
+                # leaves ample headroom while catching a real deadlock (a hung
+                # Qt event loop never finishes anyway). NOTE: MainWindowTest's
+                # per-case full-window rebuild is a known hot spot flagged for
+                # the test-suite redundancy audit — if it shrinks, drop this.
                 #
                 # `timeout --signal=KILL` jumps straight to SIGKILL because
                 # a deadlocked Qt event loop or GL driver doesn't reliably
                 # honour SIGTERM. `--foreground` keeps it usable inside a
                 # for-loop where the shell isn't a session leader.
-                PER_SUITE_TIMEOUT=600
+                PER_SUITE_TIMEOUT=1200
 
                 for suite in $SUITES; do
                     TOTAL_SUITES=$((TOTAL_SUITES + 1))
