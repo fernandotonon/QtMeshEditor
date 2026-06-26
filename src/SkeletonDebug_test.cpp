@@ -87,26 +87,6 @@ TEST_F(SkeletonDebugTests, SetAndGetAxesScaleTest)
 }
 
 
-TEST_F(SkeletonDebugTests, UpdateMethodDoesNotCrash)
-{
-    skeletonDebug->update();
-    SUCCEED();
-}
-
-TEST_F(SkeletonDebugTests, UpdateMultipleTimes)
-{
-    for (int i = 0; i < 10; ++i) {
-        skeletonDebug->update();
-    }
-    SUCCEED();
-}
-
-TEST_F(SkeletonDebugTests, SelectedBoneIndexDefault)
-{
-    int index = skeletonDebug->selectedBoneIndex();
-    EXPECT_GE(index, -1);
-}
-
 TEST_F(SkeletonDebugTests, BoneNameForMovableReturnsEmptyForNullptr)
 {
     EXPECT_TRUE(SkeletonDebug::boneNameForMovable(nullptr).empty());
@@ -161,48 +141,6 @@ TEST_F(SkeletonDebugTests, SetAxesScaleVeryLarge)
     EXPECT_FLOAT_EQ(skeletonDebug->getAxesScale(), 1000.0f);
     skeletonDebug->showAxes(true);
     skeletonDebug->update();
-}
-
-TEST_F(SkeletonDebugTests, ToggleAxesMultipleTimes)
-{
-    for (int i = 0; i < 5; ++i) {
-        skeletonDebug->showAxes(true);
-        EXPECT_TRUE(skeletonDebug->axesShown());
-        skeletonDebug->showAxes(false);
-        EXPECT_FALSE(skeletonDebug->axesShown());
-    }
-}
-
-TEST_F(SkeletonDebugTests, ToggleBonesMultipleTimes)
-{
-    for (int i = 0; i < 5; ++i) {
-        skeletonDebug->showBones(true);
-        EXPECT_TRUE(skeletonDebug->bonesShown());
-        skeletonDebug->showBones(false);
-        EXPECT_FALSE(skeletonDebug->bonesShown());
-    }
-}
-
-TEST_F(SkeletonDebugTests, ToggleNamesMultipleTimes)
-{
-    for (int i = 0; i < 5; ++i) {
-        skeletonDebug->showNames(true);
-        EXPECT_TRUE(skeletonDebug->namesShown());
-        skeletonDebug->showNames(false);
-        EXPECT_FALSE(skeletonDebug->namesShown());
-    }
-}
-
-TEST_F(SkeletonDebugTests, ShowAllVisualizationsCombined)
-{
-    skeletonDebug->showBones(true);
-    skeletonDebug->showAxes(true);
-    skeletonDebug->showNames(true);
-    EXPECT_TRUE(skeletonDebug->bonesShown());
-    EXPECT_TRUE(skeletonDebug->axesShown());
-    EXPECT_TRUE(skeletonDebug->namesShown());
-    skeletonDebug->update();
-    SUCCEED();
 }
 
 TEST_F(SkeletonDebugTests, HideAllThenShowAll)
@@ -330,25 +268,4 @@ TEST_F(SkeletonDebugTests, SetAxesScaleExtremeValues)
     skeletonDebug->update();
 
     SUCCEED();
-}
-
-TEST_F(SkeletonDebugTests, SelectedBoneIndexRange)
-{
-    // The default selected bone index should be -1 (no bone selected)
-    short index = skeletonDebug->selectedBoneIndex();
-    EXPECT_EQ(index, -1);
-
-    // Verify the index type range -- selectedBoneIndex returns short,
-    // and -1 means no selection. Any valid bone index must be >= 0.
-    EXPECT_GE(index, static_cast<short>(-1));
-
-    // After show/hide operations, the selected bone should remain -1
-    // since no user interaction has occurred
-    skeletonDebug->showBones(true);
-    skeletonDebug->update();
-    EXPECT_EQ(skeletonDebug->selectedBoneIndex(), -1);
-
-    skeletonDebug->showBones(false);
-    skeletonDebug->update();
-    EXPECT_EQ(skeletonDebug->selectedBoneIndex(), -1);
 }

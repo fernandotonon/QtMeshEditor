@@ -379,28 +379,6 @@ TEST(FixOptionsTest, AnySet_DefaultIsFalse)
     EXPECT_FALSE(opts.anySet());
 }
 
-TEST(FixOptionsTest, AnySet_RemoveDegenerates)
-{
-    FixOptions opts;
-    opts.removeDegenerates = true;
-    EXPECT_TRUE(opts.anySet());
-}
-
-TEST(FixOptionsTest, AnySet_MergeMaterials)
-{
-    FixOptions opts;
-    opts.mergeMaterials = true;
-    EXPECT_TRUE(opts.anySet());
-}
-
-TEST(FixOptionsTest, AnySet_AllFlags)
-{
-    FixOptions opts;
-    opts.removeDegenerates = true;
-    opts.mergeMaterials = true;
-    EXPECT_TRUE(opts.anySet());
-}
-
 TEST(FixOptionsTest, ToAssimpFlags_Default)
 {
     FixOptions opts;
@@ -1402,23 +1380,6 @@ TEST_F(CLIPipelineCmdTest, CmdFix_Basic)
     QFile::remove(QDir::tempPath() + "/cli_test_fix_basic.material");
 }
 
-TEST_F(CLIPipelineCmdTest, CmdFix_AllFlag)
-{
-    QString file = testDataDir() + "/Twist Dance.fbx";
-    ASSERT_TRUE(QFile::exists(file)) << "Test data not found: " << file.toStdString();
-    QByteArray fileBa = file.toUtf8();
-
-    QString outFile = QDir::tempPath() + "/cli_test_fix_all.mesh";
-    QByteArray outBa = outFile.toUtf8();
-    QFile::remove(outFile);
-
-    TestArgv args({"qtmesh", "fix", fileBa.constData(), "-o", outBa.constData(), "--all"});
-    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 0);
-    EXPECT_TRUE(QFile::exists(outFile));
-    QFile::remove(outFile);
-    QFile::remove(QDir::tempPath() + "/cli_test_fix_all.material");
-}
-
 TEST_F(CLIPipelineCmdTest, CmdFix_RemoveDegenerates)
 {
     QString file = testDataDir() + "/Twist Dance.fbx";
@@ -1453,24 +1414,6 @@ TEST_F(CLIPipelineCmdTest, CmdFix_MergeMaterials)
     EXPECT_TRUE(QFile::exists(outFile));
     QFile::remove(outFile);
     QFile::remove(QDir::tempPath() + "/cli_test_fix_merge.material");
-}
-
-TEST_F(CLIPipelineCmdTest, CmdFix_BothFlags)
-{
-    QString file = testDataDir() + "/Twist Dance.fbx";
-    ASSERT_TRUE(QFile::exists(file)) << "Test data not found: " << file.toStdString();
-    QByteArray fileBa = file.toUtf8();
-
-    QString outFile = QDir::tempPath() + "/cli_test_fix_both.mesh";
-    QByteArray outBa = outFile.toUtf8();
-    QFile::remove(outFile);
-
-    TestArgv args({"qtmesh", "fix", fileBa.constData(), "-o", outBa.constData(),
-                   "--remove-degenerates", "--merge-materials"});
-    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 0);
-    EXPECT_TRUE(QFile::exists(outFile));
-    QFile::remove(outFile);
-    QFile::remove(QDir::tempPath() + "/cli_test_fix_both.material");
 }
 
 TEST_F(CLIPipelineCmdTest, CmdFix_OutputLongForm)

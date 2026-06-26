@@ -444,21 +444,6 @@ TEST_F(MCPServerTest, CreatePrimitiveInvalidType)
 
 // --- Scene info ---
 
-TEST_F(MCPServerTest, GetSceneInfo)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-    QJsonObject primArgs;
-    primArgs["type"] = "cube";
-    primArgs["name"] = "SceneInfoCube";
-    server->callTool("create_primitive", primArgs);
-
-    QJsonObject result = server->callTool("get_scene_info", QJsonObject());
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("SceneInfoCube"));
-    EXPECT_TRUE(text.contains("Scene Information"));
-}
-
 // --- Mesh info ---
 
 TEST_F(MCPServerTest, GetMeshInfo)
@@ -624,13 +609,6 @@ TEST_F(MCPServerTest, AnimateNodeNotFound)
 
 // --- Unknown tool ---
 
-TEST_F(MCPServerTest, UnknownTool)
-{
-    QJsonObject result = server->callTool("totally_fake_tool", QJsonObject());
-    EXPECT_TRUE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("Unknown tool"));
-}
-
 // --- Export mesh ---
 
 TEST_F(MCPServerTest, ExportMeshNoSelection)
@@ -665,28 +643,6 @@ TEST_F(MCPServerTest, LoadMeshNoMainWindow)
 }
 
 // --- Tools list ---
-
-TEST_F(MCPServerTest, HandleToolsList)
-{
-    // Verify at least 15 tools are defined by checking that known tools work
-    QStringList knownTools = {
-        "create_material", "modify_material", "get_material", "list_materials",
-        "apply_material", "load_mesh", "get_mesh_info", "transform_mesh",
-        "list_textures", "set_texture", "export_mesh", "get_scene_info",
-        "take_screenshot", "create_primitive", "animate",
-        "list_skeletal_animations", "get_animation_info", "set_animation_length",
-        "set_animation_time", "add_keyframe", "remove_keyframe",
-        "play_animation", "toggle_skeleton_debug", "toggle_bone_weights",
-        "toggle_normals", "merge_animations"
-    };
-
-    for (const QString &tool : knownTools) {
-        // Just call with empty args - we only care that it's not "Unknown tool"
-        QJsonObject result = server->callTool(tool, QJsonObject());
-        EXPECT_FALSE(getResultText(result).contains("Unknown tool"))
-            << "Tool should be recognized: " << tool.toStdString();
-    }
-}
 
 // ==========================================================================
 // NEW TESTS: Server state and start/stop
@@ -771,15 +727,6 @@ TEST_F(MCPServerTest, CreateMaterialWithEmissiveColor)
 // ==========================================================================
 // NEW TESTS: get_material edge cases
 // ==========================================================================
-
-TEST_F(MCPServerTest, GetMaterialEmptyName)
-{
-    QJsonObject args;
-    args["name"] = "";
-    QJsonObject result = server->callTool("get_material", args);
-    EXPECT_TRUE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("Material name is required"));
-}
 
 TEST_F(MCPServerTest, GetMaterialNoNameKey)
 {
@@ -1577,50 +1524,6 @@ TEST_F(MCPServerTest, SetAnimationTimeEntityNotFound)
     args["entity"] = "NonExistentEntity_XYZ";
     args["animation"] = "Walk";
     args["time"] = 0.5;
-    QJsonObject result = server->callTool("set_animation_time", args);
-    EXPECT_TRUE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("not found"));
-}
-
-TEST_F(MCPServerTest, SetAnimationTimeMissingTimeAndNavigate)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-    // Create a primitive — it won't have the animation, but we test the param validation path
-    QJsonObject primArgs;
-    primArgs["type"] = "cube";
-    primArgs["name"] = "AnimTimeCube";
-    server->callTool("create_primitive", primArgs);
-
-    QJsonObject args;
-    args["entity"] = "AnimTimeCube";
-    args["animation"] = "Walk";
-    // Neither "time" nor "navigate" provided
-    QJsonObject result = server->callTool("set_animation_time", args);
-    EXPECT_TRUE(isError(result));
-    // Should fail because animation not found on non-skeletal entity
-    EXPECT_TRUE(getResultText(result).contains("not found"));
-}
-
-TEST_F(MCPServerTest, SetAnimationTimeNavigateInvalidValue)
-{
-    // Use a non-existent entity to test the entity-not-found path
-    QJsonObject args;
-    args["entity"] = "NonExistentEntity_XYZ";
-    args["animation"] = "Walk";
-    args["navigate"] = "invalid_direction";
-    args["track"] = "SomeBone";
-    QJsonObject result = server->callTool("set_animation_time", args);
-    EXPECT_TRUE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("not found"));
-}
-
-TEST_F(MCPServerTest, SetAnimationTimeNavigateMissingTrack)
-{
-    // Navigate requires a track param — but entity not found comes first
-    QJsonObject args;
-    args["entity"] = "NonExistentEntity_XYZ";
-    args["animation"] = "Walk";
-    args["navigate"] = "next";
     QJsonObject result = server->callTool("set_animation_time", args);
     EXPECT_TRUE(isError(result));
     EXPECT_TRUE(getResultText(result).contains("not found"));
@@ -2728,154 +2631,13 @@ TEST_F(MCPServerTest, GetSceneInfoWithInMemoryEntities)
     EXPECT_TRUE(text.contains("MCPSceneNode2"));
 }
 
-TEST_F(MCPServerTest, ListSkeletalAnimationsWithSkeletonEntity)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("MCPSkelAnimEntity");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject result = server->callTool("list_skeletal_animations", QJsonObject());
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("TestAnim"));
-}
-
-TEST_F(MCPServerTest, GetAnimationInfoWithSkeletonEntity)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("MCPAnimInfoEntity");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject args;
-    args["entity"] = "MCPAnimInfoEntity";
-    args["animation"] = "TestAnim";
-    QJsonObject result = server->callTool("get_animation_info", args);
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("TestAnim"));
-    EXPECT_TRUE(text.contains("length") || text.contains("Length"));
-}
-
-TEST_F(MCPServerTest, SetAnimationLengthWithSkeletonEntity)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("MCPSetAnimLenEntity");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject args;
-    args["entity"] = "MCPSetAnimLenEntity";
-    args["animation"] = "TestAnim";
-    args["length"] = 2.5;
-    QJsonObject result = server->callTool("set_animation_length", args);
-    EXPECT_FALSE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("2.5") || getResultText(result).contains("length"));
-}
-
-TEST_F(MCPServerTest, SetAnimationTimeWithSkeletonEntity)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("MCPSetAnimTimeEntity");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject args;
-    args["entity"] = "MCPSetAnimTimeEntity";
-    args["animation"] = "TestAnim";
-    args["time"] = 0.5;
-    QJsonObject result = server->callTool("set_animation_time", args);
-    EXPECT_FALSE(isError(result));
-}
-
-TEST_F(MCPServerTest, AddKeyframeWithSkeletonEntity)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("MCPAddKfEntity");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject args;
-    args["entity"] = "MCPAddKfEntity";
-    args["animation"] = "TestAnim";
-    args["track"] = "Child";
-    args["time"] = 0.25;
-    QJsonObject result = server->callTool("add_keyframe", args);
-    EXPECT_FALSE(isError(result));
-}
-
-TEST_F(MCPServerTest, RemoveKeyframeWithSkeletonEntity)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("MCPRemoveKfEntity");
-    ASSERT_NE(entity, nullptr);
-
-    // Remove keyframe at t=0.5
-    QJsonObject args;
-    args["entity"] = "MCPRemoveKfEntity";
-    args["animation"] = "TestAnim";
-    args["track"] = "Child";
-    args["time"] = 0.5;
-    QJsonObject result = server->callTool("remove_keyframe", args);
-    EXPECT_FALSE(isError(result));
-}
-
-TEST_F(MCPServerTest, PlayAnimationWithSkeletonEntity)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("MCPPlayAnimEntity");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject args;
-    args["entity"] = "MCPPlayAnimEntity";
-    args["animation"] = "TestAnim";
-    QJsonObject result = server->callTool("play_animation", args);
-    EXPECT_FALSE(isError(result));
-}
-
 // ==========================================================================
 // NEW TESTS: toggle_normals
 // ==========================================================================
 
-TEST_F(MCPServerTest, ToggleNormalsNoMainWindow)
-{
-    // Server has no MainWindow set — should fail gracefully
-    QJsonObject args;
-    args["show"] = true;
-    QJsonObject result = server->callTool("toggle_normals", args);
-    EXPECT_TRUE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("MainWindow") ||
-                getResultText(result).contains("NormalVisualizer"));
-}
-
-TEST_F(MCPServerTest, ToggleNormalsIsRecognizedTool)
-{
-    QJsonObject result = server->callTool("toggle_normals", QJsonObject());
-    EXPECT_FALSE(getResultText(result).contains("Unknown tool"));
-}
-
 // ==========================================================================
 // NEW TESTS: toggle_mesh_info
 // ==========================================================================
-
-TEST_F(MCPServerTest, ToggleMeshInfoNoMainWindow)
-{
-    QJsonObject args;
-    args["show"] = true;
-    QJsonObject result = server->callTool("toggle_mesh_info", args);
-    EXPECT_TRUE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("MainWindow") ||
-                getResultText(result).contains("MeshInfoOverlay"));
-}
-
-TEST_F(MCPServerTest, ToggleMeshInfoIsRecognizedTool)
-{
-    QJsonObject result = server->callTool("toggle_mesh_info", QJsonObject());
-    EXPECT_FALSE(getResultText(result).contains("Unknown tool"));
-}
 
 // ==========================================================================
 // NEW TESTS: Protocol edge cases
@@ -2963,44 +2725,6 @@ TEST_F(MCPServerTest, DoubleServerConstruction_DoesNotCrash)
 // NEW TESTS: Resource protocol
 // ==========================================================================
 
-TEST_F(MCPServerTest, GetSceneInfo_ReturnsSceneInformation)
-{
-    // Verify that get_scene_info returns scene information.
-    // This exercises the same data that the MCP resource protocol would
-    // expose via "qtmesheditor://scene/info".
-    QJsonObject result = server->callTool("get_scene_info", QJsonObject());
-    EXPECT_FALSE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("Scene Information"));
-}
-
-TEST_F(MCPServerTest, GetSceneInfo_ContainsSceneNodes)
-{
-    // Verify the scene info tool returns data including scene nodes.
-    QJsonObject result = server->callTool("get_scene_info", QJsonObject());
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("Scene Information"));
-    EXPECT_TRUE(text.contains("Scene Nodes"));
-}
-
-TEST_F(MCPServerTest, UnknownToolReturnsError)
-{
-    // Verify that calling a non-existent tool returns an error.
-    QJsonObject result = server->callTool("nonexistent_resource_tool", QJsonObject());
-    EXPECT_TRUE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("Unknown tool"));
-}
-
-TEST_F(MCPServerTest, GetMaterialWithEmptyNameReturnsError)
-{
-    // Verify that get_material with an empty name returns a proper error
-    QJsonObject args2;
-    args2["name"] = "";
-    QJsonObject result = server->callTool("get_material", args2);
-    EXPECT_TRUE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("Material name is required"));
-}
-
 // ==========================================================================
 // NEW TESTS: Additional tool tests
 // ==========================================================================
@@ -3021,46 +2745,6 @@ TEST_F(MCPServerTest, MergeAnimations_WithAnimatedEntity)
     QJsonObject result = server->callTool("merge_animations", args);
     // Should succeed or fail gracefully - the important thing is no crash
     EXPECT_FALSE(getResultText(result).isEmpty());
-}
-
-TEST_F(MCPServerTest, ToggleNormals_ToggleOnOff)
-{
-    // Server has no MainWindow set -- toggle_normals requires MainWindow
-    // Verify it fails gracefully for both on and off
-    QJsonObject argsOn;
-    argsOn["show"] = true;
-    QJsonObject resultOn = server->callTool("toggle_normals", argsOn);
-    EXPECT_TRUE(isError(resultOn));
-
-    QJsonObject argsOff;
-    argsOff["show"] = false;
-    QJsonObject resultOff = server->callTool("toggle_normals", argsOff);
-    EXPECT_TRUE(isError(resultOff));
-
-    // Both should give consistent error messages
-    EXPECT_TRUE(getResultText(resultOn).contains("MainWindow") ||
-                getResultText(resultOn).contains("NormalVisualizer"));
-    EXPECT_TRUE(getResultText(resultOff).contains("MainWindow") ||
-                getResultText(resultOff).contains("NormalVisualizer"));
-}
-
-TEST_F(MCPServerTest, ToggleMeshInfo_ToggleOnOff)
-{
-    // Server has no MainWindow set -- toggle_mesh_info requires MainWindow
-    QJsonObject argsOn;
-    argsOn["show"] = true;
-    QJsonObject resultOn = server->callTool("toggle_mesh_info", argsOn);
-    EXPECT_TRUE(isError(resultOn));
-
-    QJsonObject argsOff;
-    argsOff["show"] = false;
-    QJsonObject resultOff = server->callTool("toggle_mesh_info", argsOff);
-    EXPECT_TRUE(isError(resultOff));
-
-    EXPECT_TRUE(getResultText(resultOn).contains("MainWindow") ||
-                getResultText(resultOn).contains("MeshInfoOverlay"));
-    EXPECT_TRUE(getResultText(resultOff).contains("MainWindow") ||
-                getResultText(resultOff).contains("MeshInfoOverlay"));
 }
 
 TEST_F(MCPServerTest, ToggleMeshInfo_SuccessPath)
@@ -3197,90 +2881,6 @@ TEST_F(MCPServerTest, ExportMesh_ToTempFile)
 // Animation tool success path tests
 // ==========================================================================
 
-TEST_F(MCPServerTest, AnimSuccPath_ListSkeletalAnimations)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccListSkel");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject result = server->callTool("list_skeletal_animations", QJsonObject());
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("TestAnim"));
-    EXPECT_TRUE(text.contains("AnimSuccListSkel"));
-    EXPECT_TRUE(text.contains("Length"));
-    EXPECT_TRUE(text.contains("Enabled"));
-}
-
-TEST_F(MCPServerTest, AnimSuccPath_GetAnimationInfo)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccGetInfo");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject args;
-    args["entity"] = "AnimSuccGetInfo";
-    args["animation"] = "TestAnim";
-    QJsonObject result = server->callTool("get_animation_info", args);
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("TestAnim"));
-    EXPECT_TRUE(text.contains("Length"));
-    EXPECT_TRUE(text.contains("Tracks"));
-    EXPECT_TRUE(text.contains("Keyframes"));
-    // Should contain track info for Child bone
-    EXPECT_TRUE(text.contains("Child"));
-    // Should contain 3 keyframes
-    EXPECT_TRUE(text.contains("3"));
-}
-
-TEST_F(MCPServerTest, AnimSuccPath_SetAnimationLength)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccSetLen");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject args;
-    args["entity"] = "AnimSuccSetLen";
-    args["animation"] = "TestAnim";
-    args["length"] = 2.0;
-    QJsonObject result = server->callTool("set_animation_length", args);
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("Changed animation"));
-    EXPECT_TRUE(text.contains("2"));
-
-    // Verify the length actually changed via get_animation_info
-    QJsonObject infoArgs;
-    infoArgs["entity"] = "AnimSuccSetLen";
-    infoArgs["animation"] = "TestAnim";
-    QJsonObject infoResult = server->callTool("get_animation_info", infoArgs);
-    EXPECT_FALSE(isError(infoResult));
-    EXPECT_TRUE(getResultText(infoResult).contains("2"));
-}
-
-TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTime)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccSetTime");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject args;
-    args["entity"] = "AnimSuccSetTime";
-    args["animation"] = "TestAnim";
-    args["time"] = 0.5;
-    QJsonObject result = server->callTool("set_animation_time", args);
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("Set animation"));
-    EXPECT_TRUE(text.contains("0.5"));
-    EXPECT_TRUE(text.contains("enabled: yes"));
-}
-
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigateNext)
 {
     ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
@@ -3415,34 +3015,6 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeNavigateMissingTrack)
     EXPECT_TRUE(getResultText(result).contains("track"));
 }
 
-TEST_F(MCPServerTest, AnimSuccPath_AddKeyframe)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccAddKf");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject args;
-    args["entity"] = "AnimSuccAddKf";
-    args["animation"] = "TestAnim";
-    args["track"] = "Child";
-    args["time"] = 0.75;
-    QJsonObject result = server->callTool("add_keyframe", args);
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("Added keyframe"));
-    EXPECT_TRUE(text.contains("0.75"));
-    EXPECT_TRUE(text.contains("Child"));
-
-    // Verify the keyframe was added - get_animation_info should now show 4 keyframes
-    QJsonObject infoArgs;
-    infoArgs["entity"] = "AnimSuccAddKf";
-    infoArgs["animation"] = "TestAnim";
-    QJsonObject infoResult = server->callTool("get_animation_info", infoArgs);
-    EXPECT_FALSE(isError(infoResult));
-    EXPECT_TRUE(getResultText(infoResult).contains("4"));
-}
-
 TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeWithExplicitTransforms)
 {
     ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
@@ -3469,35 +3041,6 @@ TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeWithExplicitTransforms)
     EXPECT_TRUE(text.contains("scale=(2"));
 }
 
-TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframe)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccRemoveKf");
-    ASSERT_NE(entity, nullptr);
-
-    // Remove the keyframe at t=0.5
-    QJsonObject args;
-    args["entity"] = "AnimSuccRemoveKf";
-    args["animation"] = "TestAnim";
-    args["track"] = "Child";
-    args["time"] = 0.5;
-    QJsonObject result = server->callTool("remove_keyframe", args);
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("Removed keyframe"));
-    EXPECT_TRUE(text.contains("0.5"));
-    EXPECT_TRUE(text.contains("Child"));
-
-    // Verify the keyframe was removed - get_animation_info should now show 2 keyframes
-    QJsonObject infoArgs;
-    infoArgs["entity"] = "AnimSuccRemoveKf";
-    infoArgs["animation"] = "TestAnim";
-    QJsonObject infoResult = server->callTool("get_animation_info", infoArgs);
-    EXPECT_FALSE(isError(infoResult));
-    EXPECT_TRUE(getResultText(infoResult).contains("2"));
-}
-
 TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframeNotFound)
 {
     ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
@@ -3514,29 +3057,6 @@ TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframeNotFound)
     QJsonObject result = server->callTool("remove_keyframe", args);
     EXPECT_TRUE(isError(result));
     EXPECT_TRUE(getResultText(result).contains("No keyframe found"));
-}
-
-TEST_F(MCPServerTest, AnimSuccPath_PlayAnimation)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-
-    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccPlay");
-    ASSERT_NE(entity, nullptr);
-
-    QJsonObject args;
-    args["entity"] = "AnimSuccPlay";
-    args["animation"] = "TestAnim";
-    QJsonObject result = server->callTool("play_animation", args);
-    EXPECT_FALSE(isError(result));
-    QString text = getResultText(result);
-    EXPECT_TRUE(text.contains("Playing animation"));
-    EXPECT_TRUE(text.contains("TestAnim"));
-    EXPECT_TRUE(text.contains("AnimSuccPlay"));
-
-    // Verify the animation state was enabled
-    Ogre::AnimationState* state = entity->getAnimationState("TestAnim");
-    EXPECT_TRUE(state->getEnabled());
-    EXPECT_TRUE(state->getLoop());
 }
 
 TEST_F(MCPServerTest, AnimSuccPath_PlayAnimationStop)

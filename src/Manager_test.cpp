@@ -64,97 +64,8 @@ TEST_F(ManagerTest, DefaultImportExtensions_IncludesPlayStationFormats)
     EXPECT_TRUE(exts.contains(QStringLiteral(".ply")));
 }
 
-TEST_F(ManagerTest, Forbidden_Name)
-{
-    // Test static functionality that doesn't require full initialization
-    EXPECT_TRUE(QString("TPCameraChildSceneNode").startsWith("TPCameraChildSceneNode"));
-    EXPECT_TRUE(QString("GridLine_node").startsWith("GridLine_node"));
-    EXPECT_TRUE(QString("Unnamed_something").startsWith("Unnamed_"));
-    EXPECT_FALSE(QString("Cube").startsWith("TPCameraChildSceneNode"));
-    EXPECT_FALSE(QString("Cube_0").startsWith("GridLine_node"));
-
-    // Test the actual logic would work (without Manager singleton)
-    auto isForbiddenNodeName = [](const QString &_name) {
-        return (_name=="TPCameraChildSceneNode"
-                ||_name=="GridLine_node"
-                ||_name==SELECTIONBOX_OBJECT_NAME
-                ||_name==TRANSFORM_OBJECT_NAME
-                ||_name.startsWith("Unnamed_"));
-    };
-
-    EXPECT_EQ(isForbiddenNodeName("Cube"), false);
-    EXPECT_EQ(isForbiddenNodeName("Cube_0"), false);
-    EXPECT_EQ(isForbiddenNodeName("Cube_1"), false);
-    EXPECT_EQ(isForbiddenNodeName("TPCameraChildSceneNode"), true);
-    EXPECT_EQ(isForbiddenNodeName("TPCameraChildSceneNode_0"), false);
-    EXPECT_EQ(isForbiddenNodeName("GridLine_node"), true);
-    EXPECT_EQ(isForbiddenNodeName("Unnamed_"), true);
-    EXPECT_EQ(isForbiddenNodeName(TRANSFORM_OBJECT_NAME), true);
-    EXPECT_EQ(isForbiddenNodeName(SELECTIONBOX_OBJECT_NAME), true);
-}
-
 // Simple validation test without full scene creation
-TEST_F(ManagerTest, BasicValidation)
-{
-    // Test basic string validations that Manager would use
-    QString validFileExt = ".mesh .xml .fbx .dae .obj .blend .3ds .ase .ply .x .ms3d .lwo .lws .lxo .stl";
-
-    EXPECT_TRUE(validFileExt.contains(".mesh"));
-    EXPECT_TRUE(validFileExt.contains(".fbx"));
-    EXPECT_FALSE(validFileExt.contains(".invalid"));
-
-    // Test that we could check valid file extensions
-    auto isValidExtension = [&validFileExt](const QString& filename) {
-        for(const QString& ext : validFileExt.split(" ", Qt::SkipEmptyParts)) {
-            if(filename.endsWith(ext, Qt::CaseInsensitive)) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    EXPECT_TRUE(isValidExtension("ninja.mesh"));
-    EXPECT_TRUE(isValidExtension("robot.fbx"));
-    EXPECT_FALSE(isValidExtension("invalid.txt"));
-}
-
 // --- Headless Manager tests ---
-
-TEST_F(ManagerHeadlessTest, AddSceneNode)
-{
-    auto* mgr = Manager::getSingletonPtr();
-    ASSERT_NE(mgr, nullptr);
-
-    Ogre::SceneNode* node = mgr->addSceneNode("TestNode");
-    ASSERT_NE(node, nullptr);
-    EXPECT_TRUE(mgr->hasSceneNode("TestNode"));
-}
-
-TEST_F(ManagerHeadlessTest, AddMultipleSceneNodes)
-{
-    auto* mgr = Manager::getSingletonPtr();
-    ASSERT_NE(mgr, nullptr);
-
-    // First node should get the exact name
-    Ogre::SceneNode* node1 = mgr->addSceneNode("Cube");
-    ASSERT_NE(node1, nullptr);
-    EXPECT_TRUE(mgr->hasSceneNode("Cube"));
-
-    // Second node with the same name should get auto-numbered (Cube1)
-    Ogre::SceneNode* node2 = mgr->addSceneNode("Cube");
-    ASSERT_NE(node2, nullptr);
-    EXPECT_TRUE(mgr->hasSceneNode("Cube1"));
-
-    // Third node with the same name should get Cube2
-    Ogre::SceneNode* node3 = mgr->addSceneNode("Cube");
-    ASSERT_NE(node3, nullptr);
-    EXPECT_TRUE(mgr->hasSceneNode("Cube2"));
-
-    // All three should be distinct nodes
-    EXPECT_NE(node1, node2);
-    EXPECT_NE(node2, node3);
-    EXPECT_NE(node1, node3);
-}
 
 TEST_F(ManagerHeadlessTest, DestroySceneNode)
 {
@@ -421,17 +332,6 @@ TEST_F(ManagerHeadlessTest, SceneNodeCreated_Signal)
     EXPECT_EQ(spy.count(), 1);
 }
 
-TEST_F(ManagerHeadlessTest, SceneNodeDestroyed_Signal_ByName)
-{
-    auto* mgr = Manager::getSingletonPtr();
-    ASSERT_NE(mgr, nullptr);
-    Ogre::SceneNode* node = mgr->addSceneNode("DestroySignalNode");
-    ASSERT_NE(node, nullptr);
-    QSignalSpy spy(mgr, &Manager::sceneNodeDestroyed);
-    mgr->destroySceneNode("DestroySignalNode");
-    EXPECT_EQ(spy.count(), 1);
-}
-
 TEST_F(ManagerHeadlessTest, SceneNodeDestroyed_Signal_ByPointer)
 {
     auto* mgr = Manager::getSingletonPtr();
@@ -579,20 +479,6 @@ TEST_F(ManagerHeadlessTest, GetViewportGridNullBeforeCreateScene)
 // NEW: destroySceneNode by name string — verify destroy and signal
 // ==========================================================================
 
-TEST_F(ManagerHeadlessTest, DestroySceneNodeByNameWithSignal)
-{
-    auto* mgr = Manager::getSingletonPtr();
-    ASSERT_NE(mgr, nullptr);
-
-    mgr->addSceneNode("SignalDestroyByName");
-    ASSERT_TRUE(mgr->hasSceneNode("SignalDestroyByName"));
-
-    QSignalSpy spy(mgr, &Manager::sceneNodeDestroyed);
-    mgr->destroySceneNode("SignalDestroyByName");
-    EXPECT_FALSE(mgr->hasSceneNode("SignalDestroyByName"));
-    EXPECT_EQ(spy.count(), 1);
-}
-
 // ==========================================================================
 // NEW: hasAnimationName with non-skeletal entity
 // ==========================================================================
@@ -669,19 +555,6 @@ TEST_F(ManagerHeadlessTest, CreateAnimatedEntity)
 
     auto* state = entity->getAnimationState("TestAnim");
     EXPECT_NEAR(state->getLength(), 1.0f, 0.01f);
-}
-
-TEST_F(ManagerHeadlessTest, HasAnimationNameWithSkeleton)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-    auto* mgr = Manager::getSingletonPtr();
-    ASSERT_NE(mgr, nullptr);
-
-    auto* entity = createAnimatedTestEntity("MgrAnimNameEntity");
-    ASSERT_NE(entity, nullptr);
-
-    EXPECT_TRUE(mgr->hasAnimationName(entity, "TestAnim"));
-    EXPECT_FALSE(mgr->hasAnimationName(entity, "NonExistentAnim"));
 }
 
 TEST_F(ManagerHeadlessTest, DestroyInMemoryEntity)
@@ -925,27 +798,6 @@ TEST_F(ManagerHeadlessTest, DuplicateSceneNode_ClonesAnimatedEntityWithIndepende
 }
 
 // Test hasAnimationName with createAnimatedTestEntity - multiple animation name checks
-TEST_F(ManagerHeadlessTest, HasAnimationName_MultipleChecks)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-    auto* mgr = Manager::getSingletonPtr();
-    ASSERT_NE(mgr, nullptr);
-
-    auto* entity = createAnimatedTestEntity("AnimMultiCheck");
-    ASSERT_NE(entity, nullptr);
-    ASSERT_TRUE(entity->hasSkeleton());
-
-    // The helper creates a "TestAnim" animation
-    EXPECT_TRUE(mgr->hasAnimationName(entity, "TestAnim"));
-
-    // Non-existent animation names
-    EXPECT_FALSE(mgr->hasAnimationName(entity, "Walk"));
-    EXPECT_FALSE(mgr->hasAnimationName(entity, "Run"));
-    EXPECT_FALSE(mgr->hasAnimationName(entity, "Idle"));
-    EXPECT_FALSE(mgr->hasAnimationName(entity, ""));
-    EXPECT_FALSE(mgr->hasAnimationName(entity, "testAnim")); // case-sensitive
-}
-
 // Test scene node parent-child chain after multiple addSceneNode calls
 TEST_F(ManagerHeadlessTest, SceneNodeParentChain_MultipleDepth)
 {

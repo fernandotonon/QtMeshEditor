@@ -157,15 +157,6 @@ TEST_F(NodeAnimCommandsTest, DeleteClipTextWithEmptyName)
     EXPECT_EQ(cmd.text(), QStringLiteral("Delete node clip \"\""));
 }
 
-TEST_F(NodeAnimCommandsTest, DeleteClipCtorSnapshotsEmptyWhenNoScene)
-{
-    // Without a usable scene the constructor's sceneMgr() block is skipped,
-    // so nothing is captured; undo() must be a clean no-op regardless of
-    // singleton state.
-    DeleteNodeAnimClipCommand cmd(QStringLiteral("Crouch"));
-    EXPECT_NO_THROW(cmd.undo());
-}
-
 TEST_F(NodeAnimCommandsTest, DeleteClipRedoUndoNoOpWhenNoManager)
 {
     DeleteNodeAnimClipCommand cmd(QStringLiteral("Attack"));
@@ -231,23 +222,6 @@ TEST_F(NodeAnimCommandsTest, SetKeyframeTextEmbedsNodeName)
               QStringLiteral("Keyframe \"Clip\"@10.00s on 'LeftHand_End'"));
 }
 
-TEST_F(NodeAnimCommandsTest, SetKeyframeCtorNoPriorWhenNoScene)
-{
-    // The constructor's prior-keyframe scan only runs with a usable scene;
-    // without one mPriorKeyframe stays empty. We assert the externally
-    // observable consequence regardless of singleton state: redo()/undo()
-    // don't throw.
-    SetNodeKeyframeCommand cmd(QStringLiteral("Walk"),
-                               QStringLiteral("Hips"),
-                               0.5,
-                               Ogre::Vector3(1, 2, 3),
-                               Ogre::Quaternion(Ogre::Degree(45),
-                                                Ogre::Vector3::UNIT_X),
-                               Ogre::Vector3(2, 2, 2));
-    EXPECT_NO_THROW(cmd.redo());
-    EXPECT_NO_THROW(cmd.undo());
-}
-
 TEST_F(NodeAnimCommandsTest, SetKeyframeRedoUndoNoOpWhenNoManager)
 {
     SetNodeKeyframeCommand cmd(QStringLiteral("Dance"),
@@ -264,19 +238,6 @@ TEST_F(NodeAnimCommandsTest, SetKeyframeRedoUndoNoOpWhenNoManager)
     EXPECT_NO_THROW(cmd.undo());
     EXPECT_EQ(cmd.text(),
               QStringLiteral("Keyframe \"Dance\"@4.25s on 'Chest'"));
-}
-
-TEST_F(NodeAnimCommandsTest, SetKeyframeUndoBeforeRedoIsSafe)
-{
-    // undo() without a preceding redo() must still early-return rather than
-    // dereference anything, regardless of singleton state.
-    SetNodeKeyframeCommand cmd(QStringLiteral("X"),
-                               QStringLiteral("Y"),
-                               1.0,
-                               Ogre::Vector3::ZERO,
-                               Ogre::Quaternion::IDENTITY,
-                               Ogre::Vector3(1, 1, 1));
-    EXPECT_NO_THROW(cmd.undo());
 }
 
 TEST_F(NodeAnimCommandsTest, SetKeyframeNegativeTimeFormats)

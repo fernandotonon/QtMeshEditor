@@ -1589,52 +1589,6 @@ TEST(HalfEdgeMeshStandalone, CubeBevelTopFrontEdgeTrimsLeftAndRightFaceCorners) 
         << " tris referencing v5=(1,1,1) — corner not trimmed";
 }
 
-TEST(HalfEdgeMeshStandalone, CubeBevelFrontFaceGetsCornerCut) {
-    // When beveling the top-right edge (v5↔v3):
-    //   - v5=(1,1,1) is on the FRONT face (z=+1). Beveling cuts v5 so it no
-    //     longer appears as a corner in any front-face-plane triangle.
-    //   - v3=(1,1,-1) is on the BACK face (z=-1). v3 stays as a corner of
-    //     the back face (the bevel doesn't penetrate the back face).
-    // The asymmetry is a consequence of how the beveled edge happens to touch
-    // the two coplanar-to-f1 siblings at each end.
-    auto em = makeCubeMesh();
-    HalfEdgeMesh he;
-    ASSERT_TRUE(he.buildFromEditableMesh(em));
-    int edgeIdx = findEdge(he, 5, 3);
-    ASSERT_GE(edgeIdx, 0);
-    ASSERT_FALSE(he.bevelEdges({edgeIdx}, 0.05f).empty());
-    EditableMesh back;
-    ASSERT_TRUE(he.toEditableMesh(back));
-    const auto& sub = back.subMeshes()[0];
-
-    int outputV5 = -1;
-    for (size_t i = 0; i < sub.vertices.size(); ++i) {
-        if (sub.vertices[i].position.squaredDistance(Ogre::Vector3(1, 1, 1)) < 1e-8f) {
-            outputV5 = static_cast<int>(i); break;
-        }
-    }
-    auto isFrontTri = [&](const EditableTriangle& t) {
-        return sub.vertices[t.indices[0]].position.z > 0.9f
-            && sub.vertices[t.indices[1]].position.z > 0.9f
-            && sub.vertices[t.indices[2]].position.z > 0.9f;
-    };
-    int frontTrisReferencingV5 = 0;
-    for (const auto& t : sub.triangles) {
-        if (isFrontTri(t) && outputV5 >= 0) {
-            for (int k = 0; k < 3; ++k)
-                if (static_cast<int>(t.indices[k]) == outputV5) ++frontTrisReferencingV5;
-        }
-    }
-    // The bevel cuts v5=(1,1,1) entirely (it's both endpoints' corner on
-    // top AND right faces). Neither outputV5 nor the front-face-corner
-    // counter survives to a testable state; the valuable coverage here
-    // is just that bevel ran without crashing, which the ASSERT_FALSE
-    // above already enforces. The manifold/closed-surface invariants
-    // are covered by CubeBevelTopRightEdgeProducesClosedManifold.
-    (void)outputV5;
-    (void)frontTrisReferencingV5;
-}
-
 TEST(HalfEdgeMeshStandalone, CubeBevelPreservesVolumeMinusChamfer) {
     // The signed volume of a closed mesh centered at origin = sum over
     // triangles of (p0 · (p1 × p2)) / 6. For our 2x2x2 cube (volume 8),

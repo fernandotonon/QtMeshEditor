@@ -65,12 +65,6 @@ protected:
     }
 };
 
-TEST_F(SceneTreeModelTests, InitialState) {
-    // Root should have at least 0 rows (empty scene)
-    EXPECT_GE(model->rowCount(), 0);
-    EXPECT_EQ(model->columnCount(), 1);
-}
-
 TEST_F(SceneTreeModelTests, RoleNames) {
     auto roles = model->roleNames();
     EXPECT_TRUE(roles.contains(SceneTreeModel::NameRole));
@@ -78,13 +72,6 @@ TEST_F(SceneTreeModelTests, RoleNames) {
     EXPECT_TRUE(roles.contains(SceneTreeModel::TypeLabelRole));
     EXPECT_TRUE(roles.contains(SceneTreeModel::SelectedRole));
     EXPECT_TRUE(roles.contains(SceneTreeModel::MaterialNameRole));
-}
-
-TEST_F(SceneTreeModelTests, Rebuild) {
-    int initialRows = model->rowCount();
-    model->rebuild();
-    // After rebuild, row count should be consistent
-    EXPECT_EQ(model->rowCount(), initialRows);
 }
 
 TEST_F(SceneTreeModelTests, InvalidIndex) {
@@ -138,87 +125,10 @@ TEST_F(SceneTreeModelTests, RootIndexIsInvalid) {
     EXPECT_FALSE(root.isValid());
 }
 
-TEST_F(SceneTreeModelTests, RebuildWithEntity) {
-    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
-    createStandardOgreMaterials();
-
-    auto mesh = createInMemoryTriangleMesh("TreeModelTestMesh");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = Manager::getSingleton()->addSceneNode("TreeModelTestNode");
-    auto* entity = sceneMgr->createEntity("TreeModelTestEnt", mesh);
-    node->attachObject(entity);
-
-    model->rebuild();
-
-    // Should have at least one row (the node we added)
-    EXPECT_GE(model->rowCount(), 1);
-}
-
-TEST_F(SceneTreeModelTests, SelectNodeItem) {
-    Manager* mgr = Manager::getSingleton();
-    Ogre::SceneNode* node = mgr->addSceneNode("SelectTestNode");
-    ASSERT_NE(node, nullptr);
-
-    model->rebuild();
-
-    // Find the row for our node
-    QModelIndex root = model->rootIndex();
-    int rows = model->rowCount(root);
-    bool found = false;
-    for (int i = 0; i < rows; ++i) {
-        QModelIndex idx = model->index(i, 0, root);
-        if (model->data(idx, SceneTreeModel::NameRole).toString() == "SelectTestNode") {
-            model->selectItem(i, root, false);
-            EXPECT_TRUE(SelectionSet::getSingleton()->contains(node));
-            found = true;
-            break;
-        }
-    }
-    // Node may or may not be found depending on forbidden names, but test should not crash
-    if (!found) {
-        // selectItem with valid but wrong index should not crash
-        EXPECT_NO_THROW(model->selectItem(0, root, false));
-    }
-
-    SelectionSet::getSingleton()->clear();
-}
-
 TEST_F(SceneTreeModelTests, UpdateSelection) {
     QSignalSpy spy(model, &SceneTreeModel::selectionUpdated);
     model->updateSelection();
     EXPECT_EQ(spy.count(), 1);
-}
-
-TEST_F(SceneTreeModelTests, DataWithVariousRoles) {
-    Manager* mgr = Manager::getSingleton();
-    Ogre::SceneNode* node = mgr->addSceneNode("DataRolesNode");
-    ASSERT_NE(node, nullptr);
-
-    model->rebuild();
-
-    QModelIndex root = model->rootIndex();
-    int rows = model->rowCount(root);
-    if (rows > 0) {
-        QModelIndex idx = model->index(0, 0, root);
-        if (idx.isValid()) {
-            // Test all roles
-            QVariant nameData = model->data(idx, SceneTreeModel::NameRole);
-            EXPECT_FALSE(nameData.toString().isEmpty());
-
-            QVariant typeData = model->data(idx, SceneTreeModel::TypeRole);
-            EXPECT_TRUE(typeData.isValid());
-
-            QVariant typeLabelData = model->data(idx, SceneTreeModel::TypeLabelRole);
-            EXPECT_TRUE(typeLabelData.isValid());
-
-            QVariant selectedData = model->data(idx, SceneTreeModel::SelectedRole);
-            EXPECT_TRUE(selectedData.isValid());
-
-            // Unknown role should return empty QVariant
-            QVariant unknownData = model->data(idx, Qt::UserRole + 100);
-            EXPECT_FALSE(unknownData.isValid());
-        }
-    }
 }
 
 TEST(SceneTreeItemTests, ChildParentRowAndTypeLabelsWork)

@@ -5,6 +5,8 @@
 #include <QQmlEngine>
 #include <QVariantMap>
 #include <QPoint>
+#include <atomic>
+#include <memory>
 #include <vector>
 
 #include "AutoRig.h"
@@ -32,6 +34,10 @@ class AutoRigController : public QObject
     // and empty selections disable the button.
     Q_PROPERTY(bool hasRiggableSelection READ hasRiggableSelection NOTIFY selectionChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    // UniRig worker progress (for the QML progress bar).
+    Q_PROPERTY(bool rigDownloading READ rigDownloading NOTIFY rigProgressChanged)
+    Q_PROPERTY(int rigProgress READ rigProgress NOTIFY rigProgressChanged)   // 0..rigTotal
+    Q_PROPERTY(int rigTotal READ rigTotal NOTIFY rigProgressChanged)
     // Marker-placement session state (for the QML guided UX).
     Q_PROPERTY(bool markerMode READ markerMode NOTIFY markerModeChanged)
     Q_PROPERTY(int markerCount READ markerCount NOTIFY markerCountChanged)
@@ -46,15 +52,24 @@ public:
 
     bool hasRiggableSelection() const;
     bool busy() const { return m_busy; }
+    bool rigDownloading() const { return m_rigDownloading; }
+    int  rigProgress() const { return m_rigProgress; }
+    int  rigTotal() const { return m_rigTotal; }
+
+    /// Cancel an in-flight UniRig worker rig (no-op otherwise).
+    Q_INVOKABLE void cancelRig();
 
     /// Auto-rig the first resolved selected entity with `templateName`
-    /// (humanoid / biped / quadruped / generic). When `alsoSkin` is true,
+    /// (humanoid / biped / quadruped / generic) using `algo`
+    /// ('pinocchio' default, or 'rignet' — falls back to pinocchio when the
+    /// RigNet model / ONNX runtime is unavailable). When `alsoSkin` is true,
     /// chains SkinWeights::computeAndApply so the mesh deforms immediately.
     /// Returns a QVariantMap mirroring AutoRig::Report (+ a `skinned` bool).
     /// Emits `rigged(report)` on success or `error(msg)` on failure.
     Q_INVOKABLE QVariantMap autoRigSelected(const QString& templateName,
                                             const QString& upAxis,
-                                            bool alsoSkin);
+                                            bool alsoSkin,
+                                            const QString& algo = QStringLiteral("pinocchio"));
 
     // ---- Marker placement (Mixamo-style) -------------------------------
     bool markerMode() const { return m_markerMode; }
@@ -96,6 +111,7 @@ signals:
     void markerModeChanged();
     void markerCountChanged();
     void markerPlaced(const QString& label);
+    void rigProgressChanged();        // rigDownloading / rigProgress / rigTotal
 
 private:
     AutoRigController();
@@ -104,9 +120,26 @@ private:
     Ogre::Entity* selectedRiggableEntity() const;
     void clearMarkerOverlays();
     void refreshMarkerOverlays();
+    // Build the Ogre skeleton on the MAIN thread from worker-predicted joints
+    // (the back half of the threaded UniRig path), then emit the result.
+    void finishUniRigOnMain(const QString& entityName,
+                            const std::vector<AutoRig::Joint>& joints,
+                            const QString& templateName, int upAxis,
+                            bool alsoSkin);
+    // Worker said UniRig is unavailable/failed → rig with the template instead
+    // (main thread), surfacing the reason as a fallback note.
+    void finishUniRigFallback(const QString& entityName, const QString& reason,
+                              const QString& templateName, int upAxis, bool alsoSkin);
+    // Shared result-emit for both finish paths.
+    void emitRigResult(const AutoRig::Report& report, bool skinned);
 
     static AutoRigController* m_pSingleton;
     bool m_busy = false;
+    // UniRig worker-thread progress + cancel.
+    bool m_rigDownloading = false;
+    int  m_rigProgress = 0;
+    int  m_rigTotal = 0;
+    std::shared_ptr<std::atomic_bool> m_rigCancel;
 
     // Marker session. Progress is a CURSOR into m_markerOrder: slots before the
     // cursor are resolved (either placed in m_markers, or skipped — absent from

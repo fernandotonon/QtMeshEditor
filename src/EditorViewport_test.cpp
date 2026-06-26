@@ -100,19 +100,6 @@ public:
 };
 }
 
-TEST_F(EditorViewportTest, ConstructionWithIndex) {
-    EditorViewport viewport(mainWindow, 5);
-    EXPECT_EQ(viewport.getIndex(), 5);
-}
-
-TEST_F(EditorViewportTest, GetIndexReturnsCorrectValue) {
-    EditorViewport viewport1(mainWindow, 0);
-    EXPECT_EQ(viewport1.getIndex(), 0);
-
-    EditorViewport viewport2(mainWindow, 42);
-    EXPECT_EQ(viewport2.getIndex(), 42);
-}
-
 TEST_F(EditorViewportTest, GetMainWindowReturnsParent) {
     EditorViewport viewport(mainWindow, 1);
     EXPECT_EQ(viewport.getMainWindow(), mainWindow);

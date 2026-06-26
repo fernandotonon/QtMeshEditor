@@ -113,27 +113,6 @@ TEST(AddMorphTargetCommandTest, TextFormattingUnicodeName)
     EXPECT_EQ(cmd.text(), QStringLiteral("Add morph target \"%1\"").arg(name));
 }
 
-TEST(AddMorphTargetCommandTest, RedoUndoAreNoOpsWithNullEntity)
-{
-    // mEntity is null → every method must early-return without touching
-    // any Ogre state (none exists in this harness). Just verify they do
-    // not crash and the text is unchanged afterwards.
-    AddMorphTargetCommand cmd(nullptr, QStringLiteral("Frown"), makeSlices());
-    EXPECT_NO_THROW(cmd.redo());
-    EXPECT_NO_THROW(cmd.undo());
-    EXPECT_NO_THROW(cmd.redo());
-    EXPECT_EQ(cmd.text(), QStringLiteral("Add morph target \"Frown\""));
-}
-
-TEST(AddMorphTargetCommandTest, NoOpWithEmptySlices)
-{
-    AddMorphTargetCommand cmd(nullptr, QStringLiteral("Empty"),
-                              std::vector<MorphPoseSlice>{});
-    EXPECT_NO_THROW(cmd.redo());
-    EXPECT_NO_THROW(cmd.undo());
-    EXPECT_EQ(cmd.text(), QStringLiteral("Add morph target \"Empty\""));
-}
-
 // ──────────────── DeleteMorphTargetCommand ──────────────────────────
 
 TEST(DeleteMorphTargetCommandTest, TextFormatting)

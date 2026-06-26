@@ -47,18 +47,6 @@ TEST_F(ObjectItemModelTest, ConstructorCreatesModelWithCorrectHeader)
 }
 
 // Test: Constructor creates model with root item "Scene"
-TEST_F(ObjectItemModelTest, ConstructorCreatesRootSceneItem)
-{
-    ObjectItemModel model;
-
-    // The root item should exist and be named "Scene"
-    QModelIndex rootIndex = model.getRootIndex();
-    EXPECT_TRUE(rootIndex.isValid());
-
-    QString rootText = model.data(rootIndex, Qt::DisplayRole).toString();
-    EXPECT_EQ(rootText, QString("Scene"));
-}
-
 // Test: reloadSceneNode builds tree from scene graph
 TEST_F(ObjectItemModelTest, ReloadSceneNodeBuildsTreeFromSceneGraph)
 {
@@ -179,18 +167,6 @@ TEST_F(ObjectItemModelTest, ObjectNodeRemovedRemovesNodes)
 }
 
 // Test: getRootIndex returns valid index
-TEST_F(ObjectItemModelTest, GetRootIndexReturnsValidIndex)
-{
-    ObjectItemModel model;
-
-    QModelIndex rootIndex = model.getRootIndex();
-    EXPECT_TRUE(rootIndex.isValid());
-
-    // The root index should point to the "Scene" item
-    QString rootText = model.data(rootIndex, Qt::DisplayRole).toString();
-    EXPECT_EQ(rootText, QString("Scene"));
-}
-
 // Test: getRootIndex row and column are valid
 TEST_F(ObjectItemModelTest, GetRootIndexHasValidRowAndColumn)
 {

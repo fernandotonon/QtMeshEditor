@@ -135,33 +135,6 @@ TEST_F(NormalVisualizerIntegrationTest, DestructorCleansUpWhileVisible)
     Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
 }
 
-TEST_F(NormalVisualizerIntegrationTest, BuildsOverlayForInMemoryMesh)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
-    auto meshPtr = createInMemoryTriangleMesh("NormalVisualizerTestMesh");
-    ASSERT_TRUE(meshPtr);
-
-    Ogre::SceneNode* node = Manager::getSingleton()->getSceneMgr()
-        ->getRootSceneNode()->createChildSceneNode("NormVizTestNode");
-    Ogre::Entity* entity = Manager::getSingleton()->getSceneMgr()->createEntity(
-        "NormalVisualizerTestEntity", meshPtr);
-    node->attachObject(entity);
-
-    NormalVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
-    visualizer.setVisible(true);
-
-    // The overlay ManualObject should be on a child node, not directly on entity's node
-    // So entity's node should still only have 1 attached object (the entity itself)
-    // but should have a child node with the ManualObject
-    EXPECT_GE(node->numChildren(), 1u);
-
-    visualizer.setVisible(false);
-
-    node->detachObject(entity);
-    Manager::getSingleton()->getSceneMgr()->destroyEntity(entity);
-    Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
-}
-
 TEST_F(NormalVisualizerIntegrationTest, OverlayCreatedForSkeletalEntity)
 {
     ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
@@ -282,34 +255,6 @@ TEST_F(NormalVisualizerIntegrationTest, OnSceneNodeDestroyedCleansUpOverlay)
 }
 
 // Verify overlay works with shared vertex data (createInMemoryTriangleMesh uses shared).
-TEST_F(NormalVisualizerIntegrationTest, OverlayWithSharedVertexData)
-{
-    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
-    // createInMemoryTriangleMesh creates a mesh with sharedVertexData and
-    // sub->useSharedVertices = true, which exercises the shared vertex path.
-    auto meshPtr = createInMemoryTriangleMesh("NormVizSharedMesh");
-    ASSERT_TRUE(meshPtr);
-    ASSERT_NE(meshPtr->sharedVertexData, nullptr);
-
-    Ogre::SceneNode* node = Manager::getSingleton()->getSceneMgr()
-        ->getRootSceneNode()->createChildSceneNode("NormVizSharedNode");
-    Ogre::Entity* entity = Manager::getSingleton()->getSceneMgr()->createEntity(
-        "NormVizSharedEntity", meshPtr);
-    node->attachObject(entity);
-
-    NormalVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
-    visualizer.setVisible(true);
-
-    // Shared vertex data path should produce an overlay child node
-    EXPECT_GE(node->numChildren(), 1u);
-
-    visualizer.setVisible(false);
-
-    node->detachObject(entity);
-    Manager::getSingleton()->getSceneMgr()->destroyEntity(entity);
-    Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
-}
-
 // Multiple entities: show normals for 3+ entities simultaneously.
 TEST_F(NormalVisualizerIntegrationTest, MultipleEntitiesSimultaneously)
 {

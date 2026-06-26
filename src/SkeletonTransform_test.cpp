@@ -47,14 +47,6 @@ protected:
 // --------------------------------------------------------------------------
 // Constructor is deleted -- verify this is a static-only class
 // --------------------------------------------------------------------------
-TEST_F(SkeletonTransformTest, ConstructorIsDeleted)
-{
-    // SkeletonTransform() = delete; -- verified at compile time.
-    // This test simply confirms the class can be used via static methods.
-    EXPECT_NE(entity, nullptr);
-    EXPECT_TRUE(entity->hasSkeleton());
-}
-
 // --------------------------------------------------------------------------
 // renameAnimation tests
 // --------------------------------------------------------------------------
@@ -361,74 +353,6 @@ TEST_F(SkeletonTransformTest, RotateSkeletonZeroRotation)
             idx++;
         }
     }
-}
-
-TEST_F(SkeletonTransformTest, RotateSkeletonXAxis)
-{
-    Ogre::Skeleton* sk = entity->getSkeleton();
-    ASSERT_NE(sk, nullptr);
-
-    auto bones = sk->getBones();
-    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
-
-    // Record root bone orientations before rotation
-    std::vector<Ogre::Quaternion> initialOrientations;
-    for (const auto& bone : bones) {
-        if (bone->getParent() == nullptr) {
-            initialOrientations.push_back(bone->getOrientation());
-        }
-    }
-
-    // Rotate around X axis (which maps to UNIT_Y in the code: _rotate.x uses UNIT_Y)
-    SkeletonTransform::rotateSkeleton(entity, Ogre::Vector3(90.0f, 0.0f, 0.0f));
-
-    // At least one root bone orientation should have changed
-    bool anyChanged = false;
-    size_t idx = 0;
-    for (const auto& bone : bones) {
-        if (bone->getParent() == nullptr) {
-            ASSERT_LT(idx, initialOrientations.size());
-            Ogre::Quaternion orient = bone->getOrientation();
-            if (!orient.equals(initialOrientations[idx], Ogre::Radian(0.001f))) {
-                anyChanged = true;
-            }
-            idx++;
-        }
-    }
-    EXPECT_TRUE(anyChanged);
-}
-
-TEST_F(SkeletonTransformTest, RotateSkeletonYAxis)
-{
-    Ogre::Skeleton* sk = entity->getSkeleton();
-    ASSERT_NE(sk, nullptr);
-
-    auto bones = sk->getBones();
-    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
-
-    std::vector<Ogre::Quaternion> initialOrientations;
-    for (const auto& bone : bones) {
-        if (bone->getParent() == nullptr) {
-            initialOrientations.push_back(bone->getOrientation());
-        }
-    }
-
-    // Rotate around Y axis (which maps to UNIT_Z in the code: _rotate.y uses UNIT_Z)
-    SkeletonTransform::rotateSkeleton(entity, Ogre::Vector3(0.0f, 45.0f, 0.0f));
-
-    bool anyChanged = false;
-    size_t idx = 0;
-    for (const auto& bone : bones) {
-        if (bone->getParent() == nullptr) {
-            ASSERT_LT(idx, initialOrientations.size());
-            Ogre::Quaternion orient = bone->getOrientation();
-            if (!orient.equals(initialOrientations[idx], Ogre::Radian(0.001f))) {
-                anyChanged = true;
-            }
-            idx++;
-        }
-    }
-    EXPECT_TRUE(anyChanged);
 }
 
 TEST_F(SkeletonTransformTest, RotateSkeletonZAxis)

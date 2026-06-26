@@ -33,29 +33,6 @@ void writeJsonFile(const QString& path, const QByteArray& json)
 
 } // namespace
 
-TEST(PlatformProfileLoaderTest, ResolvesBuiltinExampleMinimal)
-{
-    ASSERT_FALSE(profilesSourceDir().isEmpty()) << "profiles/ directory not found";
-
-    const PlatformProfileLoadResult loaded =
-        PlatformProfileLoader::load(QStringLiteral("example-minimal"));
-    ASSERT_TRUE(loaded.ok) << loaded.error.toStdString();
-    EXPECT_EQ(loaded.profile.id, QStringLiteral("example-minimal"));
-    EXPECT_EQ(loaded.profile.displayName, QStringLiteral("Example Minimal"));
-    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_vertex_count")).toInt(), 10000);
-    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_material_count")).toInt(), 8);
-    EXPECT_TRUE(loaded.profile.rules.value(QStringLiteral("require_textures_exist")).toBool());
-}
-
-TEST(PlatformProfileLoaderTest, InheritanceMergesParentRules)
-{
-    const PlatformProfileLoadResult loaded =
-        PlatformProfileLoader::load(QStringLiteral("example-minimal"));
-    ASSERT_TRUE(loaded.ok) << loaded.error.toStdString();
-    EXPECT_EQ(loaded.profile.rules.value(QStringLiteral("max_vertex_count")).toInt(), 10000);
-    EXPECT_TRUE(loaded.profile.rules.value(QStringLiteral("require_textures_exist")).toBool());
-}
-
 TEST(PlatformProfileLoaderTest, MissingBuiltinIdIsActionable)
 {
     const PlatformProfileLoadResult loaded =

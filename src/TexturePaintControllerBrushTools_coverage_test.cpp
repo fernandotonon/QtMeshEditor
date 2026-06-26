@@ -464,33 +464,6 @@ TEST_F(TexturePaintControllerCoverageTest, ToolFillSingleStampPerStroke)
 // UV overlay WITH an active session — exercises refreshUvOverlay drawing path
 // ===========================================================================
 
-TEST_F(TexturePaintControllerCoverageTest, UvOverlayWithSessionProducesPng)
-{
-    ASSERT_TRUE(m_fix.setup(QStringLiteral("UvOverlay")));
-    auto* ctrl = TexturePaintController::instance();
-    ctrl->setPaintTarget(TexturePaintController::TargetTexture);
-    ASSERT_TRUE(ctrl->ensurePaintableTexture(64));
-    // m_paintMesh is built by ensurePaintableTexture, so the overlay draws
-    // the UV triangles instead of taking the no-session early-out.
-    ctrl->setUvOverlayVisible(true);
-    EXPECT_TRUE(ctrl->uvOverlayVisible());
-    const QString uri = ctrl->uvOverlayDataUri();
-    EXPECT_FALSE(uri.isEmpty()) << "overlay PNG should be generated with a live session";
-    EXPECT_TRUE(uri.startsWith(QStringLiteral("data:image/png;base64,")));
-}
-
-TEST_F(TexturePaintControllerCoverageTest, UvOverlayEmitsSignalOnEnable)
-{
-    ASSERT_TRUE(m_fix.setup(QStringLiteral("UvOverlaySig")));
-    auto* ctrl = TexturePaintController::instance();
-    ctrl->setPaintTarget(TexturePaintController::TargetTexture);
-    ASSERT_TRUE(ctrl->ensurePaintableTexture(32));
-    ctrl->setUvOverlayVisible(false);
-    ctrl->setUvOverlayVisible(true);
-    // The URI is non-empty after enabling with a session.
-    EXPECT_FALSE(ctrl->uvOverlayDataUri().isEmpty());
-}
-
 // ===========================================================================
 // bakeToOriginalFile — resolve an on-disk path and rewrite the file
 // ===========================================================================

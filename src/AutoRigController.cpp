@@ -1,5 +1,6 @@
 #include "AutoRigController.h"
 #include "AutoRig.h"
+#include "UniRigPredictor.h"
 #include "SkinWeights.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -9,6 +10,11 @@
 #include "UndoManager.h"
 #include "PropertiesPanelController.h"
 #include "commands/AutoRigCommand.h"
+
+#include <QCoreApplication>
+#include <QPointer>
+#include <QMetaObject>
+#include <thread>
 
 #include <Ogre.h>
 #include <OgreEntity.h>
@@ -148,13 +154,14 @@ bool AutoRigController::hasRiggableSelection() const
 
 QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
                                                const QString& upAxis,
-                                               bool alsoSkin)
+                                               bool alsoSkin,
+                                               const QString& algo)
 {
     QVariantMap result;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-        QStringLiteral("Auto-rig requested (%1, up=%2%3)")
-            .arg(templateName, upAxis,
+        QStringLiteral("Auto-rig requested (%1, algo=%2, up=%3%4)")
+            .arg(templateName, algo, upAxis,
                  alsoSkin ? QStringLiteral(", +skin") : QString()));
 
     auto* sel = SelectionSet::getSingleton();
@@ -177,15 +184,17 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
 
     AutoRig::Options opts;
     opts.tmpl = AutoRig::templateFromString(templateName);
+    opts.algorithm = AutoRig::algorithmFromString(algo);
     const QString ax = upAxis.trimmed().toLower();
     if (ax == QStringLiteral("x")) opts.upAxis = 0;
     else if (ax == QStringLiteral("z")) opts.upAxis = 2;
     else opts.upAxis = 1;   // y (default)
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.auto_rig"),
-        QStringLiteral("UI auto-rig entity=%1 template=%2")
+        QStringLiteral("UI auto-rig entity=%1 template=%2 algo=%3")
             .arg(QString::fromStdString(entity->getName()),
-                 AutoRig::templateToString(opts.tmpl)));
+                 AutoRig::templateToString(opts.tmpl),
+                 AutoRig::algorithmToString(opts.algorithm)));
 
     // Pre-check here so a non-static mesh fails cleanly WITHOUT leaving a
     // no-op entry on the undo stack (QUndoStack::push runs redo()).
@@ -201,6 +210,66 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
 
     m_busy = true;
     emit busyChanged();
+
+    // --- UniRig: run the slow ONNX inference on a WORKER thread so the UI
+    // stays responsive + shows a progress bar; build the Ogre skeleton back on
+    // the MAIN thread. Pinocchio is instant, so it keeps the synchronous path.
+    if (opts.algorithm == AutoRig::Algorithm::UniRig) {
+        // Gather geometry now (main thread — locks Ogre HW buffers).
+        std::vector<float> verts;
+        std::vector<uint32_t> indices;
+        AutoRig::gatherGeometry(entity, verts, indices);
+
+        m_rigDownloading = !UniRigPredictor::modelsPresent();
+        m_rigProgress = 0; m_rigTotal = 0;
+        emit rigProgressChanged();
+
+        m_rigCancel = std::make_shared<std::atomic_bool>(false);
+        auto cancel = m_rigCancel;
+        const std::string entName = entity->getName();
+        const int upAxisVal = opts.upAxis;
+        QPointer<AutoRigController> self(this);
+
+        std::thread([self, verts, indices, upAxisVal, templateName, alsoSkin, cancel, entName]() {
+            auto progress = [self, cancel](int done, int total) -> bool {
+                if (cancel->load()) return false;
+                QMetaObject::invokeMethod(qApp, [self, done, total]() {
+                    if (!self) return;
+                    self->m_rigDownloading = false;
+                    self->m_rigProgress = done; self->m_rigTotal = total;
+                    emit self->rigProgressChanged();
+                }, Qt::QueuedConnection);
+                return true;
+            };
+            QString err;
+            std::vector<AutoRig::Joint> joints =
+                AutoRig::predictUniRig(verts, indices, upAxisVal, progress, &err);
+            // Back to the main thread: build the skeleton (Ogre) or report.
+            QMetaObject::invokeMethod(qApp, [self, joints, err, entName,
+                                             templateName, upAxisVal, alsoSkin, cancel]() {
+                if (!self) return;
+                self->m_rigDownloading = false;
+                if (cancel->load()) {
+                    self->m_busy = false; emit self->busyChanged();
+                    emit self->error(QStringLiteral("Auto-rig cancelled."));
+                    return;
+                }
+                if (joints.size() < 2) {
+                    // Inference unavailable/failed → fall back to the template
+                    // rig on the main thread (synchronous, instant).
+                    self->finishUniRigFallback(QString::fromStdString(entName),
+                                               err, templateName, upAxisVal, alsoSkin);
+                    return;
+                }
+                self->finishUniRigOnMain(QString::fromStdString(entName), joints,
+                                         templateName, upAxisVal, alsoSkin);
+            }, Qt::QueuedConnection);
+        }).detach();
+
+        result["applied"] = true;       // async — real result arrives via rigged()
+        result["pending"] = true;
+        return result;
+    }
 
     AutoRig::Report report;
     bool skinned = false;
@@ -229,10 +298,12 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
     result["meshName"]         = report.meshName;
     result["skeletonName"]     = report.skeletonName;
     result["template"]         = report.templateName;
+    result["algorithm"]        = AutoRig::algorithmToString(report.algorithmUsed);
     result["boneCount"]        = report.boneCount;
     result["verticesSampled"]  = report.verticesSampled;
     result["jointsRecentered"] = report.jointsRecentered;
     result["skinned"]          = skinned;
+    if (!report.fallbackReason.isEmpty()) result["fallbackReason"] = report.fallbackReason;
     if (!report.error.isEmpty()) result["error"] = report.error;
 
     if (report.applied) emit rigged(result);
@@ -240,6 +311,89 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
                         ? QStringLiteral("Auto-rig failed") : report.error);
 
     return result;
+}
+
+void AutoRigController::cancelRig()
+{
+    if (m_rigCancel) m_rigCancel->store(true);
+}
+
+void AutoRigController::emitRigResult(const AutoRig::Report& report, bool skinned)
+{
+    m_busy = false; m_rigDownloading = false;
+    emit busyChanged();
+    emit rigProgressChanged();
+    emit selectionChanged();
+
+    QVariantMap result;
+    result["applied"]          = report.applied;
+    result["meshName"]         = report.meshName;
+    result["skeletonName"]     = report.skeletonName;
+    result["template"]         = report.templateName;
+    result["algorithm"]        = AutoRig::algorithmToString(report.algorithmUsed);
+    result["boneCount"]        = report.boneCount;
+    result["verticesSampled"]  = report.verticesSampled;
+    result["jointsRecentered"] = report.jointsRecentered;
+    result["skinned"]          = skinned;
+    if (!report.fallbackReason.isEmpty()) result["fallbackReason"] = report.fallbackReason;
+    if (!report.error.isEmpty()) result["error"] = report.error;
+
+    if (report.applied) emit rigged(result);
+    else emit error(report.error.isEmpty()
+                        ? QStringLiteral("Auto-rig failed") : report.error);
+}
+
+void AutoRigController::finishUniRigOnMain(const QString& entityName,
+                                           const std::vector<AutoRig::Joint>& joints,
+                                           const QString& templateName, int upAxis,
+                                           bool alsoSkin)
+{
+    // MAIN thread: build the Ogre skeleton from worker-predicted joints via the
+    // undoable command (using the prePredictedJoints escape hatch so it skips
+    // the slow ONNX path and just builds + binds).
+    AutoRig::Options opts;
+    opts.algorithm = AutoRig::Algorithm::UniRig;
+    opts.tmpl = AutoRig::templateFromString(templateName);
+    opts.upAxis = upAxis;
+    opts.prePredictedJoints = joints;
+
+    AutoRig::Report report; bool skinned = false;
+    try {
+        auto* cmd = new AutoRigCommand(entityName.toStdString(), opts, {}, alsoSkin);
+        UndoManager::getSingleton()->push(cmd);
+        report  = cmd->report();
+        skinned = cmd->skinned();
+    } catch (const std::exception& e) {
+        report.applied = false;
+        report.error = QString::fromUtf8(e.what());
+    }
+    emitRigResult(report, skinned);
+}
+
+void AutoRigController::finishUniRigFallback(const QString& entityName, const QString& reason,
+                                             const QString& templateName, int upAxis, bool alsoSkin)
+{
+    // MAIN thread: UniRig wasn't usable → template rig, with the reason noted.
+    AutoRig::Options opts;
+    opts.algorithm = AutoRig::Algorithm::Pinocchio;
+    opts.tmpl = AutoRig::templateFromString(templateName);
+    opts.upAxis = upAxis;
+
+    AutoRig::Report report; bool skinned = false;
+    try {
+        auto* cmd = new AutoRigCommand(entityName.toStdString(), opts, {}, alsoSkin);
+        UndoManager::getSingleton()->push(cmd);
+        report  = cmd->report();
+        skinned = cmd->skinned();
+    } catch (const std::exception& e) {
+        report.applied = false;
+        report.error = QString::fromUtf8(e.what());
+    }
+    if (report.applied && report.fallbackReason.isEmpty())
+        report.fallbackReason =
+            QStringLiteral("%1 — used the native template rig instead.")
+                .arg(reason.isEmpty() ? QStringLiteral("UniRig unavailable") : reason);
+    emitRigResult(report, skinned);
 }
 
 // ============================ Marker placement ============================
@@ -319,8 +473,13 @@ void AutoRigController::notifyRiggingChanged(const std::string& entityName)
     // Drop any skeleton-debug overlay on this entity — once the skeleton state
     // flips (rig ↔ unrig on undo/redo) a previously-shown overlay references a
     // skeleton instance that's being recreated/destroyed, which would dangle.
-    if (auto* ppc = PropertiesPanelController::instance())
+    if (auto* ppc = PropertiesPanelController::instance()) {
         ppc->toggleSkeletonDebug(QString::fromStdString(entityName), false);
+        // The skeleton state flipped but the SELECTION didn't, so PPC won't
+        // re-emit on its own — poke it so the Skeleton section (gated on
+        // PropertiesPanelController.hasSkeletonSelection) appears/disappears.
+        ppc->notifySelectionMetadataChanged();
+    }
     // Re-evaluate the Inspector Rigging / Skeleton section visibility.
     emit selectionChanged();
 }

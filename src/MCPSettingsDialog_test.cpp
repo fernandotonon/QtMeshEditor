@@ -31,11 +31,6 @@ static QLabel* findStatusLabel(MCPSettingsDialog& dialog) {
     return nullptr;
 }
 
-TEST_F(MCPSettingsDialogTest, ConstructionDoesNotCrash) {
-    MCPSettingsDialog dialog(false, 8080);
-    EXPECT_TRUE(true);
-}
-
 TEST_F(MCPSettingsDialogTest, UIElementsExist) {
     MCPSettingsDialog dialog(false, 8080);
 

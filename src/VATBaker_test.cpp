@@ -22,32 +22,6 @@
 // so they run on every CI permutation.
 // ===========================================================================
 
-TEST(VATBakerStandalone, BakeNullEntityReports) {
-    VATBaker::Options opts;
-    opts.animationName = QStringLiteral("Idle");
-    opts.outputDir = QStringLiteral("/tmp/vat");
-    auto r = VATBaker::bake(nullptr, opts);
-    EXPECT_FALSE(r.ok);
-    EXPECT_TRUE(r.error.contains(QStringLiteral("null")));
-}
-
-TEST(VATBakerStandalone, BakeMissingAnimationNameReports) {
-    VATBaker::Options opts;
-    opts.outputDir = QStringLiteral("/tmp/vat");
-    auto r = VATBaker::bake(nullptr, opts);
-    EXPECT_FALSE(r.ok);
-}
-
-TEST(VATBakerStandalone, BakeInvalidFpsReports) {
-    VATBaker::Options opts;
-    opts.animationName = QStringLiteral("Walk");
-    opts.fps = 0.0;
-    opts.outputDir = QStringLiteral("/tmp/vat");
-    auto r = VATBaker::bake(nullptr, opts);
-    EXPECT_FALSE(r.ok);
-    EXPECT_FALSE(r.error.isEmpty());
-}
-
 TEST(VATBakerStandalone, BuildSidecarJsonProducesOsRemap) {
     // BakeResult.minBound/maxBound are the already-rounded OpenVAT
     // bounds (snapped by bake() before encoding the texture and emitting

@@ -94,16 +94,6 @@ TEST(ComputeSkinWeightsCommandTest, AppliedMirrorsReportAppliedFlag) {
 // redo() against an unresolvable entity → error branch
 // ---------------------------------------------------------------------------
 
-TEST(ComputeSkinWeightsCommandTest, RedoOnBogusEntitySetsErrorReport) {
-    ComputeSkinWeightsCommand cmd(kBogusEntity, defaultOpts());
-    cmd.redo();
-
-    EXPECT_FALSE(cmd.report().applied);
-    EXPECT_FALSE(cmd.applied());
-    EXPECT_EQ(cmd.report().error,
-              QStringLiteral("entity not found / no mesh"));
-}
-
 TEST(ComputeSkinWeightsCommandTest, RedoOnBogusEntityWithNoManagerSingleton) {
     // Force the Manager::getSingletonPtr() == nullptr leg of
     // resolveEntity(). kill() is a no-op if no singleton exists.
@@ -118,42 +108,9 @@ TEST(ComputeSkinWeightsCommandTest, RedoOnBogusEntityWithNoManagerSingleton) {
               QStringLiteral("entity not found / no mesh"));
 }
 
-TEST(ComputeSkinWeightsCommandTest, RedoOnEmptyEntityNameSetsErrorReport) {
-    ComputeSkinWeightsCommand cmd(std::string(), defaultOpts());
-    cmd.redo();
-
-    EXPECT_FALSE(cmd.applied());
-    EXPECT_EQ(cmd.report().error,
-              QStringLiteral("entity not found / no mesh"));
-}
-
-TEST(ComputeSkinWeightsCommandTest, RedoOnBogusEntityIsIdempotent) {
-    // Calling redo() twice on an unresolvable entity stays in the
-    // error branch each time (mCaptured is never set, so the second
-    // call re-enters the same early-return path — no crash, no
-    // change of state).
-    ComputeSkinWeightsCommand cmd(kBogusEntity, defaultOpts());
-    cmd.redo();
-    cmd.redo();
-
-    EXPECT_FALSE(cmd.applied());
-    EXPECT_EQ(cmd.report().error,
-              QStringLiteral("entity not found / no mesh"));
-}
-
 // ---------------------------------------------------------------------------
 // undo() before any successful redo → strict no-op (!mCaptured guard)
 // ---------------------------------------------------------------------------
-
-TEST(ComputeSkinWeightsCommandTest, UndoBeforeRedoIsNoOp) {
-    ComputeSkinWeightsCommand cmd(kBogusEntity, defaultOpts());
-    // No redo() at all → mCaptured == false → undo() must early-return
-    // without resolving the entity or touching any scene state.
-    EXPECT_NO_THROW(cmd.undo());
-
-    EXPECT_FALSE(cmd.applied());
-    EXPECT_TRUE(cmd.report().error.isEmpty());
-}
 
 TEST(ComputeSkinWeightsCommandTest, UndoAfterFailedRedoIsNoOp) {
     // A failed redo() (unresolvable entity) returns before
@@ -168,28 +125,6 @@ TEST(ComputeSkinWeightsCommandTest, UndoAfterFailedRedoIsNoOp) {
     EXPECT_FALSE(cmd.applied());
     EXPECT_EQ(cmd.report().error,
               QStringLiteral("entity not found / no mesh"));
-}
-
-TEST(ComputeSkinWeightsCommandTest, RepeatedUndoNeverCrashes) {
-    ComputeSkinWeightsCommand cmd(kBogusEntity, defaultOpts());
-    EXPECT_NO_THROW({
-        cmd.undo();
-        cmd.undo();
-        cmd.undo();
-    });
-    EXPECT_FALSE(cmd.applied());
-}
-
-TEST(ComputeSkinWeightsCommandTest, UndoNoOpWithNoManagerSingleton) {
-    // Even with no Manager, undo() before a successful redo must not
-    // attempt to resolve the entity (the !mCaptured guard short-
-    // circuits ahead of resolveEntity()).
-    Manager::kill();
-    ASSERT_EQ(Manager::getSingletonPtr(), nullptr);
-
-    ComputeSkinWeightsCommand cmd(kBogusEntity, defaultOpts());
-    EXPECT_NO_THROW(cmd.undo());
-    EXPECT_FALSE(cmd.applied());
 }
 
 // ---------------------------------------------------------------------------

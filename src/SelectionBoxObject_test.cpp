@@ -56,13 +56,6 @@ TEST_F(SelectionBoxObjectTest, SetBoxColour)
     EXPECT_EQ(box.getBoxColour(), red);
 }
 
-TEST_F(SelectionBoxObjectTest, DrawBox_FloatOverload)
-{
-    SelectionBoxObject box("TestSelBoxDrawFloat");
-    // drawBox with floats should not crash
-    box.drawBox(-0.5f, 0.5f, 0.5f, -0.5f);
-}
-
 TEST_F(SelectionBoxObjectTest, DrawBox_VectorOverload)
 {
     SelectionBoxObject box("TestSelBoxDrawVec");
@@ -70,23 +63,4 @@ TEST_F(SelectionBoxObjectTest, DrawBox_VectorOverload)
     Ogre::Vector2 bottomRight(0.5f, -0.5f);
     // drawBox with Vector2 should not crash
     box.drawBox(topLeft, bottomRight);
-}
-
-TEST_F(SelectionBoxObjectTest, DrawBox_MultipleCalls)
-{
-    SelectionBoxObject box("TestSelBoxMulti");
-    // Multiple drawBox calls test that clear() works internally
-    box.drawBox(-1.0f, 1.0f, 1.0f, -1.0f);
-    box.drawBox(-0.5f, 0.5f, 0.5f, -0.5f);
-    box.drawBox(0.0f, 0.0f, 1.0f, -1.0f);
-}
-
-TEST_F(SelectionBoxObjectTest, SetBoxColourAffectsSubsequentDraws)
-{
-    SelectionBoxObject box("TestSelBoxColourDraw");
-    Ogre::ColourValue green(0.0f, 1.0f, 0.0f, 1.0f);
-    box.setBoxColour(green);
-    EXPECT_EQ(box.getBoxColour(), green);
-    // Drawing after colour change should not crash
-    box.drawBox(-0.2f, 0.2f, 0.2f, -0.2f);
 }

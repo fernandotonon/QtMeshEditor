@@ -141,6 +141,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AutoRig.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AutoRigController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UniRigPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDepthRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.cpp

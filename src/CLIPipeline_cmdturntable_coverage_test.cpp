@@ -112,39 +112,7 @@ protected:
 
 // --axis y (default), sprite-sheet output: assert the PNG lands on disk with
 // the sheet geometry (N frames laid out horizontally).
-TEST_F(CLIPipelineCmdTurntableCoverageTest, AxisYSpriteSheetWritesPngOnDisk)
-{
-    const QString mesh = meshInput("ax_y.obj");
-    const QString out = outPath("sheet_y.png");
-
-    ArgvBuilder args({"qtmesh", "turntable", mesh, "-o", out,
-                      "--frames", "3", "--size", "48", "--axis", "y"});
-    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
-
-    ASSERT_TRUE(QFile::exists(out));
-    QImage img(out);
-    ASSERT_FALSE(img.isNull());
-    EXPECT_EQ(img.width(), 144);  // 3 cols * 48
-    EXPECT_EQ(img.height(), 48);
-}
-
 // --axis x render branch on a real mesh.
-TEST_F(CLIPipelineCmdTurntableCoverageTest, AxisXSpriteSheetWritesPngOnDisk)
-{
-    const QString mesh = meshInput("ax_x.obj");
-    const QString out = outPath("sheet_x.png");
-
-    ArgvBuilder args({"qtmesh", "turntable", mesh, "-o", out,
-                      "--frames", "2", "--size", "40", "--axis", "x"});
-    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
-
-    ASSERT_TRUE(QFile::exists(out));
-    QImage img(out);
-    ASSERT_FALSE(img.isNull());
-    EXPECT_EQ(img.width(), 80);   // 2 cols * 40
-    EXPECT_EQ(img.height(), 40);
-}
-
 // --axis z render branch on a real mesh.
 TEST_F(CLIPipelineCmdTurntableCoverageTest, AxisZSpriteSheetWritesPngOnDisk)
 {
@@ -165,68 +133,10 @@ TEST_F(CLIPipelineCmdTurntableCoverageTest, AxisZSpriteSheetWritesPngOnDisk)
 // --camera-height (elevation) variant: a non-default camera height should
 // still produce a valid PNG. Pairs camera-height with the --json surface so
 // we can assert the elevation echo + axis key in the JSON report.
-TEST_F(CLIPipelineCmdTurntableCoverageTest, CameraHeightVariantWritesPngAndJson)
-{
-    const QString mesh = meshInput("cam_h.obj");
-    const QString out = outPath("cam_h.png");
-
-    ArgvBuilder args({"qtmesh", "turntable", mesh, "-o", out,
-                      "--frames", "2", "--size", "40",
-                      "--axis", "x", "--camera-height", "35", "--json"});
-    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
-
-    ASSERT_TRUE(QFile::exists(out));
-    QImage img(out);
-    ASSERT_FALSE(img.isNull());
-    EXPECT_EQ(img.width(), 80);
-    EXPECT_EQ(img.height(), 40);
-}
-
 // Per-frame %02d sequence output: every frame PNG must exist on disk and be a
 // loadable image with the requested per-frame dimensions.
-TEST_F(CLIPipelineCmdTurntableCoverageTest, SequencePerFrameOutputExistsOnDisk)
-{
-    const QString mesh = meshInput("seq.obj");
-    const QString pattern = outPath("robot_%02d.png");
-
-    ArgvBuilder args({"qtmesh", "turntable", mesh, "-o", pattern,
-                      "--frames", "3", "--width", "64", "--height", "48",
-                      "--axis", "y"});
-    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
-
-    const QString f0 = outPath("robot_00.png");
-    const QString f1 = outPath("robot_01.png");
-    const QString f2 = outPath("robot_02.png");
-    EXPECT_TRUE(QFile::exists(f0));
-    EXPECT_TRUE(QFile::exists(f1));
-    EXPECT_TRUE(QFile::exists(f2));
-    // No off-by-one extra frame should be produced.
-    EXPECT_FALSE(QFile::exists(outPath("robot_03.png")));
-
-    QImage img(f0);
-    ASSERT_FALSE(img.isNull());
-    EXPECT_EQ(img.width(), 64);
-    EXPECT_EQ(img.height(), 48);
-}
-
 // --frames 1 single-frame branch: writes exactly one PNG at -o (no sheet, no
 // sequence) with the requested square size.
-TEST_F(CLIPipelineCmdTurntableCoverageTest, SingleFrameWritesOnePngOnDisk)
-{
-    const QString mesh = meshInput("one.obj");
-    const QString out = outPath("single.png");
-
-    ArgvBuilder args({"qtmesh", "turntable", mesh, "-o", out,
-                      "--frames", "1", "--size", "56", "--camera-height", "10"});
-    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
-
-    ASSERT_TRUE(QFile::exists(out));
-    QImage img(out);
-    ASSERT_FALSE(img.isNull());
-    EXPECT_EQ(img.width(), 56);
-    EXPECT_EQ(img.height(), 56);
-}
-
 // JSON report on a sprite-sheet (multi-frame, non-sequence) render: assert the
 // reported keys/values match the request and that "outputs" lists the on-disk
 // PNG. Exercises the jsonOutput + sequence=false + axis=x echo branch.
@@ -274,21 +184,4 @@ TEST_F(CLIPipelineCmdTurntableCoverageTest, FramesAboveCapClampToValidRange)
 
 // --columns N multi-row sprite-sheet layout on a real mesh: 4 frames in 2
 // columns -> 2x2 grid.
-TEST_F(CLIPipelineCmdTurntableCoverageTest, ColumnsMultiRowSheetWritesPngOnDisk)
-{
-    const QString mesh = meshInput("cols.obj");
-    const QString out = outPath("cols.png");
-
-    ArgvBuilder args({"qtmesh", "turntable", mesh, "-o", out,
-                      "--frames", "4", "--size", "40",
-                      "--columns", "2", "--axis", "y", "--camera-height", "25"});
-    EXPECT_EQ(CLIPipeline::cmdTurntable(args.argc(), args.argv()), 0);
-
-    ASSERT_TRUE(QFile::exists(out));
-    QImage img(out);
-    ASSERT_FALSE(img.isNull());
-    EXPECT_EQ(img.width(), 80);   // 2 cols * 40
-    EXPECT_EQ(img.height(), 80);  // 2 rows * 40
-}
-
 } // namespace

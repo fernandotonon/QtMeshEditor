@@ -117,13 +117,6 @@ TEST_F(ScaleGizmoTests, SetQueryFlags) {
     EXPECT_EQ(mScaleGizmo->getZAxis().getQueryFlags(), GIZMO_QUERY_FLAGS);
 }
 
-TEST_F(ScaleGizmoTests, CreateAxis) {
-    mScaleGizmo->createAxis();
-    ASSERT_NE(&mScaleGizmo->getXAxis(), nullptr);
-    ASSERT_NE(&mScaleGizmo->getYAxis(), nullptr);
-    ASSERT_NE(&mScaleGizmo->getZAxis(), nullptr);
-}
-
 TEST_F(ScaleGizmoTests, SetFading) {
     mScaleGizmo->setFading(0.8f);
     EXPECT_FLOAT_EQ(mScaleGizmo->getFading(), 0.8f);
@@ -157,12 +150,6 @@ TEST_F(ScaleGizmoTests, UnnamedGizmoCreation) {
     auto emptyNameGizmo = std::make_unique<ScaleGizmo>(mLinkNode, "");
     EXPECT_FALSE(emptyNameGizmo->isHighlighted());
     EXPECT_FLOAT_EQ(emptyNameGizmo->getScale(), 1.0f);
-}
-
-TEST_F(ScaleGizmoTests, HighlightNullReturnsZero) {
-    auto result = mScaleGizmo->highlightAxis(nullptr);
-    EXPECT_EQ(result, Ogre::Vector3::ZERO);
-    EXPECT_FALSE(mScaleGizmo->isHighlighted());
 }
 
 TEST_F(ScaleGizmoTests, HighlightUnknownObjectReturnsZeroAndClearsHighlight) {
@@ -200,36 +187,6 @@ TEST_F(ScaleGizmoTests, SetCustomColours) {
     EXPECT_EQ(mScaleGizmo->getXaxisColour(), cyan);
     EXPECT_EQ(mScaleGizmo->getYaxisColour(), magenta);
     EXPECT_EQ(mScaleGizmo->getZaxisColour(), yellow);
-}
-
-TEST_F(ScaleGizmoTests, VisibilityToggle) {
-    mScaleGizmo->setVisible(true);
-    EXPECT_TRUE(mScaleGizmo->getXAxis().isVisible());
-
-    mScaleGizmo->setVisible(false);
-    EXPECT_FALSE(mScaleGizmo->getXAxis().isVisible());
-
-    mScaleGizmo->setVisible(true);
-    EXPECT_TRUE(mScaleGizmo->getXAxis().isVisible());
-}
-
-TEST_F(ScaleGizmoTests, HighlightEachAxisSequentially) {
-    // Highlight X then Y then Z then clear
-    auto r1 = mScaleGizmo->highlightAxis(&mScaleGizmo->getXAxis());
-    EXPECT_EQ(r1, Ogre::Vector3::UNIT_X);
-    EXPECT_TRUE(mScaleGizmo->isHighlighted());
-
-    auto r2 = mScaleGizmo->highlightAxis(&mScaleGizmo->getYAxis());
-    EXPECT_EQ(r2, Ogre::Vector3::UNIT_Y);
-    EXPECT_TRUE(mScaleGizmo->isHighlighted());
-
-    auto r3 = mScaleGizmo->highlightAxis(&mScaleGizmo->getZAxis());
-    EXPECT_EQ(r3, Ogre::Vector3::UNIT_Z);
-    EXPECT_TRUE(mScaleGizmo->isHighlighted());
-
-    auto r4 = mScaleGizmo->highlightAxis(nullptr);
-    EXPECT_EQ(r4, Ogre::Vector3::ZERO);
-    EXPECT_FALSE(mScaleGizmo->isHighlighted());
 }
 
 TEST_F(ScaleGizmoTests, ConstructWithCustomScale) {

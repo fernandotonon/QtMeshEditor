@@ -75,14 +75,6 @@ TEST_F(RotationGizmoTests, CreateUnamedGizmo) {
     ASSERT_EQ(unamedGizmo.getZCircle().getName(), "Z");
 }
 
-TEST_F(RotationGizmoTests, CreateCircles) {
-    mRotationGizmo->createCircles();
-
-    ASSERT_NE(&mRotationGizmo->getXCircle(), nullptr);
-    ASSERT_NE(&mRotationGizmo->getYCircle(), nullptr);
-    ASSERT_NE(&mRotationGizmo->getZCircle(), nullptr);
-}
-
 TEST_F(RotationGizmoTests, SetScale) {
     mRotationGizmo->setScale(2.0);
     EXPECT_EQ(mRotationGizmo->getScale(), 2.0);

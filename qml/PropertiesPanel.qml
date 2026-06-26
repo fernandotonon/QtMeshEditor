@@ -24,10 +24,12 @@ Rectangle {
     // (replaces the old modal AutoRigDialog) ----
     property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic"]
     property int    rigTemplateIndex: 0
+    property var    rigAlgos: ["pinocchio", "unirig"]
+    property int    rigAlgoIndex: 0             // pinocchio (offline) default
     property var    rigUpAxes: ["x", "y", "z"]
     property int    rigUpAxisIndex: 1           // +Y default
     property bool   rigAlsoSkin: true
-    property bool   rigShowAdvanced: false      // template / up-axis pickers
+    property bool   rigShowAdvanced: false      // up-axis picker
     property string rigStatus: ""
     property bool   rigStatusError: false
 
@@ -36,12 +38,23 @@ Rectangle {
         const r = AutoRigController.autoRigSelected(
             root.rigTemplates[root.rigTemplateIndex],
             root.rigUpAxes[root.rigUpAxisIndex],
-            root.rigAlsoSkin)
+            root.rigAlsoSkin,
+            root.rigAlgos[root.rigAlgoIndex])
+        // UniRig runs on a worker thread: it returns {pending:true} immediately
+        // and resolves later via the onRigged / onError signals. Don't touch the
+        // status line yet — the progress bar takes over while busy.
+        if (r && r.pending) {
+            root.rigStatus = ""
+            root.rigStatusError = false
+            return
+        }
         if (r && r.applied) {
-            root.rigStatus = "Rigged: " + r.boneCount + " bones, "
+            root.rigStatus = "Rigged (" + (r.algorithm ? r.algorithm : "pinocchio")
+                + "): " + r.boneCount + " bones, "
                 + r.verticesSampled + " verts, "
                 + r.jointsRecentered + " recentered"
                 + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+                + (r.fallbackReason ? "\n" + r.fallbackReason : "")
             root.rigStatusError = false
         } else {
             root.rigStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
@@ -65,6 +78,18 @@ Rectangle {
 
     Connections {
         target: AutoRigController
+        // Worker-thread (UniRig) completion. The synchronous Pinocchio path
+        // already set the status line in runAutoRig(); this only fires for the
+        // async path (and harmlessly overwrites with the same info if both ran).
+        function onRigged(r) {
+            if (!r) return
+            root.rigStatus = "Rigged (" + (r.algorithm ? r.algorithm : "pinocchio")
+                + "): " + r.boneCount + " bones, "
+                + r.verticesSampled + " verts"
+                + (root.rigAlsoSkin ? (r.skinned ? " (+ skinned)" : " (skin failed)") : "")
+                + (r.fallbackReason ? "\n" + r.fallbackReason : "")
+            root.rigStatusError = false
+        }
         function onError(msg) {
             root.rigStatus = "Failed: " + msg
             root.rigStatusError = true
@@ -144,14 +169,26 @@ Rectangle {
         Repeater {
             model: rseg.options
             Rectangle {
+                id: segRect
                 width: Math.max(56, rsegText.implicitWidth + 16)
                 height: 22
                 radius: 3
                 color: index === rseg.index
                     ? PropertiesPanelController.highlightColor
                     : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
+                // Keyboard accessibility: each segment is tab-focusable, with a
+                // focus ring; Space/Enter selects it. (Mouse still works too.)
+                activeFocusOnTab: true
+                border.color: segRect.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: segRect.activeFocus ? 2 : 1
+                Accessible.role: Accessible.RadioButton
+                Accessible.name: modelData
+                Accessible.checked: index === rseg.index
+                Keys.onSpacePressed: rseg.picked(index)
+                Keys.onReturnPressed: rseg.picked(index)
+                Keys.onEnterPressed: rseg.picked(index)
                 Text {
                     id: rsegText
                     anchors.centerIn: parent
@@ -162,7 +199,7 @@ Rectangle {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: rseg.picked(index)
+                    onClicked: { segRect.forceActiveFocus(); rseg.picked(index) }
                 }
             }
         }
@@ -1478,6 +1515,8 @@ Rectangle {
 
             readonly property bool canRig: AutoRigController.hasRiggableSelection
             readonly property bool marking: AutoRigController.markerMode
+            // Mirror rigIdle.isUnirig so the intro text can branch on the backend.
+            readonly property bool isUnirig: root.rigAlgos[root.rigAlgoIndex] === "unirig"
 
             Text {
                 width: parent.width - 16
@@ -1488,9 +1527,8 @@ Rectangle {
                 text: rigCol.marking
                     ? "Click each highlighted point on the mesh in the viewport."
                     : (rigCol.canRig
-                        ? "Embed a skeleton into this unrigged mesh. Use markers for a "
-                          + "better fit (Mixamo-style), or a plain template. Optionally "
-                          + "skin in one click."
+                        ? "Embed a skeleton into this unrigged mesh. Optionally skin "
+                          + "in one click."
                         : "Select a static (unrigged) mesh to enable rigging.")
             }
 
@@ -1542,12 +1580,70 @@ Rectangle {
 
             // ── Idle: skeleton type + entry points + options ──────────────
             Column {
+                id: rigIdle
                 width: parent.width - 16
                 spacing: 8
-                visible: !rigCol.marking
+                // Hidden while marking OR while the worker rig is running (the
+                // progress block below takes over) so the controls can't be
+                // re-triggered mid-run.
+                visible: !rigCol.marking && !AutoRigController.busy
 
-                // Skeleton type — a primary choice, always visible.
+                // True when the ML (UniRig) backend is selected. UniRig predicts
+                // the whole skeleton from geometry, so the template type, markers
+                // and up-axis (all template-only inputs) are hidden for it.
+                readonly property bool isUnirig: root.rigAlgos[root.rigAlgoIndex] === "unirig"
+
+                // Skeleton algorithm — Pinocchio (native template, offline) or
+                // UniRig (ML, ONNX; falls back to the template when unavailable).
                 Text {
+                    text: "Algorithm"
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.8
+                    font.pixelSize: 10
+                }
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    RigSegments {
+                        options: root.rigAlgos
+                        index: root.rigAlgoIndex
+                        onPicked: function(i) { root.rigAlgoIndex = i }
+                    }
+                }
+                // AI-powered notice — shown only for UniRig, makes the local-model
+                // nature explicit.
+                Text {
+                    width: parent.width
+                    visible: rigIdle.isUnirig
+                    wrapMode: Text.Wrap
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.7
+                    font.pixelSize: 9
+                    text: "✨ AI-powered. UniRig (MIT, SIGGRAPH 2025) predicts the full "
+                        + "skeleton from the mesh geometry using a local ML model — no "
+                        + "template or markers needed. The model (~1.4 GB) downloads once "
+                        + "on first use and then runs entirely on your machine (offline). "
+                        + "Falls back to the template rig if the model can't be loaded. "
+                        + "Trained on Articulation-XL2.0 (CC-BY-4.0)."
+                }
+                // Marker hint — shown only for Pinocchio (the template backend),
+                // mirroring the UniRig notice above.
+                Text {
+                    width: parent.width
+                    visible: !rigIdle.isUnirig
+                    wrapMode: Text.Wrap
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.7
+                    font.pixelSize: 9
+                    text: "Use markers for a better fit (Mixamo-style): click the "
+                        + "highlighted points on the mesh to anchor the joints, or "
+                        + "skip them for a plain proportional template."
+                }
+
+                // ---- Template-only controls (hidden when UniRig is selected) ----
+                // Skeleton type — used by Pinocchio (and as the UniRig fallback).
+                Text {
+                    visible: !rigIdle.isUnirig
                     text: "Skeleton type"
                     color: PropertiesPanelController.textColor
                     opacity: 0.8
@@ -1555,6 +1651,7 @@ Rectangle {
                 }
                 Flow {
                     width: parent.width
+                    visible: !rigIdle.isUnirig
                     spacing: 4
                     RigSegments {
                         options: root.rigTemplates
@@ -1567,8 +1664,9 @@ Rectangle {
                     width: parent.width
                     spacing: 6
                     RigButton {
-                        // Markers are a humanoid concept (chin/shoulders/wrists/
-                        // hips/knees) — only offered for the humanoid template.
+                        // Markers are a humanoid TEMPLATE concept — UniRig predicts
+                        // its own structure, so this is hidden for the ML backend.
+                        visible: !rigIdle.isUnirig
                         label: "Place markers…"
                         buttonEnabled: rigCol.canRig && !AutoRigController.busy
                             && root.rigTemplates[root.rigTemplateIndex] === "humanoid"
@@ -1576,7 +1674,10 @@ Rectangle {
                             root.rigUpAxes[root.rigUpAxisIndex])
                     }
                     RigButton {
-                        label: AutoRigController.busy ? "Rigging…" : "Auto-Rig (template)"
+                        // Label reflects the backend: AI prediction vs template embed.
+                        label: AutoRigController.busy
+                            ? "Rigging…"
+                            : (rigIdle.isUnirig ? "Generate Rig (AI)" : "Auto-Rig (template)")
                         buttonEnabled: rigCol.canRig && !AutoRigController.busy
                         onClicked: root.runAutoRig()
                     }
@@ -1588,8 +1689,9 @@ Rectangle {
                     onToggled: root.rigAlsoSkin = !root.rigAlsoSkin
                 }
 
-                // Advanced options toggle (just the up-axis picker for now).
+                // Advanced options toggle — template-only (up-axis), hidden for UniRig.
                 RigCheckbox {
+                    visible: !rigIdle.isUnirig
                     label: "Advanced options"
                     checked: root.rigShowAdvanced
                     onToggled: root.rigShowAdvanced = !root.rigShowAdvanced
@@ -1598,7 +1700,7 @@ Rectangle {
                 Column {
                     width: parent.width
                     spacing: 6
-                    visible: root.rigShowAdvanced
+                    visible: root.rigShowAdvanced && !rigIdle.isUnirig
 
                     Text {
                         text: "Up axis (+Y is the in-app default)"
@@ -1611,6 +1713,64 @@ Rectangle {
                         index: root.rigUpAxisIndex
                         onPicked: function(i) { root.rigUpAxisIndex = i }
                     }
+                }
+            }
+
+            // ── UniRig worker progress (busy) ─────────────────────────────
+            // Shown while the ML rig runs on the worker thread. Determinate bar
+            // over the decode steps, a "Downloading model…" phase before the
+            // first step, and a Cancel button. The whole section stays mounted
+            // (the idle controls above are gated on !busy where it matters via
+            // buttonEnabled) so deleting the model mid-run isn't possible — the
+            // worker holds the only handle and Cancel is the sanctioned exit.
+            Column {
+                width: parent.width - 16
+                spacing: 6
+                visible: AutoRigController.busy
+
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    text: AutoRigController.rigDownloading
+                        ? "Downloading UniRig model (~1.4 GB, first use only)…"
+                        : (AutoRigController.rigTotal > 0
+                            ? ("Predicting skeleton… step "
+                               + AutoRigController.rigProgress + " / "
+                               + AutoRigController.rigTotal)
+                            : "Preparing…")
+                }
+
+                // Determinate while decoding; indeterminate-looking (full-width
+                // track, no fill) during download / prepare where we have no count.
+                Rectangle {
+                    width: parent.width
+                    height: 6
+                    radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Rectangle {
+                        height: parent.height - 2
+                        y: 1; x: 1
+                        radius: 2
+                        color: PropertiesPanelController.highlightColor
+                        readonly property real frac:
+                            AutoRigController.rigTotal > 0
+                                ? Math.max(0, Math.min(1,
+                                    AutoRigController.rigProgress
+                                    / AutoRigController.rigTotal))
+                                : 0
+                        width: (parent.width - 2) * frac
+                        Behavior on width { NumberAnimation { duration: 120 } }
+                    }
+                }
+
+                RigButton {
+                    label: "Cancel"
+                    buttonEnabled: true
+                    onClicked: AutoRigController.cancelRig()
                 }
             }
 

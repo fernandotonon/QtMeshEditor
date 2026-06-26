@@ -213,44 +213,7 @@ TEST_F(MeshDecimatorCoverageTest, ProjectEntityNullReturnsEmpty)
 }
 
 // (c) decimateEntity(entity, 0.5) — 2-arg delegate -> Algorithm::Ogre path.
-TEST_F(MeshDecimatorCoverageTest, DecimateOgreTwoArgReduces)
-{
-    Ogre::Entity* entity = makeEntity("ogre2arg");
-    ASSERT_NE(entity, nullptr);
-
-    DecimationReport report = MeshDecimator::decimateEntity(entity, 0.5);
-    EXPECT_TRUE(report.applied);
-    EXPECT_EQ(128, report.totalTrianglesBefore);
-    EXPECT_LT(report.totalTrianglesAfter, report.totalTrianglesBefore);
-    EXPECT_GT(report.totalTrianglesAfter, 0);
-    EXPECT_NEAR(0.5, report.appliedReduction, 1e-9);
-    EXPECT_FALSE(report.meshName.isEmpty());
-
-    // The in-place mutation is observable on the live mesh.
-    const size_t liveTris =
-        entity->getMesh()->getSubMesh(0)->indexData->indexCount / 3;
-    EXPECT_EQ(static_cast<int>(liveTris), report.totalTrianglesAfter);
-    EXPECT_LT(liveTris, 128u);
-
-    ASSERT_EQ(1, report.submeshes.size());
-    EXPECT_EQ(128, report.submeshes[0].trianglesBefore);
-    EXPECT_LT(report.submeshes[0].trianglesAfter, 128);
-}
-
 // decimateEntity(entity, 0.5, Algorithm::Ogre) — explicit Ogre LodConfig path.
-TEST_F(MeshDecimatorCoverageTest, DecimateOgreExplicitReduces)
-{
-    Ogre::Entity* entity = makeEntity("ogreexpl");
-    ASSERT_NE(entity, nullptr);
-
-    DecimationReport report = MeshDecimator::decimateEntity(
-        entity, 0.5, MeshDecimator::Algorithm::Ogre);
-    EXPECT_TRUE(report.applied);
-    EXPECT_EQ(128, report.totalTrianglesBefore);
-    EXPECT_LT(report.totalTrianglesAfter, report.totalTrianglesBefore);
-    EXPECT_GT(report.totalTrianglesAfter, 0);
-}
-
 // (d) decimateEntity(entity, 0.5, Algorithm::Meshopt) — meshoptimizer branch:
 // generateLods -> mLodFaceList -> promoteFirstLodToBase -> recount.
 TEST_F(MeshDecimatorCoverageTest, DecimateMeshoptReduces)

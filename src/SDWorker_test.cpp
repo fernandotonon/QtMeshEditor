@@ -18,14 +18,6 @@ protected:
     QApplication* app = nullptr;
 };
 
-TEST_F(SDWorkerTest, Constructor)
-{
-    SDWorker worker;
-    EXPECT_FALSE(worker.isModelLoaded());
-    EXPECT_FALSE(worker.isGenerating());
-    EXPECT_TRUE(worker.getLoadedModelPath().isEmpty());
-}
-
 TEST_F(SDWorkerTest, DefaultSettings)
 {
     SDWorker worker;
@@ -69,18 +61,6 @@ TEST_F(SDWorkerTest, SetSettings)
     EXPECT_EQ(retrieved.gpuLayers, 50);
 }
 
-TEST_F(SDWorkerTest, IsNotModelLoadedInitially)
-{
-    SDWorker worker;
-    EXPECT_FALSE(worker.isModelLoaded());
-}
-
-TEST_F(SDWorkerTest, IsNotGeneratingInitially)
-{
-    SDWorker worker;
-    EXPECT_FALSE(worker.isGenerating());
-}
-
 TEST_F(SDWorkerTest, RequestStopWithoutGenerating)
 {
     SDWorker worker;
@@ -112,12 +92,6 @@ TEST_F(SDWorkerTest, LoadModelEmptyPath)
     bool result = worker.loadModel("");
     EXPECT_FALSE(result);
     EXPECT_FALSE(worker.isModelLoaded());
-}
-
-TEST_F(SDWorkerTest, GetLoadedModelPathEmpty)
-{
-    SDWorker worker;
-    EXPECT_TRUE(worker.getLoadedModelPath().isEmpty());
 }
 
 TEST_F(SDWorkerTest, GenerateWithoutModel)

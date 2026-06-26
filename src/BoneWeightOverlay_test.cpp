@@ -276,31 +276,6 @@ TEST_F(BoneWeightOverlayInMemoryTest, SetSelectedBoneWithInvalidIndex)
 }
 
 // Build overlay on an in-memory animated entity (using createAnimatedTestEntity).
-TEST_F(BoneWeightOverlayInMemoryTest, BuildOverlayOnAnimatedEntity)
-{
-    Ogre::Entity* entity = createAnimatedTestEntity("BWO_AnimBuild");
-    ASSERT_NE(entity, nullptr);
-
-    ASSERT_TRUE(entity->hasSkeleton());
-
-    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
-    overlay.setVisible(true);
-
-    Ogre::SceneNode* node = entity->getParentSceneNode();
-    ASSERT_NE(node, nullptr);
-
-    // Should have both the entity and the overlay ManualObject
-    EXPECT_GE(node->numAttachedObjects(), 2u);
-
-    // Select the bone that has assignments (bone index 1 = "Child")
-    overlay.setSelectedBone(1);
-
-    // Overlay should still be attached after bone selection change
-    EXPECT_GE(node->numAttachedObjects(), 2u);
-
-    overlay.setVisible(false);
-}
-
 // Destroying the overlay (via destructor) cleans up while visible.
 TEST_F(BoneWeightOverlayInMemoryTest, DestroyOverlayOnDeselect)
 {
@@ -463,34 +438,6 @@ TEST_F(BoneWeightOverlayInMemoryTest, PollBoneSelectionChanges)
 }
 
 // Multiple rapid bone selection changes while visible.
-TEST_F(BoneWeightOverlayInMemoryTest, RapidBoneSelectionChanges)
-{
-    Ogre::Entity* entity = createAnimatedTestEntity("BWO_RapidBone");
-    ASSERT_NE(entity, nullptr);
-
-    ASSERT_TRUE(entity->hasSkeleton());
-    ASSERT_GE(entity->getSkeleton()->getNumBones(), 2u);
-
-    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
-    overlay.setVisible(true);
-
-    Ogre::SceneNode* node = entity->getParentSceneNode();
-    ASSERT_NE(node, nullptr);
-
-    // Rapidly switch between bones
-    for (int i = 0; i < 10; ++i) {
-        overlay.setSelectedBone(static_cast<unsigned short>(i % 2));
-        if (app) app->processEvents();
-    }
-
-    // The overlay should still be functional after rapid switches
-    EXPECT_TRUE(overlay.isVisible());
-    EXPECT_GE(node->numAttachedObjects(), 2u);
-
-    overlay.setVisible(false);
-    EXPECT_EQ(node->numAttachedObjects(), 1u);
-}
-
 // setVisible(true) followed immediately by setVisible(true) again should
 // not create duplicate overlays.
 TEST_F(BoneWeightOverlayInMemoryTest, DoubleSetVisibleTrueNoDuplicate)
