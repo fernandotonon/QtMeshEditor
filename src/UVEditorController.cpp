@@ -105,6 +105,8 @@ void UVEditorController::clearUvSelection()
 {
     if (m_selectedUvVerts.isEmpty() && m_selectedUvEdges.isEmpty() && m_selectedUvFaces.isEmpty())
         return;
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("UV editor clear selection"));
     m_selectedUvVerts.clear();
     m_selectedUvEdges.clear();
     m_selectedUvFaces.clear();
@@ -286,6 +288,9 @@ void UVEditorController::pickAt(double u, double v, int modifiers, double pickRa
     if (!m_hasMesh || m_uvTris.empty())
         return;
 
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("UV editor pick selection"));
+
     const double pickRadiusSq = pickRadiusUv * pickRadiusUv;
     QSet<int> verts;
     QSet<int> edges;
@@ -353,6 +358,9 @@ void UVEditorController::boxSelect(double uMin, double vMin, double uMax, double
 {
     if (!m_hasMesh)
         return;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("UV editor box selection"));
 
     if (uMin > uMax)
         std::swap(uMin, uMax);
