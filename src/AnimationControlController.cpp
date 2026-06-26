@@ -10,6 +10,8 @@
 #include "commands/CurveEditModelChangeCommand.h"
 #include "commands/DecimateTrackCommand.h"
 #include "CurveEditModel.h"
+#include "AnimationMerger.h"
+#include "MotionInbetween.h"
 #include "commands/AddKeyframeCommand.h"
 #include "commands/DeleteKeyframeCommand.h"
 #include <QApplication>
@@ -1571,6 +1573,63 @@ bool AnimationControlController::resampleCurveSegment(const QString& boneName,
         emit boneRowsChanged();
     }
     return true;
+}
+
+QVariantMap AnimationControlController::inbetweenWindow(double t0, double t1,
+                                                        int gapFrames,
+                                                        bool noModel)
+{
+    QVariantMap out;
+    out["ok"] = false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()
+        || !m_selectedSkeleton->hasAnimation(m_selectedAnimation)) {
+        out["error"] = QStringLiteral("No animation selected.");
+        emit inbetweenStatus(out["error"].toString(), true);
+        return out;
+    }
+    if (gapFrames < 1) {
+        out["error"] = QStringLiteral("Gap frames must be >= 1.");
+        emit inbetweenStatus(out["error"].toString(), true);
+        return out;
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.in_between"),
+        QStringLiteral("GUI in-between gap=%1").arg(gapFrames));
+
+    // Resolve / download the model on the GUI thread (it has an event loop).
+    QString modelPath;
+    if (!noModel)
+        modelPath = MotionInbetween::ensureModelBlocking();
+
+    const auto r = AnimationMerger::inbetweenAnimation(
+        m_selectedSkeleton, m_selectedAnimation,
+        static_cast<float>(t0), static_cast<float>(t1), gapFrames,
+        modelPath, noModel);
+
+    out["ok"] = r.ok;
+    out["keyframesInserted"] = r.keyframesInserted;
+    out["tracksAffected"] = r.tracksAffected;
+    out["usedModel"] = r.usedModel;
+    out["fallbackReason"] = r.fallbackReason;
+    if (!r.ok) {
+        out["error"] = r.error;
+        emit inbetweenStatus(r.error, true);
+        return out;
+    }
+
+    // Refresh the dope sheet / slider ticks so the new keys appear.
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    emit keyframeTicksChanged();
+
+    QString msg = QStringLiteral("Inserted %1 keyframes across %2 track(s) via %3")
+        .arg(r.keyframesInserted).arg(r.tracksAffected)
+        .arg(r.usedModel ? QStringLiteral("RMIB model")
+                         : QStringLiteral("spline fallback"));
+    if (!r.usedModel && !r.fallbackReason.isEmpty())
+        msg += QStringLiteral(" — %1").arg(r.fallbackReason);
+    emit inbetweenStatus(msg, false);
+    return out;
 }
 
 bool AnimationControlController::setCurveHandle(const QString& boneName,

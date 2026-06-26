@@ -1,4 +1,5 @@
 #include "AnimationMerger.h"
+#include "MotionInbetween.h"
 #include <OgreSkeleton.h>
 #include <OgreSkeletonInstance.h>
 #include <OgreAnimation.h>
@@ -687,6 +688,148 @@ int AnimationMerger::bakeAnimationAtFps(Ogre::Skeleton* skel,
         }
     }
     return totalKeys;
+}
+
+AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
+    Ogre::Skeleton* skel, const std::string& animName,
+    float t0, float t1, int gapFrames, const QString& modelPath,
+    bool forceFallback)
+{
+    InbetweenResult res;
+    if (!skel || !skel->hasAnimation(animName)) {
+        res.error = QStringLiteral("Animation not found.");
+        return res;
+    }
+    if (gapFrames <= 0) {
+        res.error = QStringLiteral("gapFrames must be >= 1.");
+        return res;
+    }
+    if (t1 <= t0) {
+        res.error = QStringLiteral("End time must be greater than start time.");
+        return res;
+    }
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    if (!anim) { res.error = QStringLiteral("Animation not found."); return res; }
+
+    // One stable track order = the channel layout. Per bone we pack 10 DoF:
+    // [tx,ty,tz, qx,qy,qz,qw, sx,sy,sz]. Tracks that don't bracket the window
+    // are still packed (so the model sees a full pose) but we only WRITE new
+    // keys to tracks that have a real bracketing segment.
+    struct TrackCtx {
+        Ogre::NodeAnimationTrack* track = nullptr;
+        bool   bracketed = false;        // has a key <= t0 and a key >= t1
+        SimpleKey startKey;              // pose at/just-before t0
+        SimpleKey endKey;                // pose at/just-after t1
+    };
+
+    auto evalAt = [](Ogre::NodeAnimationTrack* tr, float t) -> SimpleKey {
+        Ogre::TransformKeyFrame tmp(nullptr, t);
+        tr->getInterpolatedKeyFrame(Ogre::TimeIndex(t), &tmp);
+        return { t, tmp.getTranslate(), tmp.getRotation(), tmp.getScale() };
+    };
+
+    std::vector<TrackCtx> ctxs;
+    std::vector<MotionInbetween::Channel> layout;
+    const auto& trackList = anim->_getNodeTrackList();
+    ctxs.reserve(trackList.size());
+    for (const auto& [handle, track] : trackList) {
+        TrackCtx c;
+        c.track = track;
+        const unsigned short numKf = track->getNumKeyFrames();
+        if (numKf >= 2) {
+            const float first = track->getNodeKeyFrame(0)->getTime();
+            const float last  = track->getNodeKeyFrame(numKf - 1)->getTime();
+            if (first <= t0 + 1e-4f && last >= t1 - 1e-4f) {
+                c.bracketed = true;
+                c.startKey  = evalAt(track, t0);
+                c.endKey    = evalAt(track, t1);
+            }
+        }
+        if (!c.bracketed) {
+            // Non-bracketed: hold the evaluated pose at t0 for both ends so the
+            // model still receives a coherent full-skeleton pose, but we won't
+            // write keys back to this track.
+            c.startKey = c.endKey = (numKf > 0) ? evalAt(track, t0)
+                                                : SimpleKey{ t0, Ogre::Vector3::ZERO,
+                                                             Ogre::Quaternion::IDENTITY,
+                                                             Ogre::Vector3::UNIT_SCALE };
+        }
+        ctxs.push_back(c);
+        // 10 channels for this bone.
+        layout.push_back(MotionInbetween::Channel::Scalar);     // tx
+        layout.push_back(MotionInbetween::Channel::Scalar);     // ty
+        layout.push_back(MotionInbetween::Channel::Scalar);     // tz
+        layout.push_back(MotionInbetween::Channel::QuatStart);  // qx
+        layout.push_back(MotionInbetween::Channel::QuatCont);   // qy
+        layout.push_back(MotionInbetween::Channel::QuatCont);   // qz
+        layout.push_back(MotionInbetween::Channel::QuatCont);   // qw
+        layout.push_back(MotionInbetween::Channel::Scalar);     // sx
+        layout.push_back(MotionInbetween::Channel::Scalar);     // sy
+        layout.push_back(MotionInbetween::Channel::Scalar);     // sz
+    }
+
+    if (ctxs.empty()) {
+        res.error = QStringLiteral("Animation has no node tracks.");
+        return res;
+    }
+
+    auto packPose = [](const SimpleKey& k, MotionInbetween::Pose& out) {
+        out.push_back(k.translate.x); out.push_back(k.translate.y); out.push_back(k.translate.z);
+        out.push_back(k.rotation.x);  out.push_back(k.rotation.y);
+        out.push_back(k.rotation.z);  out.push_back(k.rotation.w);
+        out.push_back(k.scale.x);     out.push_back(k.scale.y);     out.push_back(k.scale.z);
+    };
+
+    MotionInbetween::Pose startPose, endPose;
+    startPose.reserve(ctxs.size() * 10);
+    endPose.reserve(ctxs.size() * 10);
+    for (const auto& c : ctxs) { packPose(c.startKey, startPose); packPose(c.endKey, endPose); }
+
+    MotionInbetween::Options opts;
+    opts.gapFrames = gapFrames;
+    opts.forceFallback = forceFallback;
+    const MotionInbetween::Result mr =
+        MotionInbetween::predict(startPose, endPose, layout, modelPath, opts);
+    if (!mr.ok) {
+        res.error = mr.error.isEmpty()
+            ? QStringLiteral("In-between prediction failed.") : mr.error;
+        return res;
+    }
+    res.usedModel = mr.usedModel;
+    res.fallbackReason = mr.fallbackReason;
+
+    // Scatter the predicted poses back onto the bracketed tracks at uniform
+    // interior times t0 + i*(t1-t0)/(gap+1).
+    const float span = t1 - t0;
+    for (size_t bi = 0; bi < ctxs.size(); ++bi) {
+        if (!ctxs[bi].bracketed) continue;
+        Ogre::NodeAnimationTrack* track = ctxs[bi].track;
+        bool wroteAny = false;
+        for (int f = 0; f < gapFrames; ++f) {
+            const float t = t0 + span * static_cast<float>(f + 1)
+                                       / static_cast<float>(gapFrames + 1);
+            const MotionInbetween::Pose& pose = mr.frames[static_cast<size_t>(f)];
+            const size_t base = bi * 10;
+            Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(t);
+            kf->setTranslate(Ogre::Vector3(pose[base+0], pose[base+1], pose[base+2]));
+            Ogre::Quaternion q(pose[base+6], pose[base+3], pose[base+4], pose[base+5]); // (w,x,y,z)
+            q.normalise();
+            kf->setRotation(q);
+            kf->setScale(Ogre::Vector3(pose[base+7], pose[base+8], pose[base+9]));
+            ++res.keyframesInserted;
+            wroteAny = true;
+        }
+        if (wroteAny) ++res.tracksAffected;
+    }
+
+    if (res.tracksAffected == 0) {
+        res.error = QStringLiteral(
+            "No track had a keyframe pair bracketing [%1, %2] — nothing to fill.")
+            .arg(t0).arg(t1);
+        return res;
+    }
+    res.ok = true;
+    return res;
 }
 
 void AnimationMerger::analyzeRedundantKeyframes(const Ogre::Animation* anim,

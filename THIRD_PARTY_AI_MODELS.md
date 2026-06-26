@@ -29,6 +29,27 @@ the binary). Attribution + licenses for the models and their training data:
 - Real-ESRGAN x2plus / x4plus from https://github.com/xinntao/Real-ESRGAN —
   **BSD-3-Clause**.
 
+## RMIB — animation in-betweening (issue #409)
+
+- **Model:** Robust Motion In-betweening (RMIB) — a small transformer that
+  predicts intermediate poses from a start pose, an end/target pose and a target
+  duration, exported to ONNX.
+- **Source/paper:** Harvey, Yurick, Nowrouzezahrai, Pal — *"Robust Motion
+  In-betweening"*, SIGGRAPH 2020 (Ubisoft La Forge). The *algorithm* (a
+  transition transformer over a fixed skeleton/feature layout) is published and
+  unencumbered; the app ships a from-scratch ONNX runtime for it
+  (`src/MotionInbetween.cpp`), not Ubisoft's research code.
+- **Licensing position / hosting status:** like #408 UniRig, the exported
+  `rmib.onnx` downloads on first use to `AppData/ai_models/inbetween/` (base-URL
+  override `QTMESH_INBETWEEN_MODEL_BASE_URL` / `QSettings
+  ai/inbetweenModelBaseUrl`). Until a permissively-licensed export is hosted, the
+  download 404s and the feature uses its **deterministic spline fallback**
+  (cubic-Hermite + shortest-arc slerp) — always present, needs no ONNX/model, and
+  visibly smoother than naive linear interpolation. The model is skeleton-
+  specific, so an incompatible rig also falls back to the spline. The plumbing +
+  fallback ship today; hosting a redistributable export lights up the ML path
+  with no code change.
+
 All of the above clear QtMeshEditor's permissive-redistribution bar (MIT app,
 distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed
 models are deliberately excluded (e.g. RigNet was rejected for #408 — GPL code +

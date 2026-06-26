@@ -95,6 +95,7 @@ SkinWeightsController.cpp
 AutoRig.cpp
 AutoRigController.cpp
 UniRigPredictor.cpp
+MotionInbetween.cpp
 MeshDepthRenderer.cpp
 MultiViewTextureBaker.cpp
 TextureChannelPacker.cpp
@@ -238,6 +239,7 @@ SkinWeightsController.h
 AutoRig.h
 AutoRigController.h
 UniRigPredictor.h
+MotionInbetween.h
 MeshDepthRenderer.h
 MultiViewTextureBaker.h
 TextureChannelPacker.h

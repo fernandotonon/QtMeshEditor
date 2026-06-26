@@ -310,6 +310,19 @@ public:
     Q_INVOKABLE int reduceTrackToFps(const QString& boneName,
                                      int targetFps);
 
+    /// AI animation in-betweening (#409): fill the window [t0, t1] of the
+    /// currently-selected animation with `gapFrames` predicted intermediate
+    /// keyframes across every bracketing bone track. Runs the RMIB ONNX model
+    /// when available (downloaded on first use), else the deterministic spline
+    /// fallback. Set `noModel=true` to force the spline. Returns a QVariantMap
+    /// { ok, keyframesInserted, tracksAffected, usedModel, fallbackReason,
+    /// error } so the dope-sheet UI can surface a "fell back to spline" note.
+    /// Emits inbetweenStatus(message, isError). Not undoable yet — a follow-up
+    /// can wrap it in a command (mirrors the resample-curve path).
+    Q_INVOKABLE QVariantMap inbetweenWindow(double t0, double t1,
+                                            int gapFrames,
+                                            bool noModel = false);
+
     /// Whole-animation bake helpers: temporarily suppress the per-
     /// segment QML refresh emitted by resampleCurveSegment so a
     /// thousands-of-segments macro doesn't fire thousands of dope
@@ -322,6 +335,7 @@ public slots:
 
 signals:
     void themeChanged();
+    void inbetweenStatus(const QString& message, bool isError);
     void animationTreeChanged();
     void selectionChanged();
     void boneListChanged();

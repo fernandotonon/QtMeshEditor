@@ -3,6 +3,7 @@
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "AnimationMerger.h"
+#include "MotionInbetween.h"
 #include "MeshValidator.h"
 #include "MeshLodController.h"
 #include "SelectionSet.h"
@@ -1854,10 +1855,15 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool decimateMode = false;
     bool simplifyMode = false;
     bool bakeFpsMode  = false;
+    bool inbetweenMode = false;       // #409: AI in-betweening
+    bool inbetweenNoModel = false;    // --no-model → force spline fallback
     bool jsonOutput = false;
     int resampleCount = 0;
     int decimateStep = 0;
     int bakeFps      = 0;
+    int inbetweenGapFrames = 0;       // --gap-frames N
+    float inbetweenStart = -1.0f;     // --start-time S (default: clip start)
+    float inbetweenEnd   = -1.0f;     // --end-time S   (default: clip end)
     // Default tolerances mirror the AnimationMerger "Balanced" preset
     // (1mm translation, 0.5° rotation) — visually indistinguishable on
     // meter-scale character clips. Override via --tolerance / --rotation-tolerance-deg
@@ -1906,6 +1912,20 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             bakeFps = QString(argv[++i]).toInt();
             continue;
         }
+        if (arg == "--in-between") { inbetweenMode = true; continue; }
+        if (arg == "--gap-frames" && i + 1 < argc) {
+            inbetweenGapFrames = QString(argv[++i]).toInt();
+            continue;
+        }
+        if (arg == "--start-time" && i + 1 < argc) {
+            inbetweenStart = QString(argv[++i]).toFloat();
+            continue;
+        }
+        if (arg == "--end-time" && i + 1 < argc) {
+            inbetweenEnd = QString(argv[++i]).toFloat();
+            continue;
+        }
+        if (arg == "--no-model") { inbetweenNoModel = true; continue; }
         if (arg == "--simplify") { simplifyMode = true; continue; }
         if (arg == "--analyze")  { analyzeMode  = true; continue; }
         if (arg == "--preset" && i + 1 < argc) {
@@ -1952,8 +1972,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     filePath = positional[0];
 
     if (!listMode && !renameMode && !mergeMode && !resampleMode && !decimateMode
-        && !simplifyMode && !analyzeMode && !bakeFpsMode) {
-        err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --simplify, --bake-fps, or --analyze." << Qt::endl;
+        && !simplifyMode && !analyzeMode && !bakeFpsMode && !inbetweenMode) {
+        err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --simplify, --bake-fps, --in-between, or --analyze." << Qt::endl;
         err() << "Usage: qtmesh anim <file> --list [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --rename <old> <new> [-o <output>]" << Qt::endl;
@@ -1964,11 +1984,17 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         err() << "       qtmesh anim <file> --simplify [--preset {conservative|balanced|aggressive}] [--tolerance T] [--rotation-tolerance-deg D] [-o <output>] [--animation <name>]" << Qt::endl;
         err() << "                          (--tolerance T sets translation+scale tolerance in world units)" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]" << Qt::endl;
+        err() << "       qtmesh anim <file> --in-between --gap-frames N [--start-time S] [--end-time S] [--no-model] [-o <output>] [--animation <name>]" << Qt::endl;
+        return 2;
+    }
+
+    if (inbetweenMode && inbetweenGapFrames < 1) {
+        err() << "Error: --in-between requires --gap-frames N (N >= 1)." << Qt::endl;
         return 2;
     }
 
     if ((renameMode || mergeMode || resampleMode || decimateMode || simplifyMode
-         || bakeFpsMode) && outputPath.isEmpty()) {
+         || bakeFpsMode || inbetweenMode) && outputPath.isEmpty()) {
         outputPath = filePath;  // overwrite in place
     }
 
@@ -2319,6 +2345,90 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
         cliWrite(QString("Baked %1 animation(s) at %2 FPS (%3 total keyframes)\nOutput: %4\n")
             .arg(animsProcessed).arg(bakeFps).arg(totalKeys).arg(outFi.fileName()));
+        return 0;
+    }
+
+    // In-between mode (#409): fill the gap between two keyframes with predicted
+    // intermediate poses (RMIB ONNX model when available, spline fallback else).
+    if (inbetweenMode) {
+        SentryReporter::addBreadcrumb("ai.assist.in_between",
+            QString("gap=%1 anim=%2 noModel=%3")
+                .arg(inbetweenGapFrames)
+                .arg(animationFilter.isEmpty() ? "(all)" : animationFilter)
+                .arg(inbetweenNoModel ? "yes" : "no"));
+
+        // Resolve the model once (download on first use unless --no-model / no
+        // ONNX build). Empty path → predict() uses the spline fallback.
+        QString modelPath;
+        if (!inbetweenNoModel)
+            modelPath = MotionInbetween::ensureModelBlocking();
+
+        std::vector<std::string> animNames;
+        unsigned short numAnims = skel->getNumAnimations();
+        for (unsigned short i = 0; i < numAnims; ++i)
+            animNames.push_back(skel->getAnimation(i)->getName());
+
+        int totalInserted = 0, animsProcessed = 0;
+        bool anyUsedModel = false;
+        QString lastFallbackReason;
+        for (const auto& name : animNames) {
+            if (!animationFilter.isEmpty() && animationFilter.toStdString() != name)
+                continue;
+            Ogre::Animation* anim = skel->getAnimation(name);
+            if (!anim) continue;
+            // Default window = the whole clip [0, length].
+            const float clipLen = anim->getLength();
+            const float t0 = (inbetweenStart >= 0.0f) ? inbetweenStart : 0.0f;
+            const float t1 = (inbetweenEnd   >= 0.0f) ? inbetweenEnd   : clipLen;
+
+            const auto r = AnimationMerger::inbetweenAnimation(
+                skel.get(), name, t0, t1, inbetweenGapFrames, modelPath,
+                inbetweenNoModel);
+            if (!r.ok) {
+                err() << "Warning: in-between skipped for '"
+                      << QString::fromStdString(name) << "': " << r.error << Qt::endl;
+                continue;
+            }
+            totalInserted += r.keyframesInserted;
+            ++animsProcessed;
+            anyUsedModel = anyUsedModel || r.usedModel;
+            if (!r.fallbackReason.isEmpty()) lastFallbackReason = r.fallbackReason;
+        }
+
+        if (animsProcessed == 0) {
+            err() << "Error: No animation could be in-betweened." << Qt::endl;
+            if (!animationFilter.isEmpty()) {
+                err() << "Available animations:" << Qt::endl;
+                for (const auto& name : animNames)
+                    err() << "  " << QString::fromStdString(name) << Qt::endl;
+            }
+            return 1;
+        }
+
+        QFileInfo outFi(outputPath);
+        if (isAnimOnlyInput) {
+            QString exportErr;
+            if (!exportAnimOnly(skel, outFi.absoluteFilePath(), &exportErr)) {
+                err() << "Error: Export failed: " << exportErr << Qt::endl;
+                return 1;
+            }
+        } else {
+            entity->refreshAvailableAnimationState();
+            auto* node = entity->getParentSceneNode();
+            int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(),
+                                                        formatForExtension(outputPath));
+            if (result != 0) {
+                err() << "Error: Export failed." << Qt::endl;
+                return 1;
+            }
+        }
+
+        cliWrite(QString("In-betweened %1 animation(s): inserted %2 keyframes via %3\nOutput: %4\n")
+            .arg(animsProcessed).arg(totalInserted)
+            .arg(anyUsedModel ? "RMIB model" : "spline fallback")
+            .arg(outFi.fileName()));
+        if (!anyUsedModel && !lastFallbackReason.isEmpty())
+            cliWrite(QString("Note: %1\n").arg(lastFallbackReason));
         return 0;
     }
 
