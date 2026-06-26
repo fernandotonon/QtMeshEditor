@@ -454,8 +454,10 @@ SampledCloud sampleSurface(const std::vector<float>& nverts, int vertexCount,
     }
 
     // Deterministic RNG so the same mesh always samples the same cloud (matches
-    // the greedy-decode determinism contract).
-    std::mt19937 rng(0x5eed5eedu);
+    // the greedy-decode determinism contract). This is geometry surface sampling
+    // — NOT a security context — and a fixed seed is REQUIRED for reproducibility,
+    // so a CSPRNG would be both unnecessary and wrong here.
+    std::mt19937 rng(0x5eed5eedu);  // NOSONAR — non-crypto, intentionally fixed-seed
     std::uniform_real_distribution<double> uni(0.0, 1.0);
 
     out.pts.reserve(static_cast<size_t>(target) * 3);

@@ -925,8 +925,9 @@ AutoRig::Algorithm AutoRig::algorithmFromString(const QString& s)
     const QString l = s.trimmed().toLower();
     if (l == "unirig" || l == "rignet")  // "rignet" kept as a deprecated alias
         return Algorithm::UniRig;
-    if (l == "pinocchio" || l == "native" || l == "template") return Algorithm::Pinocchio;
-    return Algorithm::Pinocchio;   // default / unknown → offline-reliable native
+    // Everything else ("pinocchio" / "native" / "template" / unknown) maps to
+    // the offline-reliable native backend.
+    return Algorithm::Pinocchio;
 }
 
 QJsonObject AutoRig::reportToJson(const Report& r)
