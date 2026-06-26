@@ -1517,10 +1517,24 @@ TEST_F(MainWindowTest, ConstructorAppliesCustomPaletteFromSettings)
     }
     ASSERT_NE(window, nullptr);
 
+    // The checked state is set synchronously in the constructor…
     EXPECT_TRUE(window->ui->actionCustom->isChecked());
     EXPECT_FALSE(window->ui->actionLight->isChecked());
     EXPECT_FALSE(window->ui->actionDark->isChecked());
     EXPECT_EQ(QSettings().value("palette").toString(), "custom");
+
+    // …but the actual QApplication::setPalette() is DEFERRED to a queued
+    // single-shot (it must not run synchronously mid-construction — doing so
+    // dispatched palette-change events into a half-built widget tree and
+    // wedged the event loop under headless Xvfb for tens of seconds). Pump
+    // the loop so the deferred apply runs, then verify it landed. Qt derives
+    // a full QPalette from the single seed colour, so rather than assert an
+    // exact role we confirm the application palette was actually replaced
+    // (its button/window seed reflects the custom colour, not the prior one).
+    app->processEvents();
+    const QColor seed(12, 34, 56);
+    const QPalette derived(seed);
+    EXPECT_EQ(QApplication::palette(), derived);
 }
 
 TEST_F(MainWindowTest, CrashReportMenuToggleToEnabledShowsConfirmationPath)
