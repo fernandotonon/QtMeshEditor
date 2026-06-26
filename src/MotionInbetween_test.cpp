@@ -1,10 +1,18 @@
 #include <gtest/gtest.h>
 
+// M_PI is not defined by <cmath> on MSVC unless _USE_MATH_DEFINES is set
+// before the include — define it for cross-platform safety.
+#define _USE_MATH_DEFINES
+#include <cmath>
+
 #include "MotionInbetween.h"
 
 #include <array>
-#include <cmath>
 #include <vector>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // MotionInbetween's core is Ogre-free and ONNX-optional, so these tests run on
 // ANY build (ENABLE_ONNX on or off) with no GL context or model files — they
@@ -226,6 +234,21 @@ TEST(MotionInbetween, PredictForceFallbackMatchesSpline)
         for (size_t c = 0; c < layout.size(); ++c)
             EXPECT_NEAR(pr.frames[f][c], sp.frames[f][c], 1e-6);
     EXPECT_FALSE(pr.usedModel);
+}
+
+TEST(MotionInbetween, PredictNonYUpFallsBackToSpline)
+{
+    // RMIB is +Y-up only; a non-Y up axis must defer to the axis-agnostic
+    // spline rather than feed the model a wrong-convention pose.
+    const auto layout = layoutTRS(1);
+    MIB::Pose start(layout.size(), 0.0f), end(layout.size(), 0.0f);
+    start[6] = end[6] = 1;
+    MIB::Options o; o.gapFrames = 3; o.upAxis = 2;  // Z-up
+    auto r = MIB::predict(start, end, layout, MIB::modelPath(), o);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_EQ(r.frames.size(), 3u);
+    EXPECT_FALSE(r.usedModel);
+    EXPECT_FALSE(r.fallbackReason.isEmpty());
 }
 
 TEST(MotionInbetween, ModelBackendAvailabilityMatchesBuild)

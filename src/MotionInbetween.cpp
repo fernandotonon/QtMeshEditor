@@ -269,6 +269,14 @@ MotionInbetween::Result MotionInbetween::predict(
 
     if (opts.forceFallback)
         return fallback(QStringLiteral("Spline fallback forced by request."));
+    // RMIB is trained +Y-up. Rather than feed it a wrong-convention pose (which
+    // would silently produce garbage), defer a non-Y up axis to the axis-
+    // agnostic spline fallback. (The fallback interpolates channels
+    // independently, so it's correct for any up axis.)
+    if (opts.upAxis != 1)
+        return fallback(QStringLiteral(
+            "RMIB requires +Y-up; up axis %1 used the spline fallback.")
+            .arg(opts.upAxis));
     if (modelPath.isEmpty() || !QFileInfo::exists(modelPath))
         return fallback(QStringLiteral(
             "RMIB model not found at %1 — used the spline fallback.").arg(modelPath));
@@ -374,7 +382,18 @@ MotionInbetween::Result MotionInbetween::predict(
 
         auto outTI = outputs[0].GetTensorTypeAndShapeInfo();
         const size_t elems = outTI.GetElementCount();
-        // Expect gap*C floats (or a leading batch dim). Validate before copying.
+        const auto outShape = outTI.GetShape();
+        // Validate the SHAPE, not just the element count: the last dim must be
+        // our channel count and the frame dim must cover `gap`. A re-exported
+        // model that returns the same float count in a different layout (e.g.
+        // [1, C, gap] instead of [1, gap, C]) would otherwise be sliced wrong —
+        // defer it to the spline rather than emit scrambled poses.
+        if (outShape.empty() || outShape.back() <= 0
+            || static_cast<size_t>(outShape.back()) != C)
+            return fallback(QStringLiteral(
+                "RMIB output last-dim %1 != channel count %2 — used the spline fallback.")
+                .arg(outShape.empty() ? -1 : outShape.back()).arg(C));
+        // Total framed rows available = elems / C; must be >= gap.
         if (elems < static_cast<size_t>(gap) * C)
             return fallback(QStringLiteral(
                 "RMIB output too small (%1 < %2) — used the spline fallback.")

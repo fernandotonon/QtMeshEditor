@@ -355,6 +355,14 @@ private:
     ~AnimationControlController() override = default;
 
 public:
+    /// Called after an EXTERNAL structural edit to the live skeleton's
+    /// animations (e.g. the MCP motion_in_between / add_keyframe tools in
+    /// --with-mcp mode). Drops the cached track / keyframe pointers — which a
+    /// keyframe insert can dangle by reallocating a track's keyframe vector —
+    /// and re-emits the view signals so the dope sheet / slider re-resolve from
+    /// the skeleton. Safe to call when nothing is selected.
+    void notifyExternalAnimationEdit();
+
     // Suspend / resume the 60fps animation-position poll timer. Used
     // by long-running ops that open a nested event loop (e.g. the
     // File → Export Selected file dialog) so the poll timer doesn't

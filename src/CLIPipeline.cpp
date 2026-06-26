@@ -2369,7 +2369,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             animNames.push_back(skel->getAnimation(i)->getName());
 
         int totalInserted = 0, animsProcessed = 0;
-        bool anyUsedModel = false;
+        bool anyUsedModel = false, anyUsedFallback = false;
         QString lastFallbackReason;
         for (const auto& name : animNames) {
             if (!animationFilter.isEmpty() && animationFilter.toStdString() != name)
@@ -2392,6 +2392,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             totalInserted += r.keyframesInserted;
             ++animsProcessed;
             anyUsedModel = anyUsedModel || r.usedModel;
+            anyUsedFallback = anyUsedFallback || !r.usedModel;
             if (!r.fallbackReason.isEmpty()) lastFallbackReason = r.fallbackReason;
         }
 
@@ -2423,11 +2424,15 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             }
         }
 
+        // Report the path honestly across all processed clips: model-only,
+        // spline-only, or a mix (some clips used the model, others fell back).
+        const QString via = (anyUsedModel && anyUsedFallback)
+            ? QStringLiteral("RMIB model + spline fallback (mixed)")
+            : anyUsedModel ? QStringLiteral("RMIB model")
+                           : QStringLiteral("spline fallback");
         cliWrite(QString("In-betweened %1 animation(s): inserted %2 keyframes via %3\nOutput: %4\n")
-            .arg(animsProcessed).arg(totalInserted)
-            .arg(anyUsedModel ? "RMIB model" : "spline fallback")
-            .arg(outFi.fileName()));
-        if (!anyUsedModel && !lastFallbackReason.isEmpty())
+            .arg(animsProcessed).arg(totalInserted).arg(via).arg(outFi.fileName()));
+        if (anyUsedFallback && !lastFallbackReason.isEmpty())
             cliWrite(QString("Note: %1\n").arg(lastFallbackReason));
         return 0;
     }

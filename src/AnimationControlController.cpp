@@ -1575,6 +1575,18 @@ bool AnimationControlController::resampleCurveSegment(const QString& boneName,
     return true;
 }
 
+void AnimationControlController::notifyExternalAnimationEdit()
+{
+    // A keyframe insert/remove elsewhere may have reallocated a track's
+    // keyframe vector — drop the cached pointers and re-resolve the view.
+    m_selectedTrack   = nullptr;
+    m_currentKeyframe = nullptr;
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    emit keyframeTicksChanged();
+    emit currentKeyframeChanged();
+}
+
 QVariantMap AnimationControlController::inbetweenWindow(double t0, double t1,
                                                         int gapFrames,
                                                         bool noModel)
@@ -1617,10 +1629,16 @@ QVariantMap AnimationControlController::inbetweenWindow(double t0, double t1,
         return out;
     }
 
-    // Refresh the dope sheet / slider ticks so the new keys appear.
+    // Inserting keyframes is a STRUCTURAL edit: it can reallocate a track's
+    // internal keyframe vector, dangling the cached m_selectedTrack /
+    // m_currentKeyframe pointers. Drop them before refreshing the view (the
+    // dope sheet / slider re-resolve from the skeleton on the next emit).
+    m_selectedTrack   = nullptr;
+    m_currentKeyframe = nullptr;
     refreshSliderTicks();
     emit boneRowsChanged();
     emit keyframeTicksChanged();
+    emit currentKeyframeChanged();
 
     QString msg = QStringLiteral("Inserted %1 keyframes across %2 track(s) via %3")
         .arg(r.keyframesInserted).arg(r.tracksAffected)

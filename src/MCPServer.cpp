@@ -83,6 +83,7 @@
 #include <OgreBone.h>
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
+#include "AnimationControlController.h"
 #include "SubMeshTransform.h"
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
@@ -3319,6 +3320,11 @@ QJsonObject MCPServer::toolMotionInBetween(const QJsonObject &args)
             return makeErrorResult(QString("Error: %1").arg(r.error));
 
         entity->refreshAvailableAnimationState();
+        // In --with-mcp mode the dope sheet / keyframe caches point into the
+        // live skeleton; a keyframe insert can dangle them, so tell the
+        // controller to drop its cached pointers + refresh.
+        if (auto* acc = AnimationControlController::instance())
+            acc->notifyExternalAnimationEdit();
 
         QString result = QString("In-betweened '%1' [%2..%3]: inserted %4 keyframes "
                                  "across %5 track(s) via %6")

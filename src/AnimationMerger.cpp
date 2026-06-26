@@ -704,6 +704,21 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
         res.error = QStringLiteral("gapFrames must be >= 1.");
         return res;
     }
+    // Cap gapFrames: user-provided via CLI/MCP/GUI, and gapFrames(+1) drives both
+    // model/fallback allocation and per-track keyframe inserts. 1000 frames in a
+    // single gap is already absurd for any real clip.
+    constexpr int kMaxGapFrames = 1000;
+    if (gapFrames > kMaxGapFrames) {
+        res.error = QStringLiteral("gapFrames %1 exceeds the maximum of %2.")
+            .arg(gapFrames).arg(kMaxGapFrames);
+        return res;
+    }
+    // Reject non-finite times: NaN/inf would slip past `t1 <= t0` (all comparisons
+    // with NaN are false) and corrupt the sampling math downstream.
+    if (!std::isfinite(t0) || !std::isfinite(t1)) {
+        res.error = QStringLiteral("Start/end times must be finite.");
+        return res;
+    }
     if (t1 <= t0) {
         res.error = QStringLiteral("End time must be greater than start time.");
         return res;
@@ -739,7 +754,16 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
         if (numKf >= 2) {
             const float first = track->getNodeKeyFrame(0)->getTime();
             const float last  = track->getNodeKeyFrame(numKf - 1)->getTime();
-            if (first <= t0 + 1e-4f && last >= t1 - 1e-4f) {
+            // The window must be a genuine GAP: bracketed by keys at/outside
+            // [t0,t1] AND with no existing keyframe strictly inside (t0,t1).
+            // Inserting into an already-keyed span would stack new keys on top
+            // of authored ones — skip those tracks (they're not a gap to fill).
+            bool hasInteriorKey = false;
+            for (unsigned short k = 0; k < numKf; ++k) {
+                const float kt = track->getNodeKeyFrame(k)->getTime();
+                if (kt > t0 + 1e-4f && kt < t1 - 1e-4f) { hasInteriorKey = true; break; }
+            }
+            if (first <= t0 + 1e-4f && last >= t1 - 1e-4f && !hasInteriorKey) {
                 c.bracketed = true;
                 c.startKey  = evalAt(track, t0);
                 c.endKey    = evalAt(track, t1);
