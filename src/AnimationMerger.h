@@ -98,6 +98,41 @@ public:
                                   const std::string& animName,
                                   int targetFps);
 
+    /// Outcome of inbetweenAnimation — how many keyframes were inserted and
+    /// whether the ML model or the spline fallback produced them.
+    struct InbetweenResult {
+        bool ok = false;
+        QString error;
+        int keyframesInserted = 0;   // total new keyframes across all tracks
+        int tracksAffected    = 0;
+        bool usedModel        = false;   // true = RMIB model; false = spline
+        QString fallbackReason;          // why the spline ran (if it did)
+    };
+
+    /// AI animation in-betweening (#409): for every node track of `animName`,
+    /// find the keyframe pair bracketing the window [t0, t1] (the two adjacent
+    /// keys whose times straddle the gap) and insert `gapFrames` intermediate
+    /// keyframes between them, predicted by MotionInbetween (RMIB ONNX model
+    /// when available, deterministic spline fallback otherwise).
+    ///
+    /// `t0`/`t1` are clip-time seconds; the nearest existing keyframe at or
+    /// before t0 and at or after t1 on each track define the segment. Tracks
+    /// with fewer than two keyframes, or no key straddling the window, are
+    /// skipped. Existing keyframes are preserved; only interior keys are added.
+    /// `forceFallback` forces the spline path (CLI `--no-model` / tests).
+    ///
+    /// The whole skeleton is packed into ONE MotionInbetween call per segment
+    /// (channels = bones × 10 DoF) so the model sees the full pose, then the
+    /// predicted per-frame poses are scattered back onto each track. Returns an
+    /// InbetweenResult; `usedModel`/`fallbackReason` let the caller surface a
+    /// "fell back to spline" note (acceptance criterion).
+    static InbetweenResult inbetweenAnimation(Ogre::Skeleton* skel,
+                                              const std::string& animName,
+                                              float t0, float t1,
+                                              int gapFrames,
+                                              const QString& modelPath,
+                                              bool forceFallback = false);
+
     /// Merge animations from sourceEntities into baseEntity's skeleton.
     /// Convenience wrapper; forwards an empty skeleton list to the 4-argument overload.
     static Ogre::Entity* mergeAnimations(

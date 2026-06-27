@@ -190,6 +190,7 @@ private:
     QJsonObject toolSimplifyAnimation(const QJsonObject &args);
     QJsonObject toolAnalyzeAnimation(const QJsonObject &args);
     QJsonObject toolBakeAnimationFps(const QJsonObject &args);
+    QJsonObject toolMotionInBetween(const QJsonObject &args);
     QJsonObject toolSaveScene(const QJsonObject &args);
     QJsonObject toolOpenScene(const QJsonObject &args);
     QJsonObject toolValidateMesh(const QJsonObject &args);

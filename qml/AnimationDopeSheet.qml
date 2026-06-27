@@ -263,6 +263,160 @@ Rectangle {
         }
     }
 
+    // ── AI in-between control (#409) ─────────────────────────────────────────
+    // Appears when the selection spans a time window (>= 2 keys at different
+    // times). Fills the [minTime, maxTime] gap with N predicted keyframes
+    // (RMIB ONNX model when available, smooth spline fallback otherwise).
+    property real inbetweenT0: {
+        if (root.selection.length < 2) return -1
+        var lo = Infinity
+        for (var i = 0; i < root.selection.length; i++)
+            lo = Math.min(lo, root.selection[i].time)
+        return lo
+    }
+    property real inbetweenT1: {
+        if (root.selection.length < 2) return -1
+        var hi = -Infinity
+        for (var i = 0; i < root.selection.length; i++)
+            hi = Math.max(hi, root.selection[i].time)
+        return hi
+    }
+    property int inbetweenFrames: 8
+
+    Rectangle {
+        id: inbetweenBar
+        anchors.top: header.visible ? header.bottom : parent.top
+        anchors.right: parent.right
+        anchors.rightMargin: 6
+        anchors.topMargin: 2
+        // Grow to fit the status line when present.
+        width: Math.max(ibRow.implicitWidth, ibStatus.implicitWidth) + 12
+        height: ibCol.implicitHeight + 6
+        radius: 3
+        z: 50
+        color: AnimationControlController.panelColor
+        border.color: AnimationControlController.borderColor
+        visible: root.inbetweenT1 > root.inbetweenT0 + 0.0001
+
+        // Result of the last fill — drives the status line (which path ran +
+        // count, or why nothing happened).
+        property string ibMessage: ""
+        property bool ibError: false
+        onVisibleChanged: { ibMessage = "" }
+
+        // Clear the stale result whenever the target request changes — a new
+        // window (T0/T1) or a new frame count means the old "via RMIB model …"
+        // / "already has keyframes" line no longer describes what would happen.
+        Connections {
+            target: root
+            function onInbetweenT0Changed()     { inbetweenBar.ibMessage = "" }
+            function onInbetweenT1Changed()     { inbetweenBar.ibMessage = "" }
+            function onInbetweenFramesChanged() { inbetweenBar.ibMessage = "" }
+        }
+
+        Connections {
+            target: AnimationControlController
+            function onInbetweenStatus(message, isError) {
+                inbetweenBar.ibMessage = message
+                inbetweenBar.ibError = isError
+            }
+        }
+
+        Column {
+            id: ibCol
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 3
+            spacing: 2
+
+        Row {
+            id: ibRow
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: 6
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "AI in-between:"
+                font.pixelSize: 10
+                color: AnimationControlController.textColor
+            }
+            Rectangle {
+                width: 34; height: 16; radius: 2
+                anchors.verticalCenter: parent.verticalCenter
+                color: AnimationControlController.inputColor
+                border.color: AnimationControlController.borderColor
+                TextInput {
+                    id: framesInput
+                    anchors.fill: parent; anchors.margins: 2
+                    text: String(root.inbetweenFrames)
+                    font.pixelSize: 10
+                    color: AnimationControlController.textColor
+                    horizontalAlignment: TextInput.AlignHCenter
+                    verticalAlignment: TextInput.AlignVCenter
+                    validator: IntValidator { bottom: 1; top: 240 }
+                    selectByMouse: true
+                    onEditingFinished: {
+                        var n = parseInt(text)
+                        root.inbetweenFrames = (isNaN(n) || n < 1) ? 1 : n
+                        text = String(root.inbetweenFrames)
+                    }
+                }
+            }
+            Text { anchors.verticalCenter: parent.verticalCenter
+                   text: "frames"; font.pixelSize: 10
+                   color: AnimationControlController.textColor; opacity: 0.7 }
+            Rectangle {
+                id: fillBtn
+                width: fillTxt.implicitWidth + 12; height: 16; radius: 2
+                anchors.verticalCenter: parent.verticalCenter
+                color: fillMa.containsMouse ? AnimationControlController.highlightColor
+                                            : AnimationControlController.headerColor
+                border.color: AnimationControlController.borderColor
+                Text { id: fillTxt; anchors.centerIn: parent
+                       text: "Fill gap"; font.pixelSize: 10
+                       color: AnimationControlController.textColor }
+                MouseArea {
+                    id: fillMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        var r = AnimationControlController.inbetweenWindow(
+                            root.inbetweenT0, root.inbetweenT1,
+                            root.inbetweenFrames, false)
+                        // The controller emits inbetweenStatus for both success
+                        // and failure (handled by the Connections above). But the
+                        // common "dense clip, no empty gap" case returns an error
+                        // whose wording is opaque — give it a clearer hint here.
+                        if (r && !r.ok && r.error
+                            && String(r.error).indexOf("bracketing") >= 0) {
+                            inbetweenBar.ibMessage =
+                                "Selected range already has keyframes — in-betweening "
+                                + "fills empty gaps between sparse keys."
+                            inbetweenBar.ibError = true
+                        }
+                    }
+                }
+            }
+        }
+
+        // Result line: which path ran (RMIB model vs spline) + count, or why
+        // nothing happened. Empty until the first fill.
+        Text {
+            id: ibStatus
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: inbetweenBar.ibMessage.length > 0
+            text: inbetweenBar.ibMessage
+            wrapMode: Text.Wrap
+            width: Math.min(implicitWidth, 320)
+            horizontalAlignment: Text.AlignHCenter
+            font.pixelSize: 9
+            color: inbetweenBar.ibError ? "#e06c6c"
+                                        : AnimationControlController.textColor
+            opacity: 0.85
+        }
+        }
+    }
+
     // ── Bone rows ────────────────────────────────────────────────────────────
     ListView {
         id: rowsView

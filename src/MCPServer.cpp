@@ -82,6 +82,8 @@
 #include <OgreKeyFrame.h>
 #include <OgreBone.h>
 #include "AnimationMerger.h"
+#include "MotionInbetween.h"
+#include "AnimationControlController.h"
 #include "SubMeshTransform.h"
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
@@ -601,6 +603,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("simplify_animation"), &MCPServer::toolSimplifyAnimation},
         {QStringLiteral("analyze_animation"), &MCPServer::toolAnalyzeAnimation},
         {QStringLiteral("bake_animation_fps"), &MCPServer::toolBakeAnimationFps},
+        {QStringLiteral("motion_in_between"), &MCPServer::toolMotionInBetween},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
         {QStringLiteral("validate_mesh"), &MCPServer::toolValidateMesh},
@@ -671,6 +674,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("resample_animation"),
         QStringLiteral("simplify_animation"),
         QStringLiteral("bake_animation_fps"),
+        QStringLiteral("motion_in_between"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
         QStringLiteral("bake_vat"),
@@ -3248,6 +3252,87 @@ QJsonObject MCPServer::toolBakeAnimationFps(const QJsonObject &args)
 
         QString result = QString("Baked %1 animation(s) to %2 FPS — %3 total keyframes")
             .arg(animNames.size()).arg(targetFps).arg(totalKeys);
+        return makeSuccessResult(result);
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolMotionInBetween(const QJsonObject &args)
+{
+    try {
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.in_between"),
+            QStringLiteral("MCP motion_in_between"));
+
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr)
+            return makeErrorResult("Error: Manager not available");
+
+        const int gapFrames = args.value("gap_frames").toInt(0);
+        if (gapFrames < 1)
+            return makeErrorResult("Error: 'gap_frames' must be a positive integer.");
+
+        QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+        QList<Ogre::Entity*> allEntities = mgr->getEntities();
+        if (!entityName.isEmpty()) {
+            for (auto* ent : allEntities)
+                if (ent && QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+            if (!entity)
+                return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        } else {
+            for (auto* ent : allEntities)
+                if (ent && ent->hasSkeleton()) { entity = ent; break; }
+        }
+        if (!entity || !entity->hasSkeleton())
+            return makeErrorResult("Error: No entity with skeleton found");
+
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        if (!skel)
+            return makeErrorResult("Error: No skeleton found");
+
+        QString animName = args["animation_name"].toString();
+        if (animName.isEmpty()) {
+            if (skel->getNumAnimations() == 0)
+                return makeErrorResult("Error: Skeleton has no animations");
+            animName = QString::fromStdString(skel->getAnimation(0)->getName());
+        } else if (!skel->hasAnimation(animName.toStdString())) {
+            return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+        }
+        Ogre::Animation* anim = skel->getAnimation(animName.toStdString());
+
+        const bool noModel = args.value("no_model").toBool(false);
+        const float clipLen = anim ? anim->getLength() : 0.0f;
+        const float t0 = args.contains("start_time")
+            ? static_cast<float>(args.value("start_time").toDouble()) : 0.0f;
+        const float t1 = args.contains("end_time")
+            ? static_cast<float>(args.value("end_time").toDouble()) : clipLen;
+
+        QString modelPath;
+        if (!noModel) modelPath = MotionInbetween::ensureModelBlocking();
+
+        const auto r = AnimationMerger::inbetweenAnimation(
+            skel.get(), animName.toStdString(), t0, t1, gapFrames, modelPath, noModel);
+        if (!r.ok)
+            return makeErrorResult(QString("Error: %1").arg(r.error));
+
+        entity->refreshAvailableAnimationState();
+        // In --with-mcp mode the dope sheet / keyframe caches point into the
+        // live skeleton; a keyframe insert can dangle them, so tell the
+        // controller to drop its cached pointers + refresh.
+        if (auto* acc = AnimationControlController::instance())
+            acc->notifyExternalAnimationEdit();
+
+        QString result = QString("In-betweened '%1' [%2..%3]: inserted %4 keyframes "
+                                 "across %5 track(s) via %6")
+            .arg(animName).arg(t0).arg(t1)
+            .arg(r.keyframesInserted).arg(r.tracksAffected)
+            .arg(r.usedModel ? "RMIB model" : "spline fallback");
+        if (!r.usedModel && !r.fallbackReason.isEmpty())
+            result += QString(" (%1)").arg(r.fallbackReason);
         return makeSuccessResult(result);
 
     } catch (Ogre::Exception& e) {
@@ -6281,6 +6366,28 @@ QJsonArray MCPServer::buildToolsList()
             "shape; the clip's first and last keyframes are kept exactly so duration is unchanged.",
             props,
             QJsonArray{"fps"}
+        );
+    }
+
+    // motion_in_between
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
+        props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to fill. If omitted, uses the first animation on the skeleton."}};
+        props["gap_frames"] = QJsonObject{{"type", "integer"}, {"description", "Number of intermediate keyframes to insert between the bracketing keys (N >= 1)."}};
+        props["start_time"] = QJsonObject{{"type", "number"}, {"description", "Clip-time (seconds) of the window start. Defaults to the clip start (0)."}};
+        props["end_time"] = QJsonObject{{"type", "number"}, {"description", "Clip-time (seconds) of the window end. Defaults to the clip length."}};
+        props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the deterministic spline fallback instead of the RMIB ML model. Default false."}};
+        appendTool(
+            "motion_in_between",
+            "AI animation in-betweening (#409): fill the gap between two keyframes with smooth, plausible "
+            "intermediate poses predicted by Robust Motion In-betweening (RMIB, ONNX). For each bone track "
+            "whose keyframes bracket [start_time, end_time], inserts gap_frames interpolated keys. Falls back "
+            "automatically to a cubic-Hermite + slerp spline (visibly smoother than linear) when the model is "
+            "unavailable, the build lacks ONNX, or the skeleton is incompatible with the model — the result "
+            "reports which path ran. Works best on humanoid skeletons close to the model's training distribution.",
+            props,
+            QJsonArray{"gap_frames"}
         );
     }
 

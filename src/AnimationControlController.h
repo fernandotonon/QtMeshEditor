@@ -310,6 +310,19 @@ public:
     Q_INVOKABLE int reduceTrackToFps(const QString& boneName,
                                      int targetFps);
 
+    /// AI animation in-betweening (#409): fill the window [t0, t1] of the
+    /// currently-selected animation with `gapFrames` predicted intermediate
+    /// keyframes across every bracketing bone track. Runs the RMIB ONNX model
+    /// when available (downloaded on first use), else the deterministic spline
+    /// fallback. Set `noModel=true` to force the spline. Returns a QVariantMap
+    /// { ok, keyframesInserted, tracksAffected, usedModel, fallbackReason,
+    /// error } so the dope-sheet UI can surface a "fell back to spline" note.
+    /// Emits inbetweenStatus(message, isError). Not undoable yet — a follow-up
+    /// can wrap it in a command (mirrors the resample-curve path).
+    Q_INVOKABLE QVariantMap inbetweenWindow(double t0, double t1,
+                                            int gapFrames,
+                                            bool noModel = false);
+
     /// Whole-animation bake helpers: temporarily suppress the per-
     /// segment QML refresh emitted by resampleCurveSegment so a
     /// thousands-of-segments macro doesn't fire thousands of dope
@@ -322,6 +335,7 @@ public slots:
 
 signals:
     void themeChanged();
+    void inbetweenStatus(const QString& message, bool isError);
     void animationTreeChanged();
     void selectionChanged();
     void boneListChanged();
@@ -341,6 +355,14 @@ private:
     ~AnimationControlController() override = default;
 
 public:
+    /// Called after an EXTERNAL structural edit to the live skeleton's
+    /// animations (e.g. the MCP motion_in_between / add_keyframe tools in
+    /// --with-mcp mode). Drops the cached track / keyframe pointers — which a
+    /// keyframe insert can dangle by reallocating a track's keyframe vector —
+    /// and re-emits the view signals so the dope sheet / slider re-resolve from
+    /// the skeleton. Safe to call when nothing is selected.
+    void notifyExternalAnimationEdit();
+
     // Suspend / resume the 60fps animation-position poll timer. Used
     // by long-running ops that open a nested event loop (e.g. the
     // File → Export Selected file dialog) so the poll timer doesn't

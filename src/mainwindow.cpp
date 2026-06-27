@@ -4072,17 +4072,11 @@ void MainWindow::importMeshs(const QStringList &_uriList)
     }
     SentryReporter::finishTransaction(txn);
 
-    for (auto* obj : Manager::getSingleton()->getEntities()) {
-        if (!obj || obj->getMovableType() != QLatin1String("Entity"))
-            continue;
-        if (entityNamesBefore.contains(QString::fromStdString(obj->getName())))
-            continue;
-
-        auto* entity = static_cast<Ogre::Entity*>(obj);
-        MeshImporterExporter::rebindEntityMaterials(
-            entity, MeshImporterExporter::textureSearchRootsForEntity(entity));
-    }
-
+    // Material rebinding (texture hydration + per-material RTSS sync + a
+    // whole-scene material walk) is deferred to the next event-loop tick so it
+    // doesn't block the import call and freeze the UI. It used to run here
+    // (immediately) AND again in the QTimer below — doing the expensive work
+    // TWICE per imported entity. Now it runs once, deferred.
     QTimer::singleShot(0, this, [this, entityNamesBefore]() {
         for (auto* obj : Manager::getSingleton()->getEntities()) {
             if (!obj || obj->getMovableType() != QLatin1String("Entity"))
