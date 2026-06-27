@@ -732,6 +732,7 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
     // keys to tracks that have a real bracketing segment.
     struct TrackCtx {
         Ogre::NodeAnimationTrack* track = nullptr;
+        std::string boneName;            // resolved from the skeleton by handle
         bool   bracketed = false;        // has a key <= t0 and a key >= t1
         SimpleKey startKey;              // pose at/just-before t0
         SimpleKey endKey;                // pose at/just-after t1
@@ -744,12 +745,16 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
     };
 
     std::vector<TrackCtx> ctxs;
-    std::vector<MotionInbetween::Channel> layout;
     const auto& trackList = anim->_getNodeTrackList();
     ctxs.reserve(trackList.size());
     for (const auto& [handle, track] : trackList) {
         TrackCtx c;
         c.track = track;
+        // Tracks are keyed by bone HANDLE; resolve the bone name from the
+        // skeleton for canonical-role matching. (hasBone() takes a name, not a
+        // handle, so guard by handle range instead.)
+        if (handle < skel->getNumBones())
+            c.boneName = skel->getBone(handle)->getName();
         const unsigned short numKf = track->getNumKeyFrames();
         if (numKf >= 2) {
             const float first = track->getNodeKeyFrame(0)->getTime();
@@ -779,17 +784,6 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
                                                              Ogre::Vector3::UNIT_SCALE };
         }
         ctxs.push_back(c);
-        // 10 channels for this bone.
-        layout.push_back(MotionInbetween::Channel::Scalar);     // tx
-        layout.push_back(MotionInbetween::Channel::Scalar);     // ty
-        layout.push_back(MotionInbetween::Channel::Scalar);     // tz
-        layout.push_back(MotionInbetween::Channel::QuatStart);  // qx
-        layout.push_back(MotionInbetween::Channel::QuatCont);   // qy
-        layout.push_back(MotionInbetween::Channel::QuatCont);   // qz
-        layout.push_back(MotionInbetween::Channel::QuatCont);   // qw
-        layout.push_back(MotionInbetween::Channel::Scalar);     // sx
-        layout.push_back(MotionInbetween::Channel::Scalar);     // sy
-        layout.push_back(MotionInbetween::Channel::Scalar);     // sz
     }
 
     if (ctxs.empty()) {
@@ -797,53 +791,111 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
         return res;
     }
 
-    auto packPose = [](const SimpleKey& k, MotionInbetween::Pose& out) {
-        out.push_back(k.translate.x); out.push_back(k.translate.y); out.push_back(k.translate.z);
-        out.push_back(k.rotation.x);  out.push_back(k.rotation.y);
-        out.push_back(k.rotation.z);  out.push_back(k.rotation.w);
-        out.push_back(k.scale.x);     out.push_back(k.scale.y);     out.push_back(k.scale.z);
+    auto packPose = [](const SimpleKey& k, MotionInbetween::Pose& out, size_t at) {
+        out[at+0] = k.translate.x; out[at+1] = k.translate.y; out[at+2] = k.translate.z;
+        out[at+3] = k.rotation.x;  out[at+4] = k.rotation.y;
+        out[at+5] = k.rotation.z;  out[at+6] = k.rotation.w;
+        out[at+7] = k.scale.x;     out[at+8] = k.scale.y;     out[at+9] = k.scale.z;
+    };
+    auto writeKey = [&](Ogre::NodeAnimationTrack* track, float t,
+                        const MotionInbetween::Pose& pose, size_t base) {
+        Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3(pose[base+0], pose[base+1], pose[base+2]));
+        Ogre::Quaternion q(pose[base+6], pose[base+3], pose[base+4], pose[base+5]); // (w,x,y,z)
+        q.normalise();
+        kf->setRotation(q);
+        kf->setScale(Ogre::Vector3(pose[base+7], pose[base+8], pose[base+9]));
     };
 
-    MotionInbetween::Pose startPose, endPose;
-    startPose.reserve(ctxs.size() * 10);
-    endPose.reserve(ctxs.size() * 10);
-    for (const auto& c : ctxs) { packPose(c.startKey, startPose); packPose(c.endKey, endPose); }
-
-    MotionInbetween::Options opts;
-    opts.gapFrames = gapFrames;
-    opts.forceFallback = forceFallback;
-    const MotionInbetween::Result mr =
-        MotionInbetween::predict(startPose, endPose, layout, modelPath, opts);
-    if (!mr.ok) {
-        res.error = mr.error.isEmpty()
-            ? QStringLiteral("In-between prediction failed.") : mr.error;
-        return res;
-    }
-    res.usedModel = mr.usedModel;
-    res.fallbackReason = mr.fallbackReason;
-
-    // Scatter the predicted poses back onto the bracketed tracks at uniform
-    // interior times t0 + i*(t1-t0)/(gap+1).
     const float span = t1 - t0;
-    for (size_t bi = 0; bi < ctxs.size(); ++bi) {
-        if (!ctxs[bi].bracketed) continue;
-        Ogre::NodeAnimationTrack* track = ctxs[bi].track;
-        bool wroteAny = false;
-        for (int f = 0; f < gapFrames; ++f) {
-            const float t = t0 + span * static_cast<float>(f + 1)
-                                       / static_cast<float>(gapFrames + 1);
-            const MotionInbetween::Pose& pose = mr.frames[static_cast<size_t>(f)];
-            const size_t base = bi * 10;
-            Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(t);
-            kf->setTranslate(Ogre::Vector3(pose[base+0], pose[base+1], pose[base+2]));
-            Ogre::Quaternion q(pose[base+6], pose[base+3], pose[base+4], pose[base+5]); // (w,x,y,z)
-            q.normalise();
-            kf->setRotation(q);
-            kf->setScale(Ogre::Vector3(pose[base+7], pose[base+8], pose[base+9]));
-            ++res.keyframesInserted;
-            wroteAny = true;
+    auto interiorT = [&](int f) {
+        return t0 + span * static_cast<float>(f + 1) / static_cast<float>(gapFrames + 1);
+    };
+
+    // --- Try the RMIB model via canonical-skeleton retargeting --------------
+    // The model is fixed to canonicalJointCount() joints. Map each track to a
+    // canonical index; if a model is present, enough roles resolve, and we're
+    // not forcing fallback, pack the canonical [2, C220] pose, run predict()
+    // (which fires the model since C matches), and scatter the prediction back
+    // onto each matched bracketed track. Unmatched / non-bracketed tracks are
+    // handled by the per-track spline pass below.
+    const int CJ = MotionInbetween::canonicalJointCount();
+    const size_t modelC = static_cast<size_t>(CJ) * 10;
+    std::vector<int> canonToTrack(CJ, -1);          // canonical idx -> ctx idx
+    int rolesResolved = 0;
+    if (!forceFallback && !modelPath.isEmpty()) {
+        for (size_t bi = 0; bi < ctxs.size(); ++bi) {
+            const int ci = MotionInbetween::canonicalIndexForBone(
+                QString::fromStdString(ctxs[bi].boneName));
+            if (ci >= 0 && canonToTrack[ci] < 0) { canonToTrack[ci] = static_cast<int>(bi); ++rolesResolved; }
         }
-        if (wroteAny) ++res.tracksAffected;
+    }
+    // Require a strong majority of roles before trusting the model (a partial
+    // skeleton would feed garbage to a fixed-layout net). ~75% of 22 = 17.
+    const bool useModel = !forceFallback && !modelPath.isEmpty()
+                          && rolesResolved >= (CJ * 3) / 4;
+
+    std::vector<bool> handledByModel(ctxs.size(), false);
+    if (useModel) {
+        MotionInbetween::Pose startPose(modelC, 0.0f), endPose(modelC, 0.0f);
+        std::vector<MotionInbetween::Channel> mlayout(modelC, MotionInbetween::Channel::Scalar);
+        for (int cj = 0; cj < CJ; ++cj) {
+            const size_t at = static_cast<size_t>(cj) * 10;
+            mlayout[at+3] = MotionInbetween::Channel::QuatStart;
+            mlayout[at+4] = MotionInbetween::Channel::QuatCont;
+            mlayout[at+5] = MotionInbetween::Channel::QuatCont;
+            mlayout[at+6] = MotionInbetween::Channel::QuatCont;
+            const int bi = canonToTrack[cj];
+            if (bi >= 0) { packPose(ctxs[bi].startKey, startPose, at);
+                           packPose(ctxs[bi].endKey,   endPose,   at); }
+            else { startPose[at+6] = endPose[at+6] = 1.0f;        // identity quat
+                   startPose[at+7] = startPose[at+8] = startPose[at+9] = 1.0f;
+                   endPose[at+7] = endPose[at+8] = endPose[at+9] = 1.0f; }
+        }
+        MotionInbetween::Options opts; opts.gapFrames = gapFrames;
+        const MotionInbetween::Result mr =
+            MotionInbetween::predict(startPose, endPose, mlayout, modelPath, opts);
+        if (mr.ok && mr.usedModel) {
+            res.usedModel = true;
+            for (int cj = 0; cj < CJ; ++cj) {
+                const int bi = canonToTrack[cj];
+                if (bi < 0 || !ctxs[bi].bracketed) continue;
+                for (int f = 0; f < gapFrames; ++f) {
+                    writeKey(ctxs[bi].track, interiorT(f), mr.frames[f],
+                             static_cast<size_t>(cj) * 10);
+                    ++res.keyframesInserted;
+                }
+                ++res.tracksAffected;
+                handledByModel[bi] = true;
+            }
+        } else {
+            res.fallbackReason = mr.fallbackReason;   // model declined → spline below
+        }
+    }
+
+    // --- Per-track spline pass (every bracketed track the model didn't do) ---
+    for (size_t bi = 0; bi < ctxs.size(); ++bi) {
+        if (!ctxs[bi].bracketed || handledByModel[bi]) continue;
+        // Single-bone spline: layout is the 10-DoF for one bone.
+        MotionInbetween::Pose s(10), e(10);
+        packPose(ctxs[bi].startKey, s, 0);
+        packPose(ctxs[bi].endKey,   e, 0);
+        std::vector<MotionInbetween::Channel> oneLayout = {
+            MotionInbetween::Channel::Scalar, MotionInbetween::Channel::Scalar,
+            MotionInbetween::Channel::Scalar, MotionInbetween::Channel::QuatStart,
+            MotionInbetween::Channel::QuatCont, MotionInbetween::Channel::QuatCont,
+            MotionInbetween::Channel::QuatCont, MotionInbetween::Channel::Scalar,
+            MotionInbetween::Channel::Scalar, MotionInbetween::Channel::Scalar };
+        MotionInbetween::Options o; o.gapFrames = gapFrames; o.forceFallback = true;
+        const auto sr = MotionInbetween::interpolateSpline(s, e, oneLayout, o);
+        if (!sr.ok) continue;
+        for (int f = 0; f < gapFrames; ++f) {
+            writeKey(ctxs[bi].track, interiorT(f), sr.frames[f], 0);
+            ++res.keyframesInserted;
+        }
+        ++res.tracksAffected;
+        if (!res.usedModel && res.fallbackReason.isEmpty())
+            res.fallbackReason = QStringLiteral("Used the spline fallback.");
     }
 
     if (res.tracksAffected == 0) {

@@ -99,6 +99,25 @@ public:
                                     const Pose* preStart = nullptr,
                                     const Pose* postEnd = nullptr);
 
+    // ---- Canonical skeleton (RMIB retargeting) ------------------------------
+    // The hosted RMIB model is trained on a FIXED 22-joint humanoid skeleton
+    // (CMU core body: hips/spine/neck/head + both arms + both legs), so its
+    // input/output channel count is canonicalJointCount()*10 = 220. Real user
+    // rigs have different bone counts/names, so to run the model on them the
+    // adapter maps the rig's bones onto these 22 canonical roles BY NAME (Mixamo
+    // `mixamorig:LeftArm`, generic `L_Shoulder`, CMU `lshoulder`, …). Bones that
+    // don't map keep the spline; if too few roles resolve, the whole segment
+    // falls back. This is what makes the skeleton-specific model usable on
+    // arbitrary humanoid rigs instead of always-fallback.
+    static int canonicalJointCount();              // 22
+    // Canonical joint name at index i (CMU core-body name), 0..count-1.
+    static QString canonicalJointName(int i);
+    // Map an arbitrary skeleton bone name to a canonical joint index, or -1 if
+    // it doesn't correspond to one of the 22 roles. Case-insensitive; tolerates
+    // common prefixes (mixamorig:, mixamorig1:, bip01 …) and side spellings
+    // (left/right, l/r, _l/_r). Pure-data + unit-testable.
+    static int canonicalIndexForBone(const QString& boneName);
+
     // ---- ONNX RMIB path (model when available, else spline) -----------------
     // Absolute path the RMIB model is expected at
     // (AppData/ai_models/inbetween/rmib.onnx). Same per-user cache convention as

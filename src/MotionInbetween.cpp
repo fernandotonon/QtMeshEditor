@@ -32,6 +32,116 @@ constexpr const char* kBaseUrlSettingsKey = "ai/inbetweenModelBaseUrl";
 // aggregate init of the nested struct while MotionInbetween is incomplete.
 MotionInbetween::Options::Options() = default;
 
+// ---------------------------------------------------------------------------
+// Canonical skeleton (must match scripts/export-rmib-onnx.py's joint order)
+// ---------------------------------------------------------------------------
+namespace {
+// The 22 CMU core-body joints, in the exact order the model was trained on.
+const char* const kCanonJoints[] = {
+    "hip", "abdomen", "chest", "neck", "neck1", "head",
+    "rcollar", "rshoulder", "relbow", "rhand",
+    "lcollar", "lshoulder", "lelbow", "lhand",
+    "rbuttock", "rhip", "rknee", "rfoot",
+    "lbuttock", "lhip", "lknee", "lfoot",
+};
+constexpr int kCanonCount = 22;
+
+// normalise: lowercase, strip a leading "mixamorig[N]:" / "bip01 " style prefix,
+// drop separators, fold side tokens so "LeftArm"/"L_Arm"/"arm.l" all compare.
+QString normaliseBoneName(const QString& raw)
+{
+    QString s = raw.toLower();
+    int colon = s.lastIndexOf(':');           // mixamorig:LeftArm → LeftArm
+    if (colon >= 0) s = s.mid(colon + 1);
+    s.remove(' ').remove('_').remove('-').remove('.');
+    return s;
+}
+
+// Detect side from a normalised name. Returns 'l', 'r', or 0.
+// Word-style ("left"/"right") wins over single-letter affixes (leading/trailing
+// 'l'/'r'), which cover CMU `lshoulder` / DCC `arml`.
+char sideOf(const QString& n)
+{
+    if (n.contains("left"))  return 'l';
+    if (n.contains("right")) return 'r';
+    if (n.startsWith('l') && n.size() > 1) return 'l';
+    if (n.startsWith('r') && n.size() > 1) return 'r';
+    if (n.endsWith('l')) return 'l';
+    if (n.endsWith('r')) return 'r';
+    return 0;
+}
+} // namespace
+
+int MotionInbetween::canonicalJointCount() { return kCanonCount; }
+
+QString MotionInbetween::canonicalJointName(int i)
+{
+    if (i < 0 || i >= kCanonCount) return {};
+    return QString::fromLatin1(kCanonJoints[i]);
+}
+
+int MotionInbetween::canonicalIndexForBone(const QString& boneName)
+{
+    const QString n = normaliseBoneName(boneName);
+    if (n.isEmpty()) return -1;
+    const char side = sideOf(n);
+    auto has = [&](std::initializer_list<const char*> cores) {
+        for (const char* c : cores) if (n.contains(QLatin1String(c))) return true;
+        return false;
+    };
+    // Early reject of non-core appendages BEFORE role matching: finger/toe/digit
+    // bones often contain a core substring ("LeftHandIndex1" contains "hand",
+    // "RightToeBase" a leg-ish name) and would otherwise mis-map onto a core
+    // role. Face / twist / helper bones too.
+    if (has({"finger", "thumb", "index", "middle", "ring", "pinky", "pinkie",
+             "toe", "toebase", "ball", "metacarp", "digit",
+             "twist", "roll", "jaw", "eye", "tongue", "ik", "pole",
+             "camera", "prop", "weapon"}))
+        return -1;
+
+    // Center / spine chain (no side). Spine naming differs: CMU has
+    // abdomen→chest; Mixamo has Spine→Spine1→Spine2(→Spine3). Map the LOWER
+    // spine (spine/spine1/abdomen/lowerback) to abdomen, and the UPPER spine
+    // (chest/spine2/spine3/upperchest) to chest.
+    if (has({"hips", "pelvis"}) || n == "hip")          return 0;  // hip
+    if (has({"chest", "spine2", "spine3", "upperchest"})) return 2; // chest (upper spine)
+    if (has({"spine", "abdomen", "lowerback"}) && side == 0
+        && !has({"head", "neck"}))                       return 1;  // abdomen (lower spine)
+    if (has({"neck1", "neck2"}))                         return 4;  // neck1
+    if (has({"neck"}))                                   return 3;  // neck
+    if (has({"head"}) && !has({"headtop", "end"}))       return 5;  // head
+
+    // Limbs — disambiguated by side. NOTE the arm naming conflict between
+    // conventions: Mixamo's "Shoulder" is the CLAVICLE (its upper arm is "Arm");
+    // CMU's "shoulder" (rshoulder/lshoulder) is the UPPER ARM. We resolve it so
+    // both map correctly: collar/clavicle/shoulder → the collar role; arm/
+    // upperarm (not fore/lower/hand) → the upper-arm role. CMU's own
+    // "rshoulder"/"lshoulder" names hit the upper-arm branch via the exact-name
+    // checks below so they keep their original index.
+    if (side == 'r') {
+        if (n == "rshoulder")                            return 7;   // CMU upper arm
+        if (has({"collar", "clavicle", "shoulder"}))     return 6;   // rcollar (incl. Mixamo "Shoulder")
+        if (has({"upperarm", "arm"}) && !has({"fore","lower","hand"})) return 7;  // rshoulder (upper arm)
+        if (has({"elbow", "forearm", "lowerarm"}))       return 8;   // relbow
+        if (has({"hand", "wrist"}))                      return 9;   // rhand
+        if (has({"buttock"}))                            return 14;  // rbuttock
+        if (has({"upleg", "thigh", "hip", "femur"}))     return 15;  // rhip
+        if (has({"knee", "leg", "shin", "calf"}) && !has({"upleg","thigh"})) return 16; // rknee
+        if (has({"foot", "ankle"}))                      return 17;  // rfoot
+    } else if (side == 'l') {
+        if (n == "lshoulder")                            return 11;  // CMU upper arm
+        if (has({"collar", "clavicle", "shoulder"}))     return 10;  // lcollar (incl. Mixamo "Shoulder")
+        if (has({"upperarm", "arm"}) && !has({"fore","lower","hand"})) return 11; // lshoulder (upper arm)
+        if (has({"elbow", "forearm", "lowerarm"}))       return 12;  // lelbow
+        if (has({"hand", "wrist"}))                      return 13;  // lhand
+        if (has({"buttock"}))                            return 18;  // lbuttock
+        if (has({"upleg", "thigh", "hip", "femur"}))     return 19;  // lhip
+        if (has({"knee", "leg", "shin", "calf"}) && !has({"upleg","thigh"})) return 20; // lknee
+        if (has({"foot", "ankle"}))                      return 21;  // lfoot
+    }
+    return -1;
+}
+
 bool MotionInbetween::isModelBackendAvailable()
 {
 #ifdef ENABLE_ONNX

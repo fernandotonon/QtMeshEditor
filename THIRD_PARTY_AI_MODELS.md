@@ -31,24 +31,39 @@ the binary). Attribution + licenses for the models and their training data:
 
 ## RMIB — animation in-betweening (issue #409)
 
-- **Model:** Robust Motion In-betweening (RMIB) — a small transformer that
-  predicts intermediate poses from a start pose, an end/target pose and a target
-  duration, exported to ONNX.
-- **Source/paper:** Harvey, Yurick, Nowrouzezahrai, Pal — *"Robust Motion
+- **Model:** an RMIB-style (Robust Motion In-betweening) transformer that
+  predicts intermediate poses between two keyframes, exported to ONNX (~13 MB).
+- **Algorithm/paper:** Harvey, Yurick, Nowrouzezahrai, Pal — *"Robust Motion
   In-betweening"*, SIGGRAPH 2020 (Ubisoft La Forge). The *algorithm* (a
   transition transformer over a fixed skeleton/feature layout) is published and
   unencumbered; the app ships a from-scratch ONNX runtime for it
-  (`src/MotionInbetween.cpp`), not Ubisoft's research code.
-- **Licensing position / hosting status:** like #408 UniRig, the exported
-  `rmib.onnx` downloads on first use to `AppData/ai_models/inbetween/` (base-URL
-  override `QTMESH_INBETWEEN_MODEL_BASE_URL` / `QSettings
-  ai/inbetweenModelBaseUrl`). Until a permissively-licensed export is hosted, the
-  download 404s and the feature uses its **deterministic spline fallback**
-  (cubic-Hermite + shortest-arc slerp) — always present, needs no ONNX/model, and
-  visibly smoother than naive linear interpolation. The model is skeleton-
-  specific, so an incompatible rig also falls back to the spline. The plumbing +
-  fallback ship today; hosting a redistributable export lights up the ML path
-  with no code change.
+  (`src/MotionInbetween.cpp`), not Ubisoft's research code — and the shipped
+  weights are **our own**, trained from scratch (see below), NOT Ubisoft's.
+- **Training data:** **CMU Graphics Lab Motion Capture Database**
+  (mocap.cs.cmu.edu) — permissively licensed: free to use/modify/redistribute
+  *including in commercial products*; the only restriction is you may not RESELL
+  the motion data itself. Credit: mocap.cs.cmu.edu. This is what makes our
+  weights redistributable under the project's permissive bar — the rest of the
+  in-betweening field standardizes on **LAFAN1** (Ubisoft LaForge), which is
+  **CC-BY-NC-ND** (non-commercial / no-derivatives) and was therefore rejected,
+  same posture as RigNet for #408.
+- **Skeleton:** trained on the 22 CMU core-body joints (hips/spine/neck/head +
+  both arms + both legs). At runtime `MotionInbetween::canonicalIndexForBone()`
+  maps arbitrary rig bones (Mixamo / generic / CMU naming) onto these 22 roles;
+  rigs that don't resolve a strong majority fall back to the spline.
+- **Export tool:** `scripts/export-rmib-onnx.py` (one-time, offline, NOT shipped
+  — the app never runs Python). Produces `rmib.onnx` (input `[1,2,220]` →
+  output `[1,8,220]`).
+- **Hosting:** `rmib.onnx` is hosted in the
+  [`fernandotonon/QtMeshEditor-models`](https://huggingface.co/fernandotonon/QtMeshEditor-models)
+  HF repo under `inbetween/` and downloads on first use to
+  `AppData/ai_models/inbetween/` (override `QTMESH_INBETWEEN_MODEL_BASE_URL` /
+  `QSettings ai/inbetweenModelBaseUrl`; offline guard `QTMESH_INBETWEEN_NO_DOWNLOAD`).
+- **Fallback:** when ONNX is disabled, the model can't be fetched, or a rig
+  doesn't map to the canonical skeleton, the feature uses its deterministic
+  spline fallback (cubic-Hermite + shortest-arc slerp) — always present, needs
+  no model, and visibly smoother than naive linear interpolation. The trained
+  model measurably beats slerp on held-out CMU motion (rotation error < half).
 
 All of the above clear QtMeshEditor's permissive-redistribution bar (MIT app,
 distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed

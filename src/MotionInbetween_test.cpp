@@ -251,6 +251,77 @@ TEST(MotionInbetween, PredictNonYUpFallsBackToSpline)
     EXPECT_FALSE(r.fallbackReason.isEmpty());
 }
 
+// ---- canonical-skeleton bone matcher --------------------------------------
+
+TEST(MotionInbetween, CanonicalSkeletonHas22Joints)
+{
+    EXPECT_EQ(MIB::canonicalJointCount(), 22);
+    EXPECT_EQ(MIB::canonicalJointName(0).toStdString(), "hip");
+    EXPECT_EQ(MIB::canonicalJointName(5).toStdString(), "head");
+    EXPECT_TRUE(MIB::canonicalJointName(-1).isEmpty());
+    EXPECT_TRUE(MIB::canonicalJointName(99).isEmpty());
+}
+
+TEST(MotionInbetween, BoneMatcherCmuNames)
+{
+    // The exact CMU canonical names must map to themselves.
+    EXPECT_EQ(MIB::canonicalIndexForBone("hip"), 0);
+    EXPECT_EQ(MIB::canonicalIndexForBone("head"), 5);
+    EXPECT_EQ(MIB::canonicalIndexForBone("lshoulder"), 11);
+    EXPECT_EQ(MIB::canonicalIndexForBone("rshoulder"), 7);
+    EXPECT_EQ(MIB::canonicalIndexForBone("lhand"), 13);
+    EXPECT_EQ(MIB::canonicalIndexForBone("rfoot"), 17);
+    EXPECT_EQ(MIB::canonicalIndexForBone("lknee"), 20);
+}
+
+TEST(MotionInbetween, BoneMatcherMixamoNames)
+{
+    // Mixamo naming. NOTE the arm convention: Mixamo "Shoulder" is the CLAVICLE
+    // (→ collar role) and "Arm" is the upper arm (→ the CMU shoulder role).
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:Hips"), 0);
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:Spine"), 1);     // abdomen
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:Spine2"), 2);    // chest
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:Head"), 5);
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:LeftShoulder"), 10); // lcollar
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:LeftArm"), 11);   // lshoulder (upper arm)
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:RightArm"), 7);   // rshoulder (upper arm)
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:LeftForeArm"), 12); // lelbow
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:LeftHand"), 13);
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:RightUpLeg"), 15); // rhip
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:LeftLeg"), 20);   // lknee
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:RightFoot"), 17);
+}
+
+TEST(MotionInbetween, BoneMatcherGenericNames)
+{
+    EXPECT_EQ(MIB::canonicalIndexForBone("R_Forearm"), 8);   // relbow
+    EXPECT_EQ(MIB::canonicalIndexForBone("Spine"), 1);       // abdomen
+    EXPECT_EQ(MIB::canonicalIndexForBone("Chest"), 2);
+    EXPECT_EQ(MIB::canonicalIndexForBone("Neck"), 3);
+}
+
+TEST(MotionInbetween, BoneMatcherRejectsNonBodyBones)
+{
+    // Fingers / toes / face / unknowns must NOT map to a core role (they often
+    // contain a core substring — "LeftHandIndex1" contains "hand").
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:LeftHandIndex1"), -1);
+    EXPECT_EQ(MIB::canonicalIndexForBone("mixamorig:LeftHandThumb2"), -1);
+    EXPECT_EQ(MIB::canonicalIndexForBone("RightToeBase"), -1);
+    EXPECT_EQ(MIB::canonicalIndexForBone("jaw"), -1);
+    EXPECT_EQ(MIB::canonicalIndexForBone("CameraBone"), -1);
+    EXPECT_EQ(MIB::canonicalIndexForBone(""), -1);
+}
+
+TEST(MotionInbetween, BoneMatcherSidesAreDistinct)
+{
+    // Left and right of the same role must map to DIFFERENT canonical indices
+    // (a side-confusion would mirror the rig).
+    EXPECT_NE(MIB::canonicalIndexForBone("LeftHand"),
+              MIB::canonicalIndexForBone("RightHand"));
+    EXPECT_NE(MIB::canonicalIndexForBone("LeftFoot"),
+              MIB::canonicalIndexForBone("RightFoot"));
+}
+
 TEST(MotionInbetween, ModelBackendAvailabilityMatchesBuild)
 {
 #ifdef ENABLE_ONNX
