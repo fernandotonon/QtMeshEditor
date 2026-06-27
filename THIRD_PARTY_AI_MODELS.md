@@ -78,9 +78,15 @@ the binary). Attribution + licenses for the models and their training data:
   weights** (each vertex's dominant bone → a canonical body part) on permissively
   -licensed source rigs (e.g. CMU-derived), sampled into point clouds. The
   derivation + labels are ours (CC0), so the weights are redistributable.
+- **Model architecture:** a small PointNet-style segmenter (~0.3 MB ONNX).
+  Validated: 98% per-point accuracy on held-out synthetic humanoids, and it
+  transfers to real humanoid meshes (labels a Mixamo character into symmetric
+  head/torso/arms/legs — better limb symmetry than the geometric fallback).
 - **Export tool:** `scripts/export-meshseg-onnx.py` (one-time, offline, NOT
-  shipped — the app never runs Python).
-- **Hosting:** `meshseg.onnx` downloads on first use to
+  shipped — the app never runs Python; it synthesises the data + trains + exports).
+- **Hosting:** `meshseg.onnx` is hosted in the
+  [`fernandotonon/QtMeshEditor-models`](https://huggingface.co/fernandotonon/QtMeshEditor-models)
+  HF repo under `segment/` and downloads on first use to
   `AppData/ai_models/segment/` (override `QTMESH_SEGMENT_MODEL_BASE_URL` /
   `QSettings ai/segmentModelBaseUrl`; offline guard `QTMESH_SEGMENT_NO_DOWNLOAD`).
 - **Fallback:** when ONNX is disabled, the model can't be fetched, or inference
