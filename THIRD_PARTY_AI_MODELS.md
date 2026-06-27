@@ -65,7 +65,32 @@ the binary). Attribution + licenses for the models and their training data:
   no model, and visibly smoother than naive linear interpolation. The trained
   model measurably beats slerp on held-out CMU motion (rotation error < half).
 
+## Mesh part segmentation (issue #410)
+
+- **Model:** a PointNet++-style point-cloud part-segmentation network (per-point
+  → head / torso / left+right arm / left+right leg), exported to ONNX. Run by
+  `src/MeshSegmenter.cpp`; the fourth ONNX consumer.
+- **Training data — synthetic / permissively derived.** The standard
+  part-segmentation datasets (**ShapeNet-Part**, **PartNet**) are
+  **non-commercial research-only** and so were rejected (same bar as #408
+  RigNet / #409 LAFAN1). Instead the shipped model is trained on **synthetic
+  data we own**: per-vertex part labels derived from **rigged-humanoid bone
+  weights** (each vertex's dominant bone → a canonical body part) on permissively
+  -licensed source rigs (e.g. CMU-derived), sampled into point clouds. The
+  derivation + labels are ours (CC0), so the weights are redistributable.
+- **Export tool:** `scripts/export-meshseg-onnx.py` (one-time, offline, NOT
+  shipped — the app never runs Python).
+- **Hosting:** `meshseg.onnx` downloads on first use to
+  `AppData/ai_models/segment/` (override `QTMESH_SEGMENT_MODEL_BASE_URL` /
+  `QSettings ai/segmentModelBaseUrl`; offline guard `QTMESH_SEGMENT_NO_DOWNLOAD`).
+- **Fallback:** when ONNX is disabled, the model can't be fetched, or inference
+  fails, the feature uses a deterministic **geometric** segmenter (connected-
+  component islands + an up-axis/lateral spatial heuristic, refined by rig
+  bone-proximity when available) — always present, no model needed, and good
+  enough for reasonable head/torso/limb labels on upright humanoids.
+
 All of the above clear QtMeshEditor's permissive-redistribution bar (MIT app,
 distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed
 models are deliberately excluded (e.g. RigNet was rejected for #408 — GPL code +
-unlicensed weights — in favour of UniRig).
+unlicensed weights — in favour of UniRig; ShapeNet-Part/PartNet were rejected
+for #410 — non-commercial — in favour of synthetic bone-weight-derived labels).
