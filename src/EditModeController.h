@@ -35,6 +35,7 @@ THE SOFTWARE.
 #include <QRect>
 #include <QVariantList>
 #include <QColor>
+#include <atomic>
 #include <limits>
 #include <memory>
 #include <functional>
@@ -88,6 +89,11 @@ class EditModeController : public QObject
     Q_PROPERTY(int selectedVertexCount READ selectedVertexCount NOTIFY editSelectionChanged)
     Q_PROPERTY(int selectedEdgeCount READ selectedEdgeCount NOTIFY editSelectionChanged)
     Q_PROPERTY(int selectedFaceCount READ selectedFaceCount NOTIFY editSelectionChanged)
+    // "Select by Part" (#410) async worker progress.
+    Q_PROPERTY(bool segmentBusy READ segmentBusy NOTIFY segmentProgressChanged)
+    Q_PROPERTY(bool segmentDownloading READ segmentDownloading NOTIFY segmentProgressChanged)
+    Q_PROPERTY(int segmentProgress READ segmentProgress NOTIFY segmentProgressChanged)
+    Q_PROPERTY(int segmentTotal READ segmentTotal NOTIFY segmentProgressChanged)
 
     // Soft selection (proportional editing)
     Q_PROPERTY(bool softSelectionEnabled READ softSelectionEnabled WRITE setSoftSelectionEnabled NOTIFY softSelectionChanged)
@@ -643,10 +649,24 @@ public:
     /// arm/leg) per face via MeshSegmenter, then add every face whose label
     /// matches any currently-selected face's label to the selection. With NO
     /// face selected, selects the largest predicted part. Switches to Face mode.
-    /// Returns a short status string (which part(s) + face count, or why it
-    /// couldn't run) for the UI. Uses the ONNX model when available, else the
-    /// geometric fallback.
+    /// Uses the ONNX model when available, else the geometric fallback.
+    ///
+    /// ASYNC: gathers geometry on the main thread, then runs the (potentially
+    /// slow) first-use model download + ONNX inference on a WORKER thread so the
+    /// UI stays responsive, and finally applies the face selection back on the
+    /// main thread. Progress surfaces via segmentBusy / segmentDownloading /
+    /// segmentProgress(/Total) and the segmentFinished(status) signal. Returns a
+    /// short immediate status ("Segmenting…" / a guard message); the final
+    /// result arrives via segmentFinished. No-op if already running.
     Q_INVOKABLE QString selectByPart();
+
+    /// Cancel an in-flight selectByPart worker (no-op otherwise).
+    Q_INVOKABLE void cancelSegment();
+
+    bool segmentBusy() const { return m_segmentBusy; }
+    bool segmentDownloading() const { return m_segmentDownloading; }
+    int  segmentProgress() const { return m_segmentProgress; }   // 0..segmentTotal
+    int  segmentTotal() const { return m_segmentTotal; }
 
     /// Select a vertex by global index. If addToSelection is false, clears
     /// prior selection first.
@@ -831,6 +851,10 @@ public:
     /// @}
 
 signals:
+    /// "Select by Part" worker progress (segmentBusy/Downloading/Progress/Total).
+    void segmentProgressChanged();
+    /// Final result of an async selectByPart() (status string; isError flag).
+    void segmentFinished(const QString& status, bool isError);
     /// Emitted when entering or exiting edit mode.
     void editModeChanged();
     /// Emitted when the mesh data is modified during edit mode.
@@ -900,6 +924,19 @@ private:
     std::set<int> m_selectedVertices;              ///< Global vertex indices
     std::set<std::pair<int,int>> m_selectedEdges;  ///< Edges as (min, max) vertex pairs
     std::set<int> m_selectedFaces;                 ///< Global triangle indices
+
+    // "Select by Part" (#410) async worker state. The ONNX download + inference
+    // run on a worker thread; these mirror progress back to the UI (guarded:
+    // written on the main thread via QueuedConnection from the worker).
+    bool m_segmentBusy = false;
+    bool m_segmentDownloading = false;
+    int  m_segmentProgress = 0;
+    int  m_segmentTotal = 0;
+    std::shared_ptr<std::atomic_bool> m_segmentCancel;
+    // Applies a finished segmentation Result's face labels to the selection
+    // (main thread); emits segmentFinished. Declared here, defined in the .cpp.
+    void finishSegmentOnMain(const std::vector<int>& faceLabels,
+                             bool usedModel, const QString& predictError);
 
     // Selection overlay
     Ogre::ManualObject* m_overlayVertices = nullptr;
