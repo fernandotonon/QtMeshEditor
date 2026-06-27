@@ -41,9 +41,7 @@ Usage (offline, with torch + numpy + bvh + onnx in a venv):
 """
 import argparse
 import glob
-import math
 import os
-import sys
 
 import numpy as np
 
@@ -100,15 +98,18 @@ def preprocess(bvh_dir):
     from bvh import Bvh
     files = sorted(glob.glob(os.path.join(bvh_dir, "**/*.bvh"), recursive=True))
     print(f"found {len(files)} BVH files")
-    S, E, I = [], [], []
-    for i, path in enumerate(files):
+    starts, ends, interiors = [], [], []
+    skipped = 0
+    for path in files:
         try:
             with open(path) as f:
                 m = Bvh(f.read())
         except Exception:
+            skipped += 1
             continue
         names = [n for n in m.get_joints_names() if is_core(n)]
         if names != CANON:
+            skipped += 1
             continue
         frames = np.array(m.frames, dtype=np.float32)
         T = len(frames)
@@ -134,9 +135,16 @@ def preprocess(bvh_dir):
             quats[:, ji] = euler_to_quat_vec(np.deg2rad(frames[:, rotcols[j]]), roto[j])
         for s in range(0, T - GAP - 2, 10):
             e = s + GAP + 1
-            S.append(quats[s]); E.append(quats[e]); I.append(quats[s+1:e])
-    print(f"windows: {len(S)}")
-    return np.stack(S), np.stack(E), np.stack(I)
+            starts.append(quats[s])
+            ends.append(quats[e])
+            interiors.append(quats[s+1:e])
+    print(f"windows: {len(starts)} (skipped {skipped}/{len(files)} files)")
+    if not starts:
+        raise SystemExit(
+            f"No usable windows: all {len(files)} BVH files failed to parse or "
+            f"don't match the canonical {len(CANON)}-joint skeleton. Check --bvh "
+            f"points at the CMU BVH set.")
+    return np.stack(starts), np.stack(ends), np.stack(interiors)
 
 
 def main():
@@ -157,7 +165,9 @@ def main():
         out[..., 3:7] = q
         out[..., 7:10] = 1.0
         return out.reshape(sh + (C,))
-    S = torch.tensor(pack(qs)); E = torch.tensor(pack(qe)); I = torch.tensor(pack(qi))
+    S = torch.tensor(pack(qs))
+    E = torch.tensor(pack(qe))
+    Iv = torch.tensor(pack(qi))     # interiors (avoid the ambiguous bare 'I')
     dev = "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"train N={S.shape[0]} C={C} gap={GAP} dev={dev}")
 
@@ -182,25 +192,32 @@ def main():
     net = Net().to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=3e-4, weight_decay=1e-4)
     sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, a.epochs)
-    n = S.shape[0]; nval = max(1, n // 10); bs = 256
-    idx = torch.randperm(n); S, E, I = S[idx], E[idx], I[idx]
+    n = S.shape[0]
+    nval = max(1, n // 10)
+    bs = 256
+    idx = torch.randperm(n)
+    S, E, Iv = S[idx], E[idx], Iv[idx]
 
-    def qb(x):
-        return x.reshape(x.shape[:-1] + (J, 4 if False else 10))[..., 3:7]
+    def qb(x):                       # [...,C] → the per-joint quaternion block
+        return x.reshape(x.shape[:-1] + (J, 10))[..., 3:7]
     for ep in range(a.epochs):
         net.train()
         perm = torch.randperm(n - nval) + nval
         for b in range(0, perm.numel(), bs):
             bi = perm[b:b+bs]
             p = net(S[bi].to(dev), E[bi].to(dev))
-            t = I[bi].to(dev)
+            t = Iv[bi].to(dev)
             loss = ((p - t) ** 2).mean() + 0.01 * ((qb(p).pow(2).sum(-1) - 1) ** 2).mean()
-            opt.zero_grad(); loss.backward(); opt.step()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
         sch.step()
     net.eval()
 
     class Wrap(nn.Module):
-        def __init__(s, net): super().__init__(); s.net = net
+        def __init__(s, net):
+            super().__init__()
+            s.net = net
 
         def forward(s, pair):
             return s.net(pair[:, 0, :], pair[:, 1, :])
