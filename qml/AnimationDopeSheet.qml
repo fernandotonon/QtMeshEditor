@@ -299,10 +299,20 @@ Rectangle {
         visible: root.inbetweenT1 > root.inbetweenT0 + 0.0001
 
         // Result of the last fill — drives the status line (which path ran +
-        // count, or why nothing happened). Reset when the window changes.
+        // count, or why nothing happened).
         property string ibMessage: ""
         property bool ibError: false
         onVisibleChanged: { ibMessage = "" }
+
+        // Clear the stale result whenever the target request changes — a new
+        // window (T0/T1) or a new frame count means the old "via RMIB model …"
+        // / "already has keyframes" line no longer describes what would happen.
+        Connections {
+            target: root
+            function onInbetweenT0Changed()     { inbetweenBar.ibMessage = "" }
+            function onInbetweenT1Changed()     { inbetweenBar.ibMessage = "" }
+            function onInbetweenFramesChanged() { inbetweenBar.ibMessage = "" }
+        }
 
         Connections {
             target: AnimationControlController

@@ -1566,27 +1566,82 @@ void MeshImporterExporter::hydrateEntityTexturesFromSearchPaths(Ogre::Entity* en
     if (!entity || searchRoots.isEmpty())
         return;
 
+    // PASS 1 (cheap): collect the texture names this entity references whose
+    // image is NOT already available to Ogre. In the common case (textures
+    // embedded or sitting next to the mesh) every name is already loaded, so we
+    // skip the directory walk entirely. This is the hot path — hydration is only
+    // needed for genuinely-missing textures (cloud cache / moved files).
+    auto& texMgr = Ogre::TextureManager::getSingleton();
+    QSet<QString> neededBaseNames;     // basename (and rel) we still must find
+    for (unsigned int si = 0; si < entity->getNumSubEntities(); ++si) {
+        Ogre::SubEntity* sub = entity->getSubEntity(si);
+        Ogre::MaterialPtr mat = sub->getMaterial();
+        if (mat.isNull() || mat->getNumTechniques() == 0)
+            continue;
+        for (unsigned short ti = 0; ti < mat->getNumTechniques(); ++ti) {
+            Ogre::Technique* tech = mat->getTechnique(ti);
+            if (!tech) continue;
+            for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi) {
+                Ogre::Pass* pass = tech->getPass(pi);
+                if (!pass) continue;
+                for (unsigned short ui = 0; ui < pass->getNumTextureUnitStates(); ++ui) {
+                    Ogre::TextureUnitState* tus = pass->getTextureUnitState(ui);
+                    if (!tus) continue;
+                    const std::string texName = tus->getTextureName();
+                    if (texName.empty()) continue;
+                    // Already loaded/known to Ogre? Then it's not missing.
+                    if (texMgr.resourceExists(texName, mat->getGroup())
+                        || texMgr.getByName(texName))
+                        continue;
+                    QString key = QDir::fromNativeSeparators(QString::fromStdString(texName));
+                    while (key.startsWith(QStringLiteral("./"))) key = key.mid(2);
+                    neededBaseNames.insert(QFileInfo(key).fileName());
+                    neededBaseNames.insert(key);
+                }
+            }
+        }
+    }
+    if (neededBaseNames.isEmpty())
+        return;   // nothing missing — no directory walk needed
+
+    // PASS 2 (bounded walk): only now scan the roots, and ONLY for the missing
+    // names. Stop early once every needed name is found, and cap the total files
+    // visited so a pathological import root (e.g. a huge repo/home dir with tens
+    // of thousands of files) can't freeze the UI for minutes. We index any file
+    // whose basename or relative path is one we're looking for.
+    constexpr int kMaxFilesScanned = 20000;   // safety cap
     QHash<QString, QString> filesByKey;
+    int scanned = 0;
+    bool capped = false;
     for (const QString& rootRaw : searchRoots) {
+        if (filesByKey.size() >= neededBaseNames.size()) break;  // found everything
         const QString root = QDir::fromNativeSeparators(QFileInfo(rootRaw).absoluteFilePath());
         if (root.isEmpty() || !QFileInfo(root).isDir())
             continue;
-
+        QDir rootDir(root);
         QDirIterator it(root, QDir::Files, QDirIterator::Subdirectories);
         while (it.hasNext()) {
+            if (++scanned > kMaxFilesScanned) { capped = true; break; }
             const QString path = it.next();
-            const QFileInfo fi(path);
-            const QString base = fi.fileName();
-            if (!base.isEmpty() && !filesByKey.contains(base))
+            const QString base = QFileInfo(path).fileName();
+            if (neededBaseNames.contains(base) && !filesByKey.contains(base))
                 filesByKey.insert(base, path);
-
-            const QString rel = QDir(root).relativeFilePath(path);
-            const QString relNorm = QDir::fromNativeSeparators(rel);
-            if (!relNorm.isEmpty() && !filesByKey.contains(relNorm))
+            const QString relNorm = QDir::fromNativeSeparators(rootDir.relativeFilePath(path));
+            if (neededBaseNames.contains(relNorm) && !filesByKey.contains(relNorm))
                 filesByKey.insert(relNorm, path);
+            // Early-out: found a path for every needed name.
+            if (filesByKey.size() >= neededBaseNames.size())
+                break;
         }
+        if (capped) break;
     }
 
+    if (capped) {
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("file.import"),
+            QStringLiteral("Texture hydration walk hit the %1-file cap; some "
+                           "missing textures may be unresolved").arg(kMaxFilesScanned));
+    }
     if (filesByKey.isEmpty())
         return;
 
