@@ -182,6 +182,34 @@ TEST_F(UVEditorControllerTest, ControllerRefreshTracksSelection)
     EXPECT_EQ(ctrl->triangles().size(), 1);
 }
 
+// Performance gate (#762): while INACTIVE (UV dock hidden), selection / entity
+// signals must NOT rebuild the cache — they only mark it dirty. setActive(true)
+// then rebuilds lazily. This is what stops import from paying per-entity UV
+// reads + island computation when the UV editor is closed.
+TEST_F(UVEditorControllerTest, InactiveControllerDefersRebuildUntilActivated)
+{
+    auto mesh = createInMemoryTriangleMesh("UVEditor_gate_tri");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UVEditor_gate_node");
+    auto* entity = sceneMgr->createEntity("UVEditor_gate_entity", mesh);
+    node->attachObject(entity);
+
+    UVEditorController* ctrl = UVEditorController::instance();
+    ctrl->setActive(false);              // dock hidden
+
+    // A selection change while inactive must not build the mesh cache (the
+    // expensive path) — it only marks dirty.
+    SelectionSet::getSingleton()->selectOne(entity);
+    EXPECT_FALSE(ctrl->hasMesh()) << "inactive controller rebuilt on selection";
+
+    // Activating rebuilds lazily from the pending-dirty state.
+    ctrl->setActive(true);
+    EXPECT_TRUE(ctrl->hasMesh()) << "setActive(true) did not flush the deferred rebuild";
+    EXPECT_EQ(ctrl->triangles().size(), 1);
+
+    ctrl->setActive(false);              // leave clean for other tests
+}
+
 TEST_F(UVEditorControllerTest, ShowTextureBackgroundToggle)
 {
     UVEditorController* ctrl = UVEditorController::instance();

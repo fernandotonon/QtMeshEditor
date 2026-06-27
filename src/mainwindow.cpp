@@ -970,8 +970,13 @@ void MainWindow::initToolBar()
         connect(m_uvEditorDock, &QDockWidget::visibilityChanged, this, [this](bool vis) {
             SentryReporter::addBreadcrumb("ui.action",
                 vis ? "UV Editor shown" : "UV Editor hidden");
+            // Drive the controller's active state from dock visibility: active
+            // (rebuild on selection/import) only while the panel is shown;
+            // inactive otherwise so import doesn't pay the per-entity UV cache
+            // rebuild when nobody's looking. setActive(true) lazily rebuilds if
+            // the cache went stale while hidden.
+            UVEditorController::instance()->setActive(vis);
             if (vis) {
-                UVEditorController::instance()->refresh();
                 if (auto* root = qobject_cast<QQuickWidget*>(m_uvEditorDock->widget())) {
                     if (root->rootObject())
                         QMetaObject::invokeMethod(root->rootObject(), "fitToView");

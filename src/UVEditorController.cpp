@@ -57,21 +57,26 @@ UVEditorController::UVEditorController(QObject* parent)
     : QObject(parent)
 {
     connectSignals();
-    rebuildMeshCache();
+    // Starts inactive + dirty: the first setActive(true) (UV dock shown) builds
+    // the cache. No eager rebuild — nothing is watching the panel yet.
 }
 
 void UVEditorController::connectSignals()
 {
+    // Signal-driven refreshes go through onSourceChanged(), which is GATED on
+    // the panel being active (visible) — so import-time signal storms don't
+    // rebuild the UV cache when nobody's looking. Explicit refresh() still
+    // rebuilds immediately.
     if (auto* sel = SelectionSet::getSingleton()) {
-        connect(sel, &SelectionSet::selectionChanged, this, &UVEditorController::refresh);
+        connect(sel, &SelectionSet::selectionChanged, this, &UVEditorController::onSourceChanged);
     }
     if (auto* mgr = Manager::getSingletonPtr()) {
-        connect(mgr, &Manager::entityCreated, this, &UVEditorController::refresh);
-        connect(mgr, &Manager::sceneNodeDestroyed, this, &UVEditorController::refresh);
+        connect(mgr, &Manager::entityCreated, this, &UVEditorController::onSourceChanged);
+        connect(mgr, &Manager::sceneNodeDestroyed, this, &UVEditorController::onSourceChanged);
     }
     if (auto* edit = EditModeController::instance()) {
-        connect(edit, &EditModeController::meshDataChanged, this, &UVEditorController::refresh);
-        connect(edit, &EditModeController::editModeChanged, this, &UVEditorController::refresh);
+        connect(edit, &EditModeController::meshDataChanged, this, &UVEditorController::onSourceChanged);
+        connect(edit, &EditModeController::editModeChanged, this, &UVEditorController::onSourceChanged);
     }
 }
 
@@ -95,7 +100,36 @@ void UVEditorController::setShowTextureBackground(bool on)
 
 void UVEditorController::refresh()
 {
+    // Explicit refresh (Q_INVOKABLE — a deliberate QML/test/user action) always
+    // rebuilds, regardless of the active gate.
+    m_dirty = false;
     rebuildMeshCache();
+}
+
+void UVEditorController::onSourceChanged()
+{
+    // Signal-driven auto-refresh (selection / entityCreated / mesh edits). Only
+    // do the expensive rebuild when the panel is active (visible); otherwise
+    // just mark the cache stale so setActive(true) rebuilds it lazily. This is
+    // what keeps import — which fires entityCreated + selectionChanged
+    // repeatedly — from paying per-entity UV reads + island computation while
+    // the UV editor is closed (the common case, and the reported slowdown).
+    if (!m_active) {
+        m_dirty = true;
+        return;
+    }
+    rebuildMeshCache();
+}
+
+void UVEditorController::setActive(bool active)
+{
+    if (m_active == active)
+        return;
+    m_active = active;
+    if (m_active && m_dirty) {
+        m_dirty = false;
+        rebuildMeshCache();
+    }
 }
 
 bool UVEditorController::readUvChannel(const Ogre::VertexData* vertexData, int channel,

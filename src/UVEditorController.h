@@ -68,6 +68,15 @@ public:
     /// Re-read the active selection and rebuild cached draw data.
     Q_INVOKABLE void refresh();
 
+    /// Activate/deactivate the controller, driven by the UV Editor dock's
+    /// visibility. When INACTIVE, selection/entity-created/mesh-change signals
+    /// only mark the cache dirty instead of rebuilding it — so importing a
+    /// multi-submesh/multi-entity model doesn't pay the (expensive) per-entity
+    /// UV read + island computation while nobody's looking at the panel. The
+    /// pending rebuild runs lazily on the next setActive(true). No-op if the
+    /// state is unchanged.
+    void setActive(bool active);
+
     /// Connected UV islands for a mesh snapshot (headless tests).
     /// Caller must populate `EditableMesh` UVs for the channel under test.
     static IslandResult computeIslandsFromEditableMesh(const EditableMesh& mesh);
@@ -83,6 +92,10 @@ private:
     ~UVEditorController() override = default;
 
     void connectSignals();
+    // Gated signal-driven refresh (selection / entityCreated / mesh edits):
+    // rebuilds only when active, else marks dirty. (refresh() is the explicit,
+    // always-rebuild entry point.)
+    void onSourceChanged();
     void rebuildMeshCache();
     bool buildFromEntity(Ogre::Entity* entity, const QSet<int>& submeshFilter, int uvChannel);
     static IslandResult computeIslandsFromHalfEdgeMesh(const HalfEdgeMesh& hem);
@@ -99,6 +112,11 @@ private:
     bool m_showTextureBackground = true;
     int m_meshRevision = 0;
     bool m_hasMesh = false;
+    // Gating: only rebuild the (expensive) UV cache when the panel is visible.
+    // m_active mirrors the dock's visibility; m_dirty records that a rebuild is
+    // owed once it becomes active again.
+    bool m_active = false;
+    bool m_dirty = true;
     QString m_statusText;
     QString m_textureBackgroundSource;
     QRectF m_uvBounds;
