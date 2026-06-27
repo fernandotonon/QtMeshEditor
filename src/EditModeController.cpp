@@ -30,6 +30,8 @@ THE SOFTWARE.
 #include "EditableMesh.h"
 #include "HalfEdgeMesh.h"
 #include "SelectionSet.h"
+#include "MeshSegmenter.h"
+#include "AutoRig.h"
 #include "SentryReporter.h"
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
@@ -749,6 +751,82 @@ void EditModeController::deselectAll()
 
     updateSelectionOverlay();
     emit editSelectionChanged();
+}
+
+QString EditModeController::selectByPart()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+        return tr("Enter Edit Mode on a mesh first.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
+                                  QStringLiteral("Edit Mode: Select by part"));
+
+    // Gather geometry (per-submesh sequential — matches localTriToGlobal's
+    // global-triangle ordering) and predict a label per face.
+    std::vector<float> verts;
+    std::vector<uint32_t> indices;
+    if (!AutoRig::gatherGeometry(m_editEntity, verts, indices) || verts.empty())
+        return tr("No readable geometry to segment.");
+    const int vertexCount = static_cast<int>(verts.size() / 3);
+
+    const QString modelPath = MeshSegmenter::ensureModelBlocking();
+    const MeshSegmenter::Result r = MeshSegmenter::predict(
+        verts.data(), vertexCount, indices.data(),
+        static_cast<int>(indices.size()), modelPath);
+    if (!r.ok)
+        return tr("Segmentation failed: %1").arg(r.error);
+
+    const int totalTris = static_cast<int>(m_editableMesh->totalTriangleCount());
+    // gatherGeometry's face count should match the editable mesh's triangle
+    // count (both fan-triangulate per submesh in order); guard the mismatch.
+    if (static_cast<int>(r.faceLabels.size()) < totalTris)
+        return tr("Segmentation/topology mismatch — cannot map labels to faces.");
+
+    // Which labels to select: the labels of currently-selected faces, or (if
+    // nothing is selected) the single largest predicted part so one click is
+    // useful out of the box.
+    std::set<int> wantLabels;
+    if (!m_selectedFaces.empty()) {
+        for (int tri : m_selectedFaces)
+            if (tri >= 0 && tri < static_cast<int>(r.faceLabels.size()))
+                wantLabels.insert(r.faceLabels[tri]);
+    } else {
+        const int P = MeshSegmenter::partCount();
+        std::vector<int> count(P, 0);
+        for (int t = 0; t < totalTris; ++t) {
+            const int l = r.faceLabels[t];
+            if (l > 0 && l < P) ++count[l];      // skip Unknown(0) when auto-picking
+        }
+        int best = 0, bestCount = -1;
+        for (int p = 1; p < P; ++p)
+            if (count[p] > bestCount) { bestCount = count[p]; best = p; }
+        if (bestCount <= 0)
+            return tr("No parts predicted.");
+        wantLabels.insert(best);
+    }
+
+    // Ensure Face mode so the selection reads naturally, then select matching
+    // faces (clearing any prior selection first).
+    if (m_selectionMode != FaceMode)
+        setSelectionMode(static_cast<int>(FaceMode));
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    int selectedCount = 0;
+    for (int t = 0; t < totalTris; ++t) {
+        if (wantLabels.count(r.faceLabels[t])) {
+            selectFace(t, /*addToSelection=*/true);
+            ++selectedCount;
+        }
+    }
+
+    QStringList names;
+    for (int l : wantLabels) names << MeshSegmenter::partName(l);
+    return tr("Selected %1 face(s) — %2%3")
+        .arg(selectedCount)
+        .arg(names.join(QStringLiteral(", ")))
+        .arg(r.usedModel ? QString() : tr(" (geometric fallback)"));
 }
 
 void EditModeController::selectVertex(int globalIndex, bool addToSelection)

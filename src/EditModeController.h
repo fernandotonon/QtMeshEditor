@@ -639,6 +639,15 @@ public:
     Q_INVOKABLE void selectAll();
     Q_INVOKABLE void deselectAll();
 
+    /// AI "Select by part" (#410): predict a semantic part label (head/torso/
+    /// arm/leg) per face via MeshSegmenter, then add every face whose label
+    /// matches any currently-selected face's label to the selection. With NO
+    /// face selected, selects the largest predicted part. Switches to Face mode.
+    /// Returns a short status string (which part(s) + face count, or why it
+    /// couldn't run) for the UI. Uses the ONNX model when available, else the
+    /// geometric fallback.
+    Q_INVOKABLE QString selectByPart();
+
     /// Select a vertex by global index. If addToSelection is false, clears
     /// prior selection first.
     void selectVertex(int globalIndex, bool addToSelection = false);

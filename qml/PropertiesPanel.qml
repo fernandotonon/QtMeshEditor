@@ -1956,6 +1956,33 @@ Rectangle {
                 wrapMode: Text.Wrap
             }
 
+            // AI "Select by Part" (#410) — predicts head/torso/arm/leg labels
+            // and selects all faces matching the selected face's part (or the
+            // largest part if nothing is selected).
+            property string selectByPartStatus: ""
+            Rectangle {
+                width: parent.width - 16; height: 26; radius: 3
+                color: sbpMouse.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                     : sbpMouse.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                     : PropertiesPanelController.highlightColor
+                Text { anchors.centerIn: parent; text: "Select by Part (AI)"
+                       color: "white"; font.pixelSize: 11 }
+                MouseArea {
+                    id: sbpMouse; anchors.fill: parent; hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: editToolsCol.selectByPartStatus =
+                        EditModeController.selectByPart()
+                }
+            }
+            Text {
+                visible: editToolsCol.selectByPartStatus.length > 0
+                text: editToolsCol.selectByPartStatus
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 9; opacity: 0.8
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+            }
+
             // Soft selection toggle (themed checkbox)
             Row {
                 spacing: 6; width: parent.width - 16
