@@ -144,6 +144,31 @@ namespace {
 constexpr int kBottomToolHeight = MainWindow::kDefaultDockedHeight;
 constexpr int kBottomDockMaxHeight = MainWindow::kDefaultDockedMaxHeight;
 
+constexpr char kLazyQmlUrlProperty[] = "_lazyQmlUrl";
+
+void markLazyQml(QQuickWidget* widget, const QUrl& url)
+{
+    if (!widget)
+        return;
+    widget->setProperty(kLazyQmlUrlProperty, url);
+}
+
+void ensureLazyQml(QQuickWidget* widget)
+{
+    if (!widget || widget->status() != QQuickWidget::Null)
+        return;
+    const QVariant url = widget->property(kLazyQmlUrlProperty);
+    if (url.isValid())
+        widget->setSource(url.toUrl());
+}
+
+void ensureLazyDockQml(QDockWidget* dock)
+{
+    if (!dock)
+        return;
+    ensureLazyQml(qobject_cast<QQuickWidget*>(dock->widget()));
+}
+
 QString transformSpaceLabel(TransformOperator::TransformSpace space)
 {
     return space == TransformOperator::SPACE_LOCAL
@@ -227,6 +252,24 @@ MainWindow::MainWindow(QWidget *parent) :
 
     manager->CreateEmptyScene();
 
+    // Sync palette menu checkboxes only — ThemeManager::applySavedThemeFromSettings()
+    // in main() already applied the palette before any widgets existed. Re-calling
+    // QApplication::setPalette() here (after initToolBar's QML docks) forces a
+    // global repaint that can freeze the UI for tens of seconds.
+    {
+        QSettings settings;
+        mCurrentPalette = settings.value("palette", "dark").toString();
+        if (mCurrentPalette == "light") {
+            ui->actionLight->setChecked(true);
+        } else if (mCurrentPalette == "custom") {
+            ui->actionCustom->blockSignals(true);
+            ui->actionCustom->setChecked(true);
+            ui->actionCustom->blockSignals(false);
+        } else {
+            ui->actionDark->setChecked(true);
+        }
+    }
+
     initToolBar();
 
     FeedbackReportHelper::setOpenFeedbackHandler([this](const FeedbackPrefill& prefill) {
@@ -285,19 +328,6 @@ MainWindow::MainWindow(QWidget *parent) :
 
     ui->menuOp_es->insertAction(ui->actionChange_Ambient_Light, ui->actionMaterial_Editor);
     ui->menuOp_es->insertSeparator(ui->actionChange_Ambient_Light);
-
-    QSettings settings;
-    mCurrentPalette = settings.value("palette","dark").toString();
-    if(mCurrentPalette == "light"){
-            ui->actionLight->setChecked(true);
-    } else if(mCurrentPalette == "custom"){
-        custom_Palette_Color_Selected(settings.value("customPalette").value<QColor>());
-        ui->actionCustom->blockSignals(true);
-        ui->actionCustom->setChecked(true);
-        ui->actionCustom->blockSignals(false);
-    } else {
-        ui->actionDark->setChecked(true);
-    }
 
     customPaletteColorDialog->setOption(QColorDialog::DontUseNativeDialog);
     customPaletteColorDialog->setObjectName("Custom Color Dialog");
@@ -812,7 +842,7 @@ void MainWindow::initToolBar()
         // StrongFocus: a single click inside the dock routes keyboard events into QML
         // without requiring a prior click in the viewport.
         chatWidget->setFocusPolicy(Qt::StrongFocus);
-        chatWidget->setSource(QUrl("qrc:/AIChatPanel/AIChatPanel.qml"));
+        markLazyQml(chatWidget, QUrl("qrc:/AIChatPanel/AIChatPanel.qml"));
         m_chatDock = new QDockWidget(tr("AI Chat"), this);
         m_chatDock->setWidget(chatWidget);
         m_chatDock->setObjectName("AIChatDock");
@@ -841,7 +871,7 @@ void MainWindow::initToolBar()
         assetBrowserWidget->setMinimumHeight(kBottomToolHeight);
         assetBrowserWidget->setMaximumHeight(kBottomToolHeight);
         assetBrowserWidget->setFocusPolicy(Qt::StrongFocus);
-        assetBrowserWidget->setSource(QUrl("qrc:/AssetBrowser/AssetBrowser.qml"));
+        markLazyQml(assetBrowserWidget, QUrl("qrc:/AssetBrowser/AssetBrowser.qml"));
         m_assetBrowserDock = new QDockWidget(tr("Asset Browser"), this);
         m_assetBrowserDock->setWidget(assetBrowserWidget);
         m_assetBrowserDock->setObjectName("AssetBrowserDock");
@@ -849,12 +879,17 @@ void MainWindow::initToolBar()
         addDockWidget(Qt::BottomDockWidgetArea, m_assetBrowserDock);
         m_assetBrowserDock->hide();
 
-        // Connect Browse button — open a native directory picker from MainWindow
-        // (QFileDialog needs a proper parent widget on macOS)
-        auto* abController = AssetBrowserController::instance();
-        connect(abController, &AssetBrowserController::importMeshRequested, this, [this](const QStringList& paths) {
-            SentryReporter::addBreadcrumb("ui.action", "Asset Browser: import mesh");
-            importMeshs(paths);
+        connect(m_assetBrowserDock, &QDockWidget::visibilityChanged, this, [this](bool vis) {
+            if (!vis)
+                return;
+            ensureLazyDockQml(m_assetBrowserDock);
+            auto* abController = AssetBrowserController::instance();
+            disconnect(abController, &AssetBrowserController::importMeshRequested, this, nullptr);
+            connect(abController, &AssetBrowserController::importMeshRequested, this,
+                    [this](const QStringList& paths) {
+                        SentryReporter::addBreadcrumb("ui.action", "Asset Browser: import mesh");
+                        importMeshs(paths);
+                    });
         });
     }
 
@@ -868,7 +903,7 @@ void MainWindow::initToolBar()
         dopeSheetWidget->setMinimumHeight(kBottomToolHeight);
         dopeSheetWidget->setMaximumHeight(kBottomToolHeight);
         dopeSheetWidget->setFocusPolicy(Qt::StrongFocus);
-        dopeSheetWidget->setSource(QUrl("qrc:/AnimationControl/AnimationDopeSheet.qml"));
+        markLazyQml(dopeSheetWidget, QUrl("qrc:/AnimationControl/AnimationDopeSheet.qml"));
 
         // QQuickWidget inside a QDockWidget on macOS can swallow wheel events
         // before they reach the QML scene's WheelHandler — Qt routes them to
@@ -934,7 +969,7 @@ void MainWindow::initToolBar()
         curveEditorWidget->setMinimumHeight(kBottomToolHeight);
         curveEditorWidget->setMaximumHeight(kBottomToolHeight);
         curveEditorWidget->setFocusPolicy(Qt::StrongFocus);
-        curveEditorWidget->setSource(QUrl("qrc:/AnimationControl/AnimationCurveEditor.qml"));
+        markLazyQml(curveEditorWidget, QUrl("qrc:/AnimationControl/AnimationCurveEditor.qml"));
         m_curveEditorDock = new QDockWidget(tr("Curve Editor"), this); // NOSONAR
         m_curveEditorDock->setWidget(curveEditorWidget);
         m_curveEditorDock->setObjectName("CurveEditorDock");
@@ -958,7 +993,7 @@ void MainWindow::initToolBar()
         uvEditorWidget->setMinimumHeight(kBottomToolHeight);
         uvEditorWidget->setMaximumHeight(kBottomToolHeight);
         uvEditorWidget->setFocusPolicy(Qt::StrongFocus);
-        uvEditorWidget->setSource(QUrl("qrc:/UVEditor/UVEditorPanel.qml"));
+        markLazyQml(uvEditorWidget, QUrl("qrc:/UVEditor/UVEditorPanel.qml"));
 
         m_uvEditorDock = new QDockWidget(tr("UV Editor"), this); // NOSONAR
         m_uvEditorDock->setWidget(uvEditorWidget);
@@ -970,7 +1005,9 @@ void MainWindow::initToolBar()
         connect(m_uvEditorDock, &QDockWidget::visibilityChanged, this, [this](bool vis) {
             SentryReporter::addBreadcrumb("ui.action",
                 vis ? "UV Editor shown" : "UV Editor hidden");
+            UVEditorController::instance()->setPanelActive(vis);
             if (vis) {
+                ensureLazyDockQml(m_uvEditorDock);
                 UVEditorController::instance()->refresh();
                 if (auto* root = qobject_cast<QQuickWidget*>(m_uvEditorDock->widget())) {
                     if (root->rootObject())
@@ -1114,6 +1151,7 @@ void MainWindow::initToolBar()
     aiChatButton->setFont(aiFont);
     connect(aiChatButton, &QToolButton::clicked, this, [this]() {
         if (m_chatDock) {
+            ensureLazyDockQml(m_chatDock);
             m_chatDock->show();
             m_chatDock->raise();
         }
@@ -2382,6 +2420,7 @@ void MainWindow::initToolBar()
     aiChatAction->setObjectName("actionAIChatDock");
     connect(aiChatAction, &QAction::triggered, this, [this]() {
         if (m_chatDock) {
+            ensureLazyDockQml(m_chatDock);
             m_chatDock->show();
             m_chatDock->raise();
         }
@@ -2455,8 +2494,9 @@ void MainWindow::initToolBar()
         }
     });
 
-    // Initialize LLMManager
-    LLMManager::instance();
+    // Initialize LLMManager after the window is up — starting the worker thread
+    // during initToolBar competes with Ogre + QML startup on the main thread.
+    QTimer::singleShot(0, this, []() { LLMManager::instance(); });
 
 #ifdef ENABLE_PS1_RIP
     QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
@@ -3242,6 +3282,8 @@ void MainWindow::showBottomToolDock(QDockWidget* dock)
 {
     if (!dock)
         return;
+
+    ensureLazyDockQml(dock);
 
     if (dock->isFloating())
         dock->setFloating(false);

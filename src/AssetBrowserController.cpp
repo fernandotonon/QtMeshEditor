@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTimer>
 
 AssetBrowserController* AssetBrowserController::m_pSingleton = nullptr;
 

@@ -58,22 +58,45 @@ void UVEditorController::kill()
 UVEditorController::UVEditorController(QObject* parent)
     : QObject(parent)
 {
+    m_refreshTimer = new QTimer(this);
+    m_refreshTimer->setSingleShot(true);
+    m_refreshTimer->setInterval(75);
+    connect(m_refreshTimer, &QTimer::timeout, this, &UVEditorController::rebuildMeshCache);
     connectSignals();
-    rebuildMeshCache();
+}
+
+void UVEditorController::setPanelActive(bool active)
+{
+    if (m_panelActive == active)
+        return;
+    m_panelActive = active;
+    if (m_panelActive && m_refreshPending) {
+        m_refreshPending = false;
+        refresh();
+    }
+}
+
+void UVEditorController::scheduleRefresh()
+{
+    if (!m_panelActive) {
+        m_refreshPending = true;
+        return;
+    }
+    m_refreshTimer->start();
 }
 
 void UVEditorController::connectSignals()
 {
     if (auto* sel = SelectionSet::getSingleton()) {
-        connect(sel, &SelectionSet::selectionChanged, this, &UVEditorController::refresh);
+        connect(sel, &SelectionSet::selectionChanged, this, &UVEditorController::scheduleRefresh);
     }
     if (auto* mgr = Manager::getSingletonPtr()) {
-        connect(mgr, &Manager::entityCreated, this, &UVEditorController::refresh);
-        connect(mgr, &Manager::sceneNodeDestroyed, this, &UVEditorController::refresh);
+        connect(mgr, &Manager::entityCreated, this, &UVEditorController::scheduleRefresh);
+        connect(mgr, &Manager::sceneNodeDestroyed, this, &UVEditorController::scheduleRefresh);
     }
     if (auto* edit = EditModeController::instance()) {
-        connect(edit, &EditModeController::meshDataChanged, this, &UVEditorController::refresh);
-        connect(edit, &EditModeController::editModeChanged, this, &UVEditorController::refresh);
+        connect(edit, &EditModeController::meshDataChanged, this, &UVEditorController::scheduleRefresh);
+        connect(edit, &EditModeController::editModeChanged, this, &UVEditorController::scheduleRefresh);
         connect(edit, &EditModeController::editSelectionChanged, this,
                 &UVEditorController::onEditSelectionChanged);
     }
@@ -477,6 +500,10 @@ QVariantList UVEditorController::contextIslandFaces() const
 
 void UVEditorController::onEditSelectionChanged()
 {
+    if (!m_panelActive) {
+        m_refreshPending = true;
+        return;
+    }
     updateContextIslandsFromEdit();
     notifyUvSelectionChanged();
 }
@@ -491,32 +518,33 @@ void UVEditorController::updateContextIslandsFromEdit()
 
     QSet<int> islands;
     for (int gv : edit->selectedVertices()) {
-        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
-            const auto& tri = m_uvTris[fi];
-            for (int c = 0; c < 3; ++c) {
-                if (tri.meshGlobalVert[c] == gv)
-                    islands.insert(tri.island);
-            }
-        }
+        if (gv < 0 || gv >= static_cast<int>(m_trisByGlobalVert.size()))
+            continue;
+        for (int fi : m_trisByGlobalVert[static_cast<size_t>(gv)])
+            islands.insert(m_uvTris[static_cast<size_t>(fi)].island);
     }
     for (const auto& edge : edit->selectedEdges()) {
-        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
-            const auto& tri = m_uvTris[fi];
+        const int a = edge.first;
+        const int b = edge.second;
+        if (a < 0 || a >= static_cast<int>(m_trisByGlobalVert.size()))
+            continue;
+        for (int fi : m_trisByGlobalVert[static_cast<size_t>(a)]) {
+            const auto& tri = m_uvTris[static_cast<size_t>(fi)];
             for (int e = 0; e < 3; ++e) {
                 const int n = (e + 1) % 3;
-                const int a = tri.meshGlobalVert[e];
-                const int b = tri.meshGlobalVert[n];
-                if ((a == edge.first && b == edge.second)
-                    || (a == edge.second && b == edge.first))
+                const int va = tri.meshGlobalVert[e];
+                const int vb = tri.meshGlobalVert[n];
+                if ((va == a && vb == b) || (va == b && vb == a)) {
                     islands.insert(tri.island);
+                    break;
+                }
             }
         }
     }
     for (int gt : edit->selectedFaces()) {
-        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
-            if (m_uvTris[fi].meshGlobalTri == gt)
-                islands.insert(m_uvTris[fi].island);
-        }
+        const auto it = m_fiByGlobalTri.find(gt);
+        if (it != m_fiByGlobalTri.end())
+            islands.insert(m_uvTris[static_cast<size_t>(it->second)].island);
     }
 
     m_contextIslandIds = islands;
@@ -532,6 +560,8 @@ void UVEditorController::setShowTextureBackground(bool on)
 
 void UVEditorController::refresh()
 {
+    m_refreshPending = false;
+    m_refreshTimer->stop();
     rebuildMeshCache();
 }
 
@@ -1030,6 +1060,28 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
         }
     }
 
+    m_trisByGlobalVert.clear();
+    m_fiByGlobalTri.clear();
+    int maxGlobalVert = -1;
+    for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
+        const auto& tri = m_uvTris[fi];
+        m_fiByGlobalTri[tri.meshGlobalTri] = static_cast<int>(fi);
+        for (int c = 0; c < 3; ++c) {
+            maxGlobalVert = std::max(maxGlobalVert, tri.meshGlobalVert[c]);
+        }
+    }
+    if (maxGlobalVert >= 0) {
+        m_trisByGlobalVert.assign(static_cast<size_t>(maxGlobalVert + 1), {});
+        for (size_t fi = 0; fi < m_uvTris.size(); ++fi) {
+            const auto& tri = m_uvTris[fi];
+            for (int c = 0; c < 3; ++c) {
+                const int gv = tri.meshGlobalVert[c];
+                if (gv >= 0)
+                    m_trisByGlobalVert[static_cast<size_t>(gv)].push_back(static_cast<int>(fi));
+            }
+        }
+    }
+
     m_triangles = tris;
     m_islandCount = islands.islandCount;
     m_hasMesh = !tris.isEmpty();
@@ -1059,6 +1111,8 @@ void UVEditorController::rebuildMeshCache()
     m_uvVerts.clear();
     m_uvTris.clear();
     m_uvEdges.clear();
+    m_trisByGlobalVert.clear();
+    m_fiByGlobalTri.clear();
     m_hasMesh = false;
     m_islandCount = 0;
     m_textureBackgroundSource.clear();
