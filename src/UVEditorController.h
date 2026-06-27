@@ -6,7 +6,9 @@
 #include <QRectF>
 #include <QSet>
 #include <QVariantList>
+#include <QTimer>
 #include <vector>
+#include <unordered_map>
 
 #include <Ogre.h>
 
@@ -109,6 +111,11 @@ public:
     /// Re-read the active selection and rebuild cached draw data.
     Q_INVOKABLE void refresh();
 
+    /// When false (UV Editor dock hidden), scene/selection changes are not
+    /// rebuilt — avoids blocking the main thread during mesh import.
+    Q_INVOKABLE void setPanelActive(bool active);
+    bool panelActive() const { return m_panelActive; }
+
     /// Connected UV islands for a mesh snapshot (headless tests).
     /// Caller must populate `EditableMesh` UVs for the channel under test.
     static IslandResult computeIslandsFromEditableMesh(const EditableMesh& mesh);
@@ -148,6 +155,7 @@ private:
     ~UVEditorController() override = default;
 
     void connectSignals();
+    void scheduleRefresh();
     void rebuildMeshCache();
     bool buildFromEntity(Ogre::Entity* entity, const QSet<int>& submeshFilter, int uvChannel);
     void applySelectionSet(const QSet<int>& verts, const QSet<int>& edges, const QSet<int>& faces,
@@ -185,8 +193,15 @@ private:
     std::vector<UvVert> m_uvVerts;
     std::vector<UvTri> m_uvTris;
     std::vector<UvEdge> m_uvEdges;
+    /// Per mesh-global-vertex list of triangle indices in m_uvTris (for fast context islands).
+    std::vector<std::vector<int>> m_trisByGlobalVert;
+    std::unordered_map<int, int> m_fiByGlobalTri;
 
     Ogre::Entity* m_activeEntity = nullptr;
+
+    bool m_panelActive = false;
+    bool m_refreshPending = false;
+    QTimer* m_refreshTimer = nullptr;
 };
 
 #endif // UV_EDITOR_CONTROLLER_H

@@ -187,6 +187,29 @@ TEST_F(UVEditorControllerTest, ControllerRefreshTracksSelection)
     EXPECT_EQ(ctrl->triangles().size(), 1);
 }
 
+TEST_F(UVEditorControllerTest, SkipsBackgroundRebuildWhilePanelHidden)
+{
+    auto mesh = createInMemoryTriangleMesh("UVEditor_hidden_tri");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UVEditor_hidden_node");
+    auto* entity = sceneMgr->createEntity("UVEditor_hidden_entity", mesh);
+    node->attachObject(entity);
+
+    UVEditorController::kill();
+    UVEditorController* ctrl = UVEditorController::instance();
+    ctrl->setPanelActive(false);
+    QSignalSpy spy(ctrl, &UVEditorController::meshDataChanged);
+
+    SelectionSet::getSingleton()->selectOne(entity);
+    EXPECT_EQ(spy.count(), 0);
+    EXPECT_FALSE(ctrl->hasMesh());
+
+    spy.clear();
+    ctrl->setPanelActive(true);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_TRUE(ctrl->hasMesh());
+}
+
 TEST_F(UVEditorControllerTest, ShowTextureBackgroundToggle)
 {
     UVEditorController* ctrl = UVEditorController::instance();
@@ -315,6 +338,7 @@ TEST_F(UVEditorControllerTest, ContextIslandsHighlightFromEditSelection)
     node->attachObject(entity);
 
     UVEditorController* ctrl = UVEditorController::instance();
+    ctrl->setPanelActive(true);
     SelectionSet::getSingleton()->selectOne(entity);
     ctrl->refresh();
     ASSERT_TRUE(ctrl->hasMesh());
