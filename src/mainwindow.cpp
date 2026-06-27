@@ -258,16 +258,29 @@ MainWindow::MainWindow(QWidget *parent) :
     // global repaint that can freeze the UI for tens of seconds.
     {
         QSettings settings;
-        mCurrentPalette = settings.value("palette", "dark").toString();
-        if (mCurrentPalette == "light") {
+        const QString appearanceTheme =
+            settings.value(AppSettingsKeys::appearanceTheme()).toString().trimmed();
+        const QString paletteTheme =
+            settings.value(AppSettingsKeys::palette(), QStringLiteral("dark")).toString().trimmed();
+        const QString paletteThemeLower = paletteTheme.toLower();
+        mCurrentPalette =
+            paletteThemeLower == QStringLiteral("custom")
+                ? paletteTheme
+                : (appearanceTheme.isEmpty() ? paletteTheme : appearanceTheme);
+        ui->actionLight->blockSignals(true);
+        ui->actionDark->blockSignals(true);
+        ui->actionCustom->blockSignals(true);
+        const QString themeLower = mCurrentPalette.trimmed().toLower();
+        if (themeLower == QStringLiteral("light")) {
             ui->actionLight->setChecked(true);
-        } else if (mCurrentPalette == "custom") {
-            ui->actionCustom->blockSignals(true);
+        } else if (themeLower == QStringLiteral("custom")) {
             ui->actionCustom->setChecked(true);
-            ui->actionCustom->blockSignals(false);
         } else {
             ui->actionDark->setChecked(true);
         }
+        ui->actionLight->blockSignals(false);
+        ui->actionDark->blockSignals(false);
+        ui->actionCustom->blockSignals(false);
     }
 
     initToolBar();
@@ -879,17 +892,15 @@ void MainWindow::initToolBar()
         addDockWidget(Qt::BottomDockWidgetArea, m_assetBrowserDock);
         m_assetBrowserDock->hide();
 
+        auto* abController = AssetBrowserController::instance();
+        connect(abController, &AssetBrowserController::importMeshRequested, this,
+                [this](const QStringList& paths) {
+                    SentryReporter::addBreadcrumb("ui.action", "Asset Browser: import mesh");
+                    importMeshs(paths);
+                });
         connect(m_assetBrowserDock, &QDockWidget::visibilityChanged, this, [this](bool vis) {
-            if (!vis)
-                return;
-            ensureLazyDockQml(m_assetBrowserDock);
-            auto* abController = AssetBrowserController::instance();
-            disconnect(abController, &AssetBrowserController::importMeshRequested, this, nullptr);
-            connect(abController, &AssetBrowserController::importMeshRequested, this,
-                    [this](const QStringList& paths) {
-                        SentryReporter::addBreadcrumb("ui.action", "Asset Browser: import mesh");
-                        importMeshs(paths);
-                    });
+            if (vis)
+                ensureLazyDockQml(m_assetBrowserDock);
         });
     }
 
@@ -1150,6 +1161,8 @@ void MainWindow::initToolBar()
     aiFont.setPixelSize(15);
     aiChatButton->setFont(aiFont);
     connect(aiChatButton, &QToolButton::clicked, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Toolbar: Open AI Chat"));
         if (m_chatDock) {
             ensureLazyDockQml(m_chatDock);
             m_chatDock->show();
@@ -2419,6 +2432,8 @@ void MainWindow::initToolBar()
     QAction* aiChatAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Chat..."));
     aiChatAction->setObjectName("actionAIChatDock");
     connect(aiChatAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("AI menu: Open AI Chat"));
         if (m_chatDock) {
             ensureLazyDockQml(m_chatDock);
             m_chatDock->show();

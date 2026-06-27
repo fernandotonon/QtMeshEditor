@@ -195,6 +195,7 @@ TEST_F(UVEditorControllerTest, SkipsBackgroundRebuildWhilePanelHidden)
     auto* entity = sceneMgr->createEntity("UVEditor_hidden_entity", mesh);
     node->attachObject(entity);
 
+    UVEditorController::kill();
     UVEditorController* ctrl = UVEditorController::instance();
     ctrl->setPanelActive(false);
     QSignalSpy spy(ctrl, &UVEditorController::meshDataChanged);
@@ -203,8 +204,9 @@ TEST_F(UVEditorControllerTest, SkipsBackgroundRebuildWhilePanelHidden)
     EXPECT_EQ(spy.count(), 0);
     EXPECT_FALSE(ctrl->hasMesh());
 
+    spy.clear();
     ctrl->setPanelActive(true);
-    ctrl->refresh();
+    EXPECT_GE(spy.count(), 1);
     EXPECT_TRUE(ctrl->hasMesh());
 }
 

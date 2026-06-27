@@ -70,7 +70,14 @@ void UVEditorController::setPanelActive(bool active)
     if (m_panelActive == active)
         return;
     m_panelActive = active;
-    if (m_panelActive && m_refreshPending) {
+    if (!m_panelActive) {
+        if (m_refreshTimer->isActive()) {
+            m_refreshTimer->stop();
+            m_refreshPending = true;
+        }
+        return;
+    }
+    if (m_refreshPending) {
         m_refreshPending = false;
         refresh();
     }
