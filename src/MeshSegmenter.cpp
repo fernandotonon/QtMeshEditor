@@ -32,16 +32,26 @@ const char* const kPartIds[] = {
     "unknown", "head", "torso", "left_arm", "right_arm", "left_leg", "right_leg",
 };
 
-// Normalise a bone name for matching: lowercase, strip a leading
-// "mixamorig[N]:" / "bip01 " / "def_"-style prefix, drop separators so
-// "LeftArm" / "L_Arm" / "arm.l" / "DEF-upper_arm.L" compare alike.
-QString normaliseBoneName(const QString& raw)
+// Strip non-semantic prefixes (lowercased): a "mixamorig[N]:" / namespace
+// colon prefix and a leading "def_"/"org-"/"mch-"/"ctrl-" rig prefix. Keeps
+// separators intact (delimited-token side detection needs them). A namespace
+// like "LeftRig:Spine1" MUST be dropped here, or its "left" leaks into side
+// detection and a centre bone loses its torso mapping.
+QString stripBonePrefixes(const QString& raw)
 {
     QString s = raw.toLower();
     const int colon = s.lastIndexOf(':');           // mixamorig:LeftArm → leftarm
     if (colon >= 0) s = s.mid(colon + 1);
     for (const char* p : {"def-", "def_", "def", "org-", "mch-", "ctrl-"})
         if (s.startsWith(QLatin1String(p))) { s = s.mid(int(qstrlen(p))); break; }
+    return s;
+}
+
+// Normalise a bone name for matching: strip prefixes, then drop separators so
+// "LeftArm" / "L_Arm" / "arm.l" / "DEF-upper_arm.L" compare alike.
+QString normaliseBoneName(const QString& raw)
+{
+    QString s = stripBonePrefixes(raw);
     s.remove(' ').remove('_').remove('-').remove('.');
     return s;
 }
@@ -104,9 +114,12 @@ MeshSegmenter::Part MeshSegmenter::partForBoneName(const QString& boneName)
 {
     const QString n = normaliseBoneName(boneName);
     if (n.isEmpty()) return Part::Unknown;
-    // Prefer explicit side tokens in the raw name (catches `_R_1`/`.l`/`-r`
-    // delimited markers); fall back to the normalised-name heuristic.
-    char side = boneSideFromRaw(boneName.toLower());
+    // Prefer explicit side tokens in the PREFIX-STRIPPED name (catches
+    // `_R_1`/`.l`/`-r` delimited markers); fall back to the normalised-name
+    // heuristic. Strip prefixes first so a namespace like "LeftRig:Spine1"
+    // doesn't leak its "left" into the side (which would skip the torso
+    // mapping for a centre bone).
+    char side = boneSideFromRaw(stripBonePrefixes(boneName));
     if (side == 0) side = boneSide(n);
     auto has = [&](std::initializer_list<const char*> cores) {
         for (const char* c : cores) if (n.contains(QLatin1String(c))) return true;

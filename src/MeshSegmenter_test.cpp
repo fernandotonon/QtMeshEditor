@@ -201,6 +201,18 @@ TEST(MeshSegmenter, BoneSideFromDelimitedToken)
     EXPECT_EQ(MS::partForBoneName("body"), MS::Part::Torso);
 }
 
+// A NAMESPACE / rig prefix must not leak its "left"/"right" into side
+// detection — "LeftRig:Spine1" is a centre torso bone, not a left limb.
+TEST(MeshSegmenter, BoneNamespacePrefixDoesNotLeakSide)
+{
+    EXPECT_EQ(MS::partForBoneName("LeftRig:Spine1"), MS::Part::Torso);
+    EXPECT_EQ(MS::partForBoneName("RightRig:Hips"),  MS::Part::Torso);
+    EXPECT_EQ(MS::partForBoneName("char_L:spine2"),  MS::Part::Torso);
+    // ...but a real side token AFTER the namespace still resolves.
+    EXPECT_EQ(MS::partForBoneName("LeftRig:arm_R_1"), MS::Part::RightArm);
+    EXPECT_EQ(MS::partForBoneName("Rig:LeftHand"),    MS::Part::LeftArm);
+}
+
 TEST(MeshSegmenter, ModelBackendAvailabilityMatchesBuild)
 {
 #ifdef ENABLE_ONNX
