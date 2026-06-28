@@ -56,6 +56,15 @@ public:
     static QString partName(Part p);         // stable lowercase id ("head", …)
     static QString partName(int p);
 
+    // Map a SKELETON bone name → a segmentation part (or Unknown if it doesn't
+    // correspond to a body region). This is the RIG-PRIOR path: when a mesh is
+    // rigged, labelling each vertex by the part of the bone it's most skinned to
+    // is EXACT — far better than the coordinate-only model, and it handles
+    // non-human anatomy the humanoid model can't (ears/snout→head, tail→torso,
+    // fingers→arm, toes→leg, wings→arm). Case-insensitive; tolerates common
+    // prefixes (mixamorig:, bip01, def_, …). Pure-data + unit-testable.
+    static Part partForBoneName(const QString& boneName);
+
     struct Options {
         Options();
         // Up axis (0=X,1=Y,2=Z, default +Y) — used by the geometric fallback's

@@ -774,6 +774,66 @@ QString EditModeController::selectByPart()
         return tr("No readable geometry to segment.");
     const int vertexCount = static_cast<int>(verts.size() / 3);
 
+    // --- RIG-PRIOR fast path -------------------------------------------------
+    // If the mesh is skinned, label each vertex by the PART of the bone it's
+    // most-weighted to (exact, and handles non-human anatomy — ears/snout→head,
+    // tail→torso, paws/toes→leg — which the humanoid coordinate model can't).
+    // This is synchronous (just a bone-name lookup, no download/inference). We
+    // use it directly when it covers a strong majority of vertices; otherwise
+    // fall through to the worker (model / geometric fallback).
+    {
+        Ogre::MeshPtr mesh = m_editEntity->getMesh();
+        Ogre::SkeletonPtr skel = (mesh && mesh->hasSkeleton()) ? mesh->getSkeleton()
+                                                               : Ogre::SkeletonPtr();
+        if (skel) {
+            // Per-vertex dominant bone (by weight), in gatherGeometry's vertex
+            // order: shared vertex data first (base 0), then each submesh's own
+            // data at its running offset.
+            std::vector<float> bestW(vertexCount, -1.0f);
+            std::vector<int>   boneOf(vertexCount, -1);
+            auto consider = [&](unsigned int gv, unsigned short boneIdx, float w) {
+                if (gv < static_cast<unsigned int>(vertexCount) && w > bestW[gv]) {
+                    bestW[gv] = w; boneOf[gv] = boneIdx;
+                }
+            };
+            uint32_t base = 0;
+            if (mesh->sharedVertexData) {
+                for (const auto& kv : mesh->getBoneAssignments())
+                    consider(kv.second.vertexIndex, kv.second.boneIndex, kv.second.weight);
+                base = static_cast<uint32_t>(mesh->sharedVertexData->vertexCount);
+            }
+            for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+                Ogre::SubMesh* sub = mesh->getSubMesh(si);
+                if (!sub || sub->useSharedVertices || !sub->vertexData) continue;
+                for (const auto& kv : sub->getBoneAssignments())
+                    consider(base + kv.second.vertexIndex, kv.second.boneIndex, kv.second.weight);
+                base += static_cast<uint32_t>(sub->vertexData->vertexCount);
+            }
+
+            std::vector<int> rigLabels(vertexCount, static_cast<int>(MeshSegmenter::Part::Unknown));
+            int resolved = 0;
+            for (int v = 0; v < vertexCount; ++v) {
+                if (boneOf[v] < 0) continue;
+                const QString bn = QString::fromStdString(
+                    skel->getBone(static_cast<unsigned short>(boneOf[v]))->getName());
+                const auto part = MeshSegmenter::partForBoneName(bn);
+                if (part != MeshSegmenter::Part::Unknown) {
+                    rigLabels[v] = static_cast<int>(part);
+                    ++resolved;
+                }
+            }
+            // Use the rig labels when they cover most of the mesh (a real rig
+            // should). Below that, the rig is too sparse to trust → use the model.
+            if (vertexCount > 0 && resolved >= (vertexCount * 7) / 10) {
+                const auto faceLabels = MeshSegmenter::facesFromVertexLabels(
+                    rigLabels, indices.data(), static_cast<int>(indices.size()));
+                finishSegmentOnMain(faceLabels, /*usedModel=*/false,
+                                    /*predictError(=sourceNote)=*/QStringLiteral("rig"));
+                return tr("Selecting by part (from rig)…");
+            }
+        }
+    }
+
     // Spin up the worker: ensureModelBlocking() (first-use download) + predict()
     // are Ogre-free and run off the UI thread so the app stays responsive and
     // the progress bar animates. The result is applied back on the main thread.
@@ -835,7 +895,7 @@ QString EditModeController::selectByPart()
 }
 
 void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
-                                             bool usedModel, const QString& /*predictError*/)
+                                             bool usedModel, const QString& predictError)
 {
     m_segmentBusy = false;
     m_segmentDownloading = false;
@@ -893,11 +953,16 @@ void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
 
     QStringList names;
     for (int l : wantLabels) names << MeshSegmenter::partName(l);
+    // `predictError` doubles as a source note for the success line: the rig
+    // fast-path passes "rig"; an empty string + model = no suffix; else fallback.
+    const QString note = (predictError == QLatin1String("rig"))
+        ? tr(" (from rig)")
+        : (usedModel ? QString() : tr(" (geometric fallback)"));
     emit segmentFinished(
         tr("Selected %1 face(s) — %2%3")
             .arg(selectedCount)
             .arg(names.join(QStringLiteral(", ")))
-            .arg(usedModel ? QString() : tr(" (geometric fallback)")),
+            .arg(note),
         false);
 }
 

@@ -138,6 +138,48 @@ TEST(MeshSegmenter, PredictFallsBackWhenNoModel)
     EXPECT_EQ(r.vertexLabels.size(), 6u);
 }
 
+// ---- partForBoneName (rig-prior mapping) ----------------------------------
+
+TEST(MeshSegmenter, BoneNameMapsHumanoidParts)
+{
+    EXPECT_EQ(MS::partForBoneName("mixamorig:Head"), MS::Part::Head);
+    EXPECT_EQ(MS::partForBoneName("mixamorig:Spine1"), MS::Part::Torso);
+    EXPECT_EQ(MS::partForBoneName("mixamorig:Hips"), MS::Part::Torso);
+    EXPECT_EQ(MS::partForBoneName("mixamorig:LeftArm"), MS::Part::LeftArm);
+    EXPECT_EQ(MS::partForBoneName("mixamorig:RightForeArm"), MS::Part::RightArm);
+    EXPECT_EQ(MS::partForBoneName("mixamorig:LeftHand"), MS::Part::LeftArm);
+    EXPECT_EQ(MS::partForBoneName("mixamorig:RightUpLeg"), MS::Part::RightLeg);
+    EXPECT_EQ(MS::partForBoneName("mixamorig:LeftFoot"), MS::Part::LeftLeg);
+    EXPECT_EQ(MS::partForBoneName("L_Shoulder"), MS::Part::LeftArm);
+    EXPECT_EQ(MS::partForBoneName("DEF-thigh.R"), MS::Part::RightLeg);
+}
+
+TEST(MeshSegmenter, BoneNameMapsNonHumanParts)
+{
+    // The cat case: ears / snout / tail / paws must map to a sane body region
+    // (this is what the coordinate model couldn't do).
+    EXPECT_EQ(MS::partForBoneName("Ear.L"), MS::Part::Head);
+    EXPECT_EQ(MS::partForBoneName("RightEar"), MS::Part::Head);
+    EXPECT_EQ(MS::partForBoneName("snout"), MS::Part::Head);
+    EXPECT_EQ(MS::partForBoneName("muzzle"), MS::Part::Head);
+    EXPECT_EQ(MS::partForBoneName("Tail1"), MS::Part::Torso);
+    EXPECT_EQ(MS::partForBoneName("L_Paw"), MS::Part::LeftLeg);
+    EXPECT_EQ(MS::partForBoneName("wing_R"), MS::Part::RightArm);
+}
+
+TEST(MeshSegmenter, BoneNameUnknownForNonBody)
+{
+    EXPECT_EQ(MS::partForBoneName(""), MS::Part::Unknown);
+    EXPECT_EQ(MS::partForBoneName("root_ctrl"), MS::Part::Unknown);
+    EXPECT_EQ(MS::partForBoneName("camera"), MS::Part::Unknown);
+}
+
+TEST(MeshSegmenter, BoneSidesDistinct)
+{
+    EXPECT_NE(MS::partForBoneName("LeftArm"), MS::partForBoneName("RightArm"));
+    EXPECT_NE(MS::partForBoneName("LeftFoot"), MS::partForBoneName("RightFoot"));
+}
+
 TEST(MeshSegmenter, ModelBackendAvailabilityMatchesBuild)
 {
 #ifdef ENABLE_ONNX

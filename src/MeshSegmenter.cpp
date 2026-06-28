@@ -31,6 +31,33 @@ constexpr const char* kBaseUrlSettingsKey = "ai/segmentModelBaseUrl";
 const char* const kPartIds[] = {
     "unknown", "head", "torso", "left_arm", "right_arm", "left_leg", "right_leg",
 };
+
+// Normalise a bone name for matching: lowercase, strip a leading
+// "mixamorig[N]:" / "bip01 " / "def_"-style prefix, drop separators so
+// "LeftArm" / "L_Arm" / "arm.l" / "DEF-upper_arm.L" compare alike.
+QString normaliseBoneName(const QString& raw)
+{
+    QString s = raw.toLower();
+    const int colon = s.lastIndexOf(':');           // mixamorig:LeftArm → leftarm
+    if (colon >= 0) s = s.mid(colon + 1);
+    for (const char* p : {"def-", "def_", "def", "org-", "mch-", "ctrl-"})
+        if (s.startsWith(QLatin1String(p))) { s = s.mid(int(qstrlen(p))); break; }
+    s.remove(' ').remove('_').remove('-').remove('.');
+    return s;
+}
+
+// Side from a normalised name → 'l', 'r', or 0 (centre). Word forms win over
+// single-letter affixes.
+char boneSide(const QString& n)
+{
+    if (n.contains("left"))  return 'l';
+    if (n.contains("right")) return 'r';
+    if (n.startsWith('l') && n.size() > 1) return 'l';
+    if (n.startsWith('r') && n.size() > 1) return 'r';
+    if (n.endsWith('l')) return 'l';
+    if (n.endsWith('r')) return 'r';
+    return 0;
+}
 } // namespace
 
 MeshSegmenter::Options::Options() = default;
@@ -43,6 +70,51 @@ QString MeshSegmenter::partName(int p)
     return QString::fromLatin1(kPartIds[p]);
 }
 QString MeshSegmenter::partName(Part p) { return partName(static_cast<int>(p)); }
+
+MeshSegmenter::Part MeshSegmenter::partForBoneName(const QString& boneName)
+{
+    const QString n = normaliseBoneName(boneName);
+    if (n.isEmpty()) return Part::Unknown;
+    const char side = boneSide(n);
+    auto has = [&](std::initializer_list<const char*> cores) {
+        for (const char* c : cores) if (n.contains(QLatin1String(c))) return true;
+        return false;
+    };
+
+    // HEAD region — incl. non-human cranial parts so a cat's ears/snout follow
+    // the head, not "arm". NOTE: the bare substring "ear" collides with
+    // "forEARm", so an arm name must NOT be misread as an ear — guard it.
+    const bool isArmName = has({"arm", "forearm"});
+    if ((has({"head", "skull", "cranium", "jaw", "eye", "eyelid", "brow",
+              "nose", "snout", "muzzle", "nostril", "tongue", "teeth", "tooth",
+              "lip", "cheek", "horn", "antler", "whisker", "face", "neck"})
+         || (has({"ear"}) && !isArmName)))
+        return Part::Head;
+
+    // Centre / spine / tail → torso (tail has no dedicated label; torso is the
+    // closest body region and keeps it out of the limbs).
+    if (has({"spine", "chest", "hips", "pelvis", "abdomen", "lowerback",
+             "tail", "spine1", "spine2", "ribcage", "belly", "root"}) && side == 0)
+        return Part::Torso;
+
+    // Arms (incl. wings, fingers, hands, clavicle/shoulder) by side.
+    if (has({"arm", "hand", "wrist", "finger", "thumb", "elbow", "forearm",
+             "clavicle", "shoulder", "collar", "wing", "palm", "claw"})) {
+        if (side == 'l') return Part::LeftArm;
+        if (side == 'r') return Part::RightArm;
+        return Part::Torso;                  // a centre "arm"? treat as torso
+    }
+
+    // Legs (incl. feet, toes, thigh/shin) by side.
+    if (has({"leg", "thigh", "shin", "calf", "knee", "foot", "ankle", "toe",
+             "femur", "tibia", "heel", "hoof", "paw", "upleg", "buttock"})) {
+        if (side == 'l') return Part::LeftLeg;
+        if (side == 'r') return Part::RightLeg;
+        return Part::Torso;
+    }
+
+    return Part::Unknown;
+}
 
 bool MeshSegmenter::isModelBackendAvailable()
 {
