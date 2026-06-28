@@ -164,6 +164,7 @@ ApplicationWindow {
                                 source: materialListModal.materialPreviewUris[modelData] || ""
                                 fillMode: Image.PreserveAspectFit
                                 asynchronous: true
+                                cache: false
                                 sourceSize.width: 52
                                 sourceSize.height: 52
 
@@ -323,6 +324,13 @@ ApplicationWindow {
     Component.onCompleted: {
         refreshMaterialList()
         selectedMaterial = ""
+    }
+
+    Connections {
+        target: MaterialEditorQML
+        function onMaterialApplied() {
+            rebuildMaterialPreviews(allMaterials)
+        }
     }
 
     onImportMaterials: openImportDialog()

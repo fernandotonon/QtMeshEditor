@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <unordered_set>
 
 namespace UVTransform {
 
@@ -30,7 +31,7 @@ Ogre::Vector2 medianPivot(const std::vector<VertRef>& verts)
 
 Ogre::Vector2 snapUv(Ogre::Vector2 uv, const Settings& settings,
                      const std::vector<VertRef>& allVerts,
-                     const std::vector<int>& selectedIds)
+                     const std::unordered_set<int>& selectedIds)
 {
     const bool doSnap = settings.snapEnabled != settings.invertSnap;
     if (!doSnap)
@@ -43,7 +44,7 @@ Ogre::Vector2 snapUv(Ogre::Vector2 uv, const Settings& settings,
         float bestDistSq = settings.snapThreshold * settings.snapThreshold;
         Ogre::Vector2 best = uv;
         for (const auto& v : allVerts) {
-            if (std::find(selectedIds.begin(), selectedIds.end(), v.id) != selectedIds.end())
+            if (selectedIds.count(v.id) != 0)
                 continue;
             const float dx = v.uv.x - uv.x;
             const float dy = v.uv.y - uv.y;
@@ -107,10 +108,10 @@ std::vector<VertRef> applyTransform(TransformOp op,
     if (input.empty())
         return {};
 
-    std::vector<int> selectedIds;
+    std::unordered_set<int> selectedIds;
     selectedIds.reserve(input.size());
     for (const auto& v : input)
-        selectedIds.push_back(v.id);
+        selectedIds.insert(v.id);
 
     const Ogre::Vector2 median = medianPivot(input);
     const Ogre::Vector2 cursorPivot = settings.cursor;

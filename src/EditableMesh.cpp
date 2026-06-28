@@ -826,7 +826,10 @@ bool entityHasNormalMap(Ogre::Entity* ent)
         }
         if (mat->getNumTechniques() == 0)
             continue;
-        auto* pass = mat->getTechnique(0)->getPass(0);
+        auto* technique = mat->getTechnique(0);
+        if (!technique || technique->getNumPasses() == 0)
+            continue;
+        auto* pass = technique->getPass(0);
         if (!pass)
             continue;
         for (unsigned short t = 0; t < pass->getNumTextureUnitStates(); ++t) {

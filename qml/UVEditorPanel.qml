@@ -156,12 +156,13 @@ Rectangle {
 
     function applyNumericBuffer() {
         if (numericBuffer.length === 0)
-            return
+            return false
         const val = parseFloat(numericBuffer)
         if (isNaN(val))
-            return
+            return false
         UVEditorController.applyNumericTransform(val)
         numericBuffer = ""
+        return true
     }
 
     Keys.onPressed: function(event) {
@@ -170,6 +171,19 @@ Rectangle {
             event.accepted = true
         } else if (event.key === Qt.Key_Home) {
             resetView()
+            event.accepted = true
+        } else if (UVEditorController.transformMode >= 0
+                   && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+            event.accepted = applyNumericBuffer()
+        } else if (UVEditorController.transformMode >= 0
+                   && event.key >= Qt.Key_0 && event.key <= Qt.Key_9) {
+            appendNumericChar(String.fromCharCode(event.key))
+            event.accepted = true
+        } else if (UVEditorController.transformMode >= 0 && event.key === Qt.Key_Minus) {
+            appendNumericChar("-")
+            event.accepted = true
+        } else if (UVEditorController.transformMode >= 0 && event.key === Qt.Key_Period) {
+            appendNumericChar(".")
             event.accepted = true
         } else if (event.key === Qt.Key_1) {
             UVEditorController.selectionMode = 0
@@ -191,18 +205,6 @@ Rectangle {
                 UVEditorController.transformMode = -1
             numericBuffer = ""
             root.draggingTransform = false
-            event.accepted = true
-        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            applyNumericBuffer()
-            event.accepted = numericBuffer.length > 0
-        } else if (event.key >= Qt.Key_0 && event.key <= Qt.Key_9) {
-            appendNumericChar(String.fromCharCode(event.key))
-            event.accepted = true
-        } else if (event.key === Qt.Key_Minus) {
-            appendNumericChar("-")
-            event.accepted = true
-        } else if (event.key === Qt.Key_Period) {
-            appendNumericChar(".")
             event.accepted = true
         }
     }

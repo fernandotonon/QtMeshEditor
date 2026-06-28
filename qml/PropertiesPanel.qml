@@ -4514,6 +4514,10 @@ Rectangle {
                     target: materialToolCol
                     function onSelectedMaterialNameChanged() { previewHost.schedulePreviewRefresh() }
                 }
+                Connections {
+                    target: MaterialEditorQML
+                    function onMaterialApplied() { previewHost.schedulePreviewRefresh() }
+                }
                 onPreviewShapeChanged: schedulePreviewRefresh()
                 onPreviewYawChanged: schedulePreviewRefresh()
                 onWidthChanged: schedulePreviewRefresh()

@@ -4,6 +4,7 @@
 #include <OgreVector2.h>
 
 #include <cmath>
+#include <unordered_set>
 #include <vector>
 
 /// Pure UV-space transform helpers for the UV editor (issue #461).
@@ -49,7 +50,7 @@ Ogre::Vector2 medianPivot(const std::vector<VertRef>& verts);
 
 Ogre::Vector2 snapUv(Ogre::Vector2 uv, const Settings& settings,
                      const std::vector<VertRef>& allVerts,
-                     const std::vector<int>& selectedIds);
+                     const std::unordered_set<int>& selectedIds);
 
 Ogre::Vector2 transformPoint(TransformOp op, const Ogre::Vector2& uv,
                              const Ogre::Vector2& pivot, const Ogre::Vector2& delta,

@@ -52,12 +52,28 @@ void UVEditCommand::apply(bool useNew)
         }
     }
 
+    const auto rollback = [&]() {
+        for (const auto& ch : m_changes) {
+            const Ogre::Vector2& uv = useNew ? ch.oldUv : ch.newUv;
+            if (useControllerMesh) {
+                uvCtrl->applyWorkingMeshUv(ch.subMeshIndex, ch.vertexIndex, uv);
+            } else {
+                mesh->setVertexUV(static_cast<size_t>(ch.subMeshIndex),
+                                  static_cast<size_t>(ch.vertexIndex), uv);
+            }
+        }
+    };
+
     if (useControllerMesh) {
-        if (!uvCtrl->commitWorkingMeshUvs())
+        if (!uvCtrl->commitWorkingMeshUvs()) {
+            rollback();
             return;
+        }
     } else {
-        if (!mesh->commitUvsToEntity(m_entity, m_uvChannel))
+        if (!mesh->commitUvsToEntity(m_entity, m_uvChannel)) {
+            rollback();
             return;
+        }
     }
 
     if (edit && edit->isEditModeActive() && edit->editEntity() == m_entity)

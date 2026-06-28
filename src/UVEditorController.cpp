@@ -885,8 +885,11 @@ bool UVEditorController::applyUvRefChanges(
     if (changes.empty())
         return false;
 
-    if (!commitWorkingMeshUvs())
+    if (!commitWorkingMeshUvs()) {
+        for (const auto& ch : changes)
+            applyWorkingMeshUv(ch.subMeshIndex, ch.vertexIndex, ch.oldUv);
         return false;
+    }
 
     if (auto* edit = EditModeController::instance()) {
         if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity)

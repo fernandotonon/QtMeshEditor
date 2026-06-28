@@ -346,8 +346,8 @@ QString MaterialPreviewRenderer::renderInteractivePreview(const QString& materia
     // Clamp size to a sane band: too small wastes pixels, too large
     // burns frame time for a docked preview.
     const int cappedSize = std::clamp(size, 32, 1024);
-    const double wrappedYaw = std::fmod(std::fmod(yawDegrees, 360.0) + 360.0, 360.0);
-    const int yawKey = static_cast<int>(std::lround(wrappedYaw));
+    const int yawKey = static_cast<int>(std::lround(
+        std::fmod(std::fmod(yawDegrees, 360.0) + 360.0, 360.0)));
     const QString cacheKey =
         QStringLiteral("%1|%2|%3|%4").arg(materialName).arg(cappedSize).arg(shape).arg(yawKey);
     if (auto it = m_interactiveCache.constFind(cacheKey); it != m_interactiveCache.constEnd())
@@ -411,7 +411,7 @@ QString MaterialPreviewRenderer::renderInteractivePreview(const QString& materia
         // Apply environment yaw — rotate the light around the world
         // up-axis so the model appears illuminated from a different
         // angle. Modulo to [0, 360) so the cache key is stable.
-        const Ogre::Radian yaw(Ogre::Degree(static_cast<float>(wrappedYaw)));
+        const Ogre::Radian yaw(Ogre::Degree(static_cast<float>(yawKey)));
         Ogre::Vector3 baseDir = Ogre::Vector3(-1, -1, -1).normalisedCopy();
         Ogre::Quaternion rot(yaw, Ogre::Vector3::UNIT_Y);
         m_lightNode->setDirection((rot * baseDir).normalisedCopy());
