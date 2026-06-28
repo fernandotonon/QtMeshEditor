@@ -30,6 +30,13 @@ THE SOFTWARE.
 #include "EditableMesh.h"
 #include "HalfEdgeMesh.h"
 #include "SelectionSet.h"
+#include "MeshSegmenter.h"
+#include "AutoRig.h"
+#include <QCoreApplication>
+#include <QMetaObject>
+#include <QPointer>
+#include <thread>
+#include <unordered_set>
 #include "SentryReporter.h"
 #include "UndoManager.h"
 #include "UvSeamData.h"
@@ -830,6 +837,225 @@ void EditModeController::clearSeamOnSelection()
     notifyMeshDataChanged();
 }
 
+QString EditModeController::selectByPart(const QString& upAxis)
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+        return tr("Enter Edit Mode on a mesh first.");
+    if (m_segmentBusy)
+        return tr("Segmentation already running…");
+
+    // Parse up-axis (parity with CLI --up-axis / MCP up_axis); default +Y.
+    int upAxisIdx = 1;
+    const QString ua = upAxis.trimmed().toLower();
+    if (ua == QLatin1String("x")) upAxisIdx = 0;
+    else if (ua == QLatin1String("z")) upAxisIdx = 2;
+    else upAxisIdx = 1;   // "y", empty, or anything unrecognised → +Y
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
+                                  QStringLiteral("Edit Mode: Select by part"));
+
+    // MAIN thread: gather geometry (locks Ogre HW buffers — must stay here).
+    std::vector<float> verts;
+    std::vector<uint32_t> indices;
+    if (!AutoRig::gatherGeometry(m_editEntity, verts, indices) || verts.empty())
+        return tr("No readable geometry to segment.");
+    const int vertexCount = static_cast<int>(verts.size() / 3);
+
+    // --- RIG-PRIOR fast path -------------------------------------------------
+    // If the mesh is skinned, label each vertex by the PART of the bone it's
+    // most-weighted to (exact, and handles non-human anatomy — ears/snout→head,
+    // tail→torso, paws/toes→leg — which the humanoid coordinate model can't).
+    // This is synchronous (just a bone-name lookup, no download/inference). We
+    // use it directly when it covers a strong majority of vertices; otherwise
+    // fall through to the worker (model / geometric fallback). The extraction is
+    // shared with the training-data miner (AutoRig::rigPriorPartLabels) so the
+    // GUI selection and the mined ground truth are bit-identical.
+    {
+        int resolved = 0;
+        std::vector<int> rigLabels =
+            AutoRig::rigPriorPartLabels(m_editEntity, vertexCount, &resolved);
+        // Use the rig labels when they cover most of the mesh (a real rig
+        // should). Below that, the rig is too sparse to trust → use the model.
+        // (rigPriorPartLabels marks bone-but-non-body vertices as -1; map those
+        // to Unknown(0) for the face-label majority + selection.)
+        if (!rigLabels.empty() && vertexCount > 0
+                && resolved >= (vertexCount * 7) / 10) {
+            for (int& l : rigLabels)
+                if (l < 0) l = static_cast<int>(MeshSegmenter::Part::Unknown);
+            const auto faceLabels = MeshSegmenter::facesFromVertexLabels(
+                rigLabels, indices.data(), static_cast<int>(indices.size()));
+            finishSegmentOnMain(faceLabels, /*usedModel=*/false,
+                                /*predictError(=sourceNote)=*/QStringLiteral("rig"));
+            return tr("Selecting by part (from rig)…");
+        }
+    }
+
+    // Spin up the worker: ensureModelBlocking() (first-use download) + predict()
+    // are Ogre-free and run off the UI thread so the app stays responsive and
+    // the progress bar animates. The result is applied back on the main thread.
+    m_segmentBusy = true;
+    m_segmentDownloading = !MeshSegmenter::modelPresent();
+    m_segmentProgress = 0;
+    m_segmentTotal = 0;
+    emit segmentProgressChanged();
+
+    m_segmentCancel = std::make_shared<std::atomic_bool>(false);
+    auto cancel = m_segmentCancel;
+    QPointer<EditModeController> self(this);
+
+    std::thread([self, verts, indices, vertexCount, cancel, upAxisIdx]() {
+        // Progress callback (inference): marshal to the UI thread, honour cancel.
+        auto progress = [self, cancel](int done, int total) -> bool {
+            if (cancel->load()) return false;
+            QMetaObject::invokeMethod(qApp, [self, done, total]() {
+                if (!self) return;
+                self->m_segmentDownloading = false;
+                self->m_segmentProgress = done;
+                self->m_segmentTotal = total;
+                emit self->segmentProgressChanged();
+            }, Qt::QueuedConnection);
+            return true;
+        };
+
+        const QString modelPath = MeshSegmenter::ensureModelBlocking();
+        if (cancel->load()) {
+            QMetaObject::invokeMethod(qApp, [self]() {
+                if (!self) return;
+                self->m_segmentBusy = false; self->m_segmentDownloading = false;
+                emit self->segmentProgressChanged();
+                emit self->segmentFinished(tr("Segmentation cancelled."), false);
+            }, Qt::QueuedConnection);
+            return;
+        }
+
+        MeshSegmenter::Options opts;
+        opts.upAxis = upAxisIdx;
+        const MeshSegmenter::Result r = MeshSegmenter::predict(
+            verts.data(), vertexCount, indices.data(),
+            static_cast<int>(indices.size()), modelPath, opts,
+            /*boneProximity=*/nullptr, progress);
+
+        // Hand the result back to the main thread to touch Ogre selection.
+        QMetaObject::invokeMethod(qApp, [self, r, cancel]() {
+            if (!self) return;
+            // If the user cancelled, predict() may still return an OK "cancelled"
+            // fallback — do NOT mutate the selection; just report cancellation.
+            if (cancel->load() || r.fallbackReason == QStringLiteral("cancelled")) {
+                self->m_segmentBusy = false; self->m_segmentDownloading = false;
+                emit self->segmentProgressChanged();
+                emit self->segmentFinished(tr("Segmentation cancelled."), false);
+                return;
+            }
+            if (!r.ok) {
+                self->m_segmentBusy = false; self->m_segmentDownloading = false;
+                emit self->segmentProgressChanged();
+                emit self->segmentFinished(tr("Segmentation failed: %1").arg(r.error), true);
+                return;
+            }
+            self->finishSegmentOnMain(r.faceLabels, r.usedModel, QString());
+        }, Qt::QueuedConnection);
+    }).detach();
+
+    return tr("Segmenting…");
+}
+
+void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
+                                             bool usedModel, const QString& predictError)
+{
+    m_segmentBusy = false;
+    m_segmentDownloading = false;
+    emit segmentProgressChanged();
+
+    if (!m_editModeActive || !m_editableMesh) {
+        emit segmentFinished(tr("Edit Mode exited before segmentation finished."), true);
+        return;
+    }
+
+    const int totalTris = static_cast<int>(m_editableMesh->totalTriangleCount());
+    if (static_cast<int>(faceLabels.size()) < totalTris) {
+        emit segmentFinished(
+            tr("Segmentation/topology mismatch — cannot map labels to faces."), true);
+        return;
+    }
+
+    // Which labels to select: labels of currently-selected faces, or (nothing
+    // selected) the single largest predicted part so one click is useful.
+    std::set<int> wantLabels;
+    if (!m_selectedFaces.empty()) {
+        for (int tri : m_selectedFaces)
+            if (tri >= 0 && tri < static_cast<int>(faceLabels.size()))
+                wantLabels.insert(faceLabels[tri]);
+    } else {
+        const int P = MeshSegmenter::partCount();
+        std::vector<int> count(P, 0);
+        for (int t = 0; t < totalTris; ++t) {
+            const int l = faceLabels[t];
+            if (l > 0 && l < P) ++count[l];      // skip Unknown(0) when auto-picking
+        }
+        int best = 0, bestCount = -1;
+        for (int p = 1; p < P; ++p)
+            if (count[p] > bestCount) { bestCount = count[p]; best = p; }
+        if (bestCount <= 0) {
+            emit segmentFinished(tr("No parts predicted."), true);
+            return;
+        }
+        wantLabels.insert(best);
+    }
+
+    if (m_selectionMode != FaceMode)
+        setSelectionMode(static_cast<int>(FaceMode));
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    // Expand each wanted triangle to its full polygon (quad / n-gon) via
+    // selectFace, but count DISTINCT polygons and de-dup the work: selectFace
+    // is idempotent on the face set, yet it rebuilds the overlay + emits a
+    // signal on every call — calling it once per triangle on a multi-thousand
+    // -face mesh would trigger thousands of overlay rebuilds. We track which
+    // polygons we've already expanded and update the overlay/signal ONCE below.
+    std::unordered_set<int> seenPolygons;   // keyed by face's first global tri
+    int selectedPolygons = 0;
+    for (int t = 0; t < totalTris; ++t) {
+        if (!wantLabels.count(faceLabels[t])) continue;
+        auto [subIdx, localTri] = globalTriToLocal(t);
+        if (subIdx >= m_editableMesh->subMeshes().size()) continue;
+        const auto& sub = m_editableMesh->subMeshes()[subIdx];
+        size_t faceFirstTri = localTri, faceTriCount = 1;
+        faceIndexForTriangle(sub, localTri, &faceFirstTri, &faceTriCount);
+        const int faceKey = localTriToGlobal(subIdx, faceFirstTri);
+        if (!seenPolygons.insert(faceKey).second) continue;   // already expanded
+        selectFace(t, /*addToSelection=*/true, /*notify=*/false);
+        ++selectedPolygons;
+    }
+    // Rebuild the overlay + notify ONCE for the whole batch (selectFace was
+    // told not to, so a multi-thousand-face part doesn't trigger N rebuilds).
+    updateSelectionOverlay();
+    emit editSelectionChanged();
+    const int selectedCount = selectedPolygons;
+
+    QStringList names;
+    for (int l : wantLabels) names << MeshSegmenter::partName(l);
+    // `predictError` doubles as a source note for the success line: the rig
+    // fast-path passes "rig"; an empty string + model = no suffix; else fallback.
+    const QString note = (predictError == QLatin1String("rig"))
+        ? tr(" (from rig)")
+        : (usedModel ? QString() : tr(" (geometric fallback)"));
+    emit segmentFinished(
+        tr("Selected %1 face(s) — %2%3")
+            .arg(selectedCount)
+            .arg(names.join(QStringLiteral(", ")))
+            .arg(note),
+        false);
+}
+
+void EditModeController::cancelSegment()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
+                                  QStringLiteral("Edit Mode: Select by part cancelled"));
+    if (m_segmentCancel) m_segmentCancel->store(true);
+}
+
 void EditModeController::selectVertex(int globalIndex, bool addToSelection)
 {
     if (!m_editModeActive || !m_editableMesh)
@@ -885,7 +1111,7 @@ void EditModeController::deselectEdge(int v1, int v2)
     }
 }
 
-void EditModeController::selectFace(int triIndex, bool addToSelection)
+void EditModeController::selectFace(int triIndex, bool addToSelection, bool notify)
 {
     if (!m_editModeActive || !m_editableMesh)
         return;
@@ -953,8 +1179,10 @@ void EditModeController::selectFace(int triIndex, bool addToSelection)
         }
     }
 
-    updateSelectionOverlay();
-    emit editSelectionChanged();
+    if (notify) {
+        updateSelectionOverlay();
+        emit editSelectionChanged();
+    }
 }
 
 void EditModeController::deselectFace(int triIndex)

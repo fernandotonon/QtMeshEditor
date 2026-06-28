@@ -101,6 +101,7 @@ AutoRig.cpp
 AutoRigController.cpp
 UniRigPredictor.cpp
 MotionInbetween.cpp
+MeshSegmenter.cpp
 MeshDepthRenderer.cpp
 MultiViewTextureBaker.cpp
 TextureChannelPacker.cpp
@@ -248,6 +249,7 @@ AutoRig.h
 AutoRigController.h
 UniRigPredictor.h
 MotionInbetween.h
+MeshSegmenter.h
 MeshDepthRenderer.h
 MultiViewTextureBaker.h
 TextureChannelPacker.h

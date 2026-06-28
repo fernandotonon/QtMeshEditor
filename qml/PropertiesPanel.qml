@@ -1966,6 +1966,125 @@ Rectangle {
                 wrapMode: Text.Wrap
             }
 
+            // AI "Select by Part" (#410) — predicts head/torso/arm/leg labels
+            // and selects all faces matching the selected face's part (or the
+            // largest part if nothing is selected). Runs the (slow first-use
+            // model download + ONNX inference) on a WORKER thread so the UI stays
+            // responsive; progress + result surface via EditModeController.
+            property string selectByPartStatus: ""
+            property bool selectByPartError: false
+
+            Connections {
+                target: EditModeController
+                function onSegmentFinished(status, isError) {
+                    editToolsCol.selectByPartStatus = status
+                    editToolsCol.selectByPartError = isError
+                }
+            }
+
+            Rectangle {
+                id: sbpButton
+                width: parent.width - 16; height: 26; radius: 3
+                opacity: EditModeController.segmentBusy ? 0.5 : 1.0
+                color: sbpMouse.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                     : (sbpMouse.containsMouse || sbpButton.activeFocus)
+                         ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                         : PropertiesPanelController.highlightColor
+                // Keyboard accessibility: focusable, activatable with Space/Return,
+                // and exposed to assistive tech as a button.
+                activeFocusOnTab: !EditModeController.segmentBusy
+                border.color: sbpButton.activeFocus ? "white"
+                                                    : PropertiesPanelController.borderColor
+                border.width: sbpButton.activeFocus ? 1 : 0
+                Accessible.role: Accessible.Button
+                Accessible.name: "Select by Part (AI)"
+                Accessible.description: "Predict mesh parts and select the part under the current face selection"
+                Accessible.onPressAction: sbpButton.activate()
+                function activate() {
+                    if (EditModeController.segmentBusy)
+                        return
+                    editToolsCol.selectByPartStatus = ""
+                    EditModeController.selectByPart()
+                }
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
+                            || event.key === Qt.Key_Enter) {
+                        sbpButton.activate()
+                        event.accepted = true
+                    }
+                }
+                Text { anchors.centerIn: parent
+                       text: EditModeController.segmentBusy ? "Segmenting…" : "Select by Part (AI)"
+                       color: "white"; font.pixelSize: 11 }
+                MouseArea {
+                    id: sbpMouse; anchors.fill: parent; hoverEnabled: true
+                    enabled: !EditModeController.segmentBusy
+                    cursorShape: EditModeController.segmentBusy ? Qt.ForbiddenCursor
+                                                               : Qt.PointingHandCursor
+                    onClicked: {
+                        sbpButton.forceActiveFocus()
+                        sbpButton.activate()
+                    }
+                }
+            }
+
+            // Progress: "Downloading model…" phase, then a determinate inference
+            // bar, plus Cancel — shown only while the worker runs.
+            Column {
+                width: parent.width - 16
+                spacing: 4
+                visible: EditModeController.segmentBusy
+                Text {
+                    width: parent.width; wrapMode: Text.Wrap; font.pixelSize: 9
+                    color: PropertiesPanelController.textColor
+                    text: EditModeController.segmentDownloading
+                        ? "Downloading segmentation model (first use only)…"
+                        : (EditModeController.segmentTotal > 0
+                            ? ("Segmenting… step " + EditModeController.segmentProgress
+                               + " / " + EditModeController.segmentTotal)
+                            : "Preparing…")
+                }
+                Rectangle {
+                    width: parent.width; height: 6; radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Rectangle {
+                        height: parent.height - 2; y: 1; x: 1; radius: 2
+                        color: PropertiesPanelController.highlightColor
+                        readonly property real frac: EditModeController.segmentTotal > 0
+                            ? Math.max(0, Math.min(1, EditModeController.segmentProgress
+                                                      / EditModeController.segmentTotal))
+                            : 0
+                        width: (parent.width - 2) * frac
+                        Behavior on width { NumberAnimation { duration: 120 } }
+                    }
+                }
+                Rectangle {
+                    width: cancelSbpTxt.implicitWidth + 16; height: 18; radius: 3
+                    color: cancelSbpMa.containsMouse ? PropertiesPanelController.highlightColor
+                                                     : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text { id: cancelSbpTxt; anchors.centerIn: parent; text: "Cancel"
+                           font.pixelSize: 10; color: PropertiesPanelController.textColor }
+                    MouseArea {
+                        id: cancelSbpMa; anchors.fill: parent; hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: EditModeController.cancelSegment()
+                    }
+                }
+            }
+
+            Text {
+                visible: editToolsCol.selectByPartStatus.length > 0
+                         && !EditModeController.segmentBusy
+                text: editToolsCol.selectByPartStatus
+                color: editToolsCol.selectByPartError ? "#e06c6c"
+                                                       : PropertiesPanelController.textColor
+                font.pixelSize: 9; opacity: 0.85
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+            }
+
             // Soft selection toggle (themed checkbox)
             Row {
                 spacing: 6; width: parent.width - 16

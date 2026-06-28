@@ -212,6 +212,12 @@ public:
     /// skin weights (--skin), and export. Issue #407.
     static int cmdRig(int argc, char* argv[]);
 
+    /// AI mesh part segmentation (#410): predict per-vertex/face part labels
+    /// (head/torso/arm/leg) and emit a label map. `segment <file> [--json]
+    /// [--no-model] [--up-axis x|y|z]`. Text lists per-part vertex/face counts;
+    /// --json emits the full vertex/face → label arrays.
+    static int cmdSegment(int argc, char* argv[]);
+
     /// List the morph targets / blend shapes on a mesh file. Slice A1
     /// surfaces a `--list` mode only; subsequent slices add `--set`,
     /// `--add`, `--delete` once the in-memory authoring path lands.
