@@ -60,7 +60,7 @@ void commitTopologyMeshState(Ogre::Entity* entity, EditableMesh* mesh)
 
 } // namespace
 
-EditableMesh* meshForEntity(Ogre::Entity* entity)
+EditableMesh* meshForEntity(Ogre::Entity* entity, EditableMesh& scratch)
 {
     if (!entity)
         return nullptr;
@@ -72,6 +72,8 @@ EditableMesh* meshForEntity(Ogre::Entity* entity)
         if (auto* wm = uv->workingMeshForEntity(entity))
             return wm;
     }
+    if (scratch.loadFromEntity(entity))
+        return &scratch;
     return nullptr;
 }
 
@@ -89,7 +91,8 @@ UvSeamMarkCommand::UvSeamMarkCommand(Ogre::Entity* entity,
 
 void UvSeamMarkCommand::apply(bool useNew)
 {
-    EditableMesh* mesh = meshForEntity(m_entity);
+    EditableMesh scratch;
+    EditableMesh* mesh = meshForEntity(m_entity, scratch);
     if (!mesh)
         return;
     for (const auto& ch : m_changes) {
@@ -136,7 +139,8 @@ UvPinCommand::UvPinCommand(Ogre::Entity* entity,
 
 void UvPinCommand::apply(bool useNew)
 {
-    EditableMesh* mesh = meshForEntity(m_entity);
+    EditableMesh scratch;
+    EditableMesh* mesh = meshForEntity(m_entity, scratch);
     if (!mesh)
         return;
     for (const auto& ch : m_changes) {
@@ -185,7 +189,8 @@ UvSeamTopologyCommand::UvSeamTopologyCommand(Ogre::Entity* entity,
 
 void UvSeamTopologyCommand::applyMesh(const std::vector<EditableSubMesh>& state)
 {
-    EditableMesh* mesh = meshForEntity(m_entity);
+    EditableMesh scratch;
+    EditableMesh* mesh = meshForEntity(m_entity, scratch);
     if (!mesh)
         return;
     mesh->subMeshes() = state;

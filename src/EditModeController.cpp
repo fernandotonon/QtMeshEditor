@@ -5565,6 +5565,10 @@ void EditModeController::destroySelectionOverlay()
             sceneMgr->destroyManualObject(m_overlayEdges);
             m_overlayEdges = nullptr;
         }
+        if (m_overlaySeamEdges) {
+            sceneMgr->destroyManualObject(m_overlaySeamEdges);
+            m_overlaySeamEdges = nullptr;
+        }
         if (m_overlayFaces) {
             sceneMgr->destroyManualObject(m_overlayFaces);
             m_overlayFaces = nullptr;

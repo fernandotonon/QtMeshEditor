@@ -126,6 +126,45 @@ std::vector<uint8_t> buildFaceIgnore(const std::vector<uint32_t>& indices,
     return ignore;
 }
 
+bool readSourceUv(Ogre::VertexData* src, int channel, unsigned vertIdx, Ogre::Vector2& out)
+{
+    if (!src || vertIdx >= src->vertexCount)
+        return false;
+    const auto* uvElem = src->vertexDeclaration->findElementBySemantic(
+        Ogre::VES_TEXTURE_COORDINATES, static_cast<unsigned short>(channel));
+    if (!uvElem)
+        return false;
+    auto vbuf = src->vertexBufferBinding->getBuffer(uvElem->getSource());
+    if (!vbuf)
+        return false;
+    auto* base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+    float* uv = nullptr;
+    uvElem->baseVertexPointerToElement(base + vertIdx * vbuf->getVertexSize(), &uv);
+    out.x = uv[0];
+    out.y = uv[1];
+    vbuf->unlock();
+    return true;
+}
+
+std::vector<bool> buildIncludedSourceVerts(const std::vector<uint32_t>& indices,
+                                           const UvUnwrapOptions::FaceMask* mask)
+{
+    if (!mask || mask->includeTriangle.empty())
+        return {};
+    const size_t triCount = indices.size() / 3;
+    unsigned maxVert = 0;
+    for (uint32_t idx : indices)
+        maxVert = std::max(maxVert, idx);
+    std::vector<bool> included(maxVert + 1, false);
+    for (size_t t = 0; t < triCount && t < mask->includeTriangle.size(); ++t) {
+        if (!mask->includeTriangle[t])
+            continue;
+        for (int k = 0; k < 3; ++k)
+            included[indices[t * 3 + k]] = true;
+    }
+    return included;
+}
+
 } // namespace
 
 // ── Pure-data helpers ────────────────────────────────────────────────────────
@@ -209,7 +248,8 @@ UnwrappedSubmesh buildUnwrappedSubmesh(const xatlas::Mesh& xmesh,
                                        float invAtlasH,
                                        int   uvChannel,
                                        bool  preserveBackup,
-                                       const std::unordered_map<unsigned int, Ogre::Vector2>* pinnedUvs)
+                                       const std::unordered_map<unsigned int, Ogre::Vector2>* pinnedUvs,
+                                       const std::vector<bool>* includedSourceVerts)
 {
     UnwrappedSubmesh out;
 
@@ -353,10 +393,23 @@ UnwrappedSubmesh buildUnwrappedSubmesh(const xatlas::Mesh& xmesh,
         }
 
         // Target UV: xatlas's uv is in texels (atlas-pixel coords),
-        // normalize to [0, 1].
+        // normalize to [0, 1]. For partial unwraps, keep the source
+        // UV on verts that belong only to ignored triangles.
         auto* uvOut = reinterpret_cast<float*>(row + targetUvOffset);
-        uvOut[0] = xv.uv[0] * invAtlasW;
-        uvOut[1] = xv.uv[1] * invAtlasH;
+        bool wroteUv = false;
+        if (includedSourceVerts && xv.xref < includedSourceVerts->size()
+                && !(*includedSourceVerts)[xv.xref]) {
+            Ogre::Vector2 orig;
+            if (readSourceUv(src, uvChannel, xv.xref, orig)) {
+                uvOut[0] = orig.x;
+                uvOut[1] = orig.y;
+                wroteUv = true;
+            }
+        }
+        if (!wroteUv) {
+            uvOut[0] = xv.uv[0] * invAtlasW;
+            uvOut[1] = xv.uv[1] * invAtlasH;
+        }
         if (pinnedUvs) {
             const auto it = pinnedUvs->find(xv.xref);
             if (it != pinnedUvs->end()) {
@@ -681,11 +734,17 @@ UvUnwrapReport runUnwrap(Ogre::Entity* entity,
         const std::unordered_map<unsigned int, Ogre::Vector2>* pinned = nullptr;
         if (si < opts.pinnedUvs.size() && !opts.pinnedUvs[si].empty())
             pinned = &opts.pinnedUvs[si];
+        const UvUnwrapOptions::FaceMask* mask = faceMaskForSub(opts, si);
+        const std::vector<bool> includedSourceVerts =
+            buildIncludedSourceVerts(geoms[si].indices, mask);
+        const std::vector<bool>* includedPtr =
+            includedSourceVerts.empty() ? nullptr : &includedSourceVerts;
         auto built = buildUnwrappedSubmesh(xmesh, geoms[si].sourceVertexData,
                                            invAtlasW, invAtlasH,
                                            opts.channel,
                                            opts.preserveOriginalAsBackup,
-                                           pinned);
+                                           pinned,
+                                           includedPtr);
 
         // The unwrap can split shared vertices into per-submesh
         // copies. Each submesh now owns its own vertex data — flip

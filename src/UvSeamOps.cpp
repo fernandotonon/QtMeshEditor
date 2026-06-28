@@ -172,25 +172,10 @@ EdgeSewResult sewEdges(EditableMesh& mesh, size_t subMeshIndex,
             (sub.vertices[a].uv.x + sub.vertices[b].uv.x) * 0.5f,
             (sub.vertices[a].uv.y + sub.vertices[b].uv.y) * 0.5f);
 
-        const Ogre::Vector3 pa = sub.vertices[a].position;
-        const Ogre::Vector3 pb = sub.vertices[b].position;
-        const float eps = 1e-6f;
-        bool changed = false;
-        for (size_t vi = 0; vi < sub.vertices.size(); ++vi) {
-            const Ogre::Vector3& p = sub.vertices[vi].position;
-            if (!sub.vertices[vi].hasUV)
-                continue;
-            const bool nearA = p.squaredDistance(pa) <= eps;
-            const bool nearB = p.squaredDistance(pb) <= eps;
-            if (!nearA && !nearB)
-                continue;
-            sub.vertices[vi].uv = avg;
-            sub.vertices[vi].hasUV = true;
-            changed = true;
-        }
-        if (changed)
-            UvSeamData::setSeam(sub, a, b, false);
-        return changed;
+        sub.vertices[a].uv = avg;
+        sub.vertices[b].uv = avg;
+        UvSeamData::setSeam(sub, a, b, false);
+        return true;
     };
 
     QSet<UvSeamData::EdgeKey> seen;
