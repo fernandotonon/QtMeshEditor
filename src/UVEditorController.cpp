@@ -7,8 +7,13 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
+#include "ThemeManager.h"
 #include "UndoManager.h"
+#include "UvSeamData.h"
+#include "UvSeamOps.h"
+#include "UvUnwrap.h"
 #include "commands/UVEditCommand.h"
+#include "commands/UvSeamCommands.h"
 
 #include <QImage>
 #include <QColor>
@@ -16,6 +21,9 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QImageReader>
+#include <QLibraryInfo>
+#include <QQmlApplicationEngine>
+#include <QQuickWindow>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QUrl>
@@ -85,6 +93,97 @@ void UVEditorController::setPanelActive(bool active)
         m_refreshPending = false;
         refresh();
     }
+}
+
+void UVEditorController::updateSurfacesActive()
+{
+    setPanelActive(m_inspectorEmbedded || m_editorWindow != nullptr);
+}
+
+void UVEditorController::setInspectorEmbedded(bool embedded)
+{
+    if (m_inspectorEmbedded == embedded)
+        return;
+    m_inspectorEmbedded = embedded;
+    updateSurfacesActive();
+    if (m_inspectorEmbedded)
+        refresh();
+}
+
+void UVEditorController::openEditorWindow()
+{
+    if (m_editorWindow) {
+        if (auto* w = qobject_cast<QQuickWindow*>(m_editorWindow)) {
+            w->show();
+            w->raise();
+            w->requestActivate();
+        }
+        return;
+    }
+
+    auto* engine = new QQmlApplicationEngine(this);
+    const QString appDir = QCoreApplication::applicationDirPath();
+    engine->addImportPath(appDir + QStringLiteral("/qml"));
+    engine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
+
+    qmlRegisterSingletonType<ThemeManager>(
+        "ThemeManager", 1, 0, "ThemeManager",
+        [](QQmlEngine* e, QJSEngine*) -> QObject* {
+            return ThemeManager::qmlInstance(e, nullptr);
+        });
+    qmlRegisterSingletonType<UVEditorController>(
+        "PropertiesPanel", 1, 0, "UVEditorController",
+        [](QQmlEngine* e, QJSEngine*) -> QObject* {
+            return UVEditorController::qmlInstance(e, nullptr);
+        });
+
+    bool handled = false;
+    connect(engine, &QQmlApplicationEngine::objectCreated, this,
+            [this, engine, &handled](QObject* obj, const QUrl&) {
+                handled = true;
+                if (!obj) {
+                    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                                  QStringLiteral("UV editor window: QML load failed"));
+                    engine->deleteLater();
+                    return;
+                }
+                m_editorWindow = obj;
+                updateSurfacesActive();
+                refresh();
+                emit editorWindowChanged();
+                if (auto* w = qobject_cast<QQuickWindow*>(obj)) {
+                    connect(w, &QQuickWindow::visibleChanged, this,
+                            [this, w, engine](bool vis) {
+                                if (vis || m_editorWindow != w)
+                                    return;
+                                m_editorWindow = nullptr;
+                                updateSurfacesActive();
+                                emit editorWindowChanged();
+                                engine->deleteLater();
+                            });
+                    w->show();
+                    w->raise();
+                    w->requestActivate();
+                }
+            },
+            Qt::DirectConnection);
+
+    engine->load(QUrl(QStringLiteral("qrc:/UVEditor/UVEditorWindow.qml")));
+    if (!handled) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("UV editor window: load() returned without objectCreated"));
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("UV editor window opened"));
+}
+
+void UVEditorController::closeEditorWindow()
+{
+    if (!m_editorWindow)
+        return;
+    if (auto* w = qobject_cast<QQuickWindow*>(m_editorWindow))
+        w->close();
+    else
+        m_editorWindow = nullptr;
 }
 
 void UVEditorController::scheduleRefresh()
@@ -647,7 +746,7 @@ EditableMesh* UVEditorController::workingMeshForEntity(Ogre::Entity* entity)
 
 void UVEditorController::refreshAfterUvEdit()
 {
-    syncUvLayoutFromWorkingMesh();
+    refresh();
 }
 
 void UVEditorController::syncWorkingMeshFromEntity()
@@ -655,17 +754,14 @@ void UVEditorController::syncWorkingMeshFromEntity()
     if (!m_activeEntity)
         return;
 
-    if (auto* edit = EditModeController::instance()) {
-        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity && edit->currentMesh()) {
-            m_workingMesh.subMeshes() = edit->currentMesh()->subMeshes();
-            applyUvChannel(m_workingMesh, m_activeEntity, m_uvChannel, m_submeshFilter);
-            return;
-        }
-    }
-
     if (!m_workingMesh.loadFromEntity(m_activeEntity))
         return;
     applyUvChannel(m_workingMesh, m_activeEntity, m_uvChannel, m_submeshFilter);
+
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity && edit->currentMesh())
+            edit->currentMesh()->subMeshes() = m_workingMesh.subMeshes();
+    }
 }
 
 void UVEditorController::applyWorkingMeshUv(int subMeshIndex, int localVert, const Ogre::Vector2& uv)
@@ -1734,4 +1830,289 @@ void UVEditorController::rebuildMeshCache()
     updateContextIslandsFromEdit();
     ++m_meshRevision;
     emit meshDataChanged();
+}
+
+QVariantList UVEditorController::seamEdges() const
+{
+    QVariantList out;
+    if (!m_activeEntity || m_workingMesh.subMeshes().empty())
+        return out;
+
+    for (size_t si = 0; si < m_workingMesh.subMeshes().size(); ++si) {
+        const auto& sub = m_workingMesh.subMeshes()[si];
+        for (uint64_t key : sub.seamEdges) {
+            const unsigned int a = static_cast<unsigned int>(key >> 32);
+            const unsigned int b = static_cast<unsigned int>(key & 0xFFFFFFFFu);
+            if (a >= sub.vertices.size() || b >= sub.vertices.size()
+                || !sub.vertices[a].hasUV || !sub.vertices[b].hasUV)
+                continue;
+            QVariantMap edge;
+            edge[QStringLiteral("u0")] = sub.vertices[a].uv.x;
+            edge[QStringLiteral("v0")] = sub.vertices[a].uv.y;
+            edge[QStringLiteral("u1")] = sub.vertices[b].uv.x;
+            edge[QStringLiteral("v1")] = sub.vertices[b].uv.y;
+            out.push_back(edge);
+        }
+    }
+    return out;
+}
+
+QVariantList UVEditorController::pinnedVertices() const
+{
+    QVariantList out;
+    if (!m_activeEntity || m_workingMesh.subMeshes().empty())
+        return out;
+
+    for (size_t si = 0; si < m_workingMesh.subMeshes().size(); ++si) {
+        const auto& sub = m_workingMesh.subMeshes()[si];
+        for (unsigned int vi : sub.pinnedVertices) {
+            if (vi >= sub.vertices.size() || !sub.vertices[vi].hasUV)
+                continue;
+            QVariantMap pin;
+            pin[QStringLiteral("u")] = sub.vertices[vi].uv.x;
+            pin[QStringLiteral("v")] = sub.vertices[vi].uv.y;
+            out.push_back(pin);
+        }
+    }
+    return out;
+}
+
+void UVEditorController::pinSelection()
+{
+    if (!m_activeEntity || m_selectedUvVerts.isEmpty())
+        return;
+
+    std::vector<UvPinCommand::PinChange> changes;
+    for (int vid : m_selectedUvVerts) {
+        if (vid < 0 || vid >= static_cast<int>(m_uvVerts.size()))
+            continue;
+        const int globalVert = m_uvVerts[static_cast<size_t>(vid)].meshGlobalVert;
+        int subIdx = 0;
+        int localVert = 0;
+        if (!mapGlobalVertToSubLocal(globalVert, subIdx, localVert))
+            continue;
+        auto& sub = m_workingMesh.subMeshes()[static_cast<size_t>(subIdx)];
+        const bool was = UvSeamData::isPinned(sub, static_cast<unsigned int>(localVert));
+        if (was)
+            continue;
+        UvPinCommand::PinChange ch;
+        ch.subMeshIndex = static_cast<size_t>(subIdx);
+        ch.vertexIndex = static_cast<unsigned int>(localVert);
+        ch.oldPinned = was;
+        ch.newPinned = true;
+        changes.push_back(ch);
+        UvSeamData::setPinned(sub, ch.vertexIndex, true);
+    }
+    if (changes.empty())
+        return;
+
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity && edit->currentMesh())
+            edit->currentMesh()->subMeshes() = m_workingMesh.subMeshes();
+    }
+    UvSeamData::writeBindingsToMesh(m_activeEntity->getMesh().get(), m_workingMesh.subMeshes());
+    commitWorkingMeshUvs();
+    if (UndoManager* undo = UndoManager::getSingleton())
+        undo->push(new UvPinCommand(m_activeEntity, std::move(changes), tr("Pin UV")));
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.pin"), tr("Pin UV"));
+    ++m_meshRevision;
+    emit meshDataChanged();
+}
+
+void UVEditorController::unpinSelection()
+{
+    if (!m_activeEntity || m_selectedUvVerts.isEmpty())
+        return;
+
+    std::vector<UvPinCommand::PinChange> changes;
+    for (int vid : m_selectedUvVerts) {
+        if (vid < 0 || vid >= static_cast<int>(m_uvVerts.size()))
+            continue;
+        const int globalVert = m_uvVerts[static_cast<size_t>(vid)].meshGlobalVert;
+        int subIdx = 0;
+        int localVert = 0;
+        if (!mapGlobalVertToSubLocal(globalVert, subIdx, localVert))
+            continue;
+        auto& sub = m_workingMesh.subMeshes()[static_cast<size_t>(subIdx)];
+        const bool was = UvSeamData::isPinned(sub, static_cast<unsigned int>(localVert));
+        if (!was)
+            continue;
+        UvPinCommand::PinChange ch;
+        ch.subMeshIndex = static_cast<size_t>(subIdx);
+        ch.vertexIndex = static_cast<unsigned int>(localVert);
+        ch.oldPinned = was;
+        ch.newPinned = false;
+        changes.push_back(ch);
+        UvSeamData::setPinned(sub, ch.vertexIndex, false);
+    }
+    if (changes.empty())
+        return;
+
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity && edit->currentMesh())
+            edit->currentMesh()->subMeshes() = m_workingMesh.subMeshes();
+    }
+    UvSeamData::writeBindingsToMesh(m_activeEntity->getMesh().get(), m_workingMesh.subMeshes());
+    commitWorkingMeshUvs();
+    if (UndoManager* undo = UndoManager::getSingleton())
+        undo->push(new UvPinCommand(m_activeEntity, std::move(changes), tr("Unpin UV")));
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.pin"), tr("Unpin UV"));
+    ++m_meshRevision;
+    emit meshDataChanged();
+}
+
+void UVEditorController::sewSelectedEdges()
+{
+    if (!m_activeEntity || m_selectedUvEdges.isEmpty())
+        return;
+
+    const auto before = m_workingMesh.subMeshes();
+    std::vector<std::pair<int, int>> globalEdges;
+    for (int eid : m_selectedUvEdges) {
+        if (eid < 0 || eid >= static_cast<int>(m_uvEdges.size()))
+            continue;
+        const auto& e = m_uvEdges[static_cast<size_t>(eid)];
+        globalEdges.emplace_back(e.meshGlobalV0, e.meshGlobalV1);
+    }
+    size_t sub = 0;
+    const auto keys = UvSeamOps::localEdgeKeysFromGlobal(m_workingMesh, globalEdges, sub);
+    if (keys.empty())
+        return;
+
+    const auto result = UvSeamOps::sewEdges(m_workingMesh, sub, keys);
+    if (!result.applied)
+        return;
+
+    const auto after = m_workingMesh.subMeshes();
+    commitWorkingMeshUvs();
+    if (UndoManager* undo = UndoManager::getSingleton())
+        undo->push(new UvSeamTopologyCommand(m_activeEntity, before, after, tr("Sew UV"), false));
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.sew"), tr("Sew UV"));
+    syncUvLayoutFromWorkingMesh();
+    ++m_meshRevision;
+    emit meshDataChanged();
+}
+
+void UVEditorController::splitSelectedEdges()
+{
+    if (!m_activeEntity || m_selectedUvEdges.isEmpty())
+        return;
+
+    const auto before = m_workingMesh.subMeshes();
+    std::vector<std::pair<int, int>> globalEdges;
+    for (int eid : m_selectedUvEdges) {
+        if (eid < 0 || eid >= static_cast<int>(m_uvEdges.size()))
+            continue;
+        const auto& e = m_uvEdges[static_cast<size_t>(eid)];
+        globalEdges.emplace_back(e.meshGlobalV0, e.meshGlobalV1);
+    }
+    size_t sub = 0;
+    const auto keys = UvSeamOps::localEdgeKeysFromGlobal(m_workingMesh, globalEdges, sub);
+    if (keys.empty())
+        return;
+
+    const auto result = UvSeamOps::splitEdges(m_workingMesh, sub, keys);
+    if (!result.applied)
+        return;
+
+    const auto after = m_workingMesh.subMeshes();
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity && edit->currentMesh())
+            edit->currentMesh()->subMeshes() = after;
+    }
+    m_workingMesh.subMeshes() = after;
+    m_workingMesh.resizeEntityBuffers(m_activeEntity);
+    UvSeamData::writeBindingsToMesh(m_activeEntity->getMesh().get(), m_workingMesh.subMeshes());
+    EditModeController::rewriteEntityAfterTopologyChange(m_activeEntity);
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity)
+            edit->notifyMeshDataChanged();
+    }
+
+    if (UndoManager* undo = UndoManager::getSingleton())
+        undo->push(new UvSeamTopologyCommand(m_activeEntity, before, after, tr("Split UV")));
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.split"), tr("Split UV"));
+    refresh();
+}
+
+void UVEditorController::unwrapSelectedFaces()
+{
+    if (!m_activeEntity || m_selectedUvFaces.isEmpty())
+        return;
+
+    commitWorkingMeshUvs();
+    const auto before = m_workingMesh.subMeshes();
+
+    UvUnwrapOptions opts;
+    opts.channel = m_uvChannel;
+    opts.seamEdgeKeys.resize(m_workingMesh.subMeshes().size());
+    opts.pinnedUvs.resize(m_workingMesh.subMeshes().size());
+    for (size_t si = 0; si < m_workingMesh.subMeshes().size(); ++si) {
+        opts.seamEdgeKeys[si].assign(m_workingMesh.subMeshes()[si].seamEdges.begin(),
+                                    m_workingMesh.subMeshes()[si].seamEdges.end());
+        for (unsigned int vi : m_workingMesh.subMeshes()[si].pinnedVertices) {
+            if (vi < m_workingMesh.subMeshes()[si].vertices.size()
+                && m_workingMesh.subMeshes()[si].vertices[vi].hasUV) {
+                opts.pinnedUvs[si][vi] = m_workingMesh.subMeshes()[si].vertices[vi].uv;
+            }
+        }
+    }
+
+    for (size_t si = 0; si < m_workingMesh.subMeshes().size(); ++si) {
+        UvUnwrapOptions::FaceMask mask;
+        mask.subMeshIndex = static_cast<unsigned>(si);
+        mask.includeTriangle.assign(m_workingMesh.subMeshes()[si].triangles.size(), false);
+        opts.faceMasks.push_back(mask);
+    }
+
+    for (int fid : m_selectedUvFaces) {
+        if (fid < 0 || fid >= static_cast<int>(m_uvTris.size()))
+            continue;
+        const int globalTri = m_uvTris[static_cast<size_t>(fid)].meshGlobalTri;
+        int offset = 0;
+        bool found = false;
+        int subIdx = 0;
+        int localTri = 0;
+        for (size_t si = 0; si < m_workingMesh.subMeshes().size(); ++si) {
+            const int triCount = static_cast<int>(m_workingMesh.subMeshes()[si].triangles.size());
+            if (globalTri >= offset && globalTri < offset + triCount) {
+                subIdx = static_cast<int>(si);
+                localTri = globalTri - offset;
+                found = true;
+                break;
+            }
+            offset += triCount;
+        }
+        if (!found)
+            continue;
+        for (auto& mask : opts.faceMasks) {
+            if (mask.subMeshIndex == static_cast<unsigned>(subIdx)
+                && localTri >= 0
+                && static_cast<size_t>(localTri) < mask.includeTriangle.size()) {
+                mask.includeTriangle[static_cast<size_t>(localTri)] = true;
+            }
+        }
+    }
+
+    const UvUnwrapReport report = UvUnwrap::unwrapEntity(m_activeEntity, opts);
+    if (!report.applied)
+        return;
+
+    if (!m_workingMesh.loadFromEntity(m_activeEntity))
+        return;
+    applyUvChannel(m_workingMesh, m_activeEntity, m_uvChannel, m_submeshFilter);
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity && edit->currentMesh())
+            edit->currentMesh()->subMeshes() = m_workingMesh.subMeshes();
+    }
+
+    const auto after = m_workingMesh.subMeshes();
+    if (UndoManager* undo = UndoManager::getSingleton())
+        undo->push(new UvSeamTopologyCommand(m_activeEntity, before, after,
+                                             tr("Unwrap selected UVs"), true));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.unwrap_selected"),
+                                  QStringLiteral("Unwrap selected faces"));
+    clearUvSelection();
+    refresh();
 }

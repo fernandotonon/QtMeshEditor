@@ -198,7 +198,6 @@ private:
     QDockWidget* m_assetBrowserDock = nullptr;
     QDockWidget* m_dopeSheetDock = nullptr;
     QDockWidget* m_curveEditorDock = nullptr;
-    QDockWidget* m_uvEditorDock = nullptr;
     QDockWidget* m_bottomContextDock = nullptr;
     QDockWidget* m_consoleDock = nullptr;
     QPlainTextEdit* m_consoleEdit = nullptr;

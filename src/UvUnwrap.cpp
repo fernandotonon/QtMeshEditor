@@ -20,8 +20,113 @@
 #include <QTextStream>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+namespace {
+
+uint64_t seamEdgeKey(unsigned int a, unsigned int b)
+{
+    if (a > b)
+        std::swap(a, b);
+    return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+}
+
+const UvUnwrapOptions::FaceMask* faceMaskForSub(const UvUnwrapOptions& opts, unsigned si)
+{
+    for (const auto& mask : opts.faceMasks) {
+        if (mask.subMeshIndex == si)
+            return &mask;
+    }
+    return nullptr;
+}
+
+std::vector<uint32_t> buildFaceMaterials(const std::vector<uint32_t>& indices,
+                                         const std::vector<bool>& includeTri,
+                                         const std::vector<uint64_t>& seamEdges)
+{
+    const size_t triCount = indices.size() / 3;
+    std::vector<uint32_t> triChart(triCount, 0);
+    if (triCount == 0)
+        return triChart;
+
+    std::unordered_set<uint64_t> seamSet(seamEdges.begin(), seamEdges.end());
+
+    auto triIncluded = [&](size_t t) {
+        return includeTri.empty() || (t < includeTri.size() && includeTri[t]);
+    };
+
+    std::vector<std::vector<size_t>> triNeighbors(triCount);
+    for (size_t t0 = 0; t0 < triCount; ++t0) {
+        if (!triIncluded(t0))
+            continue;
+        const uint32_t v0 = indices[t0 * 3 + 0];
+        const uint32_t v1 = indices[t0 * 3 + 1];
+        const uint32_t v2 = indices[t0 * 3 + 2];
+        const std::array<std::pair<uint32_t, uint32_t>, 3> edges{{{v0, v1}, {v1, v2}, {v2, v0}}};
+        for (size_t t1 = t0 + 1; t1 < triCount; ++t1) {
+            if (!triIncluded(t1))
+                continue;
+            const uint32_t u0 = indices[t1 * 3 + 0];
+            const uint32_t u1 = indices[t1 * 3 + 1];
+            const uint32_t u2 = indices[t1 * 3 + 2];
+            const std::array<std::pair<uint32_t, uint32_t>, 3> edgesB{{{u0, u1}, {u1, u2}, {u2, u0}}};
+            bool adjacent = false;
+            for (const auto& eA : edges) {
+                for (const auto& eB : edgesB) {
+                    if (eA.first == eB.second && eA.second == eB.first
+                        && seamSet.count(seamEdgeKey(eA.first, eA.second)) == 0) {
+                        adjacent = true;
+                        break;
+                    }
+                }
+                if (adjacent)
+                    break;
+            }
+            if (adjacent) {
+                triNeighbors[t0].push_back(t1);
+                triNeighbors[t1].push_back(t0);
+            }
+        }
+    }
+
+    uint32_t nextChart = 1;
+    for (size_t start = 0; start < triCount; ++start) {
+        if (!triIncluded(start) || triChart[start] != 0)
+            continue;
+        triChart[start] = nextChart;
+        std::vector<size_t> stack{start};
+        while (!stack.empty()) {
+            const size_t t = stack.back();
+            stack.pop_back();
+            for (size_t n : triNeighbors[t]) {
+                if (triChart[n] != 0)
+                    continue;
+                triChart[n] = nextChart;
+                stack.push_back(n);
+            }
+        }
+        ++nextChart;
+    }
+    return triChart;
+}
+
+std::vector<uint8_t> buildFaceIgnore(const std::vector<uint32_t>& indices,
+                                     const UvUnwrapOptions::FaceMask* mask)
+{
+    const size_t triCount = indices.size() / 3;
+    if (!mask || mask->includeTriangle.empty())
+        return {};
+    std::vector<uint8_t> ignore(triCount, 1);
+    for (size_t i = 0; i < triCount && i < mask->includeTriangle.size(); ++i)
+        ignore[i] = mask->includeTriangle[i] ? 0 : 1;
+    return ignore;
+}
+
+} // namespace
 
 // ── Pure-data helpers ────────────────────────────────────────────────────────
 
@@ -103,7 +208,8 @@ UnwrappedSubmesh buildUnwrappedSubmesh(const xatlas::Mesh& xmesh,
                                        float invAtlasW,
                                        float invAtlasH,
                                        int   uvChannel,
-                                       bool  preserveBackup)
+                                       bool  preserveBackup,
+                                       const std::unordered_map<unsigned int, Ogre::Vector2>* pinnedUvs)
 {
     UnwrappedSubmesh out;
 
@@ -251,6 +357,13 @@ UnwrappedSubmesh buildUnwrappedSubmesh(const xatlas::Mesh& xmesh,
         auto* uvOut = reinterpret_cast<float*>(row + targetUvOffset);
         uvOut[0] = xv.uv[0] * invAtlasW;
         uvOut[1] = xv.uv[1] * invAtlasH;
+        if (pinnedUvs) {
+            const auto it = pinnedUvs->find(xv.xref);
+            if (it != pinnedUvs->end()) {
+                uvOut[0] = it->second.x;
+                uvOut[1] = it->second.y;
+            }
+        }
     }
     newBuf->unlock();
 
@@ -481,8 +594,26 @@ UvUnwrapReport runUnwrap(Ogre::Entity* entity,
         if (geoms[si].positions.empty() || geoms[si].indices.empty()) continue;
 
         const size_t vertCount = geoms[si].positions.size() / 3;
+        const size_t triCount = geoms[si].indices.size() / 3;
+
+        const UvUnwrapOptions::FaceMask* mask = faceMaskForSub(opts, si);
+        std::vector<uint8_t> faceIgnore = buildFaceIgnore(geoms[si].indices, mask);
+        if (mask && !faceIgnore.empty()
+            && std::all_of(faceIgnore.begin(), faceIgnore.end(), [](uint8_t v) { return v != 0; })) {
+            continue;
+        }
+
+        std::vector<bool> includeTri;
+        if (mask)
+            includeTri = mask->includeTriangle;
+        const std::vector<uint64_t> emptySeams;
+        const std::vector<uint64_t>& seams =
+            si < opts.seamEdgeKeys.size() ? opts.seamEdgeKeys[si] : emptySeams;
+        std::vector<uint32_t> faceMaterials =
+            buildFaceMaterials(geoms[si].indices, includeTri, seams);
+
         report.verticesBefore     += static_cast<int>(vertCount);
-        report.trianglesProcessed += static_cast<int>(geoms[si].indices.size() / 3);
+        report.trianglesProcessed += static_cast<int>(triCount);
 
         xatlas::MeshDecl decl;
         decl.vertexCount          = static_cast<uint32_t>(vertCount);
@@ -491,6 +622,10 @@ UvUnwrapReport runUnwrap(Ogre::Entity* entity,
         decl.indexCount           = static_cast<uint32_t>(geoms[si].indices.size());
         decl.indexData            = geoms[si].indices.data();
         decl.indexFormat          = xatlas::IndexFormat::UInt32;
+        if (!faceIgnore.empty())
+            decl.faceIgnoreData = reinterpret_cast<const bool*>(faceIgnore.data());
+        if (!faceMaterials.empty())
+            decl.faceMaterialData = faceMaterials.data();
 
         const auto err = xatlas::AddMesh(atlas, decl);
         if (err != xatlas::AddMeshError::Success) {
@@ -543,10 +678,14 @@ UvUnwrapReport runUnwrap(Ogre::Entity* entity,
 
         // Build the unwrapped vertex + index data against the
         // source vertex layout.
+        const std::unordered_map<unsigned int, Ogre::Vector2>* pinned = nullptr;
+        if (si < opts.pinnedUvs.size() && !opts.pinnedUvs[si].empty())
+            pinned = &opts.pinnedUvs[si];
         auto built = buildUnwrappedSubmesh(xmesh, geoms[si].sourceVertexData,
                                            invAtlasW, invAtlasH,
                                            opts.channel,
-                                           opts.preserveOriginalAsBackup);
+                                           opts.preserveOriginalAsBackup,
+                                           pinned);
 
         // The unwrap can split shared vertices into per-submesh
         // copies. Each submesh now owns its own vertex data — flip

@@ -122,6 +122,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UVEditCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UvSeamCommands.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvSeamData.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvSeamOps.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp

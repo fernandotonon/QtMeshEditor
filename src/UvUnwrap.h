@@ -4,6 +4,9 @@
 #include <QString>
 #include <QJsonObject>
 #include <cstdint>
+#include <unordered_map>
+#include <OgreVector2.h>
+
 #include <vector>
 
 namespace Ogre {
@@ -49,6 +52,21 @@ struct UvUnwrapOptions {
     // overwrite is preserved on a higher channel (UV{channel+1}).
     // No-op when the target channel is empty.
     bool preserveOriginalAsBackup = true;
+
+    /// When non-empty, only triangles marked true are re-unwrapped; others
+    /// keep existing UVs via xatlas `faceIgnoreData` (issue #462).
+    struct FaceMask {
+        unsigned subMeshIndex = 0;
+        std::vector<bool> includeTriangle;
+    };
+    std::vector<FaceMask> faceMasks;
+
+    /// Per-submesh seam edges (local vertex pair keys). Chart boundaries
+    /// for xatlas via distinct `faceMaterialData` IDs.
+    std::vector<std::vector<uint64_t>> seamEdgeKeys;
+
+    /// Pinned UVs keyed by source vertex index per submesh.
+    std::vector<std::unordered_map<unsigned int, Ogre::Vector2>> pinnedUvs;
 };
 
 struct UvUnwrapReport {

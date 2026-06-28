@@ -641,6 +641,10 @@ public:
     Q_INVOKABLE void selectAll();
     Q_INVOKABLE void deselectAll();
 
+    /// Mark / clear UV seam flags on the current edge selection (issue #462).
+    Q_INVOKABLE void markSeamOnSelection();
+    Q_INVOKABLE void clearSeamOnSelection();
+
     /// Select a vertex by global index. If addToSelection is false, clears
     /// prior selection first.
     void selectVertex(int globalIndex, bool addToSelection = false);
@@ -897,6 +901,7 @@ private:
     // Selection overlay
     Ogre::ManualObject* m_overlayVertices = nullptr;
     Ogre::ManualObject* m_overlayEdges = nullptr;
+    Ogre::ManualObject* m_overlaySeamEdges = nullptr;
     Ogre::ManualObject* m_overlayFaces = nullptr;
     /// Quad-aware wireframe: lines along n-gon face boundaries only,
     /// hiding the diagonals introduced by `triangulateFaces()`. Active

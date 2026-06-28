@@ -127,3 +127,25 @@ TEST_F(UvUnwrapTest, InfoReportsUvChannels) {
     EXPECT_EQ(info[0].triangleCount, 128);
     EXPECT_FALSE(info[0].hasUv0);  // plane was built without UVs
 }
+
+TEST_F(UvUnwrapTest, PartialFaceMaskUnwrapsSelectedTrisOnly) {
+    auto mesh = createPlaneNoUvs("UvUnwrapTest_partial", 2);
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UvUnwrapTest_partial_node");
+    auto* entity = sceneMgr->createEntity("UvUnwrapTest_partial_entity", mesh);
+    node->attachObject(entity);
+
+    UvUnwrapOptions opts;
+    opts.resolution = 256;
+    opts.padding = 2;
+    UvUnwrapOptions::FaceMask mask;
+    mask.subMeshIndex = 0;
+    mask.includeTriangle.assign(8, false);
+    mask.includeTriangle[0] = true;
+    mask.includeTriangle[1] = true;
+    opts.faceMasks.push_back(std::move(mask));
+
+    const auto report = UvUnwrap::unwrapEntity(entity, opts);
+    ASSERT_TRUE(report.applied) << report.error.toStdString();
+    EXPECT_GT(report.chartCount, 0);
+}

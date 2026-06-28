@@ -999,39 +999,8 @@ void MainWindow::initToolBar()
         });
     }
 
-    // UV Editor dock — read-only UV layout viewer (issue #459).
-    {
-        auto* uvEditorWidget = new QQuickWidget(); // NOSONAR — Qt parent ownership
-        uvEditorWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
-        uvEditorWidget->setMinimumHeight(kBottomToolHeight);
-        uvEditorWidget->setMaximumHeight(kBottomToolHeight);
-        uvEditorWidget->setFocusPolicy(Qt::StrongFocus);
-        markLazyQml(uvEditorWidget, QUrl("qrc:/UVEditor/UVEditorPanel.qml"));
-
-        m_uvEditorDock = new QDockWidget(tr("UV Editor"), this); // NOSONAR
-        m_uvEditorDock->setWidget(uvEditorWidget);
-        m_uvEditorDock->setObjectName("UVEditorDock");
-        configureBottomToolDock(m_uvEditorDock);
-        addDockWidget(Qt::BottomDockWidgetArea, m_uvEditorDock);
-        m_uvEditorDock->hide();
-
-        connect(m_uvEditorDock, &QDockWidget::visibilityChanged, this, [this](bool vis) {
-            SentryReporter::addBreadcrumb("ui.action",
-                vis ? "UV Editor shown" : "UV Editor hidden");
-            UVEditorController::instance()->setPanelActive(vis);
-            if (vis) {
-                ensureLazyDockQml(m_uvEditorDock);
-                UVEditorController::instance()->refresh();
-                if (auto* root = qobject_cast<QQuickWidget*>(m_uvEditorDock->widget())) {
-                    if (root->rootObject())
-                        QMetaObject::invokeMethod(root->rootObject(), "fitToView");
-                }
-            }
-            QSettings().setValue(QStringLiteral("View/showUVEditor"), vis);
-        });
-    }
-
-    // Console dock — Qt message log (tabbed with other bottom tools)
+    // UV Editor lives in Material Mode → Mode Tools (UV Edit section) and
+    // an optional detached window via UVEditorController::openEditorWindow().
     {
         auto* consoleContainer = new QWidget();
         auto* consoleLayout = new QVBoxLayout(consoleContainer);
@@ -1287,11 +1256,13 @@ void MainWindow::initToolBar()
 
     addRailButton(
         QStringLiteral("UV"),
-        tr("Show UV Editor"),
+        tr("Open UV Editor"),
         QStringLiteral("modeUVEditorAction"),
-        [this]() {
+        []() {
             SentryReporter::addBreadcrumb("ui.action", "Rail: UV Editor");
-            showBottomToolDock(m_uvEditorDock);
+            EditorModeController::instance()->setCurrentMode(
+                EditorModeController::MaterialMode);
+            UVEditorController::instance()->openEditorWindow();
         });
 
     addRailButton(
@@ -1499,6 +1470,31 @@ void MainWindow::initToolBar()
     });
     QAction* loopCutAction = ui->objectsToolbar->addWidget(loopCutButton);
     loopCutAction->setObjectName("modeEditLoopCutAction");
+
+    // UV seam mark/clear (edge mode — issue #462).
+    auto markSeamButton = new QToolButton(ui->objectsToolbar);
+    markSeamButton->setText(QStringLiteral("\u2502"));  // │ seam line
+    markSeamButton->setToolTip(tr("Mark UV Seam on selected edges"));
+    markSeamButton->setFont(topoFont);
+    markSeamButton->setStyleSheet(topoBtnStyle);
+    connect(markSeamButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Mark UV Seam");
+        EditModeController::instance()->markSeamOnSelection();
+    });
+    QAction* markSeamAction = ui->objectsToolbar->addWidget(markSeamButton);
+    markSeamAction->setObjectName("modeEditMarkSeamAction");
+
+    auto clearSeamButton = new QToolButton(ui->objectsToolbar);
+    clearSeamButton->setText(QStringLiteral("\u2500"));  // ─ clear seam
+    clearSeamButton->setToolTip(tr("Clear UV Seam on selected edges"));
+    clearSeamButton->setFont(topoFont);
+    clearSeamButton->setStyleSheet(topoBtnStyle);
+    connect(clearSeamButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Clear UV Seam");
+        EditModeController::instance()->clearSeamOnSelection();
+    });
+    QAction* clearSeamAction = ui->objectsToolbar->addWidget(clearSeamButton);
+    clearSeamAction->setObjectName("modeEditClearSeamAction");
 
     // Convert to Quads: walks the mesh and merges coplanar adjacent
     // triangle pairs into n-gon quads. Useful when an imported tri
@@ -2145,9 +2141,11 @@ void MainWindow::initToolBar()
     //    mode matches AND the relevant element type actually has a
     //    non-empty selection.
     auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton, mergeButton, deleteButton,
-                               subdivideButton, fillButton, loopCutButton, convertToQuadsButton,
+                               subdivideButton, fillButton, loopCutButton, markSeamButton, clearSeamButton,
+                               convertToQuadsButton,
                                extrudeAction, bevelAction, knifeAction, mergeAction, deleteAction,
-                               subdivideAction, fillAction, loopCutAction, convertToQuadsAction]() {
+                               subdivideAction, fillAction, loopCutAction, markSeamAction, clearSeamAction,
+                               convertToQuadsAction]() {
         auto* c = EditModeController::instance();
         const bool active = c->isEditModeActive();
         extrudeAction->setVisible(active);
@@ -2158,6 +2156,8 @@ void MainWindow::initToolBar()
         subdivideAction->setVisible(active);
         fillAction->setVisible(active);
         loopCutAction->setVisible(active);
+        markSeamAction->setVisible(active);
+        clearSeamAction->setVisible(active);
         convertToQuadsAction->setVisible(active);
         if (!active) return;
         const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
@@ -2191,6 +2191,8 @@ void MainWindow::initToolBar()
         // uses the first selected edge as the start; multi-edge loop
         // cuts aren't in scope for the MVP.
         loopCutButton->setEnabled(mode == 1 && hasEdges);
+        markSeamButton->setEnabled(mode == 1 && hasEdges);
+        clearSeamButton->setEnabled(mode == 1 && hasEdges);
         // Convert to Quads: whole-mesh; disable only when EVERY submesh
         // is already n-gon canonical. Mixed meshes (some submeshes tri,
         // some quad) still qualify — the tri-only submeshes can still
@@ -2330,25 +2332,16 @@ void MainWindow::initToolBar()
             });
         });
     }
-    if (m_uvEditorDock && ui->menuView) {
-        QAction* uvAct = m_uvEditorDock->toggleViewAction();
-        uvAct->setText(tr("UV Editor"));
-        uvAct->setChecked(
-            QSettings().value(QStringLiteral("View/showUVEditor"), false).toBool());
+    if (ui->menuView) {
+        auto* uvAct = new QAction(tr("UV Editor Window…"), this);
+        uvAct->setObjectName(QStringLiteral("actionView_UV_Editor_Window"));
         ui->menuView->addAction(uvAct);
-        connect(uvAct, &QAction::triggered, this, [this](bool checked) {
-            if (!checked || !m_uvEditorDock)
-                return;
-
-            QTimer::singleShot(0, this, [this]() {
-                showBottomToolDock(m_uvEditorDock);
-            });
+        connect(uvAct, &QAction::triggered, this, []() {
+            SentryReporter::addBreadcrumb("ui.action", "View: UV Editor Window");
+            EditorModeController::instance()->setCurrentMode(
+                EditorModeController::MaterialMode);
+            UVEditorController::instance()->openEditorWindow();
         });
-        if (uvAct->isChecked()) {
-            QTimer::singleShot(0, this, [this]() {
-                showBottomToolDock(m_uvEditorDock);
-            });
-        }
     }
     if (m_bottomContextDock && m_consoleDock && ui->menuView) {
         m_contextPanelViewAction = new QAction(tr("Context Panel"), this);
@@ -3246,8 +3239,11 @@ void MainWindow::revealBottomTool(const QString& toolId)
     }
     else if (toolId == QStringLiteral("uvEditor"))
     {
-        dock = m_uvEditorDock;
-        breadcrumb = QStringLiteral("Rail: UV Editor");
+        SentryReporter::addBreadcrumb("ui.action", QStringLiteral("Rail: UV Editor"));
+        EditorModeController::instance()->setCurrentMode(
+            EditorModeController::MaterialMode);
+        UVEditorController::instance()->openEditorWindow();
+        return;
     }
 
     if (dock) {
@@ -3330,8 +3326,7 @@ void MainWindow::tabifyBottomToolDocks()
         m_consoleDock,
         m_assetBrowserDock,
         m_dopeSheetDock,
-        m_curveEditorDock,
-        m_uvEditorDock
+        m_curveEditorDock
     };
 
     QDockWidget* anchor = nullptr;

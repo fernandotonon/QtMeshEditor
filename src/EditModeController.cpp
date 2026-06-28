@@ -32,6 +32,8 @@ THE SOFTWARE.
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "UndoManager.h"
+#include "UvSeamData.h"
+#include "commands/UvSeamCommands.h"
 #include "commands/TransformCommands.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
@@ -754,6 +756,78 @@ void EditModeController::deselectAll()
 
     updateSelectionOverlay();
     emit editSelectionChanged();
+}
+
+void EditModeController::markSeamOnSelection()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity || m_selectedEdges.empty())
+        return;
+
+    std::vector<UvSeamMarkCommand::EdgeChange> changes;
+    for (const auto& e : m_selectedEdges) {
+        size_t sub = 0;
+        UvSeamData::EdgeKey local = 0;
+        if (!UvSeamData::globalEdgeToLocalKey(*m_editableMesh, e.first, e.second, sub, local))
+            continue;
+        auto& sm = m_editableMesh->subMeshes()[sub];
+        const unsigned int a = static_cast<unsigned int>(local >> 32);
+        const unsigned int b = static_cast<unsigned int>(local & 0xFFFFFFFFu);
+        const bool was = UvSeamData::isSeam(sm, a, b);
+        if (was)
+            continue;
+        UvSeamMarkCommand::EdgeChange ch;
+        ch.subMeshIndex = sub;
+        ch.edgeKey = local;
+        ch.oldSeam = was;
+        ch.newSeam = true;
+        changes.push_back(ch);
+        UvSeamData::setSeam(sm, a, b, true);
+    }
+    if (changes.empty())
+        return;
+
+    UvSeamData::writeBindingsToMesh(m_editEntity->getMesh().get(), m_editableMesh->subMeshes());
+    if (UndoManager* undo = UndoManager::getSingleton())
+        undo->push(new UvSeamMarkCommand(m_editEntity, std::move(changes), tr("Mark UV Seam")));
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"), QStringLiteral("Mark seam"));
+    updateSelectionOverlay();
+    notifyMeshDataChanged();
+}
+
+void EditModeController::clearSeamOnSelection()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity || m_selectedEdges.empty())
+        return;
+
+    std::vector<UvSeamMarkCommand::EdgeChange> changes;
+    for (const auto& e : m_selectedEdges) {
+        size_t sub = 0;
+        UvSeamData::EdgeKey local = 0;
+        if (!UvSeamData::globalEdgeToLocalKey(*m_editableMesh, e.first, e.second, sub, local))
+            continue;
+        auto& sm = m_editableMesh->subMeshes()[sub];
+        const unsigned int a = static_cast<unsigned int>(local >> 32);
+        const unsigned int b = static_cast<unsigned int>(local & 0xFFFFFFFFu);
+        const bool was = UvSeamData::isSeam(sm, a, b);
+        if (!was)
+            continue;
+        UvSeamMarkCommand::EdgeChange ch;
+        ch.subMeshIndex = sub;
+        ch.edgeKey = local;
+        ch.oldSeam = was;
+        ch.newSeam = false;
+        changes.push_back(ch);
+        UvSeamData::setSeam(sm, a, b, false);
+    }
+    if (changes.empty())
+        return;
+
+    UvSeamData::writeBindingsToMesh(m_editEntity->getMesh().get(), m_editableMesh->subMeshes());
+    if (UndoManager* undo = UndoManager::getSingleton())
+        undo->push(new UvSeamMarkCommand(m_editEntity, std::move(changes), tr("Clear UV Seam")));
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"), QStringLiteral("Clear seam"));
+    updateSelectionOverlay();
+    notifyMeshDataChanged();
 }
 
 void EditModeController::selectVertex(int globalIndex, bool addToSelection)
@@ -4936,6 +5010,18 @@ void EditModeController::createOverlayMaterials()
         pass->setLineWidth(3.0f);
     }
 
+    if (!matMgr.getByName("EditMode/SeamEdge"))
+    {
+        auto mat = matMgr.create("EditMode/SeamEdge",
+                                 Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        auto* pass = mat->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(false);
+        pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+        pass->setDepthCheckEnabled(false);
+        pass->setDepthWriteEnabled(false);
+        pass->setLineWidth(4.0f);
+    }
+
     // Face selection material (semi-transparent overlay, no lighting)
     if (!matMgr.getByName("EditMode/FaceSelection"))
     {
@@ -5090,6 +5176,46 @@ void EditModeController::updateSelectionOverlay()
         }
 
         m_overlayEdges->end();
+    }
+
+    if (!m_overlaySeamEdges)
+    {
+        m_overlaySeamEdges = sceneMgr->createManualObject("EditMode_SeamOverlay");
+        m_overlaySeamEdges->setDynamic(true);
+        m_overlaySeamEdges->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY + 1);
+        m_overlayNode->attachObject(m_overlaySeamEdges);
+    }
+
+    m_overlaySeamEdges->clear();
+    {
+        bool drewAny = false;
+        for (size_t si = 0; si < m_editableMesh->subMeshes().size(); ++si) {
+            const auto& sub = m_editableMesh->subMeshes()[si];
+            int vertOffset = 0;
+            for (size_t sj = 0; sj < si; ++sj)
+                vertOffset += static_cast<int>(m_editableMesh->subMeshes()[sj].vertices.size());
+            for (uint64_t key : sub.seamEdges) {
+                const unsigned int a = static_cast<unsigned int>(key >> 32);
+                const unsigned int b = static_cast<unsigned int>(key & 0xFFFFFFFFu);
+                if (a >= sub.vertices.size() || b >= sub.vertices.size())
+                    continue;
+                if (!drewAny) {
+                    m_overlaySeamEdges->begin("EditMode/SeamEdge",
+                                              Ogre::RenderOperation::OT_LINE_LIST);
+                    drewAny = true;
+                }
+                const Ogre::ColourValue seamColor(1.0f, 0.1f, 0.1f, 1.0f);
+                const auto& p0 = sub.vertices[a].position;
+                const auto& p1 = sub.vertices[b].position;
+                m_overlaySeamEdges->position(p0);
+                m_overlaySeamEdges->colour(seamColor);
+                m_overlaySeamEdges->position(p1);
+                m_overlaySeamEdges->colour(seamColor);
+                Q_UNUSED(vertOffset);
+            }
+        }
+        if (drewAny)
+            m_overlaySeamEdges->end();
     }
 
     // -- Face overlay --
