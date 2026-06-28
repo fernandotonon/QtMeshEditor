@@ -437,6 +437,8 @@ bool MaterialEditorQML::applyMaterial()
 
         // Reload the material to update UI
         loadMaterial(m_materialName);
+
+        MaterialPreviewRenderer::instance()->clearCache();
         
         emit materialApplied();
         return true;

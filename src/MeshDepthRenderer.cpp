@@ -1,6 +1,7 @@
 #include "MeshDepthRenderer.h"
 
 #include "Manager.h"
+#include "OgreRenderTargetUtil.h"
 #include "GlobalDefinitions.h"
 
 #include <OgreCamera.h>
@@ -87,6 +88,7 @@ bool ensureRenderTarget(int size, QString* errorOut)
         static_cast<Ogre::uint32>(size), static_cast<Ogre::uint32>(size), 0,
         Ogre::PF_BYTE_RGBA, Ogre::TU_RENDERTARGET);
     st.renderTarget = st.rttTexture->getBuffer()->getRenderTarget();
+    OgreRenderTargetUtil::configureOffscreenRenderTarget(st.renderTarget);
     st.size = size;
 
     if (!st.camera) {
@@ -270,6 +272,7 @@ MeshDepthRenderer::RenderResult MeshDepthRenderer::renderDepthMapView(
     // Render a single frame.
     st.renderTarget->update();
     QImage rgba = readRenderTarget(size);
+    OgreRenderTargetUtil::restoreEditorRenderTarget();
 
     // Capture the EXACT view/projection the frame was rendered with, so the
     // multi-view baker re-projects mesh triangles through the identical camera.

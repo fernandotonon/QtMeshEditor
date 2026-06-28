@@ -467,6 +467,24 @@ public:
     bool commitVertexColorsToEntity(Ogre::Entity* entity);
 
     /**
+     * @brief Write only UV coordinates back to the Ogre::Entity's buffers.
+     *
+     * Does not recalculate normals or mesh bounds. Writes the editable
+     * `EditableVertex::uv` values into the requested texture coordinate set.
+     * Does not re-init the entity. For bump-mapped materials call
+     * refreshEntityGpuCachesAfterUvWrite() to rebuild tangents.
+     *
+     * @param outBufferRebound Optional; set true when a static VBO was
+     *        replaced with a dynamic one (SubEntity caches must be refreshed).
+     */
+    bool commitUvsToEntity(Ogre::Entity* entity, int uvChannel = 0,
+                             bool* outBufferRebound = nullptr);
+
+    /// Rebuild tangents / RTSS after UV writes when the entity uses normal maps.
+    /// Does not tear down the entity (safe during live drag and animation).
+    static void refreshEntityGpuCachesAfterUvWrite(Ogre::Entity* entity);
+
+    /**
      * @brief Ensure diffuse vertex colors exist in memory and on the GPU.
      *
      * Vertices without `hasColor` become white. Rebuilds mesh buffers when the
@@ -596,6 +614,10 @@ private:
      */
     bool writeVertexData(Ogre::VertexData* vertexData, const std::vector<EditableVertex>& vertices);
     bool writeVertexColors(Ogre::VertexData* vertexData, const std::vector<EditableVertex>& vertices);
+    bool writeUvChannel(Ogre::VertexData* vertexData, int uvChannel,
+                        const std::vector<EditableVertex>& vertices,
+                        bool* outBufferRebound = nullptr);
+    void syncSkelAnimUvBuffers(Ogre::Entity* entity, int uvChannel);
 
     /**
      * @brief Build vertex/index hardware buffers for a single submesh.

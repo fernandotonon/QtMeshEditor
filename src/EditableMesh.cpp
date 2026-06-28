@@ -27,7 +27,10 @@ THE SOFTWARE.
 */
 
 #include "EditableMesh.h"
+#include "Manager.h"
+#include "MeshImporterExporter.h"
 #include "SubMeshTransform.h"
+#include <OgreRTShaderSystem.h>
 #include <OgreSubEntity.h>
 #include <OgrePlatform.h>
 #include <algorithm>
@@ -35,6 +38,7 @@ THE SOFTWARE.
 #include <iterator>
 #include <limits>
 #include <cmath>
+#include <unordered_set>
 #include <cstring>
 #include <map>
 
@@ -801,6 +805,201 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
     writeNgonFacesToMesh(mesh, m_subMeshes);
 
     return true;
+}
+
+namespace {
+
+bool entityHasNormalMap(Ogre::Entity* ent)
+{
+    if (!ent)
+        return false;
+    for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
+        auto mat = ent->getSubEntity(i)->getMaterial();
+        if (!mat)
+            continue;
+        if (!mat->isLoaded()) {
+            try {
+                mat->load();
+            } catch (const Ogre::Exception&) {
+                continue;
+            }
+        }
+        if (mat->getNumTechniques() == 0)
+            continue;
+        auto* technique = mat->getTechnique(0);
+        if (!technique || technique->getNumPasses() == 0)
+            continue;
+        auto* pass = technique->getPass(0);
+        if (!pass)
+            continue;
+        for (unsigned short t = 0; t < pass->getNumTextureUnitStates(); ++t) {
+            const auto& tusName = pass->getTextureUnitState(t)->getName();
+            if (tusName == "normal_map" || tusName == "NormalMap")
+                return true;
+        }
+    }
+    return false;
+}
+
+/// Rebuild tangents / RTSS after UV edits on bump-mapped materials.
+void refreshEntityAfterUvCommit(Ogre::Entity* entity)
+{
+    if (!entity || !entity->getMesh())
+        return;
+
+    if (Manager::getSingletonPtr()) {
+        bool inScene = false;
+        for (auto* obj : Manager::getSingleton()->getEntities()) {
+            if (obj == entity && obj->getMovableType() == "Entity") {
+                inScene = true;
+                break;
+            }
+        }
+        if (!inScene)
+            return;
+    }
+
+    if (!entityHasNormalMap(entity))
+        return;
+
+    try {
+        entity->getMesh()->buildTangentVectors(
+            /*sourceTexCoordSet=*/0,
+            /*splitMirrored=*/false,
+            /*splitRotated=*/false,
+            /*storeParityInW=*/true);
+        MeshImporterExporter::applyNormalMapsToEntity(entity);
+    } catch (const Ogre::Exception&) {
+    } catch (...) {
+    }
+}
+
+} // namespace
+
+void EditableMesh::refreshEntityGpuCachesAfterUvWrite(Ogre::Entity* entity)
+{
+    refreshEntityAfterUvCommit(entity);
+}
+
+bool EditableMesh::commitUvsToEntity(Ogre::Entity* entity, int uvChannel,
+                                     bool* outBufferRebound)
+{
+    if (outBufferRebound)
+        *outBufferRebound = false;
+
+    if (!entity || uvChannel < 0)
+        return false;
+
+    Ogre::MeshPtr meshPtr = entity->getMesh();
+    if (!meshPtr)
+        return false;
+
+    Ogre::Mesh* mesh = meshPtr.get();
+
+    if (m_subMeshes.size() != static_cast<size_t>(mesh->getNumSubMeshes()))
+        return false;
+
+    bool wroteAny = false;
+    bool anyRebound = false;
+
+    // Shared pool: merge UVs from every submesh that references it so edits
+    // routed through a later submesh index still reach the GPU buffer.
+    if (mesh->sharedVertexData) {
+        const size_t sharedCount = mesh->sharedVertexData->vertexCount;
+        std::vector<EditableVertex> merged(sharedCount);
+        for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+            if (!mesh->getSubMesh(i)->useSharedVertices)
+                continue;
+            const EditableSubMesh& editSub = m_subMeshes[i];
+            const size_t n = std::min(editSub.vertices.size(), sharedCount);
+            for (size_t vi = 0; vi < n; ++vi) {
+                if (editSub.vertices[vi].hasUV) {
+                    merged[vi].uv = editSub.vertices[vi].uv;
+                    merged[vi].hasUV = true;
+                }
+            }
+        }
+        bool rebound = false;
+        if (!writeUvChannel(mesh->sharedVertexData, uvChannel, merged, &rebound))
+            return false;
+        anyRebound = anyRebound || rebound;
+        wroteAny = true;
+    }
+
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* subMesh = mesh->getSubMesh(i);
+        if (subMesh->useSharedVertices)
+            continue;
+
+        const EditableSubMesh& editSub = m_subMeshes[i];
+        if (editSub.vertices.empty() || !subMesh->vertexData)
+            continue;
+
+        bool rebound = false;
+        if (!writeUvChannel(subMesh->vertexData, uvChannel, editSub.vertices, &rebound))
+            return false;
+        anyRebound = anyRebound || rebound;
+        wroteAny = true;
+    }
+
+    if (outBufferRebound)
+        *outBufferRebound = anyRebound;
+
+    if (wroteAny && entity->hasSkeleton())
+        syncSkelAnimUvBuffers(entity, uvChannel);
+
+    if (wroteAny)
+        refreshEntityGpuCachesAfterUvWrite(entity);
+
+    return wroteAny;
+}
+
+void EditableMesh::syncSkelAnimUvBuffers(Ogre::Entity* entity, int uvChannel)
+{
+    if (!entity || !entity->hasSkeleton())
+        return;
+
+    Ogre::Mesh* mesh = entity->getMesh().get();
+    if (!mesh)
+        return;
+
+    std::unordered_set<Ogre::VertexData*> updated;
+
+    if (mesh->sharedVertexData) {
+        Ogre::VertexData* sharedAnim = entity->_getSkelAnimVertexData();
+        if (sharedAnim && updated.insert(sharedAnim).second) {
+            const size_t sharedCount = sharedAnim->vertexCount;
+            std::vector<EditableVertex> merged(sharedCount);
+            for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+                if (!mesh->getSubMesh(i)->useSharedVertices)
+                    continue;
+                const EditableSubMesh& editSub = m_subMeshes[i];
+                const size_t n = std::min(editSub.vertices.size(), sharedCount);
+                for (size_t vi = 0; vi < n; ++vi) {
+                    if (editSub.vertices[vi].hasUV) {
+                        merged[vi].uv = editSub.vertices[vi].uv;
+                        merged[vi].hasUV = true;
+                    }
+                }
+            }
+            writeUvChannel(sharedAnim, uvChannel, merged, nullptr);
+        }
+    }
+
+    for (unsigned short i = 0; i < entity->getNumSubEntities() && i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* subMesh = mesh->getSubMesh(i);
+        if (subMesh->useSharedVertices)
+            continue;
+
+        Ogre::VertexData* animData = entity->getSubEntity(i)->_getSkelAnimVertexData();
+        if (!animData || !updated.insert(animData).second)
+            continue;
+
+        const EditableSubMesh& editSub = m_subMeshes[i];
+        if (editSub.vertices.empty())
+            continue;
+        writeUvChannel(animData, uvChannel, editSub.vertices, nullptr);
+    }
 }
 
 bool EditableMesh::commitVertexColorsToEntity(Ogre::Entity* entity)
@@ -1673,6 +1872,64 @@ bool EditableMesh::writeVertexData(Ogre::VertexData* vertexData, const std::vect
             *p = packDiffuseColour(vertices[j].color);
         });
 
+    return true;
+}
+
+bool EditableMesh::writeUvChannel(Ogre::VertexData* vertexData, int uvChannel,
+                                  const std::vector<EditableVertex>& vertices,
+                                  bool* outBufferRebound)
+{
+    if (outBufferRebound)
+        *outBufferRebound = false;
+
+    if (!vertexData || vertices.empty() || uvChannel < 0)
+        return false;
+
+    auto* decl = vertexData->vertexDeclaration;
+    auto* binding = vertexData->vertexBufferBinding;
+    const auto* elem = decl->findElementBySemantic(
+        Ogre::VES_TEXTURE_COORDINATES, static_cast<unsigned short>(uvChannel));
+    if (!elem)
+        return true;
+
+    unsigned short source = elem->getSource();
+    auto vbuf = binding->getBuffer(source);
+    if (!vbuf)
+        return false;
+
+    const size_t bufSize = vbuf->getSizeInBytes();
+    const size_t vertexSize = vbuf->getVertexSize();
+    const size_t count = std::min(vertices.size(), static_cast<size_t>(vertexData->vertexCount));
+
+    if (vbuf->getUsage() & Ogre::HardwareBuffer::HBU_STATIC) {
+        std::vector<unsigned char> oldData(bufSize);
+        vbuf->readData(0, bufSize, oldData.data());
+
+        auto newBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+            vertexSize, vertexData->vertexCount,
+            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true /* useShadowBuffer */);
+        newBuf->writeData(0, bufSize, oldData.data(), true);
+        binding->setBinding(source, newBuf);
+        vbuf = newBuf;
+        if (outBufferRebound)
+            *outBufferRebound = true;
+    }
+
+    std::vector<unsigned char> bufCopy(bufSize);
+    vbuf->readData(0, bufSize, bufCopy.data());
+
+    for (size_t j = 0; j < count; ++j) {
+        if (!vertices[j].hasUV)
+            continue;
+        float* p = nullptr;
+        elem->baseVertexPointerToElement(bufCopy.data() + j * vertexSize, &p);
+        p[0] = vertices[j].uv.x;
+        p[1] = vertices[j].uv.y;
+    }
+
+    auto* dest = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+    memcpy(dest, bufCopy.data(), bufSize);
+    vbuf->unlock();
     return true;
 }
 

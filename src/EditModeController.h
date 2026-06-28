@@ -166,6 +166,8 @@ public:
     Q_INVOKABLE void toggleEditMode();
     Q_INVOKABLE bool enterEditMode();
     Q_INVOKABLE void exitEditMode(bool commitChanges = true);
+    /// Notify listeners that editable mesh UV/attribute data changed (issue #461).
+    Q_INVOKABLE void notifyMeshDataChanged();
     /// @}
 
     /// @name Component selection mode (Vertex/Edge/Face)

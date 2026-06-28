@@ -76,6 +76,7 @@ commands/PoseLibraryCommands.cpp
 commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
+commands/UVEditCommand.cpp
 BoneDragRelease.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp
@@ -88,6 +89,7 @@ ExportOptimizer.cpp
 UvUnwrap.cpp
 UvUnwrapController.cpp
 UVEditorController.cpp
+UVTransform.cpp
 QuadRetopo.cpp
 QuadRetopoController.cpp
 SkinWeights.cpp

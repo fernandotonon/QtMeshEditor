@@ -7,12 +7,15 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
+#include "UndoManager.h"
+#include "commands/UVEditCommand.h"
 
 #include <QImage>
 #include <QColor>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QImageReader>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QUrl>
@@ -62,6 +65,7 @@ UVEditorController::UVEditorController(QObject* parent)
     m_refreshTimer->setSingleShot(true);
     m_refreshTimer->setInterval(75);
     connect(m_refreshTimer, &QTimer::timeout, this, &UVEditorController::rebuildMeshCache);
+
     connectSignals();
 }
 
@@ -562,7 +566,537 @@ void UVEditorController::setShowTextureBackground(bool on)
     if (m_showTextureBackground == on)
         return;
     m_showTextureBackground = on;
+    updateTexturePixelSize();
     emit showTextureBackgroundChanged();
+}
+
+void UVEditorController::setTransformMode(int mode)
+{
+    mode = std::max(-1, std::min(mode, 2));
+    const auto next = static_cast<TransformMode>(mode);
+    if (m_transformMode == next)
+        return;
+    m_transformMode = next;
+    emit transformModeChanged();
+}
+
+void UVEditorController::setPivotMode(int mode)
+{
+    mode = std::max(0, std::min(mode, 2));
+    const auto next = static_cast<PivotMode>(mode);
+    if (m_pivotMode == next)
+        return;
+    m_pivotMode = next;
+    emit pivotModeChanged();
+}
+
+void UVEditorController::setSnapMode(int mode)
+{
+    mode = std::max(0, std::min(mode, 2));
+    const auto next = static_cast<SnapMode>(mode);
+    if (m_snapMode == next)
+        return;
+    m_snapMode = next;
+    emit snapModeChanged();
+}
+
+void UVEditorController::setSnapEnabled(bool on)
+{
+    if (m_snapEnabled == on)
+        return;
+    m_snapEnabled = on;
+    emit snapEnabledChanged();
+}
+
+void UVEditorController::setUseBlenderTransformKeys(bool on)
+{
+    if (m_useBlenderTransformKeys == on)
+        return;
+    m_useBlenderTransformKeys = on;
+    emit useBlenderTransformKeysChanged();
+}
+
+void UVEditorController::setCursorU(double u)
+{
+    if (std::abs(m_cursorU - u) < 1e-9)
+        return;
+    m_cursorU = u;
+    emit cursorChanged();
+}
+
+void UVEditorController::setCursorV(double v)
+{
+    if (std::abs(m_cursorV - v) < 1e-9)
+        return;
+    m_cursorV = v;
+    emit cursorChanged();
+}
+
+void UVEditorController::setCursorFromUv(double u, double v)
+{
+    setCursorU(u);
+    setCursorV(v);
+}
+
+EditableMesh* UVEditorController::workingMeshForEntity(Ogre::Entity* entity)
+{
+    if (!entity || entity != m_activeEntity || m_workingMesh.subMeshes().empty())
+        return nullptr;
+    return &m_workingMesh;
+}
+
+void UVEditorController::refreshAfterUvEdit()
+{
+    syncUvLayoutFromWorkingMesh();
+}
+
+void UVEditorController::syncWorkingMeshFromEntity()
+{
+    if (!m_activeEntity)
+        return;
+
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity && edit->currentMesh()) {
+            m_workingMesh.subMeshes() = edit->currentMesh()->subMeshes();
+            applyUvChannel(m_workingMesh, m_activeEntity, m_uvChannel, m_submeshFilter);
+            return;
+        }
+    }
+
+    if (!m_workingMesh.loadFromEntity(m_activeEntity))
+        return;
+    applyUvChannel(m_workingMesh, m_activeEntity, m_uvChannel, m_submeshFilter);
+}
+
+void UVEditorController::applyWorkingMeshUv(int subMeshIndex, int localVert, const Ogre::Vector2& uv)
+{
+    if (subMeshIndex < 0 || localVert < 0)
+        return;
+
+    m_workingMesh.setVertexUV(static_cast<size_t>(subMeshIndex),
+                              static_cast<size_t>(localVert), uv);
+
+    if (m_activeEntity) {
+        Ogre::Mesh* mesh = m_activeEntity->getMesh().get();
+        if (mesh && static_cast<unsigned short>(subMeshIndex) < mesh->getNumSubMeshes()
+            && mesh->getSubMesh(static_cast<unsigned short>(subMeshIndex))->useSharedVertices) {
+            for (size_t si = 0; si < m_workingMesh.subMeshes().size(); ++si) {
+                if (static_cast<int>(si) == subMeshIndex)
+                    continue;
+                if (si >= mesh->getNumSubMeshes() || !mesh->getSubMesh(static_cast<unsigned short>(si))->useSharedVertices)
+                    continue;
+                m_workingMesh.setVertexUV(si, static_cast<size_t>(localVert), uv);
+            }
+        }
+    }
+
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity && edit->currentMesh()) {
+            edit->currentMesh()->setVertexUV(static_cast<size_t>(subMeshIndex),
+                                             static_cast<size_t>(localVert), uv);
+            if (m_activeEntity) {
+                Ogre::Mesh* mesh = m_activeEntity->getMesh().get();
+                if (mesh && static_cast<unsigned short>(subMeshIndex) < mesh->getNumSubMeshes()
+                    && mesh->getSubMesh(static_cast<unsigned short>(subMeshIndex))->useSharedVertices) {
+                    for (size_t si = 0; si < edit->currentMesh()->subMeshes().size(); ++si) {
+                        if (static_cast<int>(si) == subMeshIndex)
+                            continue;
+                        if (si >= mesh->getNumSubMeshes()
+                            || !mesh->getSubMesh(static_cast<unsigned short>(si))->useSharedVertices)
+                            continue;
+                        edit->currentMesh()->setVertexUV(si, static_cast<size_t>(localVert), uv);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void UVEditorController::syncUvLayoutFromWorkingMesh()
+{
+    for (auto& vert : m_uvVerts) {
+        int subIdx = 0;
+        int localVert = 0;
+        if (!mapGlobalVertToSubLocal(vert.meshGlobalVert, subIdx, localVert))
+            continue;
+        const Ogre::Vector2 uv = m_workingMesh.getVertexUV(
+            static_cast<size_t>(subIdx), static_cast<size_t>(localVert));
+        vert.u = uv.x;
+        vert.v = uv.y;
+    }
+
+    for (auto& tri : m_uvTris) {
+        for (int c = 0; c < 3; ++c) {
+            const int id = tri.uvVertId[c];
+            if (id < 0 || id >= static_cast<int>(m_uvVerts.size()))
+                continue;
+            tri.u[c] = m_uvVerts[static_cast<size_t>(id)].u;
+            tri.v[c] = m_uvVerts[static_cast<size_t>(id)].v;
+        }
+    }
+
+    QVariantList tris;
+    tris.reserve(static_cast<int>(m_uvTris.size()));
+    for (const auto& tri : m_uvTris) {
+        tris.push_back(QVariantMap{
+            {QStringLiteral("u0"), tri.u[0]},
+            {QStringLiteral("v0"), tri.v[0]},
+            {QStringLiteral("u1"), tri.u[1]},
+            {QStringLiteral("v1"), tri.v[1]},
+            {QStringLiteral("u2"), tri.u[2]},
+            {QStringLiteral("v2"), tri.v[2]},
+            {QStringLiteral("island"), tri.island},
+            {QStringLiteral("color"), colorForIsland(tri.island)},
+        });
+    }
+    m_triangles = tris;
+
+    ++m_meshRevision;
+    emit meshDataChanged();
+}
+
+void UVEditorController::updateTexturePixelSize()
+{
+    m_texturePixelSize = 0;
+    if (!m_showTextureBackground || m_textureBackgroundSource.isEmpty())
+        return;
+
+    const QUrl url(m_textureBackgroundSource);
+    const QString path = url.isLocalFile() ? url.toLocalFile() : m_textureBackgroundSource;
+    QImageReader reader(path);
+    if (!reader.canRead())
+        return;
+    const QSize size = reader.size();
+    if (size.isValid())
+        m_texturePixelSize = std::max(size.width(), size.height());
+}
+
+QSet<int> UVEditorController::affectedUvVertIds() const
+{
+    QSet<int> ids = m_selectedUvVerts;
+    for (int eid : m_selectedUvEdges) {
+        if (eid < 0 || eid >= m_uvEdges.size())
+            continue;
+        ids.insert(m_uvEdges[static_cast<size_t>(eid)].v0);
+        ids.insert(m_uvEdges[static_cast<size_t>(eid)].v1);
+    }
+    for (int fid : m_selectedUvFaces) {
+        if (fid < 0 || fid >= static_cast<int>(m_uvTris.size()))
+            continue;
+        const auto& tri = m_uvTris[static_cast<size_t>(fid)];
+        for (int c = 0; c < 3; ++c)
+            ids.insert(tri.uvVertId[c]);
+    }
+    return ids;
+}
+
+bool UVEditorController::mapGlobalVertToSubLocal(int globalVert, int& subMeshIndex, int& localVert) const
+{
+    if (globalVert < 0 || m_workingMesh.subMeshes().empty())
+        return false;
+
+    int off = 0;
+    for (size_t si = 0; si < m_workingMesh.subMeshes().size(); ++si) {
+        const int count = static_cast<int>(m_workingMesh.subMeshes()[si].vertices.size());
+        if (globalVert >= off && globalVert < off + count) {
+            subMeshIndex = static_cast<int>(si);
+            localVert = globalVert - off;
+            return true;
+        }
+        off += count;
+    }
+    return false;
+}
+
+UVTransform::Settings UVEditorController::transformSettings(bool invertSnap) const
+{
+    UVTransform::Settings settings;
+    settings.pivot = static_cast<UVTransform::PivotMode>(static_cast<int>(m_pivotMode));
+    settings.snap = static_cast<UVTransform::SnapMode>(static_cast<int>(m_snapMode));
+    settings.snapEnabled = m_snapEnabled;
+    settings.invertSnap = invertSnap;
+    settings.cursor = {static_cast<float>(m_cursorU), static_cast<float>(m_cursorV)};
+    settings.texturePixelSize = m_texturePixelSize;
+    return settings;
+}
+
+std::vector<UVTransform::VertRef> UVEditorController::collectSelectedUvRefs() const
+{
+    std::vector<UVTransform::VertRef> refs;
+    const QSet<int> ids = affectedUvVertIds();
+    refs.reserve(ids.size());
+    for (int id : ids) {
+        if (id < 0 || id >= static_cast<int>(m_uvVerts.size()))
+            continue;
+        const auto& v = m_uvVerts[static_cast<size_t>(id)];
+        refs.push_back({id, {v.u, v.v}});
+    }
+    return refs;
+}
+
+std::vector<UVTransform::VertRef> UVEditorController::collectAllUvRefs() const
+{
+    std::vector<UVTransform::VertRef> refs;
+    refs.reserve(m_uvVerts.size());
+    for (size_t i = 0; i < m_uvVerts.size(); ++i) {
+        const auto& v = m_uvVerts[i];
+        refs.push_back({static_cast<int>(i), {v.u, v.v}});
+    }
+    return refs;
+}
+
+bool UVEditorController::applyUvRefChanges(
+    const std::vector<UVTransform::VertRef>& refs,
+    const std::vector<UVTransform::VertRef>& before,
+    UVTransform::TransformOp op,
+    const QString& description)
+{
+    if (!m_activeEntity || refs.empty() || refs.size() != before.size())
+        return false;
+
+    if (m_workingMesh.subMeshes().empty())
+        return false;
+
+    std::vector<UVEditCommand::VertChange> changes;
+    changes.reserve(refs.size());
+
+    for (size_t i = 0; i < refs.size(); ++i) {
+        const auto& after = refs[i];
+        const auto& prev = before[i];
+        if (after.id < 0 || after.id >= static_cast<int>(m_uvVerts.size()))
+            continue;
+
+        const int globalVert = m_uvVerts[static_cast<size_t>(after.id)].meshGlobalVert;
+        int subIdx = 0;
+        int localVert = 0;
+        if (!mapGlobalVertToSubLocal(globalVert, subIdx, localVert))
+            continue;
+
+        applyWorkingMeshUv(subIdx, localVert, after.uv);
+
+        UVEditCommand::VertChange change;
+        change.subMeshIndex = subIdx;
+        change.vertexIndex = localVert;
+        change.oldUv = prev.uv;
+        change.newUv = after.uv;
+        changes.push_back(change);
+    }
+
+    if (changes.empty())
+        return false;
+
+    if (!commitWorkingMeshUvs()) {
+        for (const auto& ch : changes)
+            applyWorkingMeshUv(ch.subMeshIndex, ch.vertexIndex, ch.oldUv);
+        return false;
+    }
+
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity)
+            edit->notifyMeshDataChanged();
+    }
+
+    if (UndoManager* undo = UndoManager::getSingleton())
+        undo->push(new UVEditCommand(m_activeEntity, m_uvChannel, changes, description));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.transform"), description);
+    syncUvLayoutFromWorkingMesh();
+    return true;
+}
+
+Ogre::Vector2 UVEditorController::transformDeltaFromDrag(double u, double v) const
+{
+    const float du = static_cast<float>(u - m_dragStartU);
+    const float dv = static_cast<float>(v - m_dragStartV);
+
+    switch (m_transformMode) {
+    case MoveTransform:
+        return {du, dv};
+    case RotateTransform:
+        return {du * 180.f, 0.f};
+    case ScaleTransform: {
+        const float dist = std::sqrt(du * du + dv * dv);
+        const float sign = (du + dv) >= 0.f ? 1.f : -1.f;
+        return {1.f + sign * dist, 0.f};
+    }
+    default:
+        return Ogre::Vector2::ZERO;
+    }
+}
+
+bool UVEditorController::beginTransformDrag(double u, double v, int modifiers)
+{
+    if (!m_hasMesh || m_transformMode == NoTransform)
+        return false;
+
+    const auto selected = collectSelectedUvRefs();
+    if (selected.empty())
+        return false;
+
+    m_dragBeforeChanges.clear();
+    m_dragBeforeRefs = selected;
+    for (const auto& ref : selected) {
+        if (ref.id < 0 || ref.id >= static_cast<int>(m_uvVerts.size()))
+            continue;
+        const int globalVert = m_uvVerts[static_cast<size_t>(ref.id)].meshGlobalVert;
+        int subIdx = 0;
+        int localVert = 0;
+        if (!mapGlobalVertToSubLocal(globalVert, subIdx, localVert))
+            continue;
+        UVEditCommand::VertChange change;
+        change.subMeshIndex = subIdx;
+        change.vertexIndex = localVert;
+        change.oldUv = ref.uv;
+        change.newUv = ref.uv;
+        m_dragBeforeChanges.push_back(change);
+    }
+    if (m_dragBeforeChanges.empty())
+        return false;
+
+    m_dragStartU = u;
+    m_dragStartV = v;
+    m_draggingTransform = true;
+    m_transformActive = true;
+    emit transformActiveChanged();
+    return true;
+}
+
+void UVEditorController::updateTransformDrag(double u, double v, int modifiers)
+{
+    if (!m_draggingTransform || m_transformMode == NoTransform)
+        return;
+
+    const bool invertSnap = (modifiers & static_cast<int>(ControlModifier)) != 0;
+    const auto& before = m_dragBeforeRefs;
+    UVTransform::TransformOp op = UVTransform::TransformOp::Move;
+    switch (m_transformMode) {
+    case MoveTransform: op = UVTransform::TransformOp::Move; break;
+    case RotateTransform: op = UVTransform::TransformOp::Rotate; break;
+    case ScaleTransform: op = UVTransform::TransformOp::Scale; break;
+    default: return;
+    }
+
+    const Ogre::Vector2 delta = transformDeltaFromDrag(u, v);
+    const auto after = UVTransform::applyTransform(
+        op, before, transformSettings(invertSnap), collectAllUvRefs(), delta, 0.f, false);
+
+    for (size_t i = 0; i < after.size() && i < before.size(); ++i) {
+        const int globalVert = m_uvVerts[static_cast<size_t>(after[i].id)].meshGlobalVert;
+        int subIdx = 0;
+        int localVert = 0;
+        if (!mapGlobalVertToSubLocal(globalVert, subIdx, localVert))
+            continue;
+        applyWorkingMeshUv(subIdx, localVert, after[i].uv);
+    }
+    commitWorkingMeshUvs();
+    syncUvLayoutFromWorkingMesh();
+}
+
+void UVEditorController::commitTransformDrag()
+{
+    if (!m_draggingTransform)
+        return;
+
+    m_draggingTransform = false;
+    m_transformActive = false;
+    emit transformActiveChanged();
+
+    if (m_dragBeforeChanges.empty() || m_dragBeforeRefs.empty())
+        return;
+
+    QString desc = tr("UV Move");
+    if (m_transformMode == RotateTransform)
+        desc = tr("UV Rotate");
+    else if (m_transformMode == ScaleTransform)
+        desc = tr("UV Scale");
+
+    std::vector<UVEditCommand::VertChange> changes = m_dragBeforeChanges;
+    for (auto& ch : changes) {
+        ch.newUv = m_workingMesh.getVertexUV(
+            static_cast<size_t>(ch.subMeshIndex),
+            static_cast<size_t>(ch.vertexIndex));
+    }
+
+    // GPU buffers were already updated during drag; record undo only.
+    if (UndoManager* undo = UndoManager::getSingleton())
+        undo->push(new UVEditCommand(m_activeEntity, m_uvChannel, std::move(changes), desc));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.transform"), desc);
+
+    m_dragBeforeChanges.clear();
+    m_dragBeforeRefs.clear();
+}
+
+void UVEditorController::cancelTransformDrag()
+{
+    if (!m_draggingTransform)
+        return;
+
+    syncWorkingMeshFromEntity();
+    for (const auto& ch : m_dragBeforeChanges)
+        applyWorkingMeshUv(ch.subMeshIndex, ch.vertexIndex, ch.oldUv);
+    commitWorkingMeshUvs();
+    m_dragBeforeChanges.clear();
+    m_dragBeforeRefs.clear();
+    m_draggingTransform = false;
+    m_transformActive = false;
+    emit transformActiveChanged();
+    syncUvLayoutFromWorkingMesh();
+}
+
+bool UVEditorController::applyNumericTransform(double value)
+{
+    if (m_transformMode == NoTransform)
+        return false;
+
+    const auto before = collectSelectedUvRefs();
+    if (before.empty())
+        return false;
+
+    UVTransform::TransformOp op = UVTransform::TransformOp::Move;
+    QString desc = tr("UV Move");
+    if (m_transformMode == RotateTransform) {
+        op = UVTransform::TransformOp::Rotate;
+        desc = tr("UV Rotate");
+    } else if (m_transformMode == ScaleTransform) {
+        op = UVTransform::TransformOp::Scale;
+        desc = tr("UV Scale");
+    }
+
+    const auto after = UVTransform::applyTransform(
+        op, before, transformSettings(false), collectAllUvRefs(),
+        Ogre::Vector2::ZERO, static_cast<float>(value), true);
+    return applyUvRefChanges(after, before, op, desc);
+}
+
+void UVEditorController::mirrorSelectionX()
+{
+    const auto before = collectSelectedUvRefs();
+    if (before.empty())
+        return;
+    const auto after = UVTransform::applyTransform(
+        UVTransform::TransformOp::MirrorX, before, transformSettings(false),
+        collectAllUvRefs(), Ogre::Vector2::ZERO, 0.f, false);
+    applyUvRefChanges(after, before, UVTransform::TransformOp::MirrorX, tr("UV Mirror X"));
+}
+
+void UVEditorController::mirrorSelectionY()
+{
+    const auto before = collectSelectedUvRefs();
+    if (before.empty())
+        return;
+    const auto after = UVTransform::applyTransform(
+        UVTransform::TransformOp::MirrorY, before, transformSettings(false),
+        collectAllUvRefs(), Ogre::Vector2::ZERO, 0.f, false);
+    applyUvRefChanges(after, before, UVTransform::TransformOp::MirrorY, tr("UV Mirror Y"));
+}
+
+bool UVEditorController::commitWorkingMeshUvs()
+{
+    if (!m_activeEntity)
+        return false;
+
+    return m_workingMesh.commitUvsToEntity(m_activeEntity, m_uvChannel, nullptr);
 }
 
 void UVEditorController::refresh()
@@ -603,7 +1137,7 @@ bool UVEditorController::readUvChannel(const Ogre::VertexData* vertexData, int c
 void UVEditorController::applyUvChannel(EditableMesh& mesh, Ogre::Entity* entity, int channel,
                                         const QSet<int>& submeshFilter)
 {
-    if (channel == 0 || !entity || !entity->getMesh())
+    if (!entity || !entity->getMesh())
         return;
 
     Ogre::Mesh* ogreMesh = entity->getMesh().get();
@@ -1108,6 +1642,23 @@ bool UVEditorController::buildFromEntity(Ogre::Entity* entity, const QSet<int>& 
         : *std::min_element(submeshFilter.begin(), submeshFilter.end());
     m_textureBackgroundSource = resolveDiffuseTextureSource(entity, previewSub);
     m_activeEntity = entity;
+
+    m_sourceSubIndices.clear();
+    m_subVertOffsets.clear();
+    m_submeshFilter = submeshFilter;
+    m_sourceSubIndices.reserve(sourceSubIndices.size());
+    m_subVertOffsets.reserve(sourceSubIndices.size());
+    int vertOff = 0;
+    for (size_t si : sourceSubIndices) {
+        m_sourceSubIndices.push_back(static_cast<int>(si));
+        m_subVertOffsets.push_back(vertOff);
+        vertOff += static_cast<int>(displayMesh.subMeshes()[si].vertices.size());
+    }
+
+    m_workingMesh.subMeshes() = displayMesh.subMeshes();
+    applyUvChannel(m_workingMesh, entity, uvChannel, submeshFilter);
+    updateTexturePixelSize();
+
     return m_hasMesh;
 }
 
