@@ -46,6 +46,35 @@ QString normaliseBoneName(const QString& raw)
     return s;
 }
 
+// Side from the RAW (lower-cased) bone name using explicit side tokens that
+// survive separators — handles `_R_`, `.l`, `-r`, and the very common
+// `..._joint_R_1` / `arm_joint_L__4_` style where the side letter sits BETWEEN
+// separators and a trailing index (which the normalised-name heuristic misses
+// because stripping separators leaves `armjointr1`, ending in a digit). Word
+// forms ("left"/"right") always win.
+char boneSideFromRaw(const QString& rawLower)
+{
+    if (rawLower.contains(QLatin1String("left")))  return 'l';
+    if (rawLower.contains(QLatin1String("right"))) return 'r';
+    // A side letter delimited by a separator (or string end) on at least one
+    // side, e.g. "_r_", ".l", "_r1", "armr" → side token, not part of a word.
+    auto isSep = [](QChar c) {
+        return c == '_' || c == '-' || c == '.' || c == ' ' || c == ':';
+    };
+    for (int i = 0; i < rawLower.size(); ++i) {
+        const QChar c = rawLower[i];
+        if (c != 'l' && c != 'r') continue;
+        const bool sepBefore = (i == 0) || isSep(rawLower[i - 1]);
+        if (!sepBefore) continue;                       // must start a token
+        // followed by a separator, a digit, or end-of-string → a side marker
+        const bool ok = (i + 1 >= rawLower.size())
+                        || isSep(rawLower[i + 1])
+                        || rawLower[i + 1].isDigit();
+        if (ok) return c.toLatin1();
+    }
+    return 0;
+}
+
 // Side from a normalised name → 'l', 'r', or 0 (centre). Word forms win over
 // single-letter affixes.
 char boneSide(const QString& n)
@@ -75,7 +104,10 @@ MeshSegmenter::Part MeshSegmenter::partForBoneName(const QString& boneName)
 {
     const QString n = normaliseBoneName(boneName);
     if (n.isEmpty()) return Part::Unknown;
-    const char side = boneSide(n);
+    // Prefer explicit side tokens in the raw name (catches `_R_1`/`.l`/`-r`
+    // delimited markers); fall back to the normalised-name heuristic.
+    char side = boneSideFromRaw(boneName.toLower());
+    if (side == 0) side = boneSide(n);
     auto has = [&](std::initializer_list<const char*> cores) {
         for (const char* c : cores) if (n.contains(QLatin1String(c))) return true;
         return false;
@@ -94,7 +126,8 @@ MeshSegmenter::Part MeshSegmenter::partForBoneName(const QString& boneName)
     // Centre / spine / tail → torso (tail has no dedicated label; torso is the
     // closest body region and keeps it out of the limbs).
     if (has({"spine", "chest", "hips", "pelvis", "abdomen", "lowerback",
-             "tail", "spine1", "spine2", "ribcage", "belly", "root"}) && side == 0)
+             "tail", "spine1", "spine2", "ribcage", "belly", "root",
+             "torso", "body", "waist", "sternum", "clavicleroot"}) && side == 0)
         return Part::Torso;
 
     // Arms (incl. wings, fingers, hands, clavicle/shoulder) by side.
