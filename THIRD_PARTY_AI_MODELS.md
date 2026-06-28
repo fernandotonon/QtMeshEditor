@@ -78,6 +78,22 @@ the binary). Attribution + licenses for the models and their training data:
   weights** (each vertex's dominant bone → a canonical body part) on permissively
   -licensed source rigs (e.g. CMU-derived), sampled into point clouds. The
   derivation + labels are ours (CC0), so the weights are redistributable.
+- **Mined real data (continual improvement) — CC0 / CC-BY only.** Synthetic
+  primitives can't capture real surface distributions, so the corpus is
+  optionally augmented with REAL rigged characters mined for exact labels via
+  `qtmesh segment <mesh> --dump-training-data` (rig bone-weight → bone name →
+  part; `AutoRig::rigPriorPartLabels`). **Because the shipped weights are a
+  derived work of the training data, only sources that clear the project's
+  permissive-redistribution bar may be mined:** CC0 (Quaternius / Poly Pizza /
+  Kenney rigged characters) or CC-BY with attribution recorded in the corpus
+  `SOURCES.md`. **Mixamo (Adobe) is explicitly NOT used** — its EULA does not
+  clearly permit training a redistributable commercial model, and "trained on"
+  obligations are an unsettled legal frontier; shipping Mixamo-derived weights
+  would be the first asset in the repo resting on "probably fine" rather than
+  "provably clean", inconsistent with every other AI asset here. `scripts/
+  fetch-training-rigs.sh` (curated CC0 source ledger) + `scripts/
+  mine-training-data.sh` assemble + mine the corpus; `export-meshseg-onnx.py
+  --real-data <dir>` mixes it into the synthetic set.
 - **Model architecture:** a small PointNet-style segmenter (~0.3 MB ONNX).
   Validated: 98% per-point accuracy on held-out synthetic humanoids, and it
   transfers to real humanoid meshes (labels a Mixamo character into symmetric

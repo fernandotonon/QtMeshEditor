@@ -101,3 +101,7 @@ minisign.key
 # Local ML experiment scratch (not part of the project)
 src/python_scripts/
 src/project_for_llm.py
+
+# Segmentation training corpus (#410) — local, never committed (license provenance via SOURCES.md)
+training_rigs/
+mined_training_data/
