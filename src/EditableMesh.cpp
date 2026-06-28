@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include "EditableMesh.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "SentryReporter.h"
 #include "SubMeshTransform.h"
 #include "UvSeamData.h"
 #include <OgreRTShaderSystem.h>
@@ -416,6 +417,8 @@ bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
     }
 
     UvSeamData::readBindingsFromMesh(mesh, m_subMeshes);
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"),
+                                  QStringLiteral("Loaded UV seam/pin bindings"));
 
     return true;
 }
@@ -807,6 +810,8 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
     // travel with the live mesh from now on.
     writeNgonFacesToMesh(mesh, m_subMeshes);
     UvSeamData::writeBindingsToMesh(mesh, m_subMeshes);
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"),
+                                  QStringLiteral("Persisted UV seam/pin bindings"));
 
     return true;
 }
@@ -1372,6 +1377,8 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
     // post-edit. (Quad migration #326, chunk 6.)
     writeNgonFacesToMesh(mesh, m_subMeshes);
     UvSeamData::writeBindingsToMesh(mesh, m_subMeshes);
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"),
+                                  QStringLiteral("Persisted UV seam/pin bindings"));
 
     return true;
 }

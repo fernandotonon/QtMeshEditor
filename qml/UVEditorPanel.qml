@@ -649,8 +649,8 @@ Rectangle {
                     drawContextIslands(ctx)
                     drawTriangles(ctx)
                     drawSeamEdges(ctx)
-                    drawSelection(ctx)
                     drawPinnedVertices(ctx)
+                    drawSelection(ctx)
                     drawUnitBoundary(ctx)
                 }
 

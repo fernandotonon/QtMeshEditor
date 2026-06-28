@@ -189,6 +189,7 @@ public:
     /// Used by UVEditCommand undo/redo when edit mode is inactive.
     EditableMesh* workingMeshForEntity(Ogre::Entity* entity);
     void refreshAfterUvEdit();
+    void syncWorkingMeshFromEditable(const EditableMesh& mesh);
 
     bool commitWorkingMeshUvs();
     void applyWorkingMeshUv(int subMeshIndex, int localVert, const Ogre::Vector2& uv);

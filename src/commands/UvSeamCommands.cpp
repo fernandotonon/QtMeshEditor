@@ -103,10 +103,7 @@ void UvSeamMarkCommand::apply(bool useNew)
         const unsigned int b = static_cast<unsigned int>(ch.edgeKey & 0xFFFFFFFFu);
         UvSeamData::setSeam(sub, a, b, useNew ? ch.newSeam : ch.oldSeam);
     }
-    UvSeamData::writeBindingsToMesh(m_entity->getMesh().get(), mesh->subMeshes());
-    syncEditMeshFrom(m_entity, mesh);
-    if (auto* uv = UVEditorController::instance())
-        uv->refreshAfterUvEdit();
+    commitUvMeshState(m_entity, mesh);
 }
 
 void UvSeamMarkCommand::undo()
@@ -149,10 +146,7 @@ void UvPinCommand::apply(bool useNew)
         UvSeamData::setPinned(mesh->subMeshes()[ch.subMeshIndex], ch.vertexIndex,
                               useNew ? ch.newPinned : ch.oldPinned);
     }
-    UvSeamData::writeBindingsToMesh(m_entity->getMesh().get(), mesh->subMeshes());
-    syncEditMeshFrom(m_entity, mesh);
-    if (auto* uv = UVEditorController::instance())
-        uv->refreshAfterUvEdit();
+    commitUvMeshState(m_entity, mesh);
 }
 
 void UvPinCommand::undo()
@@ -206,6 +200,8 @@ void UvSeamTopologyCommand::applyMesh(const std::vector<EditableSubMesh>& state)
 
 void UvSeamTopologyCommand::undo()
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.topology"),
+                                  QStringLiteral("Undo UV topology"));
     applyMesh(m_before);
 }
 
@@ -215,5 +211,7 @@ void UvSeamTopologyCommand::redo()
         m_firstRedo = false;
         return;
     }
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.topology"),
+                                  QStringLiteral("Redo UV topology"));
     applyMesh(m_after);
 }

@@ -41,6 +41,7 @@ THE SOFTWARE.
 #include "UndoManager.h"
 #include "UvSeamData.h"
 #include "commands/UvSeamCommands.h"
+#include "UVEditorController.h"
 #include "commands/TransformCommands.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
@@ -799,6 +800,8 @@ void EditModeController::markSeamOnSelection()
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"), QStringLiteral("Mark seam"));
     updateSelectionOverlay();
     notifyMeshDataChanged();
+    if (auto* uv = UVEditorController::instance())
+        uv->syncWorkingMeshFromEditable(*m_editableMesh);
 }
 
 void EditModeController::clearSeamOnSelection()
@@ -835,6 +838,8 @@ void EditModeController::clearSeamOnSelection()
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"), QStringLiteral("Clear seam"));
     updateSelectionOverlay();
     notifyMeshDataChanged();
+    if (auto* uv = UVEditorController::instance())
+        uv->syncWorkingMeshFromEditable(*m_editableMesh);
 }
 
 QString EditModeController::selectByPart(const QString& upAxis)

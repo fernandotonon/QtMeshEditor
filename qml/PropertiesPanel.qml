@@ -576,11 +576,21 @@ Rectangle {
             }
 
             CollapsibleSection {
+                id: uvEditSection
                 title: "UV Edit"
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.MaterialMode,
                     PropertiesPanelController.hasEntitySelection)
                 expanded: false
+
+                function updateUvEditEmbedded() {
+                    if (sectionVisible && expanded)
+                        UVEditorController.setInspectorEmbedded(true)
+                    else
+                        UVEditorController.setInspectorEmbedded(false)
+                }
+                onSectionVisibleChanged: updateUvEditEmbedded()
+                onExpandedChanged: updateUvEditEmbedded()
 
                 Component.onCompleted: content = uvEditComponent
             }

@@ -92,6 +92,10 @@ EdgeSplitResult splitEdges(EditableMesh& mesh, size_t subMeshIndex,
         sub.vertices.push_back(copyVertex(sub.vertices[a]));
         const unsigned int newB = static_cast<unsigned int>(sub.vertices.size());
         sub.vertices.push_back(copyVertex(sub.vertices[b]));
+        if (UvSeamData::isPinned(sub, a))
+            UvSeamData::setPinned(sub, newA, true);
+        if (UvSeamData::isPinned(sub, b))
+            UvSeamData::setPinned(sub, newB, true);
         result.vertsAdded += 2;
 
         for (auto& tri : sub.triangles) {
@@ -168,14 +172,49 @@ EdgeSewResult sewEdges(EditableMesh& mesh, size_t subMeshIndex,
         if (!sub.vertices[a].hasUV || !sub.vertices[b].hasUV)
             return false;
 
-        const Ogre::Vector2 avg(
-            (sub.vertices[a].uv.x + sub.vertices[b].uv.x) * 0.5f,
-            (sub.vertices[a].uv.y + sub.vertices[b].uv.y) * 0.5f);
+        const Ogre::Vector3 pa = sub.vertices[a].position;
+        const Ogre::Vector3 pb = sub.vertices[b].position;
+        const float eps = 1e-6f;
 
-        sub.vertices[a].uv = avg;
-        sub.vertices[b].uv = avg;
-        UvSeamData::setSeam(sub, a, b, false);
-        return true;
+        Ogre::Vector2 sumA(0, 0);
+        Ogre::Vector2 sumB(0, 0);
+        int countA = 0;
+        int countB = 0;
+        for (const auto& vert : sub.vertices) {
+            if (!vert.hasUV)
+                continue;
+            if (vert.position.squaredDistance(pa) <= eps) {
+                sumA += vert.uv;
+                ++countA;
+            }
+            if (vert.position.squaredDistance(pb) <= eps) {
+                sumB += vert.uv;
+                ++countB;
+            }
+        }
+        if (countA == 0 || countB == 0)
+            return false;
+
+        const Ogre::Vector2 avgA(sumA.x / static_cast<float>(countA),
+                                 sumA.y / static_cast<float>(countA));
+        const Ogre::Vector2 avgB(sumB.x / static_cast<float>(countB),
+                                 sumB.y / static_cast<float>(countB));
+
+        bool changed = false;
+        for (auto& vert : sub.vertices) {
+            if (!vert.hasUV)
+                continue;
+            if (vert.position.squaredDistance(pa) <= eps) {
+                vert.uv = avgA;
+                changed = true;
+            } else if (vert.position.squaredDistance(pb) <= eps) {
+                vert.uv = avgB;
+                changed = true;
+            }
+        }
+        if (changed)
+            UvSeamData::setSeam(sub, a, b, false);
+        return changed;
     };
 
     QSet<UvSeamData::EdgeKey> seen;

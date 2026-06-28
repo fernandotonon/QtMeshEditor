@@ -126,12 +126,18 @@ void readBindingsFromMesh(const Ogre::Mesh* mesh, std::vector<EditableSubMesh>& 
     for (size_t i = 0; i < subMeshes.size(); ++i) {
         subMeshes[i].seamEdges.clear();
         subMeshes[i].pinnedVertices.clear();
+        const auto vertexCount = static_cast<unsigned int>(subMeshes[i].vertices.size());
 
         const auto seamAny = mesh->getUserObjectBindings().getUserAny(seamsKey(i));
         if (seamAny.has_value()) {
             try {
                 const auto keys = Ogre::any_cast<EdgeKeyList>(seamAny);
-                subMeshes[i].seamEdges.insert(keys.begin(), keys.end());
+                for (const auto key : keys) {
+                    const auto a = static_cast<unsigned int>(key >> 32);
+                    const auto b = static_cast<unsigned int>(key & 0xffffffffu);
+                    if (a < vertexCount && b < vertexCount && a != b)
+                        subMeshes[i].seamEdges.insert(key);
+                }
             } catch (...) {
             }
         }
@@ -140,7 +146,10 @@ void readBindingsFromMesh(const Ogre::Mesh* mesh, std::vector<EditableSubMesh>& 
         if (pinAny.has_value()) {
             try {
                 const auto pins = Ogre::any_cast<PinList>(pinAny);
-                subMeshes[i].pinnedVertices.insert(pins.begin(), pins.end());
+                for (const auto pin : pins) {
+                    if (pin < vertexCount)
+                        subMeshes[i].pinnedVertices.insert(pin);
+                }
             } catch (...) {
             }
         }

@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
 #include "EditableMesh.h"
+#include "Manager.h"
 #include "TestHelpers.h"
 #include "UvSeamData.h"
 
+#include <OgreEntity.h>
 #include <OgreMeshManager.h>
 
 namespace {
@@ -66,8 +68,8 @@ TEST(UvSeamDataTest, PinRoundTripOnSubmesh)
 
 TEST(UvSeamDataTest, MeshBindingRoundTrip)
 {
-    if (!tryInitOgre())
-        GTEST_SKIP() << "Ogre init failed";
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL context unavailable";
 
     auto ogreMesh = createInMemoryTriangleMesh("UvSeamData_binding_tri");
     EditableMesh mesh;
@@ -81,4 +83,51 @@ TEST(UvSeamDataTest, MeshBindingRoundTrip)
     ASSERT_TRUE(reloaded.loadFromMesh(ogreMesh));
     EXPECT_TRUE(UvSeamData::isSeam(reloaded.subMeshes()[0], 0, 1));
     EXPECT_TRUE(UvSeamData::isPinned(reloaded.subMeshes()[0], 1));
+}
+
+TEST(UvSeamDataTest, CommitToEntityPersistsBindings)
+{
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL context unavailable";
+
+    auto ogreMesh = createInMemoryTriangleMesh("UvSeamData_commit_tri");
+    EditableMesh mesh;
+    ASSERT_TRUE(mesh.loadFromMesh(ogreMesh));
+
+    UvSeamData::setSeam(mesh.subMeshes()[0], 0, 1, true);
+    UvSeamData::setPinned(mesh.subMeshes()[0], 2, true);
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("UvSeamData_commit_node");
+    auto* entity = sceneMgr->createEntity("UvSeamData_commit_entity", ogreMesh);
+    node->attachObject(entity);
+    ASSERT_TRUE(mesh.commitToEntity(entity));
+
+    EditableMesh reloaded;
+    ASSERT_TRUE(reloaded.loadFromEntity(entity));
+    EXPECT_TRUE(UvSeamData::isSeam(reloaded.subMeshes()[0], 0, 1));
+    EXPECT_TRUE(UvSeamData::isPinned(reloaded.subMeshes()[0], 2));
+}
+
+TEST(UvSeamDataTest, ReadBindingsRejectsOutOfRangeEntries)
+{
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb required in CI)";
+
+    auto ogreMesh = createInMemoryTriangleMesh("UvSeamData_invalid_bind");
+    EditableMesh mesh;
+    ASSERT_TRUE(mesh.loadFromMesh(ogreMesh));
+
+    std::vector<uint64_t> badSeams{UvSeamData::makeEdgeKey(0, 99)};
+    std::vector<uint32_t> badPins{42};
+    ogreMesh->getUserObjectBindings().setUserAny(
+        "qtme.seams.0", Ogre::Any(std::move(badSeams)));
+    ogreMesh->getUserObjectBindings().setUserAny(
+        "qtme.uv_pins.0", Ogre::Any(std::move(badPins)));
+
+    EditableSubMesh sub;
+    sub.vertices.resize(3);
+    std::vector<EditableSubMesh> subs{sub};
+    UvSeamData::readBindingsFromMesh(ogreMesh.get(), subs);
+    EXPECT_TRUE(subs[0].seamEdges.empty());
+    EXPECT_TRUE(subs[0].pinnedVertices.empty());
 }

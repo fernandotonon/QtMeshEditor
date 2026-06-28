@@ -749,10 +749,26 @@ void UVEditorController::refreshAfterUvEdit()
     refresh();
 }
 
+void UVEditorController::syncWorkingMeshFromEditable(const EditableMesh& mesh)
+{
+    if (!m_activeEntity)
+        return;
+    m_workingMesh.subMeshes() = mesh.subMeshes();
+    refreshAfterUvEdit();
+}
+
 void UVEditorController::syncWorkingMeshFromEntity()
 {
     if (!m_activeEntity)
         return;
+
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity && edit->currentMesh()) {
+            m_workingMesh.subMeshes() = edit->currentMesh()->subMeshes();
+            applyUvChannel(m_workingMesh, m_activeEntity, m_uvChannel, m_submeshFilter);
+            return;
+        }
+    }
 
     if (!m_workingMesh.loadFromEntity(m_activeEntity))
         return;
@@ -1984,6 +2000,7 @@ void UVEditorController::sewSelectedEdges()
         return;
 
     const auto after = m_workingMesh.subMeshes();
+    UvSeamData::writeBindingsToMesh(m_activeEntity->getMesh().get(), m_workingMesh.subMeshes());
     commitWorkingMeshUvs();
     if (UndoManager* undo = UndoManager::getSingleton())
         undo->push(new UvSeamTopologyCommand(m_activeEntity, before, after, tr("Sew UV"), false));
@@ -2032,6 +2049,8 @@ void UVEditorController::splitSelectedEdges()
     if (UndoManager* undo = UndoManager::getSingleton())
         undo->push(new UvSeamTopologyCommand(m_activeEntity, before, after, tr("Split UV")));
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.split"), tr("Split UV"));
+    ++m_meshRevision;
+    emit meshDataChanged();
     refresh();
 }
 
@@ -2114,5 +2133,7 @@ void UVEditorController::unwrapSelectedFaces()
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.unwrap_selected"),
                                   QStringLiteral("Unwrap selected faces"));
     clearUvSelection();
+    ++m_meshRevision;
+    emit meshDataChanged();
     refresh();
 }

@@ -40,6 +40,18 @@ TEST(UvSeamOpsTest, SplitEdgeDuplicatesVertsAndMarksSeam)
     EXPECT_TRUE(UvSeamData::isSeam(mesh.subMeshes()[0], 0, 1));
 }
 
+TEST(UvSeamOpsTest, SplitCopiesPinStateToDuplicatedVerts)
+{
+    EditableMesh mesh = makeSplitQuad();
+    UvSeamData::setPinned(mesh.subMeshes()[0], 0, true);
+    const auto key = UvSeamData::makeEdgeKey(0, 1);
+
+    const auto result = UvSeamOps::splitEdges(mesh, 0, {key});
+    ASSERT_TRUE(result.applied);
+    const unsigned int newA = static_cast<unsigned int>(mesh.subMeshes()[0].vertices.size() - 2);
+    EXPECT_TRUE(UvSeamData::isPinned(mesh.subMeshes()[0], newA));
+}
+
 TEST(UvSeamOpsTest, SewAveragesCoincidentUvPositions)
 {
     EditableMesh mesh;
@@ -68,6 +80,23 @@ TEST(UvSeamOpsTest, SewAveragesCoincidentUvPositions)
     const float u2 = mesh.subMeshes()[0].vertices[2].uv.x;
     EXPECT_NEAR(u0, 0.25f, 1e-5f);
     EXPECT_NEAR(u2, 0.25f, 1e-5f);
+}
+
+TEST(UvSeamOpsTest, SplitThenSewClearsSplitSeam)
+{
+    EditableMesh mesh = makeSplitQuad();
+    const auto key = UvSeamData::makeEdgeKey(0, 1);
+    const auto split = UvSeamOps::splitEdges(mesh, 0, {key});
+    ASSERT_TRUE(split.applied);
+
+    const unsigned int newA = static_cast<unsigned int>(mesh.subMeshes()[0].vertices.size() - 2);
+    const unsigned int newB = newA + 1;
+    const auto splitSeamKey = UvSeamData::makeEdgeKey(newA, newB);
+    ASSERT_TRUE(UvSeamData::isSeam(mesh.subMeshes()[0], newA, newB));
+
+    const auto sew = UvSeamOps::sewEdges(mesh, 0, {splitSeamKey});
+    EXPECT_TRUE(sew.applied);
+    EXPECT_FALSE(UvSeamData::isSeam(mesh.subMeshes()[0], newA, newB));
 }
 
 TEST(UvSeamOpsTest, LocalEdgeKeysRequireSameSubmesh)
