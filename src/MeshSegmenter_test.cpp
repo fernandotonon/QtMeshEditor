@@ -180,6 +180,39 @@ TEST(MeshSegmenter, BoneSidesDistinct)
     EXPECT_NE(MS::partForBoneName("LeftFoot"), MS::partForBoneName("RightFoot"));
 }
 
+// Real CC0 rig naming (Khronos CesiumMan / RiggedFigure) puts the side letter
+// between separators and a trailing index: "arm_joint_R_1", "leg_joint_L__4_".
+// The side must be detected from that delimited token (regression for the
+// "armjointr1 ends in a digit → side lost → Torso" bug).
+TEST(MeshSegmenter, BoneSideFromDelimitedToken)
+{
+    EXPECT_EQ(MS::partForBoneName("arm_joint_R_1"),  MS::Part::RightArm);
+    EXPECT_EQ(MS::partForBoneName("arm_joint_L__4_"), MS::Part::LeftArm);
+    EXPECT_EQ(MS::partForBoneName("leg_joint_R_2"),  MS::Part::RightLeg);
+    EXPECT_EQ(MS::partForBoneName("leg_joint_L_5"),  MS::Part::LeftLeg);
+    EXPECT_EQ(MS::partForBoneName("Skeleton_arm_joint_L__3_"), MS::Part::LeftArm);
+    // Blender ".L/.R" and Maya-ish "-r" suffixes too.
+    EXPECT_EQ(MS::partForBoneName("upper_arm.L"), MS::Part::LeftArm);
+    EXPECT_EQ(MS::partForBoneName("hand-r"),      MS::Part::RightArm);
+    // A neck/torso joint with a numeric suffix must NOT be dragged to a side.
+    EXPECT_EQ(MS::partForBoneName("neck_joint_1"), MS::Part::Head);
+    EXPECT_EQ(MS::partForBoneName("torso_joint_1"), MS::Part::Torso);
+    EXPECT_EQ(MS::partForBoneName("Skeleton_torso_joint_2"), MS::Part::Torso);
+    EXPECT_EQ(MS::partForBoneName("body"), MS::Part::Torso);
+}
+
+// A NAMESPACE / rig prefix must not leak its "left"/"right" into side
+// detection — "LeftRig:Spine1" is a centre torso bone, not a left limb.
+TEST(MeshSegmenter, BoneNamespacePrefixDoesNotLeakSide)
+{
+    EXPECT_EQ(MS::partForBoneName("LeftRig:Spine1"), MS::Part::Torso);
+    EXPECT_EQ(MS::partForBoneName("RightRig:Hips"),  MS::Part::Torso);
+    EXPECT_EQ(MS::partForBoneName("char_L:spine2"),  MS::Part::Torso);
+    // ...but a real side token AFTER the namespace still resolves.
+    EXPECT_EQ(MS::partForBoneName("LeftRig:arm_R_1"), MS::Part::RightArm);
+    EXPECT_EQ(MS::partForBoneName("Rig:LeftHand"),    MS::Part::LeftArm);
+}
+
 TEST(MeshSegmenter, ModelBackendAvailabilityMatchesBuild)
 {
 #ifdef ENABLE_ONNX
