@@ -83,6 +83,7 @@
 #include <OgreBone.h>
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
+#include "MeshSegmenter.h"
 #include "AnimationControlController.h"
 #include "SubMeshTransform.h"
 #include "UndoManager.h"
@@ -604,6 +605,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("analyze_animation"), &MCPServer::toolAnalyzeAnimation},
         {QStringLiteral("bake_animation_fps"), &MCPServer::toolBakeAnimationFps},
         {QStringLiteral("motion_in_between"), &MCPServer::toolMotionInBetween},
+        {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
         {QStringLiteral("validate_mesh"), &MCPServer::toolValidateMesh},
@@ -675,6 +677,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("simplify_animation"),
         QStringLiteral("bake_animation_fps"),
         QStringLiteral("motion_in_between"),
+        QStringLiteral("segment_mesh"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
         QStringLiteral("bake_vat"),
@@ -3334,6 +3337,109 @@ QJsonObject MCPServer::toolMotionInBetween(const QJsonObject &args)
         if (!r.usedModel && !r.fallbackReason.isEmpty())
             result += QString(" (%1)").arg(r.fallbackReason);
         return makeSuccessResult(result);
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
+{
+    try {
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
+            QStringLiteral("MCP segment_mesh"));
+
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity") continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        }
+        if (!entity) {
+            return makeErrorResult(entityName.isEmpty()
+                ? QString("Error: No mesh entity found")
+                : QString("Error: Entity '%1' not found").arg(entityName));
+        }
+
+        std::vector<float> verts;
+        std::vector<uint32_t> indices;
+        if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.empty())
+            return makeErrorResult("Error: no readable geometry");
+        const int vertexCount = static_cast<int>(verts.size() / 3);
+
+        const bool noModel = args.value("no_model").toBool(false);
+        QString modelPath;
+        if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking();
+
+        MeshSegmenter::Options opts;
+        opts.forceFallback = noModel;
+        const QString upAxisStr = args.value("up_axis").toString().toLower();
+        if (!upAxisStr.isEmpty()) {
+            if (upAxisStr == "x") opts.upAxis = 0;
+            else if (upAxisStr == "y") opts.upAxis = 1;
+            else if (upAxisStr == "z") opts.upAxis = 2;
+            else return makeErrorResult("Error: up_axis must be 'x', 'y', or 'z'");
+        }
+        const MeshSegmenter::Result r = MeshSegmenter::predict(
+            verts.data(), vertexCount, indices.data(),
+            static_cast<int>(indices.size()), modelPath, opts);
+        if (!r.ok)
+            return makeErrorResult(QString("Error: %1")
+                .arg(r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error));
+
+        const int P = MeshSegmenter::partCount();
+        std::vector<int> vCount(P, 0);
+        for (int l : r.vertexLabels) if (l >= 0 && l < P) ++vCount[l];
+        std::vector<int> fCount(P, 0);
+        for (int l : r.faceLabels) if (l >= 0 && l < P) ++fCount[l];
+
+        QString summary = QString("Segmented '%1' (%2 verts) via %3:")
+            .arg(QString::fromStdString(entity->getName())).arg(vertexCount)
+            .arg(r.usedModel ? "model" : "geometric fallback");
+        for (int p = 0; p < P; ++p)
+            if (vCount[p] > 0)
+                summary += QString(" %1=%2").arg(MeshSegmenter::partName(p)).arg(vCount[p]);
+        if (!r.usedModel && !r.fallbackReason.isEmpty())
+            summary += QString(" (%1)").arg(r.fallbackReason);
+
+        // Return the actual label map so callers can act on it (assign a
+        // material to a part, drive a selection, etc.) rather than parse prose.
+        QJsonObject content;
+        content["ok"]              = true;
+        content["entity"]          = QString::fromStdString(entity->getName());
+        content["vertex_count"]    = vertexCount;
+        content["face_count"]      = static_cast<int>(r.faceLabels.size());
+        content["used_model"]      = r.usedModel;
+        if (!r.usedModel && !r.fallbackReason.isEmpty())
+            content["fallback_reason"] = r.fallbackReason;
+        content["up_axis"]         = QString(QChar("xyz"[opts.upAxis]));
+        content["summary"]         = summary;
+
+        QJsonArray parts, perVert, perFace;
+        for (int p = 0; p < P; ++p) {
+            QJsonObject part;
+            part["index"]        = p;
+            part["name"]         = MeshSegmenter::partName(p);
+            part["vertex_count"] = vCount[p];
+            part["face_count"]   = fCount[p];
+            parts.append(part);
+        }
+        content["parts"] = parts;
+
+        // Per-face labels (index into `parts`) — the primary actionable output
+        // for face-level part selection / per-part material assignment.
+        QJsonArray faceLabels;
+        for (int l : r.faceLabels) faceLabels.append(l);
+        content["face_labels"] = faceLabels;
+
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
@@ -6388,6 +6494,27 @@ QJsonArray MCPServer::buildToolsList()
             "reports which path ran. Works best on humanoid skeletons close to the model's training distribution.",
             props,
             QJsonArray{"gap_frames"}
+        );
+    }
+
+    // segment_mesh
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity to segment. If omitted, uses the first mesh entity."}};
+        props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the deterministic geometric fallback instead of the PointNet++ ML model. Default false."}};
+        props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis. Affects BOTH the ML model (the point cloud is remapped to the model's +Y-up training frame before inference) and the geometric fallback's head-vs-leg heuristic. Set this for X/Z-up meshes or labels will be wrong. Default 'y' (+Y up)."}};
+        appendTool(
+            "segment_mesh",
+            "AI mesh part segmentation (#410): predict a semantic part label "
+            "(head / torso / left+right arm / left+right leg) per vertex via a "
+            "PointNet++ ONNX model. Returns JSON with the full label map: per-part "
+            "vertex+face counts and the per-face label array (index into `parts`) "
+            "so callers can drive selection / per-part material assignment directly. "
+            "Falls back automatically to a deterministic geometric segmenter (connected "
+            "components + spatial heuristic, refined by rig bone proximity) when "
+            "the model is unavailable or the build lacks ONNX — the result reports "
+            "which path ran. Works best on upright humanoid meshes.",
+            props
         );
     }
 

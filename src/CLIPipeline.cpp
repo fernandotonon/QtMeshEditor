@@ -25,6 +25,7 @@
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
 #include "AutoRig.h"
+#include "MeshSegmenter.h"
 #include "MeshDecimator.h"
 #include "EditableMesh.h"
 #include "TexturePaintBuffer.h"
@@ -66,7 +67,9 @@
 #include <QWidget>
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QMap>
 #include <QDebug>
 #include <QTextStream>
@@ -1502,6 +1505,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);
+    else if (cmd == "segment") rc = cmdSegment(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
     else if (cmd == "nodeanim") rc = cmdNodeAnim(argc, argv);
     else if (cmd == "cloud") rc = CloudCLIPipeline::run(argc, argv);
@@ -8318,7 +8322,11 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
             }
             continue;
         }
-        if (arg == "--up-axis" && i + 1 < argc) {
+        if (arg == "--up-axis") {
+            if (i + 1 >= argc) {
+                err() << "Error: --up-axis requires a value (x, y, or z)." << Qt::endl;
+                return 2;
+            }
             const QString a = QString::fromLocal8Bit(argv[++i]).toLower();
             if (a == "x") upAxis = 0;
             else if (a == "y") upAxis = 1;
@@ -8416,6 +8424,194 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
                  + (alsoSkin ? QString("  skinned: %1\n").arg(skinned ? "yes" : "no")
                              : QString())
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
+    }
+    return 0;
+}
+
+int CLIPipeline::cmdSegment(int argc, char* argv[])
+{
+    // Parse: segment <file> [--json] [--no-model] [--up-axis x|y|z]
+    //                        [--dump-training-data <out.json>]
+    QString inputPath;
+    QString dumpPath;
+    bool jsonOutput = false;
+    bool noModel = false;
+    int upAxis = 1;   // +Y default
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == "segment" || arg == "--cli") continue;
+        if (arg == "--json")     { jsonOutput = true; continue; }
+        if (arg == "--no-model") { noModel = true; continue; }
+        if (arg == "--dump-training-data") {
+            if (i + 1 >= argc) {
+                err() << "Error: --dump-training-data requires an output path." << Qt::endl;
+                return 2;
+            }
+            dumpPath = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
+        if (arg == "--up-axis") {
+            if (i + 1 >= argc) {
+                err() << "Error: --up-axis requires a value (x, y, or z)." << Qt::endl;
+                return 2;
+            }
+            const QString a = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (a == "x") upAxis = 0;
+            else if (a == "y") upAxis = 1;
+            else if (a == "z") upAxis = 2;
+            else { err() << "Error: --up-axis must be x, y, or z." << Qt::endl; return 2; }
+            continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) { inputPath = arg; continue; }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh segment <file> [--json] [--no-model] [--up-axis x|y|z] "
+                 "[--dump-training-data <out.json>]" << Qt::endl;
+        return 2;
+    }
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) { err() << "Error: file not found: " << inputPath << Qt::endl; return 1; }
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
+        QString("segment .%1 noModel=%2").arg(fi.suffix()).arg(noModel));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    Ogre::Entity* entity = nullptr;
+    for (Ogre::Entity* e : Manager::getSingleton()->getEntities()) {
+        if (e && e->getMovableType() == "Entity") { entity = e; break; }
+    }
+    if (!entity) { err() << "Error: failed to load " << inputPath << Qt::endl; return 1; }
+
+    std::vector<float> verts;
+    std::vector<uint32_t> indices;
+    if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.empty()) {
+        err() << "Error: no readable geometry in " << inputPath << Qt::endl; return 1;
+    }
+    const int vertexCount = static_cast<int>(verts.size() / 3);
+
+    // --- Training-data miner ------------------------------------------------
+    // `--dump-training-data out.json` writes the mesh's point cloud + EXACT
+    // per-vertex part labels derived from the rig (bone weights → bone name →
+    // part, via the same AutoRig::rigPriorPartLabels the GUI uses). Every
+    // rigged mesh becomes one free, exactly-labelled training sample — the
+    // segmentation model is retrained on a mix of synthetic humanoids + these
+    // mined real meshes (scripts/export-meshseg-onnx.py --real-data), so the
+    // MODEL path (used on UNrigged meshes) keeps improving as more rigged
+    // assets are mined. Requires a skinned mesh.
+    if (!dumpPath.isEmpty()) {
+        int resolved = 0;
+        std::vector<int> labels = AutoRig::rigPriorPartLabels(entity, vertexCount, &resolved);
+        if (labels.empty()) {
+            err() << "Error: --dump-training-data needs a SKINNED mesh (no skeleton in "
+                  << inputPath << ")." << Qt::endl;
+            return 1;
+        }
+        if (resolved < (vertexCount + 1) / 2) {
+            err() << "Error: rig resolved only " << resolved << " / " << vertexCount
+                  << " vertices to body parts — too sparse to be reliable training data."
+                  << Qt::endl;
+            return 1;
+        }
+        // Normalise positions into a centred unit box (the model's input frame),
+        // matching MeshSegmenter::predict's normalisation so mined samples and
+        // inference see the same coordinate convention.
+        float mn[3] = { verts[0], verts[1], verts[2] }, mx[3] = { verts[0], verts[1], verts[2] };
+        for (int v = 0; v < vertexCount; ++v)
+            for (int a = 0; a < 3; ++a) {
+                mn[a] = std::min(mn[a], verts[3*v+a]);
+                mx[a] = std::max(mx[a], verts[3*v+a]);
+            }
+        const float ctr[3] = { 0.5f*(mn[0]+mx[0]), 0.5f*(mn[1]+mx[1]), 0.5f*(mn[2]+mx[2]) };
+        float half = 0.0f;
+        for (int a = 0; a < 3; ++a) half = std::max(half, 0.5f*(mx[a]-mn[a]));
+        const float invs = half > 1e-6f ? 1.0f/half : 1.0f;
+
+        QJsonArray pts, labs;
+        for (int v = 0; v < vertexCount; ++v) {
+            pts.append((verts[3*v+0]-ctr[0])*invs);
+            pts.append((verts[3*v+1]-ctr[1])*invs);
+            pts.append((verts[3*v+2]-ctr[2])*invs);
+            labs.append(labels[v] < 0 ? 0 : labels[v]);   // bone-but-non-body → unknown(0)
+        }
+        QJsonObject root;
+        root["schema"]      = "qtmesh-meshseg-training-v1";
+        root["mesh"]        = fi.fileName();
+        root["upAxis"]      = upAxis;     // miner records the source up axis
+        root["vertexCount"] = vertexCount;
+        root["resolved"]    = resolved;
+        root["partCount"]   = MeshSegmenter::partCount();
+        root["points"]      = pts;        // flat [x,y,z, …] normalised to unit box
+        root["labels"]      = labs;       // per-vertex part index (0=unknown)
+        QFile out(dumpPath);
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            err() << "Error: cannot write " << dumpPath << Qt::endl; return 1;
+        }
+        out.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        out.close();
+        cliWrite(QString("Wrote training sample %1 — %2 verts, %3 resolved (%4%)\n")
+                     .arg(dumpPath).arg(vertexCount).arg(resolved)
+                     .arg(100.0 * resolved / std::max(1, vertexCount), 0, 'f', 1));
+        return 0;
+    }
+
+    QString modelPath;
+    if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking();
+
+    MeshSegmenter::Options opts;
+    opts.upAxis = upAxis;
+    opts.forceFallback = noModel;
+    const MeshSegmenter::Result r = MeshSegmenter::predict(
+        verts.data(), vertexCount, indices.data(), static_cast<int>(indices.size()),
+        modelPath, opts);
+    if (!r.ok) {
+        err() << "Error: " << (r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error)
+              << Qt::endl;
+        return 1;
+    }
+
+    // Per-part counts.
+    const int P = MeshSegmenter::partCount();
+    std::vector<int> vCount(P, 0), fCount(P, 0);
+    for (int l : r.vertexLabels) if (l >= 0 && l < P) ++vCount[l];
+    for (int l : r.faceLabels)   if (l >= 0 && l < P) ++fCount[l];
+
+    if (jsonOutput) {
+        QJsonObject root;
+        root["mesh"] = fi.fileName();
+        root["method"] = r.usedModel ? "model" : "geometric_fallback";
+        if (!r.usedModel && !r.fallbackReason.isEmpty())
+            root["fallbackReason"] = r.fallbackReason;
+        root["vertexCount"] = vertexCount;
+        root["faceCount"] = static_cast<int>(r.faceLabels.size());
+        QJsonObject parts;
+        for (int p = 0; p < P; ++p) {
+            QJsonObject pc;
+            pc["vertices"] = vCount[p];
+            pc["faces"] = fCount[p];
+            parts[MeshSegmenter::partName(p)] = pc;
+        }
+        root["parts"] = parts;
+        QJsonArray vl, fl;
+        for (int l : r.vertexLabels) vl.append(l);
+        for (int l : r.faceLabels)   fl.append(l);
+        root["vertexLabels"] = vl;
+        root["faceLabels"] = fl;
+        cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)) + "\n");
+    } else {
+        cliWrite(QString("Segmented %1 — %2 verts, %3 faces via %4\n")
+                     .arg(fi.fileName()).arg(vertexCount).arg(r.faceLabels.size())
+                     .arg(r.usedModel ? "model" : "geometric fallback"));
+        for (int p = 0; p < P; ++p) {
+            if (vCount[p] == 0 && fCount[p] == 0) continue;
+            cliWrite(QString("  %1: %2 verts, %3 faces\n")
+                         .arg(MeshSegmenter::partName(p), -10).arg(vCount[p]).arg(fCount[p]));
+        }
+        if (!r.usedModel && !r.fallbackReason.isEmpty())
+            cliWrite(QString("Note: %1\n").arg(r.fallbackReason));
     }
     return 0;
 }

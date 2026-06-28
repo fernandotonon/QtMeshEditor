@@ -188,6 +188,22 @@ public:
     static bool gatherGeometry(Ogre::Entity* entity,
                                std::vector<float>& outVerts,
                                std::vector<uint32_t>& outIndices);
+
+    // --- Rig-prior part labels (shared by Edit-Mode select-by-part + the
+    //     segmentation training-data miner) ---------------------------------
+    // For a SKINNED entity, label each vertex by the segmentation part of the
+    // bone it is most-weighted to (MeshSegmenter::partForBoneName). Exact when
+    // a rig is present, and the labelling matches gatherGeometry's vertex order
+    // (shared vertex data first at base 0, then each submesh's own data at its
+    // running offset) so it lines up 1:1 with the gathered positions.
+    //
+    // Returns a per-vertex part index (MeshSegmenter::Part as int, or -1 when
+    // the vertex has no resolvable body-region bone). `outResolved` (optional)
+    // gets the count of vertices that resolved to a real part. Returns an empty
+    // vector when the entity has no skeleton.
+    static std::vector<int> rigPriorPartLabels(Ogre::Entity* entity,
+                                               int vertexCount,
+                                               int* outResolved = nullptr);
     static std::vector<Joint> predictUniRig(
         const std::vector<float>& verts,
         const std::vector<uint32_t>& indices,

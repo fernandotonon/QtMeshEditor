@@ -26,7 +26,8 @@ bool isCliSubcommand(const QString& arg)
         QStringLiteral("decimate"), QStringLiteral("atlas"), QStringLiteral("atlas-apply"),
         QStringLiteral("optimize"), QStringLiteral("bake-vertex-colors"),
         QStringLiteral("vat"), QStringLiteral("uv"), QStringLiteral("retopo"),
-        QStringLiteral("skin"), QStringLiteral("rig"), QStringLiteral("morph"),
+        QStringLiteral("skin"), QStringLiteral("rig"), QStringLiteral("segment"),
+        QStringLiteral("morph"),
         QStringLiteral("nodeanim"), QStringLiteral("cloud"),
     };
     return kSubcommands.contains(arg);
