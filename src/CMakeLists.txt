@@ -77,6 +77,9 @@ commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
 commands/UVEditCommand.cpp
+commands/UvSeamCommands.cpp
+UvSeamData.cpp
+UvSeamOps.cpp
 BoneDragRelease.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp
@@ -235,6 +238,9 @@ ExportOptimizer.h
 UvUnwrap.h
 UvUnwrapController.h
 UVEditorController.h
+UvSeamData.h
+UvSeamOps.h
+commands/UvSeamCommands.h
 QuadRetopo.h
 QuadRetopoController.h
 SkinWeights.h

@@ -576,6 +576,26 @@ Rectangle {
             }
 
             CollapsibleSection {
+                id: uvEditSection
+                title: "UV Edit"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.MaterialMode,
+                    PropertiesPanelController.hasEntitySelection)
+                expanded: false
+
+                function updateUvEditEmbedded() {
+                    if (sectionVisible && expanded)
+                        UVEditorController.setInspectorEmbedded(true)
+                    else
+                        UVEditorController.setInspectorEmbedded(false)
+                }
+                onSectionVisibleChanged: updateUvEditEmbedded()
+                onExpandedChanged: updateUvEditEmbedded()
+
+                Component.onCompleted: content = uvEditComponent
+            }
+
+            CollapsibleSection {
                 title: "Workspace Panels"
                 sectionVisible: root.currentTab === root.modeToolsTab
                     && (root.showAllModeTools
@@ -671,7 +691,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.MaterialMode,
                     true)
-                expanded: true
+                expanded: false
 
                 Component.onCompleted: content = materialEditorToolComponent
             }
@@ -2526,6 +2546,122 @@ Rectangle {
                     text: brushCol.brushFalloff.toFixed(2)
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+        }
+    }
+
+    // ---- UV Edit (Material mode) ----
+    Component {
+        id: uvEditComponent
+
+        Column {
+            id: uvEditCol
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            Component.onCompleted: {
+                UVEditorController.setInspectorEmbedded(true)
+                UVEditorController.refresh()
+            }
+            Component.onDestruction: UVEditorController.setInspectorEmbedded(false)
+
+            Text {
+                width: parent.width - 16
+                text: "Edit UV layout for the selected mesh. Mark seams in Edit Mode " +
+                      "(edge selection), then pin, split, sew, and unwrap here."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.75
+                wrapMode: Text.Wrap
+            }
+
+            Row {
+                spacing: 6
+                Rectangle {
+                    width: 150
+                    height: 24
+                    radius: 3
+                    color: uvWinMa.containsMouse
+                        ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "\u2922  Open Editor Window"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: uvWinMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: UVEditorController.openEditorWindow()
+                    }
+                }
+                Text {
+                    text: UVEditorController.statusText
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    opacity: 0.8
+                    anchors.verticalCenter: parent.verticalCenter
+                    elide: Text.ElideRight
+                    width: Math.max(0, uvEditCol.width - 180)
+                }
+            }
+
+            Row {
+                spacing: 4
+                visible: UVEditorController.hasMesh
+                Repeater {
+                    model: [
+                        { label: "Pin", fn: function() { UVEditorController.pinSelection() } },
+                        { label: "Unpin", fn: function() { UVEditorController.unpinSelection() } },
+                        { label: "Sew", fn: function() { UVEditorController.sewSelectedEdges() } },
+                        { label: "Split", fn: function() { UVEditorController.splitSelectedEdges() } },
+                        { label: "Unwrap", fn: function() { UVEditorController.unwrapSelectedFaces() } }
+                    ]
+                    delegate: Rectangle {
+                        width: modelData.label === "Unpin" ? 38 : (modelData.label === "Unwrap" ? 48 : 32)
+                        height: 22
+                        radius: 3
+                        color: uvToolMa.pressed ? Qt.darker(PropertiesPanelController.inputColor, 1.12)
+                             : uvToolMa.containsMouse ? Qt.lighter(PropertiesPanelController.inputColor, 1.08)
+                             : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            id: uvToolMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: modelData.fn()
+                        }
+                    }
+                }
+            }
+
+            Loader {
+                id: uvPanelLoader
+                width: parent.width - 16
+                height: 300
+                source: "qrc:/UVEditor/UVEditorPanel.qml"
+                onLoaded: {
+                    if (item) {
+                        item.embedded = true
+                        item.width = uvPanelLoader.width
+                        item.height = uvPanelLoader.height
+                        item.focus = true
+                    }
                 }
             }
         }

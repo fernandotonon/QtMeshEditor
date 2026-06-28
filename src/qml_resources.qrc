@@ -48,6 +48,7 @@
   </qresource>
   <qresource prefix="/UVEditor">
     <file alias="UVEditorPanel.qml">../qml/UVEditorPanel.qml</file>
+    <file alias="UVEditorWindow.qml">../qml/UVEditorWindow.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
   </qresource>
   <qresource prefix="/AIChatPanel">

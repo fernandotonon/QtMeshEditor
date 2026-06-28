@@ -32,6 +32,7 @@ THE SOFTWARE.
 #include <Ogre.h>
 #include <vector>
 #include <string>
+#include <unordered_set>
 
 /**
  * @brief Vertex bone assignment data for skeletal meshes.
@@ -132,6 +133,11 @@ struct EditableSubMesh {
     /// pre-edit-vs-current delta even after commits have written the
     /// edits back to the GPU buffer.
     std::vector<Ogre::Vector3> originalPositions;
+
+    /// Marked UV seam edges (canonical local vertex pair keys — issue #462).
+    std::unordered_set<uint64_t> seamEdges;
+    /// Pinned UV vertices (local vertex indices).
+    std::unordered_set<unsigned int> pinnedVertices;
 };
 
 /**

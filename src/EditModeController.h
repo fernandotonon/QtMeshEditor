@@ -647,6 +647,10 @@ public:
     Q_INVOKABLE void selectAll();
     Q_INVOKABLE void deselectAll();
 
+    /// Mark / clear UV seam flags on the current edge selection (issue #462).
+    Q_INVOKABLE void markSeamOnSelection();
+    Q_INVOKABLE void clearSeamOnSelection();
+
     /// AI "Select by part" (#410): predict a semantic part label (head/torso/
     /// arm/leg) per face via MeshSegmenter, then add every face whose label
     /// matches any currently-selected face's label to the selection. With NO
@@ -951,6 +955,7 @@ private:
     // Selection overlay
     Ogre::ManualObject* m_overlayVertices = nullptr;
     Ogre::ManualObject* m_overlayEdges = nullptr;
+    Ogre::ManualObject* m_overlaySeamEdges = nullptr;
     Ogre::ManualObject* m_overlayFaces = nullptr;
     /// Quad-aware wireframe: lines along n-gon face boundaries only,
     /// hiding the diagonals introduced by `triangulateFaces()`. Active

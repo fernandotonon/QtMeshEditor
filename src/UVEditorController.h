@@ -174,18 +174,37 @@ public:
     Q_INVOKABLE void mirrorSelectionX();
     Q_INVOKABLE void mirrorSelectionY();
 
+    /// Seam / pin / topology tools (issue #462).
+    Q_INVOKABLE void pinSelection();
+    Q_INVOKABLE void unpinSelection();
+    Q_INVOKABLE void sewSelectedEdges();
+    Q_INVOKABLE void splitSelectedEdges();
+    Q_INVOKABLE void unwrapSelectedFaces();
+    Q_INVOKABLE QVariantList seamEdges() const;
+    Q_INVOKABLE QVariantList pinnedVertices() const;
+
     /// Re-read the active selection and rebuild cached draw data.
     Q_INVOKABLE void refresh();
 
     /// Used by UVEditCommand undo/redo when edit mode is inactive.
     EditableMesh* workingMeshForEntity(Ogre::Entity* entity);
     void refreshAfterUvEdit();
+    void syncWorkingMeshFromEditable(const EditableMesh& mesh);
 
     bool commitWorkingMeshUvs();
     void applyWorkingMeshUv(int subMeshIndex, int localVert, const Ogre::Vector2& uv);
 
-    /// When false (UV Editor dock hidden), scene/selection changes are not
-    /// rebuilt — avoids blocking the main thread during mesh import.
+    /// Material Mode Tools embedded preview (Inspector UV Edit section).
+    Q_INVOKABLE void setInspectorEmbedded(bool embedded);
+
+    /// Detached editor window (same pattern as Texture Paint).
+    Q_INVOKABLE void openEditorWindow();
+    Q_INVOKABLE void closeEditorWindow();
+    Q_PROPERTY(bool editorWindowOpen READ editorWindowOpen NOTIFY editorWindowChanged)
+    bool editorWindowOpen() const { return m_editorWindow != nullptr; }
+
+    /// When false, scene/selection changes are not rebuilt — avoids blocking
+    /// the main thread during mesh import.
     Q_INVOKABLE void setPanelActive(bool active);
     bool panelActive() const { return m_panelActive; }
 
@@ -207,8 +226,10 @@ signals:
     void useBlenderTransformKeysChanged();
     void cursorChanged();
     void transformActiveChanged();
+    void editorWindowChanged();
 
 private:
+    void updateSurfacesActive();
     struct UvVert {
         float u = 0.f;
         float v = 0.f;
@@ -315,7 +336,9 @@ private:
     Ogre::Entity* m_activeEntity = nullptr;
 
     bool m_panelActive = false;
+    bool m_inspectorEmbedded = false;
     bool m_refreshPending = false;
+    QObject* m_editorWindow = nullptr;
     QTimer* m_refreshTimer = nullptr;
 };
 

@@ -29,7 +29,9 @@ THE SOFTWARE.
 #include "EditableMesh.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "SentryReporter.h"
 #include "SubMeshTransform.h"
+#include "UvSeamData.h"
 #include <OgreRTShaderSystem.h>
 #include <OgreSubEntity.h>
 #include <OgrePlatform.h>
@@ -413,6 +415,10 @@ bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
 
         m_subMeshes.push_back(std::move(editSub));
     }
+
+    UvSeamData::readBindingsFromMesh(mesh, m_subMeshes);
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"),
+                                  QStringLiteral("Loaded UV seam/pin bindings"));
 
     return true;
 }
@@ -803,6 +809,9 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
     // chunk 6.) The source-file path is gone, but the n-gon faces
     // travel with the live mesh from now on.
     writeNgonFacesToMesh(mesh, m_subMeshes);
+    UvSeamData::writeBindingsToMesh(mesh, m_subMeshes);
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"),
+                                  QStringLiteral("Persisted UV seam/pin bindings"));
 
     return true;
 }
@@ -1367,6 +1376,9 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
     // Refresh the n-gon face cache so exporters can recover n-gons
     // post-edit. (Quad migration #326, chunk 6.)
     writeNgonFacesToMesh(mesh, m_subMeshes);
+    UvSeamData::writeBindingsToMesh(mesh, m_subMeshes);
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"),
+                                  QStringLiteral("Persisted UV seam/pin bindings"));
 
     return true;
 }

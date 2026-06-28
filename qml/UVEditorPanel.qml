@@ -10,6 +10,9 @@ Rectangle {
     color: ThemeManager.panelColor
     focus: true
 
+    // Inspector embed uses a fixed-height preview; the detached window is full-size.
+    property bool embedded: false
+
     // panU/panV = UV coordinate at the canvas centre; zoom = pixels per UV unit.
     property real panU: 0.5
     property real panV: 0.5
@@ -22,6 +25,8 @@ Rectangle {
     property var selEdgeCache: []
     property var selFaceCache: []
     property var ctxIslandCache: []
+    property var seamEdgeCache: []
+    property var pinVertCache: []
 
     property bool draggingSelect: false
     property bool draggingTransform: false
@@ -60,6 +65,8 @@ Rectangle {
         selEdgeCache = UVEditorController.selectionEdges()
         selFaceCache = UVEditorController.selectionFaces()
         ctxIslandCache = UVEditorController.contextIslandFaces()
+        seamEdgeCache = UVEditorController.seamEdges()
+        pinVertCache = UVEditorController.pinnedVertices()
         viewCanvas.requestPaint()
     }
 
@@ -100,6 +107,20 @@ Rectangle {
         panV = cy
         zoom = Math.min(availW / (spanU + pad * 2), availH / (spanV + pad * 2))
         viewCanvas.requestPaint()
+    }
+
+    /// Fit once the canvas has a real layout size (detached window opens maximized).
+    function fitToViewWhenReady(retry) {
+        if (viewCanvas.width > 10 && viewCanvas.height > 10) {
+            if (UVEditorController.hasMesh)
+                fitToView()
+            else
+                resetView()
+            return
+        }
+        const n = retry === undefined ? 0 : retry
+        if (n < 30)
+            Qt.callLater(function() { fitToViewWhenReady(n + 1) })
     }
 
     Connections {
@@ -216,7 +237,67 @@ Rectangle {
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: 4
+            visible: root.embedded
+
+            Text {
+                text: UVEditorController.hasMesh
+                      ? (UVEditorController.islandCount + " islands")
+                      : "No mesh"
+                color: ThemeManager.disabledTextColor
+                font.pixelSize: 10
+                Layout.fillWidth: true
+            }
+
+            Row {
+                spacing: 2
+                Repeater {
+                    model: [
+                        { label: "V", mode: 0 },
+                        { label: "E", mode: 1 },
+                        { label: "F", mode: 2 }
+                    ]
+                    delegate: Rectangle {
+                        width: 20; height: 18; radius: 3
+                        color: UVEditorController.selectionMode === modelData.mode
+                            ? ThemeManager.highlightColor
+                            : ThemeManager.inputColor
+                        border.color: ThemeManager.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: ThemeManager.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: UVEditorController.selectionMode = modelData.mode
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: "Fit"
+                color: ThemeManager.textColor
+                font.pixelSize: 10
+                font.underline: embFitMa.containsMouse
+                MouseArea {
+                    id: embFitMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.fitToView()
+                }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
             spacing: 6
+            visible: !root.embedded
 
             Text {
                 text: UVEditorController.statusText
@@ -464,9 +545,63 @@ Rectangle {
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            visible: UVEditorController.hasMesh && !root.embedded
+
+            Text {
+                text: "Seams"
+                color: ThemeManager.disabledTextColor
+                font.pixelSize: 10
+            }
+
+            Row {
+                spacing: 2
+                Repeater {
+                    model: [
+                        { label: "Pin", tip: "Pin selected UV vertices", fn: function() { UVEditorController.pinSelection() } },
+                        { label: "Unpin", tip: "Unpin selected UV vertices", fn: function() { UVEditorController.unpinSelection() } },
+                        { label: "Sew", tip: "Sew UVs along selected edges", fn: function() { UVEditorController.sewSelectedEdges() } },
+                        { label: "Split", tip: "Split UVs along selected edges", fn: function() { UVEditorController.splitSelectedEdges() } },
+                        { label: "Unwrap", tip: "Re-unwrap selected faces (respects seams + pins)", fn: function() { UVEditorController.unwrapSelectedFaces() } }
+                    ]
+                    delegate: Rectangle {
+                        width: modelData.label === "Unpin" ? 38 : (modelData.label === "Unwrap" ? 48 : 32)
+                        height: 18
+                        radius: 3
+                        color: seamBtnMa.pressed ? Qt.darker(ThemeManager.inputColor, 1.15)
+                             : seamBtnMa.containsMouse ? Qt.lighter(ThemeManager.inputColor, 1.08)
+                             : ThemeManager.inputColor
+                        border.color: ThemeManager.borderColor
+                        border.width: 1
+                        ToolTip.visible: seamBtnMa.containsMouse
+                        ToolTip.text: modelData.tip
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: ThemeManager.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            id: seamBtnMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                modelData.fn()
+                                root.rebuildTriangleCache()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Rectangle {
             Layout.fillWidth: true
-            Layout.fillHeight: true
+            Layout.fillHeight: !root.embedded
+            Layout.preferredHeight: root.embedded ? 280 : 0
             color: ThemeManager.inputColor
             border.color: ThemeManager.borderColor
             border.width: 1
@@ -513,6 +648,8 @@ Rectangle {
                     drawGrid(ctx)
                     drawContextIslands(ctx)
                     drawTriangles(ctx)
+                    drawSeamEdges(ctx)
+                    drawPinnedVertices(ctx)
                     drawSelection(ctx)
                     drawUnitBoundary(ctx)
                 }
@@ -573,6 +710,43 @@ Rectangle {
                                                 ThemeManager.accentColor.g,
                                                 ThemeManager.accentColor.b, 0.18)
                         ctx.fill()
+                    }
+                    ctx.restore()
+                }
+
+                function drawSeamEdges(ctx) {
+                    if (seamEdgeCache.length === 0)
+                        return
+                    ctx.save()
+                    ctx.lineWidth = 2
+                    ctx.strokeStyle = "#E03030"
+                    for (let i = 0; i < seamEdgeCache.length; ++i) {
+                        const e = seamEdgeCache[i]
+                        const a = root.uvToScreen(e.u0, e.v0)
+                        const b = root.uvToScreen(e.u1, e.v1)
+                        ctx.beginPath()
+                        ctx.moveTo(a.x, a.y)
+                        ctx.lineTo(b.x, b.y)
+                        ctx.stroke()
+                    }
+                    ctx.restore()
+                }
+
+                function drawPinnedVertices(ctx) {
+                    if (pinVertCache.length === 0)
+                        return
+                    ctx.save()
+                    const r = 5
+                    ctx.fillStyle = "#FFD54A"
+                    ctx.strokeStyle = "#8A6A00"
+                    ctx.lineWidth = 1
+                    for (let i = 0; i < pinVertCache.length; ++i) {
+                        const v = pinVertCache[i]
+                        const p = root.uvToScreen(v.u, v.v)
+                        ctx.beginPath()
+                        ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+                        ctx.fill()
+                        ctx.stroke()
                     }
                     ctx.restore()
                 }
