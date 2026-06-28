@@ -8431,7 +8431,9 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
 int CLIPipeline::cmdSegment(int argc, char* argv[])
 {
     // Parse: segment <file> [--json] [--no-model] [--up-axis x|y|z]
+    //                        [--dump-training-data <out.json>]
     QString inputPath;
+    QString dumpPath;
     bool jsonOutput = false;
     bool noModel = false;
     int upAxis = 1;   // +Y default
@@ -8441,6 +8443,14 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         if (arg == "segment" || arg == "--cli") continue;
         if (arg == "--json")     { jsonOutput = true; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
+        if (arg == "--dump-training-data") {
+            if (i + 1 >= argc) {
+                err() << "Error: --dump-training-data requires an output path." << Qt::endl;
+                return 2;
+            }
+            dumpPath = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
         if (arg == "--up-axis") {
             if (i + 1 >= argc) {
                 err() << "Error: --up-axis requires a value (x, y, or z)." << Qt::endl;
@@ -8458,7 +8468,8 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
 
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh segment <file> [--json] [--no-model] [--up-axis x|y|z]" << Qt::endl;
+        err() << "Usage: qtmesh segment <file> [--json] [--no-model] [--up-axis x|y|z] "
+                 "[--dump-training-data <out.json>]" << Qt::endl;
         return 2;
     }
     QFileInfo fi(inputPath);
@@ -8481,6 +8492,71 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         err() << "Error: no readable geometry in " << inputPath << Qt::endl; return 1;
     }
     const int vertexCount = static_cast<int>(verts.size() / 3);
+
+    // --- Training-data miner ------------------------------------------------
+    // `--dump-training-data out.json` writes the mesh's point cloud + EXACT
+    // per-vertex part labels derived from the rig (bone weights → bone name →
+    // part, via the same AutoRig::rigPriorPartLabels the GUI uses). Every
+    // rigged mesh becomes one free, exactly-labelled training sample — the
+    // segmentation model is retrained on a mix of synthetic humanoids + these
+    // mined real meshes (scripts/export-meshseg-onnx.py --real-data), so the
+    // MODEL path (used on UNrigged meshes) keeps improving as more rigged
+    // assets are mined. Requires a skinned mesh.
+    if (!dumpPath.isEmpty()) {
+        int resolved = 0;
+        std::vector<int> labels = AutoRig::rigPriorPartLabels(entity, vertexCount, &resolved);
+        if (labels.empty()) {
+            err() << "Error: --dump-training-data needs a SKINNED mesh (no skeleton in "
+                  << inputPath << ")." << Qt::endl;
+            return 1;
+        }
+        if (resolved < (vertexCount + 1) / 2) {
+            err() << "Error: rig resolved only " << resolved << " / " << vertexCount
+                  << " vertices to body parts — too sparse to be reliable training data."
+                  << Qt::endl;
+            return 1;
+        }
+        // Normalise positions into a centred unit box (the model's input frame),
+        // matching MeshSegmenter::predict's normalisation so mined samples and
+        // inference see the same coordinate convention.
+        float mn[3] = { verts[0], verts[1], verts[2] }, mx[3] = { verts[0], verts[1], verts[2] };
+        for (int v = 0; v < vertexCount; ++v)
+            for (int a = 0; a < 3; ++a) {
+                mn[a] = std::min(mn[a], verts[3*v+a]);
+                mx[a] = std::max(mx[a], verts[3*v+a]);
+            }
+        const float ctr[3] = { 0.5f*(mn[0]+mx[0]), 0.5f*(mn[1]+mx[1]), 0.5f*(mn[2]+mx[2]) };
+        float half = 0.0f;
+        for (int a = 0; a < 3; ++a) half = std::max(half, 0.5f*(mx[a]-mn[a]));
+        const float invs = half > 1e-6f ? 1.0f/half : 1.0f;
+
+        QJsonArray pts, labs;
+        for (int v = 0; v < vertexCount; ++v) {
+            pts.append((verts[3*v+0]-ctr[0])*invs);
+            pts.append((verts[3*v+1]-ctr[1])*invs);
+            pts.append((verts[3*v+2]-ctr[2])*invs);
+            labs.append(labels[v] < 0 ? 0 : labels[v]);   // bone-but-non-body → unknown(0)
+        }
+        QJsonObject root;
+        root["schema"]      = "qtmesh-meshseg-training-v1";
+        root["mesh"]        = fi.fileName();
+        root["upAxis"]      = upAxis;     // miner records the source up axis
+        root["vertexCount"] = vertexCount;
+        root["resolved"]    = resolved;
+        root["partCount"]   = MeshSegmenter::partCount();
+        root["points"]      = pts;        // flat [x,y,z, …] normalised to unit box
+        root["labels"]      = labs;       // per-vertex part index (0=unknown)
+        QFile out(dumpPath);
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            err() << "Error: cannot write " << dumpPath << Qt::endl; return 1;
+        }
+        out.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        out.close();
+        cliWrite(QString("Wrote training sample %1 — %2 verts, %3 resolved (%4%)\n")
+                     .arg(dumpPath).arg(vertexCount).arg(resolved)
+                     .arg(100.0 * resolved / std::max(1, vertexCount), 0, 'f', 1));
+        return 0;
+    }
 
     QString modelPath;
     if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking();

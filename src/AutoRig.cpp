@@ -1,5 +1,6 @@
 #include "AutoRig.h"
 #include "UniRigPredictor.h"
+#include "MeshSegmenter.h"
 
 #include <algorithm>
 #include <cmath>
@@ -604,6 +605,58 @@ bool AutoRig::gatherGeometry(Ogre::Entity* entity,
     for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si)
         appendIndices(mesh->getSubMesh(si), mesh.get(), sharedBase, ownOffset[si], outIndices);
     return !outVerts.empty();
+}
+
+std::vector<int> AutoRig::rigPriorPartLabels(Ogre::Entity* entity,
+                                             int vertexCount,
+                                             int* outResolved)
+{
+    if (outResolved) *outResolved = 0;
+    if (!entity || !entity->getMesh() || vertexCount <= 0) return {};
+    Ogre::MeshPtr mesh = entity->getMesh();
+    Ogre::SkeletonPtr skel = (mesh->hasSkeleton()) ? mesh->getSkeleton() : Ogre::SkeletonPtr();
+    if (!skel) return {};
+
+    // Per-vertex dominant bone (by weight), in gatherGeometry's vertex order:
+    // shared vertex data first (base 0), then each submesh's own data at its
+    // running offset. (Identical accounting to gatherGeometry above.)
+    std::vector<float> bestW(vertexCount, -1.0f);
+    std::vector<int>   boneOf(vertexCount, -1);
+    auto consider = [&](unsigned int gv, unsigned short boneIdx, float w) {
+        if (gv < static_cast<unsigned int>(vertexCount) && w > bestW[gv]) {
+            bestW[gv] = w; boneOf[gv] = boneIdx;
+        }
+    };
+    uint32_t base = 0;
+    if (mesh->sharedVertexData) {
+        for (const auto& kv : mesh->getBoneAssignments())
+            consider(kv.second.vertexIndex, kv.second.boneIndex, kv.second.weight);
+        base = static_cast<uint32_t>(mesh->sharedVertexData->vertexCount);
+    }
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (!sub || sub->useSharedVertices || !sub->vertexData) continue;
+        for (const auto& kv : sub->getBoneAssignments())
+            consider(base + kv.second.vertexIndex, kv.second.boneIndex, kv.second.weight);
+        base += static_cast<uint32_t>(sub->vertexData->vertexCount);
+    }
+
+    std::vector<int> labels(vertexCount, static_cast<int>(MeshSegmenter::Part::Unknown));
+    int resolved = 0;
+    for (int v = 0; v < vertexCount; ++v) {
+        if (boneOf[v] < 0) continue;
+        const QString bn = QString::fromStdString(
+            skel->getBone(static_cast<unsigned short>(boneOf[v]))->getName());
+        const auto part = MeshSegmenter::partForBoneName(bn);
+        if (part != MeshSegmenter::Part::Unknown) {
+            labels[v] = static_cast<int>(part);
+            ++resolved;
+        } else {
+            labels[v] = -1;   // had a bone, but not a body-region one
+        }
+    }
+    if (outResolved) *outResolved = resolved;
+    return labels;
 }
 
 std::vector<AutoRig::Joint> AutoRig::predictUniRig(

@@ -793,57 +793,26 @@ QString EditModeController::selectByPart(const QString& upAxis)
     // tail→torso, paws/toes→leg — which the humanoid coordinate model can't).
     // This is synchronous (just a bone-name lookup, no download/inference). We
     // use it directly when it covers a strong majority of vertices; otherwise
-    // fall through to the worker (model / geometric fallback).
+    // fall through to the worker (model / geometric fallback). The extraction is
+    // shared with the training-data miner (AutoRig::rigPriorPartLabels) so the
+    // GUI selection and the mined ground truth are bit-identical.
     {
-        Ogre::MeshPtr mesh = m_editEntity->getMesh();
-        Ogre::SkeletonPtr skel = (mesh && mesh->hasSkeleton()) ? mesh->getSkeleton()
-                                                               : Ogre::SkeletonPtr();
-        if (skel) {
-            // Per-vertex dominant bone (by weight), in gatherGeometry's vertex
-            // order: shared vertex data first (base 0), then each submesh's own
-            // data at its running offset.
-            std::vector<float> bestW(vertexCount, -1.0f);
-            std::vector<int>   boneOf(vertexCount, -1);
-            auto consider = [&](unsigned int gv, unsigned short boneIdx, float w) {
-                if (gv < static_cast<unsigned int>(vertexCount) && w > bestW[gv]) {
-                    bestW[gv] = w; boneOf[gv] = boneIdx;
-                }
-            };
-            uint32_t base = 0;
-            if (mesh->sharedVertexData) {
-                for (const auto& kv : mesh->getBoneAssignments())
-                    consider(kv.second.vertexIndex, kv.second.boneIndex, kv.second.weight);
-                base = static_cast<uint32_t>(mesh->sharedVertexData->vertexCount);
-            }
-            for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
-                Ogre::SubMesh* sub = mesh->getSubMesh(si);
-                if (!sub || sub->useSharedVertices || !sub->vertexData) continue;
-                for (const auto& kv : sub->getBoneAssignments())
-                    consider(base + kv.second.vertexIndex, kv.second.boneIndex, kv.second.weight);
-                base += static_cast<uint32_t>(sub->vertexData->vertexCount);
-            }
-
-            std::vector<int> rigLabels(vertexCount, static_cast<int>(MeshSegmenter::Part::Unknown));
-            int resolved = 0;
-            for (int v = 0; v < vertexCount; ++v) {
-                if (boneOf[v] < 0) continue;
-                const QString bn = QString::fromStdString(
-                    skel->getBone(static_cast<unsigned short>(boneOf[v]))->getName());
-                const auto part = MeshSegmenter::partForBoneName(bn);
-                if (part != MeshSegmenter::Part::Unknown) {
-                    rigLabels[v] = static_cast<int>(part);
-                    ++resolved;
-                }
-            }
-            // Use the rig labels when they cover most of the mesh (a real rig
-            // should). Below that, the rig is too sparse to trust → use the model.
-            if (vertexCount > 0 && resolved >= (vertexCount * 7) / 10) {
-                const auto faceLabels = MeshSegmenter::facesFromVertexLabels(
-                    rigLabels, indices.data(), static_cast<int>(indices.size()));
-                finishSegmentOnMain(faceLabels, /*usedModel=*/false,
-                                    /*predictError(=sourceNote)=*/QStringLiteral("rig"));
-                return tr("Selecting by part (from rig)…");
-            }
+        int resolved = 0;
+        std::vector<int> rigLabels =
+            AutoRig::rigPriorPartLabels(m_editEntity, vertexCount, &resolved);
+        // Use the rig labels when they cover most of the mesh (a real rig
+        // should). Below that, the rig is too sparse to trust → use the model.
+        // (rigPriorPartLabels marks bone-but-non-body vertices as -1; map those
+        // to Unknown(0) for the face-label majority + selection.)
+        if (!rigLabels.empty() && vertexCount > 0
+                && resolved >= (vertexCount * 7) / 10) {
+            for (int& l : rigLabels)
+                if (l < 0) l = static_cast<int>(MeshSegmenter::Part::Unknown);
+            const auto faceLabels = MeshSegmenter::facesFromVertexLabels(
+                rigLabels, indices.data(), static_cast<int>(indices.size()));
+            finishSegmentOnMain(faceLabels, /*usedModel=*/false,
+                                /*predictError(=sourceNote)=*/QStringLiteral("rig"));
+            return tr("Selecting by part (from rig)…");
         }
     }
 

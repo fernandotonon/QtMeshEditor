@@ -33,8 +33,20 @@ MODEL
   A small PointNet-style segmenter: shared per-point MLP → max-pooled global
   feature → concat back to each point → per-point classifier. ~0.3 MB ONNX.
 
+MINED REAL DATA (continual improvement)
+  Synthetic primitives can't capture real surface distributions (dense face
+  meshes, true limb shapes, animal topology). The app can mine EXACT labels
+  from any RIGGED mesh for free — `qtmesh segment <mesh> --dump-training-data
+  out.json` reads per-vertex labels from the rig (bone weights → bone name →
+  part). Pass those JSONs via `--real-data` to MIX them with the synthetic set;
+  the model improves as more rigged assets are mined, and the gains land on the
+  MODEL path used for UNrigged meshes (rigged meshes already use the exact
+  rig-prior path in-app). This is the "train further as we gather data" loop.
+
 Usage (offline, with torch + numpy + onnx in a venv):
     python export-meshseg-onnx.py --samples 4000 --points 4096 --out meshseg.onnx
+    # mix in mined real meshes:
+    python export-meshseg-onnx.py --samples 6000 --real-data ./mined/ --out meshseg.onnx
 """
 import argparse
 import numpy as np
@@ -127,6 +139,61 @@ def gen_dataset(samples, points, seed):
     return aP, aL
 
 
+# --- mined real meshes (rig-prior ground truth) ----------------------------
+# Each JSON is written by `qtmesh segment <mesh> --dump-training-data out.json`
+# (schema "qtmesh-meshseg-training-v1"): a normalised point cloud + EXACT
+# per-vertex part labels read from the mesh's rig (bone weights -> bone name ->
+# part). Every rigged asset = one free, exactly-labelled sample. We resample
+# each to `points` and apply the SAME small upright augmentation as the
+# synthetic data + a few aug copies, so a handful of real meshes still teaches
+# the model real-world surface distributions (dense faces, true limb shapes)
+# that synthetic primitives can't.
+def _augment_upright(P, rng):
+    yaw = rng.uniform(-0.25, 0.25)
+    tilt = rng.uniform(-0.08, 0.08, size=2)
+    cy, sy = np.cos(yaw), np.sin(yaw)
+    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+    cx, sx = np.cos(tilt[0]), np.sin(tilt[0]); cz, sz = np.cos(tilt[1]), np.sin(tilt[1])
+    Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+    Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+    out = P @ (Ry @ Rx @ Rz).T.astype(np.float32)
+    out += rng.normal(scale=0.004, size=out.shape).astype(np.float32)
+    return out.astype(np.float32)
+
+
+def load_real_data(paths, points, aug, seed):
+    import glob
+    import json
+    import os
+    rng = np.random.default_rng(seed + 777)
+    files = []
+    for pth in paths:
+        files += sorted(glob.glob(os.path.join(pth, "*.json"))) if os.path.isdir(pth) else [pth]
+    if not files:
+        return np.zeros((0, points, 3), np.float32), np.zeros((0, points), np.int64)
+    Ps, Ls = [], []
+    for f in files:
+        d = json.load(open(f))
+        if d.get("schema") != "qtmesh-meshseg-training-v1":
+            print(f"  skip {f}: unexpected schema {d.get('schema')!r}"); continue
+        P = np.asarray(d["points"], np.float32).reshape(-1, 3)
+        L = np.asarray(d["labels"], np.int64)
+        if len(P) != len(L) or len(P) == 0:
+            print(f"  skip {f}: points/labels mismatch"); continue
+        # base sample + `aug` augmented copies (yaw/tilt/jitter).
+        for k in range(1 + aug):
+            idx = rng.choice(len(P), points, replace=len(P) < points)
+            pp = P[idx]
+            if k > 0:
+                pp = _augment_upright(pp, rng)
+                # re-centre + re-scale to unit box after rotation.
+                c = 0.5 * (pp.min(0) + pp.max(0)); h = float(np.max(0.5 * (pp.max(0) - pp.min(0))))
+                pp = (pp - c) / (h + 1e-9)
+            Ps.append(pp.astype(np.float32)); Ls.append(L[idx])
+    print(f"loaded {len(files)} real mesh file(s) -> {len(Ps)} samples (incl. {aug}x aug)")
+    return np.stack(Ps), np.stack(Ls)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--samples", type=int, default=6000)
@@ -135,6 +202,11 @@ def main():
     ap.add_argument("--batch", type=int, default=8)        # cdist+gather are memory-heavy
     ap.add_argument("--out", default="meshseg.onnx")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--real-data", nargs="*", default=[],
+                    help="dirs/files of `qtmesh segment --dump-training-data` JSON "
+                         "samples (rig-prior ground truth) to MIX with synthetic data")
+    ap.add_argument("--real-aug", type=int, default=8,
+                    help="augmented copies per real mesh (yaw/tilt/jitter)")
     a = ap.parse_args()
 
     import torch
@@ -142,6 +214,16 @@ def main():
 
     print("generating synthetic data…")
     P, L = gen_dataset(a.samples, a.points, a.seed)
+    if a.real_data:
+        rP, rL = load_real_data(a.real_data, a.points, a.real_aug, a.seed)
+        if len(rP):
+            # Shuffle real samples into the synthetic set so the held-out val
+            # split (first n//10) contains both, and training sees a true mix.
+            P = np.concatenate([P, rP]); L = np.concatenate([L, rL])
+            sh = np.random.default_rng(a.seed + 1).permutation(len(P))
+            P = P[sh]; L = L[sh]
+            print(f"combined dataset: {len(P)} samples "
+                  f"({a.samples} synthetic + {len(rP)} real)")
     P = torch.tensor(P); L = torch.tensor(L)
     n = P.shape[0]; N = P.shape[1]
     nval = max(1, n // 10)
