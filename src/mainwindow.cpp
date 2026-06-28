@@ -62,6 +62,7 @@
 #include "QtMeshCloudSession.h"
 #include "ui_mainwindow.h"
 #include "OgreWidget.h"
+#include "OgreRenderTargetUtil.h"
 #include "QtInputManager.h"
 #include "Manager.h"
 #include "material.h"
@@ -361,6 +362,7 @@ MainWindow::MainWindow(QWidget *parent) :
         if(m_pRoot && m_pRoot->getRenderSystem())
         {
             try {
+                OgreRenderTargetUtil::restoreEditorRenderTarget();
                 m_pRoot->renderOneFrame();
             } catch (Ogre::Exception& e) {
                 fprintf(stderr, "RENDER ERROR (Ogre): %s\n", e.getFullDescription().c_str());

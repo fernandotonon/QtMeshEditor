@@ -3941,10 +3941,22 @@ Rectangle {
             // Drives the preview thumbnail and the action buttons.
             property string selectedMaterialName: ""
             property var materialNames: []
+            property var materialPreviewUris: ({})
+
+            function rebuildMaterialPreviews() {
+                var uris = {}
+                for (var i = 0; i < materialNames.length; ++i) {
+                    var n = materialNames[i]
+                    if (n && n.length > 0)
+                        uris[n] = MaterialEditorQML.materialPreview(n)
+                }
+                materialPreviewUris = uris
+            }
 
             // Refresh the list when materials are imported/created.
             function refreshMaterialList() {
                 materialNames = MaterialEditorQML.getMaterialList()
+                rebuildMaterialPreviews()
             }
 
             // Defer the model load by one event-loop tick so the
@@ -3970,6 +3982,7 @@ Rectangle {
             Connections {
                 target: MaterialEditorQML
                 function onMaterialNameChanged() { materialToolCol.refreshMaterialList() }
+                function onMaterialApplied() { materialToolCol.rebuildMaterialPreviews() }
             }
 
             // Also refresh when the scene's material set may have changed —
@@ -4154,8 +4167,8 @@ Rectangle {
                                     Image {
                                         anchors.horizontalCenter: parent.horizontalCenter
                                         width: 52; height: 52
-                                        source: (modelData && modelData.length > 0)
-                                            ? MaterialEditorQML.materialPreview(modelData)
+                                        source: (modelData && materialToolCol.materialPreviewUris[modelData])
+                                            ? materialToolCol.materialPreviewUris[modelData]
                                             : ""
                                         fillMode: Image.PreserveAspectFit
                                         asynchronous: true
@@ -4469,6 +4482,46 @@ Rectangle {
                 property real previewYaw: 0.0
                 property real dragStartX: 0
                 property real dragStartYaw: 0
+                property string previewSource: ""
+
+                function schedulePreviewRefresh() {
+                    previewRefreshTimer.restart()
+                }
+
+                function refreshPreviewSource() {
+                    const mat = materialToolCol.selectedMaterialName
+                    if (!mat || mat.length === 0) {
+                        previewSource = ""
+                        return
+                    }
+                    const size = Math.min(Math.floor(previewHost.width), 256)
+                    if (size < 8)
+                        return
+                    const uri = MaterialEditorQML.interactiveMaterialPreview(
+                        mat, size, previewHost.previewShape, previewHost.previewYaw)
+                    if (uri && uri.length > 0)
+                        previewSource = uri
+                }
+
+                Timer {
+                    id: previewRefreshTimer
+                    interval: 80
+                    repeat: false
+                    onTriggered: previewHost.refreshPreviewSource()
+                }
+
+                Connections {
+                    target: materialToolCol
+                    function onSelectedMaterialNameChanged() { previewHost.schedulePreviewRefresh() }
+                }
+                Connections {
+                    target: MaterialEditorQML
+                    function onMaterialApplied() { previewHost.schedulePreviewRefresh() }
+                }
+                onPreviewShapeChanged: schedulePreviewRefresh()
+                onPreviewYawChanged: schedulePreviewRefresh()
+                onWidthChanged: schedulePreviewRefresh()
+                Component.onCompleted: schedulePreviewRefresh()
 
                 Rectangle {
                     id: previewBg
@@ -4486,15 +4539,7 @@ Rectangle {
                         smooth: true
                         cache: false
                         asynchronous: true
-                        source: {
-                            const mat = materialToolCol.selectedMaterialName
-                            if (!mat || mat.length === 0) return ""
-                            return MaterialEditorQML.interactiveMaterialPreview(
-                                mat,
-                                Math.min(Math.floor(previewHost.width), 256),
-                                previewHost.previewShape,
-                                previewHost.previewYaw)
-                        }
+                        source: previewHost.previewSource
                     }
                     Text {
                         visible: previewImage.source.toString().length === 0

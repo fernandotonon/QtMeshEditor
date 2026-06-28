@@ -121,6 +121,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/PoseLibraryCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UVEditCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
@@ -135,6 +136,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrapController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UVEditorController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UVTransform.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopoController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeights.cpp

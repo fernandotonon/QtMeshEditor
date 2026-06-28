@@ -1,3 +1,6 @@
+#include <OgreRoot.h>
+#include <OgreTextureManager.h>
+
 #include <gtest/gtest.h>
 #include "MaterialPreviewRenderer.h"
 #include "TestHelpers.h"
@@ -118,6 +121,12 @@ TEST_F(MaterialPreviewRendererTests, RenderPreviewWithOgreBaseWhite) {
     EXPECT_EQ(img.width(), 64);
     EXPECT_EQ(img.height(), 64);
     EXPECT_EQ(img.format(), QImage::Format_RGBA8888);
+
+    auto* tex = Ogre::TextureManager::getSingleton().getByName("MatPreviewRTT").get();
+    ASSERT_NE(tex, nullptr);
+    auto* thumbRtt = tex->getBuffer()->getRenderTarget();
+    ASSERT_NE(thumbRtt, nullptr);
+    EXPECT_FALSE(thumbRtt->isAutoUpdated());
 }
 
 TEST_F(MaterialPreviewRendererTests, FirstMaterialNameWithCommentLines) {

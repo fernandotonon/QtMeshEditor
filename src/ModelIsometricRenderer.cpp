@@ -4,6 +4,7 @@
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "RTShaderHelper.h"
+#include "OgreRenderTargetUtil.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 
@@ -183,6 +184,7 @@ bool ensureRenderTarget(int width, int height, const Ogre::ColourValue &bg, QStr
         static_cast<Ogre::uint32>(width), static_cast<Ogre::uint32>(height), 0, Ogre::PF_BYTE_RGBA,
         Ogre::TU_RENDERTARGET);
     st.renderTarget = st.rttTexture->getBuffer()->getRenderTarget();
+    OgreRenderTargetUtil::configureOffscreenRenderTarget(st.renderTarget);
     st.rttWidth = width;
     st.rttHeight = height;
 
