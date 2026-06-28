@@ -466,14 +466,24 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
             }
         }
 
-        const int N = std::max(256, opts.samplePoints);
+        // Cap N at the vertex count: padding a small mesh up to samplePoints with
+        // random duplicate points only adds noise to the model's global max-pool
+        // and never improves coverage (every real vert is already point i). Sample
+        // DOWN only when the mesh is larger than samplePoints.
+        const int N = std::min(std::max(256, opts.samplePoints), vertexCount);
         // Deterministic point sample (with replacement if the mesh is small).
         std::mt19937 rng(0x5e6u);  // NOSONAR — non-crypto, fixed for reproducibility
         std::uniform_int_distribution<int> pick(0, vertexCount - 1);
         std::vector<float> pts(static_cast<size_t>(N) * 3);
         std::vector<int> srcVert(N);
         for (int i = 0; i < N; ++i) {
-            const int v = (vertexCount >= N) ? (i < vertexCount ? i : pick(rng)) : pick(rng);
+            // The first min(N, vertexCount) points are verts 0..vc-1 IN ORDER so
+            // every vertex is covered 1:1 (the scatter's `vertexCount <= N`
+            // branch relies on this). Only the padding beyond vc (when N > vc) is
+            // random. (Previously this was inverted: when vc < N — the common
+            // case — every point was random, so ~37% of verts never got a real
+            // label and fell back to the Torso default, wrecking the result.)
+            const int v = (i < vertexCount) ? i : pick(rng);
             srcVert[i] = v;
             for (int c = 0; c < 3; ++c) {
                 const int a = axisFor[c];

@@ -111,10 +111,12 @@ def make_humanoid(rng, npp=700):
 
     P = np.concatenate(pts).astype(np.float32); L = np.concatenate(lab)
 
-    # Augmentation: keep UPRIGHT (real meshes are +Y up) and keep LEFT/RIGHT
-    # meaningful — so only a SMALL yaw (about the up axis) + tiny tilt, never the
-    # old ±0.4rad on all 3 axes that scrambled orientation + which-side-is-which.
-    yaw = rng.uniform(-0.25, 0.25)
+    # Augmentation: FULL 360° yaw about the up axis so the model is invariant to
+    # which way the character faces (a real mesh can face any compass direction;
+    # the old ±0.25rad yaw made the model brittle — a 180°-yawed mesh got its
+    # left/right mirrored and head mislabelled). We keep it UPRIGHT (only a tiny
+    # tilt) and DO NOT mirror, so true left/right handedness is preserved.
+    yaw = rng.uniform(0.0, 2*np.pi)
     tilt = rng.uniform(-0.08, 0.08, size=2)
     cy, sy = np.cos(yaw), np.sin(yaw)
     Ry = np.array([[cy,0,sy],[0,1,0],[-sy,0,cy]])
@@ -149,7 +151,7 @@ def gen_dataset(samples, points, seed):
 # the model real-world surface distributions (dense faces, true limb shapes)
 # that synthetic primitives can't.
 def _augment_upright(P, rng):
-    yaw = rng.uniform(-0.25, 0.25)
+    yaw = rng.uniform(0.0, 2*np.pi)   # full 360° facing (see make_humanoid note)
     tilt = rng.uniform(-0.08, 0.08, size=2)
     cy, sy = np.cos(yaw), np.sin(yaw)
     Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
@@ -207,6 +209,11 @@ def main():
                          "samples (rig-prior ground truth) to MIX with synthetic data")
     ap.add_argument("--real-aug", type=int, default=8,
                     help="augmented copies per real mesh (yaw/tilt/jitter)")
+    ap.add_argument("--real-weight", type=float, default=1.0,
+                    help="oversample factor for real samples so they aren't drowned "
+                         "out by synthetic. 0 = auto-balance to ~50/50 real:synthetic")
+    ap.add_argument("--dim", type=int, default=128, help="model feature width")
+    ap.add_argument("--knn", type=int, default=12, help="local kNN neighbours")
     a = ap.parse_args()
 
     import torch
@@ -214,53 +221,73 @@ def main():
 
     print("generating synthetic data…")
     P, L = gen_dataset(a.samples, a.points, a.seed)
+    # `src`: 0 = synthetic, 1 = real — kept so we can report val accuracy PER
+    # SOURCE (real-mesh accuracy is what actually matters; a synthetic-only
+    # average hides it).
+    src = np.zeros(len(P), np.int64)
     if a.real_data:
         rP, rL = load_real_data(a.real_data, a.points, a.real_aug, a.seed)
         if len(rP):
-            # Shuffle real samples into the synthetic set so the held-out val
-            # split (first n//10) contains both, and training sees a true mix.
+            # Oversample real so it isn't drowned out by synthetic. With the
+            # default (auto, --real-weight 0) we replicate real to ~match the
+            # synthetic count (≈50/50); the per-mesh augmentation already makes
+            # the copies non-identical, and we re-augment replicas below.
+            reps = a.real_weight
+            if reps <= 0:
+                reps = max(1.0, len(P) / max(1, len(rP)))
+            reps_i = int(round(reps))
+            if reps_i > 1:
+                rng = np.random.default_rng(a.seed + 2)
+                extraP, extraL = [], []
+                for _ in range(reps_i - 1):
+                    for i in range(len(rP)):
+                        extraP.append(_augment_upright(rP[i], rng)); extraL.append(rL[i])
+                rP = np.concatenate([rP, np.stack(extraP)])
+                rL = np.concatenate([rL, np.stack(extraL)])
             P = np.concatenate([P, rP]); L = np.concatenate([L, rL])
+            src = np.concatenate([src, np.ones(len(rP), np.int64)])
             sh = np.random.default_rng(a.seed + 1).permutation(len(P))
-            P = P[sh]; L = L[sh]
+            P = P[sh]; L = L[sh]; src = src[sh]
             print(f"combined dataset: {len(P)} samples "
-                  f"({a.samples} synthetic + {len(rP)} real)")
+                  f"({a.samples} synthetic + {len(rP)} real @ {reps_i}x = "
+                  f"{100*len(rP)/len(P):.0f}% real)")
     P = torch.tensor(P); L = torch.tensor(L)
+    srcT = torch.tensor(src)
     n = P.shape[0]; N = P.shape[1]
     nval = max(1, n // 10)
     dev = "mps" if torch.backends.mps.is_available() else "cpu"
-    print(f"data N={n} points={N} dev={dev}")
+    print(f"data N={n} points={N} dev={dev} dim={a.dim} knn={a.knn}")
 
     class PointSeg(nn.Module):
-        # PointNet++-style: per-point MLP + a LOCAL feature aggregated over each
-        # point's k nearest neighbours (so adjacent-but-distinct parts — arm vs
-        # torso, ear vs head — separate, the flat-PointNet weakness) + the global
-        # max-pooled feature. kNN is computed in-graph (exportable to ONNX).
+        # Classic PointNet SEGMENTATION network — deliberately uses ONLY ops that
+        # every ONNX Runtime build executes identically (Linear / GELU / max).
+        #
+        # NO in-graph kNN (cdist / topk / gather): the prebuilt
+        # onnxruntime-osx-universal2 binary the app links MIS-EXECUTES those ops
+        # on arm64 (verified: Python ORT 1.20.1 gives 0.98 on the same model +
+        # input, the C++ universal2 build gives 0.33). A flat PointNet sidesteps
+        # the broken kernels entirely and runs correctly in the app.
+        #
+        # Local context is recovered the PointNet-seg way: per-point features are
+        # concatenated with the GLOBAL max-pooled feature (broadcast back to every
+        # point), so each point classifies in the context of the whole shape. `k`
+        # is accepted but unused (kept for CLI compat).
         def __init__(s, d=128, k=12):
             super().__init__()
-            s.k = k
-            s.mlp1 = nn.Sequential(nn.Linear(3,64), nn.GELU(), nn.Linear(64,d), nn.GELU())
-            # local: consumes [self feat ; max over neighbours of (neighbour-self)]
-            s.local = nn.Sequential(nn.Linear(2*d, d), nn.GELU(), nn.Linear(d, d), nn.GELU())
-            s.mlp2 = nn.Sequential(nn.Linear(d,d), nn.GELU(), nn.Linear(d,d), nn.GELU())
-            s.head = nn.Sequential(nn.Linear(d+d+d, d), nn.GELU(), nn.Linear(d, C))
+            s.mlp1 = nn.Sequential(nn.Linear(3, 64), nn.GELU(), nn.Linear(64, d), nn.GELU())
+            s.mlp2 = nn.Sequential(nn.Linear(d, d), nn.GELU(), nn.Linear(d, d), nn.GELU())
+            # segmentation head: [per-point f ; per-point g ; global maxpool(g)]
+            s.head = nn.Sequential(nn.Linear(d + d + d, d), nn.GELU(),
+                                   nn.Linear(d, d), nn.GELU(), nn.Linear(d, C))
 
         def forward(s, pts):                      # pts: [B,N,3]
             f = s.mlp1(pts)                        # [B,N,d]
-            # kNN by Euclidean distance in xyz.
-            d2 = torch.cdist(pts, pts)             # [B,N,N]
-            kk = min(s.k, pts.shape[1])
-            nbr = d2.topk(kk, dim=-1, largest=False).indices  # [B,N,k]
-            B, N, dimf = f.shape
-            idx = nbr.reshape(B, N*kk, 1).expand(-1, -1, dimf)   # [B,N*k,d]
-            gathered = torch.gather(f, 1, idx).reshape(B, N, kk, dimf)  # [B,N,k,d]
-            rel = gathered - f.unsqueeze(2)        # neighbour minus self
-            localfeat = rel.max(dim=2).values      # [B,N,d]
-            loc = s.local(torch.cat([f, localfeat], dim=-1))
-            g = s.mlp2(loc)
-            glob = g.max(dim=1, keepdim=True).values.expand(-1, N, -1)
-            return s.head(torch.cat([f, loc, glob], dim=-1))
+            g = s.mlp2(f)                          # [B,N,d]
+            B, N, _ = f.shape
+            glob = g.max(dim=1, keepdim=True).values.expand(-1, N, -1)  # global ctx
+            return s.head(torch.cat([f, g, glob], dim=-1))
 
-    net = PointSeg().to(dev)
+    net = PointSeg(d=a.dim, k=a.knn).to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=2e-3, weight_decay=1e-4)
     sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, a.epochs)
     lossf = nn.CrossEntropyLoss()
@@ -276,13 +303,23 @@ def main():
         sch.step()
         if ep % 5 == 0 or ep == a.epochs - 1:
             net.eval()
-            correct = 0; total = 0
+            # Report val accuracy split by source — real-mesh accuracy is the
+            # number that matters; a blended average hides it.
+            cor = {0: 0, 1: 0}; tot = {0: 0, 1: 0}
             with torch.no_grad():
                 for b in range(0, nval, bs):     # batch val too (cdist is O(N^2) memory)
                     pv = P[b:b+bs].to(dev); lv = L[b:b+bs].to(dev)
-                    correct += (net(pv).argmax(-1) == lv).sum().item()
-                    total += lv.numel()
-            print(f"ep{ep:3d} loss{loss.item():.4f} val_pt_acc{correct/max(1,total):.4f}")
+                    sv = srcT[b:b+bs]
+                    ok = (net(pv).argmax(-1) == lv)
+                    for srcid in (0, 1):
+                        m = (sv == srcid)
+                        if m.any():
+                            cor[srcid] += ok[m.to(dev)].sum().item()
+                            tot[srcid] += int(m.sum().item()) * lv.shape[1]
+            syn = cor[0] / max(1, tot[0]); real = cor[1] / max(1, tot[1])
+            allc = (cor[0] + cor[1]) / max(1, tot[0] + tot[1])
+            print(f"ep{ep:3d} loss{loss.item():.4f} val_acc{allc:.4f} "
+                  f"synth{syn:.4f} real{real:.4f}(n={tot[1]//max(1,N)})")
 
     net.eval().cpu()
     torch.onnx.export(
