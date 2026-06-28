@@ -2616,6 +2616,14 @@ Rectangle {
             Row {
                 spacing: 4
                 visible: UVEditorController.hasMesh
+                Text {
+                    text: "Seams"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    opacity: 0.65
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 44
+                }
                 Repeater {
                     model: [
                         { label: "Pin", fn: function() { UVEditorController.pinSelection() } },
@@ -2641,6 +2649,51 @@ Rectangle {
                         }
                         MouseArea {
                             id: uvToolMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: modelData.fn()
+                        }
+                    }
+                }
+            }
+
+            Row {
+                spacing: 4
+                visible: UVEditorController.hasMesh
+                Text {
+                    text: "Projection"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    opacity: 0.65
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 44
+                }
+                Repeater {
+                    model: [
+                        { label: "View", fn: function() { UVEditorController.projectUvFromView() } },
+                        { label: "Box", fn: function() { UVEditorController.projectUvBox(1.0) } },
+                        { label: "Cyl", fn: function() { UVEditorController.projectUvCylinder(1, 1.0) } },
+                        { label: "Sph", fn: function() { UVEditorController.projectUvSphere(1) } },
+                        { label: "Reset", fn: function() { UVEditorController.resetUvBox() } }
+                    ]
+                    delegate: Rectangle {
+                        width: modelData.label === "Reset" ? 34 : 30
+                        height: 22
+                        radius: 3
+                        color: uvProjMa.pressed ? Qt.darker(PropertiesPanelController.inputColor, 1.12)
+                             : uvProjMa.containsMouse ? Qt.lighter(PropertiesPanelController.inputColor, 1.08)
+                             : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            id: uvProjMa
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor

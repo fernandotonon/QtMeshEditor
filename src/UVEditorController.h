@@ -13,6 +13,7 @@
 #include <Ogre.h>
 
 #include "UVTransform.h"
+#include "UvProject.h"
 #include "commands/UVEditCommand.h"
 #include "EditableMesh.h"
 
@@ -180,6 +181,14 @@ public:
     Q_INVOKABLE void sewSelectedEdges();
     Q_INVOKABLE void splitSelectedEdges();
     Q_INVOKABLE void unwrapSelectedFaces();
+
+    /// Projection unwrap modes (issue #463).
+    Q_INVOKABLE void projectUvFromView();
+    Q_INVOKABLE void projectUvBox(double scale);
+    Q_INVOKABLE void projectUvCylinder(int axis, double scale);
+    Q_INVOKABLE void projectUvSphere(int axis);
+    Q_INVOKABLE void resetUvBox();
+
     Q_INVOKABLE QVariantList seamEdges() const;
     Q_INVOKABLE QVariantList pinnedVertices() const;
 
@@ -281,6 +290,11 @@ private:
                            const std::vector<UVTransform::VertRef>& before,
                            UVTransform::TransformOp op,
                            const QString& description);
+    UvProject::Selection buildProjectionSelection() const;
+    bool applyProjectionChanges(const std::vector<UVEditCommand::VertChange>& changes,
+                                const QString& undoDescription,
+                                const QString& breadcrumbMode);
+    void runUvProjection(UvProject::Mode mode, const UvProject::Options& extraOpts);
     void syncWorkingMeshFromEntity();
     void syncUvLayoutFromWorkingMesh();
     void updateTexturePixelSize();

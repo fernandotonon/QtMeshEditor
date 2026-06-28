@@ -40,6 +40,7 @@ class MainWindow;
 }
 class EditorViewport;
 class PrimitivesWidget;
+class SpaceCamera;
 
 namespace Ogre
 {
@@ -48,7 +49,16 @@ namespace Ogre
     class RaySceneQuery;
     class ManualObject;
     class AnimationState;
+    class Matrix4;
 }
+
+/// Snapshot of the active 3D viewport camera (issue #463).
+struct ViewportCameraSnapshot {
+    Ogre::Matrix4 viewMatrix;
+    Ogre::Matrix4 projMatrix;
+    bool valid = false;
+    bool fromFocusedViewport = false;
+};
 
 class MainWindow : public QMainWindow, public Ogre::FrameListener
 {
@@ -81,6 +91,10 @@ public:
 
     /// Invokes the same flow as Options → Material Editor (Mode Tools button).
     void triggerMaterialEditor();
+
+    /// Returns the focused viewport camera when @p requireFocus is true; otherwise
+    /// falls back to the first viewport when none has focus.
+    ViewportCameraSnapshot queryViewportCamera(bool requireFocus = false) const;
 
     void keyPressEvent(QKeyEvent *event) override;
     void dropEvent(QDropEvent *event) override;

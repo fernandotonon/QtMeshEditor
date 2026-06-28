@@ -91,6 +91,7 @@ MeshOptimizerLod.cpp
 ExportOptimizer.cpp
 UvUnwrap.cpp
 UvUnwrapController.cpp
+UvProject.cpp
 UVEditorController.cpp
 UVTransform.cpp
 QuadRetopo.cpp
@@ -237,6 +238,7 @@ MeshOptimizerLod.h
 ExportOptimizer.h
 UvUnwrap.h
 UvUnwrapController.h
+UvProject.h
 UVEditorController.h
 UvSeamData.h
 UvSeamOps.h
