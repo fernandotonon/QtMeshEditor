@@ -639,6 +639,11 @@ void EditModeController::exitEditMode(bool commitChanges)
     emit validationChanged();
 }
 
+void EditModeController::notifyMeshDataChanged()
+{
+    emit meshDataChanged();
+}
+
 void EditModeController::onSelectionChanged()
 {
     // If selection changes while in edit mode and the edited entity is no

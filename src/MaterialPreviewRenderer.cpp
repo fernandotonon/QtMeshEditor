@@ -10,7 +10,10 @@
 #include <OgreMeshManager.h>
 #include <OgreTextureManager.h>
 #include <OgreRoot.h>
+#include <OgreRenderWindow.h>
 
+#include "Manager.h"
+#include "OgreRenderTargetUtil.h"
 #include "ProceduralBoxGenerator.h"
 #include "ProceduralPlaneGenerator.h"
 #include "ProceduralSphereGenerator.h"
@@ -160,6 +163,7 @@ bool MaterialPreviewRenderer::ensureScene()
             Ogre::TU_RENDERTARGET);
 
         m_renderTarget = m_rttTexture->getBuffer()->getRenderTarget();
+        OgreRenderTargetUtil::configureOffscreenRenderTarget(m_renderTarget);
         Ogre::Viewport* vp = m_renderTarget->addViewport(m_camera);
         vp->setClearEveryFrame(true);
         vp->setBackgroundColour(Ogre::ColourValue(0.15f, 0.15f, 0.15f, 1.0f));
@@ -292,10 +296,13 @@ QImage MaterialPreviewRenderer::renderPreview(const QString& materialName)
             Ogre::Box(0, 0, PREVIEW_SIZE, PREVIEW_SIZE), pb,
             Ogre::RenderTarget::FB_AUTO);
 
+        OgreRenderTargetUtil::restoreEditorRenderTarget();
         return image;
     } catch (const Ogre::Exception&) {
+        OgreRenderTargetUtil::restoreEditorRenderTarget();
         return {};
     } catch (...) {
+        OgreRenderTargetUtil::restoreEditorRenderTarget();
         return {};
     }
 }
@@ -339,6 +346,12 @@ QString MaterialPreviewRenderer::renderInteractivePreview(const QString& materia
     // Clamp size to a sane band: too small wastes pixels, too large
     // burns frame time for a docked preview.
     const int cappedSize = std::clamp(size, 32, 1024);
+    const double wrappedYaw = std::fmod(std::fmod(yawDegrees, 360.0) + 360.0, 360.0);
+    const int yawKey = static_cast<int>(std::lround(wrappedYaw));
+    const QString cacheKey =
+        QStringLiteral("%1|%2|%3|%4").arg(materialName).arg(cappedSize).arg(shape).arg(yawKey);
+    if (auto it = m_interactiveCache.constFind(cacheKey); it != m_interactiveCache.constEnd())
+        return it.value();
 
     // Allocate / resize the interactive render target when the requested
     // size changes. Reuses the existing texture when the size matches.
@@ -356,6 +369,7 @@ QString MaterialPreviewRenderer::renderInteractivePreview(const QString& materia
                 cappedSize, cappedSize, 0,
                 Ogre::PF_BYTE_RGBA, Ogre::TU_RENDERTARGET);
             m_interactiveRenderTarget = m_interactiveRtt->getBuffer()->getRenderTarget();
+            OgreRenderTargetUtil::configureOffscreenRenderTarget(m_interactiveRenderTarget);
             Ogre::Viewport* vp = m_interactiveRenderTarget->addViewport(m_camera);
             vp->setClearEveryFrame(true);
             vp->setBackgroundColour(Ogre::ColourValue(0.12f, 0.12f, 0.13f, 1.0f));
@@ -397,7 +411,6 @@ QString MaterialPreviewRenderer::renderInteractivePreview(const QString& materia
         // Apply environment yaw — rotate the light around the world
         // up-axis so the model appears illuminated from a different
         // angle. Modulo to [0, 360) so the cache key is stable.
-        const double wrappedYaw = std::fmod(std::fmod(yawDegrees, 360.0) + 360.0, 360.0);
         const Ogre::Radian yaw(Ogre::Degree(static_cast<float>(wrappedYaw)));
         Ogre::Vector3 baseDir = Ogre::Vector3(-1, -1, -1).normalisedCopy();
         Ogre::Quaternion rot(yaw, Ogre::Vector3::UNIT_Y);
@@ -411,14 +424,20 @@ QString MaterialPreviewRenderer::renderInteractivePreview(const QString& materia
             Ogre::Box(0, 0, cappedSize, cappedSize), pb,
             Ogre::RenderTarget::FB_AUTO);
 
+        OgreRenderTargetUtil::restoreEditorRenderTarget();
+
         QByteArray ba;
         QBuffer buf(&ba);
         buf.open(QIODevice::WriteOnly);
         if (!image.save(&buf, "PNG")) return {};
-        return QStringLiteral("data:image/png;base64,") + ba.toBase64();
+        const QString dataUri = QStringLiteral("data:image/png;base64,") + ba.toBase64();
+        m_interactiveCache.insert(cacheKey, dataUri);
+        return dataUri;
     } catch (const Ogre::Exception&) {
+        OgreRenderTargetUtil::restoreEditorRenderTarget();
         return {};
     } catch (...) {
+        OgreRenderTargetUtil::restoreEditorRenderTarget();
         return {};
     }
 }
@@ -426,6 +445,7 @@ QString MaterialPreviewRenderer::renderInteractivePreview(const QString& materia
 void MaterialPreviewRenderer::clearCache()
 {
     m_cache.clear();
+    m_interactiveCache.clear();
 }
 
 QString MaterialPreviewRenderer::firstMaterialNameInFile(const QString& filePath)

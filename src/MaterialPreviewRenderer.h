@@ -52,6 +52,7 @@ public:
     /// `data:image/png;base64,…` URL the QML Image element shows directly.
     /// `size` is clamped to [32, 1024]; `yawDegrees` is wrapped to [0, 360).
     /// `shape` is one of the Shape enum values; out-of-range falls back to Sphere.
+    /// Results are cached per (material, size, shape, yaw) tuple.
     Q_INVOKABLE QString renderInteractivePreview(const QString& materialName,
                                                   int size,
                                                   int shape,
@@ -102,6 +103,10 @@ private:
 
     // Cache: materialName -> base64 data URI for the 64x64 thumbnail path.
     QHash<QString, QString> m_cache;
+
+    /// Slice I: interactive preview was documented as uncached; cache now
+    /// avoids re-entering Ogre RTT when QML re-evaluates bindings.
+    QHash<QString, QString> m_interactiveCache;
 
     static constexpr int PREVIEW_SIZE = 64;
 };

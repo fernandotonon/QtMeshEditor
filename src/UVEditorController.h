@@ -12,7 +12,10 @@
 
 #include <Ogre.h>
 
-class EditableMesh;
+#include "UVTransform.h"
+#include "commands/UVEditCommand.h"
+#include "EditableMesh.h"
+
 class HalfEdgeMesh;
 
 namespace Ogre {
@@ -45,6 +48,16 @@ class UVEditorController : public QObject
     Q_PROPERTY(int selectedEdgeCount READ selectedEdgeCount NOTIFY uvSelectionChanged)
     Q_PROPERTY(int selectedFaceCount READ selectedFaceCount NOTIFY uvSelectionChanged)
 
+    Q_PROPERTY(int transformMode READ transformMode WRITE setTransformMode NOTIFY transformModeChanged)
+    Q_PROPERTY(int pivotMode READ pivotMode WRITE setPivotMode NOTIFY pivotModeChanged)
+    Q_PROPERTY(int snapMode READ snapMode WRITE setSnapMode NOTIFY snapModeChanged)
+    Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
+    Q_PROPERTY(bool useBlenderTransformKeys READ useBlenderTransformKeys WRITE setUseBlenderTransformKeys
+                   NOTIFY useBlenderTransformKeysChanged)
+    Q_PROPERTY(double cursorU READ cursorU WRITE setCursorU NOTIFY cursorChanged)
+    Q_PROPERTY(double cursorV READ cursorV WRITE setCursorV NOTIFY cursorChanged)
+    Q_PROPERTY(bool transformActive READ transformActive NOTIFY transformActiveChanged)
+
 public:
     enum SelectionMode {
         VertexMode = 0,
@@ -60,6 +73,28 @@ public:
         ControlModifier = 0x04000000
     };
     Q_ENUM(SelectionModifier)
+
+    enum TransformMode {
+        NoTransform = -1,
+        MoveTransform = 0,
+        RotateTransform = 1,
+        ScaleTransform = 2
+    };
+    Q_ENUM(TransformMode)
+
+    enum PivotMode {
+        MedianPivot = 0,
+        IndividualOriginsPivot = 1,
+        CursorPivot = 2
+    };
+    Q_ENUM(PivotMode)
+
+    enum SnapMode {
+        GridSnap = 0,
+        VertexSnap = 1,
+        PixelSnap = 2
+    };
+    Q_ENUM(SnapMode)
 
     struct IslandResult {
         int islandCount = 0;
@@ -108,8 +143,46 @@ public:
     /// Box rules: vertex = fully enclosed; edge/face = any intersection/touch.
     Q_INVOKABLE void boxSelect(double uMin, double vMin, double uMax, double vMax, int modifiers);
 
+    int transformMode() const { return static_cast<int>(m_transformMode); }
+    void setTransformMode(int mode);
+
+    int pivotMode() const { return static_cast<int>(m_pivotMode); }
+    void setPivotMode(int mode);
+
+    int snapMode() const { return static_cast<int>(m_snapMode); }
+    void setSnapMode(int mode);
+
+    bool snapEnabled() const { return m_snapEnabled; }
+    void setSnapEnabled(bool on);
+
+    bool useBlenderTransformKeys() const { return m_useBlenderTransformKeys; }
+    void setUseBlenderTransformKeys(bool on);
+
+    double cursorU() const { return m_cursorU; }
+    double cursorV() const { return m_cursorV; }
+    void setCursorU(double u);
+    void setCursorV(double v);
+
+    bool transformActive() const { return m_transformActive; }
+
+    Q_INVOKABLE void setCursorFromUv(double u, double v);
+    Q_INVOKABLE bool beginTransformDrag(double u, double v, int modifiers);
+    Q_INVOKABLE void updateTransformDrag(double u, double v, int modifiers);
+    Q_INVOKABLE void commitTransformDrag();
+    Q_INVOKABLE void cancelTransformDrag();
+    Q_INVOKABLE bool applyNumericTransform(double value);
+    Q_INVOKABLE void mirrorSelectionX();
+    Q_INVOKABLE void mirrorSelectionY();
+
     /// Re-read the active selection and rebuild cached draw data.
     Q_INVOKABLE void refresh();
+
+    /// Used by UVEditCommand undo/redo when edit mode is inactive.
+    EditableMesh* workingMeshForEntity(Ogre::Entity* entity);
+    void refreshAfterUvEdit();
+
+    bool commitWorkingMeshUvs();
+    void applyWorkingMeshUv(int subMeshIndex, int localVert, const Ogre::Vector2& uv);
 
     /// When false (UV Editor dock hidden), scene/selection changes are not
     /// rebuilt — avoids blocking the main thread during mesh import.
@@ -127,6 +200,13 @@ signals:
     void fitToViewRequested();
     void selectionModeChanged();
     void uvSelectionChanged();
+    void transformModeChanged();
+    void pivotModeChanged();
+    void snapModeChanged();
+    void snapEnabledChanged();
+    void useBlenderTransformKeysChanged();
+    void cursorChanged();
+    void transformActiveChanged();
 
 private:
     struct UvVert {
@@ -171,6 +251,20 @@ private:
     static QString resolveDiffuseTextureSource(Ogre::Entity* entity, int submeshIndex);
     static QString colorForIsland(int islandId);
 
+    QSet<int> affectedUvVertIds() const;
+    bool mapGlobalVertToSubLocal(int globalVert, int& subMeshIndex, int& localVert) const;
+    UVTransform::Settings transformSettings(bool invertSnap) const;
+    std::vector<UVTransform::VertRef> collectSelectedUvRefs() const;
+    std::vector<UVTransform::VertRef> collectAllUvRefs() const;
+    bool applyUvRefChanges(const std::vector<UVTransform::VertRef>& refs,
+                           const std::vector<UVTransform::VertRef>& before,
+                           UVTransform::TransformOp op,
+                           const QString& description);
+    void syncWorkingMeshFromEntity();
+    void syncUvLayoutFromWorkingMesh();
+    void updateTexturePixelSize();
+    Ogre::Vector2 transformDeltaFromDrag(double u, double v) const;
+
     static UVEditorController* s_instance;
 
     int m_uvChannel = 0;
@@ -189,6 +283,27 @@ private:
     QSet<int> m_selectedUvEdges;
     QSet<int> m_selectedUvFaces;
     QSet<int> m_contextIslandIds;
+
+    TransformMode m_transformMode = NoTransform;
+    PivotMode m_pivotMode = MedianPivot;
+    SnapMode m_snapMode = GridSnap;
+    bool m_snapEnabled = false;
+    bool m_useBlenderTransformKeys = false;
+    double m_cursorU = 0.5;
+    double m_cursorV = 0.5;
+    int m_texturePixelSize = 0;
+
+    bool m_transformActive = false;
+    bool m_draggingTransform = false;
+    double m_dragStartU = 0.0;
+    double m_dragStartV = 0.0;
+    std::vector<UVTransform::VertRef> m_dragBeforeRefs;
+    std::vector<UVEditCommand::VertChange> m_dragBeforeChanges;
+
+    std::vector<int> m_sourceSubIndices;
+    std::vector<int> m_subVertOffsets;
+    QSet<int> m_submeshFilter;
+    EditableMesh m_workingMesh;
 
     std::vector<UvVert> m_uvVerts;
     std::vector<UvTri> m_uvTris;

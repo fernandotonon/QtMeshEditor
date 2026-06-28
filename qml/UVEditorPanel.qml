@@ -24,10 +24,12 @@ Rectangle {
     property var ctxIslandCache: []
 
     property bool draggingSelect: false
+    property bool draggingTransform: false
     property real dragStartX: 0
     property real dragStartY: 0
     property real dragEndX: 0
     property real dragEndY: 0
+    property string numericBuffer: ""
 
     readonly property int modNone: 0
     readonly property int modShift: 0x02000000
@@ -120,6 +122,48 @@ Rectangle {
         Qt.callLater(fitToView)
     }
 
+    function transformModeLabel() {
+        switch (UVEditorController.transformMode) {
+        case -1: return "Select (Q)"
+        case 0: return "Move (W)"
+        case 1: return "Rotate (E)"
+        case 2: return "Scale (R)"
+        default: return ""
+        }
+    }
+
+    // Match the main viewport transform shortcuts (Unity convention).
+    function setTransformModeFromKey(key) {
+        if (key === Qt.Key_Q)
+            UVEditorController.transformMode = -1
+        else if (key === Qt.Key_W || key === Qt.Key_G)
+            UVEditorController.transformMode = 0
+        else if (key === Qt.Key_E)
+            UVEditorController.transformMode = 1
+        else if (key === Qt.Key_R)
+            UVEditorController.transformMode = 2
+    }
+
+    function appendNumericChar(ch) {
+        if (UVEditorController.transformMode < 0)
+            return
+        if (ch === "." && numericBuffer.indexOf(".") >= 0)
+            return
+        if (ch === "-" && numericBuffer.length > 0)
+            return
+        numericBuffer += ch
+    }
+
+    function applyNumericBuffer() {
+        if (numericBuffer.length === 0)
+            return
+        const val = parseFloat(numericBuffer)
+        if (isNaN(val))
+            return
+        UVEditorController.applyNumericTransform(val)
+        numericBuffer = ""
+    }
+
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_F) {
             fitToView()
@@ -135,6 +179,30 @@ Rectangle {
             event.accepted = true
         } else if (event.key === Qt.Key_3) {
             UVEditorController.selectionMode = 2
+            event.accepted = true
+        } else if (event.key === Qt.Key_Q || event.key === Qt.Key_W || event.key === Qt.Key_E
+                   || event.key === Qt.Key_R || event.key === Qt.Key_G) {
+            setTransformModeFromKey(event.key)
+            event.accepted = true
+        } else if (event.key === Qt.Key_Escape) {
+            if (root.draggingTransform)
+                UVEditorController.cancelTransformDrag()
+            else
+                UVEditorController.transformMode = -1
+            numericBuffer = ""
+            root.draggingTransform = false
+            event.accepted = true
+        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            applyNumericBuffer()
+            event.accepted = numericBuffer.length > 0
+        } else if (event.key >= Qt.Key_0 && event.key <= Qt.Key_9) {
+            appendNumericChar(String.fromCharCode(event.key))
+            event.accepted = true
+        } else if (event.key === Qt.Key_Minus) {
+            appendNumericChar("-")
+            event.accepted = true
+        } else if (event.key === Qt.Key_Period) {
+            appendNumericChar(".")
             event.accepted = true
         }
     }
@@ -162,6 +230,120 @@ Rectangle {
                       : ""
                 color: ThemeManager.disabledTextColor
                 font.pixelSize: 10
+            }
+
+            Text {
+                text: UVEditorController.hasMesh ? transformModeLabel() : ""
+                color: ThemeManager.accentColor
+                font.pixelSize: 10
+            }
+
+            Text {
+                visible: numericBuffer.length > 0
+                text: numericBuffer
+                color: ThemeManager.highlightColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+
+            Row {
+                spacing: 2
+                Repeater {
+                    model: [
+                        { label: "Q", mode: -1, tip: "Select (Q)" },
+                        { label: "W", mode: 0, tip: "Move (W)" },
+                        { label: "E", mode: 1, tip: "Rotate (E)" },
+                        { label: "R", mode: 2, tip: "Scale (R)" }
+                    ]
+                    delegate: Rectangle {
+                        width: 20; height: 18; radius: 3
+                        color: UVEditorController.transformMode === modelData.mode
+                            ? ThemeManager.accentColor
+                            : ThemeManager.inputColor
+                        border.color: ThemeManager.borderColor
+                        border.width: 1
+                        ToolTip.visible: xformMa.containsMouse
+                        ToolTip.text: modelData.tip
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: ThemeManager.textColor
+                            font.pixelSize: 10
+                            font.bold: UVEditorController.transformMode === modelData.mode
+                        }
+                        MouseArea {
+                            id: xformMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: UVEditorController.transformMode = modelData.mode
+                        }
+                    }
+                }
+            }
+
+            ThemedComboBox {
+                id: pivotBox
+                Layout.preferredWidth: 72
+                model: ["Median", "Individual", "Cursor"]
+                currentIndex: UVEditorController.pivotMode
+                onActivated: UVEditorController.pivotMode = currentIndex
+            }
+
+            Rectangle {
+                width: 18; height: 18; radius: 3
+                color: UVEditorController.snapEnabled ? ThemeManager.highlightColor : ThemeManager.inputColor
+                border.color: ThemeManager.borderColor
+                ToolTip.visible: snapMa.containsMouse
+                ToolTip.text: "Snap (Ctrl inverts while dragging)"
+                Text {
+                    anchors.centerIn: parent
+                    text: "Snap"
+                    color: ThemeManager.textColor
+                    font.pixelSize: 8
+                }
+                MouseArea {
+                    id: snapMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: UVEditorController.snapEnabled = !UVEditorController.snapEnabled
+                }
+            }
+
+            ThemedComboBox {
+                id: snapBox
+                Layout.preferredWidth: 64
+                model: ["Grid", "Vertex", "Pixel"]
+                currentIndex: UVEditorController.snapMode
+                onActivated: UVEditorController.snapMode = currentIndex
+            }
+
+            Text {
+                text: "Mx"
+                color: ThemeManager.textColor
+                font.pixelSize: 10
+                font.underline: mxMa.containsMouse
+                MouseArea {
+                    id: mxMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: UVEditorController.mirrorSelectionX()
+                }
+            }
+            Text {
+                text: "My"
+                color: ThemeManager.textColor
+                font.pixelSize: 10
+                font.underline: myMa.containsMouse
+                MouseArea {
+                    id: myMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: UVEditorController.mirrorSelectionY()
+                }
             }
 
             Row {
@@ -496,7 +678,7 @@ Rectangle {
             MouseArea {
                 id: selectMa
                 anchors.fill: parent
-                acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
                 hoverEnabled: true
                 preventStealing: false
 
@@ -510,6 +692,21 @@ Rectangle {
                         lastX = mouse.x
                         lastY = mouse.y
                         return
+                    }
+                    if (mouse.button === Qt.RightButton) {
+                        const uv = root.screenToUv(mouse.x - viewCanvas.x, mouse.y - viewCanvas.y)
+                        UVEditorController.setCursorFromUv(uv.x, uv.y)
+                        return
+                    }
+                    if (UVEditorController.transformMode >= 0
+                            && UVEditorController.selectedVertexCount
+                               + UVEditorController.selectedEdgeCount
+                               + UVEditorController.selectedFaceCount > 0) {
+                        const uv = root.screenToUv(mouse.x - viewCanvas.x, mouse.y - viewCanvas.y)
+                        if (UVEditorController.beginTransformDrag(uv.x, uv.y, activeModifiers)) {
+                            root.draggingTransform = true
+                            return
+                        }
                     }
                     root.draggingSelect = true
                     root.dragStartX = mouse.x
@@ -529,6 +726,12 @@ Rectangle {
                         viewCanvas.requestPaint()
                         return
                     }
+                    if (root.draggingTransform && (mouse.buttons & Qt.LeftButton)) {
+                        const uv = root.screenToUv(mouse.x - viewCanvas.x, mouse.y - viewCanvas.y)
+                        UVEditorController.updateTransformDrag(uv.x, uv.y, activeModifiers)
+                        root.rebuildTriangleCache()
+                        return
+                    }
                     if (root.draggingSelect) {
                         root.dragEndX = mouse.x
                         root.dragEndY = mouse.y
@@ -536,8 +739,14 @@ Rectangle {
                     }
                 }
                 onReleased: function(mouse) {
-                    if (mouse.button === Qt.MiddleButton)
+                    if (mouse.button === Qt.MiddleButton || mouse.button === Qt.RightButton)
                         return
+                    if (root.draggingTransform) {
+                        UVEditorController.commitTransformDrag()
+                        root.draggingTransform = false
+                        root.rebuildTriangleCache()
+                        return
+                    }
                     if (!root.draggingSelect)
                         return
                     root.draggingSelect = false

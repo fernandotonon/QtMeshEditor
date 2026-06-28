@@ -37,10 +37,22 @@ ApplicationWindow {
     // Filtered material list
     property var allMaterials: []
     property var filteredMaterials: []
+    property var materialPreviewUris: ({})
     property string searchText: ""
+
+    function rebuildMaterialPreviews(names) {
+        var uris = {}
+        for (var i = 0; i < names.length; ++i) {
+            var n = names[i]
+            if (n && n.length > 0)
+                uris[n] = MaterialEditorQML.materialPreview(n)
+        }
+        materialPreviewUris = uris
+    }
 
     function refreshMaterialList() {
         allMaterials = MaterialEditorQML.getMaterialList()
+        rebuildMaterialPreviews(allMaterials)
         applyFilter()
     }
 
@@ -149,7 +161,7 @@ ApplicationWindow {
                             Image {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 width: 52; height: 52
-                                source: MaterialEditorQML.materialPreview(modelData)
+                                source: materialListModal.materialPreviewUris[modelData] || ""
                                 fillMode: Image.PreserveAspectFit
                                 asynchronous: true
                                 sourceSize.width: 52
