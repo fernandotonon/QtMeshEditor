@@ -3379,6 +3379,13 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
 
         MeshSegmenter::Options opts;
         opts.forceFallback = noModel;
+        const QString upAxisStr = args.value("up_axis").toString().toLower();
+        if (!upAxisStr.isEmpty()) {
+            if (upAxisStr == "x") opts.upAxis = 0;
+            else if (upAxisStr == "y") opts.upAxis = 1;
+            else if (upAxisStr == "z") opts.upAxis = 2;
+            else return makeErrorResult("Error: up_axis must be 'x', 'y', or 'z'");
+        }
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts);
@@ -3389,6 +3396,8 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         const int P = MeshSegmenter::partCount();
         std::vector<int> vCount(P, 0);
         for (int l : r.vertexLabels) if (l >= 0 && l < P) ++vCount[l];
+        std::vector<int> fCount(P, 0);
+        for (int l : r.faceLabels) if (l >= 0 && l < P) ++fCount[l];
 
         QString summary = QString("Segmented '%1' (%2 verts) via %3:")
             .arg(QString::fromStdString(entity->getName())).arg(vertexCount)
@@ -3398,7 +3407,39 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
                 summary += QString(" %1=%2").arg(MeshSegmenter::partName(p)).arg(vCount[p]);
         if (!r.usedModel && !r.fallbackReason.isEmpty())
             summary += QString(" (%1)").arg(r.fallbackReason);
-        return makeSuccessResult(summary);
+
+        // Return the actual label map so callers can act on it (assign a
+        // material to a part, drive a selection, etc.) rather than parse prose.
+        QJsonObject content;
+        content["ok"]              = true;
+        content["entity"]          = QString::fromStdString(entity->getName());
+        content["vertex_count"]    = vertexCount;
+        content["face_count"]      = static_cast<int>(r.faceLabels.size());
+        content["used_model"]      = r.usedModel;
+        if (!r.usedModel && !r.fallbackReason.isEmpty())
+            content["fallback_reason"] = r.fallbackReason;
+        content["up_axis"]         = QString(QChar("xyz"[opts.upAxis]));
+        content["summary"]         = summary;
+
+        QJsonArray parts, perVert, perFace;
+        for (int p = 0; p < P; ++p) {
+            QJsonObject part;
+            part["index"]        = p;
+            part["name"]         = MeshSegmenter::partName(p);
+            part["vertex_count"] = vCount[p];
+            part["face_count"]   = fCount[p];
+            parts.append(part);
+        }
+        content["parts"] = parts;
+
+        // Per-face labels (index into `parts`) — the primary actionable output
+        // for face-level part selection / per-part material assignment.
+        QJsonArray faceLabels;
+        for (int l : r.faceLabels) faceLabels.append(l);
+        content["face_labels"] = faceLabels;
+
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
@@ -6461,12 +6502,15 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity to segment. If omitted, uses the first mesh entity."}};
         props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the deterministic geometric fallback instead of the PointNet++ ML model. Default false."}};
+        props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis for the geometric/fallback head-vs-leg heuristic. Default 'y' (+Y up)."}};
         appendTool(
             "segment_mesh",
             "AI mesh part segmentation (#410): predict a semantic part label "
             "(head / torso / left+right arm / left+right leg) per vertex via a "
-            "PointNet++ ONNX model, and report per-part vertex counts. Falls back "
-            "automatically to a deterministic geometric segmenter (connected "
+            "PointNet++ ONNX model. Returns JSON with the full label map: per-part "
+            "vertex+face counts and the per-face label array (index into `parts`) "
+            "so callers can drive selection / per-part material assignment directly. "
+            "Falls back automatically to a deterministic geometric segmenter (connected "
             "components + spatial heuristic, refined by rig bone proximity) when "
             "the model is unavailable or the build lacks ONNX — the result reports "
             "which path ran. Works best on upright humanoid meshes.",

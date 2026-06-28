@@ -658,7 +658,12 @@ public:
     /// segmentProgress(/Total) and the segmentFinished(status) signal. Returns a
     /// short immediate status ("Segmenting…" / a guard message); the final
     /// result arrives via segmentFinished. No-op if already running.
-    Q_INVOKABLE QString selectByPart();
+    ///
+    /// `upAxis` ("x"/"y"/"z", default "y") matches the CLI `--up-axis` / MCP
+    /// `up_axis` parity — it drives the geometric/fallback head-vs-leg heuristic
+    /// for meshes that are not +Y up. Case-insensitive; an empty/unknown value
+    /// keeps the +Y default.
+    Q_INVOKABLE QString selectByPart(const QString& upAxis = QStringLiteral("y"));
 
     /// Cancel an in-flight selectByPart worker (no-op otherwise).
     Q_INVOKABLE void cancelSegment();

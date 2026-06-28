@@ -1973,11 +1973,36 @@ Rectangle {
             }
 
             Rectangle {
+                id: sbpButton
                 width: parent.width - 16; height: 26; radius: 3
                 opacity: EditModeController.segmentBusy ? 0.5 : 1.0
                 color: sbpMouse.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
-                     : sbpMouse.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
-                     : PropertiesPanelController.highlightColor
+                     : (sbpMouse.containsMouse || sbpButton.activeFocus)
+                         ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                         : PropertiesPanelController.highlightColor
+                // Keyboard accessibility: focusable, activatable with Space/Return,
+                // and exposed to assistive tech as a button.
+                activeFocusOnTab: !EditModeController.segmentBusy
+                border.color: sbpButton.activeFocus ? "white"
+                                                    : PropertiesPanelController.borderColor
+                border.width: sbpButton.activeFocus ? 1 : 0
+                Accessible.role: Accessible.Button
+                Accessible.name: "Select by Part (AI)"
+                Accessible.description: "Predict mesh parts and select the part under the current face selection"
+                Accessible.onPressAction: sbpButton.activate()
+                function activate() {
+                    if (EditModeController.segmentBusy)
+                        return
+                    editToolsCol.selectByPartStatus = ""
+                    EditModeController.selectByPart()
+                }
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
+                            || event.key === Qt.Key_Enter) {
+                        sbpButton.activate()
+                        event.accepted = true
+                    }
+                }
                 Text { anchors.centerIn: parent
                        text: EditModeController.segmentBusy ? "Segmenting…" : "Select by Part (AI)"
                        color: "white"; font.pixelSize: 11 }
@@ -1987,8 +2012,8 @@ Rectangle {
                     cursorShape: EditModeController.segmentBusy ? Qt.ForbiddenCursor
                                                                : Qt.PointingHandCursor
                     onClicked: {
-                        editToolsCol.selectByPartStatus = ""
-                        EditModeController.selectByPart()
+                        sbpButton.forceActiveFocus()
+                        sbpButton.activate()
                     }
                 }
             }

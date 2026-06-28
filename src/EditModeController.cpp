@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include <QMetaObject>
 #include <QPointer>
 #include <thread>
+#include <unordered_set>
 #include "SentryReporter.h"
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
@@ -757,12 +758,19 @@ void EditModeController::deselectAll()
     emit editSelectionChanged();
 }
 
-QString EditModeController::selectByPart()
+QString EditModeController::selectByPart(const QString& upAxis)
 {
     if (!m_editModeActive || !m_editableMesh || !m_editEntity)
         return tr("Enter Edit Mode on a mesh first.");
     if (m_segmentBusy)
         return tr("Segmentation already running…");
+
+    // Parse up-axis (parity with CLI --up-axis / MCP up_axis); default +Y.
+    int upAxisIdx = 1;
+    const QString ua = upAxis.trimmed().toLower();
+    if (ua == QLatin1String("x")) upAxisIdx = 0;
+    else if (ua == QLatin1String("z")) upAxisIdx = 2;
+    else upAxisIdx = 1;   // "y", empty, or anything unrecognised → +Y
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
                                   QStringLiteral("Edit Mode: Select by part"));
@@ -847,7 +855,7 @@ QString EditModeController::selectByPart()
     auto cancel = m_segmentCancel;
     QPointer<EditModeController> self(this);
 
-    std::thread([self, verts, indices, vertexCount, cancel]() {
+    std::thread([self, verts, indices, vertexCount, cancel, upAxisIdx]() {
         // Progress callback (inference): marshal to the UI thread, honour cancel.
         auto progress = [self, cancel](int done, int total) -> bool {
             if (cancel->load()) return false;
@@ -873,6 +881,7 @@ QString EditModeController::selectByPart()
         }
 
         MeshSegmenter::Options opts;
+        opts.upAxis = upAxisIdx;
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts,
@@ -943,13 +952,27 @@ void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
     m_selectedEdges.clear();
     m_selectedFaces.clear();
 
-    int selectedCount = 0;
+    // Expand each wanted triangle to its full polygon (quad / n-gon) via
+    // selectFace, but count DISTINCT polygons and de-dup the work: selectFace
+    // is idempotent on the face set, yet it rebuilds the overlay + emits a
+    // signal on every call — calling it once per triangle on a multi-thousand
+    // -face mesh would trigger thousands of overlay rebuilds. We track which
+    // polygons we've already expanded and update the overlay/signal ONCE below.
+    std::unordered_set<int> seenPolygons;   // keyed by face's first global tri
+    int selectedPolygons = 0;
     for (int t = 0; t < totalTris; ++t) {
-        if (wantLabels.count(faceLabels[t])) {
-            selectFace(t, /*addToSelection=*/true);
-            ++selectedCount;
-        }
+        if (!wantLabels.count(faceLabels[t])) continue;
+        auto [subIdx, localTri] = globalTriToLocal(t);
+        if (subIdx >= m_editableMesh->subMeshes().size()) continue;
+        const auto& sub = m_editableMesh->subMeshes()[subIdx];
+        size_t faceFirstTri = localTri, faceTriCount = 1;
+        faceIndexForTriangle(sub, localTri, &faceFirstTri, &faceTriCount);
+        const int faceKey = localTriToGlobal(subIdx, faceFirstTri);
+        if (!seenPolygons.insert(faceKey).second) continue;   // already expanded
+        selectFace(t, /*addToSelection=*/true);
+        ++selectedPolygons;
     }
+    const int selectedCount = selectedPolygons;
 
     QStringList names;
     for (int l : wantLabels) names << MeshSegmenter::partName(l);

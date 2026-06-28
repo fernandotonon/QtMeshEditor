@@ -8322,7 +8322,11 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
             }
             continue;
         }
-        if (arg == "--up-axis" && i + 1 < argc) {
+        if (arg == "--up-axis") {
+            if (i + 1 >= argc) {
+                err() << "Error: --up-axis requires a value (x, y, or z)." << Qt::endl;
+                return 2;
+            }
             const QString a = QString::fromLocal8Bit(argv[++i]).toLower();
             if (a == "x") upAxis = 0;
             else if (a == "y") upAxis = 1;
@@ -8437,7 +8441,11 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         if (arg == "segment" || arg == "--cli") continue;
         if (arg == "--json")     { jsonOutput = true; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
-        if (arg == "--up-axis" && i + 1 < argc) {
+        if (arg == "--up-axis") {
+            if (i + 1 >= argc) {
+                err() << "Error: --up-axis requires a value (x, y, or z)." << Qt::endl;
+                return 2;
+            }
             const QString a = QString::fromLocal8Bit(argv[++i]).toLower();
             if (a == "x") upAxis = 0;
             else if (a == "y") upAxis = 1;

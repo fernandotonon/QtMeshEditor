@@ -250,13 +250,8 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
         return Part::Torso;
     };
 
-    if (haveBone) {
-        for (int v = 0; v < vertexCount; ++v) {
-            const int bp = boneProximity[v];
-            r.vertexLabels[v] = (bp >= 0 && bp < static_cast<int>(Part::Count))
-                                    ? bp : static_cast<int>(Part::Torso);
-        }
-    } else if (nIslands > 1) {
+    // 1) ALWAYS compute the spatial (geometric) label first, for every vertex.
+    if (nIslands > 1) {
         // Per-island centroid classification.
         std::vector<std::array<double, 3>> sum(nIslands, { 0, 0, 0 });
         std::vector<int> cnt(nIslands, 0);
@@ -281,6 +276,17 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
             const float upN = (positions[3*v + up] - mn[up]) / upSpan;
             const float lateral = positions[3*v + side] - sideMid;
             r.vertexLabels[v] = static_cast<int>(classify(upN, lateral));
+        }
+    }
+
+    // 2) Override with VALID rig bone-proximity hints only. An unknown/invalid
+    // hint (-1, or out of range) leaves the spatial label intact — a partially
+    // hinted rig must not collapse its unhinted vertices to Torso.
+    if (haveBone) {
+        for (int v = 0; v < vertexCount; ++v) {
+            const int bp = boneProximity[v];
+            if (bp >= 0 && bp < static_cast<int>(Part::Count))
+                r.vertexLabels[v] = bp;
         }
     }
 
@@ -397,6 +403,23 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
         for (int a = 0; a < 3; ++a) half = std::max(half, 0.5f*(mx[a]-mn[a]));
         const float inv = half > 1e-6f ? 1.0f/half : 1.0f;
 
+        // The model is trained on +Y-up point clouds. If the mesh's up axis is
+        // X or Z, remap coordinates so the up axis lands on Y before inference —
+        // otherwise an x/z-up mesh is segmented in the wrong frame and head/legs
+        // mislabel. `axisFor[outComponent] = sourceComponent`: up → Y(1), and the
+        // two remaining source axes fill X(0)/Z(2) in ascending order.
+        const int up = (opts.upAxis >= 0 && opts.upAxis <= 2) ? opts.upAxis : 1;
+        std::array<int,3> axisFor{ 0, 1, 2 };
+        if (up != 1) {
+            axisFor[1] = up;                 // model Y  ← mesh up axis
+            int fill = 0;
+            for (int a = 0; a < 3; ++a) {
+                if (a == up) continue;
+                axisFor[fill == 0 ? 0 : 2] = a;   // X then Z get the other two
+                ++fill;
+            }
+        }
+
         const int N = std::max(256, opts.samplePoints);
         // Deterministic point sample (with replacement if the mesh is small).
         std::mt19937 rng(0x5e6u);  // NOSONAR — non-crypto, fixed for reproducibility
@@ -406,9 +429,10 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
         for (int i = 0; i < N; ++i) {
             const int v = (vertexCount >= N) ? (i < vertexCount ? i : pick(rng)) : pick(rng);
             srcVert[i] = v;
-            pts[3*i+0] = (positions[3*v+0]-centre[0])*inv;
-            pts[3*i+1] = (positions[3*v+1]-centre[1])*inv;
-            pts[3*i+2] = (positions[3*v+2]-centre[2])*inv;
+            for (int c = 0; c < 3; ++c) {
+                const int a = axisFor[c];
+                pts[3*i+c] = (positions[3*v+a]-centre[a])*inv;
+            }
         }
 
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_segment");
