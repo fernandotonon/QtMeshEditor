@@ -687,7 +687,10 @@ public:
     void deselectEdge(int v1, int v2);
 
     /// Select a face (triangle) by global triangle index.
-    void selectFace(int triIndex, bool addToSelection = false);
+    // `notify` controls whether the overlay is rebuilt + editSelectionChanged()
+    // is emitted at the end (default true). Batch callers (e.g. select-by-part)
+    // pass false for every call and fire the update ONCE afterward.
+    void selectFace(int triIndex, bool addToSelection = false, bool notify = true);
 
     /// Deselect a face by global triangle index.
     void deselectFace(int triIndex);

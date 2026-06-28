@@ -6502,7 +6502,7 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity to segment. If omitted, uses the first mesh entity."}};
         props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the deterministic geometric fallback instead of the PointNet++ ML model. Default false."}};
-        props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis for the geometric/fallback head-vs-leg heuristic. Default 'y' (+Y up)."}};
+        props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis. Affects BOTH the ML model (the point cloud is remapped to the model's +Y-up training frame before inference) and the geometric fallback's head-vs-leg heuristic. Set this for X/Z-up meshes or labels will be wrong. Default 'y' (+Y up)."}};
         appendTool(
             "segment_mesh",
             "AI mesh part segmentation (#410): predict a semantic part label "

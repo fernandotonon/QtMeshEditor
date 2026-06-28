@@ -509,9 +509,11 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
         } else {
             // brute-force nearest sampled point per vertex (N is small, ~4k).
             for (int v = 0; v < vertexCount; ++v) {
-                const float vx=(positions[3*v+0]-centre[0])*inv;
-                const float vy=(positions[3*v+1]-centre[1])*inv;
-                const float vz=(positions[3*v+2]-centre[2])*inv;
+                // Same axis remap as the sampled points (`pts`), so distances are
+                // compared in the SAME (model +Y-up) frame — not raw vertex order.
+                const float vx=(positions[3*v+axisFor[0]]-centre[axisFor[0]])*inv;
+                const float vy=(positions[3*v+axisFor[1]]-centre[axisFor[1]])*inv;
+                const float vz=(positions[3*v+axisFor[2]]-centre[axisFor[2]])*inv;
                 int best=0; float bd=1e30f;
                 for (int i = 0; i < N; ++i) {
                     const float dx=vx-pts[3*i+0], dy=vy-pts[3*i+1], dz=vz-pts[3*i+2];

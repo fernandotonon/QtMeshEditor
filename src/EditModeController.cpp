@@ -888,8 +888,16 @@ QString EditModeController::selectByPart(const QString& upAxis)
             /*boneProximity=*/nullptr, progress);
 
         // Hand the result back to the main thread to touch Ogre selection.
-        QMetaObject::invokeMethod(qApp, [self, r]() {
+        QMetaObject::invokeMethod(qApp, [self, r, cancel]() {
             if (!self) return;
+            // If the user cancelled, predict() may still return an OK "cancelled"
+            // fallback — do NOT mutate the selection; just report cancellation.
+            if (cancel->load() || r.fallbackReason == QStringLiteral("cancelled")) {
+                self->m_segmentBusy = false; self->m_segmentDownloading = false;
+                emit self->segmentProgressChanged();
+                emit self->segmentFinished(tr("Segmentation cancelled."), false);
+                return;
+            }
             if (!r.ok) {
                 self->m_segmentBusy = false; self->m_segmentDownloading = false;
                 emit self->segmentProgressChanged();
@@ -969,9 +977,13 @@ void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
         faceIndexForTriangle(sub, localTri, &faceFirstTri, &faceTriCount);
         const int faceKey = localTriToGlobal(subIdx, faceFirstTri);
         if (!seenPolygons.insert(faceKey).second) continue;   // already expanded
-        selectFace(t, /*addToSelection=*/true);
+        selectFace(t, /*addToSelection=*/true, /*notify=*/false);
         ++selectedPolygons;
     }
+    // Rebuild the overlay + notify ONCE for the whole batch (selectFace was
+    // told not to, so a multi-thousand-face part doesn't trigger N rebuilds).
+    updateSelectionOverlay();
+    emit editSelectionChanged();
     const int selectedCount = selectedPolygons;
 
     QStringList names;
@@ -991,6 +1003,8 @@ void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
 
 void EditModeController::cancelSegment()
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
+                                  QStringLiteral("Edit Mode: Select by part cancelled"));
     if (m_segmentCancel) m_segmentCancel->store(true);
 }
 
@@ -1049,7 +1063,7 @@ void EditModeController::deselectEdge(int v1, int v2)
     }
 }
 
-void EditModeController::selectFace(int triIndex, bool addToSelection)
+void EditModeController::selectFace(int triIndex, bool addToSelection, bool notify)
 {
     if (!m_editModeActive || !m_editableMesh)
         return;
@@ -1117,8 +1131,10 @@ void EditModeController::selectFace(int triIndex, bool addToSelection)
         }
     }
 
-    updateSelectionOverlay();
-    emit editSelectionChanged();
+    if (notify) {
+        updateSelectionOverlay();
+        emit editSelectionChanged();
+    }
 }
 
 void EditModeController::deselectFace(int triIndex)
