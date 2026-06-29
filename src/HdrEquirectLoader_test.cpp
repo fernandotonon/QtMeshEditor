@@ -22,7 +22,7 @@ FloatImage makeTopRedBottomBlueEquirect()
         for (int x = 0; x < img.width; ++x) {
             const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(img.width)
                               + static_cast<size_t>(x)) * 3u;
-            if (y >= img.height / 2) {
+            if (y < img.height / 2) {
                 img.rgb[i + 0] = 1.f;
                 img.rgb[i + 1] = 0.f;
                 img.rgb[i + 2] = 0.f;

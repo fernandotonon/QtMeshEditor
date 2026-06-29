@@ -19,6 +19,16 @@ protected:
     }
 };
 
+class HDREnvironmentManagerOgreTest : public HDREnvironmentManagerTest {
+protected:
+    void SetUp() override
+    {
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles());
+        createStandardOgreMaterials();
+    }
+};
+
 TEST_F(HDREnvironmentManagerTest, KillAndRecreate)
 {
     auto* mgr = HDREnvironmentManager::getSingleton();
@@ -29,11 +39,8 @@ TEST_F(HDREnvironmentManagerTest, KillAndRecreate)
 }
 
 #ifdef ENABLE_OPENEXR
-TEST_F(HDREnvironmentManagerTest, LoadEnvironment_CreatesCubeMapTexture)
+TEST_F(HDREnvironmentManagerOgreTest, LoadEnvironment_CreatesCubeMapTexture)
 {
-    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
-    createStandardOgreMaterials();
-
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
 
@@ -60,11 +67,8 @@ TEST_F(HDREnvironmentManagerTest, LoadEnvironment_CreatesCubeMapTexture)
     EXPECT_EQ(spy.count(), 1);
 }
 
-TEST_F(HDREnvironmentManagerTest, ReloadSameFile_UsesBakeCache)
+TEST_F(HDREnvironmentManagerOgreTest, ReloadSameFile_UsesBakeCache)
 {
-    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
-    createStandardOgreMaterials();
-
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
 
@@ -87,8 +91,31 @@ TEST_F(HDREnvironmentManagerTest, ReloadSameFile_UsesBakeCache)
     const qint64 secondMs = second.elapsed();
 
     EXPECT_EQ(mgr->currentCacheKey(), HdrEquirect::sha1HexOfFile(path));
-    // Second load should skip decode/bake — typically much faster.
     EXPECT_LT(secondMs, firstMs + 50);
+}
+
+TEST_F(HDREnvironmentManagerOgreTest, SwitchingEnvironment_ReleasesPreviousCubemap)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const int w = 16;
+    const int h = 8;
+    std::vector<float> rgbA(static_cast<size_t>(w * h * 3), 0.25f);
+    std::vector<float> rgbB(static_cast<size_t>(w * h * 3), 0.75f);
+    const QString pathA = tmp.filePath(QStringLiteral("a.exr"));
+    const QString pathB = tmp.filePath(QStringLiteral("b.exr"));
+    ASSERT_TRUE(MinimalEXR::writeRGB32F(pathA, w, h, rgbA));
+    ASSERT_TRUE(MinimalEXR::writeRGB32F(pathB, w, h, rgbB));
+
+    auto* mgr = HDREnvironmentManager::getSingleton();
+    ASSERT_TRUE(mgr->loadEnvironment(pathA));
+    const Ogre::String firstTex = mgr->cubemap()->getName();
+    ASSERT_TRUE(mgr->loadEnvironment(pathB));
+    const Ogre::String secondTex = mgr->cubemap()->getName();
+    EXPECT_NE(firstTex, secondTex);
+    EXPECT_FALSE(Ogre::TextureManager::getSingleton().resourceExists(firstTex));
+    EXPECT_TRUE(Ogre::TextureManager::getSingleton().resourceExists(secondTex));
 }
 #endif
 

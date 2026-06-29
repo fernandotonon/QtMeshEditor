@@ -10,6 +10,19 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 
+namespace {
+
+void removeCubemapTexture(const Ogre::TexturePtr& tex)
+{
+    if (tex.isNull() || !Ogre::TextureManager::getSingletonPtr())
+        return;
+    const Ogre::String name = tex->getName();
+    if (Ogre::TextureManager::getSingleton().resourceExists(name))
+        Ogre::TextureManager::getSingleton().remove(name);
+}
+
+} // namespace
+
 HDREnvironmentManager* HDREnvironmentManager::s_singleton = nullptr;
 
 HDREnvironmentManager* HDREnvironmentManager::getSingleton()
@@ -37,19 +50,15 @@ HDREnvironmentManager::HDREnvironmentManager(QObject* parent)
 
 HDREnvironmentManager::~HDREnvironmentManager()
 {
-    if (m_cubemap && Ogre::TextureManager::getSingletonPtr()) {
-        const Ogre::String texName = m_cubemap->getName();
-        if (Ogre::TextureManager::getSingleton().resourceExists(texName))
-            Ogre::TextureManager::getSingleton().remove(texName);
-    }
+    removeCubemapTexture(m_cubemap);
     m_cubemap.reset();
 }
 
 QString HDREnvironmentManager::resolvePath(const QString& pathOrBundledName) const
 {
     QFileInfo info(pathOrBundledName);
-    if (info.isAbsolute() && info.exists())
-        return info.absoluteFilePath();
+    if (info.isAbsolute())
+        return info.exists() ? info.absoluteFilePath() : QString{};
 
     if (info.exists())
         return info.absoluteFilePath();
@@ -60,7 +69,7 @@ QString HDREnvironmentManager::resolvePath(const QString& pathOrBundledName) con
     candidates << appDir + QStringLiteral("/media/hdri/") + fileName
                << appDir + QStringLiteral("/../media/hdri/") + fileName;
 
-#if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
+#ifdef Q_OS_MACOS
     candidates << appDir + QStringLiteral("/../../media/hdri/") + fileName
                << appDir + QStringLiteral("/../../../media/hdri/") + fileName;
 #endif
@@ -71,8 +80,11 @@ QString HDREnvironmentManager::resolvePath(const QString& pathOrBundledName) con
 #endif
 
     for (const QString& candidate : candidates) {
-        const QString canon = QDir(candidate).canonicalPath();
-        if (!canon.isEmpty() && QFileInfo::exists(canon))
+        const QFileInfo candidateInfo(candidate);
+        if (!candidateInfo.exists() || !candidateInfo.isFile())
+            continue;
+        const QString canon = candidateInfo.canonicalFilePath();
+        if (!canon.isEmpty())
             return canon;
     }
     return {};
@@ -172,6 +184,8 @@ bool HDREnvironmentManager::loadEnvironment(const QString& pathOrBundledName)
     }
 
     QString ogreError;
+    removeCubemapTexture(m_cubemap);
+    m_cubemap.reset();
     if (!createOgreCubemap(cacheKey, bake->faces, ogreError))
         return false;
 

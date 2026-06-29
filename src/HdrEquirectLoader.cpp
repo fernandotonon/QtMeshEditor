@@ -103,7 +103,8 @@ void directionToEquirectUv(const float dir[3], float& u, float& v)
     const float phi = std::atan2(dir[2], dir[0]);
     const float theta = std::asin(std::max(-1.f, std::min(1.f, dir[1])));
     u = phi / kTwoPi + 0.5f;
-    v = theta / kPi + 0.5f;
+    // Match UvProject / Radiance convention: image row 0 (+Y pole) maps to v=0.
+    v = 0.5f - theta / kPi;
 }
 
 bool loadHdrStb(const QString& path, FloatImage& out, QString& error)
@@ -141,12 +142,26 @@ bool loadHdrStb(const QString& path, FloatImage& out, QString& error)
 #ifdef ENABLE_OPENEXR
 bool loadExrTiny(const QString& path, FloatImage& out, QString& error)
 {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        error = QStringLiteral("cannot open file: %1").arg(path);
+        return false;
+    }
+    const QByteArray bytes = file.readAll();
+    if (bytes.isEmpty()) {
+        error = QStringLiteral("empty file: %1").arg(path);
+        return false;
+    }
+
     float* rgba = nullptr;
     int w = 0;
     int h = 0;
-    const QByteArray local = QFile::encodeName(path);
     const char* err = nullptr;
-    const int ret = LoadEXR(&rgba, &w, &h, local.constData(), &err);
+    const int ret = LoadEXRFromMemory(
+        &rgba, &w, &h,
+        reinterpret_cast<const unsigned char*>(bytes.constData()),
+        static_cast<size_t>(bytes.size()),
+        &err);
     if (ret != TINYEXR_SUCCESS) {
         error = err ? QString::fromUtf8(err) : QStringLiteral("LoadEXR failed");
         if (err)
