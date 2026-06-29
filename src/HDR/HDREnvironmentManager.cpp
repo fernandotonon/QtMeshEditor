@@ -1,6 +1,6 @@
-#include "HDREnvironmentManager.h"
+#include "HDR/HDREnvironmentManager.h"
 
-#include "HdrEquirectLoader.h"
+#include "HDR/HdrEquirectLoader.h"
 #include "SentryReporter.h"
 
 #include <OgreTextureManager.h>

@@ -1,4 +1,4 @@
-#include "HdrEquirectLoader.h"
+#include "HDR/HdrEquirectLoader.h"
 
 #include <QByteArray>
 #include <QFile>

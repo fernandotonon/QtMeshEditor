@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
-#include "HDREnvironmentManager.h"
-#include "HdrEquirectLoader.h"
+#include "HDR/HDREnvironmentManager.h"
+#include "HDR/HdrEquirectLoader.h"
 #include "MinimalEXRWriter.h"
 #include "TestHelpers.h"
 

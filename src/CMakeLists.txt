@@ -118,8 +118,8 @@ VATBakerController.cpp
 VATShaderEmitter.cpp
 IsometricSpritesController.cpp
 MinimalEXRWriter.cpp
-HDREnvironmentManager.cpp
-HdrEquirectLoader.cpp
+HDR/HDREnvironmentManager.cpp
+HDR/HdrEquirectLoader.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp
@@ -306,8 +306,8 @@ EditableMesh.h
 EditModeController.h
 EditorModeController.h
 HalfEdgeMesh.h
-HDREnvironmentManager.h
-HdrEquirectLoader.h
+HDR/HDREnvironmentManager.h
+HDR/HdrEquirectLoader.h
 )
 
 set(TEST_SOURCES "")

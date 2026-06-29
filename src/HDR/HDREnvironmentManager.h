@@ -1,6 +1,6 @@
 #pragma once
 
-#include "HdrEquirectLoader.h"
+#include "HDR/HdrEquirectLoader.h"
 
 #include <Ogre.h>
 

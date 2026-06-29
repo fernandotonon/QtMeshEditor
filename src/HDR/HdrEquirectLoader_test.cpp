@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "HdrEquirectLoader.h"
+#include "HDR/HdrEquirectLoader.h"
 
 #include "MinimalEXRWriter.h"
 
