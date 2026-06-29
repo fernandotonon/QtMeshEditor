@@ -12,8 +12,10 @@
 #include "UvSeamData.h"
 #include "UvSeamOps.h"
 #include "UvUnwrap.h"
+#include "UvProject.h"
 #include "commands/UVEditCommand.h"
 #include "commands/UvSeamCommands.h"
+#include "mainwindow.h"
 
 #include <QImage>
 #include <QColor>
@@ -29,8 +31,10 @@
 #include <QUrl>
 
 #include <OgreEntity.h>
+#include <OgreCamera.h>
 #include <OgreMaterial.h>
 #include <OgrePass.h>
+#include <OgreSceneNode.h>
 #include <OgreSubEntity.h>
 #include <OgreSubMesh.h>
 #include <OgreTexture.h>
@@ -2136,4 +2140,210 @@ void UVEditorController::unwrapSelectedFaces()
     ++m_meshRevision;
     emit meshDataChanged();
     refresh();
+}
+
+UvProject::Selection UVEditorController::buildProjectionSelection() const
+{
+    UvProject::Selection selection;
+    selection.includeTriangle.resize(m_workingMesh.subMeshes().size());
+
+    const bool hasSelection = !m_selectedUvVerts.isEmpty() || !m_selectedUvEdges.isEmpty()
+                              || !m_selectedUvFaces.isEmpty();
+
+    if (!hasSelection) {
+        for (size_t si = 0; si < selection.includeTriangle.size(); ++si) {
+            if (!m_submeshFilter.isEmpty() && !m_submeshFilter.contains(static_cast<int>(si))) {
+                selection.includeTriangle[si].assign(
+                    m_workingMesh.subMeshes()[si].triangles.size(), false);
+            }
+        }
+        return selection;
+    }
+
+    QSet<int> selectedGlobalVerts;
+    for (int id : m_selectedUvVerts) {
+        if (id >= 0 && id < static_cast<int>(m_uvVerts.size()))
+            selectedGlobalVerts.insert(m_uvVerts[static_cast<size_t>(id)].meshGlobalVert);
+    }
+    for (int eid : m_selectedUvEdges) {
+        if (eid < 0 || eid >= static_cast<int>(m_uvEdges.size()))
+            continue;
+        selectedGlobalVerts.insert(m_uvEdges[static_cast<size_t>(eid)].meshGlobalV0);
+        selectedGlobalVerts.insert(m_uvEdges[static_cast<size_t>(eid)].meshGlobalV1);
+    }
+
+    QSet<int> selectedGlobalTris;
+    for (int fid : m_selectedUvFaces) {
+        if (fid < 0 || fid >= static_cast<int>(m_uvTris.size()))
+            continue;
+        selectedGlobalTris.insert(m_uvTris[static_cast<size_t>(fid)].meshGlobalTri);
+    }
+
+    int globalTriOffset = 0;
+    int globalVertOffset = 0;
+    for (size_t si = 0; si < m_workingMesh.subMeshes().size(); ++si) {
+        const auto& sub = m_workingMesh.subMeshes()[si];
+        auto& mask = selection.includeTriangle[si];
+        mask.assign(sub.triangles.size(), false);
+
+        if (!m_submeshFilter.isEmpty() && !m_submeshFilter.contains(static_cast<int>(si))) {
+            globalTriOffset += static_cast<int>(sub.triangles.size());
+            globalVertOffset += static_cast<int>(sub.vertices.size());
+            continue;
+        }
+
+        for (size_t ti = 0; ti < sub.triangles.size(); ++ti) {
+            const int globalTri = globalTriOffset + static_cast<int>(ti);
+            if (selectedGlobalTris.contains(globalTri)) {
+                mask[ti] = true;
+                continue;
+            }
+            for (int c = 0; c < 3; ++c) {
+                const int globalVert =
+                    globalVertOffset + static_cast<int>(sub.triangles[ti].indices[c]);
+                if (selectedGlobalVerts.contains(globalVert)) {
+                    mask[ti] = true;
+                    break;
+                }
+            }
+        }
+
+        globalTriOffset += static_cast<int>(sub.triangles.size());
+        globalVertOffset += static_cast<int>(sub.vertices.size());
+    }
+
+    return selection;
+}
+
+bool UVEditorController::applyProjectionChanges(
+    const std::vector<UVEditCommand::VertChange>& changes,
+    const QString& undoDescription,
+    const QString& breadcrumbMode)
+{
+    if (!m_activeEntity || changes.empty())
+        return false;
+
+    if (!commitWorkingMeshUvs()) {
+        for (const auto& ch : changes)
+            applyWorkingMeshUv(ch.subMeshIndex, ch.vertexIndex, ch.oldUv);
+        return false;
+    }
+
+    if (auto* edit = EditModeController::instance()) {
+        if (edit->isEditModeActive() && edit->editEntity() == m_activeEntity) {
+            if (edit->currentMesh())
+                edit->currentMesh()->subMeshes() = m_workingMesh.subMeshes();
+            edit->notifyMeshDataChanged();
+        }
+    }
+
+    if (UndoManager* undo = UndoManager::getSingleton())
+        undo->push(new UVEditCommand(m_activeEntity, m_uvChannel, changes, undoDescription));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.project"), breadcrumbMode);
+    syncUvLayoutFromWorkingMesh();
+    return true;
+}
+
+void UVEditorController::runUvProjection(UvProject::Mode mode, const UvProject::Options& extraOpts)
+{
+    if (!m_activeEntity || m_workingMesh.subMeshes().empty())
+        return;
+
+    UvProject::Options opts = extraOpts;
+    opts.mode = mode;
+
+    if (mode == UvProject::Mode::View) {
+        MainWindow* mw = Manager::getSingletonPtr() ? Manager::getSingleton()->getMainWindow() : nullptr;
+        if (!mw) {
+            m_statusText = tr("View projection requires an active viewport");
+            emit meshDataChanged();
+            return;
+        }
+        const ViewportCameraSnapshot snap = mw->queryViewportCamera(false);
+        if (!snap.valid) {
+            m_statusText = tr("View projection requires an active 3D viewport");
+            emit meshDataChanged();
+            return;
+        }
+        opts.viewMatrix = snap.viewMatrix;
+        opts.projMatrix = snap.projMatrix;
+        opts.hasViewMatrices = true;
+
+        if (Ogre::Node* node = m_activeEntity->getParentNode())
+            opts.worldMatrix = node->_getFullTransform();
+        else
+            opts.worldMatrix = Ogre::Matrix4::IDENTITY;
+    }
+
+    const UvProject::Selection selection = buildProjectionSelection();
+    const UvProject::Report report = UvProject::project(m_workingMesh, selection, opts);
+    if (!report.applied) {
+        m_statusText = report.error.isEmpty() ? tr("Projection failed") : report.error;
+        emit meshDataChanged();
+        return;
+    }
+
+    for (const auto& ch : report.changes)
+        applyWorkingMeshUv(ch.subMeshIndex, ch.vertexIndex, ch.newUv);
+
+    std::vector<UVEditCommand::VertChange> changes;
+    changes.reserve(report.changes.size());
+    for (const auto& ch : report.changes) {
+        UVEditCommand::VertChange cmd;
+        cmd.subMeshIndex = ch.subMeshIndex;
+        cmd.vertexIndex = ch.vertexIndex;
+        cmd.oldUv = ch.oldUv;
+        cmd.newUv = ch.newUv;
+        changes.push_back(cmd);
+    }
+
+    const QString modeLabel = UvProject::modeToString(mode);
+    const QString undoDescription = tr("UV Project %1").arg(modeLabel);
+    if (applyProjectionChanges(changes, undoDescription, modeLabel)) {
+        const bool scoped = !m_selectedUvVerts.isEmpty() || !m_selectedUvEdges.isEmpty()
+                            || !m_selectedUvFaces.isEmpty();
+        m_statusText = scoped
+            ? tr("Projected %1 vertices (%2, selection)").arg(report.vertsChanged).arg(modeLabel)
+            : tr("Projected %1 vertices (%2)").arg(report.vertsChanged).arg(modeLabel);
+        emit meshDataChanged();
+    } else {
+        for (const auto& ch : changes)
+            applyWorkingMeshUv(ch.subMeshIndex, ch.vertexIndex, ch.oldUv);
+        syncUvLayoutFromWorkingMesh();
+        m_statusText = tr("Failed to commit projection");
+        emit meshDataChanged();
+    }
+}
+
+void UVEditorController::projectUvFromView()
+{
+    runUvProjection(UvProject::Mode::View, {});
+}
+
+void UVEditorController::projectUvBox(double scale)
+{
+    UvProject::Options opts;
+    opts.boxScale = static_cast<float>(scale > 0.0 ? scale : 1.0);
+    runUvProjection(UvProject::Mode::Box, opts);
+}
+
+void UVEditorController::projectUvCylinder(int axis, double scale)
+{
+    UvProject::Options opts;
+    opts.axis = axis;
+    opts.boxScale = static_cast<float>(scale > 0.0 ? scale : 1.0);
+    runUvProjection(UvProject::Mode::Cylinder, opts);
+}
+
+void UVEditorController::projectUvSphere(int axis)
+{
+    UvProject::Options opts;
+    opts.axis = axis;
+    runUvProjection(UvProject::Mode::Sphere, opts);
+}
+
+void UVEditorController::resetUvBox()
+{
+    runUvProjection(UvProject::Mode::ResetBox, {});
 }

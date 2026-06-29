@@ -596,6 +596,53 @@ Rectangle {
                     }
                 }
             }
+
+            Text {
+                text: "Projection"
+                color: ThemeManager.disabledTextColor
+                font.pixelSize: 10
+            }
+
+            Row {
+                spacing: 2
+                Repeater {
+                    model: [
+                        { label: "View", tip: "Project from focused 3D viewport", fn: function() { UVEditorController.projectUvFromView() } },
+                        { label: "Box", tip: "Box projection", fn: function() { UVEditorController.projectUvBox(1.0) } },
+                        { label: "Cyl", tip: "Cylinder projection (Y axis)", fn: function() { UVEditorController.projectUvCylinder(1, 1.0) } },
+                        { label: "Sph", tip: "Sphere projection", fn: function() { UVEditorController.projectUvSphere(1) } },
+                        { label: "Reset", tip: "Reset UVs to 0–1 box", fn: function() { UVEditorController.resetUvBox() } }
+                    ]
+                    delegate: Rectangle {
+                        width: modelData.label === "Reset" ? 34 : 30
+                        height: 18
+                        radius: 3
+                        color: projBtnMa.pressed ? Qt.darker(ThemeManager.inputColor, 1.15)
+                             : projBtnMa.containsMouse ? Qt.lighter(ThemeManager.inputColor, 1.08)
+                             : ThemeManager.inputColor
+                        border.color: ThemeManager.borderColor
+                        border.width: 1
+                        ToolTip.visible: projBtnMa.containsMouse
+                        ToolTip.text: modelData.tip
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: ThemeManager.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            id: projBtnMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                modelData.fn()
+                                root.rebuildTriangleCache()
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Rectangle {
