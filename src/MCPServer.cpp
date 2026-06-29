@@ -78,6 +78,7 @@
 #include <OgreSubMesh.h>
 #include <OgreMesh.h>
 #include <cmath>
+#include <limits>
 #include <OgreSkeleton.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
@@ -102,6 +103,8 @@ static Ogre::SceneNode* findSceneNodeByName(const QString &nodeName);
 static Ogre::Entity* findEntityByName(const QString &entityName);
 static Ogre::NodeAnimationTrack* findTrackByBoneName(Ogre::Animation* anim, const QString &boneName);
 static bool hasSelectedEntities();
+static Ogre::Entity* firstResolvedSelectedEntity();
+static bool mcpJsonIntValue(const QJsonValue& value, int* out, QString* err, const char* field);
 static QString captureLodControllerError(const std::function<void()> &operation);
 
 MCPServer::MCPServer(QObject *parent)
@@ -1519,11 +1522,9 @@ QJsonObject MCPServer::toolAutoUvUnwrap(const QJsonObject &args)
     if (args.contains("preserve_original"))
         opts.preserveOriginalAsBackup = args["preserve_original"].toBool(true);
 
-    SelectionSet* sel = SelectionSet::getSingleton();
-    if (!sel || sel->getEntitiesCount() == 0)
+    Ogre::Entity* entity = firstResolvedSelectedEntity();
+    if (!entity)
         return makeErrorResult("No selected entity.");
-    Ogre::Entity* entity = sel->getEntity(0);
-    if (!entity) return makeErrorResult("Selected entity is null.");
 
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.unwrap"),
         QStringLiteral("auto_uv_unwrap entity=%1 res=%2 pad=%3 ch=%4")
@@ -1552,12 +1553,9 @@ QJsonObject MCPServer::toolUvInfo(const QJsonObject &args)
     if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
-    SelectionSet* sel = SelectionSet::getSingleton();
-    if (!sel || sel->getEntitiesCount() == 0)
-        return makeErrorResult("No selected entity.");
-    Ogre::Entity* entity = sel->getEntity(0);
+    Ogre::Entity* entity = firstResolvedSelectedEntity();
     if (!entity)
-        return makeErrorResult("Selected entity is null.");
+        return makeErrorResult("No selected entity.");
 
     const int channel = args.contains("channel") ? args["channel"].toInt(0) : 0;
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.info"),
@@ -1575,12 +1573,9 @@ QJsonObject MCPServer::toolUvProject(const QJsonObject &args)
     if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
-    SelectionSet* sel = SelectionSet::getSingleton();
-    if (!sel || sel->getEntitiesCount() == 0)
-        return makeErrorResult("No selected entity.");
-    Ogre::Entity* entity = sel->getEntity(0);
+    Ogre::Entity* entity = firstResolvedSelectedEntity();
     if (!entity)
-        return makeErrorResult("Selected entity is null.");
+        return makeErrorResult("No selected entity.");
 
     const QString modeName = args.value(QStringLiteral("mode")).toString(QStringLiteral("box"));
     bool ok = false;
@@ -1591,7 +1586,10 @@ QJsonObject MCPServer::toolUvProject(const QJsonObject &args)
     const int channel = args.contains("channel") ? args["channel"].toInt(0) : 0;
     UvProject::Options opts;
     if (args.contains("axis")) opts.axis = args["axis"].toInt(1);
-    if (args.contains("scale")) opts.boxScale = static_cast<float>(args["scale"].toDouble(1.0));
+    if (args.contains("scale")) {
+        const double scale = args["scale"].toDouble(1.0);
+        opts.boxScale = static_cast<float>(scale > 0.0 ? scale : 1.0);
+    }
 
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.project"), modeName);
 
@@ -1618,12 +1616,9 @@ QJsonObject MCPServer::toolUvSetSeams(const QJsonObject &args)
     if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
-    SelectionSet* sel = SelectionSet::getSingleton();
-    if (!sel || sel->getEntitiesCount() == 0)
-        return makeErrorResult("No selected entity.");
-    Ogre::Entity* entity = sel->getEntity(0);
+    Ogre::Entity* entity = firstResolvedSelectedEntity();
     if (!entity)
-        return makeErrorResult("Selected entity is null.");
+        return makeErrorResult("No selected entity.");
 
     const QString spec = args.value(QStringLiteral("edges")).toString();
     if (spec.isEmpty())
@@ -1652,18 +1647,26 @@ QJsonObject MCPServer::toolUvUnwrapSelection(const QJsonObject &args)
     if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
-    SelectionSet* sel = SelectionSet::getSingleton();
-    if (!sel || sel->getEntitiesCount() == 0)
-        return makeErrorResult("No selected entity.");
-    Ogre::Entity* entity = sel->getEntity(0);
+    Ogre::Entity* entity = firstResolvedSelectedEntity();
     if (!entity)
-        return makeErrorResult("Selected entity is null.");
+        return makeErrorResult("No selected entity.");
 
-    const int subMesh = args.contains("submesh") ? args["submesh"].toInt(0) : 0;
+    int subMesh = 0;
+    if (args.contains("submesh")) {
+        QString intErr;
+        if (!mcpJsonIntValue(args.value("submesh"), &subMesh, &intErr, "submesh"))
+            return makeErrorResult(intErr);
+    }
+
     std::vector<int> triangles;
-    if (args.contains("triangles") && args["triangles"].isArray()) {
-        for (const QJsonValue& v : args["triangles"].toArray())
-            triangles.push_back(v.toInt());
+    if (!args.contains("triangles") || !args["triangles"].isArray())
+        return makeErrorResult("Error: 'triangles' array is required.");
+    for (const QJsonValue& v : args["triangles"].toArray()) {
+        int ti = 0;
+        QString intErr;
+        if (!mcpJsonIntValue(v, &ti, &intErr, "triangles[]"))
+            return makeErrorResult(intErr);
+        triangles.push_back(ti);
     }
     if (triangles.empty())
         return makeErrorResult("Error: 'triangles' array is required.");
@@ -2613,6 +2616,32 @@ static bool hasSelectedEntities()
 {
     SelectionSet* sel = SelectionSet::getSingleton();
     return sel && !sel->getResolvedEntities().isEmpty();
+}
+
+static Ogre::Entity* firstResolvedSelectedEntity()
+{
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities() : QList<Ogre::Entity*>{};
+    return resolved.isEmpty() ? nullptr : resolved.first();
+}
+
+static bool mcpJsonIntValue(const QJsonValue& value, int* out, QString* err, const char* field)
+{
+    if (!value.isDouble()) {
+        if (err)
+            *err = QStringLiteral("Error: '%1' must be an integer.").arg(QLatin1String(field));
+        return false;
+    }
+    const double d = value.toDouble();
+    if (d < static_cast<double>(std::numeric_limits<int>::min())
+        || d > static_cast<double>(std::numeric_limits<int>::max())
+        || d != std::trunc(d)) {
+        if (err)
+            *err = QStringLiteral("Error: '%1' must be an integer.").arg(QLatin1String(field));
+        return false;
+    }
+    *out = static_cast<int>(d);
+    return true;
 }
 
 static QString captureLodControllerError(const std::function<void()> &operation)
@@ -6873,7 +6902,8 @@ QJsonArray MCPServer::buildToolsList()
             "uv_set_seams",
             "Mark mesh edges as UV seams on the currently selected entity. "
             "Edges persist in qtme.seams bindings for unwrap / the UV editor.",
-            props
+            props,
+            QJsonArray{"edges"}
         );
     }
 
@@ -6898,7 +6928,8 @@ QJsonArray MCPServer::buildToolsList()
             "uv_unwrap_selection",
             "xatlas re-unwrap of selected triangle indices on one submesh of the "
             "currently selected entity. Respects existing seam bindings.",
-            props
+            props,
+            QJsonArray{"triangles"}
         );
     }
 

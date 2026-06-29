@@ -59,7 +59,7 @@ double overlappingUvsRatioFromEditableMesh(const EditableMesh& mesh)
         return boxes[a].xmin < boxes[b].xmin;
     });
 
-    int overlapCount = 0;
+    std::vector<bool> overlapped(boxes.size(), false);
     for (size_t oi = 0; oi < order.size(); ++oi) {
         const size_t i = order[oi];
         const TriBox& a = boxes[i];
@@ -70,10 +70,13 @@ double overlappingUvsRatioFromEditableMesh(const EditableMesh& mesh)
             const TriBox& b = boxes[j];
             if (a.xmax < b.xmin || a.ymax < b.ymin || b.ymax < a.ymin)
                 continue;
-            ++overlapCount;
-            break;
+            overlapped[i] = true;
+            overlapped[j] = true;
         }
     }
+
+    const int overlapCount =
+        static_cast<int>(std::count(overlapped.begin(), overlapped.end(), true));
 
     return static_cast<double>(overlapCount) / static_cast<double>(boxes.size());
 }
@@ -96,6 +99,9 @@ void applyUvChannelFromEntity(EditableMesh& mesh, Ogre::Entity* entity, int chan
             vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES,
                                                          static_cast<unsigned short>(channel));
         if (!elem)
+            continue;
+        const Ogre::VertexElementType type = elem->getType();
+        if (type != Ogre::VET_FLOAT2 && type != Ogre::VET_FLOAT3 && type != Ogre::VET_FLOAT4)
             continue;
 
         const auto vbuf = vd->vertexBufferBinding->getBuffer(elem->getSource());
@@ -156,8 +162,14 @@ UvPipeline::InfoReport UvPipeline::analyzeEntity(const Ogre::Entity* entity, int
     if (!mesh.loadFromEntity(const_cast<Ogre::Entity*>(entity)))
         return report;
 
-    if (uvChannel != 0)
+    if (uvChannel != 0) {
+        for (auto& sub : mesh.subMeshes()) {
+            for (auto& vert : sub.vertices) {
+                vert.hasUV = false;
+            }
+        }
         applyUvChannelFromEntity(mesh, const_cast<Ogre::Entity*>(entity), uvChannel);
+    }
 
     const auto islands = UVEditorController::computeIslandsFromEditableMesh(mesh);
     report.islandCount = islands.islandCount;
@@ -327,8 +339,12 @@ UvUnwrapReport UvPipeline::unwrapTriangles(Ogre::Entity* entity, int subMeshInde
         fail.error = QStringLiteral("Entity is null");
         return fail;
     }
-    if (subMeshIndex < 0
-        || static_cast<unsigned short>(subMeshIndex) >= entity->getMesh()->getNumSubMeshes()) {
+    if (subMeshIndex < 0) {
+        fail.error = QStringLiteral("Invalid submesh index");
+        return fail;
+    }
+    const size_t subMeshCount = entity->getMesh()->getNumSubMeshes();
+    if (static_cast<size_t>(subMeshIndex) >= subMeshCount) {
         fail.error = QStringLiteral("Invalid submesh index");
         return fail;
     }
@@ -339,19 +355,29 @@ UvUnwrapReport UvPipeline::unwrapTriangles(Ogre::Entity* entity, int subMeshInde
 
     UvUnwrapOptions runOpts = opts;
     runOpts.faceMasks.clear();
+    runOpts.faceMasks.reserve(subMeshCount);
 
-    UvUnwrapOptions::FaceMask mask;
-    mask.subMeshIndex = static_cast<unsigned>(subMeshIndex);
-    const int triCount =
-        static_cast<int>(entity->getMesh()->getSubMesh(static_cast<unsigned short>(subMeshIndex))
-                             ->indexData->indexCount
-                         / 3);
-    mask.includeTriangle.assign(static_cast<size_t>(triCount), false);
-    for (int ti : triangleIndices) {
-        if (ti >= 0 && ti < triCount)
-            mask.includeTriangle[static_cast<size_t>(ti)] = true;
+    for (size_t si = 0; si < subMeshCount; ++si) {
+        const int triCount = static_cast<int>(
+            entity->getMesh()->getSubMesh(static_cast<unsigned short>(si))->indexData->indexCount
+            / 3);
+
+        UvUnwrapOptions::FaceMask mask;
+        mask.subMeshIndex = static_cast<unsigned>(si);
+        mask.includeTriangle.assign(static_cast<size_t>(triCount), false);
+
+        if (static_cast<int>(si) == subMeshIndex) {
+            for (int ti : triangleIndices) {
+                if (ti < 0 || ti >= triCount) {
+                    fail.error = QStringLiteral("Triangle index out of range: %1").arg(ti);
+                    return fail;
+                }
+                mask.includeTriangle[static_cast<size_t>(ti)] = true;
+            }
+        }
+
+        runOpts.faceMasks.push_back(std::move(mask));
     }
-    runOpts.faceMasks.push_back(mask);
 
     EditableMesh mesh;
     if (mesh.loadFromEntity(entity)) {

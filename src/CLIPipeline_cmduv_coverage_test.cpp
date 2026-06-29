@@ -95,7 +95,7 @@ TEST(CLIPipelineCmdUvCoverageError, NoModeSpecified_WithResolutionOnly)
 
 TEST(CLIPipelineCmdUvCoverageError, MultipleModesSpecified)
 {
-    UvTestArgv args({"qtmesh", "uv", "model.fbx", "--info", "--unwrap", "-o", "out.glb"});
+    UvTestArgv args({"qtmesh", "uv", "model.fbx", "--info", "--project", "box", "-o", "out.glb"});
     EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 2);
 }
 

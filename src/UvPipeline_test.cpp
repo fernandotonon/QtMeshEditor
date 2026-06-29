@@ -8,7 +8,11 @@ TEST(UvPipelineParseProjectMode, AcceptsKnownModes)
     EXPECT_EQ(UvPipeline::parseProjectMode(QStringLiteral("box"), &ok), UvProject::Mode::Box);
     EXPECT_TRUE(ok);
 
-    EXPECT_EQ(UvPipeline::parseProjectMode(QStringLiteral("cylinder"), &ok),
+    EXPECT_EQ(UvPipeline::parseProjectMode(QStringLiteral("  CYLINDER  "), &ok),
+              UvProject::Mode::Cylinder);
+    EXPECT_TRUE(ok);
+
+    EXPECT_EQ(UvPipeline::parseProjectMode(QStringLiteral("cyl"), &ok),
               UvProject::Mode::Cylinder);
     EXPECT_TRUE(ok);
 
@@ -16,7 +20,19 @@ TEST(UvPipelineParseProjectMode, AcceptsKnownModes)
               UvProject::Mode::Sphere);
     EXPECT_TRUE(ok);
 
+    EXPECT_EQ(UvPipeline::parseProjectMode(QStringLiteral("sph"), &ok),
+              UvProject::Mode::Sphere);
+    EXPECT_TRUE(ok);
+
     EXPECT_EQ(UvPipeline::parseProjectMode(QStringLiteral("reset"), &ok),
+              UvProject::Mode::ResetBox);
+    EXPECT_TRUE(ok);
+
+    EXPECT_EQ(UvPipeline::parseProjectMode(QStringLiteral("reset_box"), &ok),
+              UvProject::Mode::ResetBox);
+    EXPECT_TRUE(ok);
+
+    EXPECT_EQ(UvPipeline::parseProjectMode(QStringLiteral("resetbox"), &ok),
               UvProject::Mode::ResetBox);
     EXPECT_TRUE(ok);
 }
