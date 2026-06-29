@@ -10,15 +10,7 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 
-#include <memory>
-
-struct HDREnvironmentManagerDeleter {
-    void operator()(HDREnvironmentManager* mgr) const noexcept { delete mgr; }
-};
-
 namespace {
-
-std::unique_ptr<HDREnvironmentManager, HDREnvironmentManagerDeleter> s_singleton;
 
 void removeCubemapTexture(const Ogre::TexturePtr& tex)
 {
@@ -31,21 +23,24 @@ void removeCubemapTexture(const Ogre::TexturePtr& tex)
 
 } // namespace
 
+HDREnvironmentManager* HDREnvironmentManager::s_singleton = nullptr;
+
 HDREnvironmentManager* HDREnvironmentManager::getSingleton()
 {
     if (!s_singleton)
-        s_singleton.reset(new HDREnvironmentManager());
-    return s_singleton.get();
+        s_singleton = new HDREnvironmentManager(); // NOSONAR — singleton
+    return s_singleton;
 }
 
 HDREnvironmentManager* HDREnvironmentManager::getSingletonPtr()
 {
-    return s_singleton.get();
+    return s_singleton;
 }
 
 void HDREnvironmentManager::kill()
 {
-    s_singleton.reset();
+    delete s_singleton; // NOSONAR — singleton
+    s_singleton = nullptr;
 }
 
 HDREnvironmentManager::HDREnvironmentManager(QObject* parent)
@@ -171,18 +166,20 @@ bool HDREnvironmentManager::loadEnvironment(const QString& pathOrBundledName)
         bake = &m_bakeCache[cacheKey];
     } else {
         HdrEquirect::FloatImage equirect;
-        QString loadError;
-        if (!HdrEquirect::loadFromFile(resolved, equirect, loadError))
+        if (QString loadError;
+            !HdrEquirect::loadFromFile(resolved, equirect, loadError)) {
             return false;
+        }
 
         const int faceSize = HdrEquirect::defaultFaceSizeForEquirect(equirect.width);
         CachedBake entry;
         entry.sourcePath = resolved;
         entry.cacheKey = cacheKey;
         entry.faceSize = faceSize;
-        QString bakeError;
-        if (!HdrEquirect::bakeEquirectToCubemap(equirect, faceSize, entry.faces, bakeError))
+        if (QString bakeError;
+            !HdrEquirect::bakeEquirectToCubemap(equirect, faceSize, entry.faces, bakeError)) {
             return false;
+        }
         entry.textureName = QStringLiteral("HdrEnv_%1").arg(cacheKey.left(16));
         m_bakeCache.emplace(cacheKey, std::move(entry));
         bake = &m_bakeCache[cacheKey];

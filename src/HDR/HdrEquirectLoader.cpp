@@ -10,7 +10,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <memory>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_HDR
@@ -148,10 +147,6 @@ bool loadHdrStb(const QString& path, FloatImage& out, QString& error)
 }
 
 #ifdef ENABLE_OPENEXR
-struct RgbaFreeDeleter {
-    void operator()(float* p) const noexcept { free(p); }
-};
-
 bool loadExrTiny(const QString& path, FloatImage& out, QString& error)
 {
     QFile file(path);
@@ -169,22 +164,24 @@ bool loadExrTiny(const QString& path, FloatImage& out, QString& error)
     int w = 0;
     int h = 0;
     const char* err = nullptr;
-    const int ret = LoadEXRFromMemory(
-        &rgba, &w, &h,
-        reinterpret_cast<const unsigned char*>(bytes.constData()),
-        static_cast<size_t>(bytes.size()),
-        &err);
-    if (ret != TINYEXR_SUCCESS || rgba == nullptr || w <= 0 || h <= 0) {
+    if (const int ret = LoadEXRFromMemory(
+            &rgba, &w, &h,
+            reinterpret_cast<const unsigned char*>(bytes.constData()),
+            static_cast<size_t>(bytes.size()),
+            &err);
+        ret != TINYEXR_SUCCESS || rgba == nullptr || w <= 0 || h <= 0) {
         error = err ? QString::fromUtf8(err) : QStringLiteral("LoadEXR failed");
         if (err)
             FreeEXRErrorMessage(err);
-        free(rgba);
+        if (rgba)
+            free(rgba); // NOSONAR — TinyEXR malloc/free pair
         return false;
     }
 
-    std::unique_ptr<float, RgbaFreeDeleter> rgbaOwner(rgba);
-    const float* rgbaPixels = rgbaOwner.get();
     const size_t pixelCount = static_cast<size_t>(w) * static_cast<size_t>(h);
+    const std::vector<float> rgbaPixels(rgba, rgba + pixelCount * 4u);
+    free(rgba); // NOSONAR — TinyEXR malloc/free pair; pixels copied to vector
+
     out.width = w;
     out.height = h;
     out.rgb.resize(pixelCount * 3u);
