@@ -359,7 +359,12 @@ if(ENABLE_OPENEXR)
         GIT_TAG v1.0.12
         GIT_SHALLOW TRUE
     )
-    FetchContent_MakeAvailable(tinyexr)
+    # Header-only use — do NOT MakeAvailable: upstream CMake builds test
+    # targets that fail macOS cross-compile (-Wpoison-system-directories).
+    FetchContent_GetProperties(tinyexr)
+    if(NOT tinyexr_POPULATED)
+        FetchContent_Populate(tinyexr)
+    endif()
     if(NOT TARGET tinyexr_miniz)
         add_library(tinyexr_miniz STATIC ${tinyexr_SOURCE_DIR}/deps/miniz/miniz.c)
         target_include_directories(tinyexr_miniz PUBLIC
