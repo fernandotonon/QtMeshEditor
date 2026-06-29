@@ -338,6 +338,42 @@ endif()
 message(STATUS "xatlas enabled (auto UV unwrap)")
 
 ##############################################################
+#  stb — Radiance .hdr decode for HDR environment maps (#467).
+##############################################################
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG master
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(stb)
+
+##############################################################
+#  tinyexr — OpenEXR decode for HDR environment maps (#467).
+##############################################################
+option(ENABLE_OPENEXR "Enable OpenEXR (.exr) HDR environment loading via tinyexr" ON)
+if(ENABLE_OPENEXR)
+    FetchContent_Declare(
+        tinyexr
+        GIT_REPOSITORY https://github.com/syoyo/tinyexr.git
+        GIT_TAG v1.0.12
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(tinyexr)
+    if(NOT TARGET tinyexr_miniz)
+        add_library(tinyexr_miniz STATIC ${tinyexr_SOURCE_DIR}/deps/miniz/miniz.c)
+        target_include_directories(tinyexr_miniz PUBLIC
+            ${tinyexr_SOURCE_DIR}/deps/miniz
+            ${tinyexr_SOURCE_DIR})
+        set_target_properties(tinyexr_miniz PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+    add_definitions(-DENABLE_OPENEXR)
+    message(STATUS "OpenEXR HDR loading enabled (tinyexr)")
+else()
+    message(STATUS "OpenEXR HDR loading disabled")
+endif()
+
+##############################################################
 #  libsodium — minisign signature verify (auto-updater spike #440)
 ##############################################################
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Libsodium.cmake)
