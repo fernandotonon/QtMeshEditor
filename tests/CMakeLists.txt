@@ -154,6 +154,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrap.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvProject.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvPipeline.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.cpp
@@ -297,6 +298,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrap.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvProject.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvPipeline.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.h

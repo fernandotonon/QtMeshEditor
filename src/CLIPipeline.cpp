@@ -22,6 +22,8 @@
 #include "VertexCacheOptimizer.h"
 #include "ExportOptimizer.h"
 #include "UvUnwrap.h"
+#include "UvPipeline.h"
+#include "UvProject.h"
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
 #include "AutoRig.h"
@@ -7923,11 +7925,17 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
 
 int CLIPipeline::cmdUv(int argc, char* argv[])
 {
-    // Parse: uv <file> --unwrap [--resolution N] [--padding P] [--channel C] [--no-backup] -o out
-    //   or: uv <file> --info [--json]
-    QString inputPath, outputPath;
-    bool unwrap = false, infoMode = false, jsonOutput = false;
+    // Parse:
+    //   uv <file> --info [--json] [--channel N]
+    //   uv <file> --unwrap [--resolution N] [--padding P] [--channel C] [--no-backup] -o out
+    //   uv <file> --project box|cylinder|sphere|reset [--axis N] [--scale S] [--channel C] -o out [--json]
+    //   uv <file> --set-seams "0:1-2,0:2-3" -o out
+    QString inputPath, outputPath, projectMode, seamSpec;
+    bool unwrap = false, infoMode = false, projectModeFlag = false, setSeams = false;
+    bool jsonOutput = false;
     int resolution = 1024, padding = 4, channel = 0;
+    int axis = 1;
+    double scale = 1.0;
     bool preserveBackup = true;
 
     for (int i = 1; i < argc; ++i) {
@@ -7935,6 +7943,16 @@ int CLIPipeline::cmdUv(int argc, char* argv[])
         if (arg == "uv" || arg == "--cli") continue;
         if (arg == "--unwrap") { unwrap = true; continue; }
         if (arg == "--info")   { infoMode = true; continue; }
+        if (arg == "--project" && i + 1 < argc) {
+            projectModeFlag = true;
+            projectMode = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
+        if (arg == "--set-seams" && i + 1 < argc) {
+            setSeams = true;
+            seamSpec = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
         if (arg == "--json")   { jsonOutput = true; continue; }
         if (arg == "--no-backup") { preserveBackup = false; continue; }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
@@ -7949,23 +7967,38 @@ int CLIPipeline::cmdUv(int argc, char* argv[])
         if (arg == "--channel" && i + 1 < argc) {
             channel = QString::fromLocal8Bit(argv[++i]).toInt(); continue;
         }
+        if (arg == "--axis" && i + 1 < argc) {
+            axis = QString::fromLocal8Bit(argv[++i]).toInt(); continue;
+        }
+        if (arg == "--scale" && i + 1 < argc) {
+            scale = QString::fromLocal8Bit(argv[++i]).toDouble(); continue;
+        }
         if (!arg.startsWith("-") && inputPath.isEmpty()) {
             inputPath = arg; continue;
         }
     }
 
+    const int modeCount = static_cast<int>(unwrap) + static_cast<int>(infoMode)
+                          + static_cast<int>(projectModeFlag) + static_cast<int>(setSeams);
+
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh uv <file> --unwrap [--resolution N] [--padding P] [--channel C] [--no-backup] -o <out>" << Qt::endl;
-        err() << "       qtmesh uv <file> --info [--json]" << Qt::endl;
+        err() << "Usage: qtmesh uv <file> --info [--json]" << Qt::endl;
+        err() << "       qtmesh uv <file> --unwrap [--resolution N] [--padding P] [--channel C] -o <out>" << Qt::endl;
+        err() << "       qtmesh uv <file> --project box|cylinder|sphere|reset [--axis N] [--scale S] -o <out>" << Qt::endl;
+        err() << "       qtmesh uv <file> --set-seams \"sub:v0-v1,...\" -o <out>" << Qt::endl;
         return 2;
     }
-    if (!unwrap && !infoMode) {
-        err() << "Error: specify --unwrap or --info." << Qt::endl;
+    if (modeCount == 0) {
+        err() << "Error: specify --info, --unwrap, --project, or --set-seams." << Qt::endl;
         return 2;
     }
-    if (unwrap && outputPath.isEmpty()) {
-        err() << "Error: --unwrap requires -o <output>." << Qt::endl;
+    if (modeCount > 1) {
+        err() << "Error: choose one of --info, --unwrap, --project, or --set-seams." << Qt::endl;
+        return 2;
+    }
+    if ((unwrap || projectModeFlag || setSeams) && outputPath.isEmpty()) {
+        err() << "Error: this mode requires -o <output>." << Qt::endl;
         return 2;
     }
 
@@ -7975,8 +8008,12 @@ int CLIPipeline::cmdUv(int argc, char* argv[])
     }
     if (!initOgreHeadless()) return 1;
 
+    const QString modeLabel = unwrap ? QStringLiteral("unwrap")
+                                    : infoMode ? QStringLiteral("info")
+                                               : projectModeFlag ? QStringLiteral("project")
+                                                                 : QStringLiteral("set_seams");
     SentryReporter::addBreadcrumb(QStringLiteral("cli.uv"),
-        QString("uv .%1 mode=%2").arg(fi.suffix(), unwrap ? "unwrap" : "info"));
+        QString("uv .%1 mode=%2").arg(fi.suffix(), modeLabel));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
     auto& entities = Manager::getSingleton()->getEntities();
@@ -7986,13 +8023,96 @@ int CLIPipeline::cmdUv(int argc, char* argv[])
     Ogre::Entity* entity = entities.first();
 
     if (infoMode) {
-        const auto info = UvUnwrap::infoForEntity(entity);
+        const auto info = UvPipeline::analyzeEntity(entity, channel);
         if (jsonOutput) {
             cliWrite(QString::fromUtf8(
-                QJsonDocument(UvUnwrap::infoToJson(fi.fileName(), info))
+                QJsonDocument(UvPipeline::infoToJson(fi.fileName(), info))
                     .toJson(QJsonDocument::Indented)) + "\n");
         } else {
-            cliWrite(UvUnwrap::infoToText(fi.fileName(), info));
+            cliWrite(UvPipeline::infoToText(fi.fileName(), info));
+        }
+        return 0;
+    }
+
+    if (projectModeFlag) {
+        bool ok = false;
+        const UvProject::Mode mode = UvPipeline::parseProjectMode(projectMode, &ok);
+        if (!ok) {
+            err() << "Error: unknown projection mode '" << projectMode
+                  << "'. Use box, cylinder, sphere, or reset." << Qt::endl;
+            return 2;
+        }
+
+        UvProject::Options opts;
+        opts.axis = axis;
+        opts.boxScale = static_cast<float>(scale > 0.0 ? scale : 1.0);
+
+        SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.project"),
+            UvProject::modeToString(mode));
+
+        const auto report = UvPipeline::projectEntity(entity, mode, channel, opts);
+        if (!report.applied) {
+            err() << "Error: UV projection failed — " << report.error << Qt::endl;
+            return 1;
+        }
+
+        auto* node = entity->getParentSceneNode();
+        const QString fmt = formatForExtension(outputPath);
+        if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+            err() << "Error: export failed." << Qt::endl;
+            return 1;
+        }
+
+        if (jsonOutput) {
+            QJsonObject obj;
+            obj[QStringLiteral("applied")] = true;
+            obj[QStringLiteral("mode")] = UvProject::modeToString(mode);
+            obj[QStringLiteral("vertsChanged")] = report.vertsChanged;
+            obj[QStringLiteral("output")] = outputPath;
+            cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)) + "\n");
+        } else {
+            cliWrite(QStringLiteral("Projected %1 vertices (%2)\nWrote: %3\n")
+                         .arg(report.vertsChanged)
+                         .arg(UvProject::modeToString(mode))
+                         .arg(QFileInfo(outputPath).fileName()));
+        }
+        return 0;
+    }
+
+    if (setSeams) {
+        std::vector<UvPipeline::SeamEdge> edges;
+        QString parseError;
+        if (!UvPipeline::parseSeamEdgeList(seamSpec, edges, &parseError)) {
+            err() << "Error: invalid --set-seams list — " << parseError << Qt::endl;
+            return 2;
+        }
+
+        SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"),
+            QStringLiteral("set_seams count=%1").arg(edges.size()));
+
+        QString seamError;
+        if (!UvPipeline::setSeamsOnEntity(entity, edges, &seamError)) {
+            err() << "Error: set-seams failed — " << seamError << Qt::endl;
+            return 1;
+        }
+
+        auto* node = entity->getParentSceneNode();
+        const QString fmt = formatForExtension(outputPath);
+        if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+            err() << "Error: export failed." << Qt::endl;
+            return 1;
+        }
+
+        if (jsonOutput) {
+            QJsonObject obj;
+            obj[QStringLiteral("applied")] = true;
+            obj[QStringLiteral("seamCount")] = static_cast<int>(edges.size());
+            obj[QStringLiteral("output")] = outputPath;
+            cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)) + "\n");
+        } else {
+            cliWrite(QStringLiteral("Set %1 seam edges\nWrote: %2\n")
+                         .arg(edges.size())
+                         .arg(QFileInfo(outputPath).fileName()));
         }
         return 0;
     }
@@ -8004,11 +8124,11 @@ int CLIPipeline::cmdUv(int argc, char* argv[])
     opts.channel    = std::max(0, channel);
     opts.preserveOriginalAsBackup = preserveBackup;
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.uv_unwrap"),
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.unwrap"),
         QString("Unwrap %1 (res=%2 pad=%3 ch=%4)")
             .arg(fi.fileName()).arg(opts.resolution).arg(opts.padding).arg(opts.channel));
 
-    const auto report = UvUnwrap::unwrapEntity(entity, opts);
+    const auto report = UvPipeline::unwrapEntity(entity, opts);
     if (!report.applied) {
         err() << "Error: UV unwrap failed — " << report.error << Qt::endl;
         return 1;

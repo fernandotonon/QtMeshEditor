@@ -9,13 +9,14 @@
 
 // Coverage tests for CLIPipeline::cmdUv (issue #400 UV unwrap CLI).
 //
-// cmdUv parses its own argv and applies three usage gates that all return
+// cmdUv parses its own argv and applies usage gates that all return
 // BEFORE any Ogre initialisation, so these are safe to run headless:
 //   1. no input file                  -> 2
-//   2. neither --unwrap nor --info    -> 2
-//   3. --unwrap without -o output     -> 2
-// A fourth, file-not-found gate, also runs before Ogre init:
-//   4. valid mode flags + missing file -> 1
+//   2. no mode (--info|--unwrap|...)  -> 2
+//   3. --unwrap|--project|--set-seams without -o -> 2
+//   4. more than one mode flag        -> 2
+// A fifth, file-not-found gate, also runs before Ogre init:
+//   5. valid mode flags + missing file -> 1
 //
 // Distinct filename + distinct suite names (CLIPipelineCmdUvCoverage*) avoid
 // any ODR / duplicate-registration clash with the existing CLIPipeline_test.cpp.
@@ -70,7 +71,7 @@ TEST(CLIPipelineCmdUvCoverageError, NoInputFile_OnlyOutputFlag)
     EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 2);
 }
 
-// --- Gate 2: neither --unwrap nor --info -> 2 ---
+// --- Gate 2: no mode flag -> 2 ---
 
 TEST(CLIPipelineCmdUvCoverageError, NoModeSpecified)
 {
@@ -80,7 +81,7 @@ TEST(CLIPipelineCmdUvCoverageError, NoModeSpecified)
 
 TEST(CLIPipelineCmdUvCoverageError, NoModeSpecified_WithJsonFlagOnly)
 {
-    // --json alone does not select a mode; still must require --unwrap|--info.
+    // --json alone does not select a mode; still must require a mode flag.
     UvTestArgv args({"qtmesh", "uv", "model.fbx", "--json"});
     EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 2);
 }
@@ -92,7 +93,13 @@ TEST(CLIPipelineCmdUvCoverageError, NoModeSpecified_WithResolutionOnly)
     EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 2);
 }
 
-// --- Gate 3: --unwrap without -o output -> 2 ---
+TEST(CLIPipelineCmdUvCoverageError, MultipleModesSpecified)
+{
+    UvTestArgv args({"qtmesh", "uv", "model.fbx", "--info", "--unwrap", "-o", "out.glb"});
+    EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 2);
+}
+
+// --- Gate 3: write modes without -o output -> 2 ---
 
 TEST(CLIPipelineCmdUvCoverageError, UnwrapWithoutOutput)
 {
@@ -105,6 +112,18 @@ TEST(CLIPipelineCmdUvCoverageError, UnwrapWithoutOutput_WithExtraOptions)
     // Resolution/padding/channel are accepted but do not satisfy the -o gate.
     UvTestArgv args({"qtmesh", "uv", "model.fbx", "--unwrap",
                      "--resolution", "1024", "--padding", "8", "--channel", "1"});
+    EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdUvCoverageError, ProjectWithoutOutput)
+{
+    UvTestArgv args({"qtmesh", "uv", "model.fbx", "--project", "box"});
+    EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdUvCoverageError, SetSeamsWithoutOutput)
+{
+    UvTestArgv args({"qtmesh", "uv", "model.fbx", "--set-seams", "0:1-2"});
     EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 2);
 }
 
@@ -158,5 +177,31 @@ TEST(CLIPipelineCmdUvCoverageError, UnwrapMode_FileNotFound_LongOutputFlag)
 
     UvTestArgv args({"qtmesh", "uv", missing.constData(), "--unwrap",
                      "--output", out.constData(), "--no-backup"});
+    EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdUvCoverageError, ProjectMode_FileNotFound)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QByteArray missing =
+        dir.filePath("missing_uv_project.fbx").toLocal8Bit();
+    const QByteArray out = dir.filePath("out.glb").toLocal8Bit();
+
+    UvTestArgv args({"qtmesh", "uv", missing.constData(), "--project", "box",
+                     "-o", out.constData()});
+    EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdUvCoverageError, SetSeamsMode_FileNotFound)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QByteArray missing =
+        dir.filePath("missing_uv_seams.fbx").toLocal8Bit();
+    const QByteArray out = dir.filePath("out.glb").toLocal8Bit();
+
+    UvTestArgv args({"qtmesh", "uv", missing.constData(), "--set-seams", "0:1-2",
+                     "-o", out.constData()});
     EXPECT_EQ(CLIPipeline::cmdUv(args.argc(), args.argv()), 1);
 }
