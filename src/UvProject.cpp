@@ -73,6 +73,17 @@ Ogre::Vector2 projectPositionOnBoxPlane(const Ogre::Vector3& pos, int planeAxis,
     }
 }
 
+void scaleUvMapAroundCenter(std::unordered_map<VertKey, Ogre::Vector2, VertKeyHash>& uvs,
+                            float scale)
+{
+    if (std::abs(scale - 1.f) < 1e-6f)
+        return;
+    for (auto& kv : uvs) {
+        kv.second.x = (kv.second.x - 0.5f) * scale + 0.5f;
+        kv.second.y = (kv.second.y - 0.5f) * scale + 0.5f;
+    }
+}
+
 void normalizeUvMap(std::unordered_map<VertKey, Ogre::Vector2, VertKeyHash>& uvs)
 {
     if (uvs.empty())
@@ -158,7 +169,7 @@ Ogre::Vector2 projectCylinder(const Ogre::Vector3& pos, int axis,
     return {u, v};
 }
 
-Ogre::Vector2 projectSphere(const Ogre::Vector3& pos, int /*axis*/,
+Ogre::Vector2 projectSphere(const Ogre::Vector3& pos, int axis,
                             const Ogre::AxisAlignedBox& bounds)
 {
     const Ogre::Vector3 center = bounds.getCenter();
@@ -167,9 +178,25 @@ Ogre::Vector2 projectSphere(const Ogre::Vector3& pos, int /*axis*/,
         return {0.5f, 0.5f};
     dir.normalise();
 
-    const float u = static_cast<float>(std::atan2(dir.x, dir.z) / (2.0 * Ogre::Math::PI) + 0.5);
-    const float v = 0.5f - static_cast<float>(std::asin(std::clamp(dir.y, -1.f, 1.f))
-                                               / Ogre::Math::PI);
+    float u = 0.5f;
+    float v = 0.5f;
+    switch (axis % 3) {
+    case 0:
+        u = static_cast<float>(std::atan2(dir.y, dir.z) / (2.0 * Ogre::Math::PI) + 0.5);
+        v = 0.5f - static_cast<float>(std::asin(std::clamp(dir.x, -1.f, 1.f))
+                                       / Ogre::Math::PI);
+        break;
+    case 1:
+        u = static_cast<float>(std::atan2(dir.x, dir.z) / (2.0 * Ogre::Math::PI) + 0.5);
+        v = 0.5f - static_cast<float>(std::asin(std::clamp(dir.y, -1.f, 1.f))
+                                       / Ogre::Math::PI);
+        break;
+    default:
+        u = static_cast<float>(std::atan2(dir.x, dir.y) / (2.0 * Ogre::Math::PI) + 0.5);
+        v = 0.5f - static_cast<float>(std::asin(std::clamp(dir.z, -1.f, 1.f))
+                                       / Ogre::Math::PI);
+        break;
+    }
     return {u, v};
 }
 
@@ -215,6 +242,7 @@ projectBoxPerFace(const EditableMesh& mesh, const UvProject::Selection& selectio
         }
     }
     normalizeUvMap(out);
+    scaleUvMapAroundCenter(out, scale);
     return out;
 }
 
@@ -338,9 +366,10 @@ UvProject::Report UvProject::project(EditableMesh& mesh, const Selection& select
             }
         }
 
-        if (opts.mode == Mode::View)
+        if (opts.mode == Mode::Cylinder) {
             normalizeUvMap(projected);
-        else if (opts.mode == Mode::Cylinder || opts.mode == Mode::Sphere || opts.mode == Mode::ResetBox)
+            scaleUvMapAroundCenter(projected, opts.boxScale);
+        } else if (opts.mode == Mode::Sphere || opts.mode == Mode::ResetBox)
             normalizeUvMap(projected);
         break;
     }

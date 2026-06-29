@@ -3,6 +3,8 @@
 #include "EditableMesh.h"
 #include "UvProject.h"
 
+#include <OgreMath.h>
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -43,7 +45,7 @@ EditableMesh cylinderStripMesh(int segments = 16, float height = 2.f)
     for (int ring = 0; ring < 2; ++ring) {
         const float y = ring == 0 ? 0.f : height;
         for (int i = 0; i < segments; ++i) {
-            const float ang = static_cast<float>(i) / segments * 2.f * static_cast<float>(M_PI);
+            const float ang = static_cast<float>(i) / segments * 2.f * static_cast<float>(Ogre::Math::PI);
             verts.push_back(EditableVertex{
                 .position = {std::cos(ang), y, std::sin(ang)},
             });
@@ -135,6 +137,34 @@ TEST(UvProjectTest, ViewProjectRequiresCameraMatrices)
     const auto report = UvProject::project(mesh, allTriangles(mesh), opts);
     EXPECT_FALSE(report.applied);
     EXPECT_FALSE(report.error.isEmpty());
+}
+
+TEST(UvProjectTest, SphereProjectNormalizesAndDiffersByAxis)
+{
+    auto projectAxis = [](int axis) {
+        EditableMesh mesh = cylinderStripMesh();
+        UvProject::Options opts;
+        opts.mode = UvProject::Mode::Sphere;
+        opts.axis = axis;
+        const auto report = UvProject::project(mesh, allTriangles(mesh), opts);
+        EXPECT_TRUE(report.applied);
+        EXPECT_TRUE(uvsInUnitRange(mesh));
+        return mesh;
+    };
+
+    const EditableMesh meshX = projectAxis(0);
+    const EditableMesh meshY = projectAxis(1);
+
+    bool differs = false;
+    for (size_t i = 0; i < meshX.subMeshes()[0].vertices.size(); ++i) {
+        const auto& uvX = meshX.subMeshes()[0].vertices[i].uv;
+        const auto& uvY = meshY.subMeshes()[0].vertices[i].uv;
+        if (std::abs(uvX.x - uvY.x) > 1e-4f || std::abs(uvX.y - uvY.y) > 1e-4f) {
+            differs = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(differs);
 }
 
 TEST(UvProjectTest, ResetBoxFillsUnitSquare)

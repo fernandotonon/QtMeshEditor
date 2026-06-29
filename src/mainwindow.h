@@ -7,6 +7,7 @@
 #include <QTableWidget>
 #include <QColorDialog>
 #include <OgreFrameListener.h>
+#include <OgreMatrix4.h>
 #include <QNetworkAccessManager>
 
 #include "TransformOperator.h"
@@ -49,7 +50,6 @@ namespace Ogre
     class RaySceneQuery;
     class ManualObject;
     class AnimationState;
-    class Matrix4;
 }
 
 /// Snapshot of the active 3D viewport camera (issue #463).

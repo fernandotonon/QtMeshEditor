@@ -2284,6 +2284,9 @@ void UVEditorController::runUvProjection(UvProject::Mode mode, const UvProject::
         return;
     }
 
+    for (const auto& ch : report.changes)
+        applyWorkingMeshUv(ch.subMeshIndex, ch.vertexIndex, ch.newUv);
+
     std::vector<UVEditCommand::VertChange> changes;
     changes.reserve(report.changes.size());
     for (const auto& ch : report.changes) {
@@ -2303,6 +2306,7 @@ void UVEditorController::runUvProjection(UvProject::Mode mode, const UvProject::
         m_statusText = scoped
             ? tr("Projected %1 vertices (%2, selection)").arg(report.vertsChanged).arg(modeLabel)
             : tr("Projected %1 vertices (%2)").arg(report.vertsChanged).arg(modeLabel);
+        emit meshDataChanged();
     } else {
         for (const auto& ch : changes)
             applyWorkingMeshUv(ch.subMeshIndex, ch.vertexIndex, ch.oldUv);

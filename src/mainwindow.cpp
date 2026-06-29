@@ -4406,10 +4406,14 @@ ViewportCameraSnapshot MainWindow::queryViewportCamera(bool requireFocus) const
             spaceCam = active->getSpaceCamera();
     }
 
-    if (!spaceCam && !requireFocus && !mDockWidgetList.isEmpty()) {
-        EditorViewport* vp = mDockWidgetList.first();
-        if (vp && vp->getOgreWidget())
-            spaceCam = vp->getOgreWidget()->getSpaceCamera();
+    if (!spaceCam && !requireFocus) {
+        for (EditorViewport* vp : mDockWidgetList) {
+            if (vp && vp->getOgreWidget()) {
+                spaceCam = vp->getOgreWidget()->getSpaceCamera();
+                if (spaceCam)
+                    break;
+            }
+        }
     }
 
     if (!spaceCam || (requireFocus && !focused))
