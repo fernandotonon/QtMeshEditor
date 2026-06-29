@@ -13,6 +13,8 @@
 /// Loads `.hdr` / `.exr` equirectangular maps, bakes a float cubemap, and
 /// registers it with Ogre::TextureManager. IBL precompute, skybox, and
 /// RTSS wiring land in later slices — this singleton is the asset foundation.
+struct HDREnvironmentManagerDeleter;
+
 class HDREnvironmentManager : public QObject
 {
     Q_OBJECT
@@ -45,15 +47,15 @@ signals:
     void environmentChanged();
 
 private:
+    friend struct HDREnvironmentManagerDeleter;
+
     explicit HDREnvironmentManager(QObject* parent = nullptr);
     ~HDREnvironmentManager() override;
 
     QString resolvePath(const QString& pathOrBundledName) const;
     bool createOgreCubemap(const QString& cacheKey,
-                           const HdrEquirect::CubemapFaces& faces,
+                           HdrEquirect::CubemapFaces& faces,
                            QString& error);
-
-    static HDREnvironmentManager* s_singleton;
 
     QString m_currentPath;
     QString m_cacheKey;

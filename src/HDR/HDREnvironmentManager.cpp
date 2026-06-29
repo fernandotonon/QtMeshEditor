@@ -10,11 +10,19 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 
+#include <memory>
+
+struct HDREnvironmentManagerDeleter {
+    void operator()(HDREnvironmentManager* mgr) const noexcept { delete mgr; }
+};
+
 namespace {
+
+std::unique_ptr<HDREnvironmentManager, HDREnvironmentManagerDeleter> s_singleton;
 
 void removeCubemapTexture(const Ogre::TexturePtr& tex)
 {
-    if (tex.isNull() || !Ogre::TextureManager::getSingletonPtr())
+    if (!tex || !Ogre::TextureManager::getSingletonPtr())
         return;
     const Ogre::String name = tex->getName();
     if (Ogre::TextureManager::getSingleton().resourceExists(name))
@@ -23,24 +31,21 @@ void removeCubemapTexture(const Ogre::TexturePtr& tex)
 
 } // namespace
 
-HDREnvironmentManager* HDREnvironmentManager::s_singleton = nullptr;
-
 HDREnvironmentManager* HDREnvironmentManager::getSingleton()
 {
     if (!s_singleton)
-        s_singleton = new HDREnvironmentManager();
-    return s_singleton;
+        s_singleton.reset(new HDREnvironmentManager());
+    return s_singleton.get();
 }
 
 HDREnvironmentManager* HDREnvironmentManager::getSingletonPtr()
 {
-    return s_singleton;
+    return s_singleton.get();
 }
 
 void HDREnvironmentManager::kill()
 {
-    delete s_singleton;
-    s_singleton = nullptr;
+    s_singleton.reset();
 }
 
 HDREnvironmentManager::HDREnvironmentManager(QObject* parent)
@@ -91,7 +96,7 @@ QString HDREnvironmentManager::resolvePath(const QString& pathOrBundledName) con
 }
 
 bool HDREnvironmentManager::createOgreCubemap(const QString& cacheKey,
-                                              const HdrEquirect::CubemapFaces& faces,
+                                              HdrEquirect::CubemapFaces& faces,
                                               QString& error)
 {
     if (!Ogre::Root::getSingletonPtr() || !Ogre::TextureManager::getSingletonPtr()) {
@@ -112,7 +117,7 @@ bool HDREnvironmentManager::createOgreCubemap(const QString& cacheKey,
     if (texMgr.resourceExists(texName))
         texMgr.remove(texName);
 
-    m_cubemap = texMgr.createManual(
+    Ogre::TexturePtr cubemap = texMgr.createManual(
         texName,
         Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
         Ogre::TEX_TYPE_CUBE_MAP,
@@ -123,13 +128,12 @@ bool HDREnvironmentManager::createOgreCubemap(const QString& cacheKey,
         Ogre::TU_STATIC);
 
     for (size_t face = 0; face < 6; ++face) {
-        const auto& faceRgb = faces.faces[face];
-        const size_t expected = static_cast<size_t>(faceSize)
-                                * static_cast<size_t>(faceSize) * 3u;
-        if (faceRgb.size() < expected) {
+        auto& faceRgb = faces.faces[face];
+        if (const size_t expected = static_cast<size_t>(faceSize)
+                                    * static_cast<size_t>(faceSize) * 3u;
+            faceRgb.size() < expected) {
             error = QStringLiteral("cubemap face %1 buffer too small").arg(static_cast<int>(face));
             texMgr.remove(texName);
-            m_cubemap.reset();
             return false;
         }
 
@@ -137,11 +141,12 @@ bool HDREnvironmentManager::createOgreCubemap(const QString& cacheKey,
                            static_cast<Ogre::uint32>(faceSize),
                            1,
                            Ogre::PF_FLOAT32_RGB,
-                           const_cast<float*>(faceRgb.data()));
-        m_cubemap->getBuffer(face)->blitFromMemory(box);
+                           faceRgb.data());
+        cubemap->getBuffer(face)->blitFromMemory(box);
     }
 
-    m_cubemap->load();
+    cubemap->load();
+    m_cubemap = cubemap;
     return true;
 }
 
@@ -179,7 +184,7 @@ bool HDREnvironmentManager::loadEnvironment(const QString& pathOrBundledName)
         if (!HdrEquirect::bakeEquirectToCubemap(equirect, faceSize, entry.faces, bakeError))
             return false;
         entry.textureName = QStringLiteral("HdrEnv_%1").arg(cacheKey.left(16));
-        m_bakeCache.insert(cacheKey, std::move(entry));
+        m_bakeCache.emplace(cacheKey, std::move(entry));
         bake = &m_bakeCache[cacheKey];
     }
 

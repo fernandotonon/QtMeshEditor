@@ -6,8 +6,11 @@
 #include <QCryptographicHash>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_HDR
@@ -36,7 +39,7 @@ float clamp01(float v)
     return std::max(0.f, std::min(1.f, v));
 }
 
-void sampleBilinearRgb(const FloatImage& img, float u, float v, float outRgb[3])
+void sampleBilinearRgb(const FloatImage& img, float u, float v, std::array<float, 3>& outRgb)
 {
     u = u - std::floor(u); // wrap horizontally
     v = clamp01(v);
@@ -44,14 +47,14 @@ void sampleBilinearRgb(const FloatImage& img, float u, float v, float outRgb[3])
     const float fx = u * static_cast<float>(img.width) - 0.5f;
     const float fy = v * static_cast<float>(img.height) - 0.5f;
 
-    const int x0 = static_cast<int>(std::floor(fx));
-    const int y0 = static_cast<int>(std::floor(fy));
+    const auto x0 = static_cast<int>(std::floor(fx));
+    const auto y0 = static_cast<int>(std::floor(fy));
     const int x1 = x0 + 1;
     const int y1 = y0 + 1;
     const float tx = fx - static_cast<float>(x0);
     const float ty = fy - static_cast<float>(y0);
 
-    auto fetch = [&](int x, int y, float dst[3]) {
+    auto fetch = [&](int x, int y, std::array<float, 3>& dst) {
         x = ((x % img.width) + img.width) % img.width;
         y = std::max(0, std::min(img.height - 1, y));
         const size_t idx = (static_cast<size_t>(y) * static_cast<size_t>(img.width)
@@ -61,21 +64,26 @@ void sampleBilinearRgb(const FloatImage& img, float u, float v, float outRgb[3])
         dst[2] = img.rgb[idx + 2];
     };
 
-    float c00[3], c10[3], c01[3], c11[3];
+    std::array<float, 3> c00{};
+    std::array<float, 3> c10{};
+    std::array<float, 3> c01{};
+    std::array<float, 3> c11{};
     fetch(x0, y0, c00);
     fetch(x1, y0, c10);
     fetch(x0, y1, c01);
     fetch(x1, y1, c11);
 
     for (int c = 0; c < 3; ++c) {
-        const float top = c00[c] * (1.f - tx) + c10[c] * tx;
-        const float bot = c01[c] * (1.f - tx) + c11[c] * tx;
-        outRgb[c] = top * (1.f - ty) + bot * ty;
+        const float top = c00[static_cast<size_t>(c)] * (1.f - tx)
+                          + c10[static_cast<size_t>(c)] * tx;
+        const float bot = c01[static_cast<size_t>(c)] * (1.f - tx)
+                          + c11[static_cast<size_t>(c)] * tx;
+        outRgb[static_cast<size_t>(c)] = top * (1.f - ty) + bot * ty;
     }
 }
 
 /// Ogre cube-face order: +X, -X, +Y, -Y, +Z, -Z.
-void faceUvToDirection(int face, float u, float v, float outDir[3])
+void faceUvToDirection(int face, float u, float v, std::array<float, 3>& outDir)
 {
     const float uc = u * 2.f - 1.f;
     const float vc = v * 2.f - 1.f;
@@ -98,7 +106,7 @@ void faceUvToDirection(int face, float u, float v, float outDir[3])
     }
 }
 
-void directionToEquirectUv(const float dir[3], float& u, float& v)
+void directionToEquirectUv(const std::array<float, 3>& dir, float& u, float& v)
 {
     const float phi = std::atan2(dir[2], dir[0]);
     const float theta = std::asin(std::max(-1.f, std::min(1.f, dir[1])));
@@ -140,6 +148,10 @@ bool loadHdrStb(const QString& path, FloatImage& out, QString& error)
 }
 
 #ifdef ENABLE_OPENEXR
+struct RgbaFreeDeleter {
+    void operator()(float* p) const noexcept { free(p); }
+};
+
 bool loadExrTiny(const QString& path, FloatImage& out, QString& error)
 {
     QFile file(path);
@@ -162,28 +174,25 @@ bool loadExrTiny(const QString& path, FloatImage& out, QString& error)
         reinterpret_cast<const unsigned char*>(bytes.constData()),
         static_cast<size_t>(bytes.size()),
         &err);
-    if (ret != TINYEXR_SUCCESS) {
+    if (ret != TINYEXR_SUCCESS || rgba == nullptr || w <= 0 || h <= 0) {
         error = err ? QString::fromUtf8(err) : QStringLiteral("LoadEXR failed");
         if (err)
             FreeEXRErrorMessage(err);
+        free(rgba);
         return false;
     }
 
+    std::unique_ptr<float, RgbaFreeDeleter> rgbaOwner(rgba);
+    const float* rgbaPixels = rgbaOwner.get();
+    const size_t pixelCount = static_cast<size_t>(w) * static_cast<size_t>(h);
     out.width = w;
     out.height = h;
-    out.rgb.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 3u);
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            const size_t dst = (static_cast<size_t>(y) * static_cast<size_t>(w)
-                                + static_cast<size_t>(x)) * 3u;
-            const size_t src = (static_cast<size_t>(y) * static_cast<size_t>(w)
-                                + static_cast<size_t>(x)) * 4u;
-            out.rgb[dst + 0] = rgba[src + 0];
-            out.rgb[dst + 1] = rgba[src + 1];
-            out.rgb[dst + 2] = rgba[src + 2];
-        }
+    out.rgb.resize(pixelCount * 3u);
+    for (size_t i = 0; i < pixelCount; ++i) {
+        out.rgb[i * 3 + 0] = rgbaPixels[i * 4 + 0];
+        out.rgb[i * 3 + 1] = rgbaPixels[i * 4 + 1];
+        out.rgb[i * 3 + 2] = rgbaPixels[i * 4 + 2];
     }
-    free(rgba);
     return true;
 }
 #endif
@@ -249,12 +258,12 @@ bool bakeEquirectToCubemap(const FloatImage& equirect,
             for (int x = 0; x < faceSize; ++x) {
                 const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(faceSize);
                 const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(faceSize);
-                float dir[3];
+                std::array<float, 3> dir{};
                 faceUvToDirection(face, u, v, dir);
                 float eu = 0.f;
                 float ev = 0.f;
                 directionToEquirectUv(dir, eu, ev);
-                float rgb[3];
+                std::array<float, 3> rgb{};
                 sampleBilinearRgb(equirect, eu, ev, rgb);
                 const size_t idx = (static_cast<size_t>(y) * static_cast<size_t>(faceSize)
                                     + static_cast<size_t>(x)) * 3u;

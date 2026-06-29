@@ -59,7 +59,7 @@ TEST_F(HDREnvironmentManagerOgreTest, LoadEnvironment_CreatesCubeMapTexture)
     EXPECT_GT(mgr->faceSize(), 0);
 
     auto cubemap = mgr->cubemap();
-    ASSERT_FALSE(cubemap.isNull());
+    ASSERT_TRUE(cubemap);
     EXPECT_EQ(cubemap->getTextureType(), Ogre::TEX_TYPE_CUBE_MAP);
     EXPECT_EQ(cubemap->getWidth(), static_cast<Ogre::uint32>(mgr->faceSize()));
     EXPECT_EQ(cubemap->getHeight(), static_cast<Ogre::uint32>(mgr->faceSize()));
