@@ -102,9 +102,10 @@ void applyBoneHints(std::vector<int>& labels, const int* boneProximity)
 {
     if (!boneProximity) return;
     const int count = static_cast<int>(MeshSegmenter::Part::Count);
+    const int unknown = static_cast<int>(MeshSegmenter::Part::Unknown);
     for (int v = 0; v < static_cast<int>(labels.size()); ++v) {
         const int bp = boneProximity[v];
-        if (bp >= 0 && bp < count)
+        if (bp > unknown && bp < count)
             labels[v] = bp;
     }
 }
