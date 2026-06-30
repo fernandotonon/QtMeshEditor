@@ -2,6 +2,7 @@
 
 #include "HDR/HDREnvironmentManager.h"
 #include "HDR/HdrEquirectLoader.h"
+#include "HDR/HdrIblPrecompute.h"
 #include "MinimalEXRWriter.h"
 #include "TestHelpers.h"
 
@@ -43,6 +44,7 @@ TEST_F(HDREnvironmentManagerOgreTest, LoadEnvironment_CreatesCubeMapTexture)
 {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
+    qputenv("XDG_DATA_HOME", tmp.path().toUtf8());
 
     const int w = 32;
     const int h = 16;
@@ -51,7 +53,8 @@ TEST_F(HDREnvironmentManagerOgreTest, LoadEnvironment_CreatesCubeMapTexture)
     ASSERT_TRUE(MinimalEXR::writeRGB32F(path, w, h, rgb));
 
     auto* mgr = HDREnvironmentManager::getSingleton();
-    QSignalSpy spy(mgr, &HDREnvironmentManager::environmentChanged);
+    QSignalSpy envSpy(mgr, &HDREnvironmentManager::environmentChanged);
+    QSignalSpy iblSpy(mgr, &HDREnvironmentManager::iblPrecomputeCompleted);
 
     ASSERT_TRUE(mgr->loadEnvironment(path));
     EXPECT_EQ(mgr->currentEnvironment(), path);
@@ -64,7 +67,17 @@ TEST_F(HDREnvironmentManagerOgreTest, LoadEnvironment_CreatesCubeMapTexture)
     EXPECT_EQ(cubemap->getWidth(), static_cast<Ogre::uint32>(mgr->faceSize()));
     EXPECT_EQ(cubemap->getHeight(), static_cast<Ogre::uint32>(mgr->faceSize()));
     EXPECT_EQ(cubemap->getNumFaces(), 6u);
-    EXPECT_EQ(spy.count(), 1);
+    EXPECT_EQ(envSpy.count(), 1);
+
+    ASSERT_TRUE(iblSpy.wait(120000));
+    EXPECT_TRUE(mgr->isIblReady());
+    EXPECT_TRUE(mgr->irradianceMap());
+    EXPECT_TRUE(mgr->prefilteredSpecularMap());
+    EXPECT_TRUE(mgr->brdfLut());
+    EXPECT_EQ(mgr->irradianceMap()->getTextureType(), Ogre::TEX_TYPE_CUBE_MAP);
+    EXPECT_EQ(mgr->prefilteredSpecularMap()->getNumMipmaps(),
+              static_cast<Ogre::uint32>(HdrIbl::kPrefilterMipCount - 1));
+    EXPECT_EQ(mgr->brdfLut()->getWidth(), static_cast<Ogre::uint32>(HdrIbl::kBrdfLutSize));
 }
 
 TEST_F(HDREnvironmentManagerOgreTest, ReloadSameFile_UsesBakeCache)

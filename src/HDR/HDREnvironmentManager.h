@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HDR/HdrEquirectLoader.h"
+#include "HDR/HdrIblPrecompute.h"
 
 #include <Ogre.h>
 
@@ -8,11 +9,10 @@
 #include <QHash>
 #include <QString>
 
-/// Slice A (#467): owns the active HDR environment cubemap.
-///
-/// Loads `.hdr` / `.exr` equirectangular maps, bakes a float cubemap, and
-/// registers it with Ogre::TextureManager. IBL precompute, skybox, and
-/// RTSS wiring land in later slices — this singleton is the asset foundation.
+class HdrPrecomputeWorker;
+class QThread;
+
+/// Slice A (#467) + B (#468): HDR environment + IBL precompute.
 class HDREnvironmentManager : public QObject
 {
     Q_OBJECT
@@ -24,7 +24,7 @@ public:
 
     /// Load an environment from an absolute path or a bundled name under
     /// `media/hdri/`. Returns false and leaves the previous environment
-    /// unchanged on failure.
+    /// unchanged on failure. IBL precompute continues asynchronously.
     bool loadEnvironment(const QString& pathOrBundledName);
 
     /// Path of the currently loaded environment (absolute file path or
@@ -38,27 +38,59 @@ public:
     /// no environment is loaded.
     Ogre::TexturePtr cubemap() const { return m_cubemap; }
 
+    /// Irradiance / prefiltered specular / BRDF LUT textures (Slice B).
+    Ogre::TexturePtr irradianceMap() const { return m_irradiance; }
+    Ogre::TexturePtr prefilteredSpecularMap() const { return m_prefiltered; }
+    Ogre::TexturePtr brdfLut() const { return m_brdfLut; }
+
     /// Cubemap face resolution of the active environment (0 when unloaded).
     int faceSize() const { return m_faceSize; }
 
+    /// True once IBL textures for the active environment are registered.
+    bool isIblReady() const { return m_iblReady; }
+
 signals:
     void environmentChanged();
+    void iblPrecomputeCompleted(bool fromDiskCache);
+
+private slots:
+    void onPrecomputeCompleted(HdrIbl::IblBakeResult result,
+                               bool fromDiskCache,
+                               qint64 elapsedMs,
+                               quint64 generation);
+    void onPrecomputeError(const QString& error, quint64 generation);
 
 private:
     explicit HDREnvironmentManager(QObject* parent = nullptr);
     ~HDREnvironmentManager() override;
 
+    void initializeWorkerThread();
+    void shutdownWorkerThread();
+    void startIblPrecompute(const QString& cacheKey, const HdrEquirect::CubemapFaces& envFaces);
+
     QString resolvePath(const QString& pathOrBundledName) const;
     bool createOgreCubemap(const QString& cacheKey,
                            HdrEquirect::CubemapFaces& faces,
                            QString& error);
+    bool registerIblTextures(const QString& cacheKey,
+                             HdrIbl::IblBakeResult& result,
+                             QString& error);
 
     static HDREnvironmentManager* s_singleton;
 
     QString m_currentPath;
     QString m_cacheKey;
     int m_faceSize = 0;
+    bool m_iblReady = false;
+    quint64 m_precomputeGeneration = 0;
+
     Ogre::TexturePtr m_cubemap;
+    Ogre::TexturePtr m_irradiance;
+    Ogre::TexturePtr m_prefiltered;
+    Ogre::TexturePtr m_brdfLut;
+
+    QThread* m_workerThread = nullptr;
+    HdrPrecomputeWorker* m_worker = nullptr;
 
     struct CachedBake {
         QString sourcePath;
@@ -67,6 +99,5 @@ private:
         HdrEquirect::CubemapFaces faces;
         QString textureName;
     };
-    /// In-memory cache keyed by SHA-1 of source bytes (Slice A — disk cache in B).
     QHash<QString, CachedBake> m_bakeCache;
 };
