@@ -120,6 +120,9 @@ IsometricSpritesController.cpp
 MinimalEXRWriter.cpp
 HDR/HDREnvironmentManager.cpp
 HDR/HdrEquirectLoader.cpp
+HDR/HdrIblPrecompute.cpp
+HDR/HdrCache.cpp
+HDR/HdrPrecomputeWorker.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp
@@ -308,6 +311,9 @@ EditorModeController.h
 HalfEdgeMesh.h
 HDR/HDREnvironmentManager.h
 HDR/HdrEquirectLoader.h
+HDR/HdrIblPrecompute.h
+HDR/HdrCache.h
+HDR/HdrPrecomputeWorker.h
 )
 
 set(TEST_SOURCES "")

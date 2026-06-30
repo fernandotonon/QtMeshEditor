@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <vector>
 
+#include <QMetaType>
+
 /// Pure-data HDR environment loading and equirectangular → cubemap baking.
 /// No Ogre dependency — safe to unit-test without a GL context.
 namespace HdrEquirect {
@@ -46,4 +48,10 @@ struct RgbMean {
 };
 RgbMean faceMeanRgb(const std::vector<float>& faceRgb, int faceSize);
 
+/// Sample an environment cubemap along a normalized direction (bilinear).
+bool sampleCubemapRgb(const CubemapFaces& cubemap, const std::array<float, 3>& dir,
+                      std::array<float, 3>& outRgb);
+
 } // namespace HdrEquirect
+
+Q_DECLARE_METATYPE(HdrEquirect::CubemapFaces)

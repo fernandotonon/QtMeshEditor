@@ -1,6 +1,7 @@
 #include "HDR/HDREnvironmentManager.h"
 
 #include "HDR/HdrEquirectLoader.h"
+#include "HDR/HdrPrecomputeWorker.h"
 #include "SentryReporter.h"
 
 #include <OgreTextureManager.h>
@@ -9,10 +10,13 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QMetaObject>
+#include <QMetaType>
+#include <QThread>
 
 namespace {
 
-void removeCubemapTexture(const Ogre::TexturePtr& tex)
+void removeTextureIfExists(const Ogre::TexturePtr& tex)
 {
     if (!tex || !Ogre::TextureManager::getSingletonPtr())
         return;
@@ -46,12 +50,54 @@ void HDREnvironmentManager::kill()
 HDREnvironmentManager::HDREnvironmentManager(QObject* parent)
     : QObject(parent)
 {
+    qRegisterMetaType<HdrEquirect::CubemapFaces>("HdrEquirect::CubemapFaces");
+    qRegisterMetaType<HdrIbl::IblBakeResult>("HdrIbl::IblBakeResult");
+    initializeWorkerThread();
 }
 
 HDREnvironmentManager::~HDREnvironmentManager()
 {
-    removeCubemapTexture(m_cubemap);
+    shutdownWorkerThread();
+    removeTextureIfExists(m_cubemap);
+    removeTextureIfExists(m_irradiance);
+    removeTextureIfExists(m_prefiltered);
+    removeTextureIfExists(m_brdfLut);
     m_cubemap.reset();
+    m_irradiance.reset();
+    m_prefiltered.reset();
+    m_brdfLut.reset();
+}
+
+void HDREnvironmentManager::initializeWorkerThread()
+{
+    m_workerThread = new QThread(this);
+    m_worker = new HdrPrecomputeWorker();
+    m_worker->moveToThread(m_workerThread);
+
+    connect(m_worker,
+            &HdrPrecomputeWorker::precomputeCompleted,
+            this,
+            &HDREnvironmentManager::onPrecomputeCompleted,
+            Qt::QueuedConnection);
+    connect(m_worker,
+            &HdrPrecomputeWorker::precomputeError,
+            this,
+            &HDREnvironmentManager::onPrecomputeError,
+            Qt::QueuedConnection);
+    connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
+
+    m_workerThread->start();
+}
+
+void HDREnvironmentManager::shutdownWorkerThread()
+{
+    if (!m_workerThread)
+        return;
+    ++m_precomputeGeneration;
+    m_workerThread->quit();
+    m_workerThread->wait(5000);
+    m_workerThread = nullptr;
+    m_worker = nullptr;
 }
 
 QString HDREnvironmentManager::resolvePath(const QString& pathOrBundledName) const
@@ -145,6 +191,162 @@ bool HDREnvironmentManager::createOgreCubemap(const QString& cacheKey,
     return true;
 }
 
+bool HDREnvironmentManager::registerIblTextures(const QString& cacheKey,
+                                                HdrIbl::IblBakeResult& result,
+                                                QString& error)
+{
+    if (!Ogre::Root::getSingletonPtr() || !Ogre::TextureManager::getSingletonPtr()) {
+        error = QStringLiteral("Ogre is not initialised");
+        return false;
+    }
+
+    auto& texMgr = Ogre::TextureManager::getSingleton();
+    const Ogre::String key = cacheKey.left(16).toStdString();
+
+    removeTextureIfExists(m_irradiance);
+    removeTextureIfExists(m_prefiltered);
+    removeTextureIfExists(m_brdfLut);
+    m_irradiance.reset();
+    m_prefiltered.reset();
+    m_brdfLut.reset();
+
+    const Ogre::String irradianceName = Ogre::String("HdrIrradiance_") + key;
+    if (texMgr.resourceExists(irradianceName))
+        texMgr.remove(irradianceName);
+
+    const int irrSize = result.irradiance.faceSize;
+    m_irradiance = texMgr.createManual(
+        irradianceName,
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+        Ogre::TEX_TYPE_CUBE_MAP,
+        static_cast<Ogre::uint32>(irrSize),
+        static_cast<Ogre::uint32>(irrSize),
+        0,
+        Ogre::PF_FLOAT32_RGB,
+        Ogre::TU_STATIC);
+    for (size_t face = 0; face < 6; ++face) {
+        auto& faceRgb = result.irradiance.faces[face];
+        Ogre::PixelBox box(static_cast<Ogre::uint32>(irrSize),
+                           static_cast<Ogre::uint32>(irrSize),
+                           1,
+                           Ogre::PF_FLOAT32_RGB,
+                           faceRgb.data());
+        m_irradiance->getBuffer(face)->blitFromMemory(box);
+    }
+    m_irradiance->load();
+
+    const Ogre::String prefilterName = Ogre::String("HdrPrefilter_") + key;
+    if (texMgr.resourceExists(prefilterName))
+        texMgr.remove(prefilterName);
+
+    const int baseSize = result.prefilter.mips.empty()
+                             ? HdrIbl::kPrefilterBaseFaceSize
+                             : result.prefilter.mips.front().faceSize;
+    const int mipCount = static_cast<int>(result.prefilter.mips.size());
+    m_prefiltered = texMgr.createManual(
+        prefilterName,
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+        Ogre::TEX_TYPE_CUBE_MAP,
+        static_cast<Ogre::uint32>(baseSize),
+        static_cast<Ogre::uint32>(baseSize),
+        static_cast<Ogre::uint32>(std::max(0, mipCount - 1)),
+        Ogre::PF_FLOAT32_RGB,
+        Ogre::TU_STATIC);
+    for (int mip = 0; mip < mipCount; ++mip) {
+        const auto& level = result.prefilter.mips[static_cast<size_t>(mip)];
+        const int faceSize = level.faceSize;
+        for (size_t face = 0; face < 6; ++face) {
+            auto& faceRgb = result.prefilter.mips[static_cast<size_t>(mip)].faces.faces[face];
+            Ogre::PixelBox box(static_cast<Ogre::uint32>(faceSize),
+                               static_cast<Ogre::uint32>(faceSize),
+                               1,
+                               Ogre::PF_FLOAT32_RGB,
+                               faceRgb.data());
+            m_prefiltered->getBuffer(face, static_cast<Ogre::uint32>(mip))->blitFromMemory(box);
+        }
+    }
+    m_prefiltered->load();
+
+    const Ogre::String brdfName = Ogre::String("HdrBrdfLut_") + key;
+    if (texMgr.resourceExists(brdfName))
+        texMgr.remove(brdfName);
+
+    const int lutSize = result.brdfLut.size;
+    m_brdfLut = texMgr.createManual(
+        brdfName,
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+        Ogre::TEX_TYPE_2D,
+        static_cast<Ogre::uint32>(lutSize),
+        static_cast<Ogre::uint32>(lutSize),
+        0,
+        Ogre::PF_FLOAT32_GR,
+        Ogre::TU_STATIC);
+    Ogre::PixelBox lutBox(static_cast<Ogre::uint32>(lutSize),
+                          static_cast<Ogre::uint32>(lutSize),
+                          1,
+                          Ogre::PF_FLOAT32_GR,
+                          result.brdfLut.rg.data());
+    m_brdfLut->getBuffer()->blitFromMemory(lutBox);
+    m_brdfLut->load();
+
+    m_iblReady = true;
+    return true;
+}
+
+void HDREnvironmentManager::startIblPrecompute(const QString& cacheKey,
+                                               const HdrEquirect::CubemapFaces& envFaces)
+{
+    if (!m_backgroundIblPrecompute || !m_worker)
+        return;
+
+    m_iblReady = false;
+    removeTextureIfExists(m_irradiance);
+    removeTextureIfExists(m_prefiltered);
+    removeTextureIfExists(m_brdfLut);
+    m_irradiance.reset();
+    m_prefiltered.reset();
+    m_brdfLut.reset();
+
+    const quint64 generation = ++m_precomputeGeneration;
+    QMetaObject::invokeMethod(
+        m_worker,
+        "precomputeIbl",
+        Qt::QueuedConnection,
+        Q_ARG(QString, cacheKey),
+        Q_ARG(HdrEquirect::CubemapFaces, envFaces),
+        Q_ARG(quint64, generation));
+}
+
+void HDREnvironmentManager::onPrecomputeCompleted(HdrIbl::IblBakeResult result,
+                                                  bool fromDiskCache,
+                                                  qint64 elapsedMs,
+                                                  quint64 generation)
+{
+    if (generation != m_precomputeGeneration || m_cacheKey.isEmpty())
+        return;
+
+    QString error;
+    if (!registerIblTextures(m_cacheKey, result, error))
+        return;
+
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("render.hdr.precompute"),
+        QStringLiteral("cacheKey=%1 loadMs=%2 cached=%3")
+            .arg(m_cacheKey.left(8))
+            .arg(elapsedMs)
+            .arg(fromDiskCache ? QStringLiteral("yes") : QStringLiteral("no")));
+
+    emit iblPrecomputeCompleted(fromDiskCache);
+}
+
+void HDREnvironmentManager::onPrecomputeError(const QString& error, quint64 generation)
+{
+    if (generation != m_precomputeGeneration)
+        return;
+    Q_UNUSED(error);
+    m_iblReady = false;
+}
+
 bool HDREnvironmentManager::loadEnvironment(const QString& pathOrBundledName)
 {
     QElapsedTimer timer;
@@ -186,14 +388,19 @@ bool HDREnvironmentManager::loadEnvironment(const QString& pathOrBundledName)
     }
 
     QString ogreError;
-    removeCubemapTexture(m_cubemap);
+    Ogre::TexturePtr previousCubemap = m_cubemap;
     m_cubemap.reset();
-    if (!createOgreCubemap(cacheKey, bake->faces, ogreError))
+    if (!createOgreCubemap(cacheKey, bake->faces, ogreError)) {
+        m_cubemap = previousCubemap;
         return false;
+    }
+    removeTextureIfExists(previousCubemap);
 
     m_currentPath = resolved;
     m_cacheKey = cacheKey;
     m_faceSize = bake->faceSize;
+
+    startIblPrecompute(cacheKey, bake->faces);
 
     SentryReporter::addBreadcrumb(
         QStringLiteral("render.hdr.load"),

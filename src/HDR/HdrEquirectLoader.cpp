@@ -293,4 +293,126 @@ RgbMean faceMeanRgb(const std::vector<float>& faceRgb, int faceSize)
     return mean;
 }
 
+bool directionToFaceUv(const std::array<float, 3>& dir, int& face, float& u, float& v)
+{
+    const float ax = std::fabs(dir[0]);
+    const float ay = std::fabs(dir[1]);
+    const float az = std::fabs(dir[2]);
+    float uc = 0.f;
+    float vc = 0.f;
+    if (ax >= ay && ax >= az) {
+        face = dir[0] > 0.f ? 0 : 1;
+        const float inv = 1.f / ax;
+        if (face == 0) {
+            uc = -dir[2] * inv;
+            vc = -dir[1] * inv;
+        } else {
+            uc = dir[2] * inv;
+            vc = -dir[1] * inv;
+        }
+    } else if (ay >= az) {
+        face = dir[1] > 0.f ? 2 : 3;
+        const float inv = 1.f / ay;
+        if (face == 2) {
+            uc = dir[0] * inv;
+            vc = dir[2] * inv;
+        } else {
+            uc = dir[0] * inv;
+            vc = -dir[2] * inv;
+        }
+    } else {
+        face = dir[2] > 0.f ? 4 : 5;
+        const float inv = 1.f / az;
+        if (face == 4) {
+            uc = dir[0] * inv;
+            vc = -dir[1] * inv;
+        } else {
+            uc = -dir[0] * inv;
+            vc = -dir[1] * inv;
+        }
+    }
+    u = uc * 0.5f + 0.5f;
+    v = vc * 0.5f + 0.5f;
+    return true;
+}
+
+void sampleFaceBilinear(const std::vector<float>& faceRgb,
+                        int faceSize,
+                        float u,
+                        float v,
+                        std::array<float, 3>& outRgb)
+{
+    u = std::max(0.f, std::min(1.f, u));
+    v = std::max(0.f, std::min(1.f, v));
+
+    const float fx = u * static_cast<float>(faceSize) - 0.5f;
+    const float fy = v * static_cast<float>(faceSize) - 0.5f;
+    const auto x0 = static_cast<int>(std::floor(fx));
+    const auto y0 = static_cast<int>(std::floor(fy));
+    const int x1 = std::min(faceSize - 1, x0 + 1);
+    const int y1 = std::min(faceSize - 1, y0 + 1);
+    const int xc0 = std::max(0, x0);
+    const int yc0 = std::max(0, y0);
+    const float tx = fx - static_cast<float>(x0);
+    const float ty = fy - static_cast<float>(y0);
+
+    auto fetch = [&](int x, int y, std::array<float, 3>& dst) {
+        const size_t idx = (static_cast<size_t>(y) * static_cast<size_t>(faceSize)
+                            + static_cast<size_t>(x)) * 3u;
+        dst[0] = faceRgb[idx + 0];
+        dst[1] = faceRgb[idx + 1];
+        dst[2] = faceRgb[idx + 2];
+    };
+
+    std::array<float, 3> c00{};
+    std::array<float, 3> c10{};
+    std::array<float, 3> c01{};
+    std::array<float, 3> c11{};
+    fetch(xc0, yc0, c00);
+    fetch(x1, yc0, c10);
+    fetch(xc0, y1, c01);
+    fetch(x1, y1, c11);
+
+    for (int c = 0; c < 3; ++c) {
+        const float top = c00[static_cast<size_t>(c)] * (1.f - tx)
+                          + c10[static_cast<size_t>(c)] * tx;
+        const float bot = c01[static_cast<size_t>(c)] * (1.f - tx)
+                          + c11[static_cast<size_t>(c)] * tx;
+        outRgb[static_cast<size_t>(c)] = top * (1.f - ty) + bot * ty;
+    }
+}
+
+bool sampleCubemapRgb(const CubemapFaces& cubemap, const std::array<float, 3>& dir,
+                      std::array<float, 3>& outRgb)
+{
+    if (cubemap.faceSize <= 0)
+        return false;
+
+    const size_t expectedPixels =
+        static_cast<size_t>(cubemap.faceSize) * static_cast<size_t>(cubemap.faceSize) * 3u;
+    for (const auto& face : cubemap.faces) {
+        if (face.size() < expectedPixels)
+            return false;
+    }
+
+    std::array<float, 3> n = dir;
+    const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (len <= 1e-8f)
+        return false;
+    n[0] /= len;
+    n[1] /= len;
+    n[2] /= len;
+
+    int face = 0;
+    float u = 0.f;
+    float v = 0.f;
+    directionToFaceUv(n, face, u, v);
+    sampleFaceBilinear(cubemap.faces[static_cast<size_t>(face)],
+                       cubemap.faceSize,
+                       u,
+                       v,
+                       outRgb);
+    return true;
+}
+
 } // namespace HdrEquirect

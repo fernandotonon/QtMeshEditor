@@ -7,7 +7,6 @@
 
 #include <OgreTextureManager.h>
 
-#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -26,6 +25,8 @@ protected:
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         ASSERT_TRUE(canLoadMeshFiles());
         createStandardOgreMaterials();
+        // IBL bake + disk cache are covered in HdrIblPrecompute_test / HdrCache_test.
+        HDREnvironmentManager::getSingleton()->setBackgroundIblPrecomputeEnabled(false);
     }
 };
 
@@ -51,12 +52,13 @@ TEST_F(HDREnvironmentManagerOgreTest, LoadEnvironment_CreatesCubeMapTexture)
     ASSERT_TRUE(MinimalEXR::writeRGB32F(path, w, h, rgb));
 
     auto* mgr = HDREnvironmentManager::getSingleton();
-    QSignalSpy spy(mgr, &HDREnvironmentManager::environmentChanged);
+    QSignalSpy envSpy(mgr, &HDREnvironmentManager::environmentChanged);
 
     ASSERT_TRUE(mgr->loadEnvironment(path));
     EXPECT_EQ(mgr->currentEnvironment(), path);
-    EXPECT_FALSE(mgr->currentCacheKey().isEmpty());
+    EXPECT_EQ(mgr->currentCacheKey(), HdrEquirect::sha1HexOfFile(path));
     EXPECT_GT(mgr->faceSize(), 0);
+    EXPECT_FALSE(mgr->isIblReady());
 
     auto cubemap = mgr->cubemap();
     ASSERT_TRUE(cubemap);
@@ -64,34 +66,29 @@ TEST_F(HDREnvironmentManagerOgreTest, LoadEnvironment_CreatesCubeMapTexture)
     EXPECT_EQ(cubemap->getWidth(), static_cast<Ogre::uint32>(mgr->faceSize()));
     EXPECT_EQ(cubemap->getHeight(), static_cast<Ogre::uint32>(mgr->faceSize()));
     EXPECT_EQ(cubemap->getNumFaces(), 6u);
-    EXPECT_EQ(spy.count(), 1);
+    EXPECT_EQ(envSpy.count(), 1);
 }
 
-TEST_F(HDREnvironmentManagerOgreTest, ReloadSameFile_UsesBakeCache)
+TEST_F(HDREnvironmentManagerOgreTest, ReloadSameFile_ReusesInMemoryCubemapBake)
 {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
 
-    const int w = 64;
-    const int h = 32;
+    const int w = 16;
+    const int h = 8;
     std::vector<float> rgb(static_cast<size_t>(w * h * 3), 1.f);
     const QString path = tmp.filePath(QStringLiteral("cached.exr"));
     ASSERT_TRUE(MinimalEXR::writeRGB32F(path, w, h, rgb));
 
     auto* mgr = HDREnvironmentManager::getSingleton();
+    const QString cacheKey = HdrEquirect::sha1HexOfFile(path);
 
-    QElapsedTimer first;
-    first.start();
     ASSERT_TRUE(mgr->loadEnvironment(path));
-    const qint64 firstMs = first.elapsed();
+    const Ogre::String firstTex = mgr->cubemap()->getName();
 
-    QElapsedTimer second;
-    second.start();
     ASSERT_TRUE(mgr->loadEnvironment(path));
-    const qint64 secondMs = second.elapsed();
-
-    EXPECT_EQ(mgr->currentCacheKey(), HdrEquirect::sha1HexOfFile(path));
-    EXPECT_LT(secondMs, firstMs + 50);
+    EXPECT_EQ(mgr->currentCacheKey(), cacheKey);
+    EXPECT_EQ(mgr->cubemap()->getName(), firstTex);
 }
 
 TEST_F(HDREnvironmentManagerOgreTest, SwitchingEnvironment_ReleasesPreviousCubemap)
