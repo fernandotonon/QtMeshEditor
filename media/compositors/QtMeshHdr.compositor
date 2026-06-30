@@ -1,0 +1,23 @@
+compositor QtMeshHdrPipeline
+{
+    technique
+    {
+        texture rtHdr target_width target_height PF_FLOAT16_RGBA
+
+        target rtHdr
+        {
+            pass render_scene
+            {
+            }
+        }
+
+        target_output
+        {
+            input on rtHdr
+            pass render_quad
+            {
+                material QtMesh/HdrTonemapPass
+            }
+        }
+    }
+}

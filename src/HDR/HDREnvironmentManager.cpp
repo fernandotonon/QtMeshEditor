@@ -5,6 +5,10 @@
 #include "RTShaderHelper.h"
 #include "SentryReporter.h"
 
+#include <OgreMaterialManager.h>
+#include <OgreSceneManager.h>
+
+#include <algorithm>
 #include <OgreTextureManager.h>
 
 #include <QCoreApplication>
@@ -16,6 +20,8 @@
 #include <QThread>
 
 namespace {
+
+constexpr const char* kSkyboxMaterialName = "QtMesh/HdrSkybox";
 
 void removeTextureIfExists(const Ogre::TexturePtr& tex)
 {
@@ -428,4 +434,92 @@ bool HDREnvironmentManager::loadEnvironment(const QString& pathOrBundledName)
 
     emit environmentChanged();
     return true;
+}
+
+void HDREnvironmentManager::setTonemapOperator(TonemapOperator op)
+{
+    if (m_tonemapOperator == op)
+        return;
+    m_tonemapOperator = op;
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("render.hdr.tonemap"),
+        QStringLiteral("operator=%1").arg(static_cast<int>(op)));
+    emit tonemapChanged();
+}
+
+void HDREnvironmentManager::setExposureEv(float exposureEv)
+{
+    if (m_exposureEv == exposureEv)
+        return;
+    m_exposureEv = exposureEv;
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("render.hdr.tonemap"),
+        QStringLiteral("exposureEv=%1").arg(exposureEv));
+    emit tonemapChanged();
+}
+
+void HDREnvironmentManager::setWhitePoint(float whitePoint)
+{
+    const float clamped = std::max(0.001f, whitePoint);
+    if (m_whitePoint == clamped)
+        return;
+    m_whitePoint = clamped;
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("render.hdr.tonemap"),
+        QStringLiteral("whitePoint=%1").arg(clamped));
+    emit tonemapChanged();
+}
+
+void HDREnvironmentManager::setDefaultSkyBoxVisible(bool visible)
+{
+    if (m_defaultSkyBoxVisible == visible)
+        return;
+    m_defaultSkyBoxVisible = visible;
+    emit tonemapChanged();
+}
+
+void HDREnvironmentManager::updateSkyBoxMaterial()
+{
+    if (!m_cubemap || !Ogre::MaterialManager::getSingletonPtr())
+        return;
+
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    Ogre::MaterialPtr mat = matMgr.getByName(kSkyboxMaterialName);
+    if (!mat)
+        mat = matMgr.create(kSkyboxMaterialName,
+                            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    if (!mat->isLoaded())
+        mat->load();
+
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+    pass->setLightingEnabled(false);
+    pass->setDepthWriteEnabled(false);
+    pass->setCullingMode(Ogre::CULL_NONE);
+
+    if (pass->getNumTextureUnitStates() == 0)
+        pass->createTextureUnitState();
+    auto* tus = pass->getTextureUnitState(0);
+    tus->setTextureName(m_cubemap->getName(), Ogre::TEX_TYPE_CUBE_MAP);
+    tus->setTextureFiltering(Ogre::TFO_TRILINEAR);
+    tus->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
+}
+
+void HDREnvironmentManager::applySkyBox(Ogre::SceneManager* sceneMgr)
+{
+    if (!sceneMgr || !m_cubemap)
+        return;
+
+    updateSkyBoxMaterial();
+    sceneMgr->setSkyBox(true, kSkyboxMaterialName, 5000.f);
+    sceneMgr->setSkyRenderingEnabled(m_defaultSkyBoxVisible);
+    m_skyBoxInstalled = true;
+}
+
+void HDREnvironmentManager::removeSkyBox(Ogre::SceneManager* sceneMgr)
+{
+    if (!sceneMgr || !m_skyBoxInstalled)
+        return;
+    sceneMgr->setSkyBox(false, kSkyboxMaterialName);
+    m_skyBoxInstalled = false;
 }

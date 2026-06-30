@@ -2,6 +2,7 @@
 
 #include "HDR/HdrEquirectLoader.h"
 #include "HDR/HdrIblPrecompute.h"
+#include "HDR/HdrTonemap.h"
 
 #include <Ogre.h>
 
@@ -12,12 +13,14 @@
 class HdrPrecomputeWorker;
 class QThread;
 
-/// Slice A (#467) + B (#468) + C (#469): HDR environment, IBL precompute, RTSS wiring.
+/// Slice A–D (#467–#470): HDR environment, IBL, tonemap defaults, skybox.
 class HDREnvironmentManager : public QObject
 {
     Q_OBJECT
 
 public:
+    using TonemapOperator = HdrTonemap::Operator;
+
     static HDREnvironmentManager* getSingleton();
     static HDREnvironmentManager* getSingletonPtr();
     static void kill();
@@ -59,9 +62,28 @@ public:
     /// Register precomputed IBL textures with Ogre (worker path + unit tests).
     bool installIblBake(const QString& cacheKey, HdrIbl::IblBakeResult& result, QString& error);
 
+    /// Global tone-mapping defaults (Slice D). New viewports inherit these.
+    TonemapOperator tonemapOperator() const { return m_tonemapOperator; }
+    float exposureEv() const { return m_exposureEv; }
+    float whitePoint() const { return m_whitePoint; }
+    bool defaultSkyBoxVisible() const { return m_defaultSkyBoxVisible; }
+
+    void setTonemapOperator(TonemapOperator op);
+    void setExposureEv(float exposureEv);
+    void setWhitePoint(float whitePoint);
+    void setDefaultSkyBoxVisible(bool visible);
+
+    /// Install or refresh the shared scene skybox from the active cubemap.
+    void applySkyBox(Ogre::SceneManager* sceneMgr);
+    void removeSkyBox(Ogre::SceneManager* sceneMgr);
+
+    /// True when an environment cubemap is loaded (IBL may still be baking).
+    bool hasEnvironment() const { return !m_cacheKey.isEmpty() && m_cubemap; }
+
 signals:
     void environmentChanged();
     void iblPrecomputeCompleted(bool fromDiskCache);
+    void tonemapChanged();
 
 private slots:
     void onPrecomputeCompleted(HdrIbl::IblBakeResult result,
@@ -85,6 +107,7 @@ private:
     bool registerIblTextures(const QString& cacheKey,
                              HdrIbl::IblBakeResult& result,
                              QString& error);
+    void updateSkyBoxMaterial();
 
     static HDREnvironmentManager* s_singleton;
 
@@ -95,6 +118,12 @@ private:
     float m_prefilterMaxLodLevel = 0.f;
     bool m_backgroundIblPrecompute = true;
     quint64 m_precomputeGeneration = 0;
+
+    TonemapOperator m_tonemapOperator = TonemapOperator::ACES;
+    float m_exposureEv = 0.f;
+    float m_whitePoint = 1.f;
+    bool m_defaultSkyBoxVisible = true;
+    bool m_skyBoxInstalled = false;
 
     Ogre::TexturePtr m_cubemap;
     Ogre::TexturePtr m_irradiance;

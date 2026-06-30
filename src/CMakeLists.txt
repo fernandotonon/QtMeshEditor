@@ -124,6 +124,9 @@ HDR/HdrIblPrecompute.cpp
 HDR/HdrCache.cpp
 HDR/HdrPrecomputeWorker.cpp
 HDR/HdrIblRtss.cpp
+HDR/HdrTonemap.cpp
+HDR/HdrViewportPipeline.cpp
+HDR/HdrViewportController.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp
@@ -316,6 +319,9 @@ HDR/HdrIblPrecompute.h
 HDR/HdrCache.h
 HDR/HdrPrecomputeWorker.h
 HDR/HdrIblRtss.h
+HDR/HdrTonemap.h
+HDR/HdrViewportPipeline.h
+HDR/HdrViewportController.h
 )
 
 set(TEST_SOURCES "")
