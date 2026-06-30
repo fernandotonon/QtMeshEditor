@@ -317,6 +317,8 @@ void HDREnvironmentManager::startIblPrecompute(const QString& cacheKey,
     m_prefiltered.reset();
     m_brdfLut.reset();
 
+    RTShaderHelper::refreshAllPbrMaterialsForHdr();
+
     const quint64 generation = ++m_precomputeGeneration;
     QMetaObject::invokeMethod(
         m_worker,
@@ -357,6 +359,7 @@ void HDREnvironmentManager::onPrecomputeError(const QString& error, quint64 gene
         return;
     Q_UNUSED(error);
     m_iblReady = false;
+    RTShaderHelper::refreshAllPbrMaterialsForHdr();
 }
 
 bool HDREnvironmentManager::loadEnvironment(const QString& pathOrBundledName)

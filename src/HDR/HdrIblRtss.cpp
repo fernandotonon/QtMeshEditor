@@ -157,10 +157,19 @@ public:
     }
 
     void updateGpuProgramsParams(Ogre::Renderable* /*rend*/,
-                                 const Ogre::Pass* /*pass*/,
+                                 const Ogre::Pass* pass,
                                  const Ogre::AutoParamDataSource* /*source*/,
                                  const Ogre::LightList* /*ll*/) override
     {
+        if (pass) {
+            const float intensity = readEnvIntensity(pass);
+            const Ogre::ColourValue tint = readEnvTint(pass);
+            if (intensity != mEnvIntensity || tint != mEnvTint) {
+                mEnvIntensity = intensity;
+                mEnvTint = tint;
+                mGpuParamsDirty = true;
+            }
+        }
         if (!mGpuParamsDirty)
             return;
         if (mIntensityParam)

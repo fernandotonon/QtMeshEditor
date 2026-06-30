@@ -113,6 +113,12 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/IsometricSpritesController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATShaderEmitter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MinimalEXRWriter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HDREnvironmentManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrEquirectLoader.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrIblPrecompute.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrCache.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrPrecomputeWorker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrIblRtss.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MorphAnimationManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MorphCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NodeAnimationManager.cpp
