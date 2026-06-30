@@ -875,10 +875,10 @@ QString EditModeController::selectByPart(const QString& upAxis)
     // fall through to the worker (model / geometric fallback). The extraction is
     // shared with the training-data miner (AutoRig::rigPriorPartLabels) so the
     // GUI selection and the mined ground truth are bit-identical.
+    std::vector<int> rigLabels;
     {
         int resolved = 0;
-        std::vector<int> rigLabels =
-            AutoRig::rigPriorPartLabels(m_editEntity, vertexCount, &resolved);
+        rigLabels = AutoRig::rigPriorPartLabels(m_editEntity, vertexCount, &resolved);
         // Use the rig labels when they cover most of the mesh (a real rig
         // should). Below that, the rig is too sparse to trust → use the model.
         // (rigPriorPartLabels marks bone-but-non-body vertices as -1; map those
@@ -908,7 +908,7 @@ QString EditModeController::selectByPart(const QString& upAxis)
     auto cancel = m_segmentCancel;
     QPointer<EditModeController> self(this);
 
-    std::thread([self, verts, indices, vertexCount, cancel, upAxisIdx]() {
+    std::thread([self, verts, indices, rigLabels, vertexCount, cancel, upAxisIdx]() {
         // Progress callback (inference): marshal to the UI thread, honour cancel.
         auto progress = [self, cancel](int done, int total) -> bool {
             if (cancel->load()) return false;
@@ -938,7 +938,7 @@ QString EditModeController::selectByPart(const QString& upAxis)
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts,
-            /*boneProximity=*/nullptr, progress);
+            rigLabels.empty() ? nullptr : rigLabels.data(), progress);
 
         // Hand the result back to the main thread to touch Ogre selection.
         QMetaObject::invokeMethod(qApp, [self, r, cancel]() {
