@@ -12,6 +12,19 @@
 namespace HdrCache {
 namespace {
 
+constexpr int kMaxCachedFaceSize = 4096;
+
+bool isValidCacheKey(const QString& cacheKey)
+{
+    if (cacheKey.size() != 40)
+        return false;
+    for (const QChar ch : cacheKey) {
+        if (!ch.isDigit() && (ch.toLower() < QLatin1Char('a') || ch.toLower() > QLatin1Char('f')))
+            return false;
+    }
+    return true;
+}
+
 struct FileHeader {
     uint32_t magic = kMagic;
     uint32_t version = kFormatVersion;
@@ -54,7 +67,8 @@ bool writeHeader(QFile& file, uint32_t payloadBytes)
 bool readCubemapFaces(QFile& file, HdrEquirect::CubemapFaces& faces, QString& error)
 {
     int32_t faceSize = 0;
-    if (!readExact(file, &faceSize, sizeof(int32_t)) || faceSize <= 0) {
+    if (!readExact(file, &faceSize, sizeof(int32_t)) || faceSize <= 0
+        || faceSize > kMaxCachedFaceSize) {
         error = QStringLiteral("invalid cubemap face size in cache");
         return false;
     }
@@ -110,7 +124,7 @@ uint32_t brdfPayloadBytes(const HdrIbl::BrdfLut& lut)
 bool readBrdfLut(QFile& file, HdrIbl::BrdfLut& lut, QString& error)
 {
     int32_t size = 0;
-    if (!readExact(file, &size, sizeof(int32_t)) || size <= 0) {
+    if (!readExact(file, &size, sizeof(int32_t)) || size <= 0 || size > kMaxCachedFaceSize) {
         error = QStringLiteral("invalid BRDF LUT size in cache");
         return false;
     }
@@ -220,12 +234,14 @@ QString cacheRootDirectory()
 
 QString entryDirectory(const QString& cacheKey)
 {
+    if (!isValidCacheKey(cacheKey))
+        return {};
     return QDir(cacheRootDirectory()).filePath(cacheKey);
 }
 
 bool isValid(const QString& cacheKey)
 {
-    if (cacheKey.isEmpty())
+    if (!isValidCacheKey(cacheKey))
         return false;
 
     HdrIbl::IblBakeResult tmp;
@@ -236,8 +252,8 @@ bool isValid(const QString& cacheKey)
 bool load(const QString& cacheKey, HdrIbl::IblBakeResult& out, QString& error)
 {
     out = {};
-    if (cacheKey.isEmpty()) {
-        error = QStringLiteral("empty cache key");
+    if (!isValidCacheKey(cacheKey)) {
+        error = QStringLiteral("invalid cache key");
         return false;
     }
 
@@ -326,8 +342,8 @@ bool load(const QString& cacheKey, HdrIbl::IblBakeResult& out, QString& error)
 bool save(const QString& cacheKey, const HdrIbl::IblBakeResult& in, QString& error)
 {
     error.clear();
-    if (cacheKey.isEmpty()) {
-        error = QStringLiteral("empty cache key");
+    if (!isValidCacheKey(cacheKey)) {
+        error = QStringLiteral("invalid cache key");
         return false;
     }
 

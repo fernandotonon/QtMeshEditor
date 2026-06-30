@@ -91,12 +91,15 @@ void HDREnvironmentManager::initializeWorkerThread()
 
 void HDREnvironmentManager::shutdownWorkerThread()
 {
-    if (m_workerThread) {
-        m_workerThread->quit();
-        m_workerThread->wait();
-        m_workerThread = nullptr;
-        m_worker = nullptr;
-    }
+    if (!m_workerThread)
+        return;
+    ++m_precomputeGeneration;
+    m_workerThread->quit();
+    if (!m_workerThread->wait(5000))
+        m_workerThread->terminate();
+    m_workerThread->wait(1000);
+    m_workerThread = nullptr;
+    m_worker = nullptr;
 }
 
 QString HDREnvironmentManager::resolvePath(const QString& pathOrBundledName) const
@@ -387,15 +390,19 @@ bool HDREnvironmentManager::loadEnvironment(const QString& pathOrBundledName)
     }
 
     QString ogreError;
-    removeTextureIfExists(m_cubemap);
+    Ogre::TexturePtr previousCubemap = m_cubemap;
     m_cubemap.reset();
-    if (!createOgreCubemap(cacheKey, bake->faces, ogreError))
+    if (!createOgreCubemap(cacheKey, bake->faces, ogreError)) {
+        m_cubemap = previousCubemap;
         return false;
+    }
+    removeTextureIfExists(previousCubemap);
 
     m_currentPath = resolved;
     m_cacheKey = cacheKey;
     m_faceSize = bake->faceSize;
-    m_iblReady = false;
+
+    startIblPrecompute(cacheKey, bake->faces);
 
     SentryReporter::addBreadcrumb(
         QStringLiteral("render.hdr.load"),
@@ -407,6 +414,5 @@ bool HDREnvironmentManager::loadEnvironment(const QString& pathOrBundledName)
             .arg(fromBakeCache ? QStringLiteral("yes") : QStringLiteral("no")));
 
     emit environmentChanged();
-    startIblPrecompute(cacheKey, bake->faces);
     return true;
 }

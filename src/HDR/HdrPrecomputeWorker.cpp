@@ -34,7 +34,8 @@ void HdrPrecomputeWorker::precomputeIbl(const QString& cacheKey,
 
     QString saveError;
     if (!HdrCache::save(cacheKey, result, saveError)) {
-        emit precomputeError(saveError, generation);
+        // Disk cache is optional — still register the in-memory bake for this session.
+        emit precomputeCompleted(result, false, timer.elapsed(), generation);
         return;
     }
 

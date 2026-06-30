@@ -43,7 +43,8 @@ TEST(HdrCacheTest, SaveLoadRoundTrip)
     ASSERT_TRUE(tmp.isValid());
     qputenv("XDG_DATA_HOME", tmp.path().toUtf8());
 
-    const QString cacheKey = QStringLiteral("abc123deadbeef");
+    const QString cacheKey =
+        QStringLiteral("abc123deadbeefabc123deadbeefabc123de");
     const HdrIbl::IblBakeResult original = makeTinyBakeResult();
 
     QString saveError;
@@ -65,7 +66,8 @@ TEST(HdrCacheTest, TruncatedFile_IsRejectedGracefully)
     ASSERT_TRUE(tmp.isValid());
     qputenv("XDG_DATA_HOME", tmp.path().toUtf8());
 
-    const QString cacheKey = QStringLiteral("corrupt-entry");
+    const QString cacheKey =
+        QStringLiteral("c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00");
     const HdrIbl::IblBakeResult original = makeTinyBakeResult();
     QString saveError;
     ASSERT_TRUE(HdrCache::save(cacheKey, original, saveError));

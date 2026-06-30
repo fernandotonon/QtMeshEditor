@@ -378,7 +378,7 @@ bool bakeBrdfLut(BrdfLut& out, QString& error, int size, int sampleCount)
                 b += fc * gVis;
             }
 
-            const float inv = 2.f / static_cast<float>(sampleCount);
+            const float inv = 1.f / static_cast<float>(sampleCount);
             const size_t idx = (static_cast<size_t>(y) * static_cast<size_t>(size)
                                 + static_cast<size_t>(x)) * 2u;
             out.rg[idx + 0] = a * inv;

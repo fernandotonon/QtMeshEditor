@@ -302,7 +302,7 @@ bool directionToFaceUv(const std::array<float, 3>& dir, int& face, float& u, flo
     float vc = 0.f;
     if (ax >= ay && ax >= az) {
         face = dir[0] > 0.f ? 0 : 1;
-        const float inv = 1.f / dir[0];
+        const float inv = 1.f / ax;
         if (face == 0) {
             uc = -dir[2] * inv;
             vc = -dir[1] * inv;
@@ -312,7 +312,7 @@ bool directionToFaceUv(const std::array<float, 3>& dir, int& face, float& u, flo
         }
     } else if (ay >= az) {
         face = dir[1] > 0.f ? 2 : 3;
-        const float inv = 1.f / dir[1];
+        const float inv = 1.f / ay;
         if (face == 2) {
             uc = dir[0] * inv;
             vc = dir[2] * inv;
@@ -322,7 +322,7 @@ bool directionToFaceUv(const std::array<float, 3>& dir, int& face, float& u, flo
         }
     } else {
         face = dir[2] > 0.f ? 4 : 5;
-        const float inv = 1.f / dir[2];
+        const float inv = 1.f / az;
         if (face == 4) {
             uc = dir[0] * inv;
             vc = -dir[1] * inv;
@@ -387,6 +387,13 @@ bool sampleCubemapRgb(const CubemapFaces& cubemap, const std::array<float, 3>& d
 {
     if (cubemap.faceSize <= 0)
         return false;
+
+    const size_t expectedPixels =
+        static_cast<size_t>(cubemap.faceSize) * static_cast<size_t>(cubemap.faceSize) * 3u;
+    for (const auto& face : cubemap.faces) {
+        if (face.size() < expectedPixels)
+            return false;
+    }
 
     std::array<float, 3> n = dir;
     const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
