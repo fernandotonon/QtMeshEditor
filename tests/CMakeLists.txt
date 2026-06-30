@@ -119,6 +119,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrPrecomputeWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrIblRtss.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrTonemap.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrViewportPipeline.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrViewportController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MorphAnimationManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MorphCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NodeAnimationManager.cpp

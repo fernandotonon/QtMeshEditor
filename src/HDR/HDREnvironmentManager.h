@@ -84,6 +84,7 @@ signals:
     void environmentChanged();
     void iblPrecomputeCompleted(bool fromDiskCache);
     void tonemapChanged();
+    void skyboxDefaultChanged();
 
 private slots:
     void onPrecomputeCompleted(HdrIbl::IblBakeResult result,

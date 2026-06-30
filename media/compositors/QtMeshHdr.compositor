@@ -13,9 +13,9 @@ compositor QtMeshHdrPipeline
 
         target_output
         {
-            input on rtHdr
             pass render_quad
             {
+                input 0 rtHdr
                 material QtMesh/HdrTonemapPass
             }
         }

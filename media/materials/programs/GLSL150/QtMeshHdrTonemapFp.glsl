@@ -28,7 +28,7 @@ vec3 tonemapAces(vec3 x)
 
 vec3 tonemapAgx(vec3 x)
 {
-    x = clamp(x, 0.0, 1.0);
+    x = max(x, vec3(0.0));
     vec3 agx = vec3(
         dot(x, vec3(0.224282, 0.130789, 0.044929)),
         dot(x, vec3(0.050223, 0.873461, 0.076316)),

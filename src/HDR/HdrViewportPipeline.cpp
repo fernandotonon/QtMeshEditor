@@ -39,6 +39,8 @@ void updateTonemapMaterialConstants()
 HdrViewportPipeline::HdrViewportPipeline(OgreWidget* widget)
     : m_widget(widget)
 {
+    if (auto* hdrMgr = HDREnvironmentManager::getSingletonPtr())
+        m_skyBoxVisible = hdrMgr->defaultSkyBoxVisible();
 }
 
 HdrViewportPipeline::~HdrViewportPipeline()
@@ -78,8 +80,11 @@ void HdrViewportPipeline::enablePipeline()
     if (!vpConst)
         return;
 
-    m_viewport = const_cast<Ogre::Viewport*>(vpConst);
-    m_skyBoxVisible = HDREnvironmentManager::getSingleton()->defaultSkyBoxVisible();
+    Ogre::Viewport* vp = const_cast<Ogre::Viewport*>(vpConst);
+    if (m_viewport != vp && m_compositor)
+        disablePipeline();
+
+    m_viewport = vp;
     m_viewport->setSkiesEnabled(m_skyBoxVisible);
 
     if (!Ogre::CompositorManager::getSingletonPtr())

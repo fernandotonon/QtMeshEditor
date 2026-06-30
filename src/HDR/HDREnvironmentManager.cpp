@@ -475,7 +475,11 @@ void HDREnvironmentManager::setDefaultSkyBoxVisible(bool visible)
     if (m_defaultSkyBoxVisible == visible)
         return;
     m_defaultSkyBoxVisible = visible;
-    emit tonemapChanged();
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("render.hdr.skybox"),
+        QStringLiteral("defaultVisible=%1").arg(visible ? QStringLiteral("yes")
+                                                        : QStringLiteral("no")));
+    emit skyboxDefaultChanged();
 }
 
 void HDREnvironmentManager::updateSkyBoxMaterial()

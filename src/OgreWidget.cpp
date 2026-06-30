@@ -132,8 +132,7 @@ OgreWidget::OgreWidget( QWidget *parent ):
 
 OgreWidget::~OgreWidget()
 {
-    if (auto* hdrVp = HdrViewportController::getSingletonPtr())
-        hdrVp->unregisterWidget(this);
+    HdrViewportController::getSingleton().unregisterWidget(this);
 
     // Safely clean up OGRE resources
     // Order is important: remove listeners first, then destroy camera, then detach render target, then remove viewports
@@ -299,8 +298,7 @@ void OgreWidget::initOgreWindow(void)
     if (mCamera)
         applyViewportCameraFromSettings(mCamera.get());
 
-    if (auto* hdrVp = HdrViewportController::getSingletonPtr())
-        hdrVp->registerWidget(this);
+    HdrViewportController::getSingleton().registerWidget(this);
 }
 
 void OgreWidget::teardownOgreWindow()
@@ -359,11 +357,12 @@ void OgreWidget::rebuildRenderWindow()
         visMask = mViewport->getVisibilityMask();
     }
 
+    HdrViewportController::getSingleton().unregisterWidget(this);
+
     teardownOgreWindow();
     initOgreWindow();
 
-    if (auto* hdrVp = HdrViewportController::getSingletonPtr())
-        hdrVp->registerWidget(this);
+    HdrViewportController::getSingleton().registerWidget(this);
 
     setBackgroundColor(bg);
     if (mViewport)
@@ -384,8 +383,7 @@ void OgreWidget::rebuildRenderWindow()
 
 bool OgreWidget::frameStarted(const Ogre::FrameEvent& e)
 {
-    if (auto* hdrVp = HdrViewportController::getSingletonPtr())
-        hdrVp->tickActiveViewports();
+    HdrViewportController::getSingleton().tickActiveViewports();
 
     // Keep tool gizmos at a constant pixel size by scaling them against the
     // current camera distance each frame. The gizmos are shared editor

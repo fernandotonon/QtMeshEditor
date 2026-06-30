@@ -47,7 +47,11 @@ Rgb tonemapAces(Rgb x)
 Rgb tonemapAgx(Rgb x)
 {
     // Troy Sobotka's AgX default contrast approximation (Blender 4+ default).
-    const Rgb lin = clamp01(x);
+    const Rgb lin = {
+        std::max(0.f, x.r),
+        std::max(0.f, x.g),
+        std::max(0.f, x.b),
+    };
     const Rgb agx = {
         0.224282f * lin.r + 0.130789f * lin.g + 0.044929f * lin.b,
         0.050223f * lin.r + 0.873461f * lin.g + 0.076316f * lin.b,

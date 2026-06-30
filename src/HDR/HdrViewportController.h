@@ -29,6 +29,7 @@ public:
 private slots:
     void onEnvironmentChanged();
     void onTonemapChanged();
+    void onSkyboxDefaultChanged();
 
 private:
     explicit HdrViewportController(QObject* parent = nullptr);
