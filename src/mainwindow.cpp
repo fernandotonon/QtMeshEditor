@@ -65,11 +65,14 @@
 #include "OgreRenderTargetUtil.h"
 #include "QtInputManager.h"
 #include "Manager.h"
+#include <OgreCamera.h>
+
 #include "material.h"
 #include "about.h"
 #include "PrimitivesWidget.h"
 #include "MeshImporterExporter.h"
 #include "EditorViewport.h"
+#include "SpaceCamera.h"
 #include "ViewportGrid.h"
 #include "AnimationWidget.h"
 #include "AnimationMerger.h"
@@ -4378,6 +4381,53 @@ void MainWindow::updateMergeAnimationsButton()
 void MainWindow::triggerMergeAnimations()
 {
     on_actionMerge_Animations_triggered();
+}
+
+ViewportCameraSnapshot MainWindow::queryViewportCamera(bool requireFocus) const
+{
+    ViewportCameraSnapshot snap;
+    SpaceCamera* spaceCam = nullptr;
+    bool focused = false;
+
+    for (EditorViewport* vp : mDockWidgetList) {
+        if (!vp || !vp->getOgreWidget())
+            continue;
+        if (vp->getOgreWidget()->hasFocus()) {
+            spaceCam = vp->getOgreWidget()->getSpaceCamera();
+            focused = true;
+            break;
+        }
+    }
+
+    // UV/material panels steal Qt focus — fall back to the last viewport the
+    // user interacted with (same source as the transform gizmo / view cube).
+    if (!spaceCam) {
+        if (OgreWidget* active = TransformOperator::getSingleton()->getActiveWidget())
+            spaceCam = active->getSpaceCamera();
+    }
+
+    if (!spaceCam && !requireFocus) {
+        for (EditorViewport* vp : mDockWidgetList) {
+            if (vp && vp->getOgreWidget()) {
+                spaceCam = vp->getOgreWidget()->getSpaceCamera();
+                if (spaceCam)
+                    break;
+            }
+        }
+    }
+
+    if (!spaceCam || (requireFocus && !focused))
+        return snap;
+
+    Ogre::Camera* camera = spaceCam->getCamera();
+    if (!camera)
+        return snap;
+
+    snap.viewMatrix = camera->getViewMatrix();
+    snap.projMatrix = camera->getProjectionMatrix();
+    snap.valid = true;
+    snap.fromFocusedViewport = focused;
+    return snap;
 }
 
 void MainWindow::triggerMaterialEditor()
