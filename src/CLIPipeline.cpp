@@ -8492,6 +8492,8 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         err() << "Error: no readable geometry in " << inputPath << Qt::endl; return 1;
     }
     const int vertexCount = static_cast<int>(verts.size() / 3);
+    int rigResolved = 0;
+    std::vector<int> rigLabels = AutoRig::rigPriorPartLabels(entity, vertexCount, &rigResolved);
 
     // --- Training-data miner ------------------------------------------------
     // `--dump-training-data out.json` writes the mesh's point cloud + EXACT
@@ -8503,15 +8505,13 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     // MODEL path (used on UNrigged meshes) keeps improving as more rigged
     // assets are mined. Requires a skinned mesh.
     if (!dumpPath.isEmpty()) {
-        int resolved = 0;
-        std::vector<int> labels = AutoRig::rigPriorPartLabels(entity, vertexCount, &resolved);
-        if (labels.empty()) {
+        if (rigLabels.empty()) {
             err() << "Error: --dump-training-data needs a SKINNED mesh (no skeleton in "
                   << inputPath << ")." << Qt::endl;
             return 1;
         }
-        if (resolved < (vertexCount + 1) / 2) {
-            err() << "Error: rig resolved only " << resolved << " / " << vertexCount
+        if (rigResolved < (vertexCount + 1) / 2) {
+            err() << "Error: rig resolved only " << rigResolved << " / " << vertexCount
                   << " vertices to body parts — too sparse to be reliable training data."
                   << Qt::endl;
             return 1;
@@ -8535,14 +8535,14 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
             pts.append((verts[3*v+0]-ctr[0])*invs);
             pts.append((verts[3*v+1]-ctr[1])*invs);
             pts.append((verts[3*v+2]-ctr[2])*invs);
-            labs.append(labels[v] < 0 ? 0 : labels[v]);   // bone-but-non-body → unknown(0)
+            labs.append(rigLabels[v] < 0 ? 0 : rigLabels[v]);   // bone-but-non-body → unknown(0)
         }
         QJsonObject root;
         root["schema"]      = "qtmesh-meshseg-training-v1";
         root["mesh"]        = fi.fileName();
         root["upAxis"]      = upAxis;     // miner records the source up axis
         root["vertexCount"] = vertexCount;
-        root["resolved"]    = resolved;
+        root["resolved"]    = rigResolved;
         root["partCount"]   = MeshSegmenter::partCount();
         root["points"]      = pts;        // flat [x,y,z, …] normalised to unit box
         root["labels"]      = labs;       // per-vertex part index (0=unknown)
@@ -8553,8 +8553,8 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         out.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
         out.close();
         cliWrite(QString("Wrote training sample %1 — %2 verts, %3 resolved (%4%)\n")
-                     .arg(dumpPath).arg(vertexCount).arg(resolved)
-                     .arg(100.0 * resolved / std::max(1, vertexCount), 0, 'f', 1));
+                     .arg(dumpPath).arg(vertexCount).arg(rigResolved)
+                     .arg(100.0 * rigResolved / std::max(1, vertexCount), 0, 'f', 1));
         return 0;
     }
 
@@ -8566,7 +8566,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     opts.forceFallback = noModel;
     const MeshSegmenter::Result r = MeshSegmenter::predict(
         verts.data(), vertexCount, indices.data(), static_cast<int>(indices.size()),
-        modelPath, opts);
+        modelPath, opts, rigLabels.empty() ? nullptr : rigLabels.data());
     if (!r.ok) {
         err() << "Error: " << (r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error)
               << Qt::endl;

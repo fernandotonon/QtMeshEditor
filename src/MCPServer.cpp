@@ -3372,6 +3372,8 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.empty())
             return makeErrorResult("Error: no readable geometry");
         const int vertexCount = static_cast<int>(verts.size() / 3);
+        std::vector<int> rigLabels =
+            AutoRig::rigPriorPartLabels(entity, vertexCount);
 
         const bool noModel = args.value("no_model").toBool(false);
         QString modelPath;
@@ -3388,7 +3390,8 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         }
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
-            static_cast<int>(indices.size()), modelPath, opts);
+            static_cast<int>(indices.size()), modelPath, opts,
+            rigLabels.empty() ? nullptr : rigLabels.data());
         if (!r.ok)
             return makeErrorResult(QString("Error: %1")
                 .arg(r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error));
