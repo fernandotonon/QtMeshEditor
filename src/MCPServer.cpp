@@ -28,6 +28,8 @@
 #include "VertexCacheOptimizer.h"
 #include "MeshDecimator.h"
 #include "UvUnwrap.h"
+#include "UvPipeline.h"
+#include "UvProject.h"
 #include "AssetScanController.h"
 #include "CloudCredentialStore.h"
 #include "CloudUploadPlanner.h"
@@ -76,6 +78,7 @@
 #include <OgreSubMesh.h>
 #include <OgreMesh.h>
 #include <cmath>
+#include <limits>
 #include <OgreSkeleton.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
@@ -102,6 +105,8 @@ static Ogre::SceneNode* findSceneNodeByName(const QString &nodeName);
 static Ogre::Entity* findEntityByName(const QString &entityName);
 static Ogre::NodeAnimationTrack* findTrackByBoneName(Ogre::Animation* anim, const QString &boneName);
 static bool hasSelectedEntities();
+static Ogre::Entity* firstResolvedSelectedEntity();
+static bool mcpJsonIntValue(const QJsonValue& value, int* out, QString* err, const char* field);
 static QString captureLodControllerError(const std::function<void()> &operation);
 
 MCPServer::MCPServer(QObject *parent)
@@ -580,6 +585,10 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("set_texture"), &MCPServer::toolSetTexture},
         {QStringLiteral("export_mesh"), &MCPServer::toolExportMesh},
         {QStringLiteral("auto_uv_unwrap"),       &MCPServer::toolAutoUvUnwrap},
+        {QStringLiteral("uv_info"),              &MCPServer::toolUvInfo},
+        {QStringLiteral("uv_project"),           &MCPServer::toolUvProject},
+        {QStringLiteral("uv_set_seams"),           &MCPServer::toolUvSetSeams},
+        {QStringLiteral("uv_unwrap_selection"),   &MCPServer::toolUvUnwrapSelection},
         {QStringLiteral("retopologize"),         &MCPServer::toolRetopologize},
         {QStringLiteral("compute_skin_weights"), &MCPServer::toolComputeSkinWeights},
         {QStringLiteral("auto_rig"), &MCPServer::toolAutoRig},
@@ -1517,20 +1526,18 @@ QJsonObject MCPServer::toolAutoUvUnwrap(const QJsonObject &args)
     if (args.contains("preserve_original"))
         opts.preserveOriginalAsBackup = args["preserve_original"].toBool(true);
 
-    SelectionSet* sel = SelectionSet::getSingleton();
-    if (!sel || sel->getEntitiesCount() == 0)
+    Ogre::Entity* entity = firstResolvedSelectedEntity();
+    if (!entity)
         return makeErrorResult("No selected entity.");
-    Ogre::Entity* entity = sel->getEntity(0);
-    if (!entity) return makeErrorResult("Selected entity is null.");
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.uv_unwrap"),
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.unwrap"),
         QStringLiteral("auto_uv_unwrap entity=%1 res=%2 pad=%3 ch=%4")
             .arg(QString::fromStdString(entity->getName()))
             .arg(opts.resolution).arg(opts.padding).arg(opts.channel));
 
     UvUnwrapReport report;
     try {
-        report = UvUnwrap::unwrapEntity(entity, opts);
+        report = UvPipeline::unwrapEntity(entity, opts);
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")
             .arg(QString::fromStdString(e.getFullDescription())));
@@ -1539,6 +1546,155 @@ QJsonObject MCPServer::toolAutoUvUnwrap(const QJsonObject &args)
     if (!report.applied) {
         return makeErrorResult(QStringLiteral("UV unwrap failed: %1").arg(report.error));
     }
+
+    QJsonObject result = makeSuccessResult(UvUnwrap::reportToText(report));
+    result["unwrap"] = UvUnwrap::reportToJson(report);
+    return result;
+}
+
+QJsonObject MCPServer::toolUvInfo(const QJsonObject &args)
+{
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    Ogre::Entity* entity = firstResolvedSelectedEntity();
+    if (!entity)
+        return makeErrorResult("No selected entity.");
+
+    const int channel = args.contains("channel") ? args["channel"].toInt(0) : 0;
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.info"),
+        QString::fromStdString(entity->getName()));
+
+    const auto info = UvPipeline::analyzeEntity(entity, channel);
+    QJsonObject result = makeSuccessResult(UvPipeline::infoToText(
+        QString::fromStdString(entity->getName()), info));
+    result["uv"] = UvPipeline::infoToJson(QString::fromStdString(entity->getName()), info);
+    return result;
+}
+
+QJsonObject MCPServer::toolUvProject(const QJsonObject &args)
+{
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    Ogre::Entity* entity = firstResolvedSelectedEntity();
+    if (!entity)
+        return makeErrorResult("No selected entity.");
+
+    const QString modeName = args.value(QStringLiteral("mode")).toString(QStringLiteral("box"));
+    bool ok = false;
+    const UvProject::Mode mode = UvPipeline::parseProjectMode(modeName, &ok);
+    if (!ok)
+        return makeErrorResult("Error: mode must be box, cylinder, sphere, or reset.");
+
+    const int channel = args.contains("channel") ? args["channel"].toInt(0) : 0;
+    UvProject::Options opts;
+    if (args.contains("axis")) opts.axis = args["axis"].toInt(1);
+    if (args.contains("scale")) {
+        const double scale = args["scale"].toDouble(1.0);
+        opts.boxScale = static_cast<float>(scale > 0.0 ? scale : 1.0);
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.project"), modeName);
+
+    UvProject::Report report;
+    try {
+        report = UvPipeline::projectEntity(entity, mode, channel, opts);
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
+
+    if (!report.applied)
+        return makeErrorResult(QStringLiteral("UV projection failed: %1").arg(report.error));
+
+    QJsonObject result = makeSuccessResult(
+        QStringLiteral("Projected %1 vertices (%2)").arg(report.vertsChanged).arg(modeName));
+    result["vertsChanged"] = report.vertsChanged;
+    result["mode"] = modeName;
+    return result;
+}
+
+QJsonObject MCPServer::toolUvSetSeams(const QJsonObject &args)
+{
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    Ogre::Entity* entity = firstResolvedSelectedEntity();
+    if (!entity)
+        return makeErrorResult("No selected entity.");
+
+    const QString spec = args.value(QStringLiteral("edges")).toString();
+    if (spec.isEmpty())
+        return makeErrorResult("Error: 'edges' is required (e.g. \"0:1-2,0:2-3\").");
+
+    std::vector<UvPipeline::SeamEdge> edges;
+    QString parseError;
+    if (!UvPipeline::parseSeamEdgeList(spec, edges, &parseError))
+        return makeErrorResult(QStringLiteral("Invalid edges: %1").arg(parseError));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.seam"),
+        QStringLiteral("uv_set_seams count=%1").arg(edges.size()));
+
+    QString seamError;
+    if (!UvPipeline::setSeamsOnEntity(entity, edges, &seamError))
+        return makeErrorResult(QStringLiteral("Set seams failed: %1").arg(seamError));
+
+    QJsonObject result = makeSuccessResult(
+        QStringLiteral("Marked %1 seam edges").arg(edges.size()));
+    result["seamCount"] = static_cast<int>(edges.size());
+    return result;
+}
+
+QJsonObject MCPServer::toolUvUnwrapSelection(const QJsonObject &args)
+{
+    if (!hasSelectedEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    Ogre::Entity* entity = firstResolvedSelectedEntity();
+    if (!entity)
+        return makeErrorResult("No selected entity.");
+
+    int subMesh = 0;
+    if (args.contains("submesh")) {
+        QString intErr;
+        if (!mcpJsonIntValue(args.value("submesh"), &subMesh, &intErr, "submesh"))
+            return makeErrorResult(intErr);
+    }
+
+    std::vector<int> triangles;
+    if (!args.contains("triangles") || !args["triangles"].isArray())
+        return makeErrorResult("Error: 'triangles' array is required.");
+    for (const QJsonValue& v : args["triangles"].toArray()) {
+        int ti = 0;
+        QString intErr;
+        if (!mcpJsonIntValue(v, &ti, &intErr, "triangles[]"))
+            return makeErrorResult(intErr);
+        triangles.push_back(ti);
+    }
+    if (triangles.empty())
+        return makeErrorResult("Error: 'triangles' array is required.");
+
+    UvUnwrapOptions opts;
+    if (args.contains("resolution")) opts.resolution = args["resolution"].toInt(1024);
+    if (args.contains("padding"))    opts.padding    = args["padding"].toInt(4);
+    if (args.contains("channel"))    opts.channel    = args["channel"].toInt(0);
+    if (args.contains("preserve_original"))
+        opts.preserveOriginalAsBackup = args["preserve_original"].toBool(true);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("mesh.uv.unwrap"),
+        QStringLiteral("uv_unwrap_selection sub=%1 tris=%2").arg(subMesh).arg(triangles.size()));
+
+    UvUnwrapReport report;
+    try {
+        report = UvPipeline::unwrapTriangles(entity, subMesh, triangles, opts);
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+            .arg(QString::fromStdString(e.getFullDescription())));
+    }
+
+    if (!report.applied)
+        return makeErrorResult(QStringLiteral("UV unwrap failed: %1").arg(report.error));
 
     QJsonObject result = makeSuccessResult(UvUnwrap::reportToText(report));
     result["unwrap"] = UvUnwrap::reportToJson(report);
@@ -2464,6 +2620,32 @@ static bool hasSelectedEntities()
 {
     SelectionSet* sel = SelectionSet::getSingleton();
     return sel && !sel->getResolvedEntities().isEmpty();
+}
+
+static Ogre::Entity* firstResolvedSelectedEntity()
+{
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities() : QList<Ogre::Entity*>{};
+    return resolved.isEmpty() ? nullptr : resolved.first();
+}
+
+static bool mcpJsonIntValue(const QJsonValue& value, int* out, QString* err, const char* field)
+{
+    if (!value.isDouble()) {
+        if (err)
+            *err = QStringLiteral("Error: '%1' must be an integer.").arg(QLatin1String(field));
+        return false;
+    }
+    const double d = value.toDouble();
+    if (d < static_cast<double>(std::numeric_limits<int>::min())
+        || d > static_cast<double>(std::numeric_limits<int>::max())
+        || d != std::trunc(d)) {
+        if (err)
+            *err = QStringLiteral("Error: '%1' must be an integer.").arg(QLatin1String(field));
+        return false;
+    }
+    *out = static_cast<int>(d);
+    return true;
 }
 
 static QString captureLodControllerError(const std::function<void()> &operation)
@@ -3490,6 +3672,8 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.empty())
             return makeErrorResult("Error: no readable geometry");
         const int vertexCount = static_cast<int>(verts.size() / 3);
+        std::vector<int> rigLabels =
+            AutoRig::rigPriorPartLabels(entity, vertexCount);
 
         const bool noModel = args.value("no_model").toBool(false);
         QString modelPath;
@@ -3506,7 +3690,8 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         }
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
-            static_cast<int>(indices.size()), modelPath, opts);
+            static_cast<int>(indices.size()), modelPath, opts,
+            rigLabels.empty() ? nullptr : rigLabels.data());
         if (!r.ok)
             return makeErrorResult(QString("Error: %1")
                 .arg(r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error));
@@ -6813,6 +6998,80 @@ QJsonArray MCPServer::buildToolsList()
             "survive the seam splits via xref remap. Response includes a structured 'unwrap' "
             "object with atlas size, chart count, vertex count before / after, and utilization.",
             props
+        );
+    }
+
+    // uv_info (#465)
+    {
+        QJsonObject props;
+        props["channel"] = QJsonObject{{"type", "integer"},
+            {"description", "UV channel to analyze. Default 0."}};
+        appendTool(
+            "uv_info",
+            "Report UV channel coverage, island count, and an AABB overlap upper bound for "
+            "the currently selected mesh. Response includes a structured 'uv' object.",
+            props
+        );
+    }
+
+    // uv_project (#465)
+    {
+        QJsonObject props;
+        props["mode"] = QJsonObject{{"type", "string"},
+            {"description", "Projection mode: box, cylinder, sphere, or reset. Default box."}};
+        props["channel"] = QJsonObject{{"type", "integer"},
+            {"description", "UV channel to write. Default 0."}};
+        props["axis"] = QJsonObject{{"type", "integer"},
+            {"description", "Primary axis for box/cylinder/sphere (0=X, 1=Y, 2=Z). Default 1."}};
+        props["scale"] = QJsonObject{{"type", "number"},
+            {"description", "Box projection scale multiplier. Default 1.0."}};
+        appendTool(
+            "uv_project",
+            "Apply a geometric UV projection (box / cylinder / sphere / reset) to the "
+            "currently selected mesh in-session. View projection is GUI-only.",
+            props
+        );
+    }
+
+    // uv_set_seams (#465)
+    {
+        QJsonObject props;
+        props["edges"] = QJsonObject{{"type", "string"},
+            {"description",
+             "Comma-separated seam edges as submesh:vertA-vertB (e.g. \"0:1-2,0:2-3\"). "
+             "Submesh prefix may be omitted when 0."}};
+        appendTool(
+            "uv_set_seams",
+            "Mark mesh edges as UV seams on the currently selected entity. "
+            "Edges persist in qtme.seams bindings for unwrap / the UV editor.",
+            props,
+            QJsonArray{"edges"}
+        );
+    }
+
+    // uv_unwrap_selection (#465)
+    {
+        QJsonObject props;
+        props["submesh"] = QJsonObject{{"type", "integer"},
+            {"description", "Submesh index containing the triangles. Default 0."}};
+        props["triangles"] = QJsonObject{
+            {"type", "array"},
+            {"items", QJsonObject{{"type", "integer"}}},
+            {"description", "Local triangle indices to re-unwrap via xatlas."}};
+        props["resolution"] = QJsonObject{{"type", "integer"},
+            {"description", "Atlas resolution hint. Default 1024."}};
+        props["padding"] = QJsonObject{{"type", "integer"},
+            {"description", "Chart padding in texels. Default 4."}};
+        props["channel"] = QJsonObject{{"type", "integer"},
+            {"description", "UV channel to write. Default 0."}};
+        props["preserve_original"] = QJsonObject{{"type", "boolean"},
+            {"description", "Preserve the overwritten channel on UV{channel+1}. Default true."}};
+        appendTool(
+            "uv_unwrap_selection",
+            "xatlas re-unwrap of selected triangle indices on one submesh of the "
+            "currently selected entity. Respects existing seam bindings.",
+            props,
+            QJsonArray{"triangles"}
         );
     }
 

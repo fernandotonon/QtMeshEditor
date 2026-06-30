@@ -97,6 +97,71 @@ char boneSide(const QString& n)
     if (n.endsWith('r')) return 'r';
     return 0;
 }
+
+void applyBoneHints(std::vector<int>& labels, const int* boneProximity)
+{
+    if (!boneProximity) return;
+    const int count = static_cast<int>(MeshSegmenter::Part::Count);
+    const int unknown = static_cast<int>(MeshSegmenter::Part::Unknown);
+    for (int v = 0; v < static_cast<int>(labels.size()); ++v) {
+        const int bp = boneProximity[v];
+        if (bp > unknown && bp < count)
+            labels[v] = bp;
+    }
+}
+
+void smoothLabelsByTopology(std::vector<int>& labels,
+                            const uint32_t* indices,
+                            int indexCount,
+                            int iterations)
+{
+    const int vertexCount = static_cast<int>(labels.size());
+    const int partCount = static_cast<int>(MeshSegmenter::Part::Count);
+    if (vertexCount <= 0 || !indices || indexCount < 3 || iterations <= 0)
+        return;
+
+    std::vector<std::vector<int>> neighbours(vertexCount);
+    for (int i = 0; i + 2 < indexCount; i += 3) {
+        const int a = static_cast<int>(indices[i]);
+        const int b = static_cast<int>(indices[i + 1]);
+        const int c = static_cast<int>(indices[i + 2]);
+        if (a < 0 || b < 0 || c < 0 || a >= vertexCount || b >= vertexCount || c >= vertexCount)
+            continue;
+        neighbours[a].push_back(b); neighbours[a].push_back(c);
+        neighbours[b].push_back(a); neighbours[b].push_back(c);
+        neighbours[c].push_back(a); neighbours[c].push_back(b);
+    }
+    for (auto& ns : neighbours) {
+        std::sort(ns.begin(), ns.end());
+        ns.erase(std::unique(ns.begin(), ns.end()), ns.end());
+    }
+
+    std::vector<int> next(labels.size());
+    for (int it = 0; it < iterations; ++it) {
+        next = labels;
+        for (int v = 0; v < vertexCount; ++v) {
+            std::array<int, static_cast<int>(MeshSegmenter::Part::Count)> votes{};
+            const int current = labels[v];
+            if (current >= 0 && current < partCount)
+                votes[current] += 3;
+            for (int n : neighbours[v]) {
+                const int label = labels[n];
+                if (label >= 0 && label < partCount)
+                    ++votes[label];
+            }
+            int best = current;
+            int bestVotes = (current >= 0 && current < partCount) ? votes[current] : -1;
+            for (int p = 0; p < partCount; ++p) {
+                if (votes[p] > bestVotes) {
+                    bestVotes = votes[p];
+                    best = p;
+                }
+            }
+            next[v] = best;
+        }
+        labels.swap(next);
+    }
+}
 } // namespace
 
 MeshSegmenter::Options::Options() = default;
@@ -328,13 +393,8 @@ MeshSegmenter::Result MeshSegmenter::segmentGeometric(const float* positions, in
     // 2) Override with VALID rig bone-proximity hints only. An unknown/invalid
     // hint (-1, or out of range) leaves the spatial label intact — a partially
     // hinted rig must not collapse its unhinted vertices to Torso.
-    if (haveBone) {
-        for (int v = 0; v < vertexCount; ++v) {
-            const int bp = boneProximity[v];
-            if (bp >= 0 && bp < static_cast<int>(Part::Count))
-                r.vertexLabels[v] = bp;
-        }
-    }
+    if (haveBone)
+        applyBoneHints(r.vertexLabels, boneProximity);
 
     r.faceLabels = facesFromVertexLabels(r.vertexLabels, indices, indexCount);
     r.ok = true;
@@ -467,13 +527,22 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
         }
 
         const int N = std::max(256, opts.samplePoints);
-        // Deterministic point sample (with replacement if the mesh is small).
+        // Deterministic point sample. Small meshes include every vertex once so
+        // no vertex keeps the default label; large meshes are sampled across the
+        // whole vertex buffer instead of taking the first N vertices.
         std::mt19937 rng(0x5e6u);  // NOSONAR — non-crypto, fixed for reproducibility
         std::uniform_int_distribution<int> pick(0, vertexCount - 1);
         std::vector<float> pts(static_cast<size_t>(N) * 3);
         std::vector<int> srcVert(N);
         for (int i = 0; i < N; ++i) {
-            const int v = (vertexCount >= N) ? (i < vertexCount ? i : pick(rng)) : pick(rng);
+            int v = 0;
+            if (vertexCount <= N) {
+                v = (i < vertexCount) ? i : pick(rng);
+            } else {
+                const double t = (static_cast<double>(i) + 0.5) / static_cast<double>(N);
+                v = std::clamp(static_cast<int>(t * static_cast<double>(vertexCount)),
+                               0, vertexCount - 1);
+            }
             srcVert[i] = v;
             for (int c = 0; c < 3; ++c) {
                 const int a = axisFor[c];
@@ -545,13 +614,12 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
 
         // Scatter sampled-point labels back to ALL vertices by nearest sampled
         // point (in normalised space). For samplePoints >= vertexCount the first
-        // N points already cover every vertex 1:1, so this is exact.
+        // vertexCount samples cover every vertex 1:1, so this is exact.
         Result r;
         r.vertexLabels.assign(vertexCount, static_cast<int>(Part::Torso));
         if (vertexCount <= N) {
-            for (int i = 0; i < N && i < vertexCount; ++i)
-                r.vertexLabels[srcVert[i]] = pointLabel[i];
-            // any vertex not directly sampled (shouldn't happen for vc<=N first-N) → nearest
+            for (int i = 0; i < vertexCount; ++i)
+                r.vertexLabels[i] = pointLabel[i];
         } else {
             // brute-force nearest sampled point per vertex (N is small, ~4k).
             for (int v = 0; v < vertexCount; ++v) {
@@ -569,6 +637,9 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
                 r.vertexLabels[v] = pointLabel[best];
             }
         }
+        applyBoneHints(r.vertexLabels, boneProximity);
+        smoothLabelsByTopology(r.vertexLabels, indices, indexCount, 1);
+        applyBoneHints(r.vertexLabels, boneProximity);
         r.faceLabels = facesFromVertexLabels(r.vertexLabels, indices, indexCount);
         r.ok = true;
         r.usedModel = true;

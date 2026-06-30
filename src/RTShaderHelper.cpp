@@ -2,6 +2,9 @@
 
 #include "RTShaderHelper.h"
 #include "EmbeddedTextureCache.h"
+#include "HDR/HDREnvironmentManager.h"
+#include "HDR/HdrIblRtss.h"
+#include "SentryReporter.h"
 #include <OgreRTShaderSystem.h>
 #include <OgreMaterialSerializer.h>
 #include <cstring>
@@ -9,6 +12,7 @@
 #include <QDir>
 #include <QString>
 #include <QSet>
+#include <QString>
 
 // Scheme resolver listener — generates RTSS shader techniques on demand
 // when Ogre can't find a technique for the ShaderGenerator scheme.
@@ -162,10 +166,14 @@ void RTShaderHelper::initialize(Ogre::SceneManager* sceneMgr)
     // Register scheme resolver so RTSS techniques are generated on demand
     sListener = new SchemeResolverListener(shaderGen);
     Ogre::MaterialManager::getSingleton().addListener(sListener);
+
+    HdrIblRtss::registerFactory();
 }
 
 void RTShaderHelper::shutdown(Ogre::SceneManager* sceneMgr)
 {
+    HdrIblRtss::unregisterFactory();
+
     if (sListener) {
         Ogre::MaterialManager::getSingleton().removeListener(sListener);
         delete sListener;
@@ -244,6 +252,48 @@ bool isMetallicRoughnessMaterial(const Ogre::MaterialPtr& mat)
     const Ogre::String tag = readPbrWorkflowTag(pass);
     return tag == "metallic_roughness"
         || (tag.empty() && detectMetallicRoughnessByLayout(pass));
+}
+
+bool tryApplyHdrIbl(Ogre::RTShader::ShaderGenerator* shaderGen,
+                    Ogre::RTShader::RenderState* renderState,
+                    const Ogre::Pass* srcPass,
+                    const Ogre::MaterialPtr& mat)
+{
+    auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
+    if (!hdrMgr || !hdrMgr->isIblReady())
+        return false;
+
+    const Ogre::TexturePtr irradiance = hdrMgr->irradianceMap();
+    const Ogre::TexturePtr prefilter = hdrMgr->prefilteredSpecularMap();
+    const Ogre::TexturePtr brdfLut = hdrMgr->brdfLut();
+    if (!irradiance || !prefilter || !brdfLut)
+        return false;
+
+    auto* iblSrs = shaderGen->createSubRenderState(HdrIblRtss::SRS_QTME_HDR_IBL);
+    if (!iblSrs)
+        return false;
+
+    const float intensity = HdrIblRtss::readEnvIntensity(srcPass);
+    const Ogre::ColourValue tint = HdrIblRtss::readEnvTint(srcPass);
+    iblSrs->setParameter("irradiance_texture", irradiance->getName());
+    iblSrs->setParameter("prefilter_texture", prefilter->getName());
+    iblSrs->setParameter("brdf_lut_texture", brdfLut->getName());
+    iblSrs->setParameter("prefilter_max_lod",
+                         Ogre::StringConverter::toString(hdrMgr->prefilterMaxLodLevel()));
+    iblSrs->setParameter("env_intensity", Ogre::StringConverter::toString(intensity));
+    iblSrs->setParameter("env_tint",
+                         Ogre::StringUtil::format("%f %f %f", tint.r, tint.g, tint.b));
+
+    renderState->addTemplateSubRenderState(iblSrs);
+
+    static QSet<QString> s_boundMaterials;
+    const QString matKey = QString::fromStdString(mat->getName());
+    if (!s_boundMaterials.contains(matKey)) {
+        s_boundMaterials.insert(matKey);
+        SentryReporter::addBreadcrumb(QStringLiteral("render.hdr.bind"),
+                                      QStringLiteral("material=%1").arg(matKey));
+    }
+    return true;
 }
 
 bool isAlbedoSlotName(const Ogre::String& name)
@@ -1138,6 +1188,8 @@ bool RTShaderHelper::applyPbrIfTagged(Ogre::MaterialPtr& mat)
             }
         }
 
+        tryApplyHdrIbl(shaderGen, renderState, srcPass, mat);
+
         shaderGen->invalidateMaterial(
             Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, mat->getName());
         shaderGen->validateMaterial(
@@ -1156,4 +1208,44 @@ bool RTShaderHelper::applyPbrIfTagged(Ogre::MaterialPtr& mat)
             "RTShaderHelper: Exception applying PBR: " + std::string(e.what()));
     }
     return false;
+}
+
+void RTShaderHelper::refreshAllPbrMaterialsForHdr()
+{
+    if (!Ogre::RTShader::ShaderGenerator::getSingletonPtr())
+        return;
+
+    auto& materialMgr = Ogre::MaterialManager::getSingleton();
+    auto it = materialMgr.getResourceIterator();
+    while (it.hasMoreElements()) {
+        Ogre::MaterialPtr mat =
+            Ogre::static_pointer_cast<Ogre::Material>(it.getNext());
+        if (!mat || !isMetallicRoughnessMaterial(mat))
+            continue;
+        applyPbrIfTagged(mat);
+    }
+}
+
+void RTShaderHelper::setPbrEnvIntensity(Ogre::Pass* pass, float intensity)
+{
+    if (!pass)
+        return;
+    pass->getUserObjectBindings().setUserAny(HdrIblRtss::kPbrEnvIntensityKey, Ogre::Any(intensity));
+}
+
+void RTShaderHelper::setPbrEnvTint(Ogre::Pass* pass, const Ogre::ColourValue& tint)
+{
+    if (!pass)
+        return;
+    pass->getUserObjectBindings().setUserAny(HdrIblRtss::kPbrEnvTintKey, Ogre::Any(tint));
+}
+
+float RTShaderHelper::pbrEnvIntensity(const Ogre::Pass* pass)
+{
+    return HdrIblRtss::readEnvIntensity(pass);
+}
+
+Ogre::ColourValue RTShaderHelper::pbrEnvTint(const Ogre::Pass* pass)
+{
+    return HdrIblRtss::readEnvTint(pass);
 }

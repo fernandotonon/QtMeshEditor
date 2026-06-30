@@ -91,6 +91,8 @@ MeshOptimizerLod.cpp
 ExportOptimizer.cpp
 UvUnwrap.cpp
 UvUnwrapController.cpp
+UvProject.cpp
+UvPipeline.cpp
 UVEditorController.cpp
 UVTransform.cpp
 QuadRetopo.cpp
@@ -118,6 +120,12 @@ VATBakerController.cpp
 VATShaderEmitter.cpp
 IsometricSpritesController.cpp
 MinimalEXRWriter.cpp
+HDR/HDREnvironmentManager.cpp
+HDR/HdrEquirectLoader.cpp
+HDR/HdrIblPrecompute.cpp
+HDR/HdrCache.cpp
+HDR/HdrPrecomputeWorker.cpp
+HDR/HdrIblRtss.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp
@@ -239,6 +247,8 @@ MeshOptimizerLod.h
 ExportOptimizer.h
 UvUnwrap.h
 UvUnwrapController.h
+UvProject.h
+UvPipeline.h
 UVEditorController.h
 UvSeamData.h
 UvSeamOps.h
@@ -304,6 +314,12 @@ EditableMesh.h
 EditModeController.h
 EditorModeController.h
 HalfEdgeMesh.h
+HDR/HDREnvironmentManager.h
+HDR/HdrEquirectLoader.h
+HDR/HdrIblPrecompute.h
+HDR/HdrCache.h
+HDR/HdrPrecomputeWorker.h
+HDR/HdrIblRtss.h
 )
 
 set(TEST_SOURCES "")
@@ -578,6 +594,18 @@ xatlas
 qtmesh_sodium
 )
 
+if(stb_SOURCE_DIR)
+    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${stb_SOURCE_DIR})
+endif()
+if(ENABLE_OPENEXR AND tinyexr_SOURCE_DIR)
+    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+        ${tinyexr_SOURCE_DIR}
+        ${tinyexr_SOURCE_DIR}/deps/miniz)
+    if(TARGET tinyexr_miniz)
+        target_link_libraries(${CMAKE_PROJECT_NAME} tinyexr_miniz)
+    endif()
+endif()
+
 if(ENABLE_AUTO_UPDATER)
     target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_updater)
 endif()
@@ -708,6 +736,18 @@ if(BUILD_TESTS)
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
     meshoptimizer xatlas qtmesh_sodium qtmesh_updater)
+
+    if(stb_SOURCE_DIR)
+        target_include_directories(UnitTests PRIVATE ${stb_SOURCE_DIR})
+    endif()
+    if(ENABLE_OPENEXR AND tinyexr_SOURCE_DIR)
+        target_include_directories(UnitTests PRIVATE
+            ${tinyexr_SOURCE_DIR}
+            ${tinyexr_SOURCE_DIR}/deps/miniz)
+        if(TARGET tinyexr_miniz)
+            target_link_libraries(UnitTests tinyexr_miniz)
+        endif()
+    endif()
 
     # CloudCredentialStore.cpp (compiled into the tests) does a one-time legacy
     # secret-store read in migrateLegacySettingsIfNeeded(), which

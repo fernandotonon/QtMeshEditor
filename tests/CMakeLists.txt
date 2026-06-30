@@ -113,6 +113,12 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/IsometricSpritesController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATShaderEmitter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MinimalEXRWriter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HDREnvironmentManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrEquirectLoader.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrIblPrecompute.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrCache.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrPrecomputeWorker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrIblRtss.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MorphAnimationManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MorphCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NodeAnimationManager.cpp
@@ -155,6 +161,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrap.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvProject.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvPipeline.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.cpp
@@ -297,6 +305,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrap.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvProject.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvPipeline.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.h
@@ -471,6 +481,17 @@ if(BUILD_TESTS)
         POSITION_INDEPENDENT_CODE ON
     )
     target_include_directories(qtmesh_test_common PRIVATE ${TEST_SUPPORT_INCLUDES})
+    if(stb_SOURCE_DIR)
+        target_include_directories(qtmesh_test_common PRIVATE ${stb_SOURCE_DIR})
+    endif()
+    if(ENABLE_OPENEXR AND tinyexr_SOURCE_DIR)
+        target_include_directories(qtmesh_test_common PRIVATE
+            ${tinyexr_SOURCE_DIR}
+            ${tinyexr_SOURCE_DIR}/deps/miniz)
+        if(TARGET tinyexr_miniz)
+            target_link_libraries(qtmesh_test_common PUBLIC tinyexr_miniz)
+        endif()
+    endif()
     target_compile_definitions(qtmesh_test_common PRIVATE
         BATCH_EXPORTER_TEST_SEAM
         QTMESH_UNIT_TESTS

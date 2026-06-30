@@ -149,6 +149,14 @@ private:
     /// chosen channel (default 0). Skin weights survive the seam
     /// splits via xref remap.
     QJsonObject toolAutoUvUnwrap(const QJsonObject &args);
+    /// Issue #465: UV channel/island/overlap info for the selected entity.
+    QJsonObject toolUvInfo(const QJsonObject &args);
+    /// Issue #465: headless geometric UV projection (box/cylinder/sphere/reset).
+    QJsonObject toolUvProject(const QJsonObject &args);
+    /// Issue #465: mark seam edges on the selected mesh.
+    QJsonObject toolUvSetSeams(const QJsonObject &args);
+    /// Issue #465: xatlas re-unwrap of selected triangle indices on one submesh.
+    QJsonObject toolUvUnwrapSelection(const QJsonObject &args);
     /// Issue #401: triangle-pairing quad retopology on the
     /// currently selected entity. Pairs adjacent triangles into
     /// convex quads when coplanarity + shape + aspect ratio gates

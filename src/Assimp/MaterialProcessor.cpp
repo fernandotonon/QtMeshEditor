@@ -319,14 +319,10 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     // NOTE: We deliberately do NOT tag the pass with `pbr_workflow` on
     // import. Tagging would trigger applyPbrIfTagged via the slice F2
     // applyNormalMap redirect, attaching SRS_COOK_TORRANCE_LIGHTING.
-    // Without IBL, Cook-Torrance produces near-black output for
-    // metallic surfaces (the diffuse term is baseColor × (1 - metallic)
-    // and there's no env map to supply indirect specular). A future
-    // slice with proper IBL can either tag-on-import then or expose a
-    // "Convert to PBR" inspector action that adds the tag deliberately.
-    // For now: slots are populated and visible in the Material Editor,
-    // and the rendered material continues using the legacy FFP diffuse
-    // path (correct on-import visuals).
+    // Without a loaded HDR environment, Cook-Torrance produces near-black output for
+    // metallic surfaces (no indirect specular/diffuse). Slice C (#469) wires IBL into
+    // RTShaderHelper when HDREnvironmentManager has finished precomputing; until then
+    // the legacy FFP diffuse path keeps on-import visuals correct.
     (void)gotPbrMap;
 
     // Wire the slice E PBR slot colour-ops so the freshly-imported
