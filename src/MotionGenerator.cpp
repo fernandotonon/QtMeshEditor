@@ -114,7 +114,9 @@ QString MotionGenerator::ensureModelBlocking()
         guard.setSingleShot(true);
         QObject::connect(&guard, &QTimer::timeout, &loop, [&]{ ok = false; loop.quit(); });
         guard.start(180000);
-        dl->startDownload(label, base + fileName, dest);
+        // startDownload(url, destinationPath, modelName) — same order as the
+        // other consumers; completion/error signals fire under `label`.
+        dl->startDownload(base + fileName, dest, label);
         loop.exec();
         QObject::disconnect(onDone); QObject::disconnect(onErr);
         return ok && QFileInfo::exists(dest);

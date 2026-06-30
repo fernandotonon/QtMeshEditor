@@ -386,7 +386,13 @@ TEST(UniRigPredictor, LabelsAnatomicallyResolveCanonicalJoints)
     // Build a synthetic +Y-up T-pose skeleton with UniRig-style positional names
     // (joint_N) and verify labelJointsAnatomically renames them to anatomical
     // names that MotionInbetween::canonicalIndexForBone then resolves — the fix
-    // for "0/22 resolved" on a UniRig rig. Character LEFT = +X.
+    // for "0/22 resolved" on a UniRig rig.
+    //
+    // CONVENTION: the labeler names the character's LEFT on the −X side (the
+    // glTF/Ogre Y-up, faces-+Z convention this targets), so the limbs below are
+    // laid out with the LEFT chain on −X and RIGHT on +X. (The retarget then does
+    // its own handedness compensation against the CMU clip so motion isn't
+    // mirrored — labels and motion are decoupled.)
     auto J = [](double x, double y, double z, int parent) {
         UniRigPredictor::Joint j; j.pos = {x, y, z}; j.parent = parent;
         j.name = QStringLiteral("joint"); return j;
@@ -397,22 +403,22 @@ TEST(UniRigPredictor, LabelsAnatomicallyResolveCanonicalJoints)
         J(0.0, 0.6, 0.0,  1),   // 2 chest
         J(0.0, 0.8, 0.0,  2),   // 3 neck
         J(0.0, 0.95, 0.0, 3),   // 4 head
-        // left arm (+X)
-        J(0.2, 0.6, 0.0,  2),   // 5 L upper arm
-        J(0.45, 0.6, 0.0, 5),   // 6 L forearm
-        J(0.65, 0.6, 0.0, 6),   // 7 L hand
-        // right arm (−X)
-        J(-0.2, 0.6, 0.0, 2),   // 8 R upper arm
-        J(-0.45, 0.6, 0.0, 8),  // 9 R forearm
-        J(-0.65, 0.6, 0.0, 9),  // 10 R hand
-        // left leg (+X, down)
-        J(0.1, -0.1, 0.0, 0),   // 11 L upleg
-        J(0.1, -0.5, 0.0, 11),  // 12 L leg
-        J(0.1, -0.9, 0.0, 12),  // 13 L foot
-        // right leg (−X, down)
-        J(-0.1, -0.1, 0.0, 0),  // 14 R upleg
-        J(-0.1, -0.5, 0.0, 14), // 15 R leg
-        J(-0.1, -0.9, 0.0, 15), // 16 R foot
+        // LEFT arm (−X)
+        J(-0.2, 0.6, 0.0,  2),  // 5 L upper arm
+        J(-0.45, 0.6, 0.0, 5),  // 6 L forearm
+        J(-0.65, 0.6, 0.0, 6),  // 7 L hand
+        // RIGHT arm (+X)
+        J(0.2, 0.6, 0.0,  2),   // 8 R upper arm
+        J(0.45, 0.6, 0.0, 8),   // 9 R forearm
+        J(0.65, 0.6, 0.0, 9),   // 10 R hand
+        // LEFT leg (−X, down)
+        J(-0.1, -0.1, 0.0, 0),  // 11 L upleg
+        J(-0.1, -0.5, 0.0, 11), // 12 L leg
+        J(-0.1, -0.9, 0.0, 12), // 13 L foot
+        // RIGHT leg (+X, down)
+        J(0.1, -0.1, 0.0, 0),   // 14 R upleg
+        J(0.1, -0.5, 0.0, 14),  // 15 R leg
+        J(0.1, -0.9, 0.0, 15),  // 16 R foot
     };
     UniRigPredictor::labelJointsAnatomically(joints, /*upAxis=*/1);
 
@@ -433,11 +439,12 @@ TEST(UniRigPredictor, LabelsAnatomicallyResolveCanonicalJoints)
     // Spot-check key roles map correctly.
     EXPECT_EQ(MotionInbetween::canonicalIndexForBone(joints[0].name), 0);  // Hips
     EXPECT_EQ(MotionInbetween::canonicalIndexForBone(joints[4].name), 5);  // Head
-    // Left arm/hand resolve to the LEFT canonical indices (10-13 range).
+    // The −X hand (joints[7]) resolves to canon 13 (lhand); the +X hand
+    // (joints[10]) to canon 9 (rhand) — the labeler's −X=Left convention.
     const int lh = MotionInbetween::canonicalIndexForBone(joints[7].name);
-    EXPECT_TRUE(lh == 13) << "left hand index " << lh;
+    EXPECT_EQ(lh, 13) << "left (−X) hand index " << lh;
     const int rh = MotionInbetween::canonicalIndexForBone(joints[10].name);
-    EXPECT_TRUE(rh == 9) << "right hand index " << rh;
+    EXPECT_EQ(rh, 9) << "right (+X) hand index " << rh;
 }
 
 TEST(UniRigPredictor, EnsureModelBlockingHonoursNoDownloadGuard)

@@ -925,6 +925,18 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     if (clipQuats.empty()) { res.error = QStringLiteral("empty motion clip"); return res; }
     if (fps <= 0) fps = 30;
     const int frames = static_cast<int>(clipQuats.size());
+    // Guard: every frame must carry all canonical joints — clipQ() indexes up to
+    // canonicalJointCount(), and a malformed/downloaded/generated clip with a
+    // short frame would otherwise crash during retargeting.
+    {
+        const int need = MotionInbetween::canonicalJointCount();
+        for (int f = 0; f < frames; ++f)
+            if (static_cast<int>(clipQuats[f].size()) < need) {
+                res.error = QStringLiteral("motion clip frame %1 has %2 joints; expected >= %3")
+                    .arg(f).arg(clipQuats[f].size()).arg(need);
+                return res;
+            }
+    }
     const float dt = 1.0f / static_cast<float>(fps);
     const float length = (frames - 1) * dt;
     res.frames = frames;
