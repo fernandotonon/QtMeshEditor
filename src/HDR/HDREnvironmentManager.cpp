@@ -2,6 +2,7 @@
 
 #include "HDR/HdrEquirectLoader.h"
 #include "HDR/HdrPrecomputeWorker.h"
+#include "RTShaderHelper.h"
 #include "SentryReporter.h"
 
 #include <OgreTextureManager.h>
@@ -289,8 +290,16 @@ bool HDREnvironmentManager::registerIblTextures(const QString& cacheKey,
     m_brdfLut->getBuffer()->blitFromMemory(lutBox);
     m_brdfLut->load();
 
+    m_prefilterMaxLodLevel = static_cast<float>(std::max(0, mipCount - 1));
     m_iblReady = true;
     return true;
+}
+
+bool HDREnvironmentManager::installIblBake(const QString& cacheKey,
+                                           HdrIbl::IblBakeResult& result,
+                                           QString& error)
+{
+    return registerIblTextures(cacheKey, result, error);
 }
 
 void HDREnvironmentManager::startIblPrecompute(const QString& cacheKey,
@@ -300,6 +309,7 @@ void HDREnvironmentManager::startIblPrecompute(const QString& cacheKey,
         return;
 
     m_iblReady = false;
+    m_prefilterMaxLodLevel = 0.f;
     removeTextureIfExists(m_irradiance);
     removeTextureIfExists(m_prefiltered);
     removeTextureIfExists(m_brdfLut);
@@ -337,6 +347,8 @@ void HDREnvironmentManager::onPrecomputeCompleted(HdrIbl::IblBakeResult result,
             .arg(fromDiskCache ? QStringLiteral("yes") : QStringLiteral("no")));
 
     emit iblPrecomputeCompleted(fromDiskCache);
+
+    RTShaderHelper::refreshAllPbrMaterialsForHdr();
 }
 
 void HDREnvironmentManager::onPrecomputeError(const QString& error, quint64 generation)

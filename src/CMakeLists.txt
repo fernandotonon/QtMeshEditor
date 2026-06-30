@@ -123,6 +123,7 @@ HDR/HdrEquirectLoader.cpp
 HDR/HdrIblPrecompute.cpp
 HDR/HdrCache.cpp
 HDR/HdrPrecomputeWorker.cpp
+HDR/HdrIblRtss.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp
@@ -314,6 +315,7 @@ HDR/HdrEquirectLoader.h
 HDR/HdrIblPrecompute.h
 HDR/HdrCache.h
 HDR/HdrPrecomputeWorker.h
+HDR/HdrIblRtss.h
 )
 
 set(TEST_SOURCES "")
