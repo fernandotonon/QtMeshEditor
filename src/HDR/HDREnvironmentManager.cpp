@@ -95,7 +95,7 @@ void HDREnvironmentManager::shutdownWorkerThread()
         return;
     ++m_precomputeGeneration;
     m_workerThread->quit();
-    m_workerThread->wait(30000);
+    m_workerThread->wait(5000);
     m_workerThread = nullptr;
     m_worker = nullptr;
 }
@@ -296,7 +296,7 @@ bool HDREnvironmentManager::registerIblTextures(const QString& cacheKey,
 void HDREnvironmentManager::startIblPrecompute(const QString& cacheKey,
                                                const HdrEquirect::CubemapFaces& envFaces)
 {
-    if (!m_worker)
+    if (!m_backgroundIblPrecompute || !m_worker)
         return;
 
     m_iblReady = false;

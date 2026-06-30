@@ -49,6 +49,10 @@ public:
     /// True once IBL textures for the active environment are registered.
     bool isIblReady() const { return m_iblReady; }
 
+    /// When false, `loadEnvironment` skips the background IBL worker (used by
+    /// fast integration tests — bake/cache logic is covered in HdrIbl/ HdrCache tests).
+    void setBackgroundIblPrecomputeEnabled(bool enabled) { m_backgroundIblPrecompute = enabled; }
+
 signals:
     void environmentChanged();
     void iblPrecomputeCompleted(bool fromDiskCache);
@@ -82,6 +86,7 @@ private:
     QString m_cacheKey;
     int m_faceSize = 0;
     bool m_iblReady = false;
+    bool m_backgroundIblPrecompute = true;
     quint64 m_precomputeGeneration = 0;
 
     Ogre::TexturePtr m_cubemap;

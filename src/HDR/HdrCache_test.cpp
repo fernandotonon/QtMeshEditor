@@ -44,7 +44,7 @@ TEST(HdrCacheTest, SaveLoadRoundTrip)
     qputenv("XDG_DATA_HOME", tmp.path().toUtf8());
 
     const QString cacheKey =
-        QStringLiteral("abc123deadbeefabc123deadbeefabc123de");
+        QStringLiteral("0123456789abcdef0123456789abcdef01234567");
     const HdrIbl::IblBakeResult original = makeTinyBakeResult();
 
     QString saveError;
