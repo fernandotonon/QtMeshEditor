@@ -98,6 +98,13 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     m_sceneUpAxis = 1; // default: Y-up
     if (scene && scene->mMetaData)
         scene->mMetaData->Get("UpAxis", m_sceneUpAxis);
+    // glTF / glb are Y-up BY SPECIFICATION. Assimp's glTF importer can stamp a
+    // bogus UpAxis=2 (Z-up) into the scene metadata, which made us bake a
+    // spurious +90°X rotation and IMPORT THE MODEL UPSIDE-DOWN on re-imported
+    // glbs (e.g. a Mixamo character round-tripped to glb). Trust the format
+    // spec, not the metadata, for glTF.
+    if (pathEndsWithInsensitive(path, ".gltf") || pathEndsWithInsensitive(path, ".glb"))
+        m_sceneUpAxis = 1;
 
     // Some FBX animation takes fail the full post-process stack (null scene or no root)
     // but load with a lighter flag set. Retry once before giving up.

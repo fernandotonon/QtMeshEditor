@@ -18,10 +18,12 @@
 #include <QString>
 #include <array>
 #include <cmath>
+#include <set>
 #include <cstdint>
 #include <vector>
 
 #include "UniRigPredictor.h"
+#include "MotionInbetween.h"
 
 namespace {
 
@@ -377,6 +379,65 @@ TEST(UniRigPredictor, NullPositionsFails)
         QStringLiteral("/nonexistent/decoder.onnx"),
         QStringLiteral("/nonexistent/embed.onnx"));
     EXPECT_FALSE(r.ok);
+}
+
+TEST(UniRigPredictor, LabelsAnatomicallyResolveCanonicalJoints)
+{
+    // Build a synthetic +Y-up T-pose skeleton with UniRig-style positional names
+    // (joint_N) and verify labelJointsAnatomically renames them to anatomical
+    // names that MotionInbetween::canonicalIndexForBone then resolves — the fix
+    // for "0/22 resolved" on a UniRig rig. Character LEFT = +X.
+    auto J = [](double x, double y, double z, int parent) {
+        UniRigPredictor::Joint j; j.pos = {x, y, z}; j.parent = parent;
+        j.name = QStringLiteral("joint"); return j;
+    };
+    std::vector<UniRigPredictor::Joint> joints = {
+        J(0.0, 0.0, 0.0, -1),   // 0 hips (root)
+        J(0.0, 0.3, 0.0,  0),   // 1 spine
+        J(0.0, 0.6, 0.0,  1),   // 2 chest
+        J(0.0, 0.8, 0.0,  2),   // 3 neck
+        J(0.0, 0.95, 0.0, 3),   // 4 head
+        // left arm (+X)
+        J(0.2, 0.6, 0.0,  2),   // 5 L upper arm
+        J(0.45, 0.6, 0.0, 5),   // 6 L forearm
+        J(0.65, 0.6, 0.0, 6),   // 7 L hand
+        // right arm (−X)
+        J(-0.2, 0.6, 0.0, 2),   // 8 R upper arm
+        J(-0.45, 0.6, 0.0, 8),  // 9 R forearm
+        J(-0.65, 0.6, 0.0, 9),  // 10 R hand
+        // left leg (+X, down)
+        J(0.1, -0.1, 0.0, 0),   // 11 L upleg
+        J(0.1, -0.5, 0.0, 11),  // 12 L leg
+        J(0.1, -0.9, 0.0, 12),  // 13 L foot
+        // right leg (−X, down)
+        J(-0.1, -0.1, 0.0, 0),  // 14 R upleg
+        J(-0.1, -0.5, 0.0, 14), // 15 R leg
+        J(-0.1, -0.9, 0.0, 15), // 16 R foot
+    };
+    UniRigPredictor::labelJointsAnatomically(joints, /*upAxis=*/1);
+
+    // All bone names MUST be unique — Ogre::Skeleton::createBone rejects dups
+    // ("RightArm already exists"). The labeler suffixes any collision.
+    std::set<QString> seen;
+    for (const auto& j : joints) {
+        EXPECT_EQ(seen.count(j.name), 0u) << "duplicate bone name: " << j.name.toStdString();
+        seen.insert(j.name);
+    }
+
+    int resolved = 0;
+    for (const auto& j : joints)
+        if (MotionInbetween::canonicalIndexForBone(j.name) >= 0) ++resolved;
+    // We should resolve a strong majority of the 17 placed joints (all but maybe
+    // an ambiguous spine link). The text-to-motion gate needs ≥11/22.
+    EXPECT_GE(resolved, 12) << "only resolved " << resolved << " joints";
+    // Spot-check key roles map correctly.
+    EXPECT_EQ(MotionInbetween::canonicalIndexForBone(joints[0].name), 0);  // Hips
+    EXPECT_EQ(MotionInbetween::canonicalIndexForBone(joints[4].name), 5);  // Head
+    // Left arm/hand resolve to the LEFT canonical indices (10-13 range).
+    const int lh = MotionInbetween::canonicalIndexForBone(joints[7].name);
+    EXPECT_TRUE(lh == 13) << "left hand index " << lh;
+    const int rh = MotionInbetween::canonicalIndexForBone(joints[10].name);
+    EXPECT_TRUE(rh == 9) << "right hand index " << rh;
 }
 
 TEST(UniRigPredictor, EnsureModelBlockingHonoursNoDownloadGuard)

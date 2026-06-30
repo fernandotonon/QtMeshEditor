@@ -111,6 +111,29 @@ the binary). Attribution + licenses for the models and their training data:
   bone-proximity when available) — always present, no model needed, and good
   enough for reasonable head/torso/limb labels on upright humanoids.
 
+## Text-to-motion template library (issue #411)
+
+- **Not a learned model — a curated motion CLIP LIBRARY.** The #411 spike (see
+  `docs/TEXT_TO_MOTION_SPIKE_411.md`) found that off-the-shelf generative text-to-
+  motion models (MDM, T2M-GPT, MotionGPT) are all trained on **HumanML3D / KIT-ML**,
+  which derive from **AMASS** = **academic / non-commercial** (the same wall as
+  #409 LAFAN1). A from-scratch generative model proved feasible-but-hard (collapses
+  without multi-day ML effort), so the shipped MVP is a **template-clip** approach.
+- **Data:** a small curated set of clips from the **CMU Graphics Lab Motion Capture
+  Database** (mocap.cs.cmu.edu) — **permissively licensed, commercial-OK** (the same
+  source as the #409 RMIB model). Built offline by `scripts/build-motion-library.py`
+  into a `qtmesh-motion-library-v1` JSON (per-frame, per-joint canonical-quaternion
+  poses on the 22-joint CMU core-body skeleton) — no model weights, no AMASS.
+- **Hosting:** `motion/motion-library.json` (~0.9 MB, 10 actions) in the
+  [`fernandotonon/QtMeshEditor-models`](https://huggingface.co/fernandotonon/QtMeshEditor-models)
+  HF repo, downloaded on first use to `AppData/ai_models/motion/` (override
+  `QTMESH_MOTION_LIBRARY_BASE_URL` / `QSettings ai/motionLibraryBaseUrl`; offline
+  guard `QTMESH_MOTION_NO_DOWNLOAD`).
+- **Retargeting:** `AnimationMerger::applyMotionClip` maps the canonical clip onto
+  the user's rig via `MotionInbetween::canonicalIndexForBone` (shared with #409).
+- **Generative path:** postponed; the dev prototype `scripts/export-t2m-onnx.py`
+  is kept for a future upgrade but is NOT shipped (no model file).
+
 All of the above clear QtMeshEditor's permissive-redistribution bar (MIT app,
 distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed
 models are deliberately excluded (e.g. RigNet was rejected for #408 — GPL code +

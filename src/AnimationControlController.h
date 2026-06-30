@@ -323,6 +323,22 @@ public:
                                             int gapFrames,
                                             bool noModel = false);
 
+    /// Text-to-motion (#411, experimental): generate a skeletal animation from
+    /// a text prompt and apply it to the selected rigged entity. Matches the
+    /// prompt to a permissive CMU clip from the downloadable motion library and
+    /// retargets via the canonical-joint mapping (#409). Returns a QVariantMap
+    /// { ok, action, source, animation, frames, length, tracksWritten, error }.
+    /// Emits generateMotionStatus(message, isError). `duration` <= 0 keeps the
+    /// clip's native length. The library downloads on first use (blocking — the
+    /// QML caller should show a busy state).
+    /// `useModel` opts into the EXPERIMENTAL trained text-to-motion model
+    /// (MotionGenerator/ONNX); it falls back to the template library automatically
+    /// when the model is unavailable or the action isn't in its vocab. Default
+    /// false = the reliable template-clip retarget.
+    Q_INVOKABLE QVariantMap generateMotion(const QString& prompt,
+                                           double duration = 0.0,
+                                           bool useModel = false);
+
     /// Whole-animation bake helpers: temporarily suppress the per-
     /// segment QML refresh emitted by resampleCurveSegment so a
     /// thousands-of-segments macro doesn't fire thousands of dope
@@ -336,6 +352,7 @@ public slots:
 signals:
     void themeChanged();
     void inbetweenStatus(const QString& message, bool isError);
+    void generateMotionStatus(const QString& message, bool isError);
     void animationTreeChanged();
     void selectionChanged();
     void boneListChanged();

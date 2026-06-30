@@ -12,6 +12,8 @@
 #include "CurveEditModel.h"
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
+#include "MotionLibrary.h"
+#include "MotionGenerator.h"
 #include "commands/AddKeyframeCommand.h"
 #include "commands/DeleteKeyframeCommand.h"
 #include <QApplication>
@@ -1647,6 +1649,114 @@ QVariantMap AnimationControlController::inbetweenWindow(double t0, double t1,
     if (!r.usedModel && !r.fallbackReason.isEmpty())
         msg += QStringLiteral(" — %1").arg(r.fallbackReason);
     emit inbetweenStatus(msg, false);
+    return out;
+}
+
+QVariantMap AnimationControlController::generateMotion(const QString& prompt,
+                                                       double duration, bool useModel)
+{
+    QVariantMap out;
+    out["ok"] = false;
+    auto fail = [&](const QString& e) { out["error"] = e; emit generateMotionStatus(e, true); return out; };
+
+    if (prompt.trimmed().isEmpty())
+        return fail(QStringLiteral("Enter a motion prompt (e.g. \"walking\")."));
+
+    // Resolve a rigged entity: the selected one, else the first skinned mesh.
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return fail(QStringLiteral("Scene not available."));
+    Ogre::Entity* entity = nullptr;
+    for (auto* e : mgr->getEntities()) {
+        if (!e || e->getMovableType() != "Entity" || !e->hasSkeleton()) continue;
+        if (m_selectedEntityName.empty()
+            || e->getName() == m_selectedEntityName) { entity = e; break; }
+    }
+    if (!entity)
+        return fail(QStringLiteral("Select a rigged mesh first — text-to-motion needs a skeleton."));
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
+        QStringLiteral("GUI generate_motion"));
+
+    // Acquire the canonical clip: EXPERIMENTAL trained model first (when opted in),
+    // else the reliable TEMPLATE library — which is also the automatic fallback.
+    QString action, clipSource;
+    std::vector<std::vector<std::array<float, 4>>> quats;
+    int fps = 30;
+    bool worldFrame = false;
+    std::vector<std::array<float, 4>> cmuRest;
+    bool gotClip = false;
+
+    if (useModel) {
+        const QString mp = MotionGenerator::ensureModelBlocking();
+        if (!mp.isEmpty()) {
+            const auto mr = MotionGenerator::generate(prompt, mp,
+                                                      MotionGenerator::vocabPath(), duration);
+            if (mr.ok) {
+                action = mr.matchedAction; quats = mr.clip.quats; fps = mr.clip.fps;
+                worldFrame = false; clipSource = QStringLiteral("model"); gotClip = true;
+            }
+        }
+        if (!gotClip)
+            emit generateMotionStatus(
+                QStringLiteral("Model unavailable for this prompt — using template library."), false);
+    }
+
+    if (!gotClip) {
+        const QString libPath = MotionLibrary::ensureLibraryBlocking();
+        if (libPath.isEmpty())
+            return fail(QStringLiteral("Motion library unavailable (offline?)."));
+        MotionLibrary lib;
+        if (!lib.loadFromFile(libPath))
+            return fail(lib.error());
+        const int idx = lib.matchPrompt(prompt, &action);
+        if (idx < 0) {
+            QString known; for (const QString& a : lib.actions()) known += " " + a;
+            return fail(QStringLiteral("No motion matched \"%1\". Try:%2").arg(prompt, known));
+        }
+        const MotionLibrary::Clip& clip = lib.clip(idx);
+        quats = clip.quats; fps = clip.fps;
+        worldFrame = lib.isWorldFrame(); cmuRest = lib.cmuRestWorld();
+        clipSource = QStringLiteral("template");
+        if (duration > 0.05) {
+            const int want = std::max(2, int(duration * clip.fps));
+            std::vector<std::vector<std::array<float, 4>>> retimed(want);
+            for (int f = 0; f < want; ++f) {
+                const float src = (clip.frames - 1) * (float(f) / float(want - 1));
+                retimed[f] = quats[std::min(clip.frames - 1, int(src + 0.5f))];
+            }
+            quats.swap(retimed);
+        }
+    }
+
+    const std::string animName = ("generated_" + action).toStdString();
+    const auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
+                                                      worldFrame, cmuRest);
+    if (!res.ok) return fail(res.error);
+    out["source"] = clipSource;
+
+    entity->refreshAvailableAnimationState();
+    // Adding an animation can reallocate skeleton state — drop cached pointers
+    // and refresh the dope sheet, like the in-between path.
+    m_selectedTrack   = nullptr;
+    m_currentKeyframe = nullptr;
+    updateAnimationTree();
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    emit keyframeTicksChanged();
+    emit animationTreeChanged();
+
+    out["ok"] = true;
+    out["action"] = action;
+    out["source"] = clipSource;
+    out["animation"] = QString::fromStdString(animName);
+    out["frames"] = res.frames;
+    out["length"] = res.length;
+    out["tracksWritten"] = res.tracksWritten;
+    const QString msg = QStringLiteral("Generated '%1' (%2) — %3 bones, %4 frames (%5s)")
+        .arg(action, clipSource).arg(res.tracksWritten).arg(res.frames)
+        .arg(res.length, 0, 'f', 1);
+    emit generateMotionStatus(msg, false);
     return out;
 }
 

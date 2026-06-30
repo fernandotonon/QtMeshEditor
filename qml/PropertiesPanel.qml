@@ -643,11 +643,14 @@ Rectangle {
             }
 
             // ---- Animations ----
+            // Shown for any skeleton-bearing selection (not just clips) so the
+            // "Generate from text" control is available on a freshly-rigged mesh
+            // (e.g. a UniRig auto-rig with no animations yet).
             CollapsibleSection {
                 title: "Animations"
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.AnimationMode,
-                    PropertiesPanelController.hasAnimations)
+                    PropertiesPanelController.hasSkeletonSelection)
 
                 Component.onCompleted: content = animationComponent
             }
@@ -5651,6 +5654,102 @@ Rectangle {
                 function onAnimationStateChanged() { refreshAnimData() }
             }
 
+            // ── Generate from text (#411, experimental) ──────────────────────
+            // Lives in the Animations group and shows for any skeleton-bearing
+            // selection (incl. a freshly auto-rigged mesh with no clips yet).
+            Text {
+                text: "Generate from text (experimental):"
+                color: PropertiesPanelController.textColor; font.pixelSize: 11
+            }
+            Row {
+                width: parent.width - 16; spacing: 6
+                Rectangle {
+                    width: parent.width - genBtn.width - 6; height: 24; radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: genPromptIn.activeFocus ? PropertiesPanelController.highlightColor
+                                                           : PropertiesPanelController.borderColor
+                    TextInput {
+                        id: genPromptIn
+                        anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 6
+                        verticalAlignment: TextInput.AlignVCenter
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                        clip: true
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: !genPromptIn.text && !genPromptIn.activeFocus
+                            text: "e.g. walk, run, jump, wave…"
+                            color: PropertiesPanelController.textColor; opacity: 0.4; font.pixelSize: 11
+                        }
+                        onAccepted: genBtn.run()
+                    }
+                }
+                Rectangle {
+                    id: genBtn
+                    width: 74; height: 24; radius: 3
+                    opacity: genBtnBusy ? 0.5 : 1.0
+                    property bool genBtnBusy: false
+                    color: genMa.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                         : genMa.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                         : PropertiesPanelController.highlightColor
+                    function run() {
+                        if (genBtnBusy || !genPromptIn.text.trim()) return
+                        genBtnBusy = true
+                        genStatus.text = useModelChk.checked
+                            ? "Generating (experimental model)…"
+                            : "Generating… (first use downloads the motion library)"
+                        genStatus.isError = false
+                        AnimationControlController.generateMotion(genPromptIn.text, 0.0,
+                                                                  useModelChk.checked)
+                        genBtnBusy = false
+                        // generateMotion adds an AnimationState synchronously, but
+                        // it lives on AnimationControlController — the Inspector
+                        // list (PropertiesPanelController.animationData) won't know
+                        // until something re-queries. Refresh it directly so the
+                        // new clip appears without reselecting the entity.
+                        refreshAnimData()
+                    }
+                    Text { anchors.centerIn: parent; text: "Generate"; color: "white"; font.pixelSize: 11 }
+                    MouseArea { id: genMa; anchors.fill: parent; hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor; onClicked: genBtn.run() }
+                }
+            }
+            // Opt into the EXPERIMENTAL trained model (falls back to the template
+            // library automatically). Default OFF = the reliable template retarget.
+            Row {
+                spacing: 6
+                Rectangle {
+                    id: useModelChk
+                    property bool checked: false
+                    width: 14; height: 14; radius: 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: checked ? PropertiesPanelController.highlightColor
+                                   : PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text { anchors.centerIn: parent; visible: parent.checked
+                           text: "✓"; color: "white"; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent
+                                onClicked: useModelChk.checked = !useModelChk.checked }
+                }
+                Text {
+                    text: "Use trained model (experimental)"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+            Text {
+                id: genStatus
+                property bool isError: false
+                visible: text.length > 0
+                width: parent.width - 16; wrapMode: Text.Wrap; font.pixelSize: 9; opacity: 0.85
+                color: isError ? "#e06c6c" : PropertiesPanelController.textColor
+            }
+            Connections {
+                target: AnimationControlController
+                function onGenerateMotionStatus(message, isError) {
+                    genStatus.text = message; genStatus.isError = isError
+                }
+            }
+
             // Play/Pause button + playback speed (applies to selected entity only)
             Row {
                 spacing: 8
@@ -6035,6 +6134,54 @@ Rectangle {
                                         Rectangle { anchors.fill: parent; anchors.margins: -2; z: -1; color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.highlightColor; border.width: 1; radius: 2 }
                                         onEditingFinished: { if (text.length > 0 && text !== modelData.name) PropertiesPanelController.renameAnimation(grp.entity, modelData.name, text); visible = false }
                                         Keys.onEscapePressed: visible = false
+                                    }
+
+                                    // Delete animation: trash icon → inline confirm (✓/✗) to avoid
+                                    // accidental loss. Deleting is irreversible (removes the clip from
+                                    // the skeleton), so the click ARMS a confirm rather than deleting.
+                                    Rectangle {
+                                        id: trashBtn
+                                        property bool confirming: false
+                                        width: confirming ? 40 : 20; height: 18; radius: 3
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        color: "transparent"
+                                        // idle: trash icon
+                                        Text {
+                                            anchors.centerIn: parent; visible: !trashBtn.confirming
+                                            text: "🗑"; font.pixelSize: 12
+                                            color: trashMouse.containsMouse ? "#e06c6c"
+                                                 : PropertiesPanelController.textColor
+                                        }
+                                        MouseArea {
+                                            id: trashMouse; anchors.fill: parent; hoverEnabled: true
+                                            visible: !trashBtn.confirming
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: trashBtn.confirming = true
+                                        }
+                                        // armed: confirm (delete) / cancel
+                                        Row {
+                                            anchors.centerIn: parent; spacing: 4
+                                            visible: trashBtn.confirming
+                                            Text {
+                                                text: "✓"; color: "#e06c6c"; font.pixelSize: 13; font.bold: true
+                                                MouseArea { anchors.fill: parent; anchors.margins: -3
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        // emits animationStateChanged → the section's
+                                                        // Connections refreshes the list automatically.
+                                                        PropertiesPanelController.deleteAnimation(grp.entity, modelData.name)
+                                                        trashBtn.confirming = false
+                                                    }
+                                                }
+                                            }
+                                            Text {
+                                                text: "✗"; color: PropertiesPanelController.textColor; font.pixelSize: 13
+                                                MouseArea { anchors.fill: parent; anchors.margins: -3
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: trashBtn.confirming = false
+                                                }
+                                            }
+                                        }
                                     }
 
                                     // Simplify button — removes redundant keyframes from this animation.

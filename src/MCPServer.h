@@ -191,6 +191,7 @@ private:
     QJsonObject toolAnalyzeAnimation(const QJsonObject &args);
     QJsonObject toolBakeAnimationFps(const QJsonObject &args);
     QJsonObject toolMotionInBetween(const QJsonObject &args);
+    QJsonObject toolGenerateMotion(const QJsonObject &args);    // #411 text-to-motion
     QJsonObject toolSegmentMesh(const QJsonObject &args);
     QJsonObject toolSaveScene(const QJsonObject &args);
     QJsonObject toolOpenScene(const QJsonObject &args);
