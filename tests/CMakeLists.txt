@@ -479,6 +479,17 @@ if(BUILD_TESTS)
         POSITION_INDEPENDENT_CODE ON
     )
     target_include_directories(qtmesh_test_common PRIVATE ${TEST_SUPPORT_INCLUDES})
+    if(stb_SOURCE_DIR)
+        target_include_directories(qtmesh_test_common PRIVATE ${stb_SOURCE_DIR})
+    endif()
+    if(ENABLE_OPENEXR AND tinyexr_SOURCE_DIR)
+        target_include_directories(qtmesh_test_common PRIVATE
+            ${tinyexr_SOURCE_DIR}
+            ${tinyexr_SOURCE_DIR}/deps/miniz)
+        if(TARGET tinyexr_miniz)
+            target_link_libraries(qtmesh_test_common PUBLIC tinyexr_miniz)
+        endif()
+    endif()
     target_compile_definitions(qtmesh_test_common PRIVATE
         BATCH_EXPORTER_TEST_SEAM
         QTMESH_UNIT_TESTS
