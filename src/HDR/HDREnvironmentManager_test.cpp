@@ -92,15 +92,18 @@ TEST_F(HDREnvironmentManagerOgreTest, ReloadSameFile_UsesBakeCache)
     ASSERT_TRUE(MinimalEXR::writeRGB32F(path, w, h, rgb));
 
     auto* mgr = HDREnvironmentManager::getSingleton();
+    QSignalSpy iblSpy(mgr, &HDREnvironmentManager::iblPrecomputeCompleted);
 
     QElapsedTimer first;
     first.start();
     ASSERT_TRUE(mgr->loadEnvironment(path));
+    ASSERT_TRUE(iblSpy.wait(120000));
     const qint64 firstMs = first.elapsed();
 
     QElapsedTimer second;
     second.start();
     ASSERT_TRUE(mgr->loadEnvironment(path));
+    ASSERT_TRUE(iblSpy.wait(120000));
     const qint64 secondMs = second.elapsed();
 
     EXPECT_EQ(mgr->currentCacheKey(), HdrEquirect::sha1HexOfFile(path));
@@ -122,9 +125,12 @@ TEST_F(HDREnvironmentManagerOgreTest, SwitchingEnvironment_ReleasesPreviousCubem
     ASSERT_TRUE(MinimalEXR::writeRGB32F(pathB, w, h, rgbB));
 
     auto* mgr = HDREnvironmentManager::getSingleton();
+    QSignalSpy iblSpy(mgr, &HDREnvironmentManager::iblPrecomputeCompleted);
     ASSERT_TRUE(mgr->loadEnvironment(pathA));
+    ASSERT_TRUE(iblSpy.wait(120000));
     const Ogre::String firstTex = mgr->cubemap()->getName();
     ASSERT_TRUE(mgr->loadEnvironment(pathB));
+    ASSERT_TRUE(iblSpy.wait(120000));
     const Ogre::String secondTex = mgr->cubemap()->getName();
     EXPECT_NE(firstTex, secondTex);
     EXPECT_FALSE(Ogre::TextureManager::getSingleton().resourceExists(firstTex));

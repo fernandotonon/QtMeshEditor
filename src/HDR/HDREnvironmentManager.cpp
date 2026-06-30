@@ -95,9 +95,7 @@ void HDREnvironmentManager::shutdownWorkerThread()
         return;
     ++m_precomputeGeneration;
     m_workerThread->quit();
-    if (!m_workerThread->wait(5000))
-        m_workerThread->terminate();
-    m_workerThread->wait(1000);
+    m_workerThread->wait(30000);
     m_workerThread = nullptr;
     m_worker = nullptr;
 }
