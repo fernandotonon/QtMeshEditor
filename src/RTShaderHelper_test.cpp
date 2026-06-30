@@ -91,6 +91,11 @@ TEST_F(RTSSResourcesTest, HasSGXLibCookTorrance)
     EXPECT_TRUE(QFile::exists(rtssDir + "/SGXLib_CookTorrance.glsl"));
 }
 
+TEST_F(RTSSResourcesTest, HasQTSLibIbl)
+{
+    EXPECT_TRUE(QFile::exists(rtssDir + "/QTSLib_IBL.glsl"));
+}
+
 TEST_F(RTSSResourcesTest, HasSGXLibDualQuaternion)
 {
     EXPECT_TRUE(QFile::exists(rtssDir + "/SGXLib_DualQuaternion.glsl"));
@@ -142,7 +147,7 @@ TEST_F(RTSSResourcesTest, RTShaderLibHasExpectedFileCount)
     QDir dir(rtssDir);
     auto entries = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
     // 16 .glsl + 3 .dds + 1 .material = 20 files
-    EXPECT_GE(entries.size(), 20) << "Expected at least 20 files in RTShaderLib/";
+    EXPECT_GE(entries.size(), 21) << "Expected at least 21 files in RTShaderLib/";
 }
 
 TEST_F(RTSSResourcesTest, MainDirHasMinimumFiles)

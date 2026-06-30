@@ -62,4 +62,14 @@ namespace RTShaderHelper {
     /// Full viewport sync matching Material Editor script Apply + updateMaterialText:
     /// round-trip material script, hydrate embedded textures, rebuild RTSS, rebind TUS.
     void syncMaterialForViewport(Ogre::MaterialPtr& mat);
+
+    /// Re-attach Cook-Torrance + IBL on every metallic-roughness material after the
+    /// active HDR environment finishes precomputing or changes.
+    void refreshAllPbrMaterialsForHdr();
+
+    /// Per-pass PBR environment controls (stored as pass user bindings).
+    void setPbrEnvIntensity(Ogre::Pass* pass, float intensity);
+    void setPbrEnvTint(Ogre::Pass* pass, const Ogre::ColourValue& tint);
+    float pbrEnvIntensity(const Ogre::Pass* pass);
+    Ogre::ColourValue pbrEnvTint(const Ogre::Pass* pass);
 }

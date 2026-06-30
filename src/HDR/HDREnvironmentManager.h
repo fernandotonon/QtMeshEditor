@@ -12,7 +12,7 @@
 class HdrPrecomputeWorker;
 class QThread;
 
-/// Slice A (#467) + B (#468): HDR environment + IBL precompute.
+/// Slice A (#467) + B (#468) + C (#469): HDR environment, IBL precompute, RTSS wiring.
 class HDREnvironmentManager : public QObject
 {
     Q_OBJECT
@@ -49,9 +49,15 @@ public:
     /// True once IBL textures for the active environment are registered.
     bool isIblReady() const { return m_iblReady; }
 
+    /// Highest prefiltered-specular mip level (0-based) for RTSS lod lookup.
+    float prefilterMaxLodLevel() const { return m_prefilterMaxLodLevel; }
+
     /// When false, `loadEnvironment` skips the background IBL worker (used by
     /// fast integration tests — bake/cache logic is covered in HdrIbl/ HdrCache tests).
     void setBackgroundIblPrecomputeEnabled(bool enabled) { m_backgroundIblPrecompute = enabled; }
+
+    /// Register precomputed IBL textures with Ogre (worker path + unit tests).
+    bool installIblBake(const QString& cacheKey, HdrIbl::IblBakeResult& result, QString& error);
 
 signals:
     void environmentChanged();
@@ -86,6 +92,7 @@ private:
     QString m_cacheKey;
     int m_faceSize = 0;
     bool m_iblReady = false;
+    float m_prefilterMaxLodLevel = 0.f;
     bool m_backgroundIblPrecompute = true;
     quint64 m_precomputeGeneration = 0;
 
