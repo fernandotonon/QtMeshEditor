@@ -131,6 +131,10 @@ void smoothLabelsByTopology(std::vector<int>& labels,
         neighbours[b].push_back(a); neighbours[b].push_back(c);
         neighbours[c].push_back(a); neighbours[c].push_back(b);
     }
+    for (auto& ns : neighbours) {
+        std::sort(ns.begin(), ns.end());
+        ns.erase(std::unique(ns.begin(), ns.end()), ns.end());
+    }
 
     std::vector<int> next(labels.size());
     for (int it = 0; it < iterations; ++it) {
