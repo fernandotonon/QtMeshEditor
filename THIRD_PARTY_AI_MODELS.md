@@ -32,14 +32,21 @@ the binary). Attribution + licenses for the models and their training data:
   redistribution bar (Homebrew / Snap / WinGet / Docker), the same reason UniRig
   (#408) passed. Non-commercial SF3D / Stable-Fast-3D was rejected on license.
 - The host-side iso-surface step (density grid → mesh) is a native, from-scratch
-  Lorensen marching cubes (`src/MarchingCubes.{h,cpp}`, public-domain tables — no
-  vendored/GPL dependency); TripoSR's own `torchmcubes` is torch/GPU-only.
+  Lorensen marching cubes (`src/ImageTo3D/MarchingCubes.{h,cpp}`, public-domain
+  tables — no vendored/GPL dependency); TripoSR's own `torchmcubes` is torch/GPU-only.
 - The ONNX export is produced by `scripts/export-triposr-onnx.py` (one-time,
-  offline developer tool — not shipped). The app runs the resulting
-  `triposr_encoder.onnx` + `triposr_decoder.onnx` via ONNX Runtime
-  (`src/MeshGenPredictor.cpp`, slice #766), downloading them on first use to
-  `AppData/ai_models/triposr/`. **Hosting is slice #769** — until then the feature
-  reports a clean "TripoSR model not yet hosted" state (the RigNet precedent).
+  offline developer tool — not shipped). The app runs the resulting encoder +
+  `triposr_decoder.onnx` via ONNX Runtime (`src/ImageTo3D/MeshGenPredictor.cpp`),
+  downloading them on first use to `AppData/ai_models/triposr/`.
+- **Encoder size tiers** (all the SAME MIT weights, just re-precisioned by the
+  export script — no separate license): `triposr_encoder.onnx` (fp32, ~1.68 GB),
+  `triposr_encoder_fp16.onnx` (~840 MB), `triposr_encoder_int8.onnx` (~430 MB).
+  The user picks the tier; each downloads on demand.
+- **Hosting is slice #769** — the exported `.onnx` files (fp32/fp16/int8 encoders +
+  decoder) must be uploaded to the `triposr/` path of the
+  `fernandotonon/QtMeshEditor-models` HF repo. Until then the download 404s and the
+  feature reports a clean "TripoSR model not yet hosted" state (the RigNet
+  precedent) — no crash.
 
 ## U²-Net — background removal for image-to-3D (epic #764)
 
