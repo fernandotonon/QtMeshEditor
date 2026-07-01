@@ -439,9 +439,17 @@ Mesh extract(const float* field, int nx, int ny, int nz,
                     // vertices coincide at a grid corner exactly on the iso).
                     if (v0 == v1 || v1 == v2 || v0 == v2)
                         continue;
+                    // The canonical Lorensen triangle table winds triangles for
+                    // an inside-POSITIVE / outside-negative field (the original
+                    // paper's density convention). This extractor treats a corner
+                    // as inside when `v >= isoLevel` (inside-positive), the OPPOSITE
+                    // sign, so the raw table winds faces INWARD — meshes then render
+                    // back-faces toward the camera (normals appear inverted). Emit
+                    // v0,v2,v1 to flip the winding so faces point OUTWARD, matching
+                    // the header contract ("CCW toward increasing field").
                     out.indices.push_back(v0);
-                    out.indices.push_back(v1);
                     out.indices.push_back(v2);
+                    out.indices.push_back(v1);
                 }
             }
         }

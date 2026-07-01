@@ -89,17 +89,27 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
         decl->getVertexSize(0), vd->vertexCount,
         Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
 
+    // TripoSR's reconstruction frame lands the model lying on its back relative
+    // to QtMeshEditor's +Y-up convention. Bake a -90° rotation about X into the
+    // geometry so it stands upright: (x, y, z) -> (x, z, -y). Applied to both
+    // positions AND normals. Baking into the vertex data (rather than a node
+    // transform) keeps the orientation correct through glTF export in any viewer.
+    auto rotX = [](float& yy, float& zz) { const float ny = zz, nz = -yy; yy = ny; zz = nz; };
+
     Ogre::Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
     {
         auto* p = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
         auto* root = Ogre::Root::getSingletonPtr();
         for (int i = 0; i < result.vertexCount; ++i) {
             float* f = reinterpret_cast<float*>(p);
-            const float x = result.positions[3*i+0];
-            const float y = result.positions[3*i+1];
-            const float z = result.positions[3*i+2];
+            float x = result.positions[3*i+0];
+            float y = result.positions[3*i+1];
+            float z = result.positions[3*i+2];
+            rotX(y, z);
+            float nx = normals[3*i+0], ny = normals[3*i+1], nz = normals[3*i+2];
+            rotX(ny, nz);
             f[0] = x; f[1] = y; f[2] = z;
-            f[3] = normals[3*i+0]; f[4] = normals[3*i+1]; f[5] = normals[3*i+2];
+            f[3] = nx; f[4] = ny; f[5] = nz;
             p += 6 * sizeof(float);
             if (hasColor) {
                 Ogre::ColourValue cv(result.colors[3*i+0], result.colors[3*i+1],

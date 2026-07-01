@@ -44,6 +44,11 @@ public:
         int   sdfResolution = 256;    // marching-cubes grid resolution (128 = fast)
         float threshold     = 25.0f;  // TripoSR density iso threshold
         bool  vertexColor   = true;   // run the extra color pass on the vertices
+        // Run U²-Net background removal on the input first (TripoSR needs an
+        // isolated subject). Uses BackgroundRemover; if the model/ONNX is absent
+        // the image is used as-is. Recommended for photos; harmless for
+        // already-segmented inputs.
+        bool  removeBackground = false;
         // Decoder query-point chunk size (points per decoder Run). Bounds memory
         // on the resolution^3 grid; 0 → one shot (only for tiny grids).
         int   chunkPoints   = 262144;

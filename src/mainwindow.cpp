@@ -3931,8 +3931,12 @@ void MainWindow::on_actionGenerate3DFromImage_triggered()
     // TripoSR reconstructs at a fixed cost; res 256 is the default. Run on the
     // GUI thread (ensureModelBlocking needs an event loop; inference is CPU-bound
     // but tolerable). A busy cursor signals the wait.
+    // Default background removal ON in the GUI: the file picker accepts arbitrary
+    // photos, and TripoSR needs an isolated subject. (Falls back to the raw image
+    // if the U²-Net model isn't available.)
     QApplication::setOverrideCursor(Qt::BusyCursor);
-    const QVariantMap r = AIAssistManager::instance()->generateMeshFromImage(imagePath, 256, true);
+    const QVariantMap r = AIAssistManager::instance()->generateMeshFromImage(
+        imagePath, 256, /*vertexColor*/ true, /*removeBackground*/ true);
     QApplication::restoreOverrideCursor();
 
     if (!r.value("ok").toBool()) {

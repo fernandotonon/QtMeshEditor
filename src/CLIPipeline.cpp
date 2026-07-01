@@ -8720,12 +8720,14 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     int resolution = 256;
     bool vertexColor = true;
     bool noModel = false;
+    bool removeBg = false;
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
         if (arg == "generate3d" || arg == "--cli") continue;
         if (arg == "--no-color") { vertexColor = false; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
+        if (arg == "--remove-bg" || arg == "--rembg") { removeBg = true; continue; }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString::fromLocal8Bit(argv[++i]); continue;
         }
@@ -8748,7 +8750,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     if (inputPath.isEmpty()) {
         err() << "Error: No input image specified." << Qt::endl;
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
-                 "[--no-color] [--no-model]" << Qt::endl;
+                 "[--no-color] [--remove-bg] [--no-model]" << Qt::endl;
         return 2;
     }
     QFileInfo fi(inputPath);
@@ -8796,8 +8798,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     if (!initOgreHeadless()) return 1;
 
     MeshGenPredictor::Options opts;
-    opts.sdfResolution = resolution;
-    opts.vertexColor   = vertexColor;
+    opts.sdfResolution   = resolution;
+    opts.vertexColor     = vertexColor;
+    opts.removeBackground = removeBg;
     const MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(),
         MeshGenPredictor::decoderModelPath(), opts);

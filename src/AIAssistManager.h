@@ -103,6 +103,7 @@ public:
     Q_INVOKABLE QVariantMap generateMeshFromImage(const QString& imagePath,
                                                   int resolution = 256,
                                                   bool vertexColor = true,
+                                                  bool removeBackground = false,
                                                   const QString& outputPath = {});
 
 signals:

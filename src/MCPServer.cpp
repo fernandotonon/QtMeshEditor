@@ -2153,6 +2153,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     MeshGenPredictor::Options opts;
     if (args.contains("resolution")) opts.sdfResolution = args["resolution"].toInt(256);
     if (args.contains("vertex_color")) opts.vertexColor = args["vertex_color"].toBool();
+    if (args.contains("remove_bg")) opts.removeBackground = args["remove_bg"].toBool();
     if (opts.sdfResolution < 16 || opts.sdfResolution > 512)
         return makeErrorResult("'resolution' must be between 16 and 512.");
 
@@ -6923,6 +6924,7 @@ QJsonArray MCPServer::buildToolsList()
         props["output"] = QJsonObject{{"type", "string"}, {"description", "Optional path to save the generated mesh (e.g. /tmp/out.glb). If omitted, the mesh is loaded into the current scene instead."}};
         props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..512 (default 256; 128 is a fast/preview tier). Higher = more detail + slower."}};
         props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "Bake TripoSR's predicted per-vertex color (default true)."}};
+        props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; TripoSR needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "

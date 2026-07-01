@@ -138,6 +138,7 @@ NormalMapGenerator.cpp
 MarchingCubes.cpp
 MeshGenPredictor.cpp
 MeshGenBuilder.cpp
+BackgroundRemover.cpp
 PbrMapSynth.cpp
 TextureUpscaler.cpp
 AIAssistManager.cpp

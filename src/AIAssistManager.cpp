@@ -367,6 +367,7 @@ QString AIAssistManager::upscaleTexture(const QString& srcPath, int scale, bool 
 
 QVariantMap AIAssistManager::generateMeshFromImage(const QString& imagePath,
                                                    int resolution, bool vertexColor,
+                                                   bool removeBackground,
                                                    const QString& outputPath)
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
@@ -380,7 +381,7 @@ QVariantMap AIAssistManager::generateMeshFromImage(const QString& imagePath,
     };
 
 #ifndef ENABLE_ONNX
-    Q_UNUSED(resolution); Q_UNUSED(vertexColor); Q_UNUSED(outputPath);
+    Q_UNUSED(resolution); Q_UNUSED(vertexColor); Q_UNUSED(removeBackground); Q_UNUSED(outputPath);
     return fail(tr("Image-to-3D is not enabled. Rebuild with -DENABLE_ONNX=ON."));
 #else
     if (!QFileInfo::exists(imagePath))
@@ -400,8 +401,9 @@ QVariantMap AIAssistManager::generateMeshFromImage(const QString& imagePath,
         return fail(tr("Could not load image: %1").arg(imagePath));
 
     MeshGenPredictor::Options opts;
-    opts.sdfResolution = resolution;
-    opts.vertexColor   = vertexColor;
+    opts.sdfResolution    = resolution;
+    opts.vertexColor      = vertexColor;
+    opts.removeBackground = removeBackground;
     const MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(),
         MeshGenPredictor::decoderModelPath(), opts);

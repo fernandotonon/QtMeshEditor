@@ -41,6 +41,20 @@ the binary). Attribution + licenses for the models and their training data:
   `AppData/ai_models/triposr/`. **Hosting is slice #769** — until then the feature
   reports a clean "TripoSR model not yet hosted" state (the RigNet precedent).
 
+## U²-Net — background removal for image-to-3D (epic #764)
+
+- **Model:** U²-Net salient-object detection (`u2net.onnx`) — the default
+  foreground-segmentation model shipped by [rembg](https://github.com/danielgatis/rembg).
+- **Source:** Qin et al., *"U²-Net: Going Deeper with Nested U-Structure for
+  Salient Object Detection"* (Pattern Recognition 2020),
+  https://github.com/xuebinqin/U-2-Net — code **Apache-2.0**; the released ONNX
+  weights are redistributed by rembg under the same permissive terms.
+- Used only as a **pre-process** for TripoSR image-to-3D (`src/BackgroundRemover.cpp`):
+  isolate the subject so the reconstruction sees a clean background. Downloads on
+  first use to `AppData/ai_models/rembg/u2net.onnx` (override
+  `QTMESH_REMBG_MODEL_BASE_URL` / `QSettings ai/rembgModelBaseUrl`; offline guard
+  `QTMESH_REMBG_NO_DOWNLOAD`). Falls back to the raw image when unavailable.
+
 ## PBRify_Remix — PBR map synthesis (issue #404)
 
 - Three SPAN models from https://github.com/Kim2091/PBRify_Remix — **CC0-1.0**,

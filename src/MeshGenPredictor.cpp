@@ -2,6 +2,7 @@
 
 #include "MarchingCubes.h"
 #include "PbrMapSynth.h"   // toNCHW (image → planar [0,1])
+#include "BackgroundRemover.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -209,6 +210,16 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
 
     const int res = std::max(16, opts.sdfResolution);
 
+    // Optional: isolate the subject first (TripoSR needs a clean background).
+    // Falls back to the original image if the model/ONNX is unavailable.
+    QImage subject = image;
+    if (opts.removeBackground) {
+        const QString bgModel = BackgroundRemover::ensureModelBlocking();
+        const BackgroundRemover::Result br =
+            BackgroundRemover::removeBackground(image, bgModel, {});
+        subject = br.image;   // cleaned on success, original on fallback
+    }
+
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_triposr");
         Ort::SessionOptions so;
@@ -225,7 +236,7 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
         // ---- (1) Encoder: image [1,3,512,512] (RGB, [0,1]) -> scene_codes -----
-        QImage resized = image.convertToFormat(QImage::Format_RGB888)
+        QImage resized = subject.convertToFormat(QImage::Format_RGB888)
                               .scaled(kEncoderImageSize, kEncoderImageSize,
                                       Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         std::vector<float> imgNCHW = PbrMapSynth::toNCHW(resized, 3);   // /255, planar

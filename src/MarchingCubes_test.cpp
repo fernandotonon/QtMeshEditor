@@ -102,6 +102,30 @@ TEST(MarchingCubesTest, SphereIsClosedAndOnSurface)
     EXPECT_EQ(boundaryEdges, 0) << "sphere surface should have no open edges";
     EXPECT_EQ(nonManifold, 0) << "sphere surface should be 2-manifold";
 
+    // Winding/orientation: for an inside-positive field, each triangle's face
+    // normal (CCW winding, right-hand rule) must point OUTWARD — i.e. away from
+    // the sphere centre (the origin). This guards the winding fix that stopped
+    // generated meshes rendering inside-out (normals appeared inverted).
+    {
+        int outward = 0, total = 0;
+        for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+            const uint32_t a = m.indices[t], b = m.indices[t + 1], c = m.indices[t + 2];
+            const float* pa = &m.positions[a * 3];
+            const float* pb = &m.positions[b * 3];
+            const float* pc = &m.positions[c * 3];
+            const float e1[3] = {pb[0]-pa[0], pb[1]-pa[1], pb[2]-pa[2]};
+            const float e2[3] = {pc[0]-pa[0], pc[1]-pa[1], pc[2]-pa[2]};
+            const float fn[3] = {e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]};
+            // Triangle centroid ~= outward direction from origin for a sphere.
+            const float cx = (pa[0]+pb[0]+pc[0])/3.f, cy = (pa[1]+pb[1]+pc[1])/3.f, cz = (pa[2]+pb[2]+pc[2])/3.f;
+            if (fn[0]*cx + fn[1]*cy + fn[2]*cz > 0.f) ++outward;
+            ++total;
+        }
+        // The overwhelming majority must face outward (a few near-tangent tris
+        // can be ambiguous at the discretisation limit).
+        EXPECT_GT(outward, total * 0.95) << "sphere triangles must wind outward";
+    }
+
     // Every vertex sits ~on the sphere of radius R (within one cell of slop).
     const float cell = 2.0f / float(n - 1);
     for (int i = 0; i < m.vertexCount; ++i) {
