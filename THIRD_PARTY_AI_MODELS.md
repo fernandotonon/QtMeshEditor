@@ -19,6 +19,28 @@ the binary). Attribution + licenses for the models and their training data:
   `encoder.onnx` + `decoder.onnx` via ONNX Runtime (`src/UniRigPredictor.cpp`),
   downloading them on first use to `AppData/ai_models/unirig/`.
 
+## TripoSR — image-to-3D mesh generation (epic #764)
+
+- **Model:** TripoSR single-image 3D reconstruction (DINO ViT tokenizer +
+  triplane transformer + NeRF decoder), exported to ONNX as an encoder
+  (image → triplane) + decoder (triplane + points → density/color) pair.
+- **Source:** Tripo AI + Stability AI — *"TripoSR: Fast 3D Object Reconstruction
+  from a Single Image"* (arXiv 2403.02151).
+  https://github.com/VAST-AI-Research/TripoSR — code **MIT**.
+  Weights: https://huggingface.co/stabilityai/TripoSR — **MIT** (code AND weights).
+- MIT code+weights is the deciding factor: it clears QtMeshEditor's permissive-
+  redistribution bar (Homebrew / Snap / WinGet / Docker), the same reason UniRig
+  (#408) passed. Non-commercial SF3D / Stable-Fast-3D was rejected on license.
+- The host-side iso-surface step (density grid → mesh) is a native, from-scratch
+  Lorensen marching cubes (`src/MarchingCubes.{h,cpp}`, public-domain tables — no
+  vendored/GPL dependency); TripoSR's own `torchmcubes` is torch/GPU-only.
+- The ONNX export is produced by `scripts/export-triposr-onnx.py` (one-time,
+  offline developer tool — not shipped). The app runs the resulting
+  `triposr_encoder.onnx` + `triposr_decoder.onnx` via ONNX Runtime
+  (`src/MeshGenPredictor.cpp`, slice #766), downloading them on first use to
+  `AppData/ai_models/triposr/`. **Hosting is slice #769** — until then the feature
+  reports a clean "TripoSR model not yet hosted" state (the RigNet precedent).
+
 ## PBRify_Remix — PBR map synthesis (issue #404)
 
 - Three SPAN models from https://github.com/Kim2091/PBRify_Remix — **CC0-1.0**,

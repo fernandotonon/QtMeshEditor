@@ -135,6 +135,7 @@ PoseLibrary.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
+MarchingCubes.cpp
 PbrMapSynth.cpp
 TextureUpscaler.cpp
 AIAssistManager.cpp
