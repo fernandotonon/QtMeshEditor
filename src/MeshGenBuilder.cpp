@@ -92,12 +92,19 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
         decl->getVertexSize(0), vd->vertexCount,
         Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
 
-    // TripoSR's reconstruction frame lands the model lying on its back relative
-    // to QtMeshEditor's +Y-up convention. Bake a -90° rotation about X into the
-    // geometry so it stands upright: (x, y, z) -> (x, z, -y). Applied to both
-    // positions AND normals. Baking into the vertex data (rather than a node
-    // transform) keeps the orientation correct through glTF export in any viewer.
-    auto rotX = [](float& yy, float& zz) { const float ny = zz, nz = -yy; yy = ny; zz = nz; };
+    // TripoSR's reconstruction frame lands the model lying on its back AND facing
+    // 90° off relative to QtMeshEditor's +Y-up convention. Bake the fixed
+    // orientation into the geometry (positions AND normals) so it stands upright
+    // and faces forward — matching the source image. Baking into the vertex data
+    // (rather than a node transform) keeps it correct through glTF export in any
+    // viewer.
+    //   step 1: -90° about X to stand it up:  (x, y, z) -> (x, z, -y)
+    //   step 2: +90° about Y to face forward: (x, y, z) -> (z, y, -x)
+    // Composed: (x, y, z) -> (-y, z, -x).
+    auto orient = [](float& x, float& y, float& z) {
+        const float nx = -y, ny = z, nz = -x;
+        x = nx; y = ny; z = nz;
+    };
 
     Ogre::Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
     {
@@ -108,9 +115,9 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
             float x = result.positions[3*i+0];
             float y = result.positions[3*i+1];
             float z = result.positions[3*i+2];
-            rotX(y, z);
+            orient(x, y, z);
             float nx = normals[3*i+0], ny = normals[3*i+1], nz = normals[3*i+2];
-            rotX(ny, nz);
+            orient(nx, ny, nz);
             f[0] = x; f[1] = y; f[2] = z;
             f[3] = nx; f[4] = ny; f[5] = nz;
             p += 6 * sizeof(float);

@@ -183,7 +183,6 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
         // --- Build a full-res alpha by bilinear-upsampling the 320² mask -------
         const int W = image.width(), H = image.height();
         QImage rgb = image.convertToFormat(QImage::Format_RGB888);
-        QImage result(W, H, QImage::Format_RGB888);
         auto sampleMask = [&](float fx, float fy) -> float {
             // fx,fy in [0,1); bilinear on the 320² normalized mask.
             const float gx = std::clamp(fx * (kNet - 1), 0.0f, float(kNet - 1));
@@ -199,39 +198,73 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
             return top * (1 - ty) + bot * ty;
         };
 
+        // Full-res alpha (thresholded + feathered) and the subject bounding box.
+        std::vector<float> alpha(static_cast<size_t>(W) * H, 0.0f);
+        int bx0 = W, by0 = H, bx1 = -1, by1 = -1;
         int kept = 0;
         for (int y = 0; y < H; ++y) {
-            const uchar* src = rgb.constScanLine(y);
-            uchar* dst = result.scanLine(y);
             for (int x = 0; x < W; ++x) {
                 float a = sampleMask(float(x) / std::max(1, W - 1),
                                      float(y) / std::max(1, H - 1));
-                // Threshold with a soft feather band around it.
                 if (opts.feather > 0) {
                     const float band = 0.15f;
                     a = std::clamp((a - (opts.threshold - band)) / (2 * band), 0.0f, 1.0f);
                 } else {
                     a = (a >= opts.threshold) ? 1.0f : 0.0f;
                 }
-                if (a > 0.5f) ++kept;
-                const uchar* sp = src + x * 3;
-                uchar* dp = dst + x * 3;
-                dp[0] = uchar(sp[0] * a + opts.bgR * (1 - a) + 0.5f);
-                dp[1] = uchar(sp[1] * a + opts.bgG * (1 - a) + 0.5f);
-                dp[2] = uchar(sp[2] * a + opts.bgB * (1 - a) + 0.5f);
+                alpha[static_cast<size_t>(y) * W + x] = a;
+                if (a > 0.5f) {
+                    ++kept;
+                    bx0 = std::min(bx0, x); by0 = std::min(by0, y);
+                    bx1 = std::max(bx1, x); by1 = std::max(by1, y);
+                }
             }
         }
-        // If the mask kept essentially nothing (bad segmentation), don't hand
-        // TripoSR a blank image — fall back to the original.
-        if (kept < (W * H) / 200) {
+        // Bad segmentation → don't hand TripoSR a blank image.
+        if (kept < (W * H) / 200 || bx1 < bx0 || by1 < by0) {
             r.error = QStringLiteral("segmentation kept too little — using image as-is.");
             r.image = image;
             return r;
         }
 
+        // ---- Compose over GRAY, cropped + re-padded to `foregroundRatio` ------
+        // TripoSR's resize_foreground: crop to the subject bbox, pad to a square,
+        // then pad again so the subject fills `ratio` of the frame — CENTERED.
+        // This is what stops leftover background margin being reconstructed as a
+        // slab of geometry, and matches the model's training framing.
+        auto srcAt = [&](int x, int y, int c) -> float {
+            return rgb.constScanLine(y)[x * 3 + c];
+        };
+        auto alphaAt = [&](int x, int y) -> float { return alpha[static_cast<size_t>(y) * W + x]; };
+
+        const int fgW = bx1 - bx0 + 1, fgH = by1 - by0 + 1;
+        const int square = std::max(fgW, fgH);
+        const float ratio = (opts.foregroundRatio > 0.05f && opts.foregroundRatio <= 1.0f)
+                                ? opts.foregroundRatio : 0.85f;
+        const int outSz = std::max(8, int(square / ratio));
+        // Top-left of the subject square within the padded output.
+        const int sqOffX = (outSz - fgW) / 2, sqOffY = (outSz - fgH) / 2;
+
+        QImage composed(outSz, outSz, QImage::Format_RGB888);
+        composed.fill(qRgb(opts.bgR, opts.bgG, opts.bgB));
+        for (int oy = 0; oy < outSz; ++oy) {
+            uchar* dp = composed.scanLine(oy);
+            const int sy = by0 + (oy - sqOffY);
+            for (int ox = 0; ox < outSz; ++ox) {
+                const int sx = bx0 + (ox - sqOffX);
+                if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;   // stays gray
+                const float a = alphaAt(sx, sy);
+                if (a <= 0.0f) continue;
+                uchar* px = dp + ox * 3;
+                px[0] = uchar(srcAt(sx, sy, 0) * a + opts.bgR * (1 - a) + 0.5f);
+                px[1] = uchar(srcAt(sx, sy, 1) * a + opts.bgG * (1 - a) + 0.5f);
+                px[2] = uchar(srcAt(sx, sy, 2) * a + opts.bgB * (1 - a) + 0.5f);
+            }
+        }
+
         r.ok = true;
         r.usedModel = true;
-        r.image = result;
+        r.image = composed;
         return r;
     } catch (const Ort::Exception& e) {
         r.error = QStringLiteral("rembg ONNX error: %1 — using image as-is.")

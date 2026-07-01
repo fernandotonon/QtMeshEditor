@@ -29,13 +29,20 @@ class BackgroundRemover {
 public:
     struct Options {
         Options();
-        // Composite the cut-out subject over this solid color (TripoSR expects an
-        // opaque image). White matches TripoSR's demo. Alpha ignored.
-        int bgR = 255, bgG = 255, bgB = 255;
+        // Composite the cut-out subject over this solid color. TripoSR is trained
+        // with the background filled to NEUTRAL GRAY 128 (run.py: (1-alpha)*0.5) —
+        // NOT white. White gets reconstructed as a solid wall of geometry behind
+        // the subject, so the default is gray.
+        int bgR = 128, bgG = 128, bgB = 128;
         // Saliency threshold [0..1]; pixels below are treated as background.
         float threshold = 0.5f;
         // Feather the mask edge (px) to avoid a hard cut halo.
         int feather = 2;
+        // Crop to the subject's bounding box and re-pad so the foreground fills
+        // this fraction of the (square) output — TripoSR's resize_foreground step
+        // (default 0.85). Centering + tight framing is what stops the leftover
+        // margin being reconstructed as background geometry. 0 disables cropping.
+        float foregroundRatio = 0.85f;
     };
 
     struct Result {
