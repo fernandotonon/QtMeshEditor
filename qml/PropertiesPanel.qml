@@ -1493,11 +1493,13 @@ Rectangle {
             // higher = more detail but much slower. Labels flag the trade-off.
             Row {
                 spacing: 6
-                ThemedLabel {
+                Text {
                     text: "Resolution"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                ThemedComboBox {
+                ComboBox {
                     id: mgResCombo
                     width: 150; height: 26
                     font.pixelSize: 11
@@ -1511,18 +1513,47 @@ Rectangle {
             }
 
             // Remove-background toggle
-            ThemedCheckBox {
+            CheckBox {
                 id: mgRemoveBg
                 text: "Remove background"
                 checked: true
                 enabled: !MeshGenController.busy
+                contentItem: Text {
+                    text: mgRemoveBg.text
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    leftPadding: mgRemoveBg.indicator.width + 4
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
 
-            ThemedButton {
-                text: "Generate from Image…"
-                enabled: !MeshGenController.busy
-                onClicked: MeshGenController.pickImageAndGenerate(
-                    mgResCombo.resValue, mgRemoveBg.checked)
+            Rectangle {
+                id: mgBtn
+                width: Math.min(parent.width - 16, mgLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                opacity: MeshGenController.busy ? 0.45 : 1.0
+                color: mgMa.containsMouse && !MeshGenController.busy
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: mgLabel
+                    anchors.centerIn: parent
+                    text: "Generate from Image…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: mgMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: !MeshGenController.busy
+                    cursorShape: MeshGenController.busy ? Qt.BusyCursor : Qt.PointingHandCursor
+                    onClicked: MeshGenController.pickImageAndGenerate(
+                        mgResCombo.resValue, mgRemoveBg.checked)
+                }
             }
 
             // Progress bar + status (only while busy)
@@ -1535,19 +1566,39 @@ Rectangle {
                 value: 0
             }
 
-            ThemedLabel {
+            Text {
                 id: mgStatus
                 width: parent.width - 16
                 wrapMode: Text.Wrap
                 visible: text.length > 0
+                color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: ""
             }
 
-            ThemedButton {
-                text: "Cancel"
+            Rectangle {
+                width: Math.min(parent.width - 16, 80)
+                height: 22
+                radius: 3
                 visible: MeshGenController.busy
-                onClicked: MeshGenController.cancel()
+                color: mgCancelMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    anchors.centerIn: parent
+                    text: "Cancel"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: mgCancelMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: MeshGenController.cancel()
+                }
             }
 
             Connections {
