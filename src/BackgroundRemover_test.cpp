@@ -44,24 +44,28 @@ TEST(BackgroundRemoverTest, NullImageIsSafe)
     EXPECT_FALSE(r.ok);
 }
 
-// Full segmentation only when ONNX + model present.
-TEST(BackgroundRemoverTest, SegmentsWhenModelPresent)
+// Full segmentation when the model is present; otherwise the graceful-fallback
+// contract. Does NOT GTEST_SKIP — CI treats skipped tests as failures and the
+// u2net model isn't hosted yet (#769), so this must assert on every runner.
+TEST(BackgroundRemoverTest, SegmentsWhenModelPresentElseFallsBack)
 {
-#ifndef ENABLE_ONNX
-    GTEST_SKIP() << "built without ENABLE_ONNX";
-#else
-    if (!QFileInfo::exists(BackgroundRemover::modelPath()))
-        GTEST_SKIP() << "u2net model not present in the AppData cache";
     QImage img(128, 128, QImage::Format_RGB888);
     img.fill(Qt::white);
     // A dark square in the middle = a salient object over white.
     for (int y = 40; y < 88; ++y)
         for (int x = 40; x < 88; ++x)
             img.setPixel(x, y, qRgb(20, 20, 20));
+
     auto r = BackgroundRemover::removeBackground(img, BackgroundRemover::modelPath(), {});
-    if (r.ok) {
+    const bool present = BackgroundRemover::isAvailable()
+                         && QFileInfo::exists(BackgroundRemover::modelPath());
+    if (present && r.ok) {
         EXPECT_TRUE(r.usedModel);
         EXPECT_EQ(r.image.size(), img.size());
+    } else {
+        // No ONNX / no model: contract is ok=false + the ORIGINAL image returned.
+        EXPECT_FALSE(r.ok);
+        EXPECT_FALSE(r.error.isEmpty());
+        EXPECT_EQ(r.image.size(), img.size());   // original passed through
     }
-#endif
 }
