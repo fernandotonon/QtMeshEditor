@@ -13,7 +13,10 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
+#include <QFileInfo>
+#include <QSet>
 #include <QFileInfo>
 #include <QMetaObject>
 #include <QMetaType>
@@ -356,6 +359,7 @@ void HDREnvironmentManager::onPrecomputeCompleted(HdrIbl::IblBakeResult result,
 
     emit iblPrecomputeCompleted(fromDiskCache);
 
+    updateSkyBoxMaterial();
     RTShaderHelper::refreshAllPbrMaterialsForHdr();
 }
 
@@ -470,6 +474,58 @@ void HDREnvironmentManager::setWhitePoint(float whitePoint)
     emit tonemapChanged();
 }
 
+QStringList HDREnvironmentManager::listBundledEnvironments()
+{
+    QStringList names;
+    const QStringList searchRoots = [] {
+        QStringList roots;
+        const QString appDir = QCoreApplication::applicationDirPath();
+        roots << appDir + QStringLiteral("/media/hdri")
+              << appDir + QStringLiteral("/../media/hdri");
+#ifdef Q_OS_MACOS
+        roots << appDir + QStringLiteral("/../../media/hdri")
+              << appDir + QStringLiteral("/../../../media/hdri");
+#endif
+#ifdef QTMESH_UT_SOURCE_ROOT
+        roots << QDir(QString::fromUtf8(QTMESH_UT_SOURCE_ROOT)).filePath(QStringLiteral("media/hdri"));
+#endif
+        return roots;
+    }();
+
+    QSet<QString> seen;
+    for (const QString& root : searchRoots) {
+        QDir dir(root);
+        if (!dir.exists())
+            continue;
+        const QFileInfoList entries =
+            dir.entryInfoList({QStringLiteral("*.hdr"), QStringLiteral("*.exr")},
+                              QDir::Files | QDir::Readable,
+                              QDir::Name);
+        for (const QFileInfo& info : entries) {
+            const QString fileName = info.fileName();
+            if (seen.contains(fileName))
+                continue;
+            seen.insert(fileName);
+            names.append(fileName);
+        }
+    }
+    names.sort(Qt::CaseInsensitive);
+    return names;
+}
+
+void HDREnvironmentManager::setBackgroundBlur(float blur)
+{
+    const float clamped = std::clamp(blur, 0.f, 1.f);
+    if (m_backgroundBlur == clamped)
+        return;
+    m_backgroundBlur = clamped;
+    updateSkyBoxMaterial();
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ui.action"),
+        QStringLiteral("hdr.backgroundBlur=%1").arg(clamped));
+    emit backgroundBlurChanged();
+}
+
 void HDREnvironmentManager::setDefaultSkyBoxVisible(bool visible)
 {
     if (m_defaultSkyBoxVisible == visible)
@@ -504,7 +560,14 @@ void HDREnvironmentManager::updateSkyBoxMaterial()
     if (pass->getNumTextureUnitStates() == 0)
         pass->createTextureUnitState();
     auto* tus = pass->getTextureUnitState(0);
-    tus->setTextureName(m_cubemap->getName(), Ogre::TEX_TYPE_CUBE_MAP);
+    if (m_backgroundBlur > 0.001f && m_prefiltered && m_iblReady) {
+        tus->setTextureName(m_prefiltered->getName(), Ogre::TEX_TYPE_CUBE_MAP);
+        const float lod = m_backgroundBlur * m_prefilterMaxLodLevel;
+        tus->setTextureMipmapBias(lod);
+    } else {
+        tus->setTextureName(m_cubemap->getName(), Ogre::TEX_TYPE_CUBE_MAP);
+        tus->setTextureMipmapBias(0.f);
+    }
     tus->setTextureFiltering(Ogre::TFO_TRILINEAR);
     tus->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
 }

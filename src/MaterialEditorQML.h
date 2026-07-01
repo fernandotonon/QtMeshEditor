@@ -110,6 +110,8 @@ class MaterialEditorQML : public QObject
     Q_PROPERTY(float textureVScale READ textureVScale WRITE setTextureVScale NOTIFY textureVScaleChanged)
     Q_PROPERTY(float textureRotation READ textureRotation WRITE setTextureRotation NOTIFY textureRotationChanged)
     Q_PROPERTY(int environmentMapping READ environmentMapping WRITE setEnvironmentMapping NOTIFY environmentMappingChanged)
+    Q_PROPERTY(float pbrEnvIntensity READ pbrEnvIntensity WRITE setPbrEnvIntensity NOTIFY pbrEnvIntensityChanged)
+    Q_PROPERTY(QColor pbrEnvTint READ pbrEnvTint WRITE setPbrEnvTint NOTIFY pbrEnvTintChanged)
     Q_PROPERTY(double rotateAnimSpeed READ rotateAnimSpeed WRITE setRotateAnimSpeed NOTIFY rotateAnimSpeedChanged)
 
     // Theme color properties — derived live from QApplication::palette()
@@ -234,6 +236,8 @@ public:
     float textureVScale() const { return m_textureVScale; }
     float textureRotation() const { return m_textureRotation; }
     int environmentMapping() const { return m_environmentMapping; }
+    float pbrEnvIntensity() const { return m_pbrEnvIntensity; }
+    QColor pbrEnvTint() const { return m_pbrEnvTint; }
     double rotateAnimSpeed() const { return m_rotateAnimSpeed; }
 
     // Theme color getters — read the live QApplication::palette() so the
@@ -351,6 +355,8 @@ public slots:
     void setTextureVScale(float scale);
     void setTextureRotation(float rotation);
     void setEnvironmentMapping(int mapping);
+    void setPbrEnvIntensity(float intensity);
+    void setPbrEnvTint(const QColor& tint);
     void setRotateAnimSpeed(double speed);
     
     // Actions
@@ -695,6 +701,8 @@ signals:
     void textureVScaleChanged();
     void textureRotationChanged();
     void environmentMappingChanged();
+    void pbrEnvIntensityChanged();
+    void pbrEnvTintChanged();
     void rotateAnimSpeedChanged();
     
     // Error and status signals
@@ -874,6 +882,8 @@ private:
     float m_textureVScale = 1.0f;
     float m_textureRotation = 0.0f;
     int m_environmentMapping = 0;
+    float m_pbrEnvIntensity = 1.0f;
+    QColor m_pbrEnvTint = QColor::fromRgbF(1., 1., 1.);
     double m_rotateAnimSpeed = 0.0;
 
     // AI Material Generation

@@ -353,6 +353,9 @@ ApplicationWindow {
                                         case "textureBorder":
                                             MaterialEditorQML.setTextureBorderColor(selectedColor)
                                             break
+                                        case "pbrEnvTint":
+                                            MaterialEditorQML.setPbrEnvTint(selectedColor)
+                                            break
                                     }
                                     
                                     colorPickerPopup.close()
@@ -413,6 +416,9 @@ ApplicationWindow {
                                     break
                                 case "textureBorder":
                                     MaterialEditorQML.setTextureBorderColor(whiteColor)
+                                    break
+                                case "pbrEnvTint":
+                                    MaterialEditorQML.setPbrEnvTint(whiteColor)
                                     break
                             }
                             colorPickerPopup.close()

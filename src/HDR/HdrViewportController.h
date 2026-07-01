@@ -1,5 +1,7 @@
 #pragma once
 
+#include "HDR/HdrTonemap.h"
+
 #include <QObject>
 
 #include <memory>
@@ -21,9 +23,20 @@ public:
     void registerWidget(OgreWidget* widget);
     void unregisterWidget(OgreWidget* widget);
 
+    void setActiveWidget(OgreWidget* widget);
+    OgreWidget* activeWidget() const { return m_activeWidget; }
+
     void setSkyBoxVisible(OgreWidget* widget, bool visible);
     bool skyBoxVisible(const OgreWidget* widget) const;
 
+    bool tonemapOverride(const OgreWidget* widget) const;
+    void setTonemapOverride(OgreWidget* widget, bool enabled);
+    HdrTonemap::Operator tonemapOperator(const OgreWidget* widget) const;
+    void setTonemapOperator(OgreWidget* widget, HdrTonemap::Operator op);
+    float exposureEv(const OgreWidget* widget) const;
+    void setExposureEv(OgreWidget* widget, float exposureEv);
+
+    void tickViewport(OgreWidget* widget);
     void tickActiveViewports();
 
 private slots:
@@ -39,5 +52,6 @@ private:
     void refreshAll();
 
     static HdrViewportController* s_singleton;
+    OgreWidget* m_activeWidget = nullptr;
     std::unordered_map<OgreWidget*, std::unique_ptr<HdrViewportPipeline>> m_pipelines;
 };

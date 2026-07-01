@@ -89,6 +89,9 @@
 #include "SubEntityHighlight.h"
 #include "SpaceCamera.h"
 #include "ViewCube/ViewCubeController.h"
+#include "HDR/HdrViewportOverlay.h"
+#include "HDR/HdrEnvironmentController.h"
+#include "HDR/HdrViewportController.h"
 #include "LLMManager.h"
 #ifdef ENABLE_PS1_RIP
 #include "PS1/runtime/PS1RipSessionWindow.h"
@@ -743,6 +746,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<MaterialPresetLibrary>("PropertiesPanel", 1, 0, "MaterialPresetLibrary",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MaterialPresetLibrary::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<HdrEnvironmentController>("HdrEnvironment", 1, 0, "HdrEnvironmentController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return HdrEnvironmentController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<AIChatManager>("AIChatPanel", 1, 0, "AIChatManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -2423,6 +2430,20 @@ void MainWindow::initToolBar()
     if (!mDockWidgetList.isEmpty())
         m_viewCubeController->setActiveWidget(mDockWidgetList.first()->getOgreWidget());
     m_viewCubeController->setVisible(true);
+
+    m_hdrViewportOverlay = new HdrViewportOverlay(this);
+    for (EditorViewport* vp : mDockWidgetList) {
+        connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget,
+                m_hdrViewportOverlay, &HdrViewportOverlay::setActiveWidget);
+        connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget,
+                [](OgreWidget* widget) {
+                    if (auto* ctrl = HdrViewportController::getSingletonPtr())
+                        ctrl->setActiveWidget(widget);
+                    HdrEnvironmentController::instance()->setActiveWidget(widget);
+                });
+    }
+    if (!mDockWidgetList.isEmpty())
+        m_hdrViewportOverlay->setActiveWidget(mDockWidgetList.first()->getOgreWidget());
 
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
@@ -4605,6 +4626,16 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
     if (m_viewCubeController)
         connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget,
                 m_viewCubeController, &ViewCubeController::setActiveWidget);
+    if (m_hdrViewportOverlay) {
+        connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget,
+                m_hdrViewportOverlay, &HdrViewportOverlay::setActiveWidget);
+        connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget,
+                [](OgreWidget* widget) {
+                    if (auto* ctrl = HdrViewportController::getSingletonPtr())
+                        ctrl->setActiveWidget(widget);
+                    HdrEnvironmentController::instance()->setActiveWidget(widget);
+                });
+    }
 
     if(!mDockWidgetList.isEmpty())
     {

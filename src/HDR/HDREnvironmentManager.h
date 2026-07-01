@@ -73,6 +73,13 @@ public:
     void setWhitePoint(float whitePoint);
     void setDefaultSkyBoxVisible(bool visible);
 
+    /// Background blur for skybox display (0 = sharp env cubemap, 1 = max prefilter mip).
+    float backgroundBlur() const { return m_backgroundBlur; }
+    void setBackgroundBlur(float blur);
+
+    /// Scan bundled HDRIs under `media/hdri/` (Slice F fills the folder; empty until then).
+    static QStringList listBundledEnvironments();
+
     /// Install or refresh the shared scene skybox from the active cubemap.
     void applySkyBox(Ogre::SceneManager* sceneMgr);
     void removeSkyBox(Ogre::SceneManager* sceneMgr);
@@ -85,6 +92,7 @@ signals:
     void iblPrecomputeCompleted(bool fromDiskCache);
     void tonemapChanged();
     void skyboxDefaultChanged();
+    void backgroundBlurChanged();
 
 private slots:
     void onPrecomputeCompleted(HdrIbl::IblBakeResult result,
@@ -124,6 +132,7 @@ private:
     float m_exposureEv = 0.f;
     float m_whitePoint = 1.f;
     bool m_defaultSkyBoxVisible = true;
+    float m_backgroundBlur = 0.f;
     bool m_skyBoxInstalled = false;
 
     Ogre::TexturePtr m_cubemap;

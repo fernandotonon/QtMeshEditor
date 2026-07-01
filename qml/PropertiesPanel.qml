@@ -7,6 +7,7 @@ import EditorMode 1.0
 import MaterialEditorQML 1.0
 import ThemeManager 1.0
 import AssetBrowser 1.0
+import HdrEnvironment 1.0
 
 Rectangle {
     id: root
@@ -683,6 +684,17 @@ Rectangle {
                 expanded: true
 
                 Component.onCompleted: content = decimateComponent
+            }
+
+            // ---- Environment (HDR / IBL, Material mode) ----
+            CollapsibleSection {
+                title: "Environment"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.MaterialMode,
+                    true)
+                expanded: true
+
+                Component.onCompleted: content = hdrEnvironmentComponent
             }
 
             // ---- Material Editor (Material mode) ----
@@ -4226,6 +4238,289 @@ Rectangle {
                 font.pixelSize: 10
                 color: "#60c060"
                 text: ""
+            }
+        }
+    }
+
+    // ---- HDR / IBL Environment (Material mode, Slice E #471) ----
+    Component {
+        id: hdrEnvironmentComponent
+
+        Column {
+            id: hdrEnvCol
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            property bool viewportOverridesExpanded: false
+
+            function bundledIndexForCurrent() {
+                const label = HdrEnvironmentController.currentEnvironmentLabel
+                if (!label || label === "(none)")
+                    return -1
+                return HdrEnvironmentController.bundledEnvironments.indexOf(label)
+            }
+
+            // Environment picker
+            Text {
+                text: "HDRI"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+
+                ThemedComboBox {
+                    id: hdrEnvCombo
+                    width: parent.width - browseBtn.width - 6
+                    height: 22
+                    font.pixelSize: 11
+                    enabled: HdrEnvironmentController.bundledEnvironments.length > 0
+                    model: HdrEnvironmentController.bundledEnvironments
+                    currentIndex: hdrEnvCol.bundledIndexForCurrent()
+                    onActivated: index => {
+                        if (index >= 0 && index < model.length)
+                            HdrEnvironmentController.loadEnvironment(model[index])
+                    }
+                    Connections {
+                        target: HdrEnvironmentController
+                        function onEnvironmentChanged() {
+                            hdrEnvCombo.currentIndex = hdrEnvCol.bundledIndexForCurrent()
+                        }
+                    }
+                }
+
+                Rectangle {
+                    id: browseBtn
+                    width: 58
+                    height: 22
+                    radius: 3
+                    color: browseMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Browse…"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: browseMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: HdrEnvironmentController.browseEnvironment()
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                elide: Text.ElideMiddle
+                color: PropertiesPanelController.textColor
+                opacity: 0.75
+                font.pixelSize: 10
+                text: HdrEnvironmentController.hasEnvironment
+                    ? ("Loaded: " + HdrEnvironmentController.currentEnvironmentLabel)
+                    : "No environment loaded (use Browse or add files to media/hdri/)"
+            }
+
+            Text {
+                visible: HdrEnvironmentController.hasEnvironment && !HdrEnvironmentController.iblReady
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                color: "#c9b64f"
+                font.pixelSize: 10
+                text: "IBL precompute in progress…"
+            }
+
+            // Skybox + background blur
+            CheckBox {
+                width: parent.width - 16
+                text: "Show skybox"
+                enabled: HdrEnvironmentController.hasEnvironment
+                checked: HdrEnvironmentController.defaultSkyBoxVisible
+                onToggled: HdrEnvironmentController.defaultSkyBoxVisible = checked
+                Connections {
+                    target: HdrEnvironmentController
+                    function onSkyboxChanged() {
+                        checked = HdrEnvironmentController.defaultSkyBoxVisible
+                    }
+                }
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                visible: HdrEnvironmentController.hasEnvironment
+
+                Text {
+                    text: "Blur"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    width: 44
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    id: bgBlurSlider
+                    width: parent.width - 44 - blurValue.implicitWidth - 12
+                    from: 0
+                    to: 1
+                    stepSize: 0.05
+                    value: HdrEnvironmentController.backgroundBlur
+                    onMoved: HdrEnvironmentController.backgroundBlur = value
+                    Connections {
+                        target: HdrEnvironmentController
+                        function onBackgroundBlurChanged() {
+                            bgBlurSlider.value = HdrEnvironmentController.backgroundBlur
+                        }
+                    }
+                }
+                Text {
+                    id: blurValue
+                    text: Math.round(bgBlurSlider.value * 100) + "%"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Per-viewport overrides (collapsed by default)
+            Rectangle {
+                width: parent.width - 16
+                height: 22
+                radius: 2
+                color: vpOverrideHeaderMa.containsMouse
+                    ? Qt.lighter(PropertiesPanelController.headerColor, 1.08)
+                    : "transparent"
+                Row {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 4
+                    Text {
+                        text: hdrEnvCol.viewportOverridesExpanded ? "\u25BC" : "\u25B6"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 9
+                    }
+                    Text {
+                        text: "Per-viewport overrides"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        font.bold: true
+                    }
+                }
+                MouseArea {
+                    id: vpOverrideHeaderMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    activeFocusOnTab: true
+                    onClicked: hdrEnvCol.viewportOverridesExpanded = !hdrEnvCol.viewportOverridesExpanded
+                    Keys.onReturnPressed: hdrEnvCol.viewportOverridesExpanded = !hdrEnvCol.viewportOverridesExpanded
+                    Keys.onSpacePressed: hdrEnvCol.viewportOverridesExpanded = !hdrEnvCol.viewportOverridesExpanded
+                }
+            }
+
+            Column {
+                width: parent.width - 16
+                spacing: 6
+                visible: hdrEnvCol.viewportOverridesExpanded
+                leftPadding: 8
+
+                CheckBox {
+                    text: "Viewport skybox"
+                    enabled: HdrEnvironmentController.hasEnvironment
+                    checked: HdrEnvironmentController.activeSkyBoxVisible
+                    onToggled: HdrEnvironmentController.activeSkyBoxVisible = checked
+                    Connections {
+                        target: HdrEnvironmentController
+                        function onViewportOverridesChanged() {
+                            checked = HdrEnvironmentController.activeSkyBoxVisible
+                        }
+                    }
+                }
+
+                CheckBox {
+                    text: "Tonemap override"
+                    enabled: HdrEnvironmentController.hasEnvironment
+                    checked: HdrEnvironmentController.activeTonemapOverride
+                    onToggled: HdrEnvironmentController.activeTonemapOverride = checked
+                    Connections {
+                        target: HdrEnvironmentController
+                        function onViewportOverridesChanged() {
+                            checked = HdrEnvironmentController.activeTonemapOverride
+                        }
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    width: parent.width - 24
+                    visible: HdrEnvironmentController.activeTonemapOverride
+
+                    Text {
+                        text: "Tonemap"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        width: 52
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    ThemedComboBox {
+                        id: vpTonemapCombo
+                        width: parent.width - 52 - 6
+                        height: 22
+                        font.pixelSize: 10
+                        model: ["Reinhard", "ACES", "AgX"]
+                        currentIndex: HdrEnvironmentController.activeTonemapOperator
+                        onActivated: HdrEnvironmentController.activeTonemapOperator = currentIndex
+                        Connections {
+                            target: HdrEnvironmentController
+                            function onViewportOverridesChanged() {
+                                vpTonemapCombo.currentIndex = HdrEnvironmentController.activeTonemapOperator
+                            }
+                        }
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    width: parent.width - 24
+                    visible: HdrEnvironmentController.activeTonemapOverride
+
+                    Text {
+                        text: "Exposure"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        width: 52
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Slider {
+                        id: vpExposureSlider
+                        width: parent.width - 52 - evLabel.implicitWidth - 12
+                        from: -4
+                        to: 4
+                        stepSize: 0.1
+                        value: HdrEnvironmentController.activeExposureEv
+                        onMoved: HdrEnvironmentController.activeExposureEv = value
+                        Connections {
+                            target: HdrEnvironmentController
+                            function onViewportOverridesChanged() {
+                                vpExposureSlider.value = HdrEnvironmentController.activeExposureEv
+                            }
+                        }
+                    }
+                    Text {
+                        id: evLabel
+                        text: vpExposureSlider.value.toFixed(1) + " EV"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
             }
         }
     }

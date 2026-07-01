@@ -67,6 +67,59 @@ void HdrViewportController::setSkyBoxVisible(OgreWidget* widget, bool visible)
         pipe->setSkyBoxVisible(visible);
 }
 
+bool HdrViewportController::tonemapOverride(const OgreWidget* widget) const
+{
+    if (!widget)
+        return false;
+    auto it = m_pipelines.find(const_cast<OgreWidget*>(widget));
+    return it == m_pipelines.end() ? false : it->second->tonemapOverride();
+}
+
+void HdrViewportController::setTonemapOverride(OgreWidget* widget, bool enabled)
+{
+    if (auto* pipe = pipelineFor(widget))
+        pipe->setTonemapOverride(enabled);
+}
+
+HdrTonemap::Operator HdrViewportController::tonemapOperator(const OgreWidget* widget) const
+{
+    if (!widget)
+        return HdrTonemap::Operator::ACES;
+    auto it = m_pipelines.find(const_cast<OgreWidget*>(widget));
+    return it == m_pipelines.end() ? HdrTonemap::Operator::ACES : it->second->tonemapOperator();
+}
+
+void HdrViewportController::setTonemapOperator(OgreWidget* widget, HdrTonemap::Operator op)
+{
+    if (auto* pipe = pipelineFor(widget))
+        pipe->setTonemapOperator(op);
+}
+
+float HdrViewportController::exposureEv(const OgreWidget* widget) const
+{
+    if (!widget)
+        return 0.f;
+    auto it = m_pipelines.find(const_cast<OgreWidget*>(widget));
+    return it == m_pipelines.end() ? 0.f : it->second->exposureEv();
+}
+
+void HdrViewportController::setExposureEv(OgreWidget* widget, float exposureEv)
+{
+    if (auto* pipe = pipelineFor(widget))
+        pipe->setExposureEv(exposureEv);
+}
+
+void HdrViewportController::setActiveWidget(OgreWidget* widget)
+{
+    m_activeWidget = widget;
+}
+
+void HdrViewportController::tickViewport(OgreWidget* widget)
+{
+    if (auto* pipe = pipelineFor(widget))
+        pipe->updateTonemapUniforms();
+}
+
 bool HdrViewportController::skyBoxVisible(const OgreWidget* widget) const
 {
     if (!widget)

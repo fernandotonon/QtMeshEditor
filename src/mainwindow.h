@@ -18,6 +18,7 @@ class MCPServer;
 class NormalVisualizer;
 class MeshInfoOverlay;
 class ViewCubeController;
+class HdrViewportOverlay;
 class PropertiesPanelController;
 class EditModeController;
 class EditorModeController;
@@ -206,6 +207,7 @@ private:
     NormalVisualizer* m_normalVisualizer = nullptr;
     MeshInfoOverlay* m_meshInfoOverlay = nullptr;
     ViewCubeController* m_viewCubeController = nullptr;
+    HdrViewportOverlay* m_hdrViewportOverlay = nullptr;
     MCPServer* m_mcpServer = nullptr;
     QQuickWidget* m_propertiesPanel = nullptr;
     QDockWidget* m_chatDock = nullptr;
