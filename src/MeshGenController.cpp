@@ -8,6 +8,8 @@
 
 #include <OgreSceneNode.h>
 
+#include <QBuffer>
+#include <QByteArray>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImage>
@@ -58,6 +60,44 @@ void MeshGenController::cancel()
         m_cancel = true;
         emit statusMessage(tr("Cancelling…"));
     }
+}
+
+void MeshGenController::selectImage()
+{
+    if (m_busy) return;
+    const QString path = QFileDialog::getOpenFileName(
+        nullptr, tr("Select an image to reconstruct in 3D"), QString(),
+        tr("Images (*.png *.jpg *.jpeg *.bmp *.webp)"),
+        nullptr, QFileDialog::DontUseNativeDialog);
+    if (path.isEmpty()) return;
+
+    m_selectedImage = path;
+
+    // Build a small preview thumbnail as a data:image/png;base64 URL (same idiom
+    // as the texture-packer previews). Fit within 220px so it's a light payload.
+    m_previewSource.clear();
+    QImage img(path);
+    if (!img.isNull()) {
+        const QImage thumb = img.scaled(220, 220, Qt::KeepAspectRatio,
+                                        Qt::SmoothTransformation);
+        QByteArray png;
+        QBuffer buf(&png);
+        buf.open(QIODevice::WriteOnly);
+        if (thumb.save(&buf, "PNG"))
+            m_previewSource = QStringLiteral("data:image/png;base64,")
+                              + QString::fromLatin1(png.toBase64());
+    }
+    emit selectedImageChanged();
+    emit statusMessage(tr("Selected: %1").arg(QFileInfo(path).fileName()));
+}
+
+void MeshGenController::generateSelected(int resolution, bool removeBackground)
+{
+    if (m_selectedImage.isEmpty()) {
+        emit error(tr("Select an image first."));
+        return;
+    }
+    generate(m_selectedImage, resolution, removeBackground);
 }
 
 void MeshGenController::pickImageAndGenerate(int resolution, bool removeBackground)

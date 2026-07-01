@@ -29,6 +29,13 @@ class MeshGenController : public QObject
 
     Q_PROPERTY(bool available READ available CONSTANT)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    // The currently-selected source image (empty until the user picks one). The
+    // panel's "Generate" button binds its enabled state to this being non-empty.
+    Q_PROPERTY(QString selectedImagePath READ selectedImagePath NOTIFY selectedImageChanged)
+    // A small preview thumbnail of the selected image as a data:image/png;base64
+    // URL the QML Image element can show directly (same idiom as the texture
+    // packer previews). Empty when no image is selected.
+    Q_PROPERTY(QString previewSource READ previewSource NOTIFY selectedImageChanged)
 
 public:
     static MeshGenController* instance();
@@ -36,9 +43,21 @@ public:
 
     bool available() const;         // ENABLE_ONNX build
     bool busy() const { return m_busy; }
+    QString selectedImagePath() const { return m_selectedImage; }
+    QString previewSource() const { return m_previewSource; }
 
-    // Open a native file dialog to pick an image and start generation. Convenience
-    // for the panel's "Generate from Image…" button. Returns immediately.
+    // Open a native file dialog to pick a source image; stores it as the selected
+    // image and builds the preview thumbnail (does NOT start generation). Returns
+    // immediately.
+    Q_INVOKABLE void selectImage();
+
+    // Generate from the currently-selected image (selectImage() first). No-op if
+    // nothing selected or already busy. Emits progress → (completed | error).
+    Q_INVOKABLE void generateSelected(int resolution = 256,
+                                      bool removeBackground = true);
+
+    // Open a native file dialog to pick an image and start generation immediately.
+    // Convenience one-shot (kept for callers/tests). Returns immediately.
     Q_INVOKABLE void pickImageAndGenerate(int resolution = 256,
                                           bool removeBackground = true);
 
@@ -53,6 +72,7 @@ public:
 
 signals:
     void busyChanged();
+    void selectedImageChanged();
     // stage: "prep" | "background" | "encode" | "decode" | "surface" | "build"
     void progress(const QString& stage, int done, int total);
     void statusMessage(const QString& message);
@@ -69,6 +89,8 @@ private:
 
     bool m_busy = false;
     std::atomic<bool> m_cancel{false};
+    QString m_selectedImage;    // currently-selected source image path
+    QString m_previewSource;    // data:image/png;base64 thumbnail of it
     static MeshGenController* s_instance;
 
     // Worker→main handoff: the predicted arrays live in a pimpl-ish holder so this

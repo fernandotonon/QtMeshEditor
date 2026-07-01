@@ -1478,6 +1478,38 @@ Rectangle {
             padding: 8
             spacing: 6
 
+            // A small local button factory (raw QML — the Themed* wrappers blank
+            // this dynamically-loaded panel, so we style raw controls with the
+            // PropertiesPanelController palette to match the Inspector).
+            component InspectorButton: Rectangle {
+                property alias text: ibLabel.text
+                property bool clickEnabled: true
+                signal clicked()
+                width: Math.min(parent ? parent.width - 16 : 200, ibLabel.implicitWidth + 20)
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: ibMa.containsMouse && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: ibLabel
+                    anchors.centerIn: parent
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: ibMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: parent.clickEnabled
+                    cursorShape: parent.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: parent.clicked()
+                }
+            }
+
             Text {
                 width: parent.width - 16
                 wrapMode: Text.Wrap
@@ -1485,7 +1517,33 @@ Rectangle {
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: "Reconstruct a 3D mesh from a single image (TripoSR). "
-                    + "Background removal (U²-Net) runs first. Pick an image to start."
+                    + "Select an image, then Generate. Background removal (U²-Net) runs first."
+            }
+
+            // Step 1: select the source image (no generation yet).
+            InspectorButton {
+                text: "Select Image…"
+                clickEnabled: !MeshGenController.busy
+                onClicked: MeshGenController.selectImage()
+            }
+
+            // Preview of the selected image (shown once one is chosen).
+            Rectangle {
+                width: parent.width - 16
+                height: visible ? 140 : 0
+                visible: MeshGenController.selectedImagePath.length > 0
+                color: PropertiesPanelController.inputColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                radius: 3
+                Image {
+                    anchors.fill: parent
+                    anchors.margins: 4
+                    source: MeshGenController.previewSource
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    cache: false
+                }
             }
 
             // Resolution picker — marching-cubes grid resolution. Cost grows with
@@ -1512,51 +1570,56 @@ Rectangle {
                 }
             }
 
-            // Remove-background toggle
+            // Remove-background toggle — styled to match the Inspector (flat 16px
+            // box + checkmark, PropertiesPanelController palette), matching the
+            // ThemedCheckBox look without the wrapper that breaks this panel.
             CheckBox {
                 id: mgRemoveBg
                 text: "Remove background"
                 checked: true
                 enabled: !MeshGenController.busy
+                spacing: 6
+                indicator: Rectangle {
+                    x: mgRemoveBg.leftPadding
+                    y: mgRemoveBg.height / 2 - height / 2
+                    implicitWidth: 16
+                    implicitHeight: 16
+                    radius: 2
+                    color: mgRemoveBg.checked
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    opacity: mgRemoveBg.enabled ? 1.0 : 0.45
+                    Text {
+                        anchors.centerIn: parent
+                        visible: mgRemoveBg.checked
+                        text: "✓"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                }
                 contentItem: Text {
                     text: mgRemoveBg.text
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 11
-                    leftPadding: mgRemoveBg.indicator.width + 4
+                    leftPadding: mgRemoveBg.indicator.width + mgRemoveBg.spacing
                     verticalAlignment: Text.AlignVCenter
                 }
             }
 
-            Rectangle {
-                id: mgBtn
-                width: Math.min(parent.width - 16, mgLabel.implicitWidth + 16)
-                height: 26
-                radius: 3
-                opacity: MeshGenController.busy ? 0.45 : 1.0
-                color: mgMa.containsMouse && !MeshGenController.busy
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
-                Text {
-                    id: mgLabel
-                    anchors.centerIn: parent
-                    text: "Generate from Image…"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                MouseArea {
-                    id: mgMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    enabled: !MeshGenController.busy
-                    cursorShape: MeshGenController.busy ? Qt.BusyCursor : Qt.PointingHandCursor
-                    onClicked: MeshGenController.pickImageAndGenerate(
-                        mgResCombo.resValue, mgRemoveBg.checked)
-                }
+            // Step 2: generate from the selected image. Disabled until one is
+            // picked (or while busy).
+            InspectorButton {
+                text: "Generate 3D"
+                clickEnabled: !MeshGenController.busy
+                    && MeshGenController.selectedImagePath.length > 0
+                onClicked: MeshGenController.generateSelected(
+                    mgResCombo.resValue, mgRemoveBg.checked)
             }
 
-            // Progress bar + status (only while busy)
+            // Progress bar (only while busy)
             ProgressBar {
                 id: mgProgress
                 width: parent.width - 16
@@ -1576,29 +1639,11 @@ Rectangle {
                 text: ""
             }
 
-            Rectangle {
-                width: Math.min(parent.width - 16, 80)
-                height: 22
-                radius: 3
+            // Cancel (only while busy)
+            InspectorButton {
+                text: "Cancel"
                 visible: MeshGenController.busy
-                color: mgCancelMa.containsMouse
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
-                Text {
-                    anchors.centerIn: parent
-                    text: "Cancel"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                MouseArea {
-                    id: mgCancelMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: MeshGenController.cancel()
-                }
+                onClicked: MeshGenController.cancel()
             }
 
             Connections {
