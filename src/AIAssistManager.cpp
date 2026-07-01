@@ -4,6 +4,12 @@
 #include "TextureUpscaler.h"
 #include "ModelDownloader.h"
 #include "SentryReporter.h"
+#include "MeshGenPredictor.h"
+#include "MeshGenBuilder.h"
+#include "MeshImporterExporter.h"
+#include "CLIPipeline.h"
+
+#include <OgreSceneNode.h>
 
 #include <QStandardPaths>
 #include <QDir>
@@ -356,5 +362,69 @@ QString AIAssistManager::upscaleTexture(const QString& srcPath, int scale, bool 
         return failUp(tr("Could not write the upscaled image."));
     emit upscaleCompleted(outPath);
     return outPath;
+#endif
+}
+
+QVariantMap AIAssistManager::generateMeshFromImage(const QString& imagePath,
+                                                   int resolution, bool vertexColor,
+                                                   const QString& outputPath)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
+        QStringLiteral("generateMeshFromImage %1 res=%2")
+            .arg(QFileInfo(imagePath).fileName()).arg(resolution));
+    emit meshGenStarted();
+
+    auto fail = [&](const QString& msg) -> QVariantMap {
+        emit meshGenError(msg);
+        return {{"ok", false}, {"error", msg}};
+    };
+
+#ifndef ENABLE_ONNX
+    Q_UNUSED(resolution); Q_UNUSED(vertexColor); Q_UNUSED(outputPath);
+    return fail(tr("Image-to-3D is not enabled. Rebuild with -DENABLE_ONNX=ON."));
+#else
+    if (!QFileInfo::exists(imagePath))
+        return fail(tr("Image not found: %1").arg(imagePath));
+    if (resolution < 16 || resolution > 512)
+        return fail(tr("Resolution must be between 16 and 512."));
+
+    // Download the model on first use (blocks on the calling thread's event loop).
+    const QString enc = MeshGenPredictor::ensureModelBlocking();
+    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent())
+        return fail(tr("TripoSR model unavailable — it downloads on first use; if it "
+                       "is not hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL or drop "
+                       "the files in the ai_models/triposr/ cache."));
+
+    const QImage image(imagePath);
+    if (image.isNull())
+        return fail(tr("Could not load image: %1").arg(imagePath));
+
+    MeshGenPredictor::Options opts;
+    opts.sdfResolution = resolution;
+    opts.vertexColor   = vertexColor;
+    const MeshGenPredictor::Result res = MeshGenPredictor::predict(
+        image, MeshGenPredictor::encoderModelPath(),
+        MeshGenPredictor::decoderModelPath(), opts);
+    if (!res.ok)
+        return fail(res.error.isEmpty() ? tr("Image-to-3D failed.") : res.error);
+
+    Ogre::SceneNode* node =
+        MeshGenBuilder::buildSceneNode(res, QStringLiteral("qtmesh_gen3d"));
+    if (!node)
+        return fail(tr("Failed to build mesh from prediction."));
+
+    QVariantMap result{
+        {"ok", true},
+        {"vertexCount", res.vertexCount},
+        {"triangleCount", res.triangleCount},
+    };
+    if (!outputPath.trimmed().isEmpty()) {
+        const QString fmt = CLIPipeline::formatForExtension(outputPath);
+        if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0)
+            return fail(tr("Export failed: %1").arg(outputPath));
+        result["meshPath"] = QFileInfo(outputPath).absoluteFilePath();
+    }
+    emit meshGenCompleted(result);
+    return result;
 #endif
 }

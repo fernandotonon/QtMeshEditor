@@ -90,6 +90,9 @@
 #include "SpaceCamera.h"
 #include "ViewCube/ViewCubeController.h"
 #include "LLMManager.h"
+#ifdef ENABLE_ONNX
+#include "AIAssistManager.h"
+#endif
 #ifdef ENABLE_PS1_RIP
 #include "PS1/runtime/PS1RipSessionWindow.h"
 #endif
@@ -2511,9 +2514,19 @@ void MainWindow::initToolBar()
     // during initToolBar competes with Ogre + QML startup on the main thread.
     QTimer::singleShot(0, this, []() { LLMManager::instance(); });
 
-#ifdef ENABLE_PS1_RIP
+#if defined(ENABLE_PS1_RIP) || defined(ENABLE_ONNX)
     QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
     toolsMenu->setObjectName(QStringLiteral("menuTools"));
+#endif
+
+#ifdef ENABLE_ONNX
+    // Image-to-3D (epic #764, TripoSR). Picks an image, generates a mesh, loads it.
+    QAction *gen3dAction = toolsMenu->addAction(tr("Generate 3D from Image…"));
+    gen3dAction->setObjectName(QStringLiteral("actionGenerate3DFromImage"));
+    connect(gen3dAction, &QAction::triggered, this, &MainWindow::on_actionGenerate3DFromImage_triggered);
+#endif
+
+#ifdef ENABLE_PS1_RIP
     QMenu *experimentalMenu = toolsMenu->addMenu(tr("Experimental"));
     QAction *ps1RipAction = experimentalMenu->addAction(tr("PS1 Runtime Ripper…"));
     ps1RipAction->setObjectName(QStringLiteral("actionPS1RuntimeRipper"));
@@ -3901,6 +3914,39 @@ void MainWindow::on_actionImport_triggered()
         addToRecentFiles(f);
     mUriList.append(fileNames);
 }
+
+#ifdef ENABLE_ONNX
+void MainWindow::on_actionGenerate3DFromImage_triggered()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        QStringLiteral("Tools > Generate 3D from Image"));
+
+    const QString imagePath = QFileDialog::getOpenFileName(this,
+        tr("Select an image to reconstruct in 3D"), "",
+        tr("Images (*.png *.jpg *.jpeg *.bmp *.webp)"),
+        nullptr, QFileDialog::DontUseNativeDialog);
+    if (imagePath.isEmpty())
+        return;
+
+    // TripoSR reconstructs at a fixed cost; res 256 is the default. Run on the
+    // GUI thread (ensureModelBlocking needs an event loop; inference is CPU-bound
+    // but tolerable). A busy cursor signals the wait.
+    QApplication::setOverrideCursor(Qt::BusyCursor);
+    const QVariantMap r = AIAssistManager::instance()->generateMeshFromImage(imagePath, 256, true);
+    QApplication::restoreOverrideCursor();
+
+    if (!r.value("ok").toBool()) {
+        QMessageBox::warning(this, tr("Generate 3D from Image"),
+            tr("Could not generate a mesh:\n%1").arg(r.value("error").toString()));
+        return;
+    }
+    // The mesh is already attached to the scene by MeshGenBuilder; just report.
+    statusBar()->showMessage(
+        tr("Generated 3D mesh: %1 verts, %2 tris")
+            .arg(r.value("vertexCount").toInt()).arg(r.value("triangleCount").toInt()),
+        5000);
+}
+#endif
 // LCOV_EXCL_STOP
 
 void MainWindow::loadFile(const QString& filePath)

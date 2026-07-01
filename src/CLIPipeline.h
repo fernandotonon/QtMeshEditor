@@ -222,6 +222,13 @@ public:
     /// --json emits the full vertex/face → label arrays.
     static int cmdSegment(int argc, char* argv[]);
 
+    /// AI image-to-3D (epic #764, TripoSR via ONNX): generate a mesh from a
+    /// single image. `generate3d <image> [-o out.glb] [--resolution 256]
+    /// [--no-color] [--no-model]`. Default output = <image>.glb. Requires an
+    /// ENABLE_ONNX build + the TripoSR model (downloads on first use / clear
+    /// message when not hosted).
+    static int cmdGenerate3d(int argc, char* argv[]);
+
     /// List the morph targets / blend shapes on a mesh file. Slice A1
     /// surfaces a `--list` mode only; subsequent slices add `--set`,
     /// `--add`, `--delete` once the in-memory authoring path lands.

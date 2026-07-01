@@ -136,6 +136,8 @@ ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
 MarchingCubes.cpp
+MeshGenPredictor.cpp
+MeshGenBuilder.cpp
 PbrMapSynth.cpp
 TextureUpscaler.cpp
 AIAssistManager.cpp

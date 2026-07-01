@@ -93,6 +93,18 @@ public:
     /// Returns the model path, or empty if it couldn't be made available.
     QString ensureUpscaleModel(int scale);
 
+    // ── #764: image-to-3D mesh generation (TripoSR) ─────────────────────────
+    /// Generate a 3D mesh from a single image via the TripoSR ONNX models
+    /// (downloaded on first use). Builds the mesh, loads it into the scene, and
+    /// (when `outputPath` is non-empty) exports it. Synchronous; emits
+    /// meshGenStarted / meshGenCompleted / meshGenError. Returns a QVariantMap
+    /// {ok, error, vertexCount, triangleCount, meshPath}. `resolution` is the
+    /// marching-cubes grid resolution (16..512).
+    Q_INVOKABLE QVariantMap generateMeshFromImage(const QString& imagePath,
+                                                  int resolution = 256,
+                                                  bool vertexColor = true,
+                                                  const QString& outputPath = {});
+
 signals:
     void modelReadyChanged();
     void modelDownloadProgress(qint64 received, qint64 total);
@@ -102,6 +114,9 @@ signals:
     void upscaleStarted();
     void upscaleCompleted(const QString& outputPath);
     void upscaleError(const QString& error);
+    void meshGenStarted();
+    void meshGenCompleted(QVariantMap result);
+    void meshGenError(const QString& error);
 
 private:
     explicit AIAssistManager(QObject* parent = nullptr);

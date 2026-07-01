@@ -29,6 +29,8 @@
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
 #include "AutoRig.h"
+#include "MeshGenPredictor.h"
+#include "MeshGenBuilder.h"
 #include "MeshSegmenter.h"
 #include "MeshDecimator.h"
 #include "EditableMesh.h"
@@ -1510,6 +1512,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);
     else if (cmd == "segment") rc = cmdSegment(argc, argv);
+    else if (cmd == "generate3d") rc = cmdGenerate3d(argc, argv);
     else if (cmd == "morph") rc = cmdMorph(argc, argv);
     else if (cmd == "nodeanim") rc = cmdNodeAnim(argc, argv);
     else if (cmd == "cloud") rc = CloudCLIPipeline::run(argc, argv);
@@ -8708,6 +8711,122 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
     return 0;
+}
+
+int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
+{
+    // Parse: generate3d <image> [-o out.glb] [--resolution N] [--no-color] [--no-model]
+    QString inputPath, outputPath;
+    int resolution = 256;
+    bool vertexColor = true;
+    bool noModel = false;
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == "generate3d" || arg == "--cli") continue;
+        if (arg == "--no-color") { vertexColor = false; continue; }
+        if (arg == "--no-model") { noModel = true; continue; }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString::fromLocal8Bit(argv[++i]); continue;
+        }
+        if (arg == "--resolution") {
+            if (i + 1 >= argc) {
+                err() << "Error: --resolution requires a value (e.g. 128, 256)." << Qt::endl;
+                return 2;
+            }
+            bool okNum = false;
+            resolution = QString::fromLocal8Bit(argv[++i]).toInt(&okNum);
+            if (!okNum || resolution < 16 || resolution > 512) {
+                err() << "Error: --resolution must be an integer in [16..512]." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) { inputPath = arg; continue; }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input image specified." << Qt::endl;
+        err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
+                 "[--no-color] [--no-model]" << Qt::endl;
+        return 2;
+    }
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: image not found: " << inputPath << Qt::endl; return 1;
+    }
+    // Default output: <image>.glb next to the input.
+    if (outputPath.isEmpty())
+        outputPath = fi.absolutePath() + "/" + fi.completeBaseName() + ".glb";
+
+#ifndef ENABLE_ONNX
+    Q_UNUSED(resolution); Q_UNUSED(vertexColor); Q_UNUSED(noModel);
+    err() << "Error: this build was compiled without AI image-to-3D generation "
+             "(rebuild with -DENABLE_ONNX=ON)." << Qt::endl;
+    return 1;
+#else
+    if (noModel) {
+        err() << "Error: --no-model given but TripoSR has no non-model fallback "
+                 "(unlike segmentation/in-betweening). Remove --no-model." << Qt::endl;
+        return 2;
+    }
+    QImage image(fi.absoluteFilePath());
+    if (image.isNull()) {
+        err() << "Error: failed to read image: " << inputPath << Qt::endl; return 1;
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
+        QString("generate3d .%1 res=%2 color=%3")
+            .arg(fi.suffix()).arg(resolution).arg(vertexColor));
+
+    // Download the model on first use (blocks; clear message when not hosted).
+    const QString enc = MeshGenPredictor::ensureModelBlocking();
+    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent()) {
+        err() << "  (looked for models in: "
+              << QFileInfo(MeshGenPredictor::encoderModelPath()).absolutePath()
+              << ")" << Qt::endl;
+        err() << "Error: TripoSR model unavailable. It downloads on first use from "
+                 "the QtMeshEditor models repo; if it is not hosted yet, export it "
+                 "with scripts/export-triposr-onnx.py and point "
+                 "QTMESH_TRIPOSR_MODEL_BASE_URL (or ai/triposrModelBaseUrl) at it, "
+                 "or drop the files in the ai_models/triposr/ cache." << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    MeshGenPredictor::Options opts;
+    opts.sdfResolution = resolution;
+    opts.vertexColor   = vertexColor;
+    const MeshGenPredictor::Result res = MeshGenPredictor::predict(
+        image, MeshGenPredictor::encoderModelPath(),
+        MeshGenPredictor::decoderModelPath(), opts);
+    if (!res.ok) {
+        err() << "Error: image-to-3D failed: " << res.error << Qt::endl;
+        return 1;
+    }
+
+    Ogre::SceneNode* node =
+        MeshGenBuilder::buildSceneNode(res, QStringLiteral("qtmesh_gen3d"));
+    if (!node) {
+        err() << "Error: failed to build mesh from prediction." << Qt::endl;
+        return 1;
+    }
+
+    const QString fmt = formatForExtension(outputPath);
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QString("Exporting %1").arg(QFileInfo(outputPath).absoluteFilePath()));
+    if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed." << Qt::endl;
+        return 1;
+    }
+
+    cliWrite(QString("Generated 3D mesh: %1 verts, %2 tris%3\nWrote: %4\n")
+                 .arg(res.vertexCount).arg(res.triangleCount)
+                 .arg(res.colors.empty() ? QString() : QStringLiteral(" (+vertex color)"))
+                 .arg(QFileInfo(outputPath).fileName()));
+    return 0;
+#endif
 }
 
 int CLIPipeline::cmdSegment(int argc, char* argv[])
