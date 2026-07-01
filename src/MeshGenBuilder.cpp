@@ -4,8 +4,11 @@
 
 #include <OgreEntity.h>
 #include <OgreHardwareBufferManager.h>
+#include <OgreMaterialManager.h>
 #include <OgreMesh.h>
 #include <OgreMeshManager.h>
+#include <OgrePass.h>
+#include <OgreTechnique.h>
 #include <OgreRoot.h>
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
@@ -144,6 +147,29 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     sub->indexData->indexBuffer = ibuf;
     sub->indexData->indexCount  = idxCount;
     sub->indexData->indexStart  = 0;
+
+    // When the mesh carries per-vertex color (TripoSR's predicted vertex color),
+    // assign a lit material that TRACKS the diffuse channel from VES_DIFFUSE —
+    // otherwise the default white material ignores the colors and the mesh renders
+    // flat-white in the viewport. A shared named material (created once) keeps
+    // lighting on so the surface still shades; the vertex color modulates it.
+    if (hasColor) {
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        const char* kMat = "MeshGen/VertexColor";
+        Ogre::MaterialPtr vc = matMgr.getByName(kMat);
+        if (!vc) {
+            vc = matMgr.create(kMat, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            auto* pass = vc->getTechnique(0)->getPass(0);
+            pass->setLightingEnabled(true);
+            // Track diffuse (and ambient, so unlit-ish areas still show color)
+            // from the per-vertex VES_DIFFUSE channel.
+            pass->setVertexColourTracking(
+                Ogre::TVC_DIFFUSE | Ogre::TVC_AMBIENT);
+            pass->setCullingMode(Ogre::CULL_CLOCKWISE);
+            vc->compile();
+        }
+        sub->setMaterialName(kMat, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    }
 
     Ogre::AxisAlignedBox aabb(mn, mx);
     mesh->_setBounds(aabb);

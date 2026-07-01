@@ -101,9 +101,6 @@ public:
     
 private slots:
     void on_actionImport_triggered();
-#ifdef ENABLE_ONNX
-    void on_actionGenerate3DFromImage_triggered();   // #764 image-to-3D
-#endif
     void on_actionOpen_Scene_triggered();
     void on_actionSave_Scene_triggered();
     void on_actionMaterial_Editor_triggered();

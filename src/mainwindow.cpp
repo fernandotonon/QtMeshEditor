@@ -122,6 +122,7 @@
 #include "VATBakerController.h"
 #include "ThemeManager.h"
 #include "IsometricSpritesController.h"
+#include "MeshGenController.h"
 #include "MorphAnimationManager.h"
 #include "EditorModeController.h"
 #include "QtMeshCloudClient.h"
@@ -794,6 +795,10 @@ void MainWindow::initToolBar()
                 emit IsometricSpritesController::instance()->outputPathPicked(chosen);
             });
         });
+        qmlRegisterSingletonType<MeshGenController>("PropertiesPanel", 1, 0, "MeshGenController",
+            [](QQmlEngine* engine, QJSEngine* js) -> QObject* {
+                return MeshGenController::create(engine, js);
+            });
         qmlRegisterSingletonType<MorphAnimationManager>("PropertiesPanel", 1, 0, "MorphAnimationManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MorphAnimationManager::qmlInstance(engine, nullptr);
@@ -2514,19 +2519,12 @@ void MainWindow::initToolBar()
     // during initToolBar competes with Ogre + QML startup on the main thread.
     QTimer::singleShot(0, this, []() { LLMManager::instance(); });
 
-#if defined(ENABLE_PS1_RIP) || defined(ENABLE_ONNX)
-    QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
-    toolsMenu->setObjectName(QStringLiteral("menuTools"));
-#endif
-
-#ifdef ENABLE_ONNX
-    // Image-to-3D (epic #764, TripoSR). Picks an image, generates a mesh, loads it.
-    QAction *gen3dAction = toolsMenu->addAction(tr("Generate 3D from Image…"));
-    gen3dAction->setObjectName(QStringLiteral("actionGenerate3DFromImage"));
-    connect(gen3dAction, &QAction::triggered, this, &MainWindow::on_actionGenerate3DFromImage_triggered);
-#endif
+    // Image-to-3D (epic #764) lives in the Object-mode "Mode Tools" panel
+    // (qml/PropertiesPanel.qml → MeshGenController), not a Tools-menu item.
 
 #ifdef ENABLE_PS1_RIP
+    QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
+    toolsMenu->setObjectName(QStringLiteral("menuTools"));
     QMenu *experimentalMenu = toolsMenu->addMenu(tr("Experimental"));
     QAction *ps1RipAction = experimentalMenu->addAction(tr("PS1 Runtime Ripper…"));
     ps1RipAction->setObjectName(QStringLiteral("actionPS1RuntimeRipper"));
@@ -3914,43 +3912,6 @@ void MainWindow::on_actionImport_triggered()
         addToRecentFiles(f);
     mUriList.append(fileNames);
 }
-
-#ifdef ENABLE_ONNX
-void MainWindow::on_actionGenerate3DFromImage_triggered()
-{
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-        QStringLiteral("Tools > Generate 3D from Image"));
-
-    const QString imagePath = QFileDialog::getOpenFileName(this,
-        tr("Select an image to reconstruct in 3D"), "",
-        tr("Images (*.png *.jpg *.jpeg *.bmp *.webp)"),
-        nullptr, QFileDialog::DontUseNativeDialog);
-    if (imagePath.isEmpty())
-        return;
-
-    // TripoSR reconstructs at a fixed cost; res 256 is the default. Run on the
-    // GUI thread (ensureModelBlocking needs an event loop; inference is CPU-bound
-    // but tolerable). A busy cursor signals the wait.
-    // Default background removal ON in the GUI: the file picker accepts arbitrary
-    // photos, and TripoSR needs an isolated subject. (Falls back to the raw image
-    // if the U²-Net model isn't available.)
-    QApplication::setOverrideCursor(Qt::BusyCursor);
-    const QVariantMap r = AIAssistManager::instance()->generateMeshFromImage(
-        imagePath, 256, /*vertexColor*/ true, /*removeBackground*/ true);
-    QApplication::restoreOverrideCursor();
-
-    if (!r.value("ok").toBool()) {
-        QMessageBox::warning(this, tr("Generate 3D from Image"),
-            tr("Could not generate a mesh:\n%1").arg(r.value("error").toString()));
-        return;
-    }
-    // The mesh is already attached to the scene by MeshGenBuilder; just report.
-    statusBar()->showMessage(
-        tr("Generated 3D mesh: %1 verts, %2 tris")
-            .arg(r.value("vertexCount").toInt()).arg(r.value("triangleCount").toInt()),
-        5000);
-}
-#endif
 // LCOV_EXCL_STOP
 
 void MainWindow::loadFile(const QString& filePath)

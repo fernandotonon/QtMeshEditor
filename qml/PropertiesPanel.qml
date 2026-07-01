@@ -262,6 +262,13 @@ Rectangle {
         }
     }
 
+    // On load, honor the current mode's default tab (e.g. Object mode → Mode
+    // Tools now that it has tools). Without this the panel always started on the
+    // Inspector tab because onModeChanged only fires on a subsequent mode switch.
+    Component.onCompleted: {
+        root.currentTab = root.defaultTabForMode(EditorModeController.currentMode)
+    }
+
     ScrollView {
         anchors.fill: parent
         clip: true
@@ -467,6 +474,17 @@ Rectangle {
                 expanded: true
 
                 Component.onCompleted: content = editModeToolsComponent
+            }
+
+            // ---- AI: Image → 3D (epic #764, Object mode) ----
+            CollapsibleSection {
+                title: "AI: Image → 3D"
+                sectionVisible: root.currentTab === root.modeToolsTab
+                    && MeshGenController.available
+                    && root.modeToolMatches(EditorModeController.ObjectMode)
+                expanded: false
+
+                Component.onCompleted: content = meshGenToolsComponent
             }
 
             // ---- VAT ----
@@ -1445,6 +1463,156 @@ Rectangle {
                         ? "Render an isometric directions×frames PNG atlas from the live scene."
                         : "Select a mesh first."
                 }
+            }
+        }
+    }
+
+    // ---- AI: Image → 3D Content (Object mode, epic #764) ----
+    // Runs TripoSR on a worker thread (MeshGenController) so the app stays
+    // responsive; shows a staged progress bar + Cancel.
+    Component {
+        id: meshGenToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Reconstruct a 3D mesh from a single image (TripoSR). "
+                    + "Background removal (U²-Net) runs first. Pick an image to start."
+            }
+
+            // Resolution picker
+            Row {
+                spacing: 6
+                Text {
+                    text: "Resolution"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ComboBox {
+                    id: mgResCombo
+                    width: 90
+                    model: ["128 (fast)", "256", "320"]
+                    currentIndex: 1
+                    enabled: !MeshGenController.busy
+                    property int resValue: [128, 256, 320][currentIndex]
+                }
+            }
+
+            // Remove-background toggle
+            CheckBox {
+                id: mgRemoveBg
+                text: "Remove background"
+                checked: true
+                enabled: !MeshGenController.busy
+                contentItem: Text {
+                    text: mgRemoveBg.text
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    leftPadding: mgRemoveBg.indicator.width + 4
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            // Generate button
+            Rectangle {
+                id: mgBtn
+                width: Math.min(parent.width - 16, mgLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                opacity: MeshGenController.busy ? 0.45 : 1.0
+                color: mgMa.containsMouse && !MeshGenController.busy
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    id: mgLabel
+                    anchors.centerIn: parent
+                    text: "Generate from Image…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: mgMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: !MeshGenController.busy
+                    cursorShape: MeshGenController.busy ? Qt.BusyCursor : Qt.PointingHandCursor
+                    onClicked: MeshGenController.pickImageAndGenerate(
+                        mgResCombo.resValue, mgRemoveBg.checked)
+                }
+            }
+
+            // Progress bar + status (only while busy)
+            ProgressBar {
+                id: mgProgress
+                width: parent.width - 16
+                visible: MeshGenController.busy
+                from: 0; to: 1
+                indeterminate: value <= 0
+                value: 0
+            }
+
+            Text {
+                id: mgStatus
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                visible: text.length > 0
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: ""
+            }
+
+            // Cancel (only while busy)
+            Rectangle {
+                width: Math.min(parent.width - 16, 80)
+                height: 22
+                radius: 3
+                visible: MeshGenController.busy
+                color: mgCancelMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    anchors.centerIn: parent
+                    text: "Cancel"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: mgCancelMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: MeshGenController.cancel()
+                }
+            }
+
+            Connections {
+                target: MeshGenController
+                function onProgress(stage, done, total) {
+                    if (total > 0 && done >= 0) {
+                        mgProgress.indeterminate = (stage === "prep" || stage === "background")
+                        mgProgress.value = total > 0 ? (done / total) : 0
+                    }
+                }
+                function onStatusMessage(msg) { mgStatus.text = msg }
+                function onCompleted(result) {
+                    mgProgress.value = 1
+                    mgStatus.text = "Done: " + result.vertexCount + " verts, "
+                        + result.triangleCount + " tris"
+                }
+                function onError(msg) { mgStatus.text = "Error: " + msg }
             }
         }
     }

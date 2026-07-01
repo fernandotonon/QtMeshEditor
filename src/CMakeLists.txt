@@ -138,6 +138,7 @@ NormalMapGenerator.cpp
 MarchingCubes.cpp
 MeshGenPredictor.cpp
 MeshGenBuilder.cpp
+MeshGenController.cpp
 BackgroundRemover.cpp
 PbrMapSynth.cpp
 TextureUpscaler.cpp
@@ -317,6 +318,7 @@ MaterialPreviewRenderer.h
 ModelTurntableRenderer.h
 ModelIsometricRenderer.h
 IsometricSpritesController.h
+MeshGenController.h
 EditableMesh.h
 EditModeController.h
 EditorModeController.h

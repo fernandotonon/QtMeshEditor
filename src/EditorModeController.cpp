@@ -137,7 +137,9 @@ bool EditorModeController::modeHasModeTools(int mode) const
     if (!isValidMode(mode))
         return false;
 
-    return mode == EditMode
+    // ObjectMode gained a Mode Tools section with the image-to-3D tool (#764).
+    return mode == ObjectMode
+        || mode == EditMode
         || mode == AnimationMode
         || mode == MaterialMode
         || mode == ValidationMode;
