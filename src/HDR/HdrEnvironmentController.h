@@ -96,8 +96,6 @@ signals:
     void backgroundBlurChanged();
     void viewportOverridesChanged();
     void overlayVisibleChanged();
-    /// MainWindow opens the native picker (parented + non-native on Linux).
-    void browseRequested();
 
 private:
     explicit HdrEnvironmentController(QObject* parent = nullptr);

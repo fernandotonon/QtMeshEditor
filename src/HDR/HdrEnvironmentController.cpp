@@ -5,10 +5,13 @@
 #include "SentryReporter.h"
 
 #include <algorithm>
+#include <QApplication>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QQmlEngine>
 #include <QSettings>
 #include <QSet>
+#include <QWidget>
 
 namespace {
 constexpr QLatin1String kRecentPathsKey("HdrEnvironment/recentPaths");
@@ -425,8 +428,38 @@ QString HdrEnvironmentController::browseStartDirectory() const
 
 void HdrEnvironmentController::browseForEnvironment()
 {
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("hdr.browseRequested"));
-    emit browseRequested();
+    // Match VATBakerController::chooseOutputDir / MaterialEditorQML file
+    // pickers: raise the active window and parent the dialog to it. Parenting
+    // to MainWindow from a deferred slot centers a window-modal Qt dialog on
+    // the main frame and drags the whole app when moved.
+    QApplication::processEvents();
+    QWidget* parent = QApplication::activeWindow();
+    if (parent) {
+        parent->raise();
+        parent->activateWindow();
+    }
+    QApplication::processEvents();
+
+    QFileDialog::Options options = QFileDialog::DontUseCustomDirectoryIcons;
+#ifdef Q_OS_MACOS
+    // Native pickers hosted from QQuickWidget have been observed to no-op on macOS.
+    options |= QFileDialog::DontUseNativeDialog;
+#endif
+
+    const QString path = QFileDialog::getOpenFileName(
+        parent,
+        tr("Select HDR Environment"),
+        browseStartDirectory(),
+        tr("HDR Images (*.hdr *.exr);;All Files (*)"),
+        nullptr,
+        options);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  path.isEmpty()
+                                      ? QStringLiteral("hdr.browseCancelled")
+                                      : QStringLiteral("hdr.browseAccepted=%1")
+                                            .arg(QFileInfo(path).fileName()));
+    completeBrowseFromDialog(path);
 }
 
 QString HdrEnvironmentController::browseEnvironment()
