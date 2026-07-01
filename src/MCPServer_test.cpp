@@ -49,12 +49,34 @@ static bool isError(const QJsonObject &result)
     return result["isError"].toBool(false);
 }
 
+// A single MCP response can exceed the OS default pipe capacity (64 KiB on
+// Linux, 4 KiB on Windows). MCPServer::sendResponse writes the whole payload
+// with a blocking write(), and these tests read only AFTER processMessage()
+// returns — so a response larger than the pipe buffer deadlocks the write
+// (nothing is draining it yet). tools/list already serialises ~90 verbose tool
+// schemas well past 64 KiB, which hung MCPServerProtocolTest until the 20-min
+// CI wall-clock cap SIGKILLed it. Size the pipe large enough that any single
+// response fits in one buffered write. (Production isn't affected: the real MCP
+// client drains stdout continuously.)
+static constexpr int kTestPipeCapacity = 1 << 20; // 1 MiB
+
 static int createPipe(int pipeFds[2])
 {
 #ifdef Q_OS_WIN
-    return _pipe(pipeFds, 4096, _O_BINARY);
+    return _pipe(pipeFds, kTestPipeCapacity, _O_BINARY);
 #else
-    return pipe(pipeFds);
+    const int rc = pipe(pipeFds);
+#if defined(Q_OS_LINUX) && defined(F_SETPIPE_SZ)
+    if (rc == 0) {
+        // Best-effort enlarge; capped by /proc/sys/fs/pipe-max-size. If it fails
+        // (permission) the pipe keeps its default 64 KiB — the huge tools/list
+        // response relies on this, and the cap is 1 MiB by default so it
+        // succeeds on CI. F_SETPIPE_SZ is Linux-only; macOS pipes have a larger
+        // default and are not the CI target for this suite.
+        ::fcntl(pipeFds[1], F_SETPIPE_SZ, kTestPipeCapacity);
+    }
+#endif
+    return rc;
 #endif
 }
 
