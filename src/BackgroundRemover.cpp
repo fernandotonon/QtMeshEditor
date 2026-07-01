@@ -173,6 +173,18 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
         const char* inN[]  = { inName.get() };
         const char* outN[] = { outName.get() };
         auto out = session.Run(Ort::RunOptions{nullptr}, inN, &inTensor, 1, outN, 1);
+
+        // Validate the output tensor before reading it: a corrupt/wrong model could
+        // return a non-float or too-small buffer, and the mask walk below would read
+        // out of bounds. Require a float tensor with at least kNet*kNet elements.
+        {
+            const auto ti = out[0].GetTensorTypeAndShapeInfo();
+            if (ti.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+                || ti.GetElementCount() < plane) {
+                r.error = QStringLiteral("U2Net output shape/type unexpected — using image as-is.");
+                return r;   // r.image is still the original
+            }
+        }
         const float* mask = out[0].GetTensorData<float>();   // [1,1,320,320], values ~[0,1]
 
         // u2net saliency is already ~[0,1] but not guaranteed; min-max normalize.

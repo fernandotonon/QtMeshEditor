@@ -98,13 +98,18 @@ TEST(MeshGenPredictorTest, InferenceProducesMeshWhenModelPresent)
     MeshGenPredictor::Options o;
     o.sdfResolution = 64;   // small = fast for the test
     auto r = MeshGenPredictor::predict(img, enc, dec, o);
-    // A blank image may legitimately produce an empty surface; only assert the
-    // pipeline runs without error when it does produce geometry.
+    // A blank/flat image may legitimately produce an EMPTY surface, but any OTHER
+    // failure (session load, contract mismatch, decode error) is a regression — so
+    // don't let the test pass on an arbitrary error. Accept ok, or ok=false ONLY
+    // when it's the documented empty-surface case.
     if (r.ok) {
         EXPECT_GT(r.vertexCount, 0);
         EXPECT_GT(r.triangleCount, 0);
         EXPECT_EQ(static_cast<int>(r.positions.size()), r.vertexCount * 3);
         EXPECT_TRUE(r.usedModel);
+    } else {
+        EXPECT_TRUE(r.error.contains("empty surface", Qt::CaseInsensitive))
+            << "unexpected predict() failure: " << r.error.toStdString();
     }
 #endif
 }

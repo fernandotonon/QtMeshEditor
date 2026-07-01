@@ -263,7 +263,7 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         const size_t decOutCount = decoder.GetOutputCount();
         std::vector<Ort::AllocatedStringPtr> decOutHolders;
         std::vector<const char*> decOutNames;
-        int densityIdx = 0, colorIdx = -1;
+        int densityIdx = -1, colorIdx = -1;
         for (size_t i = 0; i < decOutCount; ++i) {
             decOutHolders.push_back(decoder.GetOutputNameAllocated(i, alloc));
             decOutNames.push_back(decOutHolders.back().get());
@@ -271,19 +271,38 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
             if (nm.find("color") != std::string::npos) colorIdx = static_cast<int>(i);
             else if (nm.find("density") != std::string::npos) densityIdx = static_cast<int>(i);
         }
+        // Require the named 'density' output — defaulting to index 0 would silently
+        // read the wrong tensor (garbage mesh) if the graph ever reorders outputs.
+        if (densityIdx < 0)
+            return fail(QStringLiteral("MeshGen: decoder has no 'density' output "
+                                       "(unexpected model contract)."));
         const bool wantColor = opts.vertexColor && colorIdx >= 0;
 
-        // ---- (2) Tile the grid points through the decoder -> density grid -----
-        std::vector<float> gridPts = buildGridPoints(res, kRadius);   // res^3 * 3
+        // ---- (2) Tile the grid through the decoder -> density grid ------------
+        // Points are GENERATED PER CHUNK into a small reusable buffer rather than
+        // materialising the whole res^3 * 3 grid up front (that's ~192 MiB at 256,
+        // ~1.5 GiB at 512 — enough to OOM before the ONNX buffers). Order matches
+        // MarchingCubes' row-major field[z*n*n + y*n + x] (x fastest).
         const size_t totalPts = static_cast<size_t>(res) * res * res;
         std::vector<float> densityField(totalPts, 0.0f);
+        const float step = (2.0f * kRadius) / float(res - 1);
 
         const int chunk = (opts.chunkPoints > 0) ? opts.chunkPoints : static_cast<int>(totalPts);
+        std::vector<float> chunkPts(static_cast<size_t>(chunk) * 3);
         for (size_t start = 0; start < totalPts; start += static_cast<size_t>(chunk)) {
             const size_t n = std::min(static_cast<size_t>(chunk), totalPts - start);
+            for (size_t i = 0; i < n; ++i) {
+                const size_t lin = start + i;
+                const int x = static_cast<int>(lin % res);
+                const int y = static_cast<int>((lin / res) % res);
+                const int z = static_cast<int>(lin / (static_cast<size_t>(res) * res));
+                chunkPts[i * 3 + 0] = -kRadius + x * step;
+                chunkPts[i * 3 + 1] = -kRadius + y * step;
+                chunkPts[i * 3 + 2] = -kRadius + z * step;
+            }
             const int64_t ptShape[3] = {1, static_cast<int64_t>(n), 3};
             Ort::Value ptTensor = Ort::Value::CreateTensor<float>(
-                mem, gridPts.data() + start * 3, n * 3, ptShape, 3);
+                mem, chunkPts.data(), n * 3, ptShape, 3);
             Ort::Value scTensor = Ort::Value::CreateTensor<float>(
                 mem, sceneCodes.data(), sceneCodes.size(), scShape.data(), scShape.size());
             const char* decIn[] = { decScName.get(), decPtName.get() };

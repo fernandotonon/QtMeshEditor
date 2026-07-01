@@ -8728,7 +8728,11 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-color") { vertexColor = false; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
         if (arg == "--remove-bg" || arg == "--rembg") { removeBg = true; continue; }
-        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+        if (arg == "-o" || arg == "--output") {
+            if (i + 1 >= argc) {
+                err() << "Error: " << arg << " requires a value." << Qt::endl;
+                return 2;
+            }
             outputPath = QString::fromLocal8Bit(argv[++i]); continue;
         }
         if (arg == "--resolution") {
@@ -8750,7 +8754,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     if (inputPath.isEmpty()) {
         err() << "Error: No input image specified." << Qt::endl;
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
-                 "[--no-color] [--remove-bg] [--no-model]" << Qt::endl;
+                 "[--no-color] [--remove-bg]" << Qt::endl;
         return 2;
     }
     QFileInfo fi(inputPath);

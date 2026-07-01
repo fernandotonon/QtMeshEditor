@@ -63,6 +63,15 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
         || result.positions.size() != static_cast<size_t>(result.vertexCount) * 3)
         return nullptr;
 
+    // Validate the index data before it's used to index into positions (in
+    // computeNormals and the buffer fill): the count must be 3/triangle and every
+    // index in-range. A malformed predictor result would otherwise read OOB.
+    if (result.indices.size() != static_cast<size_t>(result.triangleCount) * 3)
+        return nullptr;
+    for (uint32_t i : result.indices)
+        if (i >= static_cast<uint32_t>(result.vertexCount))
+            return nullptr;
+
     const bool hasColor =
         result.colors.size() == static_cast<size_t>(result.vertexCount) * 3;
     const std::vector<float> normals = computeNormals(result.positions, result.indices);
@@ -188,12 +197,18 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
 Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
                                 const QString& baseName)
 {
-    Ogre::Mesh* mesh = buildMesh(result, baseName + QStringLiteral("_mesh"));
+    // Make the mesh + node names UNIQUE per call so a second generation doesn't
+    // clobber the first (or fail because the mesh/node name already exists). All
+    // callers pass the same base ("qtmesh_gen3d"); disambiguate with a counter.
+    static int s_counter = 0;
+    const QString unique = baseName + QStringLiteral("_%1").arg(++s_counter);
+
+    Ogre::Mesh* mesh = buildMesh(result, unique + QStringLiteral("_mesh"));
     if (!mesh) return nullptr;
 
     auto* mgr = Manager::getSingletonPtr();
     if (!mgr) return nullptr;
-    Ogre::SceneNode* node = mgr->addSceneNode(baseName);
+    Ogre::SceneNode* node = mgr->addSceneNode(unique);
     if (!node) return nullptr;
     Ogre::MeshPtr ptr = Ogre::MeshManager::getSingleton().getByName(mesh->getName());
     mgr->createEntity(node, ptr);

@@ -125,12 +125,20 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     QImage image(fi.absoluteFilePath());
     if (image.isNull()) { emit error(tr("Could not load image: %1").arg(imagePath)); return; }
 
+    // Mark busy BEFORE ensureModelBlocking() — it spins a nested QEventLoop for the
+    // first-use download, during which the QML button would otherwise stay enabled
+    // and could re-enter generate(), racing over m_pending. setBusy disables it.
+    m_cancel = false;
+    setBusy(true);
+    emit progress(QStringLiteral("prep"), 0, 1);
+
     // Ensure models on the MAIN thread first — ensureModelBlocking() spins a local
     // QEventLoop for the download, which must not run on the worker thread. Once
     // present, the worker only reads the files (no event loop needed).
     emit statusMessage(tr("Checking model…"));
     const QString enc = MeshGenPredictor::ensureModelBlocking();
     if (enc.isEmpty() || !MeshGenPredictor::modelsPresent()) {
+        setBusy(false);
         emit error(tr("TripoSR model unavailable — it downloads on first use; if it "
                       "is not hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL or drop "
                       "the files in the ai_models/triposr/ cache."));
@@ -143,9 +151,6 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         QStringLiteral("MeshGenController generate %1 res=%2 rembg=%3")
             .arg(fi.fileName()).arg(resolution).arg(removeBackground));
 
-    m_cancel = false;
-    setBusy(true);
-    emit progress(QStringLiteral("prep"), 0, 1);
     emit statusMessage(tr("Preparing…"));
 
     delete m_pending;

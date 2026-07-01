@@ -1482,6 +1482,7 @@ Rectangle {
             // this dynamically-loaded panel, so we style raw controls with the
             // PropertiesPanelController palette to match the Inspector).
             component InspectorButton: Rectangle {
+                id: ibRoot
                 property alias text: ibLabel.text
                 property bool clickEnabled: true
                 signal clicked()
@@ -1489,11 +1490,21 @@ Rectangle {
                 height: 26
                 radius: 3
                 opacity: clickEnabled ? 1.0 : 0.45
-                color: ibMa.containsMouse && clickEnabled
+                color: (ibMa.containsMouse || ibRoot.activeFocus) && clickEnabled
                     ? PropertiesPanelController.highlightColor
                     : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
+                border.color: ibRoot.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: ibRoot.activeFocus ? 2 : 1
+                // Keyboard accessibility: focusable via Tab, activatable via
+                // Space/Enter, and exposed to assistive tech.
+                activeFocusOnTab: clickEnabled
+                Accessible.role: Accessible.Button
+                Accessible.name: ibLabel.text
+                Keys.onSpacePressed: if (clickEnabled) clicked()
+                Keys.onReturnPressed: if (clickEnabled) clicked()
+                Keys.onEnterPressed: if (clickEnabled) clicked()
                 Text {
                     id: ibLabel
                     anchors.centerIn: parent
@@ -1504,9 +1515,9 @@ Rectangle {
                     id: ibMa
                     anchors.fill: parent
                     hoverEnabled: true
-                    enabled: parent.clickEnabled
-                    cursorShape: parent.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: parent.clicked()
+                    enabled: ibRoot.clickEnabled
+                    cursorShape: ibRoot.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: ibRoot.clicked()
                 }
             }
 

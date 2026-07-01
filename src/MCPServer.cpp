@@ -2188,6 +2188,8 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     const QString output = args.value("output").toString();
     if (!output.trimmed().isEmpty()) {
         const QString fmt = CLIPipeline::formatForExtension(output);
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("Exporting %1").arg(QFileInfo(output).absoluteFilePath()));
         if (MeshImporterExporter::exporter(node, QFileInfo(output).absoluteFilePath(), fmt) != 0)
             return makeErrorResult(QStringLiteral("export failed: %1").arg(output));
         meshPath = QFileInfo(output).absoluteFilePath();
