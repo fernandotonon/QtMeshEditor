@@ -67,6 +67,27 @@ int main(int argc, char **argv)
         qputenv("QT_QPA_PLATFORM", "xcb");
 #endif
 
+    // Tests must be hermetic: no suite may reach out to the network to fetch an
+    // AI model. Any code path that calls an `ensure*Blocking()` download helper
+    // without this guard would spin a QEventLoop on a real download and hang the
+    // suite until the 20-min CI per-suite wall-clock cap SIGKILLs it (issue #411
+    // added generate_motion, which lands MotionGenerator/MotionLibrary blocking
+    // downloads on the tool path). Force every model fetch to short-circuit.
+    // Do NOT override values the caller explicitly set (respect an intentional
+    // integration run that wants a real download).
+    static const char* const kNoDownloadGuards[] = {
+        "QTMESH_PBR_NO_DOWNLOAD",
+        "QTMESH_UNIRIG_NO_DOWNLOAD",
+        "QTMESH_SEGMENT_NO_DOWNLOAD",
+        "QTMESH_INBETWEEN_NO_DOWNLOAD",
+        "QTMESH_MOTION_NO_DOWNLOAD",
+        "QTMESH_T2M_NO_DOWNLOAD",
+    };
+    for (const char* guard : kNoDownloadGuards) {
+        if (!qEnvironmentVariableIsSet(guard))
+            qputenv(guard, "1");
+    }
+
     QApplication app(argc, argv);
 
     // Suppress Ogre log output (debug spam from Root, RenderSystem, plugins).

@@ -84,6 +84,10 @@ public:
     static int cmdFix(int argc, char* argv[]);
     static int cmdConvert(int argc, char* argv[]);
     static int cmdAnim(int argc, char* argv[]);
+    // #411 text-to-motion (template-clip MVP): prompt → library clip → retarget.
+    static int cmdAnimGenerate(const QString& filePath, const QString& prompt,
+                               float duration, const QString& outputPath,
+                               bool jsonOutput, bool useModel = false);
     static int cmdValidate(int argc, char* argv[]);
     static int cmdLod(int argc, char* argv[]);
     static int cmdPose(int argc, char* argv[]);

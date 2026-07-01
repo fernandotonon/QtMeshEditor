@@ -902,6 +902,50 @@ bool PropertiesPanelController::renameAnimation(const QString& entityName, const
     return false;
 }
 
+bool PropertiesPanelController::deleteAnimation(const QString& entityName, const QString& animName)
+{
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities)
+    {
+        if (QString::fromStdString(ent->getName()) != entityName) continue;
+        if (!ent->hasSkeleton()) return false;
+        auto* sk = ent->getSkeleton();
+        const std::string name = animName.toStdString();
+        if (!sk->hasAnimation(name)) return false;
+
+        // Same teardown as rename — debug overlays/playback hold pointers into
+        // the entity's animation internals that removal invalidates.
+        if (mAnimationWidget)
+        {
+            if (mAnimationWidget->isSkeletonDebugActive(ent))
+                mAnimationWidget->toggleSkeletonDebug(ent, false);
+            if (mAnimationWidget->isBoneWeightsShown(ent))
+                mAnimationWidget->toggleBoneWeights(ent, false);
+        }
+        setPlaying(false);
+        if (auto* animSet = ent->getAllAnimationStates())
+        {
+            for (const auto& [key, state] : animSet->getAnimationStates())
+                state->setEnabled(false);
+            if (animSet->hasAnimationState(name))
+                animSet->removeAnimationState(name);
+        }
+        sk->removeAnimation(name);
+        ent->refreshAvailableAnimationState();
+
+        // Re-select to refresh all widgets off fresh entity data (avoids the
+        // poll timer dereferencing the removed animation state).
+        auto nodes = SelectionSet::getSingleton()->getNodesSelectionList();
+        SelectionSet::getSingleton()->clear();
+        for (auto* node : nodes)
+            SelectionSet::getSingleton()->append(node);
+
+        emit animationStateChanged();
+        return true;
+    }
+    return false;
+}
+
 // Forwards to AnimationMerger::tolerancesForPreset — single source of truth
 // shared by CLI, MCP and Inspector.
 static AnimationMerger::SimplifyTolerances tolerancesForPreset(const QString& preset)

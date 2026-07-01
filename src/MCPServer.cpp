@@ -85,6 +85,8 @@
 #include <OgreKeyFrame.h>
 #include <OgreBone.h>
 #include "AnimationMerger.h"
+#include "MotionLibrary.h"
+#include "MotionGenerator.h"
 #include "MotionInbetween.h"
 #include "MeshSegmenter.h"
 #include "AnimationControlController.h"
@@ -614,6 +616,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("analyze_animation"), &MCPServer::toolAnalyzeAnimation},
         {QStringLiteral("bake_animation_fps"), &MCPServer::toolBakeAnimationFps},
         {QStringLiteral("motion_in_between"), &MCPServer::toolMotionInBetween},
+        {QStringLiteral("generate_motion"), &MCPServer::toolGenerateMotion},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
@@ -686,6 +689,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("simplify_animation"),
         QStringLiteral("bake_animation_fps"),
         QStringLiteral("motion_in_between"),
+        QStringLiteral("generate_motion"),
         QStringLiteral("segment_mesh"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
@@ -3519,6 +3523,120 @@ QJsonObject MCPServer::toolMotionInBetween(const QJsonObject &args)
         if (!r.usedModel && !r.fallbackReason.isEmpty())
             result += QString(" (%1)").arg(r.fallbackReason);
         return makeSuccessResult(result);
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
+{
+    try {
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
+            QStringLiteral("MCP generate_motion"));
+
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        const QString prompt = args.value("prompt").toString();
+        if (prompt.trimmed().isEmpty())
+            return makeErrorResult("Error: 'prompt' is required (e.g. \"walking\").");
+
+        QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton()) continue;
+            if (entityName.isEmpty()
+                || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
+        }
+        if (!entity)
+            return makeErrorResult(entityName.isEmpty()
+                ? QString("Error: no skinned mesh found — text-to-motion needs a rigged skeleton")
+                : QString("Error: skinned entity '%1' not found").arg(entityName));
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+
+        const double duration = args.value("duration").toDouble(0.0);
+        const bool useModel = args.value("model").toBool(false);
+
+        // Acquire the canonical clip: EXPERIMENTAL trained model first (when
+        // model:true), else the reliable TEMPLATE library (also the fallback).
+        QString action, clipSource;
+        std::vector<std::vector<std::array<float, 4>>> quats;
+        int fps = 30; bool worldFrame = false;
+        std::vector<std::array<float, 4>> cmuRest;
+        bool gotClip = false;
+
+        if (useModel) {
+            const QString mp = MotionGenerator::ensureModelBlocking();
+            if (!mp.isEmpty()) {
+                const auto mr = MotionGenerator::generate(prompt, mp,
+                                                          MotionGenerator::vocabPath(), duration);
+                if (mr.ok) {
+                    action = mr.matchedAction; quats = mr.clip.quats; fps = mr.clip.fps;
+                    worldFrame = false; clipSource = QStringLiteral("model"); gotClip = true;
+                }
+            }
+        }
+
+        if (!gotClip) {
+            const QString libPath = MotionLibrary::ensureLibraryBlocking();
+            if (libPath.isEmpty())
+                return makeErrorResult("Error: motion library unavailable (offline or download disabled)");
+            MotionLibrary lib;
+            if (!lib.loadFromFile(libPath))
+                return makeErrorResult(QString("Error: %1").arg(lib.error()));
+            const int idx = lib.matchPrompt(prompt, &action);
+            if (idx < 0) {
+                QString known; for (const QString& a : lib.actions()) known += " " + a;
+                return makeErrorResult(QString("Error: no motion matched \"%1\". Known actions:%2")
+                                           .arg(prompt, known));
+            }
+            const MotionLibrary::Clip& clip = lib.clip(idx);
+            quats = clip.quats; fps = clip.fps;
+            worldFrame = lib.isWorldFrame(); cmuRest = lib.cmuRestWorld();
+            clipSource = QStringLiteral("template");
+            if (duration > 0.05) {
+                const int want = std::max(2, int(duration * clip.fps));
+                std::vector<std::vector<std::array<float,4>>> retimed(want);
+                for (int f = 0; f < want; ++f) {
+                    const float src = (clip.frames - 1) * (float(f) / float(want - 1));
+                    retimed[f] = quats[std::min(clip.frames - 1, int(src + 0.5f))];
+                }
+                quats.swap(retimed);
+            }
+        }
+
+        const std::string animName = ("generated_" + action).toStdString();
+        const auto r = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
+                                                        worldFrame, cmuRest);
+        if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
+
+        entity->refreshAvailableAnimationState();
+        if (auto* acc = AnimationControlController::instance())
+            acc->notifyExternalAnimationEdit();
+
+        // Optional re-export.
+        const QString outPath = args.value("output_path").toString();
+        if (!outPath.isEmpty()) {
+            auto* node = entity->getParentSceneNode();
+            const int rc = MeshImporterExporter::exporter(
+                node, outPath, CLIPipeline::formatForExtension(outPath));
+            if (rc != 0)
+                return makeErrorResult(QString("Error: applied motion but export to %1 failed").arg(outPath));
+        }
+
+        QJsonObject content;
+        content["ok"] = true;
+        content["prompt"] = prompt; content["action"] = action; content["source"] = clipSource;
+        content["animation"] = QString::fromStdString(animName);
+        content["frames"] = r.frames; content["length"] = r.length;
+        content["tracks_written"] = r.tracksWritten; content["canonical_joints"] = r.canonicalJoints;
+        content["entity"] = QString::fromStdString(entity->getName());
+        if (!outPath.isEmpty()) content["exported"] = outPath;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
@@ -6679,6 +6797,27 @@ QJsonArray MCPServer::buildToolsList()
             "reports which path ran. Works best on humanoid skeletons close to the model's training distribution.",
             props,
             QJsonArray{"gap_frames"}
+        );
+    }
+
+    // generate_motion
+    {
+        QJsonObject props;
+        props["prompt"] = QJsonObject{{"type", "string"}, {"description", "Text describing the motion, e.g. \"walking confidently\", \"jump\", \"wave hello\". Matched by action keyword to the bundled clip library (walk/run/jump/dance/march/kick/punch/wave/climb/idle; synonyms like jog→run)."}};
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the rigged entity to apply the motion to. If omitted, uses the first skinned entity."}};
+        props["duration"] = QJsonObject{{"type", "number"}, {"description", "Optional clip length in seconds (retimes the template). Default: the clip's native length."}};
+        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional path to re-export the mesh with the new animation (e.g. /tmp/out.glb). If omitted, the animation is applied in-session only."}};
+        props["model"] = QJsonObject{{"type", "boolean"}, {"description", "EXPERIMENTAL: use the trained from-scratch text-to-motion ONNX model instead of the template clip. Falls back to the template library automatically if the model is unavailable or the action isn't in its vocabulary. Default false (template). Quality is action-dependent (locomotion better than gestures)."}};
+        appendTool(
+            "generate_motion",
+            "AI text-to-motion (#411, experimental): generate a skeletal animation from a text prompt and "
+            "retarget it onto a rigged mesh. MVP approach — matches the prompt to a curated, permissively-"
+            "licensed motion clip (CMU MoCap) and retargets it onto the skeleton via the canonical-joint "
+            "mapping (same as #409). The clip library downloads on first use. Requires a humanoid rig; reports "
+            "which action matched and how many bones/joints were retargeted. (Not generative diffusion — see "
+            "docs/TEXT_TO_MOTION_SPIKE_411.md for why the template approach ships first.)",
+            props,
+            QJsonArray{"prompt"}
         );
     }
 

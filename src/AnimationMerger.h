@@ -4,6 +4,8 @@
 #include <Ogre.h>
 #include <QString>
 #include <QList>
+#include <array>
+#include <vector>
 
 class AnimationMerger {
 public:
@@ -132,6 +134,52 @@ public:
                                               int gapFrames,
                                               const QString& modelPath,
                                               bool forceFallback = false);
+
+    /// Outcome of applyMotionClip — how the canonical clip mapped onto the rig.
+    struct ApplyMotionResult {
+        bool ok = false;
+        QString error;
+        int tracksWritten = 0;     // skeleton bones that mapped to a canonical joint
+        int canonicalJoints = 0;   // distinct canonical roles resolved
+        int frames = 0;
+        float length = 0.0f;       // seconds
+        bool refined = false;      // RMIB refine pass ran (smoothed the motion)
+        bool usedModel = false;    // RMIB model (vs spline) used in the refine pass
+    };
+
+    /// Apply a TEMPLATE MOTION CLIP (#411) onto a skeleton as a new animation.
+    /// `clipQuats` is [frame][canonicalJoint] unit quaternions on the 22-joint
+    /// canonical CMU skeleton (MotionLibrary::Clip::quats). Each skeleton bone is
+    /// mapped to a canonical joint by name via MotionInbetween::canonicalIndexForBone
+    /// (the #409 retargeting), and that joint's rotation sequence is written as
+    /// keyframes onto the bone's track at 1/fps spacing. Bones with no canonical
+    /// role are left unanimated (keep their bind pose). Fails if too few roles
+    /// resolve (not a humanoid rig). Rotation only — translation/scale untouched.
+    /// `refineWithModel` optionally decimates to every `refineStride`-th
+    /// keyframe and RMIB-in-betweens the gaps (#409 model). DEFAULT OFF: the
+    /// template clips are real mocap and already temporally smooth (≈26× lower
+    /// frame-to-frame jerk than a decimate+refill), so the refine only adds
+    /// jitter at the sparse keyframe boundaries — measured, not assumed. Kept as
+    /// an opt-in for callers that start from a noisier source. Best-effort.
+    /// `worldFrame` selects how `clipQuats` is interpreted:
+    ///   * true  (schema v3): each quat is the joint's WORLD-space orientation.
+    ///     The retarget takes a clean world delta vs frame 0,
+    ///     `dWorld(f) = clip(f)·clip(0)⁻¹`, and transports it into the target
+    ///     bone's parent-world frame — basis-independent, so it carries the true
+    ///     per-bone roll with NO arm-twist. This is the preferred path.
+    ///   * false (schema v1/v2): each quat is the joint's LOCAL parent-relative
+    ///     rotation; `cmuRestWorld` (optional, 22 world-rest quats) provides the
+    ///     CMU↔target change-of-basis. Empty → parent-world transport only
+    ///     (direction-correct, residual roll). Kept for back-compat.
+    static ApplyMotionResult applyMotionClip(
+        Ogre::Skeleton* skel,
+        const std::string& animName,
+        const std::vector<std::vector<std::array<float, 4>>>& clipQuats,
+        int fps,
+        bool worldFrame = false,
+        const std::vector<std::array<float, 4>>& cmuRestWorld = {},
+        bool refineWithModel = false,
+        int refineStride = 8);
 
     /// Merge animations from sourceEntities into baseEntity's skeleton.
     /// Convenience wrapper; forwards an empty skeleton list to the 4-argument overload.

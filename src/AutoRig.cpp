@@ -641,18 +641,42 @@ std::vector<int> AutoRig::rigPriorPartLabels(Ogre::Entity* entity,
         base += static_cast<uint32_t>(sub->vertexData->vertexCount);
     }
 
+    // Per-bone part, WITH ANCESTOR INHERITANCE: a bone whose own name doesn't map
+    // to a body region (e.g. an unnamed UniRig finger "joint_37", or a "_twist"
+    // helper) inherits the part of its nearest NAMED ancestor — a finger under
+    // LeftHand→LeftArm becomes LeftArm. Without this, finger/extra bones (a third
+    // of a UniRig rig's joints) stayed Unknown and dragged the rig-prior resolve
+    // rate below the 70% gate, so Select-by-Part fell back to the model even on a
+    // perfectly good skinned rig. Cached per bone-index.
+    const int numBones = static_cast<int>(skel->getNumBones());
+    std::vector<int> bonePart(numBones, -2);   // -2 = not computed, -1 = none, ≥0 = Part
+    std::function<int(int)> partOfBone = [&](int bi) -> int {
+        if (bi < 0 || bi >= numBones) return -1;
+        if (bonePart[bi] != -2) return bonePart[bi];
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(bi));
+        const auto part = MeshSegmenter::partForBoneName(
+            QString::fromStdString(b->getName()));
+        if (part != MeshSegmenter::Part::Unknown) {
+            bonePart[bi] = static_cast<int>(part);
+        } else if (b->getParent()) {
+            bonePart[bi] = partOfBone(
+                static_cast<int>(static_cast<Ogre::Bone*>(b->getParent())->getHandle()));
+        } else {
+            bonePart[bi] = -1;
+        }
+        return bonePart[bi];
+    };
+
     std::vector<int> labels(vertexCount, static_cast<int>(MeshSegmenter::Part::Unknown));
     int resolved = 0;
     for (int v = 0; v < vertexCount; ++v) {
         if (boneOf[v] < 0) continue;
-        const QString bn = QString::fromStdString(
-            skel->getBone(static_cast<unsigned short>(boneOf[v]))->getName());
-        const auto part = MeshSegmenter::partForBoneName(bn);
-        if (part != MeshSegmenter::Part::Unknown) {
-            labels[v] = static_cast<int>(part);
+        const int part = partOfBone(boneOf[v]);
+        if (part >= 0) {
+            labels[v] = part;
             ++resolved;
         } else {
-            labels[v] = -1;   // had a bone, but not a body-region one
+            labels[v] = -1;   // had a bone, but no body-region ancestor
         }
     }
     if (outResolved) *outResolved = resolved;

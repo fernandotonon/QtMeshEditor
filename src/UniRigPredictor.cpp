@@ -15,6 +15,7 @@
 #include <limits>
 #include <random>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -145,9 +146,15 @@ UniRigPredictor::Result UniRigPredictor::detokenize(
         return failResult(QStringLiteral("UniRig: token stream does not end with EOS."));
     --end;
 
-    struct DJoint { std::array<double,3> pos; std::array<double,3> parentPos; bool isRoot; };
+    // part: 0=body, 1=hand, -1=none/spring. UniRig emits a part token before each
+    // group of joints; we track it per joint so labelJointsAnatomically can apply
+    // UniRig's OWN ordered name template (configs/skeleton/mixamo.yaml) — the body
+    // joints are emitted in a FIXED canonical order (Hips, Spine, …, RightToeBase),
+    // so the part + emission index gives the real bone name deterministically.
+    struct DJoint { std::array<double,3> pos; std::array<double,3> parentPos; bool isRoot; int part; };
     std::vector<DJoint> djoints;
     bool isBranch = false;
+    int curPart = 0;                  // default body until a part token says otherwise
     std::array<double,3> lastJoint = {0,0,0};
     bool haveLast = false;
 
@@ -178,12 +185,14 @@ UniRigPredictor::Result UniRigPredictor::detokenize(
                 i += 3;
             }
             DJoint dj; dj.pos = joint; dj.parentPos = pjoint; dj.isRoot = djoints.empty();
+            dj.part = curPart;
             djoints.push_back(dj);
             lastJoint = joint; haveLast = true; isBranch = false;
         } else if (id == kTokBranch) {
             isBranch = true; haveLast = false; ++i;
         } else if (id == kTokSpring || id == kTokPartBody || id == kTokPartHand) {
-            ++i;                                  // part token — no geometry effect
+            curPart = (id == kTokPartBody) ? 0 : (id == kTokPartHand) ? 1 : -1;
+            ++i;                                  // part token — sets the active part
         } else if (id == kTokClsVroid || id == kTokClsMixamo || id == kTokClsArtXL) {
             ++i;                                  // class token — no geometry effect
         } else if (id == kTokClsNone) {
@@ -217,7 +226,7 @@ UniRigPredictor::Result UniRigPredictor::detokenize(
         }
         std::array<double,3> p = djoints[j].pos;
         p = { p[0]*scale + centre[0], p[1]*scale + centre[1], p[2]*scale + centre[2] };
-        Joint jt; jt.parent = parent; jt.pos = p;
+        Joint jt; jt.parent = parent; jt.pos = p; jt.part = djoints[j].part;
         jt.name = jointName(static_cast<int>(j), parent);
         r.joints.push_back(std::move(jt));
     }
@@ -228,8 +237,267 @@ UniRigPredictor::Result UniRigPredictor::detokenize(
     // it, so parent index < own index by construction. We deliberately do NOT
     // reorder here: callers (and tests) rely on emission-order indexing, and
     // Ogre bone creation is happy with any order where parents precede children.
+    //
+    // Names: joints here are in the model +Y frame (the caller rotates back to
+    // the mesh up-axis afterward). The ONNX predict() path re-labels with the
+    // real up-axis after restoring it; for the detokenize-only path (tests /
+    // non-ONNX) we label in +Y so the names are still anatomical.
+    labelJointsAnatomically(r.joints, /*upAxis=*/1);
+
     r.ok = true;
     return r;
+}
+
+void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int upAxis)
+{
+    const int n = static_cast<int>(joints.size());
+    if (n == 0) return;
+
+    // ---- PATH 1: UniRig's OWN ordered name template (configs/skeleton/mixamo.yaml).
+    // UniRig emits body joints in a FIXED canonical order and tags each joint's
+    // group with a part token (body=0 / hand=1). So the part + emission index
+    // gives the real bone name deterministically — far more reliable than the
+    // geometric guess. The model's articulationxl class has no upstream template,
+    // but the EMISSION ORDER is the mixamo body order, so we apply it directly.
+    // We only take this path when the body group's count matches the template
+    // length closely (a humanoid); otherwise fall through to the geometric path.
+    static const char* kBodyOrder[] = {
+        "mixamorig:Hips", "mixamorig:Spine", "mixamorig:Spine1", "mixamorig:Spine2",
+        "mixamorig:Neck", "mixamorig:Head",
+        "mixamorig:LeftShoulder", "mixamorig:LeftArm", "mixamorig:LeftForeArm", "mixamorig:LeftHand",
+        "mixamorig:RightShoulder", "mixamorig:RightArm", "mixamorig:RightForeArm", "mixamorig:RightHand",
+        "mixamorig:LeftUpLeg", "mixamorig:LeftLeg", "mixamorig:LeftFoot", "mixamorig:LeftToeBase",
+        "mixamorig:RightUpLeg", "mixamorig:RightLeg", "mixamorig:RightFoot", "mixamorig:RightToeBase" };
+    const int kBodyLen = static_cast<int>(sizeof(kBodyOrder) / sizeof(kBodyOrder[0]));
+    {
+        // Count body-part joints (part==0). The articulationxl checkpoint may tag
+        // everything body (no hand split); we only trust the template when the
+        // body count is within a sane window of the template (so a 46-joint
+        // finger-heavy rig doesn't get mis-ordered).
+        // Count joints tagged body(0) vs hand(1). NOTE: the shipped articulationxl
+        // checkpoint does NOT emit the clean body/hand split (it tags joints with
+        // spring/none, observed body=0 hand-split=0), so this path is a no-op for
+        // it and we fall through to the geometric labeler. It activates only if a
+        // model (e.g. a future mixamo-class export) emits a proper body group.
+        int bodyCount = 0, handCount = 0;
+        for (const auto& j : joints) { if (j.part == 0) ++bodyCount; else if (j.part == 1) ++handCount; }
+        const bool partsLookHumanoid =
+            handCount > 0 &&                        // a real hand split was emitted
+            bodyCount >= 12 && bodyCount <= kBodyLen + 2;
+        if (partsLookHumanoid) {
+            int bi = 0;
+            std::unordered_set<std::string> used;
+            for (int i = 0; i < n; ++i) {
+                if (joints[i].part == 0 && bi < kBodyLen) {
+                    joints[i].name = QString::fromLatin1(kBodyOrder[bi++]);
+                    used.insert(joints[i].name.toStdString());
+                }
+                // hand-part joints keep their positional name (finger detail —
+                // not needed for the canonical body retarget).
+            }
+            return;   // template applied — done
+        }
+        // else: parts unreliable for this rig → geometric path below.
+    }
+
+    // ---- PATH 2: geometric inference (no usable part tags). ----
+    // Build children lists + find the root first (needed for up-axis detection).
+    std::vector<std::vector<int>> kids(n);
+    int root = -1;
+    for (int i = 0; i < n; ++i) {
+        if (joints[i].parent < 0) { if (root < 0) root = i; }
+        else if (joints[i].parent < n) kids[joints[i].parent].push_back(i);
+    }
+    if (root < 0) root = 0;
+
+    auto spread = [&](int ax) {
+        double lo = 1e30, hi = -1e30;
+        for (const auto& j : joints) { lo = std::min(lo, j.pos[ax]); hi = std::max(hi, j.pos[ax]); }
+        return hi - lo;
+    };
+
+    // AXIS DETECTION (don't trust the passed-in upAxis — UniRig emits in its own
+    // frame and the predicted skeleton's real axes vary; a wrong up flips
+    // spine↔limb and L↔R). Anatomical signals, robust whether or not the rig has
+    // fingers (an earlier "widest span = side" heuristic broke on a finger-less
+    // rig where the head↔foot Y-extent exceeds the arm span):
+    //   * SIDE (left/right) = the axis about which the joints are most MIRROR-
+    //     SYMMETRIC — limbs come in L/R pairs, so the joint mean sits near the
+    //     span mid-point on the side axis; up/fwd are asymmetric (body is
+    //     top/bottom-heavy, faces one way). Pick min |mean − mid| / span.
+    //   * UP = the LARGER-spread of the two remaining axes (head↔foot > front↔back).
+    //   * FWD = the last one.
+    double spanV[3] = { spread(0), spread(1), spread(2) };
+    auto symOffset = [&](int ax) -> double {
+        double lo = 1e30, hi = -1e30, sum = 0.0;
+        for (const auto& j : joints) { lo = std::min(lo, j.pos[ax]); hi = std::max(hi, j.pos[ax]); sum += j.pos[ax]; }
+        const double span = hi - lo;
+        if (span < 1e-6) return 1e30;   // degenerate axis can't be SIDE
+        const double mean = sum / static_cast<double>(n);
+        return std::abs(mean - (lo + hi) * 0.5) / span;
+    };
+    int SIDE = 0;
+    { double best = 1e30;
+      for (int ax = 0; ax < 3; ++ax) { const double s = symOffset(ax); if (s < best) { best = s; SIDE = ax; } } }
+    // UP = larger-spread of the other two.
+    const int o1 = (SIDE + 1) % 3, o2 = (SIDE + 2) % 3;
+    int U = (spanV[o1] >= spanV[o2]) ? o1 : o2;
+    if (spanV[U] < 1e-4 && upAxis >= 0 && upAxis <= 2) U = upAxis;   // degenerate guard
+    (void)upAxis;
+
+    auto up   = [&](int i) { return joints[i].pos[U]; };
+    // SIDE SIGN → LEFT/RIGHT. Name bones ANATOMICALLY: a character's LEFT is on
+    // the −X side under the glTF/Ogre Y-up, faces-+Z convention this mesh uses,
+    // so −SIDE = Left. (We negate the raw SIDE so positive→Left.) This makes the
+    // LABELS correct. The text-to-motion RETARGET separately detects whether the
+    // rig's handedness matches the CMU data and swaps L/R in its OWN mapping if
+    // not (AnimationMerger::applyMotionClip) — so correct labels do NOT mirror
+    // the motion. Decoupling label-side from retarget-side is the fix for "labels
+    // flipped vs animation mirrored" being in tension.
+    auto side = [&](int i) { return -joints[i].pos[SIDE]; };
+    // setName ENFORCES UNIQUENESS — Ogre::Skeleton::createBone rejects duplicate
+    // names ("RightArm already exists"). When the geometric classification lands
+    // two joints on the same anatomical role (e.g. a clavicle + upper-arm both
+    // branching up-and-out, or two spine links rounding to the same index), the
+    // first keeps the clean name and later ones get a numeric suffix. The
+    // suffixed name won't resolve as a canonical joint (intended — only the
+    // primary should), but the skeleton stays valid.
+    std::unordered_set<std::string> usedNames;
+    auto setName = [&](int i, const QString& nm) {
+        QString candidate = nm; int suffix = 1;
+        while (usedNames.count(candidate.toStdString()))
+            candidate = nm + QStringLiteral("_%1").arg(suffix++);
+        usedNames.insert(candidate.toStdString());
+        joints[i].name = candidate;
+    };
+
+    // ---- Root → Hips ----
+    setName(root, QStringLiteral("Hips"));
+
+    // ---- SPINE chain: from the root, repeatedly follow the child that goes
+    // most UPWARD and stays near the body's mid-SIDE line. Name lower→upper
+    // Spine, Spine1, Spine2, then Neck, Head near the top. ----
+    std::vector<bool> claimed(n, false); claimed[root] = true;
+    std::vector<int> spine;
+    {
+        int cur = root;
+        while (true) {
+            int best = -1; double bestUp = up(cur);
+            for (int k : kids[cur]) {
+                if (claimed[k]) continue;
+                // spine continues UP and stays central (|side| small relative to body)
+                if (up(k) > bestUp - 1e-6 && std::abs(side(k)) <= std::abs(side(cur)) + 1e-3) {
+                    if (best < 0 || up(k) > up(best)) best = k;
+                }
+            }
+            if (best < 0) break;
+            spine.push_back(best); claimed[best] = true; cur = best;
+            if (static_cast<int>(spine.size()) > 8) break;   // safety
+        }
+    }
+    // Name the spine chain: last 1-2 → Neck/Head, the rest → Spine/Spine1/Spine2.
+    {
+        const int m = static_cast<int>(spine.size());
+        // Heuristic: the topmost joint = Head, the one below = Neck (if ≥3 links),
+        // remaining lower links = Spine, Spine1, Spine2…
+        for (int idx = 0; idx < m; ++idx) {
+            int i = spine[idx];
+            if (idx == m - 1 && m >= 2)        setName(i, QStringLiteral("Head"));
+            else if (idx == m - 2 && m >= 3)   setName(i, QStringLiteral("Neck"));
+            else if (idx == 0)                 setName(i, QStringLiteral("Spine"));
+            else                               setName(i, QStringLiteral("Spine%1").arg(idx));
+        }
+    }
+
+    // ---- LIMBS: every still-unclaimed chain branching off the spine/root is a
+    // limb. Classify arm vs leg by where it attaches (high on the spine = arm,
+    // proximal→distal, arm vs leg decided by chain direction below. ----
+
+    // Walk a limb from its first joint, following the longest unclaimed path.
+    auto walkChain = [&](int start) {
+        std::vector<int> chain; int cur = start;
+        while (cur >= 0 && !claimed[cur]) {
+            chain.push_back(cur); claimed[cur] = true;
+            int best = -1; double bestLen = -1;
+            for (int k : kids[cur]) {
+                if (claimed[k]) continue;
+                double dx = joints[k].pos[0]-joints[cur].pos[0];
+                double dy = joints[k].pos[1]-joints[cur].pos[1];
+                double dz = joints[k].pos[2]-joints[cur].pos[2];
+                double len = dx*dx+dy*dy+dz*dz;
+                if (len > bestLen) { bestLen = len; best = k; }
+            }
+            cur = best;
+        }
+        return chain;
+    };
+
+    // Body up-extent, to judge how far a chain descends.
+    double topUp2 = up(root), botUp2 = up(root);
+    for (int i = 0; i < n; ++i) { topUp2 = std::max(topUp2, up(i)); botUp2 = std::min(botUp2, up(i)); }
+    const double bodyH = std::max(1e-6, topUp2 - botUp2);
+
+    // Limb roots = unclaimed children of any spine joint OR the root.
+    std::vector<int> attach = spine; attach.push_back(root);
+    for (int a : attach) {
+        for (int k : kids[a]) {
+            if (claimed[k]) continue;
+            std::vector<int> chain = walkChain(k);
+            if (chain.empty()) continue;
+            // ARM vs LEG by the CHAIN'S DIRECTION, not its attach height: a leg
+            // DESCENDS (its tip is well below its root in up); an arm extends
+            // sideways/level. (The hips are mid-height, so attach-height alone
+            // mislabels hip-rooted legs as arms — observed on real UniRig rigs.)
+            const double dropFrac = (up(chain.front()) - up(chain.back())) / bodyH;
+            const double sideReach = std::abs(side(chain.back()) - side(chain.front()));
+            const double upDrop     = up(chain.front()) - up(chain.back());
+            // Leg if it mostly goes DOWN; arm if it mostly goes SIDEWAYS.
+            const bool isArm = (sideReach >= upDrop) && (dropFrac < 0.25);
+            const bool left  = (side(chain.front()) >= 0.0);
+            const QString pre = left ? QStringLiteral("Left") : QStringLiteral("Right");
+            const QStringList armN = { pre + "Arm", pre + "ForeArm", pre + "Hand" };
+            const QStringList legN = { pre + "UpLeg", pre + "Leg", pre + "Foot" };
+            const QStringList& seq = isArm ? armN : legN;
+            for (int idx = 0; idx < static_cast<int>(chain.size()); ++idx) {
+                if (idx < seq.size()) setName(chain[idx], seq[idx]);
+                // extra distal joints (fingers/toes) keep their positional name
+            }
+        }
+    }
+
+    // FINAL UNIQUENESS PASS. Joints the labeler didn't rename keep their incoming
+    // name; the real predictor gives those a unique `joint_<i>`, but a caller that
+    // seeds a shared placeholder (or two unclassified joints sharing a name) would
+    // otherwise produce a duplicate that Ogre::Skeleton::createBone rejects. Force
+    // every remaining collision to a unique `joint_<i>`.
+    {
+        std::unordered_set<std::string> finalSeen;
+        for (int i = 0; i < n; ++i) {
+            std::string nm = joints[i].name.toStdString();
+            if (finalSeen.count(nm)) {
+                QString uniq = QStringLiteral("joint_%1").arg(i);
+                int s = 0;
+                while (finalSeen.count(uniq.toStdString()))
+                    uniq = QStringLiteral("joint_%1_%2").arg(i).arg(s++);
+                joints[i].name = uniq;
+                nm = uniq.toStdString();
+            }
+            finalSeen.insert(nm);
+        }
+    }
+
+    // Diagnostic dump (QTMESH_RETARGET_DEBUG): predicted joint geometry + the
+    // assigned name, so a mislabel (wrong side / wrong role) can be diagnosed
+    // from the actual positions instead of guessed at.
+    if (qEnvironmentVariableIsSet("QTMESH_RETARGET_DEBUG")) {
+        fprintf(stderr, "[UNIRIG-LABEL] upAxis=%d SIDE=%d (left=+SIDE) joints=%d\n",
+                U, SIDE, n);
+        for (int i = 0; i < n; ++i)
+            fprintf(stderr, "[UNIRIG-LABEL] j%-2d parent=%-2d pos=(%.3f,%.3f,%.3f) "
+                    "up=%.3f side=%.3f -> %s\n",
+                    i, joints[i].parent, joints[i].pos[0], joints[i].pos[1],
+                    joints[i].pos[2], up(i), side(i), joints[i].name.toUtf8().constData());
+    }
 }
 
 bool UniRigPredictor::isAvailable()
@@ -1021,9 +1289,10 @@ UniRigPredictor::Result UniRigPredictor::predict(
             return failResult(QStringLiteral("UniRig: empty token stream."));
         if (ids[end-1] == kTokEos) --end;                            // drop terminal EOS
 
-        struct DJoint { std::array<double,3> pos; std::array<double,3> parentPos; bool isRoot; };
+        struct DJoint { std::array<double,3> pos; std::array<double,3> parentPos; bool isRoot; int part; };
         std::vector<DJoint> djoints;
         bool isBranch = false;
+        int curPart = 0;                 // body until a part token says otherwise
         std::array<double,3> lastJoint = {0,0,0};
         bool haveLast = false;
 
@@ -1059,14 +1328,16 @@ UniRigPredictor::Result UniRigPredictor::predict(
                 dj.pos       = joint;
                 dj.parentPos = pjoint;
                 dj.isRoot    = djoints.empty();
+                dj.part      = curPart;
                 djoints.push_back(dj);
                 lastJoint = joint; haveLast = true;
                 isBranch  = false;
             } else if (id == kTokBranch) {
                 isBranch = true; haveLast = false; ++i;
             } else if (id == kTokSpring || id == kTokPartBody || id == kTokPartHand) {
-                // "part" token — recorded by the reference impl; no geometry
-                // effect for the skeleton, so just skip it.
+                // "part" token — sets the active part (body/hand) for the joints
+                // that follow, so the name template can be applied by part+order.
+                curPart = (id == kTokPartBody) ? 0 : (id == kTokPartHand) ? 1 : -1;
                 ++i;
             } else if (id == kTokClsVroid || id == kTokClsMixamo || id == kTokClsArtXL) {
                 // class token — skip (no geometry effect for our purposes).
@@ -1108,6 +1379,7 @@ UniRigPredictor::Result UniRigPredictor::predict(
             Joint jt;
             jt.parent = parent;
             jt.pos    = p;
+            jt.part   = djoints[j].part;
             jt.name   = jointName(static_cast<int>(j), parent);
             r.joints.push_back(std::move(jt));
         }
@@ -1154,6 +1426,12 @@ UniRigPredictor::Result UniRigPredictor::predict(
                 r.joints = std::move(reordered);
             }
         }
+
+        // Replace the positional joint_N names with anatomical ones (Hips/Spine/
+        // LeftArm/…) by rest-pose geometry, so name-keyed tooling (text-to-motion
+        // retarget, segmentation) works on UniRig rigs. Joints are now in
+        // mesh-local space with the up-axis restored.
+        labelJointsAnatomically(r.joints, opts.upAxis);
 
         r.ok = true;
         return r;

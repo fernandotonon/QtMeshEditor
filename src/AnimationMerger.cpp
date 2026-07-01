@@ -9,6 +9,8 @@
 #include <QRegularExpression>
 #include <cctype>
 #include <unordered_map>
+#include <functional>
+#include <algorithm>
 #include <vector>
 #include <cmath>
 
@@ -904,6 +906,251 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
             .arg(t0).arg(t1);
         return res;
     }
+    res.ok = true;
+    return res;
+}
+
+AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
+    Ogre::Skeleton* skel,
+    const std::string& animName,
+    const std::vector<std::vector<std::array<float, 4>>>& clipQuats,
+    int fps,
+    bool worldFrame,
+    const std::vector<std::array<float, 4>>& cmuRestWorld,
+    bool refineWithModel,
+    int refineStride)
+{
+    ApplyMotionResult res;
+    if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
+    if (clipQuats.empty()) { res.error = QStringLiteral("empty motion clip"); return res; }
+    if (fps <= 0) fps = 30;
+    const int frames = static_cast<int>(clipQuats.size());
+    // Guard: every frame must carry all canonical joints — clipQ() indexes up to
+    // canonicalJointCount(), and a malformed/downloaded/generated clip with a
+    // short frame would otherwise crash during retargeting.
+    {
+        const int need = MotionInbetween::canonicalJointCount();
+        for (int f = 0; f < frames; ++f)
+            if (static_cast<int>(clipQuats[f].size()) < need) {
+                res.error = QStringLiteral("motion clip frame %1 has %2 joints; expected >= %3")
+                    .arg(f).arg(clipQuats[f].size()).arg(need);
+                return res;
+            }
+    }
+    const float dt = 1.0f / static_cast<float>(fps);
+    const float length = (frames - 1) * dt;
+    res.frames = frames;
+    res.length = length;
+
+    // Map each skeleton bone -> canonical joint index (the #409 retargeting).
+    const int nBones = static_cast<int>(skel->getNumBones());
+    std::vector<int> boneToCanon(nBones, -1);
+    std::vector<char> canonSeen(MotionInbetween::canonicalJointCount(), 0);
+    int distinct = 0;
+    for (int i = 0; i < nBones; ++i) {
+        const QString bn = QString::fromStdString(skel->getBone(static_cast<unsigned short>(i))->getName());
+        const int c = MotionInbetween::canonicalIndexForBone(bn);
+        if (c >= 0 && c < static_cast<int>(canonSeen.size())) {
+            boneToCanon[i] = c;
+            if (!canonSeen[c]) { canonSeen[c] = 1; ++distinct; }
+        }
+    }
+    // HANDEDNESS COMPENSATION. The bone NAMES are anatomically correct for the
+    // mesh, but a mesh may face opposite to the CMU data — then the rig's "Left"
+    // bones sit on the −X side while CMU's left canonical joints are at +X. If we
+    // mapped name→canon directly the motion would play MIRRORED. So detect the
+    // rig's handedness from the actual world-X of a left vs right bone and, when
+    // it's opposite CMU's (+X = left), SWAP the canonical L/R indices in the
+    // mapping — labels stay correct, motion stays correct. Uses the upper-arm
+    // pair (canon 11 = left, 7 = right) with a fallback to the leg pair (19/15).
+    {
+        auto worldXForCanon = [&](int canon) -> double {
+            for (int i = 0; i < nBones; ++i)
+                if (boneToCanon[i] == canon)
+                    return skel->getBone(static_cast<unsigned short>(i))->_getDerivedPosition().x;
+            return 0.0;
+        };
+        double lx = worldXForCanon(11), rx = worldXForCanon(7);   // arms
+        if (std::abs(lx - rx) < 1e-4) { lx = worldXForCanon(19); rx = worldXForCanon(15); }  // legs
+        // CMU: left at +X. If the rig's "left" bone is more −X than its "right",
+        // the rig is mirrored vs CMU → swap L/R canonical targets.
+        if (lx < rx - 1e-5) {
+            static const int kLR[][2] = {{6,10},{7,11},{8,12},{9,13},{14,18},{15,19},{16,20},{17,21}};
+            auto swapCanon = [&](int& c) {
+                for (auto& p : kLR) { if (c == p[0]) { c = p[1]; return; } if (c == p[1]) { c = p[0]; return; } }
+            };
+            for (int i = 0; i < nBones; ++i)
+                if (boneToCanon[i] >= 0) swapCanon(boneToCanon[i]);
+        }
+    }
+
+    res.canonicalJoints = distinct;
+    // Need a humanoid-ish rig: require a reasonable share of the 22 roles.
+    if (distinct < (MotionInbetween::canonicalJointCount() * 1) / 2) {
+        res.error = QStringLiteral(
+            "skeleton resolved only %1/%2 canonical joints — not a humanoid rig the "
+            "motion library can retarget onto")
+            .arg(distinct).arg(MotionInbetween::canonicalJointCount());
+        return res;
+    }
+
+    if (skel->hasAnimation(animName))
+        skel->removeAnimation(animName);
+    Ogre::Animation* anim = skel->createAnimation(animName, length);
+    anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
+    anim->setRotationInterpolationMode(Ogre::Animation::RIM_LINEAR);
+
+    // The rig's natural STANDING pose. Mixamo skeletons have an identity bone
+    // rest pose — the real standing orientation lives in frame 0 of their
+    // existing animation, not in the bone transform. So harvest each bone's
+    // orientation at t=0 of the rig's first existing animation; that is the
+    // "bind" we compose our CMU motion onto (without it the body inverts, since
+    // the bone rest is a meaningless identity). Falls back to the bone's own
+    // rest if there's no prior animation.
+    struct StandXform { Ogre::Quaternion rot; Ogre::Vector3 pos; Ogre::Vector3 scale; bool has = false; };
+    std::unordered_map<unsigned short, StandXform> standPose;
+    if (skel->getNumAnimations() > 0) {
+        Ogre::Animation* ref = nullptr;
+        for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+            Ogre::Animation* a = skel->getAnimation(ai);
+            if (a && a->getName() != animName) { ref = a; break; }
+        }
+        if (ref) {
+            for (const auto& [h, trk] : ref->_getNodeTrackList()) {
+                if (!trk || trk->getNumKeyFrames() == 0) continue;
+                Ogre::TransformKeyFrame f0(nullptr, 0.0f);
+                trk->getInterpolatedKeyFrame(ref->_getTimeIndex(0.0f), &f0);
+                standPose[h] = { f0.getRotation(), f0.getTranslate(), f0.getScale(), true };
+            }
+        }
+    }
+
+    const int J = MotionInbetween::canonicalJointCount();
+
+    // ===== ROLL-CORRECTED PURE-LOCAL RETARGET =====
+    // Apply each CMU joint's LOCAL (parent-relative) articulation delta onto the
+    // rig's standing pose, conjugated by a CONSTANT per-joint frame map M_c so
+    // the motion DIRECTION matches CMU while staying frame-coherent (smooth):
+    //   local(f) = bind · (M_c⁻¹ · cmuLocalDelta[c][f] · M_c)
+    // Conjugation by a constant preserves the rotation ANGLE (no jitter) while
+    // redirecting its axis into the target bone's local frame. cmuLocalDelta is
+    // derived from the v3 WORLD clip (Wparent⁻¹·Wjoint), or used directly for
+    // v1/v2 local clips. Root (c==0) locked to standing (CMU bakes facing into
+    // the hip). Robust to duplicate-canon bones (per-bone-local). Good-but-
+    // imperfect: locomotion looks right; arm-precise gestures place the arm
+    // approximately. A true IK/look-at retarget that handles the rig↔canonical
+    // topology mismatch (multi-bone spines, canonical≠skeleton parents) is the
+    // follow-up for exact gesture placement (see #411 retarget notes).
+    static const int kParentCanon[22] = {
+        -1, 0, 1, 2, 3, 4,   // hip, abdomen, chest, neck, neck1, head
+         2, 6, 7, 8,          // rcollar, rshoulder, relbow, rhand
+         2, 10, 11, 12,       // lcollar, lshoulder, lelbow, lhand
+         0, 14, 15, 16,       // rbuttock, rhip, rknee, rfoot
+         0, 18, 19, 20 };     // lbuttock, lhip, lknee, lfoot
+    auto clipQ = [&](int frame, int joint) -> Ogre::Quaternion {
+        const auto& q = clipQuats[frame][joint];
+        return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
+    };
+    std::vector<std::vector<Ogre::Quaternion>> cmuLocalDelta(
+        J, std::vector<Ogre::Quaternion>(frames, Ogre::Quaternion::IDENTITY));
+    for (int c = 0; c < J; ++c) {
+        const int pc = kParentCanon[c];
+        Ogre::Quaternion local0;
+        for (int f = 0; f < frames; ++f) {
+            Ogre::Quaternion local = (worldFrame && pc >= 0)
+                ? clipQ(f, pc).Inverse() * clipQ(f, c)   // world→local
+                : clipQ(f, c);                            // already local (or root)
+            if (f == 0) local0 = local;
+            cmuLocalDelta[c][f] = local0.Inverse() * local;
+        }
+    }
+    // Standing-pose world orientation per bone (for the M_c roll correction).
+    std::unordered_map<unsigned short, Ogre::Quaternion> standWorldCache;
+    std::function<Ogre::Quaternion(Ogre::Bone*)> standWorldOf =
+        [&](Ogre::Bone* b) -> Ogre::Quaternion {
+        const unsigned short h = b->getHandle();
+        auto it = standWorldCache.find(h);
+        if (it != standWorldCache.end()) return it->second;
+        auto spr = standPose.find(h);
+        Ogre::Quaternion localRot = (spr != standPose.end() && spr->second.has)
+            ? spr->second.rot : b->getInitialOrientation();
+        Ogre::Quaternion w = localRot;
+        if (b->getParent())
+            w = standWorldOf(static_cast<Ogre::Bone*>(b->getParent())) * w;
+        standWorldCache[h] = w;
+        return w;
+    };
+
+    for (int i = 0; i < nBones; ++i) {
+        const int c = boneToCanon[i];
+        if (c < 0 || c >= J) continue;       // unmapped bone keeps its bind pose
+        Ogre::Bone* bone = skel->getBone(static_cast<unsigned short>(i));
+        Ogre::NodeAnimationTrack* track = anim->createNodeTrack(
+            static_cast<unsigned short>(i), bone);
+
+        auto sp = standPose.find(static_cast<unsigned short>(i));
+        const bool haveStand = (sp != standPose.end() && sp->second.has);
+        const Ogre::Quaternion bind = haveStand
+            ? sp->second.rot
+            : (bone->getOrientation().equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f))
+                   ? bone->getInitialOrientation() : bone->getOrientation());
+        const Ogre::Vector3 standPos = haveStand ? sp->second.pos : bone->getInitialPosition();
+        const Ogre::Vector3 standScale = haveStand ? sp->second.scale : bone->getInitialScale();
+
+        // Mc (roll correction) is a Mixamo-tuned heuristic: it is ≈identity when
+        // the rig has IDENTITY bone rests (Mixamo — the standing pose lives in the
+        // harvested animation, so standWorldOf≈I and Mc≈clip0≈I, harmless). But on
+        // a rig with NON-IDENTITY bone rests AND no prior animation (UniRig auto-
+        // rig), standWorldOf accumulates the real rest orientations and Mc becomes
+        // a large bogus rotation that conjugates the motion into the wrong frame —
+        // which inverted/splayed the UniRig animation. So only apply Mc when we
+        // actually harvested a standing pose (have-anim rigs); otherwise use the
+        // robust pure-local delta (bind · delta), which renders upright on UniRig.
+        const bool haveAnyStand = !standPose.empty();
+        Ogre::Quaternion Mc = Ogre::Quaternion::IDENTITY;
+        if (worldFrame && c > 0 && haveAnyStand)
+            Mc = standWorldOf(bone).Inverse() * clipQ(0, c);  // target-stand → CMU-rest
+        const Ogre::Quaternion McInv = Mc.Inverse();
+        for (int f = 0; f < frames; ++f) {
+            const Ogre::Quaternion local = (c == 0)
+                ? bind
+                : (bind * (McInv * cmuLocalDelta[c][f] * Mc));
+            Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(f * dt);
+            kf->setRotation(local);
+            kf->setTranslate(standPos);
+            kf->setScale(standScale);
+        }
+        ++res.tracksWritten;
+    }
+
+    if (res.tracksWritten == 0) {
+        skel->removeAnimation(animName);
+        res.error = QStringLiteral("no bone tracks written");
+        return res;
+    }
+
+    // RMIB REFINE PASS (#411). The raw retargeted keyframes are individually
+    // plausible but temporally jittery / slightly off the natural-motion
+    // manifold (the per-frame bind-compose accumulates small errors). The RMIB
+    // in-between model (#409) was trained on CMU motion — the SAME source as
+    // these clips — so re-predicting the interior frames between sparse
+    // keyframes acts as a learned motion smoother that pulls the poses back
+    // toward plausible CMU-style motion. (User-validated: decimate→in-between
+    // markedly cleans up the result.) We decimate to every `refineStride`-th
+    // keyframe, then RMIB-fill each gap. Best-effort: any failure leaves the
+    // dense keyframes intact.
+    if (refineWithModel && refineStride > 0 && frames > refineStride * 2) {
+        const QString modelPath = MotionInbetween::ensureModelBlocking();
+        // Decimate every track to keep every refineStride-th key (+ the last),
+        // then in-between-fill the whole clip so RMIB regenerates the interior.
+        decimateAnimation(skel, animName, refineStride);
+        const auto fill = inbetweenAnimation(
+            skel, animName, 0.0f, length, refineStride - 1, modelPath,
+            /*forceFallback=*/modelPath.isEmpty());
+        res.refined = fill.ok;
+        res.usedModel = fill.ok && fill.usedModel;
+    }
+
     res.ok = true;
     return res;
 }

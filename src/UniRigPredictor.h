@@ -69,6 +69,7 @@ public:
         QString name;                            // synthesised ("joint_0", "root", …)
         int     parent = -1;                     // index into joints (-1 = root)
         std::array<double, 3> pos = {0, 0, 0};   // mesh-local position
+        int     part   = 0;                      // UniRig part: 0=body,1=hand,-1=none
     };
 
     struct Result {
@@ -144,6 +145,16 @@ public:
     static Result detokenize(const std::vector<int>& ids,
                              double scale,
                              const std::array<double, 3>& centre);
+
+    // Assign anatomical bone names (Hips / Spine / Neck / Head / {Left,Right}
+    // {Arm,ForeArm,Hand,UpLeg,Leg,Foot}, Mixamo-style) to a predicted joint set
+    // by REST-POSE GEOMETRY — UniRig emits positional names (joint_N) with no
+    // semantics or L/R, so downstream tooling that keys off bone names (the
+    // text-to-motion canonical mapper, segmentation, etc.) resolves nothing.
+    // Pure-data + unit-testable. `upAxis` (0=X,1=Y,2=Z, default +Y) is the body's
+    // up direction; the character's LEFT is +X by convention. Joints it can't
+    // confidently classify keep their original name. Mutates `joints[].name`.
+    static void labelJointsAnatomically(std::vector<Joint>& joints, int upAxis = 1);
 };
 
 #endif // UNIRIG_PREDICTOR_H

@@ -241,6 +241,11 @@ public:
     Q_INVOKABLE void toggleSkeletonDebug(const QString& entityName, bool show);
     Q_INVOKABLE void toggleBoneWeights(const QString& entityName, bool show);
     Q_INVOKABLE bool renameAnimation(const QString& entityName, const QString& oldName, const QString& newName);
+    /// Remove an animation from the entity's skeleton (irreversible). Disables
+    /// debug overlays + playback first (rename-style safety) so stale pointers
+    /// can't crash the poll timer, then re-selects to refresh widgets and emits
+    /// animationStateChanged. Returns false if the entity/animation isn't found.
+    Q_INVOKABLE bool deleteAnimation(const QString& entityName, const QString& animName);
 
     /// Analyze an animation's redundant keyframes without modifying it.
     /// `preset` is one of: "conservative", "balanced", "aggressive".

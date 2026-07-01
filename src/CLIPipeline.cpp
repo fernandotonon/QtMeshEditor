@@ -4,6 +4,8 @@
 #include "MeshImporterExporter.h"
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
+#include "MotionLibrary.h"
+#include "MotionGenerator.h"
 #include "MeshValidator.h"
 #include "MeshLodController.h"
 #include "SelectionSet.h"
@@ -1844,6 +1846,137 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
     return 0;
 }
 
+int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
+                                 float duration, const QString& outputPath,
+                                 bool jsonOutput, bool useModel)
+{
+    // #411 text-to-motion (template-clip MVP): match the prompt to a permissive
+    // CMU motion clip from the downloadable library, retarget it onto the mesh's
+    // skeleton via the #409 canonical mapping, and re-export.
+    QFileInfo fi(filePath);
+    if (!fi.exists()) { err() << "Error: File not found: " << filePath << Qt::endl; return 1; }
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
+                                  QStringLiteral("CLI anim --generate"));
+
+    // Acquire the canonical clip from one of two sources:
+    //   (A) the EXPERIMENTAL trained model (--model), tried first when requested;
+    //   (B) the TEMPLATE-clip library (default + automatic fallback).
+    // Both yield LOCAL-frame quats consumed identically by applyMotionClip.
+    QString action;
+    std::vector<std::vector<std::array<float, 4>>> quats;
+    int fps = 30;
+    bool worldFrame = false;
+    std::vector<std::array<float, 4>> cmuRest;   // template-only (model has none)
+    QString clipSource;
+
+    bool gotClip = false;
+    if (useModel) {
+        const QString mp = MotionGenerator::ensureModelBlocking();
+        if (mp.isEmpty()) {
+            err() << "Note: text-to-motion model unavailable "
+                     "(needs ONNX build + first-use download); using template library."
+                  << Qt::endl;
+        } else {
+            const auto mr = MotionGenerator::generate(prompt, mp,
+                                                      MotionGenerator::vocabPath(),
+                                                      duration);
+            if (mr.ok) {
+                action = mr.matchedAction;
+                quats = mr.clip.quats;
+                fps = mr.clip.fps;
+                worldFrame = false;          // model emits LOCAL-frame quats
+                clipSource = QStringLiteral("model");
+                gotClip = true;
+            } else {
+                err() << "Note: model generation failed (" << mr.error
+                      << "); using template library." << Qt::endl;
+            }
+        }
+    }
+
+    if (!gotClip) {
+        const QString libPath = MotionLibrary::ensureLibraryBlocking();
+        if (libPath.isEmpty()) {
+            err() << "Error: motion library unavailable (offline, or set "
+                     "QTMESH_MOTION_LIBRARY_BASE_URL)." << Qt::endl;
+            return 1;
+        }
+        MotionLibrary lib;
+        if (!lib.loadFromFile(libPath)) {
+            err() << "Error: " << lib.error() << Qt::endl; return 1;
+        }
+        const int idx = lib.matchPrompt(prompt, &action);
+        if (idx < 0) {
+            err() << "Error: no motion matched \"" << prompt << "\". Known actions:";
+            for (const QString& a : lib.actions()) err() << " " << a;
+            err() << Qt::endl;
+            return 1;
+        }
+        const MotionLibrary::Clip& clip = lib.clip(idx);
+        quats = clip.quats;
+        fps = clip.fps;
+        worldFrame = lib.isWorldFrame();
+        cmuRest = lib.cmuRestWorld();
+        clipSource = QStringLiteral("template");
+        // Optionally retime the clip to a requested duration by frame stride/pad.
+        if (duration > 0.05f) {
+            const int want = std::max(2, int(duration * clip.fps));
+            std::vector<std::vector<std::array<float, 4>>> retimed(want);
+            for (int f = 0; f < want; ++f) {
+                const float src = (clip.frames - 1) * (float(f) / float(want - 1));
+                retimed[f] = quats[std::min(clip.frames - 1, int(src + 0.5f))];
+            }
+            quats.swap(retimed);
+        }
+    }
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    auto& entities = Manager::getSingleton()->getEntities();
+    Ogre::Entity* entity = nullptr;
+    for (auto* e : entities)
+        if (e && e->getMovableType() == "Entity" && e->hasSkeleton()) { entity = e; break; }
+    if (!entity) {
+        err() << "Error: " << filePath << " has no skinned mesh — text-to-motion "
+                 "needs a rigged humanoid skeleton to retarget onto." << Qt::endl;
+        return 1;
+    }
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+
+    const std::string animName = ("generated_" + action).toStdString();
+    auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
+                                                worldFrame, cmuRest);
+    if (!res.ok) {
+        err() << "Error: " << res.error << Qt::endl; return 1;
+    }
+    err() << "(source: " << clipSource << ")" << Qt::endl;
+
+    auto* node = entity->getParentSceneNode();
+    const QString fmt = formatForExtension(outputPath);
+    if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed." << Qt::endl; return 1;
+    }
+
+    if (jsonOutput) {
+        QJsonObject root;
+        root["prompt"] = prompt; root["action"] = action; root["source"] = clipSource;
+        root["animation"] = QString::fromStdString(animName);
+        root["frames"] = res.frames; root["length"] = res.length;
+        root["tracksWritten"] = res.tracksWritten; root["canonicalJoints"] = res.canonicalJoints;
+        root["output"] = QFileInfo(outputPath).fileName();
+        cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)) + "\n");
+    } else {
+        cliWrite(QString("Generated motion '%1' (%2, %3) → %4 bones over %5 joints, "
+                         "%6 frames (%7s) → %8\n")
+                     .arg(action, clipSource, QString::fromStdString(animName))
+                     .arg(res.tracksWritten).arg(res.canonicalJoints)
+                     .arg(res.frames).arg(res.length, 0, 'f', 1)
+                     .arg(QFileInfo(outputPath).fileName()));
+    }
+    return 0;
+}
+
 int CLIPipeline::cmdAnim(int argc, char* argv[])
 {
     // Parse: anim <file> --list [--json]
@@ -1863,6 +1996,10 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool bakeFpsMode  = false;
     bool inbetweenMode = false;       // #409: AI in-betweening
     bool inbetweenNoModel = false;    // --no-model → force spline fallback
+    bool generateMode = false;        // #411: text-to-motion (template-clip MVP)
+    QString generatePrompt;           // --generate "<prompt>"
+    float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
+    bool generateUseModel = false;    // --model → experimental trained t2m model (template fallback)
     bool jsonOutput = false;
     int resampleCount = 0;
     int decimateStep = 0;
@@ -1932,6 +2069,19 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             continue;
         }
         if (arg == "--no-model") { inbetweenNoModel = true; continue; }
+        if (arg == "--generate" && i + 1 < argc) {
+            generateMode = true;
+            generatePrompt = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
+        // --model (no arg, anim subcommand): opt into the EXPERIMENTAL trained
+        // text-to-motion model for --generate; falls back to the template library
+        // automatically if the model is unavailable.
+        if (arg == "--model" && generateMode) { generateUseModel = true; continue; }
+        if (arg == "--duration" && i + 1 < argc) {
+            generateDuration = QString(argv[++i]).toFloat();
+            continue;
+        }
         if (arg == "--simplify") { simplifyMode = true; continue; }
         if (arg == "--analyze")  { analyzeMode  = true; continue; }
         if (arg == "--preset" && i + 1 < argc) {
@@ -1977,9 +2127,21 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     filePath = positional[0];
 
+    // #411: text-to-motion (template-clip MVP). Self-contained — load → match a
+    // motion-library clip → retarget → export. Handled before the other modes.
+    if (generateMode) {
+        if (generatePrompt.trimmed().isEmpty()) {
+            err() << "Error: --generate requires a prompt, e.g. --generate \"walking\"." << Qt::endl;
+            return 2;
+        }
+        return cmdAnimGenerate(filePath, generatePrompt, generateDuration,
+                               outputPath.isEmpty() ? filePath : outputPath, jsonOutput,
+                               generateUseModel);
+    }
+
     if (!listMode && !renameMode && !mergeMode && !resampleMode && !decimateMode
         && !simplifyMode && !analyzeMode && !bakeFpsMode && !inbetweenMode) {
-        err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --simplify, --bake-fps, --in-between, or --analyze." << Qt::endl;
+        err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --simplify, --bake-fps, --in-between, --generate, or --analyze." << Qt::endl;
         err() << "Usage: qtmesh anim <file> --list [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --rename <old> <new> [-o <output>]" << Qt::endl;
