@@ -1488,68 +1488,41 @@ Rectangle {
                     + "Background removal (U²-Net) runs first. Pick an image to start."
             }
 
-            // Resolution picker
+            // Resolution picker — marching-cubes grid resolution. Cost grows with
+            // the cube of the value (the decoder queries resolution³ points), so
+            // higher = more detail but much slower. Labels flag the trade-off.
             Row {
                 spacing: 6
-                Text {
+                ThemedLabel {
                     text: "Resolution"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                ComboBox {
+                ThemedComboBox {
                     id: mgResCombo
-                    width: 90
-                    model: ["128 (fast)", "256", "320"]
-                    currentIndex: 1
+                    width: 150; height: 26
+                    font.pixelSize: 11
                     enabled: !MeshGenController.busy
-                    property int resValue: [128, 256, 320][currentIndex]
+                    model: ["128 (fast)", "192", "256 (default)", "320",
+                            "384", "448", "512 (slow, detailed)"]
+                    currentIndex: 2
+                    readonly property var resValues: [128, 192, 256, 320, 384, 448, 512]
+                    property int resValue: resValues[currentIndex]
                 }
             }
 
             // Remove-background toggle
-            CheckBox {
+            ThemedCheckBox {
                 id: mgRemoveBg
                 text: "Remove background"
                 checked: true
                 enabled: !MeshGenController.busy
-                contentItem: Text {
-                    text: mgRemoveBg.text
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                    leftPadding: mgRemoveBg.indicator.width + 4
-                    verticalAlignment: Text.AlignVCenter
-                }
             }
 
-            // Generate button
-            Rectangle {
-                id: mgBtn
-                width: Math.min(parent.width - 16, mgLabel.implicitWidth + 16)
-                height: 26
-                radius: 3
-                opacity: MeshGenController.busy ? 0.45 : 1.0
-                color: mgMa.containsMouse && !MeshGenController.busy
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
-                Text {
-                    id: mgLabel
-                    anchors.centerIn: parent
-                    text: "Generate from Image…"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                MouseArea {
-                    id: mgMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    enabled: !MeshGenController.busy
-                    cursorShape: MeshGenController.busy ? Qt.BusyCursor : Qt.PointingHandCursor
-                    onClicked: MeshGenController.pickImageAndGenerate(
-                        mgResCombo.resValue, mgRemoveBg.checked)
-                }
+            ThemedButton {
+                text: "Generate from Image…"
+                enabled: !MeshGenController.busy
+                onClicked: MeshGenController.pickImageAndGenerate(
+                    mgResCombo.resValue, mgRemoveBg.checked)
             }
 
             // Progress bar + status (only while busy)
@@ -1562,40 +1535,19 @@ Rectangle {
                 value: 0
             }
 
-            Text {
+            ThemedLabel {
                 id: mgStatus
                 width: parent.width - 16
                 wrapMode: Text.Wrap
                 visible: text.length > 0
-                color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 text: ""
             }
 
-            // Cancel (only while busy)
-            Rectangle {
-                width: Math.min(parent.width - 16, 80)
-                height: 22
-                radius: 3
+            ThemedButton {
+                text: "Cancel"
                 visible: MeshGenController.busy
-                color: mgCancelMa.containsMouse
-                    ? PropertiesPanelController.highlightColor
-                    : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
-                Text {
-                    anchors.centerIn: parent
-                    text: "Cancel"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                MouseArea {
-                    id: mgCancelMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: MeshGenController.cancel()
-                }
+                onClicked: MeshGenController.cancel()
             }
 
             Connections {
