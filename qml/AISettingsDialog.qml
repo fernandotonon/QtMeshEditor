@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import MaterialEditorQML 1.0
+import PropertiesPanel 1.0
 import "." as Local
 
 Dialog {
@@ -327,6 +328,66 @@ Dialog {
                                     from: 0; to: 1
                                     value: ModelDownloader.downloadProgress
                                     visible: ModelDownloader.isDownloading
+                                }
+                            }
+                        }
+
+                        // ── AI-Assist models (image-to-3D, #764) ──────────────
+                        // Pre-download the TripoSR encoder/decoder + U²-Net bg
+                        // remover so first use is instant. Reuses ModelDownloader's
+                        // shared progress bar above. Only shown on an ONNX build.
+                        Text {
+                            visible: MeshGenController.available
+                            text: "AI-Assist Models"
+                            font.pointSize: 12
+                            font.bold: true
+                            color: textColor
+                        }
+                        Rectangle {
+                            visible: MeshGenController.available
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: gen3dCol.implicitHeight + 20
+                            color: panelColor
+                            border.color: borderColor
+                            border.width: 1
+                            radius: 4
+                            ColumnLayout {
+                                id: gen3dCol
+                                anchors.fill: parent
+                                anchors.margins: 10
+                                spacing: 8
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    text: "Image → 3D (TripoSR) + background removal. Pick a size tier and pre-download so first use is instant. Downloads on first use too."
+                                    font.pointSize: 9
+                                    color: Qt.darker(textColor, 1.3)
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    ComboBox {
+                                        id: gen3dTier
+                                        Layout.preferredWidth: 200
+                                        model: ["fp32 (best, ~1.7GB)", "fp16 (~840MB)", "int8 (~430MB)"]
+                                        currentIndex: 0
+                                        enabled: !MeshGenController.busy
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Text {
+                                        text: MeshGenController.modelsPresent(gen3dTier.currentIndex)
+                                              ? "Downloaded" : "Not downloaded"
+                                        font.pointSize: 9
+                                        color: MeshGenController.modelsPresent(gen3dTier.currentIndex)
+                                               ? "#4caf50" : Qt.darker(textColor, 1.5)
+                                    }
+                                    Local.ThemedButton {
+                                        text: "Download"
+                                        enabled: !MeshGenController.busy
+                                                 && !MeshGenController.modelsPresent(gen3dTier.currentIndex)
+                                        onClicked: MeshGenController.downloadModels(gen3dTier.currentIndex)
+                                    }
                                 }
                             }
                         }

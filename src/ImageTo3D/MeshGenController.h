@@ -75,6 +75,15 @@ public:
     // progress callback checks). The run ends with meshGenError("cancelled").
     Q_INVOKABLE void cancel();
 
+    // ── Pre-download support (AI Settings modal) ────────────────────────────
+    // Whether the decoder + the given tier's encoder are already on disk.
+    Q_INVOKABLE bool modelsPresent(int quality = 0) const;
+    // Download the decoder + the given tier's encoder (blocks on the caller's
+    // event loop, driven by ModelDownloader → its progress bar updates in the
+    // dialog). No-op if already present. Emits modelDownloadFinished(ok) and sets
+    // busy while running. For pre-fetching from the AI Settings modal.
+    Q_INVOKABLE void downloadModels(int quality = 0);
+
 signals:
     void busyChanged();
     void selectedImageChanged();
@@ -83,6 +92,7 @@ signals:
     void statusMessage(const QString& message);
     void completed(QVariantMap result);   // {vertexCount, triangleCount}
     void error(const QString& message);
+    void modelDownloadFinished(bool ok);  // pre-download from AI Settings
 
 private:
     explicit MeshGenController(QObject* parent = nullptr);

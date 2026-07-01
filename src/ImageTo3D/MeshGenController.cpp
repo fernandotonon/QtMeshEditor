@@ -62,6 +62,35 @@ void MeshGenController::cancel()
     }
 }
 
+bool MeshGenController::modelsPresent(int quality) const
+{
+    return MeshGenPredictor::modelsPresent(qualityFromInt(quality));
+}
+
+void MeshGenController::downloadModels(int quality)
+{
+    if (m_busy) return;
+    if (!available()) {
+        emit modelDownloadFinished(false);
+        emit error(tr("Image-to-3D needs an ONNX build (rebuild with -DENABLE_ONNX)."));
+        return;
+    }
+    const MeshGenPredictor::Quality q = qualityFromInt(quality);
+    if (MeshGenPredictor::modelsPresent(q)) { emit modelDownloadFinished(true); return; }
+
+    setBusy(true);
+    emit statusMessage(tr("Downloading model…"));
+    // Blocks on this (GUI) thread's event loop; ModelDownloader drives the shared
+    // progress bar in the AI Settings dialog. Also fetch the bg-removal model.
+    const QString enc = MeshGenPredictor::ensureModelBlocking(q);
+    BackgroundRemover::ensureModelBlocking();
+    const bool ok = !enc.isEmpty() && MeshGenPredictor::modelsPresent(q);
+    setBusy(false);
+    emit statusMessage(ok ? tr("Model ready.")
+                          : tr("Model download failed (not hosted yet?)."));
+    emit modelDownloadFinished(ok);
+}
+
 void MeshGenController::selectImage()
 {
     if (m_busy) return;
