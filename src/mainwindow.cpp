@@ -2407,6 +2407,21 @@ void MainWindow::initToolBar()
         });
     });
 
+    connect(HdrEnvironmentController::instance(), &HdrEnvironmentController::browseRequested,
+            this, [this]() {
+        QTimer::singleShot(0, this, [this]() {
+            auto* hdrCtrl = HdrEnvironmentController::instance();
+            const QString path = QFileDialog::getOpenFileName(
+                this,
+                tr("Select HDR Environment"),
+                hdrCtrl->browseStartDirectory(),
+                tr("HDR Images (*.hdr *.exr);;All Files (*)"),
+                nullptr,
+                QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+            hdrCtrl->completeBrowseFromDialog(path);
+        });
+    });
+
     // ViewCube (3D navigation gizmo) — top-level window positioned over the active viewport
     m_viewCubeController = new ViewCubeController(this);
     // Force software rendering for the ViewCube QML widget (avoid GL conflicts with Ogre)

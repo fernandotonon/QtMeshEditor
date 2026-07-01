@@ -4254,11 +4254,9 @@ Rectangle {
 
             property bool viewportOverridesExpanded: false
 
-            function bundledIndexForCurrent() {
-                const label = HdrEnvironmentController.currentEnvironmentLabel
-                if (!label || label === "(none)")
-                    return -1
-                return HdrEnvironmentController.bundledEnvironments.indexOf(label)
+            function choiceIndexForCurrent() {
+                const idx = HdrEnvironmentController.currentChoiceIndex
+                return idx >= 0 ? idx : -1
             }
 
             // Environment picker
@@ -4278,17 +4276,22 @@ Rectangle {
                     width: parent.width - browseBtn.width - 6
                     height: 22
                     font.pixelSize: 11
-                    enabled: HdrEnvironmentController.bundledEnvironments.length > 0
-                    model: HdrEnvironmentController.bundledEnvironments
-                    currentIndex: hdrEnvCol.bundledIndexForCurrent()
+                    enabled: HdrEnvironmentController.environmentChoices.length > 0
+                    model: HdrEnvironmentController.environmentChoices.length > 0
+                        ? HdrEnvironmentController.environmentChoices
+                        : [qsTr("(no environments — use Browse…)")]
+                    currentIndex: hdrEnvCol.choiceIndexForCurrent()
                     onActivated: index => {
-                        if (index >= 0 && index < model.length)
-                            HdrEnvironmentController.loadEnvironment(model[index])
+                        if (HdrEnvironmentController.environmentChoices.length > 0)
+                            HdrEnvironmentController.loadEnvironmentChoice(index)
                     }
                     Connections {
                         target: HdrEnvironmentController
                         function onEnvironmentChanged() {
-                            hdrEnvCombo.currentIndex = hdrEnvCol.bundledIndexForCurrent()
+                            hdrEnvCombo.currentIndex = hdrEnvCol.choiceIndexForCurrent()
+                        }
+                        function onEnvironmentChoicesChanged() {
+                            hdrEnvCombo.currentIndex = hdrEnvCol.choiceIndexForCurrent()
                         }
                     }
                 }
@@ -4314,7 +4317,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: HdrEnvironmentController.browseEnvironment()
+                        onClicked: HdrEnvironmentController.browseForEnvironment()
                     }
                 }
             }

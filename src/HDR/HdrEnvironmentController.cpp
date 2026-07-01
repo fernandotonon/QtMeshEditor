@@ -5,10 +5,15 @@
 #include "SentryReporter.h"
 
 #include <algorithm>
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QQmlEngine>
-#include <QWidget>
+#include <QSettings>
+#include <QSet>
+
+namespace {
+constexpr QLatin1String kRecentPathsKey("HdrEnvironment/recentPaths");
+constexpr int kMaxRecentPaths = 10;
+} // namespace
 
 HdrEnvironmentController* HdrEnvironmentController::s_instance = nullptr;
 
@@ -37,6 +42,7 @@ void HdrEnvironmentController::kill()
 HdrEnvironmentController::HdrEnvironmentController(QObject* parent)
     : QObject(parent)
 {
+    loadRecentPaths();
     refreshBundledList();
     connectManagerSignals();
 }
@@ -45,6 +51,7 @@ void HdrEnvironmentController::connectManagerSignals()
 {
     auto* hdrMgr = HDREnvironmentManager::getSingleton();
     connect(hdrMgr, &HDREnvironmentManager::environmentChanged, this, [this]() {
+        rebuildEnvironmentChoices();
         emit environmentChanged();
         emit overlayVisibleChanged();
     });
@@ -59,9 +66,110 @@ void HdrEnvironmentController::connectManagerSignals()
     connect(hdrMgr, &HDREnvironmentManager::backgroundBlurChanged, this, &HdrEnvironmentController::backgroundBlurChanged);
 }
 
+void HdrEnvironmentController::loadRecentPaths()
+{
+    QSettings settings;
+    m_recentEnvironments = settings.value(kRecentPathsKey).toStringList();
+    m_recentEnvironments.removeDuplicates();
+}
+
+void HdrEnvironmentController::rememberRecentPath(const QString& resolvedPath)
+{
+    if (resolvedPath.isEmpty())
+        return;
+
+    m_recentEnvironments.removeAll(resolvedPath);
+    m_recentEnvironments.prepend(resolvedPath);
+    while (m_recentEnvironments.size() > kMaxRecentPaths)
+        m_recentEnvironments.removeLast();
+
+    QSettings settings;
+    settings.setValue(kRecentPathsKey, m_recentEnvironments);
+    rebuildEnvironmentChoices();
+}
+
+void HdrEnvironmentController::rebuildEnvironmentChoices()
+{
+    QStringList labels;
+    QStringList keys;
+    QSet<QString> seenLabels;
+
+    auto appendChoice = [&](const QString& loadKey, const QString& label) {
+        if (label.isEmpty() || seenLabels.contains(label))
+            return;
+        seenLabels.insert(label);
+        labels.append(label);
+        keys.append(loadKey);
+    };
+
+    for (const QString& bundled : m_bundledEnvironments)
+        appendChoice(bundled, bundled);
+
+    for (const QString& path : m_recentEnvironments) {
+        const QFileInfo info(path);
+        if (!info.exists() || !info.isFile())
+            continue;
+        const QString label = info.fileName();
+        if (m_bundledEnvironments.contains(label))
+            continue;
+        appendChoice(info.absoluteFilePath(), label);
+    }
+
+    const QString current = currentEnvironment();
+    if (!current.isEmpty()) {
+        const QFileInfo currentInfo(current);
+        const QString label = currentInfo.fileName();
+        bool alreadyListed = false;
+        for (int i = 0; i < keys.size(); ++i) {
+            const QFileInfo keyInfo(keys[i]);
+            if (keyInfo.isAbsolute()) {
+                if (keyInfo.canonicalFilePath() == currentInfo.canonicalFilePath()) {
+                    alreadyListed = true;
+                    break;
+                }
+            } else if (keys[i] == label || keys[i] == current) {
+                alreadyListed = true;
+                break;
+            }
+        }
+        if (!alreadyListed)
+            appendChoice(currentInfo.isAbsolute() ? currentInfo.absoluteFilePath() : current, label);
+    }
+
+    if (labels == m_environmentChoices && keys == m_choiceLoadKeys)
+        return;
+
+    m_environmentChoices = labels;
+    m_choiceLoadKeys = keys;
+    emit environmentChoicesChanged();
+}
+
 void HdrEnvironmentController::refreshBundledList()
 {
     m_bundledEnvironments = HDREnvironmentManager::listBundledEnvironments();
+    rebuildEnvironmentChoices();
+}
+
+int HdrEnvironmentController::currentChoiceIndex() const
+{
+    const QString current = currentEnvironment();
+    if (current.isEmpty())
+        return -1;
+
+    const QFileInfo currentInfo(current);
+    const QString currentCanon = currentInfo.canonicalFilePath();
+
+    for (int i = 0; i < m_choiceLoadKeys.size(); ++i) {
+        const QString& key = m_choiceLoadKeys[i];
+        const QFileInfo keyInfo(key);
+        if (keyInfo.isAbsolute()) {
+            if (keyInfo.canonicalFilePath() == currentCanon)
+                return i;
+        } else if (key == currentInfo.fileName() || key == current) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 QString HdrEnvironmentController::currentEnvironment() const
@@ -284,6 +392,7 @@ bool HdrEnvironmentController::loadEnvironment(const QString& pathOrBundledName)
         return false;
     const bool ok = hdrMgr->loadEnvironment(pathOrBundledName);
     if (ok) {
+        rememberRecentPath(hdrMgr->currentEnvironment());
         SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                        QStringLiteral("hdr.loadEnvironment=%1")
                                            .arg(QFileInfo(pathOrBundledName).fileName()));
@@ -291,19 +400,46 @@ bool HdrEnvironmentController::loadEnvironment(const QString& pathOrBundledName)
     return ok;
 }
 
+bool HdrEnvironmentController::loadEnvironmentChoice(int index)
+{
+    if (index < 0 || index >= m_choiceLoadKeys.size())
+        return false;
+    return loadEnvironment(m_choiceLoadKeys[index]);
+}
+
+QString HdrEnvironmentController::browseStartDirectory() const
+{
+    const QString current = currentEnvironment();
+    if (!current.isEmpty()) {
+        const QFileInfo info(current);
+        if (info.isAbsolute())
+            return info.absolutePath();
+    }
+    if (!m_recentEnvironments.isEmpty()) {
+        const QFileInfo info(m_recentEnvironments.first());
+        if (info.exists())
+            return info.absolutePath();
+    }
+    return QString();
+}
+
+void HdrEnvironmentController::browseForEnvironment()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("hdr.browseRequested"));
+    emit browseRequested();
+}
+
 QString HdrEnvironmentController::browseEnvironment()
 {
-    QWidget* parent = nullptr;
-    const QString path = QFileDialog::getOpenFileName(
-        parent,
-        QObject::tr("Select HDR Environment"),
-        QString(),
-        QObject::tr("HDR Images (*.hdr *.exr);;All Files (*)"));
-    if (path.isEmpty())
-        return {};
-    if (loadEnvironment(path))
-        return path;
+    browseForEnvironment();
     return {};
+}
+
+void HdrEnvironmentController::completeBrowseFromDialog(const QString& path)
+{
+    if (path.isEmpty())
+        return;
+    loadEnvironment(path);
 }
 
 void HdrEnvironmentController::resetTonemap()
