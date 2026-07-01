@@ -4,8 +4,8 @@
 #include "TextureUpscaler.h"
 #include "ModelDownloader.h"
 #include "SentryReporter.h"
-#include "MeshGenPredictor.h"
-#include "MeshGenBuilder.h"
+#include "ImageTo3D/MeshGenPredictor.h"
+#include "ImageTo3D/MeshGenBuilder.h"
 #include "MeshImporterExporter.h"
 #include "CLIPipeline.h"
 

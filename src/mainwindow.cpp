@@ -122,7 +122,7 @@
 #include "VATBakerController.h"
 #include "ThemeManager.h"
 #include "IsometricSpritesController.h"
-#include "MeshGenController.h"
+#include "ImageTo3D/MeshGenController.h"
 #include "MorphAnimationManager.h"
 #include "EditorModeController.h"
 #include "QtMeshCloudClient.h"
