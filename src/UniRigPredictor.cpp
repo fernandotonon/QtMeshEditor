@@ -316,24 +316,34 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
         return hi - lo;
     };
 
-    // AXIS DETECTION FROM JOINT SPREAD (don't trust the passed-in upAxis — UniRig
-    // emits in its own frame and the predicted skeleton's real axes vary; a wrong
-    // up flips spine↔limb and L↔R). In a roughly T/A-pose humanoid the arms (with
-    // fingers) splay the WIDEST → that's the SIDE (left/right) axis; the head-to-
-    // foot extent is the NEXT widest → UP; the shallow front/back extent is the
-    // smallest → FWD. So: SIDE = largest-span axis, UP = second-largest, FWD =
-    // smallest. (Verified against real UniRig dumps for both a Y-up and a Z-up
-    // predicted rig.)
-    int span2[3];
+    // AXIS DETECTION (don't trust the passed-in upAxis — UniRig emits in its own
+    // frame and the predicted skeleton's real axes vary; a wrong up flips
+    // spine↔limb and L↔R). Anatomical signals, robust whether or not the rig has
+    // fingers (an earlier "widest span = side" heuristic broke on a finger-less
+    // rig where the head↔foot Y-extent exceeds the arm span):
+    //   * SIDE (left/right) = the axis about which the joints are most MIRROR-
+    //     SYMMETRIC — limbs come in L/R pairs, so the joint mean sits near the
+    //     span mid-point on the side axis; up/fwd are asymmetric (body is
+    //     top/bottom-heavy, faces one way). Pick min |mean − mid| / span.
+    //   * UP = the LARGER-spread of the two remaining axes (head↔foot > front↔back).
+    //   * FWD = the last one.
     double spanV[3] = { spread(0), spread(1), spread(2) };
-    (void)span2; (void)upAxis;
-    int order[3] = {0, 1, 2};
-    std::sort(order, order + 3, [&](int a, int b){ return spanV[a] > spanV[b]; });
-    const int SIDE = order[0];   // widest — arms span
-    int U = order[1];            // second — head↔foot
-    // Degenerate guard: if the 2nd/3rd spans are near-equal and tiny, fall back
-    // to the passed-in up so a flat/odd rig doesn't pick noise.
-    if (spanV[order[1]] < 1e-4 && upAxis >= 0 && upAxis <= 2) U = upAxis;
+    auto symOffset = [&](int ax) -> double {
+        double lo = 1e30, hi = -1e30, sum = 0.0;
+        for (const auto& j : joints) { lo = std::min(lo, j.pos[ax]); hi = std::max(hi, j.pos[ax]); sum += j.pos[ax]; }
+        const double span = hi - lo;
+        if (span < 1e-6) return 1e30;   // degenerate axis can't be SIDE
+        const double mean = sum / static_cast<double>(n);
+        return std::abs(mean - (lo + hi) * 0.5) / span;
+    };
+    int SIDE = 0;
+    { double best = 1e30;
+      for (int ax = 0; ax < 3; ++ax) { const double s = symOffset(ax); if (s < best) { best = s; SIDE = ax; } } }
+    // UP = larger-spread of the other two.
+    const int o1 = (SIDE + 1) % 3, o2 = (SIDE + 2) % 3;
+    int U = (spanV[o1] >= spanV[o2]) ? o1 : o2;
+    if (spanV[U] < 1e-4 && upAxis >= 0 && upAxis <= 2) U = upAxis;   // degenerate guard
+    (void)upAxis;
 
     auto up   = [&](int i) { return joints[i].pos[U]; };
     // SIDE SIGN → LEFT/RIGHT. Name bones ANATOMICALLY: a character's LEFT is on
