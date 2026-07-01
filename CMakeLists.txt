@@ -436,6 +436,18 @@ endif()
 #  Find Assimp
 ##############################################################
 find_package(assimp REQUIRED)
+if(APPLE AND TARGET assimp::assimp)
+    execute_process(
+        COMMAND xcrun --sdk macosx --show-sdk-path
+        OUTPUT_VARIABLE QTMESH_MACOSX_SDK
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(QTMESH_MACOSX_SDK)
+        set_target_properties(assimp::assimp PROPERTIES
+            INTERFACE_LINK_LIBRARIES "${QTMESH_MACOSX_SDK}/usr/lib/libz.tbd"
+        )
+    endif()
+endif()
 if (assimp_FOUND)
     message("Assimp Found")
     set(ASSIMP_LIBRARY "assimp")
