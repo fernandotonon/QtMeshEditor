@@ -35,9 +35,11 @@ WHAT IT PRODUCES  (the contract MeshGenPredictor::predict() will target)
 
   The decoder is a per-point graph so C++ tiles the resolution^3 grid through it in
   chunks (grid vertices in [0,1]^3 scaled to (-radius,radius); see extract_mesh /
-  query_triplane in tsr/system.py). Marching cubes runs on `-(density - threshold)`
+  query_triplane in tsr/system.py). Marching cubes runs on `density - threshold`
   at iso 0 (threshold default 25.0), i.e. our native MarchingCubes::extract(field=
-  density-threshold, isoLevel=0) — see src/MarchingCubes.h.
+  density-threshold, isoLevel=0) — see src/MarchingCubes.h. (TripoSR's own
+  isosurface uses `-(density - threshold)` because its MC treats the LOW side as
+  inside; ours is inside-positive, so the sign flips — same surface.)
 
 GRID / AXIS NOTE (for slice B/C)
   TripoSR's MarchingCubeHelper builds grid vertices with meshgrid(x,y,z,

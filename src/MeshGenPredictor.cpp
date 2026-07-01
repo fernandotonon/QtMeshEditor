@@ -299,9 +299,11 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
                 return fail(QStringLiteral("cancelled"));
         }
 
-        // ---- (3) Marching cubes on -(density - threshold) at iso 0 -----------
-        // Equivalent to extract(field = density - threshold, isoLevel = 0) with
-        // our inside-positive (>= iso) convention.
+        // ---- (3) Marching cubes on (density - threshold) at iso 0 ------------
+        // Our MarchingCubes is inside-POSITIVE (>= iso), so the surface is where
+        // (density - threshold) crosses 0. (TripoSR's own MC is inside-negative
+        // and runs on -(density - threshold); the sign flips but it's the same
+        // surface — see docs/IMAGE_TO_3D_SPIKE_764.md.)
         for (float& v : densityField) v -= opts.threshold;
         const std::array<float, 3> gmin = {-kRadius, -kRadius, -kRadius};
         const std::array<float, 3> gmax = { kRadius,  kRadius,  kRadius};

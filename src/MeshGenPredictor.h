@@ -29,8 +29,10 @@
 //   * decoder.onnx (per-point): scene_codes + points [1,P,3] (world coords in
 //     (-radius,radius), radius=0.87) → density [1,P,1] (post density_act) and
 //     color [1,P,3]. The grid is tiled through this in chunks.
-// Surface = marching cubes on `-(density - threshold)` at iso 0 (threshold 25.0),
-// i.e. MarchingCubes::extract(field = density - threshold, isoLevel = 0).
+// Surface = marching cubes on `density - threshold` at iso 0 (threshold 25.0),
+// i.e. MarchingCubes::extract(field = density - threshold, isoLevel = 0) — our MC
+// is inside-positive. (TripoSR's own inside-negative MC runs the negated field;
+// same surface.)
 //
 // The whole file is `ENABLE_ONNX`-guarded; without it isAvailable() is false and
 // predict() returns a "rebuild with -DENABLE_ONNX" Result. Models live under
