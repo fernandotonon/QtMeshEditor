@@ -443,8 +443,16 @@ if(APPLE AND TARGET assimp::assimp)
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     if(QTMESH_MACOSX_SDK)
+        get_target_property(QTMESH_ASSIMP_LINK_LIBRARIES assimp::assimp INTERFACE_LINK_LIBRARIES)
+        if(NOT QTMESH_ASSIMP_LINK_LIBRARIES)
+            set(QTMESH_ASSIMP_LINK_LIBRARIES "")
+        endif()
+        list(TRANSFORM QTMESH_ASSIMP_LINK_LIBRARIES
+            REPLACE "/[^;]*/MacOSX[^;/]*\\.sdk/usr/lib/libz\\.tbd"
+                    "${QTMESH_MACOSX_SDK}/usr/lib/libz.tbd"
+        )
         set_target_properties(assimp::assimp PROPERTIES
-            INTERFACE_LINK_LIBRARIES "${QTMESH_MACOSX_SDK}/usr/lib/libz.tbd"
+            INTERFACE_LINK_LIBRARIES "${QTMESH_ASSIMP_LINK_LIBRARIES}"
         )
     endif()
 endif()
