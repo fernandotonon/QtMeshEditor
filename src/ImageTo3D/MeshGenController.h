@@ -6,6 +6,8 @@
 #include <QString>
 #include <QVariantMap>
 
+#include "MeshGenPredictor.h"   // MeshGenPredictor::Quality
+
 #include <atomic>
 
 // QML controller for image-to-3D (epic #764): drives MeshGenPredictor on a WORKER
@@ -53,18 +55,21 @@ public:
 
     // Generate from the currently-selected image (selectImage() first). No-op if
     // nothing selected or already busy. Emits progress → (completed | error).
+    // `quality` is the encoder tier: 0=fp32 (best), 1=fp16, 2=int8 (smallest).
     Q_INVOKABLE void generateSelected(int resolution = 256,
-                                      bool removeBackground = true);
+                                      bool removeBackground = true,
+                                      int quality = 0);
 
     // Open a native file dialog to pick an image and start generation immediately.
     // Convenience one-shot (kept for callers/tests). Returns immediately.
     Q_INVOKABLE void pickImageAndGenerate(int resolution = 256,
-                                          bool removeBackground = true);
+                                          bool removeBackground = true,
+                                          int quality = 0);
 
     // Start generation from an explicit image path on the worker thread. No-op if
     // already busy. Emits progress → (completed | error). Returns immediately.
     Q_INVOKABLE void generate(const QString& imagePath, int resolution = 256,
-                              bool removeBackground = true);
+                              bool removeBackground = true, int quality = 0);
 
     // Request cancellation of the in-flight run (flips the atomic the predictor's
     // progress callback checks). The run ends with meshGenError("cancelled").
@@ -91,7 +96,11 @@ private:
     std::atomic<bool> m_cancel{false};
     QString m_selectedImage;    // currently-selected source image path
     QString m_previewSource;    // data:image/png;base64 thumbnail of it
+    MeshGenPredictor::Quality m_quality = MeshGenPredictor::Quality::Fp32;
     static MeshGenController* s_instance;
+
+    // Map a QML int (0/1/2) to the encoder tier.
+    static MeshGenPredictor::Quality qualityFromInt(int q);
 
     // Worker→main handoff: the predicted arrays live in a pimpl-ish holder so this
     // header stays free of MeshGenPredictor.

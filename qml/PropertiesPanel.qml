@@ -1581,6 +1581,27 @@ Rectangle {
                 }
             }
 
+            // Model quality/size tier — the encoder downloads in the picked
+            // precision (fp32 best/largest → int8 smallest). index maps 1:1 to the
+            // MeshGenController quality int (0/1/2).
+            Row {
+                spacing: 6
+                Text {
+                    text: "Model"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ComboBox {
+                    id: mgQualityCombo
+                    width: 150; height: 26
+                    font.pixelSize: 11
+                    enabled: !MeshGenController.busy
+                    model: ["fp32 (best, ~1.7GB)", "fp16 (~840MB)", "int8 (~430MB)"]
+                    currentIndex: 0
+                }
+            }
+
             // Remove-background toggle — styled to match the Inspector (flat 16px
             // box + checkmark, PropertiesPanelController palette), matching the
             // ThemedCheckBox look without the wrapper that breaks this panel.
@@ -1627,7 +1648,7 @@ Rectangle {
                 clickEnabled: !MeshGenController.busy
                     && MeshGenController.selectedImagePath.length > 0
                 onClicked: MeshGenController.generateSelected(
-                    mgResCombo.resValue, mgRemoveBg.checked)
+                    mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex)
             }
 
             // Progress bar (only while busy)

@@ -22,7 +22,6 @@
 
 namespace {
 
-constexpr const char* kEncoderFile = "triposr_encoder.onnx";
 constexpr const char* kDecoderFile = "triposr_decoder.onnx";
 constexpr const char* kDefaultModelBaseUrl =
     "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/triposr/";
@@ -46,9 +45,19 @@ QString modelDir()
 
 MeshGenPredictor::Options::Options() = default;
 
-QString MeshGenPredictor::encoderModelPath()
+QString MeshGenPredictor::encoderFileName(Quality q)
 {
-    return QDir(modelDir()).filePath(QString::fromLatin1(kEncoderFile));
+    switch (q) {
+        case Quality::Fp16: return QStringLiteral("triposr_encoder_fp16.onnx");
+        case Quality::Int8: return QStringLiteral("triposr_encoder_int8.onnx");
+        case Quality::Fp32:
+        default:            return QStringLiteral("triposr_encoder.onnx");
+    }
+}
+
+QString MeshGenPredictor::encoderModelPath(Quality q)
+{
+    return QDir(modelDir()).filePath(encoderFileName(q));
 }
 
 QString MeshGenPredictor::decoderModelPath()
@@ -56,11 +65,11 @@ QString MeshGenPredictor::decoderModelPath()
     return QDir(modelDir()).filePath(QString::fromLatin1(kDecoderFile));
 }
 
-QString MeshGenPredictor::modelPath() { return encoderModelPath(); }
+QString MeshGenPredictor::modelPath() { return encoderModelPath(Quality::Fp32); }
 
-bool MeshGenPredictor::modelsPresent()
+bool MeshGenPredictor::modelsPresent(Quality q)
 {
-    return QFileInfo::exists(encoderModelPath())
+    return QFileInfo::exists(encoderModelPath(q))
         && QFileInfo::exists(decoderModelPath());
 }
 
@@ -93,7 +102,7 @@ std::vector<float> MeshGenPredictor::buildGridPoints(int resolution, float radiu
 
 bool MeshGenPredictor::isAvailable() { return false; }
 
-QString MeshGenPredictor::ensureModelBlocking() { return {}; }
+QString MeshGenPredictor::ensureModelBlocking(Quality) { return {}; }
 
 MeshGenPredictor::Result MeshGenPredictor::predict(const QImage&, const QString&,
                                                    const QString&, const Options&,
@@ -109,9 +118,9 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage&, const QString&
 
 bool MeshGenPredictor::isAvailable() { return true; }
 
-QString MeshGenPredictor::ensureModelBlocking()
+QString MeshGenPredictor::ensureModelBlocking(Quality q)
 {
-    const QString enc = encoderModelPath();
+    const QString enc = encoderModelPath(q);
     const QString dec = decoderModelPath();
     if (QFileInfo::exists(enc) && QFileInfo::exists(dec))
         return enc;
@@ -163,7 +172,7 @@ QString MeshGenPredictor::ensureModelBlocking()
     };
 
     if (!QFileInfo::exists(enc) &&
-        !downloadOne(QString::fromLatin1(kEncoderFile), enc,
+        !downloadOne(encoderFileName(q), enc,
                      QString::fromLatin1(kEncoderLabel)))
         return {};
     if (!QFileInfo::exists(dec) &&

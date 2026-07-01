@@ -2156,13 +2156,20 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (args.contains("remove_bg")) opts.removeBackground = args["remove_bg"].toBool();
     if (opts.sdfResolution < 16 || opts.sdfResolution > 512)
         return makeErrorResult("'resolution' must be between 16 and 512.");
+    if (args.contains("quality")) {
+        const QString q = args["quality"].toString().toLower();
+        if (q == "fp16")      opts.quality = MeshGenPredictor::Quality::Fp16;
+        else if (q == "int8") opts.quality = MeshGenPredictor::Quality::Int8;
+        else if (q == "fp32" || q.isEmpty()) opts.quality = MeshGenPredictor::Quality::Fp32;
+        else return makeErrorResult("'quality' must be 'fp32', 'fp16', or 'int8'.");
+    }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
         QStringLiteral("generate_mesh_from_image %1 res=%2")
             .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution));
 
-    const QString enc = MeshGenPredictor::ensureModelBlocking();
-    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent())
+    const QString enc = MeshGenPredictor::ensureModelBlocking(opts.quality);
+    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(opts.quality))
         return makeErrorResult(
             "TripoSR model unavailable — it downloads on first use; if it is not "
             "hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL / ai/triposrModelBaseUrl "
@@ -2173,7 +2180,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         return makeErrorResult(QStringLiteral("failed to read image: %1").arg(imagePath));
 
     const MeshGenPredictor::Result res = MeshGenPredictor::predict(
-        image, MeshGenPredictor::encoderModelPath(),
+        image, MeshGenPredictor::encoderModelPath(opts.quality),
         MeshGenPredictor::decoderModelPath(), opts);
     if (!res.ok)
         return makeErrorResult(res.error.isEmpty()
@@ -6927,6 +6934,7 @@ QJsonArray MCPServer::buildToolsList()
         props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..512 (default 256; 128 is a fast/preview tier). Higher = more detail + slower."}};
         props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "Bake TripoSR's predicted per-vertex color (default true)."}};
         props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; TripoSR needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
+        props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "fp16", "int8"}}, {"description", "Encoder precision/size tier (default fp32). fp32 = best (~1.7GB), fp16 = near-identical (~840MB), int8 = smallest, slight quality loss (~430MB). The chosen tier downloads on demand."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "

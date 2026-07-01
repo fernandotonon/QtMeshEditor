@@ -91,16 +91,25 @@ void MeshGenController::selectImage()
     emit statusMessage(tr("Selected: %1").arg(QFileInfo(path).fileName()));
 }
 
-void MeshGenController::generateSelected(int resolution, bool removeBackground)
+void MeshGenController::generateSelected(int resolution, bool removeBackground, int quality)
 {
     if (m_selectedImage.isEmpty()) {
         emit error(tr("Select an image first."));
         return;
     }
-    generate(m_selectedImage, resolution, removeBackground);
+    generate(m_selectedImage, resolution, removeBackground, quality);
 }
 
-void MeshGenController::pickImageAndGenerate(int resolution, bool removeBackground)
+MeshGenPredictor::Quality MeshGenController::qualityFromInt(int q)
+{
+    switch (q) {
+        case 1:  return MeshGenPredictor::Quality::Fp16;
+        case 2:  return MeshGenPredictor::Quality::Int8;
+        default: return MeshGenPredictor::Quality::Fp32;
+    }
+}
+
+void MeshGenController::pickImageAndGenerate(int resolution, bool removeBackground, int quality)
 {
     if (m_busy) return;
     const QString path = QFileDialog::getOpenFileName(
@@ -108,11 +117,11 @@ void MeshGenController::pickImageAndGenerate(int resolution, bool removeBackgrou
         tr("Images (*.png *.jpg *.jpeg *.bmp *.webp)"),
         nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty()) return;
-    generate(path, resolution, removeBackground);
+    generate(path, resolution, removeBackground, quality);
 }
 
 void MeshGenController::generate(const QString& imagePath, int resolution,
-                                 bool removeBackground)
+                                 bool removeBackground, int quality)
 {
     if (m_busy) return;
     if (!available()) {
@@ -125,6 +134,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     QImage image(fi.absoluteFilePath());
     if (image.isNull()) { emit error(tr("Could not load image: %1").arg(imagePath)); return; }
 
+    m_quality = qualityFromInt(quality);
+
     // Mark busy BEFORE ensureModelBlocking() — it spins a nested QEventLoop for the
     // first-use download, during which the QML button would otherwise stay enabled
     // and could re-enter generate(), racing over m_pending. setBusy disables it.
@@ -136,8 +147,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // QEventLoop for the download, which must not run on the worker thread. Once
     // present, the worker only reads the files (no event loop needed).
     emit statusMessage(tr("Checking model…"));
-    const QString enc = MeshGenPredictor::ensureModelBlocking();
-    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent()) {
+    const QString enc = MeshGenPredictor::ensureModelBlocking(m_quality);
+    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(m_quality)) {
         setBusy(false);
         emit error(tr("TripoSR model unavailable — it downloads on first use; if it "
                       "is not hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL or drop "
@@ -198,7 +209,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         };
 
         MeshGenPredictor::Result r = MeshGenPredictor::predict(
-            subject, MeshGenPredictor::encoderModelPath(),
+            subject, MeshGenPredictor::encoderModelPath(m_quality),
             MeshGenPredictor::decoderModelPath(), opts, progressFn);
 
         m_pending->result = std::move(r);

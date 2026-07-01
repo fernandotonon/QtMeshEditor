@@ -157,6 +157,8 @@ def main():
     ap.add_argument("--resolution", type=int, default=256, help="probe grid res (contract only)")
     ap.add_argument("--opset", type=int, default=17)
     ap.add_argument("--verify", action="store_true", help="run onnxruntime shape check")
+    ap.add_argument("--no-quant", action="store_true",
+                    help="skip the fp16/int8 quantized encoder variants (export fp32 only)")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -181,6 +183,32 @@ def main():
         dynamo=False,   # legacy TorchScript exporter — no onnxscript dependency
     )
     print(f"[ok] wrote {enc_path}")
+
+    # ---- Quantized encoder tiers (fp16 / int8) -------------------------------
+    # The ~1.68 GB fp32 encoder dominates the first-use download, so also emit
+    # smaller variants the app can pick (MeshGenPredictor::Quality):
+    #   fp16 (~half size, near-identical quality) — onnxconverter_common.float16
+    #   int8 (~quarter size, slight quality loss) — onnxruntime dynamic quantization
+    # The decoder stays fp32 (tiny). File names MUST match encoderFileName():
+    #   triposr_encoder_fp16.onnx / triposr_encoder_int8.onnx
+    if not args.no_quant:
+        try:
+            import onnx
+            from onnxconverter_common import float16
+            m = onnx.load(enc_path)
+            m16 = float16.convert_float_to_float16(m, keep_io_types=True)
+            fp16_path = os.path.join(args.out, "triposr_encoder_fp16.onnx")
+            onnx.save(m16, fp16_path)
+            print(f"[ok] wrote {fp16_path}")
+        except Exception as e:  # noqa: BLE001 — best-effort; fp32 still ships
+            print(f"[warn] fp16 export skipped: {e}")
+        try:
+            from onnxruntime.quantization import quantize_dynamic, QuantType
+            int8_path = os.path.join(args.out, "triposr_encoder_int8.onnx")
+            quantize_dynamic(enc_path, int8_path, weight_type=QuantType.QInt8)
+            print(f"[ok] wrote {int8_path}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] int8 export skipped: {e}")
 
     # ---- Decoder export ------------------------------------------------------
     P = 4096

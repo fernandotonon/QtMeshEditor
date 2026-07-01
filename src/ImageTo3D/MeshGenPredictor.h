@@ -41,11 +41,20 @@
 // HF repo, and QTMESH_TRIPOSR_NO_DOWNLOAD forces the offline path.
 class MeshGenPredictor {
 public:
+    // Encoder precision tier. The decoder is tiny and always fp32; only the ~1.7 GB
+    // encoder is offered in smaller quantized variants so users can trade a little
+    // quality for a much smaller download (see scripts/export-triposr-onnx.py):
+    //   Fp32  — triposr_encoder.onnx        (~1.68 GB, best)
+    //   Fp16  — triposr_encoder_fp16.onnx   (~840 MB, near-identical)
+    //   Int8  — triposr_encoder_int8.onnx   (~430 MB, slight quality loss)
+    enum class Quality { Fp32, Fp16, Int8 };
+
     struct Options {
         Options();                    // out-of-line (same idiom as UniRig::Options)
-        int   sdfResolution = 256;    // marching-cubes grid resolution (128 = fast)
-        float threshold     = 25.0f;  // TripoSR density iso threshold
-        bool  vertexColor   = true;   // run the extra color pass on the vertices
+        int     sdfResolution = 256;  // marching-cubes grid resolution (128 = fast)
+        float   threshold     = 25.0f;// TripoSR density iso threshold
+        bool    vertexColor   = true; // run the extra color pass on the vertices
+        Quality quality       = Quality::Fp32;  // encoder precision tier
         // Run U²-Net background removal on the input first (TripoSR needs an
         // isolated subject). Uses BackgroundRemover; if the model/ONNX is absent
         // the image is used as-is. Recommended for photos; harmless for
@@ -70,20 +79,24 @@ public:
     // True only when built with ENABLE_ONNX. (Model presence is checked per call.)
     static bool isAvailable();
 
-    // AppData/ai_models/triposr/ paths for the two graphs.
-    static QString encoderModelPath();
+    // AppData/ai_models/triposr/ paths for the two graphs. The encoder path
+    // depends on the quality tier; the no-arg overloads default to Fp32 for
+    // existing callers.
+    static QString encoderModelPath(Quality q = Quality::Fp32);
     static QString decoderModelPath();
-    static QString modelPath();             // == encoderModelPath() (convenience)
+    static QString modelPath();             // == encoderModelPath(Fp32) (convenience)
+    // Bare filename of the encoder for a tier (for download labels / AI Settings).
+    static QString encoderFileName(Quality q);
 
-    // True when BOTH model files already exist on disk.
-    static bool modelsPresent();
+    // True when the decoder AND the given tier's encoder already exist on disk.
+    static bool modelsPresent(Quality q = Quality::Fp32);
 
-    // Ensure both models exist, downloading whichever is missing on first use
-    // (blocks via a local event loop, like UniRigPredictor::ensureModelBlocking).
-    // Returns the encoder path when both are present, else empty (offline /
-    // disabled / download failed / not-yet-hosted). Honours
-    // QTMESH_TRIPOSR_NO_DOWNLOAD + the base-URL override.
-    static QString ensureModelBlocking();
+    // Ensure the decoder + the given tier's encoder exist, downloading whichever
+    // is missing on first use (blocks via a local event loop, like
+    // UniRigPredictor::ensureModelBlocking). Returns the encoder path when both are
+    // present, else empty (offline / disabled / download failed / not-yet-hosted).
+    // Honours QTMESH_TRIPOSR_NO_DOWNLOAD + the base-URL override.
+    static QString ensureModelBlocking(Quality q = Quality::Fp32);
 
     // Progress/cancel callback for the (long) grid query. Invoked per decoder
     // chunk with (pointsDone, pointsTotal); return false to CANCEL (predict then

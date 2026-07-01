@@ -8715,12 +8715,14 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
 
 int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
 {
-    // Parse: generate3d <image> [-o out.glb] [--resolution N] [--no-color] [--no-model]
+    // Parse: generate3d <image> [-o out.glb] [--resolution N] [--no-color]
+    //                    [--remove-bg] [--quality fp32|fp16|int8]
     QString inputPath, outputPath;
     int resolution = 256;
     bool vertexColor = true;
     bool noModel = false;
     bool removeBg = false;
+    MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -8728,6 +8730,18 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-color") { vertexColor = false; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
         if (arg == "--remove-bg" || arg == "--rembg") { removeBg = true; continue; }
+        if (arg == "--quality") {
+            if (i + 1 >= argc) {
+                err() << "Error: --quality requires fp32, fp16, or int8." << Qt::endl;
+                return 2;
+            }
+            const QString q = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (q == "fp32")      quality = MeshGenPredictor::Quality::Fp32;
+            else if (q == "fp16") quality = MeshGenPredictor::Quality::Fp16;
+            else if (q == "int8") quality = MeshGenPredictor::Quality::Int8;
+            else { err() << "Error: --quality must be fp32, fp16, or int8." << Qt::endl; return 2; }
+            continue;
+        }
         if (arg == "-o" || arg == "--output") {
             if (i + 1 >= argc) {
                 err() << "Error: " << arg << " requires a value." << Qt::endl;
@@ -8786,10 +8800,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             .arg(fi.suffix()).arg(resolution).arg(vertexColor));
 
     // Download the model on first use (blocks; clear message when not hosted).
-    const QString enc = MeshGenPredictor::ensureModelBlocking();
-    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent()) {
+    const QString enc = MeshGenPredictor::ensureModelBlocking(quality);
+    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(quality)) {
         err() << "  (looked for models in: "
-              << QFileInfo(MeshGenPredictor::encoderModelPath()).absolutePath()
+              << QFileInfo(MeshGenPredictor::encoderModelPath(quality)).absolutePath()
               << ")" << Qt::endl;
         err() << "Error: TripoSR model unavailable. It downloads on first use from "
                  "the QtMeshEditor models repo; if it is not hosted yet, export it "
@@ -8805,8 +8819,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.sdfResolution   = resolution;
     opts.vertexColor     = vertexColor;
     opts.removeBackground = removeBg;
+    opts.quality         = quality;
     const MeshGenPredictor::Result res = MeshGenPredictor::predict(
-        image, MeshGenPredictor::encoderModelPath(),
+        image, MeshGenPredictor::encoderModelPath(quality),
         MeshGenPredictor::decoderModelPath(), opts);
     if (!res.ok) {
         err() << "Error: image-to-3D failed: " << res.error << Qt::endl;
