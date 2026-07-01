@@ -154,7 +154,7 @@ bool NodeAnimationManager::deleteClip(const QString& name)
 
     if (scene->hasAnimationState(sn))
         scene->destroyAnimationState(sn);
-    scene->destroyAnimation(sn);
+    scene->removeAnimation(sn);
     // Drop the clip's node→handle allocator entries — otherwise a
     // later createClip(name, ...) would reuse stale handles that
     // map to tracks Ogre no longer has.
@@ -256,15 +256,15 @@ QStringList NodeAnimationManager::listClips() const
     if (!mgr) return out;
     auto* scene = mgr->getSceneMgr();
     if (!scene) return out;
-    // SceneManager exposes all scene animations here — skeletal clips
-    // are stored on their skeletons, but morph/mesh/node scene clips
-    // share this list. For the C1 manager surface we only need
-    // node-clip names, so the filter is "has a NodeAnimationTrack
+    // SceneManager has `getNumAnimations()` + `getAnimation(index)` —
+    // but it includes ALL animations (skeletal-attached clips, our
+    // node clips, etc.). For the C1 manager surface we only need
+    // node-clip names, but the filter is "has a NodeAnimationTrack
     // somewhere in the animation." Anything we created via
     // createClip qualifies; same-named anims created elsewhere are
     // either purely-skeletal (zero NodeAnimationTrack) or our own.
-    for (const auto& [name, animation] : scene->getAnimations()) {
-        Ogre::Animation* a = animation;
+    for (unsigned short i = 0; i < scene->getNumAnimations(); ++i) {
+        Ogre::Animation* a = scene->getAnimation(i);
         if (!a) continue;
         // Cheap filter: only animations whose first track is a
         // NodeAnimationTrack (and is non-empty) belong to us. Empty

@@ -107,7 +107,7 @@ void HdrViewportController::onSkyboxDefaultChanged()
     auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
     if (auto* mgr = Manager::getSingletonPtr(); hdrMgr && mgr && mgr->getSceneMgr()
         && hdrMgr->hasEnvironment()) {
-        mgr->getSceneMgr()->setSkyBoxEnabled(hdrMgr->defaultSkyBoxVisible());
+        mgr->getSceneMgr()->setSkyRenderingEnabled(hdrMgr->defaultSkyBoxVisible());
     }
 }
 

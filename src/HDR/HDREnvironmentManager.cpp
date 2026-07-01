@@ -516,7 +516,7 @@ void HDREnvironmentManager::applySkyBox(Ogre::SceneManager* sceneMgr)
 
     updateSkyBoxMaterial();
     sceneMgr->setSkyBox(true, kSkyboxMaterialName, 5000.f);
-    sceneMgr->setSkyBoxEnabled(m_defaultSkyBoxVisible);
+    sceneMgr->setSkyRenderingEnabled(m_defaultSkyBoxVisible);
     m_skyBoxInstalled = true;
 }
 

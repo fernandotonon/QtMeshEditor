@@ -1,6 +1,5 @@
 #include "ApplyMaterialCommand.h"
 
-#include <OgreEntity.h>
 #include <OgreSubEntity.h>
 
 ApplyMaterialCommand::ApplyMaterialCommand(std::vector<Target> targets,
