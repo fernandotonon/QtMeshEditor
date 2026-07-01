@@ -1,0 +1,47 @@
+vertex_program QtMeshHdrTonemapVp glsl
+{
+    source StdQuad_vp.glsl
+}
+
+fragment_program QtMeshHdrTonemapFp glsl
+{
+    source QtMeshHdrTonemapFp.glsl
+}
+
+material QtMesh/HdrTonemapPass
+{
+    technique
+    {
+        pass
+        {
+            depth_check off
+            depth_write off
+            cull_hardware none
+
+            vertex_program_ref QtMeshHdrTonemapVp
+            {
+            }
+            fragment_program_ref QtMeshHdrTonemapFp
+            {
+            }
+        }
+    }
+}
+
+material QtMesh/HdrSkybox
+{
+    technique
+    {
+        pass
+        {
+            depth_write off
+            lighting off
+            cull_hardware none
+            texture_unit
+            {
+                tex_address_mode clamp
+                filtering trilinear
+            }
+        }
+    }
+}

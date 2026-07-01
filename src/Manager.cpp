@@ -46,6 +46,8 @@ THE SOFTWARE.
 #include "TransformOperator.h"
 #include "mainwindow.h"
 #include "ViewportGrid.h"
+#include "HDR/HDREnvironmentManager.h"
+#include "HDR/HdrViewportController.h"
 
 #if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
  #include <CoreFoundation/CoreFoundation.h>
@@ -125,6 +127,9 @@ Manager::Manager(MainWindow* parent):
     initRoot();         // Init Ogre Root
     initRenderSystem(); // Init Ogre Render System
     initSceneMgr();     // Init Ogre SceneManager
+
+    HDREnvironmentManager::getSingleton();
+    HdrViewportController::getSingleton();
 
     if (SelectionSet *sel = SelectionSet::getSingletonPtr())
         sel->tryConnectToManager();

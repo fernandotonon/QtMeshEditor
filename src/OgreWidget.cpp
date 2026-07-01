@@ -46,6 +46,7 @@ THE SOFTWARE.
 #include "QtInputManager.h"
 #include "EditModeController.h"
 #include "TransformOperator.h"
+#include "HDR/HdrViewportController.h"
 #include "SentryReporter.h"
 
 namespace {
@@ -131,6 +132,8 @@ OgreWidget::OgreWidget( QWidget *parent ):
 
 OgreWidget::~OgreWidget()
 {
+    HdrViewportController::getSingleton()->unregisterWidget(this);
+
     // Safely clean up OGRE resources
     // Order is important: remove listeners first, then destroy camera, then detach render target, then remove viewports
     
@@ -294,6 +297,8 @@ void OgreWidget::initOgreWindow(void)
 
     if (mCamera)
         applyViewportCameraFromSettings(mCamera.get());
+
+    HdrViewportController::getSingleton()->registerWidget(this);
 }
 
 void OgreWidget::teardownOgreWindow()
@@ -352,8 +357,12 @@ void OgreWidget::rebuildRenderWindow()
         visMask = mViewport->getVisibilityMask();
     }
 
+    HdrViewportController::getSingleton()->unregisterWidget(this);
+
     teardownOgreWindow();
     initOgreWindow();
+
+    HdrViewportController::getSingleton()->registerWidget(this);
 
     setBackgroundColor(bg);
     if (mViewport)
@@ -374,6 +383,8 @@ void OgreWidget::rebuildRenderWindow()
 
 bool OgreWidget::frameStarted(const Ogre::FrameEvent& e)
 {
+    HdrViewportController::getSingleton()->tickActiveViewports();
+
     // Keep tool gizmos at a constant pixel size by scaling them against the
     // current camera distance each frame. The gizmos are shared editor
     // singletons, so only the ACTIVE viewport should tick them — otherwise
