@@ -393,9 +393,13 @@ TEST(UniRigPredictor, LabelsAnatomicallyResolveCanonicalJoints)
     // laid out with the LEFT chain on −X and RIGHT on +X. (The retarget then does
     // its own handedness compensation against the CMU clip so motion isn't
     // mirrored — labels and motion are decoupled.)
-    auto J = [](double x, double y, double z, int parent) {
+    // Seed unique positional names like the real predictor (jointName → joint_N),
+    // so the test input mirrors production; the labeler's final uniqueness pass
+    // also backstops any collision.
+    int nextId = 0;
+    auto J = [&nextId](double x, double y, double z, int parent) {
         UniRigPredictor::Joint j; j.pos = {x, y, z}; j.parent = parent;
-        j.name = QStringLiteral("joint"); return j;
+        j.name = QStringLiteral("joint_%1").arg(nextId++); return j;
     };
     std::vector<UniRigPredictor::Joint> joints = {
         J(0.0, 0.0, 0.0, -1),   // 0 hips (root)

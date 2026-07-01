@@ -455,6 +455,27 @@ void UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
         }
     }
 
+    // FINAL UNIQUENESS PASS. Joints the labeler didn't rename keep their incoming
+    // name; the real predictor gives those a unique `joint_<i>`, but a caller that
+    // seeds a shared placeholder (or two unclassified joints sharing a name) would
+    // otherwise produce a duplicate that Ogre::Skeleton::createBone rejects. Force
+    // every remaining collision to a unique `joint_<i>`.
+    {
+        std::unordered_set<std::string> finalSeen;
+        for (int i = 0; i < n; ++i) {
+            std::string nm = joints[i].name.toStdString();
+            if (finalSeen.count(nm)) {
+                QString uniq = QStringLiteral("joint_%1").arg(i);
+                int s = 0;
+                while (finalSeen.count(uniq.toStdString()))
+                    uniq = QStringLiteral("joint_%1_%2").arg(i).arg(s++);
+                joints[i].name = uniq;
+                nm = uniq.toStdString();
+            }
+            finalSeen.insert(nm);
+        }
+    }
+
     // Diagnostic dump (QTMESH_RETARGET_DEBUG): predicted joint geometry + the
     // assigned name, so a mislabel (wrong side / wrong role) can be diagnosed
     // from the actual positions instead of guessed at.
