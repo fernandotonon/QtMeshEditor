@@ -2237,6 +2237,9 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     result["vertexCount"]   = res.vertexCount;
     result["triangleCount"] = res.triangleCount;
     if (!meshPath.isEmpty()) result["meshPath"] = meshPath;
+    // Surface non-fatal degradations (bake fell back to vertex colours, …) so
+    // the MCP caller can tell a textured result from a fallback one.
+    if (!res.warning.isEmpty()) result["warning"] = res.warning;
     return result;
 #endif
 }

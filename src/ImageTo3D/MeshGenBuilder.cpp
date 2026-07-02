@@ -8,6 +8,7 @@
 
 #include <OgreEntity.h>
 #include <OgreHardwareBufferManager.h>
+#include <OgreLogManager.h>
 #include <OgreMaterialManager.h>
 #include <OgreMesh.h>
 #include <OgreMeshManager.h>
@@ -259,15 +260,33 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
             QDir(dir).filePath(unique + QStringLiteral("_diffuse.png"));
         if (result.texture.save(candidate, "PNG")) {
             texPath = candidate;
-            // Register the directory once per location so Ogre's resource
-            // system (and the exporters' resource walk) can find the file.
-            auto& rgm = Ogre::ResourceGroupManager::getSingleton();
-            const std::string loc = QDir(dir).absolutePath().toStdString();
-            const std::string grp = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
-            if (!rgm.resourceLocationExists(loc, grp)) {
+            // Register the directory so Ogre's resource system (and the
+            // exporters' resource walk) can find the file. When the location
+            // is ALREADY registered (second+ generation into the same dir),
+            // remove and re-add it: the group's file index was built before
+            // this PNG existed and would miss it otherwise.
+            try {
+                auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+                const std::string loc = QDir(dir).absolutePath().toStdString();
+                const std::string grp =
+                    Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+                if (rgm.resourceLocationExists(loc, grp))
+                    rgm.removeResourceLocation(loc, grp);
                 rgm.addResourceLocation(loc, "FileSystem", grp);
                 rgm.initialiseResourceGroup(grp);
+            } catch (const Ogre::Exception& e) {
+                Ogre::LogManager::getSingleton().logWarning(
+                    "MeshGenBuilder: could not (re)register texture location: "
+                    + Ogre::String(e.what()));
             }
+        } else {
+            // Losing the texture silently would produce a flat-white mesh with
+            // no explanation — the bake already replaced the vertex colours,
+            // so there is nothing to fall back to. Log loudly.
+            Ogre::LogManager::getSingleton().logWarning(
+                ("MeshGenBuilder: failed to save the baked texture to '"
+                 + candidate + "' — the generated mesh will render untextured.")
+                    .toStdString());
         }
     }
 

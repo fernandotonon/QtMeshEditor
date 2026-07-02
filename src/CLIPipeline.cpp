@@ -8872,6 +8872,12 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
 
     // Optional Real-ESRGAN 2x on the baked diffuse (reuses the #405 upscaler +
     // its on-demand model download) — sharpens the decoder's soft colours.
+    if (upscaleTex && (res.uvs.empty() || res.texture.isNull())) {
+        // No silent no-op: the user asked for an upscale but nothing was baked
+        // (--no-bake-texture, --no-color, or the bake fell back).
+        err() << "Warning: --upscale-texture ignored — no baked texture to "
+                 "upscale (was the bake disabled or did it fall back?)." << Qt::endl;
+    }
     if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
         const QString upModel = AIAssistManager::instance()->ensureUpscaleModel(2);
         if (upModel.isEmpty()) {

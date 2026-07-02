@@ -94,5 +94,18 @@ TEST(MeshGenBakerTest, SamplerAbortPropagatesAsCancelled)
         kQuadPos, kQuadIdx,
         [](const float*, size_t, float*) { return false; }, {});
     EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.cancelled);
     EXPECT_EQ(r.error, QStringLiteral("cancelled"));
+    // "No partial data on failure" contract.
+    EXPECT_TRUE(r.positions.empty());
+    EXPECT_TRUE(r.indices.empty());
+    EXPECT_TRUE(r.uvs.empty());
+}
+
+TEST(MeshGenBakerTest, RejectsOutOfRangeIndices)
+{
+    std::vector<uint32_t> bad{0, 1, 9};   // 9 >= 4 vertices
+    const auto r = MeshGenBaker::bake(kQuadPos, bad, posColorSampler, {});
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains(QStringLiteral("out of range")));
 }

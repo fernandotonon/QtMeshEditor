@@ -28,6 +28,15 @@ Result bake(const std::vector<float>& positions,
         r.error = QStringLiteral("bake: empty/degenerate input mesh.");
         return r;
     }
+    // Validate every index before it is used to address `positions` (in the
+    // xatlas xref rebuild and the rasterizer's barycentric interpolation).
+    for (uint32_t i : indices) {
+        if (i >= nv) {
+            r.error = QStringLiteral("bake: index out of range (%1 >= %2).")
+                          .arg(i).arg(nv);
+            return r;
+        }
+    }
     if (!sampler) {
         r.error = QStringLiteral("bake: no colour sampler.");
         return r;
@@ -145,6 +154,8 @@ Result bake(const std::vector<float>& positions,
     xatlas::Destroy(atlas);
 
     if (queryTexel.empty()) {
+        // Honour the "no partial data on failure" contract.
+        r = Result{};
         r.error = QStringLiteral("bake: no texels covered (unwrap failed?).");
         return r;
     }
@@ -160,6 +171,10 @@ Result bake(const std::vector<float>& positions,
         const size_t n = std::min(chunk, total - start);
         rgb.resize(n * 3);
         if (!sampler(queryPts.data() + start * 3, n, rgb.data())) {
+            // Honour the "no partial data on failure" contract; typed cancel
+            // flag so callers don't have to string-match the error.
+            r = Result{};
+            r.cancelled = true;
             r.error = QStringLiteral("cancelled");
             return r;
         }

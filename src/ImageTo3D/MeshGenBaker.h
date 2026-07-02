@@ -39,6 +39,7 @@ using ColorSampler =
 
 struct Result {
     bool ok = false;
+    bool cancelled = false;   // sampler aborted (typed — don't string-match error)
     QString error;
     // Re-indexed mesh (xatlas splits vertices along chart seams): same layout
     // as MeshGenPredictor::Result, plus a UV channel.

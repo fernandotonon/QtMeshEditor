@@ -445,7 +445,7 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
                 out.texture       = baked.texture;
                 out.vertexCount   = baked.vertexCount;
                 out.triangleCount = baked.triangleCount;
-            } else if (baked.error == QLatin1String("cancelled")) {
+            } else if (baked.cancelled) {
                 return fail(QStringLiteral("cancelled"));
             } else {
                 out.warning = QStringLiteral("texture bake failed (%1) — using "

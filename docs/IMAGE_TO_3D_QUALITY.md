@@ -73,6 +73,7 @@ the table below.
   smoothing+reprojection hide grid artifacts; scale texel density with it.
 
 ### 3. Rejected / parked (license or feasibility)
+
 | Model | Verdict |
 |---|---|
 | TRELLIS / TRELLIS.2-4B (MS, MIT) | Best open quality but 4B CPU-hostile, sparse attention has no clean ONNX path, and the texture stage depends on **nvdiffrast (NVIDIA non-commercial)**. Park until someone strips the NC deps (Hi3DGen proved it's possible for geometry). |
