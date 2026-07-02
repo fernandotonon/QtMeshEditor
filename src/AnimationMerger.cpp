@@ -1062,7 +1062,14 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         Ogre::Animation* ref = nullptr;
         for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
             Ogre::Animation* a = skel->getAnimation(ai);
-            if (a && a->getName() != animName) { ref = a; break; }
+            // Never harvest OUR OWN generated clips as the rig's standing
+            // pose: on an auto-rigged skeleton the first --generate adds an
+            // animation, and the next --generate would harvest it and switch
+            // from the (correct) raw path to the standing-pose path — whose
+            // Mc is bogus on non-identity bone rests. Only rig-authored
+            // animations describe the true standing pose.
+            if (a && a->getName() != animName
+                && a->getName().rfind("generated_", 0) != 0) { ref = a; break; }
         }
         if (ref) {
             for (const auto& [h, trk] : ref->_getNodeTrackList()) {
@@ -1130,6 +1137,19 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         return w;
     };
 
+    // The standing-pose change-of-basis (Mc) assumes Mixamo-style skeletons
+    // whose bone rests are identity (the real pose lives in the animation).
+    // On rigs with authored/non-identity rests (UniRig / template auto-rig)
+    // standWorldOf accumulates the rests and Mc becomes a large bogus
+    // rotation — use the raw path there instead.
+    bool restsAreIdentity = true;
+    for (int i = 0; i < nBones && restsAreIdentity; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        if (!b->getInitialOrientation().equals(Ogre::Quaternion::IDENTITY,
+                                               Ogre::Radian(0.02f)))
+            restsAreIdentity = false;
+    }
+
     for (int i = 0; i < nBones; ++i) {
         const int c = boneToCanon[i];
         if (c < 0 || c >= J) continue;       // unmapped bone keeps its bind pose
@@ -1157,7 +1177,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         // robust pure-local delta (bind · delta), which renders upright on UniRig.
         const bool haveAnyStand = !standPose.empty();
         Ogre::Quaternion Mc = Ogre::Quaternion::IDENTITY;
-        if (worldFrame && c > 0 && haveAnyStand)
+        if (worldFrame && c > 0 && haveAnyStand && restsAreIdentity)
             Mc = standWorldOf(bone).Inverse() * clipQ(0, c);  // target-stand → CMU-rest
         // −Z-facing rig on the RAW path (no harvested stand → Mc == identity,
         // deltas act in ~world axes): view every delta in a 180°-yawed frame
