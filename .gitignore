@@ -110,3 +110,27 @@ mined_training_data/
 .meshseg_work/
 .venv-meshseg/
 __pycache__/
+
+# Local scratch: CLI/tool test-output dirs + stray asset dumps (never commit — a
+# `git add -A` once swept ~600 of these in and crashed the asset-scan CI job).
+.sentry-native/
+/anim/
+/anim2/
+/quad/
+/quad2/
+/hip[0-9]*/
+/lod[0-9]*/
+/pbr[0-9]*/
+/paint[0-9]*/
+/pose[0-9]*/
+/rumba[0-9]*/
+/Boss_*.png
+/Ch14_*.png
+/Hip Hop Dancing.*
+/Rumba Dancing*.skeleton
+/fbx_linux_out.png
+/mage*.png
+/mage.*
+/monk_*.png
+/multiview_bake_*.png
+/multiview_bake_*i.png
