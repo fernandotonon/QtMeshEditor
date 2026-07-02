@@ -273,7 +273,8 @@ MotionGenerator::Result MotionGenerator::generate(
                                          2, 10, 11, 12,  0, 14, 15, 16,
                                          0, 18, 19, 20 };
 
-        std::mt19937 rng(QRandomGenerator::global()->generate());
+        // NOSONAR — non-crypto: seeds latent-noise sampling for motion variety.
+        std::mt19937 rng(QRandomGenerator::global()->generate());  // NOSONAR
         std::normal_distribution<float> gauss(0.0f, 0.5f);
         constexpr int kCandidates = 8;
         constexpr float kTargetStep = 0.048f;   // rad/frame — real-clip locals
@@ -305,12 +306,17 @@ MotionGenerator::Result MotionGenerator::generate(
                     const float* q = m + (static_cast<size_t>(f) * C + j * 10) + 3;
                     w[f][j] = { q[0], q[1], q[2], q[3] };
                 }
-            // derived locals
+            // Score on the LOCAL rotations the retarget consumes. For a
+            // world-frame model these are derived (parent^-1 * child); for a
+            // local-frame model (vocab has no "frame":"world") the output IS
+            // already local, so deriving again would double-compose and rank
+            // candidates on the wrong quantity.
             std::vector<std::vector<Q4>> loc = w;
-            for (int f = 0; f < T; ++f)
-                for (int j = 0; j < J && j < 22; ++j)
-                    if (kParent[j] >= 0)
-                        loc[f][j] = qMul(qConj(w[f][kParent[j]]), w[f][j]);
+            if (worldFrame)
+                for (int f = 0; f < T; ++f)
+                    for (int j = 0; j < J && j < 22; ++j)
+                        if (kParent[j] >= 0)
+                            loc[f][j] = qMul(qConj(w[f][kParent[j]]), w[f][j]);
             // score: energy near target, coherent step axes, bounded articulation
             double stepSum = 0.0, cohSum = 0.0; int cohN = 0;
             float maxArtic = 0.0f;

@@ -107,7 +107,12 @@ def main():
         return m.reshape(q.shape[:-1] + (3, 3))
 
     def mat_to_6d(m):
-        return m[..., :, :2].reshape(m.shape[:-2] + (6,))
+        # 6D = the first two COLUMNS of the rotation matrix, concatenated as
+        # [col0; col1] (Zhou et al. 2019). m[..., :, :2] is a 3x2 slice whose
+        # row-major flatten would INTERLEAVE the columns ([m00,m01,m10,...] —
+        # identity -> [1,0,0,1,0,0], two parallel vectors -> degenerate). Move
+        # the column axis before flattening so we get [col0(3); col1(3)].
+        return m[..., :, :2].transpose(-1, -2).reshape(m.shape[:-2] + (6,))
 
     def sixd_to_mat(d6):
         a1 = d6[..., 0:3]; a2 = d6[..., 3:6]
