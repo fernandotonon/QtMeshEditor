@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 const QTMESH_RELEASES_LATEST_API = 'https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest';
-const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@3.15.1';
+const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@3.16.0';
 const CACHE_KEY = 'qtmesh.actionRef.cache.v1';
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
