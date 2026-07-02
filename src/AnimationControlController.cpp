@@ -1730,8 +1730,13 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     }
 
     const std::string animName = ("generated_" + action).toStdString();
+    // Auto-rigged (no prior animation) meshes that face −Z would walk
+    // backward — detect facing from the mesh's foot region.
+    const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
     const auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
-                                                      worldFrame, cmuRest);
+                                                      worldFrame, cmuRest,
+                                                      /*refineWithModel=*/false,
+                                                      /*refineStride=*/8, yaw180);
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 

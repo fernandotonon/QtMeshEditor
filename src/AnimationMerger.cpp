@@ -1,4 +1,5 @@
 #include "AnimationMerger.h"
+#include "AutoRig.h"
 #include "MotionInbetween.h"
 #include <OgreSkeleton.h>
 #include <OgreSkeletonInstance.h>
@@ -910,6 +911,53 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
     return res;
 }
 
+bool AnimationMerger::detectBackwardFacing(Ogre::Entity* entity)
+{
+    // Escape hatch for exotic meshes where the foot-region heuristic guesses
+    // wrong: QTMESH_T2M_YAW180=1 forces the flip, =0 disables it.
+    const QByteArray force = qgetenv("QTMESH_T2M_YAW180");
+    if (!force.isEmpty()) return force != "0";
+    if (!entity || !entity->hasSkeleton()) return false;
+    Ogre::SkeletonInstance* skel = entity->getSkeleton();
+    if (!skel) return false;
+
+    // Ankle reference: bones resolving to the canonical foot roles (17/21).
+    Ogre::Vector3 ankleSum = Ogre::Vector3::ZERO;
+    int ankles = 0;
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+        Ogre::Bone* b = skel->getBone(i);
+        const int c = MotionInbetween::canonicalIndexForBone(
+            QString::fromStdString(b->getName()));
+        if (c == 17 || c == 21) { ankleSum += b->_getDerivedPosition(); ++ankles; }
+    }
+    if (ankles == 0) return false;
+    const Ogre::Vector3 ankle = ankleSum / static_cast<float>(ankles);
+
+    std::vector<float> verts;
+    std::vector<uint32_t> indices;
+    if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.size() < 9)
+        return false;
+    float minY = verts[1], maxY = verts[1];
+    for (size_t v = 1; v < verts.size() / 3; ++v) {
+        minY = std::min(minY, verts[3*v + 1]);
+        maxY = std::max(maxY, verts[3*v + 1]);
+    }
+    const float h = maxY - minY;
+    if (h < 1e-5f) return false;
+
+    // Foot region: vertices below (a little above) ankle height. Toes extend
+    // FORWARD of the ankle, so the region's Z centroid tells the facing.
+    const float band = ankle.y + 0.06f * h;
+    double zSum = 0.0; int n = 0;
+    for (size_t v = 0; v < verts.size() / 3; ++v) {
+        if (verts[3*v + 1] <= band) { zSum += verts[3*v + 2]; ++n; }
+    }
+    if (n < 16) return false;
+    const float dz = static_cast<float>(zSum / n) - ankle.z;
+    // conservative margin — skirts/long coats centre the low region near 0
+    return dz < -0.02f * h;
+}
+
 AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     Ogre::Skeleton* skel,
     const std::string& animName,
@@ -918,7 +966,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     bool worldFrame,
     const std::vector<std::array<float, 4>>& cmuRestWorld,
     bool refineWithModel,
-    int refineStride)
+    int refineStride,
+    bool yaw180)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
@@ -1110,6 +1159,14 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         Ogre::Quaternion Mc = Ogre::Quaternion::IDENTITY;
         if (worldFrame && c > 0 && haveAnyStand)
             Mc = standWorldOf(bone).Inverse() * clipQ(0, c);  // target-stand → CMU-rest
+        // −Z-facing rig on the RAW path (no harvested stand → Mc == identity,
+        // deltas act in ~world axes): view every delta in a 180°-yawed frame
+        // so the sagittal swing matches the mesh's facing (else it walks
+        // backward). Rigs WITH a stand pose are covered by Mc itself.
+        if (yaw180 && !(worldFrame && haveAnyStand) && c > 0) {
+            static const Ogre::Quaternion kYawPi(0.0f, 0.0f, 1.0f, 0.0f); // 180° about +Y
+            Mc = Mc * kYawPi;
+        }
         const Ogre::Quaternion McInv = Mc.Inverse();
         for (int f = 0; f < frames; ++f) {
             const Ogre::Quaternion local = (c == 0)

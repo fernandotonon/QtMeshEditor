@@ -1945,8 +1945,13 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
 
     const std::string animName = ("generated_" + action).toStdString();
+    // Auto-rigged (no prior animation) meshes that face −Z would walk
+    // backward — detect facing from the mesh's foot region.
+    const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
     auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
-                                                worldFrame, cmuRest);
+                                                worldFrame, cmuRest,
+                                                /*refineWithModel=*/false,
+                                                /*refineStride=*/8, yaw180);
     if (!res.ok) {
         err() << "Error: " << res.error << Qt::endl; return 1;
     }
