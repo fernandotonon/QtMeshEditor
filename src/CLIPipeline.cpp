@@ -8730,6 +8730,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool smooth = true;         // quality pass defaults ON
     bool refine = true;
     bool bake = true;
+    bool upscaleTex = false;    // optional Real-ESRGAN 2x on the baked texture
     int textureSize = 1024;
     MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
 
@@ -8742,6 +8743,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-smooth") { smooth = false; continue; }
         if (arg == "--no-refine") { refine = false; continue; }
         if (arg == "--no-bake-texture") { bake = false; continue; }
+        if (arg == "--upscale-texture") { upscaleTex = true; continue; }
         if (arg == "--texture-size") {
             if (i + 1 >= argc) {
                 err() << "Error: --texture-size requires a value (e.g. 512, 1024, 2048)." << Qt::endl;
@@ -8800,7 +8802,8 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Error: No input image specified." << Qt::endl;
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
-                 "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024]"
+                 "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
+                 "[--upscale-texture]"
               << Qt::endl;
         return 2;
     }
@@ -8857,7 +8860,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.refineSurface   = refine;
     opts.bakeTexture     = bake;
     opts.textureSize     = textureSize;
-    const MeshGenPredictor::Result res = MeshGenPredictor::predict(
+    MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(quality),
         MeshGenPredictor::decoderModelPath(), opts);
     if (!res.ok) {
@@ -8866,6 +8869,24 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     }
     if (!res.warning.isEmpty())
         err() << "Warning: " << res.warning << Qt::endl;
+
+    // Optional Real-ESRGAN 2x on the baked diffuse (reuses the #405 upscaler +
+    // its on-demand model download) — sharpens the decoder's soft colours.
+    if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
+        const QString upModel = AIAssistManager::instance()->ensureUpscaleModel(2);
+        if (upModel.isEmpty()) {
+            err() << "Warning: upscale model unavailable — keeping the "
+                     "un-upscaled texture." << Qt::endl;
+        } else {
+            const TextureUpscaler::Result ur =
+                TextureUpscaler::upscale(res.texture, upModel);
+            if (ur.ok && !ur.image.isNull())
+                res.texture = ur.image;
+            else
+                err() << "Warning: texture upscale failed (" << ur.error
+                      << ") — keeping the un-upscaled texture." << Qt::endl;
+        }
+    }
 
     // Baked texture lands next to the exported mesh (registered as a resource
     // location inside buildSceneNode so the exporters can resolve/embed it).
