@@ -248,6 +248,9 @@ bool downloadHdri(const QString& nameOrFileName, QString* errorOut)
 
 void applyFirstRunDefaultsIfNeeded()
 {
+    if (QCoreApplication::organizationName() == QLatin1String("QtMeshEditorTests"))
+        return;
+
     QSettings settings;
     if (settings.value(kFirstRunKey, false).toBool())
         return;
