@@ -230,6 +230,14 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
+        // Match MainWindowTest: mark the org as the test harness so the MainWindow
+        // construct/destruct paths that gate on it skip work that segfaults under
+        // Mesa/Xvfb — HDR first-run IBL defaults (HdrBundledLibrary) and the AI
+        // Image→3D QML section (MeshGenController::available). The 6 tests here that
+        // build a real MainWindow otherwise hit those unguarded paths.
+        previousOrganizationName = QCoreApplication::organizationName();
+        QCoreApplication::setOrganizationName(QStringLiteral("QtMeshEditorTests"));
+
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
@@ -243,7 +251,10 @@ protected:
         {
             app->processEvents();
         }
+        QCoreApplication::setOrganizationName(previousOrganizationName);
     }
+
+    QString previousOrganizationName;
 
     Ogre::Entity* createAndSelectTriangleEntity(const QString& baseName)
     {

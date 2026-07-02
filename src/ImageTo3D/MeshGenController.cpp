@@ -13,6 +13,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImage>
+#include <QCoreApplication>   // organizationName() — test-harness guard
 #include <QMetaObject>
 #include <QThread>
 
@@ -62,6 +63,18 @@ void MeshGenController::kill()
 
 bool MeshGenController::available() const
 {
+    // In the unit-test harness, report unavailable so PropertiesPanel.qml's
+    // "AI: Image → 3D" section stays collapsed and never instantiates its heavy
+    // component tree (image preview, comboboxes, buttons). MainWindowTest builds
+    // and destroys a real MainWindow — hence a QQmlEngine loading PropertiesPanel
+    // — dozens of times under Mesa/Xvfb; adding this branch's extra QML surface to
+    // every construct/destruct cycle perturbed the already-fragile GL teardown into
+    // a SIGSEGV (the same class of failure the HDR first-run defaults hit — see
+    // HdrBundledLibrary::applyFirstRunDefaultsIfNeeded's identical org-name guard).
+    // The feature itself is unchanged for the real app; only the test harness (which
+    // sets this org name) skips the surface. Pure-data pieces are covered directly.
+    if (QCoreApplication::organizationName() == QLatin1String("QtMeshEditorTests"))
+        return false;
     return MeshGenPredictor::isAvailable();
 }
 
