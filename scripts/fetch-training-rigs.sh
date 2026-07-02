@@ -25,6 +25,11 @@
 #        https://poly.pizza/                                              [CC0]
 #   3. Kenney — Blocky Characters / Mini Characters (rigged, stylised)
 #        https://kenney.nl/assets/blocky-characters                       [CC0]
+#   4. GitHub mirror of the classic Quaternius CC0 free packs (stable raw
+#      URLs; used for the v2 model corpus — rigged humanoids + animals under
+#      "FreeModels by Quaternius[Patreon]/Characters and Animals/"; skip the
+#      few "[Patreon Exclusive]" folders to stay unambiguously CC0):
+#        https://github.com/beep2bleep/FreeAssetsByKenneyNLandQuaternius  [CC0 content]
 #
 # CC-BY sources are also acceptable IF you add the attribution to a NOTICE file
 # shipped with the weights (e.g. some Sketchfab "downloadable + CC-BY" rigs).
