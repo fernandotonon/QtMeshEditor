@@ -154,13 +154,21 @@ TEST_F(MainWindowTest, ViewMenuContextPanelAndConsoleDefaultChecked)
     EXPECT_TRUE(QSettings().value(QStringLiteral("View/showConsole"), false).toBool());
 }
 
-// NOTE: MainWindowTest.ViewMenuConsoleToggleUpdatesDockVisibilityAndSettings was
-// removed — it reproducibly SIGSEGV'd under Mesa/Xvfb on CI (the dock-visibility
-// toggle triggers a GL repaint on a real MainWindow, the same fragile GL-teardown
-// class as the allowlisted OgreWidget/ViewCube suites). It passed on master purely
-// by test-ordering luck; the expanded QML surface on this branch shifted the crash
-// into view. The console dock's settings persistence is still covered indirectly by
-// ConsoleWidgetReceivesQtLogLine (below) and the View-menu default-checked test.
+TEST_F(MainWindowTest, ViewMenuConsoleToggleUpdatesDockVisibilityAndSettings)
+{
+    QAction* con = window->findChild<QAction*>(QStringLiteral("actionView_Console"));
+    ASSERT_NE(con, nullptr);
+
+    con->setChecked(false);
+    app->processEvents();
+    EXPECT_TRUE(window->m_consoleDock->isHidden());
+    EXPECT_FALSE(QSettings().value(QStringLiteral("View/showConsole"), true).toBool());
+
+    con->setChecked(true);
+    app->processEvents();
+    EXPECT_FALSE(window->m_consoleDock->isHidden());
+    EXPECT_TRUE(QSettings().value(QStringLiteral("View/showConsole"), false).toBool());
+}
 
 TEST_F(MainWindowTest, ConsoleWidgetReceivesQtLogLine)
 {

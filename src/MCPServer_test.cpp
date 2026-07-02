@@ -4514,13 +4514,26 @@ TEST_F(MCPServerTest, CameraTools_WithMainWindowExecuteSuccessPaths)
     server->setMainWindow(nullptr);
 }
 
-// NOTE: MCPServerTest.ToggleNormals_WithMainWindowTogglesVisibility was removed —
-// it reproducibly SIGSEGV'd under Mesa/Xvfb on CI. toggle_normals drives the
-// NormalVisualizer's GL overlay on a real MainWindow, the same fragile GL path as
-// the allowlisted OgreWidget/ViewCube suites; it passed on master by test-ordering
-// luck and the branch's expanded QML surface shifted the crash into view. The
-// toggle_normals tool's non-GL branches (no MainWindow / error paths) remain
-// covered by the other MCPServerTest cases.
+TEST_F(MCPServerTest, ToggleNormals_WithMainWindowTogglesVisibility)
+{
+    std::unique_ptr<MainWindow> mainWindow(createMainWindowWithRetries());
+    ASSERT_NE(mainWindow, nullptr);
+    server->setMainWindow(mainWindow.get());
+
+    QJsonObject showArgs;
+    showArgs["show"] = true;
+    QJsonObject showResult = server->callTool("toggle_normals", showArgs);
+    EXPECT_FALSE(isError(showResult)) << getResultText(showResult).toStdString();
+    EXPECT_TRUE(getResultText(showResult).contains("shown"));
+
+    QJsonObject hideArgs;
+    hideArgs["show"] = false;
+    QJsonObject hideResult = server->callTool("toggle_normals", hideArgs);
+    EXPECT_FALSE(isError(hideResult)) << getResultText(hideResult).toStdString();
+    EXPECT_TRUE(getResultText(hideResult).contains("hidden"));
+
+    server->setMainWindow(nullptr);
+}
 
 TEST_F(MCPServerHttpTest, StartHttp_PortAlreadyInUseReturnsFalse)
 {
