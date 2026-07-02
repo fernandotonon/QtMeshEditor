@@ -266,8 +266,20 @@ Rectangle {
     // On load, honor the current mode's default tab (e.g. Object mode → Mode
     // Tools now that it has tools). Without this the panel always started on the
     // Inspector tab because onModeChanged only fires on a subsequent mode switch.
+    //
+    // DEFERRED via Qt.callLater: assigning currentTab inside Component.onCompleted
+    // runs during QQmlObjectCreator::finalize, and the resulting binding cascade
+    // (section visibility -> CollapsibleSection content Loaders) triggers NESTED
+    // component instantiation mid-finalize. Under Mesa/Xvfb that reliably
+    // SIGSEGV'd the SECOND MainWindow constructed in-process
+    // (MainWindowTest/MCPServerTest, signal 11 — confirmed by the crashHandler
+    // backtrace: finalize -> bound signal -> StoreNameSloppy -> QQuickLoader
+    // qt_metacall -> QQmlIncubator -> create). Deferring moves the tab flip to
+    // the next event-loop turn, after creation has fully settled.
     Component.onCompleted: {
-        root.currentTab = root.defaultTabForMode(EditorModeController.currentMode)
+        Qt.callLater(function() {
+            root.currentTab = root.defaultTabForMode(EditorModeController.currentMode)
+        })
     }
 
     ScrollView {
