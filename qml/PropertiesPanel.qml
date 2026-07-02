@@ -1597,7 +1597,7 @@ Rectangle {
                     width: 150; height: 26
                     font.pixelSize: 11
                     enabled: !MeshGenController.busy
-                    model: ["fp32 (best, ~1.7GB)", "fp16 (~840MB)", "int8 (~430MB)"]
+                    model: ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
                     currentIndex: 0
                 }
             }

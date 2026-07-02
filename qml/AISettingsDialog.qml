@@ -369,7 +369,7 @@ Dialog {
                                     ComboBox {
                                         id: gen3dTier
                                         Layout.preferredWidth: 200
-                                        model: ["fp32 (best, ~1.7GB)", "fp16 (~840MB)", "int8 (~430MB)"]
+                                        model: ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
                                         currentIndex: 0
                                         enabled: !MeshGenController.busy
                                     }

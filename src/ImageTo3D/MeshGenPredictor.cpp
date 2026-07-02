@@ -48,7 +48,6 @@ MeshGenPredictor::Options::Options() = default;
 QString MeshGenPredictor::encoderFileName(Quality q)
 {
     switch (q) {
-        case Quality::Fp16: return QStringLiteral("triposr_encoder_fp16.onnx");
         case Quality::Int8: return QStringLiteral("triposr_encoder_int8.onnx");
         case Quality::Fp32:
         default:            return QStringLiteral("triposr_encoder.onnx");

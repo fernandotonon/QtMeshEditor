@@ -8732,14 +8732,13 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--remove-bg" || arg == "--rembg") { removeBg = true; continue; }
         if (arg == "--quality") {
             if (i + 1 >= argc) {
-                err() << "Error: --quality requires fp32, fp16, or int8." << Qt::endl;
+                err() << "Error: --quality requires fp32 or int8." << Qt::endl;
                 return 2;
             }
             const QString q = QString::fromLocal8Bit(argv[++i]).toLower();
             if (q == "fp32")      quality = MeshGenPredictor::Quality::Fp32;
-            else if (q == "fp16") quality = MeshGenPredictor::Quality::Fp16;
             else if (q == "int8") quality = MeshGenPredictor::Quality::Int8;
-            else { err() << "Error: --quality must be fp32, fp16, or int8." << Qt::endl; return 2; }
+            else { err() << "Error: --quality must be fp32 or int8." << Qt::endl; return 2; }
             continue;
         }
         if (arg == "-o" || arg == "--output") {

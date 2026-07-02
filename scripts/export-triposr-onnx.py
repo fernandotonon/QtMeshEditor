@@ -184,30 +184,23 @@ def main():
     )
     print(f"[ok] wrote {enc_path}")
 
-    # ---- Quantized encoder tiers (fp16 / int8) -------------------------------
-    # The ~1.68 GB fp32 encoder dominates the first-use download, so also emit
-    # smaller variants the app can pick (MeshGenPredictor::Quality):
-    #   fp16 (~half size, near-identical quality) — onnxconverter_common.float16
-    #   int8 (~quarter size, slight quality loss) — onnxruntime dynamic quantization
-    # The decoder stays fp32 (tiny). File names MUST match encoderFileName():
-    #   triposr_encoder_fp16.onnx / triposr_encoder_int8.onnx
+    # ---- Quantized encoder tier (int8) ---------------------------------------
+    # The ~1.68 GB fp32 encoder dominates the first-use download, so also emit an
+    # int8 variant (~quarter size, slight quality loss) via onnxruntime dynamic
+    # quantization. The decoder stays fp32 (tiny). File name MUST match
+    # MeshGenPredictor::encoderFileName(): triposr_encoder_int8.onnx.
+    #
+    # NOTE: fp16 was intentionally NOT emitted — TripoSR's attention blocks contain
+    # a hardcoded Cast-to-float32 whose output type the ONNX fp16 converters
+    # (onnxconverter_common float16 / auto_convert_mixed_precision) can't rewrite,
+    # producing a model that fails to load in ONNX Runtime. int8 is smaller anyway.
     if not args.no_quant:
-        try:
-            import onnx
-            from onnxconverter_common import float16
-            m = onnx.load(enc_path)
-            m16 = float16.convert_float_to_float16(m, keep_io_types=True)
-            fp16_path = os.path.join(args.out, "triposr_encoder_fp16.onnx")
-            onnx.save(m16, fp16_path)
-            print(f"[ok] wrote {fp16_path}")
-        except Exception as e:  # noqa: BLE001 — best-effort; fp32 still ships
-            print(f"[warn] fp16 export skipped: {e}")
         try:
             from onnxruntime.quantization import quantize_dynamic, QuantType
             int8_path = os.path.join(args.out, "triposr_encoder_int8.onnx")
             quantize_dynamic(enc_path, int8_path, weight_type=QuantType.QInt8)
             print(f"[ok] wrote {int8_path}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 — best-effort; fp32 still ships
             print(f"[warn] int8 export skipped: {e}")
 
     # ---- Decoder export ------------------------------------------------------

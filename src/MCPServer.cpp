@@ -2158,10 +2158,9 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         return makeErrorResult("'resolution' must be between 16 and 512.");
     if (args.contains("quality")) {
         const QString q = args["quality"].toString().toLower();
-        if (q == "fp16")      opts.quality = MeshGenPredictor::Quality::Fp16;
-        else if (q == "int8") opts.quality = MeshGenPredictor::Quality::Int8;
+        if (q == "int8") opts.quality = MeshGenPredictor::Quality::Int8;
         else if (q == "fp32" || q.isEmpty()) opts.quality = MeshGenPredictor::Quality::Fp32;
-        else return makeErrorResult("'quality' must be 'fp32', 'fp16', or 'int8'.");
+        else return makeErrorResult("'quality' must be 'fp32' or 'int8'.");
     }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
@@ -6934,7 +6933,7 @@ QJsonArray MCPServer::buildToolsList()
         props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..512 (default 256; 128 is a fast/preview tier). Higher = more detail + slower."}};
         props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "Bake TripoSR's predicted per-vertex color (default true)."}};
         props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; TripoSR needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
-        props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "fp16", "int8"}}, {"description", "Encoder precision/size tier (default fp32). fp32 = best (~1.7GB), fp16 = near-identical (~840MB), int8 = smallest, slight quality loss (~430MB). The chosen tier downloads on demand."}};
+        props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Encoder precision/size tier (default fp32). fp32 = best (~1.7GB), int8 = smallest, slight quality loss (~430MB). The chosen tier downloads on demand."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "

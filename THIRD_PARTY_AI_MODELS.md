@@ -39,14 +39,16 @@ the binary). Attribution + licenses for the models and their training data:
   `triposr_decoder.onnx` via ONNX Runtime (`src/ImageTo3D/MeshGenPredictor.cpp`),
   downloading them on first use to `AppData/ai_models/triposr/`.
 - **Encoder size tiers** (all the SAME MIT weights, just re-precisioned by the
-  export script — no separate license): `triposr_encoder.onnx` (fp32, ~1.68 GB),
-  `triposr_encoder_fp16.onnx` (~840 MB), `triposr_encoder_int8.onnx` (~430 MB).
-  The user picks the tier; each downloads on demand.
-- **Hosting is slice #769** — the exported `.onnx` files (fp32/fp16/int8 encoders +
-  decoder) must be uploaded to the `triposr/` path of the
-  `fernandotonon/QtMeshEditor-models` HF repo. Until then the download 404s and the
-  feature reports a clean "TripoSR model not yet hosted" state (the RigNet
-  precedent) — no crash.
+  export script — no separate license): `triposr_encoder.onnx` (fp32, ~1.68 GB) and
+  `triposr_encoder_int8.onnx` (~430 MB, ORT dynamic quantization). The user picks
+  the tier; each downloads on demand. (fp16 was dropped — TripoSR's attention has a
+  hardcoded Cast-to-float32 the ONNX fp16 converters can't rewrite into a loadable
+  graph; int8 is smaller anyway.)
+- **Hosted** on the `fernandotonon/QtMeshEditor-models` HF repo:
+  `triposr/triposr_encoder.onnx`, `triposr/triposr_encoder_int8.onnx`,
+  `triposr/triposr_decoder.onnx`, `rembg/u2net.onnx` (uploaded via
+  `scripts/upload-triposr-models.sh`). First use downloads them; if ever absent the
+  feature reports a clean "not yet hosted" state (no crash) — the RigNet precedent.
 
 ## U²-Net — background removal for image-to-3D (epic #764)
 

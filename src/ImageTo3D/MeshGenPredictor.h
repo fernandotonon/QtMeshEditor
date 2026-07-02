@@ -42,12 +42,13 @@
 class MeshGenPredictor {
 public:
     // Encoder precision tier. The decoder is tiny and always fp32; only the ~1.7 GB
-    // encoder is offered in smaller quantized variants so users can trade a little
+    // encoder is offered in a smaller quantized variant so users can trade a little
     // quality for a much smaller download (see scripts/export-triposr-onnx.py):
     //   Fp32  — triposr_encoder.onnx        (~1.68 GB, best)
-    //   Fp16  — triposr_encoder_fp16.onnx   (~840 MB, near-identical)
     //   Int8  — triposr_encoder_int8.onnx   (~430 MB, slight quality loss)
-    enum class Quality { Fp32, Fp16, Int8 };
+    // (fp16 was dropped: TripoSR's attention block has a hardcoded Cast-to-float32
+    // that the ONNX fp16 converters can't rewrite cleanly; int8 is smaller anyway.)
+    enum class Quality { Fp32, Int8 };
 
     struct Options {
         Options();                    // out-of-line (same idiom as UniRig::Options)

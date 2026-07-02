@@ -131,11 +131,9 @@ void MeshGenController::generateSelected(int resolution, bool removeBackground, 
 
 MeshGenPredictor::Quality MeshGenController::qualityFromInt(int q)
 {
-    switch (q) {
-        case 1:  return MeshGenPredictor::Quality::Fp16;
-        case 2:  return MeshGenPredictor::Quality::Int8;
-        default: return MeshGenPredictor::Quality::Fp32;
-    }
+    // Dropdown/CLI index: 0 = fp32 (best), 1 = int8 (smallest).
+    return (q == 1) ? MeshGenPredictor::Quality::Int8
+                    : MeshGenPredictor::Quality::Fp32;
 }
 
 void MeshGenController::pickImageAndGenerate(int resolution, bool removeBackground, int quality)
