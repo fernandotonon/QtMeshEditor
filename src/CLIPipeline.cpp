@@ -24,6 +24,7 @@
 #include "VertexCacheOptimizer.h"
 #include "ExportOptimizer.h"
 #include "UvUnwrap.h"
+#include "HDR/HdrBundledLibrary.h"
 #include "UvPipeline.h"
 #include "UvProject.h"
 #include "QuadRetopo.h"
@@ -792,6 +793,9 @@ void CLIPipeline::printUsage()
         "                                    seam-split remap.\n"
         "  uv <file> --info [--json]         Report current UV channels + UV0 bounding-box coverage per\n"
         "                                    submesh without mutating the mesh.\n"
+        "  hdri [--list]                     List bundled HDRI catalog + on-disk status.\n"
+        "  hdri --download <name>            Download one CC0 HDRI from Poly Haven into AppData/hdri/.\n"
+        "  hdri --download-all               Download every downloadable catalog entry.\n"
         "  retopo <file> [--target-faces N] [--max-angle DEG] [--shape-tol DEG] [--max-aspect R] -o <out> [--json]\n"
         "                                    Quad-dominant retopology via triangle pairing. Pairs adjacent\n"
         "                                    triangles into convex quads where coplanarity + shape + aspect-ratio\n"
@@ -1508,6 +1512,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "bake-vertex-colors") rc = cmdBakeVertexColors(argc, argv);
     else if (cmd == "vat") rc = cmdVat(argc, argv);
     else if (cmd == "uv") rc = cmdUv(argc, argv);
+    else if (cmd == "hdri") rc = cmdHdri(argc, argv);
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);
@@ -9225,4 +9230,65 @@ int CLIPipeline::cmdNodeAnim(int argc, char* argv[])
         }
     }
     return 0;
+}
+
+int CLIPipeline::cmdHdri(int argc, char* argv[])
+{
+    bool listOnly = false;
+    bool downloadAll = false;
+    QString downloadName;
+
+    for (int i = 2; i < argc; ++i) {
+        const QString arg(argv[i]);
+        if (arg == QStringLiteral("--list"))
+            listOnly = true;
+        else if (arg == QStringLiteral("--download-all"))
+            downloadAll = true;
+        else if (arg == QStringLiteral("--download") && i + 1 < argc)
+            downloadName = QString::fromUtf8(argv[++i]);
+        else if (arg == QStringLiteral("--help") || arg == QStringLiteral("-h")) {
+            cliWrite(QStringLiteral(
+                "Usage:\n"
+                "  qtmesh hdri --list\n"
+                "  qtmesh hdri --download <name>\n"
+                "  qtmesh hdri --download-all\n"
+                "\n"
+                "Downloads optional CC0 HDRIs from Poly Haven into the user\n"
+                "AppData hdri folder. Bundled release HDRIs ship under media/hdri/.\n"));
+            return 0;
+        }
+    }
+
+    if (listOnly || (!downloadAll && downloadName.isEmpty())) {
+        QString out = QStringLiteral("Bundled HDRI catalog:\n");
+        for (const QString& fileName : HdrBundledLibrary::catalogFileNames()) {
+            const QString resolved = HdrBundledLibrary::resolveHdriPath(fileName);
+            const QString status = resolved.isEmpty() ? QStringLiteral("missing")
+                                                      : QStringLiteral("ready");
+            out += QStringLiteral("  %1 [%2]\n").arg(fileName, status);
+        }
+        out += QStringLiteral("\nUser folder: %1\n").arg(HdrBundledLibrary::userHdriDirectory());
+        cliWrite(out);
+        return 0;
+    }
+
+    QStringList targets;
+    if (downloadAll) {
+        for (const QString& fileName : HdrBundledLibrary::catalogFileNames())
+            targets.append(QFileInfo(fileName).completeBaseName());
+    } else {
+        targets.append(downloadName);
+    }
+
+    int failures = 0;
+    for (const QString& name : targets) {
+        QString error;
+        if (HdrBundledLibrary::downloadHdri(name, &error)) {
+            cliWrite(QStringLiteral("Downloaded %1\n").arg(name));
+        } else {
+            err() << "Error: " << error << Qt::endl;
+            ++failures;
+        }
+    }
+    return failures > 0 ? 1 : 0;
 }

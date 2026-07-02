@@ -7,6 +7,7 @@ import EditorMode 1.0
 import MaterialEditorQML 1.0
 import ThemeManager 1.0
 import AssetBrowser 1.0
+import HdrEnvironment 1.0
 
 Rectangle {
     id: root
@@ -684,15 +685,15 @@ Rectangle {
                 Component.onCompleted: content = animControlComponent
             }
 
-            // ---- LOD Generation ----
+            // ---- Environment (HDR / IBL, Object mode) ----
             CollapsibleSection {
-                title: "LOD Generation"
+                title: "Environment"
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ObjectMode,
-                    MeshLodController.hasSelection)
-                expanded: true
+                    true)
+                expanded: false
 
-                Component.onCompleted: content = lodComponent
+                Component.onCompleted: content = hdrEnvironmentComponent
             }
 
             // ---- Decimate (single-pass) ----
@@ -704,6 +705,17 @@ Rectangle {
                 expanded: true
 
                 Component.onCompleted: content = decimateComponent
+            }
+
+            // ---- LOD Generation ----
+            CollapsibleSection {
+                title: "LOD Generation"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    MeshLodController.hasSelection)
+                expanded: true
+
+                Component.onCompleted: content = lodComponent
             }
 
             // ---- Material Editor (Material mode) ----
@@ -4561,6 +4573,201 @@ Rectangle {
         }
     }
 
+    // ---- HDR / IBL Environment (Object mode, Slice E #471) ----
+    Component {
+        id: hdrEnvironmentComponent
+
+        Column {
+            id: hdrEnvCol
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            function choiceIndexForCurrent() {
+                const idx = HdrEnvironmentController.currentChoiceIndex
+                return idx >= 0 ? idx : -1
+            }
+
+            // Environment picker
+            Text {
+                text: "HDRI"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+
+                ThemedComboBox {
+                    id: hdrEnvCombo
+                    width: parent.width - browseBtn.width - 6
+                    height: 22
+                    font.pixelSize: 11
+                    enabled: HdrEnvironmentController.environmentChoices.length > 0
+                    model: HdrEnvironmentController.environmentChoices.length > 0
+                        ? HdrEnvironmentController.environmentChoices
+                        : [qsTr("(no environments — use Browse…)")]
+                    currentIndex: hdrEnvCol.choiceIndexForCurrent()
+                    onActivated: index => {
+                        if (HdrEnvironmentController.environmentChoices.length > 0)
+                            HdrEnvironmentController.loadEnvironmentChoice(index)
+                    }
+                    Connections {
+                        target: HdrEnvironmentController
+                        function onEnvironmentChanged() {
+                            hdrEnvCombo.currentIndex = hdrEnvCol.choiceIndexForCurrent()
+                        }
+                        function onEnvironmentChoicesChanged() {
+                            hdrEnvCombo.currentIndex = hdrEnvCol.choiceIndexForCurrent()
+                        }
+                    }
+                }
+
+                Rectangle {
+                    id: browseBtn
+                    width: 58
+                    height: 22
+                    radius: 3
+                    color: browseMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Browse…"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: browseMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: HdrEnvironmentController.browseForEnvironment()
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                elide: Text.ElideMiddle
+                color: PropertiesPanelController.textColor
+                opacity: 0.75
+                font.pixelSize: 10
+                text: HdrEnvironmentController.hasEnvironment
+                    ? ("Loaded: " + HdrEnvironmentController.currentEnvironmentLabel)
+                    : "No environment loaded (use Browse or add files to media/hdri/)"
+            }
+
+            Text {
+                visible: HdrEnvironmentController.hasEnvironment && !HdrEnvironmentController.iblReady
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                color: "#c9b64f"
+                font.pixelSize: 10
+                text: "IBL precompute in progress…"
+            }
+
+            // Skybox + background blur
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Rectangle {
+                    id: hdrSkyboxChk
+                    width: 14; height: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    border.color: hdrSkyboxChk.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    border.width: hdrSkyboxChk.activeFocus ? 2 : 1
+                    radius: 2
+                    color: HdrEnvironmentController.defaultSkyBoxVisible
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    opacity: HdrEnvironmentController.hasEnvironment ? 1.0 : 0.4
+                    activeFocusOnTab: HdrEnvironmentController.hasEnvironment
+                    Accessible.role: Accessible.CheckBox
+                    Accessible.name: "Show skybox"
+                    Accessible.checkable: true
+                    Accessible.checked: HdrEnvironmentController.defaultSkyBoxVisible
+                    Keys.onSpacePressed: if (HdrEnvironmentController.hasEnvironment)
+                        HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                    Keys.onReturnPressed: if (HdrEnvironmentController.hasEnvironment)
+                        HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                    Text {
+                        anchors.centerIn: parent
+                        text: HdrEnvironmentController.defaultSkyBoxVisible ? "✓" : ""
+                        color: "white"; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: HdrEnvironmentController.hasEnvironment
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: {
+                            HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                            hdrSkyboxChk.forceActiveFocus()
+                        }
+                    }
+                }
+                Text {
+                    text: "Show skybox"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    opacity: HdrEnvironmentController.hasEnvironment ? 1.0 : 0.45
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: HdrEnvironmentController.hasEnvironment
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: {
+                            HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                            hdrSkyboxChk.forceActiveFocus()
+                        }
+                    }
+                }
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                visible: HdrEnvironmentController.hasEnvironment
+
+                Text {
+                    text: "Blur"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    width: 44
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    id: bgBlurSlider
+                    width: parent.width - 44 - blurValue.implicitWidth - 12
+                    from: 0
+                    to: 1
+                    stepSize: 0.05
+                    value: HdrEnvironmentController.backgroundBlur
+                    onMoved: HdrEnvironmentController.backgroundBlur = value
+                    Connections {
+                        target: HdrEnvironmentController
+                        function onBackgroundBlurChanged() {
+                            bgBlurSlider.value = HdrEnvironmentController.backgroundBlur
+                        }
+                    }
+                }
+                Text {
+                    id: blurValue
+                    text: Math.round(bgBlurSlider.value * 100) + "%"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+        }
+    }
+
     // ---- Material Library + Mode-Tools tools (Material mode) ----
     //
     // Slice I: this column replaces the old "Open Material Editor"
@@ -5454,9 +5661,17 @@ Rectangle {
                 // real PBR shading via the pbr_workflow Pass user-binding.
                 { name: "Metallic-Roughness",  label: "M-R",   cat: "PBR",     diff: "#bbbbbb", spec: "#888888", shin: 40,  alpha: 1.0,  wire: false, unlit: false },
                 { name: "Specular-Glossiness", label: "S-G",   cat: "PBR",     diff: "#bbbbbb", spec: "#dddddd", shin: 60,  alpha: 1.0,  wire: false, unlit: false },
-                { name: "Unlit PBR",           label: "Unlit",  cat: "PBR",    diff: "#dddddd", spec: "#dddddd", shin: 0,   alpha: 1.0,  wire: false, unlit: true  }
+                { name: "Unlit PBR",           label: "Unlit",  cat: "PBR",    diff: "#dddddd", spec: "#dddddd", shin: 0,   alpha: 1.0,  wire: false, unlit: true  },
+                // HDR presets (Slice F #472) — pair with studio_neutral by default.
+                { name: "Polished Metal (HDR)", label: "Polish", cat: "HDR",   diff: "#d0d0d6", spec: "#ffffff", shin: 90,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Brushed Metal (HDR)",  label: "Brush",  cat: "HDR",   diff: "#9e9ea4", spec: "#8c8c90", shin: 38,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Glass (HDR)",          label: "Glass",  cat: "HDR",   diff: "#b8d4eb", spec: "#ffffff", shin: 110, alpha: 0.32, wire: false, unlit: false },
+                { name: "Plastic (HDR)",        label: "Red",    cat: "HDR",   diff: "#d12e28", spec: "#737373", shin: 32,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Painted Wood (HDR)",   label: "Wood",   cat: "HDR",   diff: "#945c33", spec: "#1f1a14", shin: 8,   alpha: 1.0,  wire: false, unlit: false },
+                { name: "Skin (HDR-friendly)",  label: "Skin",   cat: "HDR",   diff: "#db9e80", spec: "#2e241e", shin: 12,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Car Paint (HDR)",      label: "Paint",  cat: "HDR",   diff: "#2e148c", spec: "#e6e6f2", shin: 98,  alpha: 1.0,  wire: false, unlit: false }
             ]
-            property var categories: ["Plastic", "Metal", "Wood", "Glass", "Other", "PBR"]
+            property var categories: ["Plastic", "Metal", "Wood", "Glass", "Other", "PBR", "HDR"]
             property string lastApplied: ""
 
             // Draw one category group

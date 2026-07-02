@@ -89,6 +89,9 @@
 #include "SubEntityHighlight.h"
 #include "SpaceCamera.h"
 #include "ViewCube/ViewCubeController.h"
+#include "HDR/HdrEnvironmentController.h"
+#include "HDR/HdrViewportController.h"
+#include "HDR/HdrBundledLibrary.h"
 #include "LLMManager.h"
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
@@ -254,6 +257,12 @@ MainWindow::MainWindow(QWidget *parent) :
     createEditorViewport(/*TODO add the type of view (perspective, left,....*/);
 
     manager->loadResources(); // Resources should be loaded after createRenderWindow...
+
+    // First-run HDR defaults need a GL context + RTSS (initRTShaderSystem runs in
+    // loadResources). Loading in Manager's constructor was too early and could segfault.
+    QTimer::singleShot(0, this, []() {
+        HdrBundledLibrary::applyFirstRunDefaultsIfNeeded();
+    });
 
     m_pRoot = manager->getRoot();
     m_pRoot->addFrameListener(this);
@@ -749,6 +758,10 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MaterialPresetLibrary::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<HdrEnvironmentController>("HdrEnvironment", 1, 0, "HdrEnvironmentController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return HdrEnvironmentController::qmlInstance(engine, nullptr);
+            });
         qmlRegisterSingletonType<AIChatManager>("AIChatPanel", 1, 0, "AIChatManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AIChatManager::qmlInstance(engine, nullptr);
@@ -805,6 +818,25 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine* js) -> QObject* {
                 return MeshGenController::create(engine, js);
             });
+        connect(HdrEnvironmentController::instance(), &HdrEnvironmentController::browseRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                auto* hdrCtrl = HdrEnvironmentController::instance();
+                const QString path = QFileDialog::getOpenFileName(
+                    this,
+                    tr("Select HDR Environment"),
+                    hdrCtrl->browseStartDirectory(),
+                    tr("HDR Images (*.hdr *.exr);;All Files (*)"),
+                    nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                              path.isEmpty()
+                                                  ? QStringLiteral("hdr.browseCancelled")
+                                                  : QStringLiteral("hdr.browseAccepted=%1")
+                                                        .arg(QFileInfo(path).fileName()));
+                hdrCtrl->completeBrowseFromDialog(path);
+            });
+        });
         qmlRegisterSingletonType<MorphAnimationManager>("PropertiesPanel", 1, 0, "MorphAnimationManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MorphAnimationManager::qmlInstance(engine, nullptr);
@@ -2437,6 +2469,15 @@ void MainWindow::initToolBar()
     if (!mDockWidgetList.isEmpty())
         m_viewCubeController->setActiveWidget(mDockWidgetList.first()->getOgreWidget());
     m_viewCubeController->setVisible(true);
+
+    for (EditorViewport* vp : mDockWidgetList) {
+        connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget,
+                [](OgreWidget* widget) {
+                    if (auto* ctrl = HdrViewportController::getSingletonPtr())
+                        ctrl->setActiveWidget(widget);
+                    HdrEnvironmentController::instance()->setActiveWidget(widget);
+                });
+    }
 
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
@@ -4622,6 +4663,12 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
     if (m_viewCubeController)
         connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget,
                 m_viewCubeController, &ViewCubeController::setActiveWidget);
+    connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget,
+            [](OgreWidget* widget) {
+                if (auto* ctrl = HdrViewportController::getSingletonPtr())
+                    ctrl->setActiveWidget(widget);
+                HdrEnvironmentController::instance()->setActiveWidget(widget);
+            });
 
     if(!mDockWidgetList.isEmpty())
     {

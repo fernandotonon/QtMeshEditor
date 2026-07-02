@@ -383,7 +383,7 @@ void OgreWidget::rebuildRenderWindow()
 
 bool OgreWidget::frameStarted(const Ogre::FrameEvent& e)
 {
-    HdrViewportController::getSingleton()->tickActiveViewports();
+    HdrViewportController::getSingleton()->tickViewport(this);
 
     // Keep tool gizmos at a constant pixel size by scaling them against the
     // current camera distance each frame. The gizmos are shared editor
