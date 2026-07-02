@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "MaterialPresetLibrary.h"
 #include "Manager.h"
+#include "HDR/HdrIblRtss.h"
 #include "RTShaderHelper.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
@@ -72,7 +73,7 @@ TEST_F(MaterialPresetLibraryTests, PresetNamesNotEmpty) {
     auto* inst = MaterialPresetLibrary::instance();
     QStringList names = inst->presetNames();
     EXPECT_FALSE(names.isEmpty());
-    EXPECT_GE(names.size(), 10); // We know there are 12 presets
+    EXPECT_GE(names.size(), 20); // legacy + PBR + HDR presets
 }
 
 TEST_F(MaterialPresetLibraryTests, PresetNamesContainsExpected) {
@@ -304,6 +305,50 @@ TEST_F(MaterialPresetLibraryTests, PresetNamesContainsPbrTemplates) {
     EXPECT_TRUE(names.contains("Metallic-Roughness"));
     EXPECT_TRUE(names.contains("Specular-Glossiness"));
     EXPECT_TRUE(names.contains("Unlit PBR"));
+}
+
+TEST_F(MaterialPresetLibraryTests, PresetNamesContainsHdrEnvironmentPresets) {
+    const QStringList names = MaterialPresetLibrary::instance()->presetNames();
+    const QStringList expected = {
+        QStringLiteral("Polished Metal (HDR)"),
+        QStringLiteral("Brushed Metal (HDR)"),
+        QStringLiteral("Glass (HDR)"),
+        QStringLiteral("Plastic (HDR)"),
+        QStringLiteral("Painted Wood (HDR)"),
+        QStringLiteral("Skin (HDR-friendly)"),
+        QStringLiteral("Car Paint (HDR)"),
+    };
+    for (const QString& preset : expected)
+        EXPECT_TRUE(names.contains(preset)) << preset.toStdString();
+    EXPECT_GE(names.size(), 22);
+}
+
+TEST_F(MaterialPresetLibraryTests, HdrPresetSetsEnvIntensityAndPbrWorkflow) {
+    Manager::kill();
+    QThread::msleep(50);
+
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
+    createStandardOgreMaterials();
+
+    Ogre::Entity* entity = createSelectedEntity(
+        "HdrPreset_Node", "HdrPreset_Entity", "HdrPreset_Mesh");
+    ASSERT_NE(entity, nullptr);
+
+    MaterialPresetLibrary::instance()->applyPreset(QStringLiteral("Polished Metal (HDR)"));
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Polished Metal (HDR)");
+    ASSERT_TRUE(bool(mat));
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+
+    auto intensityAny = pass->getUserObjectBindings().getUserAny(HdrIblRtss::kPbrEnvIntensityKey);
+    ASSERT_TRUE(intensityAny.has_value());
+    EXPECT_NEAR(Ogre::any_cast<float>(intensityAny), 1.35f, 1e-4f);
+
+    auto tag = pass->getUserObjectBindings().getUserAny(MaterialPresetLibrary::kPbrWorkflowKey);
+    ASSERT_TRUE(tag.has_value());
+    EXPECT_EQ(Ogre::any_cast<Ogre::String>(tag),
+              Ogre::String(MaterialPresetLibrary::kPbrWorkflowMetallic));
 }
 
 TEST_F(MaterialPresetLibraryTests, MetallicRoughnessTemplateCreatesSixCanonicalSlots) {

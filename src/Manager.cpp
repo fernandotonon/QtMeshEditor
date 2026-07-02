@@ -47,6 +47,7 @@ THE SOFTWARE.
 #include "mainwindow.h"
 #include "ViewportGrid.h"
 #include "HDR/HDREnvironmentManager.h"
+#include "HDR/HdrBundledLibrary.h"
 #include "HDR/HdrViewportController.h"
 
 #if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
@@ -1016,6 +1017,8 @@ void Manager::loadResources()
                 resolved.toStdString(), typeName, secName);
         }
     }
+
+    HdrBundledLibrary::registerUserHdriResourceLocation();
 
     Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
 

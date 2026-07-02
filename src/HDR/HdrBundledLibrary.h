@@ -27,6 +27,9 @@ QString resolveHdriPath(const QString& pathOrFileName);
 /// Blocking download of one catalog entry into the user HDRI folder (CLI).
 bool downloadHdri(const QString& nameOrFileName, QString* errorOut = nullptr);
 
+/// Optional user-downloaded HDRI folder as an Ogre FileSystem location (after resources.cfg).
+void registerUserHdriResourceLocation();
+
 /// First launch: studio_neutral + ACES + 0 EV (once per install).
 void applyFirstRunDefaultsIfNeeded();
 

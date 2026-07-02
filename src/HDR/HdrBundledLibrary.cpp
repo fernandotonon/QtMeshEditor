@@ -4,6 +4,7 @@
 #include "HDR/HdrTonemap.h"
 
 #include <OgreRoot.h>
+#include <OgreResourceGroupManager.h>
 
 #include <QCoreApplication>
 #include <QDir>
@@ -244,6 +245,22 @@ bool downloadHdri(const QString& nameOrFileName, QString* errorOut)
         return false;
     }
     return true;
+}
+
+void registerUserHdriResourceLocation()
+{
+    if (!Ogre::ResourceGroupManager::getSingletonPtr())
+        return;
+
+    const QString userDir = userHdriDirectory();
+    if (!QDir(userDir).exists())
+        return;
+
+    const std::string loc = userDir.toStdString();
+    const std::string group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+    auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+    if (!rgm.resourceLocationExists(loc, group))
+        rgm.addResourceLocation(loc, "FileSystem", group);
 }
 
 void applyFirstRunDefaultsIfNeeded()
