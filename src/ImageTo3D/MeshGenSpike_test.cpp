@@ -86,14 +86,17 @@ Ort::Session openSession(Ort::Env& env, const QString& path)
 // model will exercise on CI.
 TEST(MeshGenSpikeTest, EncoderDecoderLoadAndMatchContract)
 {
-    // Models aren't hosted yet (#769); on CI they're absent. CI rejects skipped
-    // tests, so instead of GTEST_SKIP assert opening a missing model fails
-    // cleanly (no crash), and only run the full load-proof when a developer has
-    // dropped the exported models into the cache.
-    if (!QFileInfo::exists(encoderPath()) || !QFileInfo::exists(decoderPath())) {
+    // Models may be absent locally / on CI (they download on first use). CI rejects
+    // skipped tests, so instead of GTEST_SKIP assert that opening a MISSING model
+    // fails cleanly (no crash), and only run the full load-proof when BOTH are
+    // present. Open whichever file is actually missing — not always the encoder —
+    // so a present-encoder/absent-decoder state doesn't false-negative.
+    const bool encMissing = !QFileInfo::exists(encoderPath());
+    const bool decMissing = !QFileInfo::exists(decoderPath());
+    if (encMissing || decMissing) {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_triposr_spike_absent");
-        EXPECT_THROW({ Ort::SessionOptions so; openSession(env, encoderPath()); },
-                     Ort::Exception);
+        const QString missingPath = encMissing ? encoderPath() : decoderPath();
+        EXPECT_THROW({ openSession(env, missingPath); }, Ort::Exception);
         return;
     }
 
