@@ -1,4 +1,5 @@
 #include "AnimationControlController.h"
+#include "PropertiesPanelController.h"
 #include "SelectionSet.h"
 #include "Manager.h"
 #include "SentryReporter.h"
@@ -1755,6 +1756,12 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
             gen->setTimePosition(0.0f);
         }
     }
+    // The Inspector's Animations checkboxes read enabled flags through
+    // PropertiesPanelController — notify it, or the panel shows STALE state
+    // (old clip still checked) and the user's next toggle crosses the
+    // enables back into a blended, shaking pose.
+    if (auto* ppc = PropertiesPanelController::instance())
+        emit ppc->animationStateChanged();
     // Adding an animation can reallocate skeleton state — drop cached pointers
     // and refresh the dope sheet, like the in-between path.
     m_selectedTrack   = nullptr;
