@@ -263,6 +263,25 @@ Rectangle {
         }
     }
 
+    // On load, honor the current mode's default tab (e.g. Object mode → Mode
+    // Tools now that it has tools). Without this the panel always started on the
+    // Inspector tab because onModeChanged only fires on a subsequent mode switch.
+    //
+    // DEFERRED via Qt.callLater: assigning currentTab inside Component.onCompleted
+    // runs during QQmlObjectCreator::finalize, and the resulting binding cascade
+    // (section visibility -> CollapsibleSection content Loaders) triggers NESTED
+    // component instantiation mid-finalize. Under Mesa/Xvfb that reliably
+    // SIGSEGV'd the SECOND MainWindow constructed in-process
+    // (MainWindowTest/MCPServerTest, signal 11 — confirmed by the crashHandler
+    // backtrace: finalize -> bound signal -> StoreNameSloppy -> QQuickLoader
+    // qt_metacall -> QQmlIncubator -> create). Deferring moves the tab flip to
+    // the next event-loop turn, after creation has fully settled.
+    Component.onCompleted: {
+        Qt.callLater(function() {
+            root.currentTab = root.defaultTabForMode(EditorModeController.currentMode)
+        })
+    }
+
     ScrollView {
         anchors.fill: parent
         clip: true
@@ -468,6 +487,17 @@ Rectangle {
                 expanded: true
 
                 Component.onCompleted: content = editModeToolsComponent
+            }
+
+            // ---- AI: Image → 3D (epic #764, Object mode) ----
+            CollapsibleSection {
+                title: "AI: Image → 3D"
+                sectionVisible: root.currentTab === root.modeToolsTab
+                    && MeshGenController.available
+                    && root.modeToolMatches(EditorModeController.ObjectMode)
+                expanded: false
+
+                Component.onCompleted: content = meshGenToolsComponent
             }
 
             // ---- VAT ----
@@ -1457,6 +1487,316 @@ Rectangle {
                         ? "Render an isometric directions×frames PNG atlas from the live scene."
                         : "Select a mesh first."
                 }
+            }
+        }
+    }
+
+    // ---- AI: Image → 3D Content (Object mode, epic #764) ----
+    // Runs TripoSR on a worker thread (MeshGenController) so the app stays
+    // responsive; shows a staged progress bar + Cancel.
+    Component {
+        id: meshGenToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            // A small local button factory (raw QML — the Themed* wrappers blank
+            // this dynamically-loaded panel, so we style raw controls with the
+            // PropertiesPanelController palette to match the Inspector).
+            component InspectorButton: Rectangle {
+                id: ibRoot
+                property alias text: ibLabel.text
+                property bool clickEnabled: true
+                signal clicked()
+                width: Math.min(parent ? parent.width - 16 : 200, ibLabel.implicitWidth + 20)
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: (ibMa.containsMouse || ibRoot.activeFocus) && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: ibRoot.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: ibRoot.activeFocus ? 2 : 1
+                // Keyboard accessibility: focusable via Tab, activatable via
+                // Space/Enter, and exposed to assistive tech.
+                activeFocusOnTab: clickEnabled
+                Accessible.role: Accessible.Button
+                Accessible.name: ibLabel.text
+                Keys.onSpacePressed: if (clickEnabled) clicked()
+                Keys.onReturnPressed: if (clickEnabled) clicked()
+                Keys.onEnterPressed: if (clickEnabled) clicked()
+                Text {
+                    id: ibLabel
+                    anchors.centerIn: parent
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: ibMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: ibRoot.clickEnabled
+                    cursorShape: ibRoot.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: ibRoot.clicked()
+                }
+            }
+
+            // Inspector-styled ComboBox (raw ComboBox re-skinned with the
+            // PropertiesPanelController palette — same look as ThemedComboBox, but
+            // inlined because the Themed* wrappers blank this dynamically-loaded
+            // panel). Used for the Resolution + Model dropdowns below.
+            component InspectorComboBox: ComboBox {
+                id: cbRoot
+                height: 26
+                font.pixelSize: 11
+                delegate: ItemDelegate {
+                    id: cbItem
+                    width: cbRoot.width
+                    implicitHeight: 22
+                    padding: 0; leftPadding: 6; rightPadding: 6
+                    contentItem: Text {
+                        text: modelData
+                        color: PropertiesPanelController.textColor
+                        font: cbRoot.font
+                        elide: Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    highlighted: cbRoot.highlightedIndex === index
+                    background: Rectangle {
+                        color: cbItem.highlighted ? PropertiesPanelController.highlightColor
+                                                  : "transparent"
+                    }
+                }
+                indicator: Canvas {
+                    id: cbArrow
+                    x: cbRoot.width - width - cbRoot.rightPadding
+                    y: cbRoot.topPadding + (cbRoot.availableHeight - height) / 2
+                    width: 9; height: 5; contextType: "2d"
+                    Connections { target: cbRoot; function onPressedChanged() { cbArrow.requestPaint() } }
+                    onPaint: {
+                        context.reset()
+                        context.moveTo(0, 0); context.lineTo(width, 0); context.lineTo(width / 2, height)
+                        context.closePath()
+                        context.fillStyle = PropertiesPanelController.textColor
+                        context.fill()
+                    }
+                }
+                contentItem: Text {
+                    leftPadding: 6
+                    rightPadding: cbRoot.indicator.width + cbRoot.spacing + 4
+                    text: cbRoot.displayText
+                    font: cbRoot.font
+                    color: PropertiesPanelController.textColor
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                background: Rectangle {
+                    implicitWidth: 120; implicitHeight: 26
+                    color: PropertiesPanelController.inputColor
+                    border.color: cbRoot.visualFocus ? PropertiesPanelController.highlightColor
+                                                     : PropertiesPanelController.borderColor
+                    border.width: cbRoot.visualFocus ? 2 : 1
+                    radius: 3
+                }
+                popup: Popup {
+                    popupType: Popup.Window
+                    y: cbRoot.height
+                    width: cbRoot.width
+                    implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
+                    padding: 1
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: cbRoot.delegateModel
+                        currentIndex: cbRoot.highlightedIndex
+                        highlightFollowsCurrentItem: false
+                        ScrollIndicator.vertical: ScrollIndicator { }
+                    }
+                    background: Rectangle {
+                        color: PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        radius: 3
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Reconstruct a 3D mesh from a single image (TripoSR). "
+                    + "Select an image, then Generate. Background removal (U²-Net) runs first."
+            }
+
+            // Step 1: select the source image (no generation yet).
+            InspectorButton {
+                text: "Select Image…"
+                clickEnabled: !MeshGenController.busy
+                onClicked: MeshGenController.selectImage()
+            }
+
+            // Preview of the selected image (shown once one is chosen).
+            Rectangle {
+                width: parent.width - 16
+                height: visible ? 140 : 0
+                visible: MeshGenController.selectedImagePath.length > 0
+                color: PropertiesPanelController.inputColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                radius: 3
+                Image {
+                    anchors.fill: parent
+                    anchors.margins: 4
+                    source: MeshGenController.previewSource
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    cache: false
+                }
+            }
+
+            // Resolution picker — marching-cubes grid resolution. Cost grows with
+            // the cube of the value (the decoder queries resolution³ points), so
+            // higher = more detail but much slower. Labels flag the trade-off.
+            Row {
+                spacing: 6
+                Text {
+                    text: "Resolution"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgResCombo
+                    width: 150
+                    enabled: !MeshGenController.busy
+                    model: ["128 (fast)", "192", "256 (default)", "320",
+                            "384", "448", "512 (slow, detailed)",
+                            "640 (~1 GB)", "768 (~1.7 GB)", "1024 (~4 GB, very slow)"]
+                    currentIndex: 2
+                    readonly property var resValues: [128, 192, 256, 320, 384, 448, 512,
+                                                      640, 768, 1024]
+                    property int resValue: resValues[currentIndex]
+                }
+            }
+
+            // Model quality/size tier — the encoder downloads in the picked
+            // precision (fp32 best/largest → int8 smallest). index maps 1:1 to the
+            // MeshGenController quality int (0/1).
+            Row {
+                spacing: 6
+                Text {
+                    text: "Model"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgQualityCombo
+                    width: 150
+                    enabled: !MeshGenController.busy
+                    model: ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
+                    currentIndex: 0
+                }
+            }
+
+            // Remove-background toggle — styled to match the Inspector (flat 16px
+            // box + checkmark, PropertiesPanelController palette), matching the
+            // ThemedCheckBox look without the wrapper that breaks this panel.
+            CheckBox {
+                id: mgRemoveBg
+                text: "Remove background"
+                checked: true
+                enabled: !MeshGenController.busy
+                spacing: 6
+                indicator: Rectangle {
+                    x: mgRemoveBg.leftPadding
+                    y: mgRemoveBg.height / 2 - height / 2
+                    implicitWidth: 16
+                    implicitHeight: 16
+                    radius: 2
+                    color: mgRemoveBg.checked
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    opacity: mgRemoveBg.enabled ? 1.0 : 0.45
+                    Text {
+                        anchors.centerIn: parent
+                        visible: mgRemoveBg.checked
+                        text: "✓"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                }
+                contentItem: Text {
+                    text: mgRemoveBg.text
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    leftPadding: mgRemoveBg.indicator.width + mgRemoveBg.spacing
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            // Step 2: generate from the selected image. Disabled until one is
+            // picked (or while busy).
+            InspectorButton {
+                text: "Generate 3D"
+                clickEnabled: !MeshGenController.busy
+                    && MeshGenController.selectedImagePath.length > 0
+                onClicked: MeshGenController.generateSelected(
+                    mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex)
+            }
+
+            // Progress bar (only while busy)
+            ProgressBar {
+                id: mgProgress
+                width: parent.width - 16
+                visible: MeshGenController.busy
+                from: 0; to: 1
+                indeterminate: value <= 0
+                value: 0
+            }
+
+            Text {
+                id: mgStatus
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                visible: text.length > 0
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: ""
+            }
+
+            // Cancel (only while busy)
+            InspectorButton {
+                text: "Cancel"
+                visible: MeshGenController.busy
+                onClicked: MeshGenController.cancel()
+            }
+
+            Connections {
+                target: MeshGenController
+                function onProgress(stage, done, total) {
+                    if (total > 0 && done >= 0) {
+                        mgProgress.indeterminate = (stage === "prep" || stage === "background")
+                        mgProgress.value = total > 0 ? (done / total) : 0
+                    }
+                }
+                function onStatusMessage(msg) { mgStatus.text = msg }
+                function onCompleted(result) {
+                    mgProgress.value = 1
+                    mgStatus.text = "Done: " + result.vertexCount + " verts, "
+                        + result.triangleCount + " tris"
+                }
+                function onError(msg) { mgStatus.text = "Error: " + msg }
             }
         }
     }

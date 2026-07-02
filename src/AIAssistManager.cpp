@@ -4,7 +4,6 @@
 #include "TextureUpscaler.h"
 #include "ModelDownloader.h"
 #include "SentryReporter.h"
-
 #include <QStandardPaths>
 #include <QDir>
 #include <QFileInfo>
@@ -358,3 +357,8 @@ QString AIAssistManager::upscaleTexture(const QString& srcPath, int scale, bool 
     return outPath;
 #endif
 }
+
+// #764 image-to-3D: no AIAssistManager entry point — the GUI runs the pipeline
+// on a worker thread via MeshGenController, and the CLI/MCP surfaces drive
+// MeshGenPredictor + MeshGenBuilder directly (see CLIPipeline::cmdGenerate3d
+// and MCPServer::toolGenerateMeshFromImage).

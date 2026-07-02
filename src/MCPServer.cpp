@@ -16,6 +16,8 @@
 #include "TransformOperator.h"
 #include "MeshImporterExporter.h"
 #include "CLIPipeline.h"
+#include "ImageTo3D/MeshGenPredictor.h"
+#include "ImageTo3D/MeshGenBuilder.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
 #include "AnimationWidget.h"
@@ -618,6 +620,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("motion_in_between"), &MCPServer::toolMotionInBetween},
         {QStringLiteral("generate_motion"), &MCPServer::toolGenerateMotion},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
+        {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
         {QStringLiteral("validate_mesh"), &MCPServer::toolValidateMesh},
@@ -691,6 +694,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("motion_in_between"),
         QStringLiteral("generate_motion"),
         QStringLiteral("segment_mesh"),
+        QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
         QStringLiteral("bake_vat"),
@@ -2128,6 +2132,84 @@ QJsonObject MCPServer::toolGeneratePbrMaps(const QJsonObject &args)
     result["heightPath"]    = res.heightPath;
     result["fromCache"]     = res.fromCache;
     result["boundSubmeshes"] = bound;
+    return result;
+#endif
+}
+
+QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "This build was compiled without AI image-to-3D generation "
+        "(rebuild with -DENABLE_ONNX=ON).");
+#else
+    const QString imagePath = args.value("image_path").toString();
+    if (imagePath.trimmed().isEmpty())
+        return makeErrorResult("'image_path' is required.");
+    if (!QFileInfo::exists(imagePath))
+        return makeErrorResult(QStringLiteral("image not found: %1").arg(imagePath));
+
+    MeshGenPredictor::Options opts;
+    if (args.contains("resolution")) opts.sdfResolution = args["resolution"].toInt(256);
+    if (args.contains("vertex_color")) opts.vertexColor = args["vertex_color"].toBool();
+    if (args.contains("remove_bg")) opts.removeBackground = args["remove_bg"].toBool();
+    if (opts.sdfResolution < 16 || opts.sdfResolution > 1024)
+        return makeErrorResult("'resolution' must be between 16 and 1024.");
+    if (args.contains("quality")) {
+        const QString q = args["quality"].toString().toLower();
+        if (q == "int8") opts.quality = MeshGenPredictor::Quality::Int8;
+        else if (q == "fp32" || q.isEmpty()) opts.quality = MeshGenPredictor::Quality::Fp32;
+        else return makeErrorResult("'quality' must be 'fp32' or 'int8'.");
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+        QStringLiteral("generate_mesh_from_image %1 res=%2")
+            .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution));
+
+    const QString enc = MeshGenPredictor::ensureModelBlocking(opts.quality);
+    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(opts.quality))
+        return makeErrorResult(
+            "TripoSR model unavailable — it downloads on first use; if it is not "
+            "hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL / ai/triposrModelBaseUrl "
+            "or drop the files in the ai_models/triposr/ cache.");
+
+    QImage image(imagePath);
+    if (image.isNull())
+        return makeErrorResult(QStringLiteral("failed to read image: %1").arg(imagePath));
+
+    const MeshGenPredictor::Result res = MeshGenPredictor::predict(
+        image, MeshGenPredictor::encoderModelPath(opts.quality),
+        MeshGenPredictor::decoderModelPath(), opts);
+    if (!res.ok)
+        return makeErrorResult(res.error.isEmpty()
+            ? QStringLiteral("image-to-3D failed") : res.error);
+
+    Ogre::SceneNode* node =
+        MeshGenBuilder::buildSceneNode(res, QStringLiteral("qtmesh_gen3d"));
+    if (!node)
+        return makeErrorResult("failed to build mesh from prediction.");
+
+    QString meshPath;
+    const QString output = args.value("output").toString();
+    if (!output.trimmed().isEmpty()) {
+        const QString fmt = CLIPipeline::formatForExtension(output);
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("Exporting %1").arg(QFileInfo(output).absoluteFilePath()));
+        if (MeshImporterExporter::exporter(node, QFileInfo(output).absoluteFilePath(), fmt) != 0)
+            return makeErrorResult(QStringLiteral("export failed: %1").arg(output));
+        meshPath = QFileInfo(output).absoluteFilePath();
+    }
+
+    QJsonObject result = makeSuccessResult(QStringLiteral(
+        "Generated a 3D mesh from '%1' (%2 verts, %3 tris)%4.")
+        .arg(QFileInfo(imagePath).fileName())
+        .arg(res.vertexCount).arg(res.triangleCount)
+        .arg(meshPath.isEmpty() ? QStringLiteral(" and loaded it into the scene")
+                                : QStringLiteral(" and saved it")));
+    result["vertexCount"]   = res.vertexCount;
+    result["triangleCount"] = res.triangleCount;
+    if (!meshPath.isEmpty()) result["meshPath"] = meshPath;
     return result;
 #endif
 }
@@ -6841,6 +6923,31 @@ QJsonArray MCPServer::buildToolsList()
             props
         );
     }
+
+#ifdef ENABLE_ONNX
+    // generate_mesh_from_image (#764) — only advertised when ONNX is compiled in.
+    {
+        QJsonObject props;
+        props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the source image (a single object, ideally background-removed). Required."}};
+        props["output"] = QJsonObject{{"type", "string"}, {"description", "Optional path to save the generated mesh (e.g. /tmp/out.glb). If omitted, the mesh is loaded into the current scene instead."}};
+        props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..1024 (default 256; 128 is a fast/preview tier). Higher = more detail + slower. Cost is res^3 floats in RAM: 512~=0.5 GB, 768~=1.7 GB, 1024~=4.3 GB. The encoder input is fixed at 512^2, so detail gains taper off above 512."}};
+        props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "Bake TripoSR's predicted per-vertex color (default true)."}};
+        props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; TripoSR needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
+        props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Encoder precision/size tier (default fp32). fp32 = best (~1.7GB), int8 = smallest, slight quality loss (~430MB). The chosen tier downloads on demand."}};
+        appendTool(
+            "generate_mesh_from_image",
+            "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "
+            "reconstruct a 3D mesh from a single image. Runs the TripoSR encoder "
+            "(image -> triplane) + decoder (density grid) and extracts the surface "
+            "with native marching cubes. Returns vertexCount/triangleCount and, when "
+            "'output' is given, the saved meshPath; otherwise the mesh is loaded into "
+            "the scene. The model downloads on first use; without it (or a non-ONNX "
+            "build) the call returns a clear error (no crash).",
+            props,
+            QJsonArray{"image_path"}
+        );
+    }
+#endif // ENABLE_ONNX
 
     // save_scene
     {

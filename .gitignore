@@ -92,6 +92,7 @@ website/dist/
 website/node_modules/
 docs/*
 !docs/AUTO_UPDATER_DESIGN.md
+!docs/IMAGE_TO_3D_SPIKE_764.md
 !docs/MESH_SEGMENTATION_STRATEGY.md
 
 # minisign — never commit secret keys
@@ -109,3 +110,39 @@ mined_training_data/
 .meshseg_work/
 .venv-meshseg/
 __pycache__/
+
+# Local scratch: CLI/tool test-output dirs + stray asset dumps (never commit — a
+# `git add -A` once swept ~600 of these in and crashed the asset-scan CI job).
+# Anchored to the repo root (/) so tracked tools/*-vat-demo/ assets are unaffected.
+.sentry-native/
+/anim/
+/anim2/
+/quad/
+/quad2/
+/hip[0-9]*/
+/lod[0-9]*/
+/pbr/
+/pbr[0-9]*/
+/paint/
+/paint[0-9]*/
+/pose/
+/pose[0-9]*/
+/rumba/
+/rumba[0-9]*/
+/rumba[0-9]*.material
+/rumba[0-9]*.mesh
+/simplify[0-9]*/
+/scene.material
+/scene.scene.glb
+/screenshot.png
+/i
+/Boss_*.png
+/Ch14_*.png
+/Hip Hop Dancing.*
+/Rumba Dancing*.skeleton
+/fbx_linux_out.png
+/mage*.png
+/mage.*
+/monk_*.png
+/multiview_bake_*.png
+/multiview_bake_*i.png

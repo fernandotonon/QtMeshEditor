@@ -201,6 +201,7 @@ private:
     QJsonObject toolMotionInBetween(const QJsonObject &args);
     QJsonObject toolGenerateMotion(const QJsonObject &args);    // #411 text-to-motion
     QJsonObject toolSegmentMesh(const QJsonObject &args);
+    QJsonObject toolGenerateMeshFromImage(const QJsonObject &args);   // #764 image-to-3D
     QJsonObject toolSaveScene(const QJsonObject &args);
     QJsonObject toolOpenScene(const QJsonObject &args);
     QJsonObject toolValidateMesh(const QJsonObject &args);

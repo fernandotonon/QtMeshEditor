@@ -93,6 +93,11 @@ public:
     /// Returns the model path, or empty if it couldn't be made available.
     QString ensureUpscaleModel(int scale);
 
+    // ── #764: image-to-3D mesh generation (TripoSR) ─────────────────────────
+    // No entry point here: the GUI runs the pipeline on a worker thread via
+    // MeshGenController, and the CLI (cmdGenerate3d) / MCP (generate_mesh_from_
+    // image) drive MeshGenPredictor + MeshGenBuilder directly.
+
 signals:
     void modelReadyChanged();
     void modelDownloadProgress(qint64 received, qint64 total);

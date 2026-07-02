@@ -140,6 +140,11 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MarchingCubes.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBuilder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/BackgroundRemover.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PbrMapSynth.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureUpscaler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIAssistManager.cpp
