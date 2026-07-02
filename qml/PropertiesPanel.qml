@@ -1521,6 +1521,86 @@ Rectangle {
                 }
             }
 
+            // Inspector-styled ComboBox (raw ComboBox re-skinned with the
+            // PropertiesPanelController palette — same look as ThemedComboBox, but
+            // inlined because the Themed* wrappers blank this dynamically-loaded
+            // panel). Used for the Resolution + Model dropdowns below.
+            component InspectorComboBox: ComboBox {
+                id: cbRoot
+                height: 26
+                font.pixelSize: 11
+                delegate: ItemDelegate {
+                    id: cbItem
+                    width: cbRoot.width
+                    implicitHeight: 22
+                    padding: 0; leftPadding: 6; rightPadding: 6
+                    contentItem: Text {
+                        text: modelData
+                        color: PropertiesPanelController.textColor
+                        font: cbRoot.font
+                        elide: Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    highlighted: cbRoot.highlightedIndex === index
+                    background: Rectangle {
+                        color: cbItem.highlighted ? PropertiesPanelController.highlightColor
+                                                  : "transparent"
+                    }
+                }
+                indicator: Canvas {
+                    id: cbArrow
+                    x: cbRoot.width - width - cbRoot.rightPadding
+                    y: cbRoot.topPadding + (cbRoot.availableHeight - height) / 2
+                    width: 9; height: 5; contextType: "2d"
+                    Connections { target: cbRoot; function onPressedChanged() { cbArrow.requestPaint() } }
+                    onPaint: {
+                        context.reset()
+                        context.moveTo(0, 0); context.lineTo(width, 0); context.lineTo(width / 2, height)
+                        context.closePath()
+                        context.fillStyle = PropertiesPanelController.textColor
+                        context.fill()
+                    }
+                }
+                contentItem: Text {
+                    leftPadding: 6
+                    rightPadding: cbRoot.indicator.width + cbRoot.spacing + 4
+                    text: cbRoot.displayText
+                    font: cbRoot.font
+                    color: PropertiesPanelController.textColor
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                background: Rectangle {
+                    implicitWidth: 120; implicitHeight: 26
+                    color: PropertiesPanelController.inputColor
+                    border.color: cbRoot.visualFocus ? PropertiesPanelController.highlightColor
+                                                     : PropertiesPanelController.borderColor
+                    border.width: cbRoot.visualFocus ? 2 : 1
+                    radius: 3
+                }
+                popup: Popup {
+                    popupType: Popup.Window
+                    y: cbRoot.height
+                    width: cbRoot.width
+                    implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
+                    padding: 1
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: cbRoot.delegateModel
+                        currentIndex: cbRoot.highlightedIndex
+                        highlightFollowsCurrentItem: false
+                        ScrollIndicator.vertical: ScrollIndicator { }
+                    }
+                    background: Rectangle {
+                        color: PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        radius: 3
+                    }
+                }
+            }
+
             Text {
                 width: parent.width - 16
                 wrapMode: Text.Wrap
@@ -1568,10 +1648,9 @@ Rectangle {
                     font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                ComboBox {
+                InspectorComboBox {
                     id: mgResCombo
-                    width: 150; height: 26
-                    font.pixelSize: 11
+                    width: 150
                     enabled: !MeshGenController.busy
                     model: ["128 (fast)", "192", "256 (default)", "320",
                             "384", "448", "512 (slow, detailed)"]
@@ -1583,7 +1662,7 @@ Rectangle {
 
             // Model quality/size tier — the encoder downloads in the picked
             // precision (fp32 best/largest → int8 smallest). index maps 1:1 to the
-            // MeshGenController quality int (0/1/2).
+            // MeshGenController quality int (0/1).
             Row {
                 spacing: 6
                 Text {
@@ -1592,10 +1671,9 @@ Rectangle {
                     font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                ComboBox {
+                InspectorComboBox {
                     id: mgQualityCombo
-                    width: 150; height: 26
-                    font.pixelSize: 11
+                    width: 150
                     enabled: !MeshGenController.busy
                     model: ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
                     currentIndex: 0
