@@ -76,7 +76,7 @@ void HdrViewportController::tickViewport(OgreWidget* widget)
 void HdrViewportController::syncAllSkyBoxesFromDefault()
 {
     auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
-    const bool visible = hdrMgr ? hdrMgr->defaultSkyBoxVisible() : true;
+    const bool visible = hdrMgr ? hdrMgr->defaultSkyBoxVisible() : false;
 
     if (auto* mgr = Manager::getSingletonPtr(); hdrMgr && mgr && mgr->getSceneMgr()
         && hdrMgr->hasEnvironment()) {

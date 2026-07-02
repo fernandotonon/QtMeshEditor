@@ -52,8 +52,11 @@
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
 #include "PbrMapSynth.h"
-#include "RTShaderHelper.h"
 #endif
+#include "HDR/HDREnvironmentManager.h"
+#include "HDR/HdrEnvironmentController.h"
+#include "HDR/HdrTonemap.h"
+#include "RTShaderHelper.h"
 #include <QEventLoop>
 #include <QDebug>
 #include <QFile>
@@ -68,6 +71,7 @@
 #include <QMetaObject>
 #include <QPixmap>
 #include <QSet>
+#include <optional>
 #include <OgreException.h>
 #include <OgreMaterialManager.h>
 #include <OgreMaterial.h>
@@ -578,6 +582,11 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("apply_material"), &MCPServer::toolApplyMaterial},
         {QStringLiteral("list_material_presets"), &MCPServer::toolListMaterialPresets},
         {QStringLiteral("apply_material_preset"), &MCPServer::toolApplyMaterialPreset},
+        {QStringLiteral("set_hdr_environment"), &MCPServer::toolSetHdrEnvironment},
+        {QStringLiteral("get_hdr_environment"), &MCPServer::toolGetHdrEnvironment},
+        {QStringLiteral("set_tonemap"), &MCPServer::toolSetTonemap},
+        {QStringLiteral("set_env_intensity"), &MCPServer::toolSetEnvIntensity},
+        {QStringLiteral("set_env_tint"), &MCPServer::toolSetEnvTint},
         {QStringLiteral("describe_material"), &MCPServer::toolDescribeMaterial},
         {QStringLiteral("load_mesh"), &MCPServer::toolLoadMesh},
         {QStringLiteral("get_mesh_info"), &MCPServer::toolGetMeshInfo},
@@ -1147,6 +1156,203 @@ QJsonObject MCPServer::toolApplyMaterialPreset(const QJsonObject &args)
         return makeSuccessResult(QString("Applied preset '%1'").arg(preset));
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+namespace {
+
+QString hdrTonemapOperatorSlug(HdrTonemap::Operator op)
+{
+    switch (op) {
+    case HdrTonemap::Operator::Reinhard:
+        return QStringLiteral("reinhard");
+    case HdrTonemap::Operator::AgX:
+        return QStringLiteral("agx");
+    case HdrTonemap::Operator::ACES:
+    default:
+        return QStringLiteral("aces");
+    }
+}
+
+std::optional<HdrTonemap::Operator> parseHdrTonemapOperator(const QString& raw)
+{
+    const QString t = raw.trimmed().toLower();
+    if (t.isEmpty())
+        return std::nullopt;
+    if (t == QStringLiteral("reinhard"))
+        return HdrTonemap::Operator::Reinhard;
+    if (t == QStringLiteral("agx"))
+        return HdrTonemap::Operator::AgX;
+    if (t == QStringLiteral("aces"))
+        return HdrTonemap::Operator::ACES;
+    return std::nullopt;
+}
+
+bool parseHexTint(const QString& raw, QColor& out)
+{
+    const QColor c(raw);
+    if (!c.isValid())
+        return false;
+    out = c;
+    return true;
+}
+
+} // namespace
+
+QJsonObject MCPServer::toolSetHdrEnvironment(const QJsonObject &args)
+{
+    QString path = args[QStringLiteral("path_or_name")].toString();
+    if (path.isEmpty()) path = args[QStringLiteral("path")].toString();
+    if (path.isEmpty()) path = args[QStringLiteral("name")].toString();
+    if (path.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'path_or_name' is required"));
+
+    auto* ctrl = HdrEnvironmentController::instance();
+    if (!ctrl->loadEnvironment(path))
+        return makeErrorResult(QStringLiteral("Error: Failed to load environment '%1'").arg(path));
+
+    if (auto* hdrMgr = HDREnvironmentManager::getSingletonPtr()) {
+        return makeSuccessResult(QStringLiteral("Loaded HDR environment: %1")
+                                     .arg(hdrMgr->currentEnvironment()));
+    }
+    return makeSuccessResult(QStringLiteral("Loaded HDR environment: %1").arg(path));
+}
+
+QJsonObject MCPServer::toolGetHdrEnvironment(const QJsonObject &)
+{
+    auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
+    if (!hdrMgr)
+        return makeErrorResult(QStringLiteral("Error: HDREnvironmentManager not available"));
+
+    QJsonObject root;
+    root[QStringLiteral("environment")] = hdrMgr->currentEnvironment();
+    root[QStringLiteral("cache_key")] = hdrMgr->currentCacheKey();
+    root[QStringLiteral("ibl_ready")] = hdrMgr->isIblReady();
+    root[QStringLiteral("has_environment")] = hdrMgr->hasEnvironment();
+
+    QJsonObject tonemap;
+    tonemap[QStringLiteral("operator")] = hdrTonemapOperatorSlug(hdrMgr->tonemapOperator());
+    tonemap[QStringLiteral("exposure_ev")] = hdrMgr->exposureEv();
+    tonemap[QStringLiteral("white_point")] = hdrMgr->whitePoint();
+    root[QStringLiteral("tonemap")] = tonemap;
+    root[QStringLiteral("skybox_visible")] = hdrMgr->defaultSkyBoxVisible();
+    root[QStringLiteral("background_blur")] = hdrMgr->backgroundBlur();
+
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetTonemap(const QJsonObject &args)
+{
+    auto* ctrl = HdrEnvironmentController::instance();
+    auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
+    if (!hdrMgr || !ctrl)
+        return makeErrorResult(QStringLiteral("Error: HDREnvironmentManager not available"));
+
+    QString opStr = args[QStringLiteral("operator")].toString();
+    if (opStr.isEmpty())
+        opStr = args[QStringLiteral("tonemap")].toString();
+
+    QStringList changes;
+    if (!opStr.isEmpty()) {
+        const auto parsed = parseHdrTonemapOperator(opStr);
+        if (!parsed)
+            return makeErrorResult(QStringLiteral("Error: Unknown tonemap operator '%1' (use aces, reinhard, or agx)").arg(opStr));
+        ctrl->setTonemapOperator(static_cast<int>(*parsed));
+        changes << QStringLiteral("operator=%1").arg(hdrTonemapOperatorSlug(*parsed));
+    }
+    if (args.contains(QStringLiteral("exposure")) || args.contains(QStringLiteral("exposure_ev"))) {
+        const float exposure = static_cast<float>(
+            args.contains(QStringLiteral("exposure"))
+                ? args[QStringLiteral("exposure")].toDouble()
+                : args[QStringLiteral("exposure_ev")].toDouble());
+        ctrl->setExposureEv(exposure);
+        changes << QStringLiteral("exposure_ev=%1").arg(exposure);
+    }
+    if (args.contains(QStringLiteral("white_point"))) {
+        const float whitePoint = static_cast<float>(args[QStringLiteral("white_point")].toDouble());
+        ctrl->setWhitePoint(whitePoint);
+        changes << QStringLiteral("white_point=%1").arg(whitePoint);
+    }
+
+    if (changes.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: Provide operator and/or exposure and/or white_point"));
+
+    return makeSuccessResult(QStringLiteral("Updated tonemap: %1").arg(changes.join(QStringLiteral(", "))));
+}
+
+QJsonObject MCPServer::toolSetEnvIntensity(const QJsonObject &args)
+{
+    QString name = args[QStringLiteral("material")].toString();
+    if (name.isEmpty()) name = args[QStringLiteral("name")].toString();
+    if (name.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'material' is required"));
+
+    if (!args.contains(QStringLiteral("value")) && !args.contains(QStringLiteral("intensity")))
+        return makeErrorResult(QStringLiteral("Error: 'value' (or 'intensity') is required"));
+
+    const float intensity = static_cast<float>(args.contains(QStringLiteral("value"))
+                                                   ? args[QStringLiteral("value")].toDouble()
+                                                   : args[QStringLiteral("intensity")].toDouble());
+
+    try {
+        Ogre::MaterialPtr material =
+            Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
+        if (!material)
+            return makeErrorResult(QStringLiteral("Error: Material '%1' not found").arg(name));
+        if (material->getNumTechniques() == 0 || material->getTechnique(0)->getNumPasses() == 0)
+            return makeErrorResult(QStringLiteral("Error: Material '%1' has no passes").arg(name));
+
+        Ogre::Pass* pass = material->getTechnique(0)->getPass(0);
+        RTShaderHelper::setPbrEnvIntensity(pass, intensity);
+        RTShaderHelper::wirePbrSlotsForFFP(material.get());
+        material->compile(false);
+        material->load();
+
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+                                      QStringLiteral("set_env_intensity %1=%2").arg(name).arg(intensity));
+        return makeSuccessResult(QStringLiteral("Set env intensity on '%1' to %2").arg(name).arg(intensity));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+                                   .arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+QJsonObject MCPServer::toolSetEnvTint(const QJsonObject &args)
+{
+    QString name = args[QStringLiteral("material")].toString();
+    if (name.isEmpty()) name = args[QStringLiteral("name")].toString();
+    if (name.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'material' is required"));
+
+    const QString hex = args[QStringLiteral("hex")].toString();
+    if (hex.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'hex' is required (e.g. #fff5e6)"));
+
+    QColor tint;
+    if (!parseHexTint(hex, tint))
+        return makeErrorResult(QStringLiteral("Error: Invalid hex color '%1'").arg(hex));
+
+    try {
+        Ogre::MaterialPtr material =
+            Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
+        if (!material)
+            return makeErrorResult(QStringLiteral("Error: Material '%1' not found").arg(name));
+        if (material->getNumTechniques() == 0 || material->getTechnique(0)->getNumPasses() == 0)
+            return makeErrorResult(QStringLiteral("Error: Material '%1' has no passes").arg(name));
+
+        Ogre::Pass* pass = material->getTechnique(0)->getPass(0);
+        RTShaderHelper::setPbrEnvTint(
+            pass, Ogre::ColourValue(tint.redF(), tint.greenF(), tint.blueF()));
+        RTShaderHelper::wirePbrSlotsForFFP(material.get());
+        material->compile(false);
+        material->load();
+
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+                                      QStringLiteral("set_env_tint %1=%2").arg(name, hex));
+        return makeSuccessResult(QStringLiteral("Set env tint on '%1' to %2").arg(name, hex));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+                                   .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -6399,6 +6605,75 @@ QJsonArray MCPServer::buildToolsList()
             "Apply a built-in material preset to a mesh. PBR templates (Metallic-Roughness / Specular-Glossiness / Unlit PBR) create the canonical 6-slot texture-unit layout (albedo / normal_map / metallic / roughness / ao / emissive) and tag the pass with a 'pbr_workflow' user binding so PBR-aware shaders can detect intent.",
             inputSchema
         ));
+    }
+
+    // set_hdr_environment
+  {
+        QJsonObject properties;
+        properties["path_or_name"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Absolute path or bundled HDRI name (e.g. studio_neutral or studio_neutral.hdr)"}};
+        appendTool(
+            "set_hdr_environment",
+            "Load a global HDR environment for image-based lighting (IBL). Mirrors the Inspector Environment picker.",
+            properties,
+            QJsonArray{"path_or_name"});
+    }
+
+    // get_hdr_environment
+    appendTool(
+        "get_hdr_environment",
+        "Return the active HDR environment path, IBL readiness, tonemap settings, and skybox defaults as JSON.",
+        QJsonObject());
+
+    // set_tonemap
+    {
+        QJsonObject properties;
+        properties["operator"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Tonemap operator: aces (default), reinhard, or agx"}};
+        properties["exposure"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Exposure in EV stops (alias: exposure_ev)"}};
+        properties["white_point"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Reinhard white point (ignored for ACES/AgX)"}};
+        appendTool(
+            "set_tonemap",
+            "Set global viewport tonemap operator, exposure, and optional Reinhard white point.",
+            properties);
+    }
+
+    // set_env_intensity
+    {
+        QJsonObject properties;
+        properties["material"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Ogre material name (use list_materials)"}};
+        properties["value"] = QJsonObject{
+            {"type", "number"},
+            {"description", "IBL environment intensity multiplier (0..4, alias: intensity)"}};
+        appendTool(
+            "set_env_intensity",
+            "Set per-material IBL environment intensity (pbr_environment_intensity).",
+            properties,
+            QJsonArray{"material", "value"});
+    }
+
+    // set_env_tint
+    {
+        QJsonObject properties;
+        properties["material"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Ogre material name (use list_materials)"}};
+        properties["hex"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Environment tint as #rrggbb (e.g. #fff5e6)"}};
+        appendTool(
+            "set_env_tint",
+            "Set per-material IBL environment tint (pbr_environment_tint).",
+            properties,
+            QJsonArray{"material", "hex"});
     }
 
     // describe_material (#406)
