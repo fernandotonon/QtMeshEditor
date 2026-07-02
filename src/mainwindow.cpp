@@ -814,10 +814,35 @@ void MainWindow::initToolBar()
         // MaterialEditorQML, so a single registration resolves for both — and it
         // avoids registering the same C++ type under two module URIs (which
         // crashed MainWindow/MCPServer tests that reconstruct the window per test).
-        qmlRegisterSingletonType<MeshGenController>("MaterialEditorQML", 1, 0, "MeshGenController",
-            [](QQmlEngine* engine, QJSEngine* js) -> QObject* {
-                return MeshGenController::create(engine, js);
-            });
+        //
+        // TWO guards, both essential (CI signal-11 diagnosis, crashHandler
+        // backtraces in run 28573967237):
+        //  * ONCE per process — in the real app main.cpp registers this URI's
+        //    other singletons once at startup; re-registering MeshGenController
+        //    on every MainWindow construction creates duplicate QQmlType
+        //    entries, and a SECOND in-process window then crashed inside
+        //    QQmlEnginePrivate::singletonInstance resolving the stale one.
+        //  * NOT in the unit-test harness — the test binary (test_main.cpp)
+        //    never runs main.cpp's registrations, so on master the
+        //    "import MaterialEditorQML" in PropertiesPanel.qml simply failed
+        //    in tests and the panel tree never instantiated. This registration
+        //    made the import succeed for the first time, pulling the whole
+        //    panel (mode-tools Loaders and all) into every MainWindowTest /
+        //    MCPServerTest window under Mesa/Xvfb — where the second window's
+        //    stale-singleton lookup segfaulted. Skipping the registration
+        //    restores master's exact harness behavior; the feature's QML is
+        //    covered by MaterialEditorQML_qml_test, which registers the
+        //    singleton explicitly in its own engine.
+        if (QCoreApplication::organizationName() != QLatin1String("QtMeshEditorTests")) {
+            static bool meshGenSingletonRegistered = false;
+            if (!meshGenSingletonRegistered) {
+                meshGenSingletonRegistered = true;
+                qmlRegisterSingletonType<MeshGenController>("MaterialEditorQML", 1, 0, "MeshGenController",
+                    [](QQmlEngine* engine, QJSEngine* js) -> QObject* {
+                        return MeshGenController::create(engine, js);
+                    });
+            }
+        }
         connect(HdrEnvironmentController::instance(), &HdrEnvironmentController::browseRequested,
                 this, [this]() {
             QTimer::singleShot(0, this, [this]() {
