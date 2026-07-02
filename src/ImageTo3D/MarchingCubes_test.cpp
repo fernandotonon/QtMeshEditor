@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <map>
@@ -75,6 +76,13 @@ TEST(MarchingCubesTest, NullFieldAndDegenerateGridAreSafe)
     std::vector<float> tiny(1, 1.0f);
     auto m1 = MarchingCubes::extract(tiny.data(), 1, 1, 1, 0.0f, lo, hi);
     EXPECT_EQ(m1.vertexCount, 0);   // n<2 on every axis → nothing to march
+
+    // Short-field contract: a declared buffer length below nx*ny*nz must yield
+    // an empty mesh instead of reading past the buffer.
+    std::vector<float> shortField(10, 1.0f);
+    auto m2 = MarchingCubes::extract(shortField.data(), 8, 8, 8, 0.0f, lo, hi,
+                                     shortField.size());
+    EXPECT_EQ(m2.vertexCount, 0);
 }
 
 TEST(MarchingCubesTest, SphereIsClosedAndOnSurface)

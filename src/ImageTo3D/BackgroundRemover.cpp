@@ -219,7 +219,10 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
                 float a = sampleMask(float(x) / std::max(1, W - 1),
                                      float(y) / std::max(1, H - 1));
                 if (opts.feather > 0) {
-                    const float band = 0.15f;
+                    // Soft band around the threshold, scaled by `feather` so the
+                    // option actually widens/narrows the transition (default 2
+                    // keeps the original 0.15 band).
+                    const float band = 0.075f * static_cast<float>(opts.feather);
                     a = std::clamp((a - (opts.threshold - band)) / (2 * band), 0.0f, 1.0f);
                 } else {
                     a = (a >= opts.threshold) ? 1.0f : 0.0f;

@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 
+#include <algorithm>
 #include <array>
 
 #ifdef ENABLE_ONNX
@@ -338,7 +339,8 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         const std::array<float, 3> gmin = {-kRadius, -kRadius, -kRadius};
         const std::array<float, 3> gmax = { kRadius,  kRadius,  kRadius};
         MarchingCubes::Mesh mc =
-            MarchingCubes::extract(densityField.data(), res, res, res, 0.0f, gmin, gmax);
+            MarchingCubes::extract(densityField.data(), res, res, res, 0.0f, gmin, gmax,
+                                   densityField.size());
 
         if (mc.vertexCount == 0 || mc.triangleCount == 0)
             return fail(QStringLiteral("MeshGen: empty surface (nothing above the "

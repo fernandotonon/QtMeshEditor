@@ -8779,7 +8779,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     if (inputPath.isEmpty()) {
         err() << "Error: No input image specified." << Qt::endl;
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
-                 "[--no-color] [--remove-bg]" << Qt::endl;
+                 "[--no-color] [--remove-bg] [--quality fp32|int8]" << Qt::endl;
         return 2;
     }
     QFileInfo fi(inputPath);

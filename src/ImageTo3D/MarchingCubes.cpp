@@ -351,10 +351,16 @@ namespace MarchingCubes {
 Mesh extract(const float* field, int nx, int ny, int nz,
              float isoLevel,
              const std::array<float, 3>& gridMin,
-             const std::array<float, 3>& gridMax)
+             const std::array<float, 3>& gridMax,
+             std::size_t fieldLength)
 {
     Mesh out;
     if (!field || nx < 2 || ny < 2 || nz < 2)
+        return out;
+    // Enforce the header's short-field contract when the caller tells us the
+    // actual buffer length (0 = caller guarantees nx*ny*nz samples).
+    if (fieldLength != 0 &&
+        fieldLength < static_cast<size_t>(nx) * ny * nz)
         return out;
 
     const size_t sliceStride = static_cast<size_t>(nx) * ny;

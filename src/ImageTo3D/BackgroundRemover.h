@@ -36,7 +36,9 @@ public:
         int bgR = 128, bgG = 128, bgB = 128;
         // Saliency threshold [0..1]; pixels below are treated as background.
         float threshold = 0.5f;
-        // Feather the mask edge (px) to avoid a hard cut halo.
+        // Feather the mask edge to avoid a hard cut halo: 0 = hard threshold,
+        // otherwise the alpha ramps over a band of ±0.075*feather (in mask
+        // saliency units) around `threshold`. Default 2 → ±0.15 band.
         int feather = 2;
         // Crop to the subject's bounding box and re-pad so the foreground fills
         // this fraction of the (square) output — TripoSR's resize_foreground step

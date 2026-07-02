@@ -2,6 +2,7 @@
 #define MARCHING_CUBES_H
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -45,7 +46,10 @@ struct Mesh {
 // box [gridMin, gridMax]: corner (x,y,z) sits at
 //   gridMin + (i / (n-1)) * (gridMax - gridMin)   per axis,
 // so emitted vertices are already in world space. A degenerate axis (n < 2) or a
-// null/short field yields an empty mesh (never throws).
+// null field yields an empty mesh (never throws). The caller must supply
+// nx*ny*nz samples; pass `fieldLength` (the actual buffer length) to make that
+// enforceable — a non-zero `fieldLength` shorter than nx*ny*nz also yields an
+// empty mesh instead of reading past the buffer (0 = caller guarantees the size).
 //
 // Convention for the density fields this epic feeds it: the surface is where the
 // field crosses `isoLevel`, with the field taken to be POSITIVE INSIDE the
@@ -61,7 +65,8 @@ struct Mesh {
 Mesh extract(const float* field, int nx, int ny, int nz,
              float isoLevel,
              const std::array<float, 3>& gridMin,
-             const std::array<float, 3>& gridMax);
+             const std::array<float, 3>& gridMax,
+             std::size_t fieldLength = 0);
 
 } // namespace MarchingCubes
 
