@@ -2154,8 +2154,8 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (args.contains("resolution")) opts.sdfResolution = args["resolution"].toInt(256);
     if (args.contains("vertex_color")) opts.vertexColor = args["vertex_color"].toBool();
     if (args.contains("remove_bg")) opts.removeBackground = args["remove_bg"].toBool();
-    if (opts.sdfResolution < 16 || opts.sdfResolution > 512)
-        return makeErrorResult("'resolution' must be between 16 and 512.");
+    if (opts.sdfResolution < 16 || opts.sdfResolution > 1024)
+        return makeErrorResult("'resolution' must be between 16 and 1024.");
     if (args.contains("quality")) {
         const QString q = args["quality"].toString().toLower();
         if (q == "int8") opts.quality = MeshGenPredictor::Quality::Int8;
@@ -6930,7 +6930,7 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the source image (a single object, ideally background-removed). Required."}};
         props["output"] = QJsonObject{{"type", "string"}, {"description", "Optional path to save the generated mesh (e.g. /tmp/out.glb). If omitted, the mesh is loaded into the current scene instead."}};
-        props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..512 (default 256; 128 is a fast/preview tier). Higher = more detail + slower."}};
+        props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..1024 (default 256; 128 is a fast/preview tier). Higher = more detail + slower. Cost is res^3 floats in RAM: 512~=0.5 GB, 768~=1.7 GB, 1024~=4.3 GB. The encoder input is fixed at 512^2, so detail gains taper off above 512."}};
         props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "Bake TripoSR's predicted per-vertex color (default true)."}};
         props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; TripoSR needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
         props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Encoder precision/size tier (default fp32). fp32 = best (~1.7GB), int8 = smallest, slight quality loss (~430MB). The chosen tier downloads on demand."}};

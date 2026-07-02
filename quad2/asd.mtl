@@ -1,0 +1,10 @@
+# File produced by Open Asset Import Library (http://www.assimp.sf.net)
+# (assimp v6.0.3024570460)
+
+newmtl BaseWhite
+Kd 1 1 1
+Ka 1 1 1
+Ks 0 0 0
+Ke 0 0 0
+illum 1
+

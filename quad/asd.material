@@ -1,0 +1,12 @@
+
+material BaseWhite
+{
+	technique
+	{
+		pass 
+		{
+		}
+
+	}
+
+}

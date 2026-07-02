@@ -1,0 +1,14 @@
+# File produced by Open Asset Import Library (http://www.assimp.sf.net)
+# (assimp v6.0.3024570460)
+
+newmtl Ch14_Body
+Kd 0.800000012 0.800000012 0.800000012
+Ka 1 1 1
+Ks 0.5 0.5 0.5
+Ke 0 0 0
+Ns 20
+illum 2
+map_Kd Ch14_1001_Diffuse.png
+bump Ch14_1001_Normal.png
+map_bump Ch14_1001_Normal.png
+

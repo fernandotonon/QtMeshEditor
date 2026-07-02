@@ -1653,9 +1653,11 @@ Rectangle {
                     width: 150
                     enabled: !MeshGenController.busy
                     model: ["128 (fast)", "192", "256 (default)", "320",
-                            "384", "448", "512 (slow, detailed)"]
+                            "384", "448", "512 (slow, detailed)",
+                            "640 (~1 GB)", "768 (~1.7 GB)", "1024 (~4 GB, very slow)"]
                     currentIndex: 2
-                    readonly property var resValues: [128, 192, 256, 320, 384, 448, 512]
+                    readonly property var resValues: [128, 192, 256, 320, 384, 448, 512,
+                                                      640, 768, 1024]
                     property int resValue: resValues[currentIndex]
                 }
             }

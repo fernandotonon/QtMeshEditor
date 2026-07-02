@@ -1,0 +1,51 @@
+{
+    "height": 2060,
+    "padding": 2,
+    "tiles": [
+        {
+            "h": 1024,
+            "source": "/Users/fernandotonon/QtMeshEditor/media/materials/textures/grass_1024.jpg",
+            "u0": 0.0009708738070912659,
+            "u1": 0.4980582594871521,
+            "v0": 0.0009708738070912659,
+            "v1": 0.4980582594871521,
+            "w": 1024,
+            "x": 2,
+            "y": 2
+        },
+        {
+            "h": 1024,
+            "source": "/Users/fernandotonon/QtMeshEditor/media/materials/textures/grass_normal.png",
+            "u0": 0.5,
+            "u1": 0.9970873594284058,
+            "v0": 0.0009708738070912659,
+            "v1": 0.4980582594871521,
+            "w": 1024,
+            "x": 1030,
+            "y": 2
+        },
+        {
+            "h": 1024,
+            "source": "/Users/fernandotonon/QtMeshEditor/media/materials/textures/wood_box.jpg",
+            "u0": 0.0009708738070912659,
+            "u1": 0.4980582594871521,
+            "v0": 0.5,
+            "v1": 0.9970873594284058,
+            "w": 1024,
+            "x": 2,
+            "y": 1030
+        },
+        {
+            "h": 1024,
+            "source": "/Users/fernandotonon/QtMeshEditor/media/materials/textures/steel.jpg",
+            "u0": 0.5,
+            "u1": 0.9970873594284058,
+            "v0": 0.5,
+            "v1": 0.9970873594284058,
+            "w": 1024,
+            "x": 1030,
+            "y": 1030
+        }
+    ],
+    "width": 2060
+}

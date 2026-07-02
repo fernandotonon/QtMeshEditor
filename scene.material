@@ -1,0 +1,24 @@
+
+material Ch14_Body
+{
+	technique
+	{
+		pass 
+		{
+			diffuse 0.8 0.8 0.8 1
+			specular 0.5 0.5 0.5 1 20
+
+			texture_unit diffuse_map
+			{
+				texture Ch14_1001_Diffuse.png 12
+			}
+
+			texture_unit normal_map
+			{
+				texture Ch14_1001_Normal.png 12
+			}
+		}
+
+	}
+
+}

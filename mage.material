@@ -1,0 +1,26 @@
+
+material monk_material
+{
+	technique
+	{
+		pass 
+		{
+			diffuse 0.8 0.8 0.8 1
+			specular 1 1 1 1 50
+
+			texture_unit diffuse_map
+			{
+				texture monk_albedo.png 9
+			}
+
+			texture_unit albedo
+			{
+				texture monk_albedo.png 9
+				colour_op_ex modulate src_texture src_diffuse
+				colour_op_multipass_fallback dest_colour zero
+			}
+		}
+
+	}
+
+}

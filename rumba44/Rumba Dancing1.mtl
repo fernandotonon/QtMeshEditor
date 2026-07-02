@@ -1,0 +1,39 @@
+# File produced by Open Asset Import Library (http://www.assimp.sf.net)
+# (assimp v6.0.3024570460)
+
+newmtl Clothes_MAT
+Kd 1 1 1
+Ka 0 0 0
+Ks 0.5 0.5 0.5
+Ke 0 0 0
+Ns 36.9230995
+illum 2
+map_Kd Boss_diffuse.png
+
+newmtl Cigar_Mat
+Kd 1 1 1
+Ka 0 0 0
+Ks 0.5 0.5 0.5
+Ke 0 0 0
+Ns 12.3077002
+illum 2
+map_Kd Boss_diffuse.png
+
+newmtl Skin_MAT
+Kd 1 1 1
+Ka 0 0 0
+Ks 0.5 0.5 0.5
+Ke 0 0 0
+Ns 13.8462
+illum 2
+map_Kd Boss_diffuse.png
+
+newmtl Eyes_MAT
+Kd 1 1 1
+Ka 0.300000012 0.300000012 0.300000012
+Ks 0.5 0.5 0.5
+Ke 0 0 0
+Ns 93.846199
+illum 2
+map_Kd Boss_diffuse.png
+

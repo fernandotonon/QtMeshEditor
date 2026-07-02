@@ -8755,10 +8755,17 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             }
             bool okNum = false;
             resolution = QString::fromLocal8Bit(argv[++i]).toInt(&okNum);
-            if (!okNum || resolution < 16 || resolution > 512) {
-                err() << "Error: --resolution must be an integer in [16..512]." << Qt::endl;
+            if (!okNum || resolution < 16 || resolution > 1024) {
+                err() << "Error: --resolution must be an integer in [16..1024]." << Qt::endl;
                 return 2;
             }
+            if (resolution > 512)
+                err() << "Note: resolution " << resolution << " needs a large density grid ("
+                      << "res^3 floats: ~"
+                      << QString::number(double(qint64(resolution) * resolution * resolution * 4)
+                                             / (1024.0 * 1024.0 * 1024.0), 'f', 1)
+                      << " GB) and is slow; the encoder input is fixed at 512^2 so detail "
+                         "gains taper off above 512." << Qt::endl;
             continue;
         }
         if (!arg.startsWith("-") && inputPath.isEmpty()) { inputPath = arg; continue; }
