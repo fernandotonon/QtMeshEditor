@@ -799,6 +799,13 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine* js) -> QObject* {
                 return MeshGenController::create(engine, js);
             });
+        // Also expose under MaterialEditorQML so AISettingsDialog.qml (which imports
+        // that module, not PropertiesPanel) can reach it — a QML singleton may be
+        // registered under multiple module names.
+        qmlRegisterSingletonType<MeshGenController>("MaterialEditorQML", 1, 0, "MeshGenController",
+            [](QQmlEngine* engine, QJSEngine* js) -> QObject* {
+                return MeshGenController::create(engine, js);
+            });
         qmlRegisterSingletonType<MorphAnimationManager>("PropertiesPanel", 1, 0, "MorphAnimationManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MorphAnimationManager::qmlInstance(engine, nullptr);

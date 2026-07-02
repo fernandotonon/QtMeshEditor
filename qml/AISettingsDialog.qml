@@ -2,7 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import MaterialEditorQML 1.0
-import PropertiesPanel 1.0
 import "." as Local
 
 Dialog {
