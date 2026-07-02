@@ -227,10 +227,19 @@ public:
 
     /// AI image-to-3D (epic #764, TripoSR via ONNX): generate a mesh from a
     /// single image. `generate3d <image> [-o out.glb] [--resolution 16..1024]
-    /// [--no-color] [--remove-bg] [--quality fp32|int8]`. Default output =
-    /// <image>.glb. Requires an ENABLE_ONNX build + the TripoSR model
-    /// (downloads on first use / clear message when not hosted). There is no
-    /// non-model fallback (generative feature), so `--no-model` is rejected.
+    /// [--no-color] [--remove-bg] [--quality fp32|int8] [--no-smooth]
+    /// [--no-refine] [--no-bake-texture] [--texture-size 64..8192]
+    /// [--upscale-texture] [--no-pbr]`. The quality pass (Taubin smoothing +
+    /// iso-surface reprojection + xatlas diffuse-texture bake + #404 PBR
+    /// normal/roughness synthesis bound into the material, all ON by default)
+    /// is opt-out via the --no-* flags; --upscale-texture additionally runs
+    /// Real-ESRGAN 2x (#405) on the baked diffuse (model downloads on
+    /// demand). Default output = <image>.glb; the baked texture and PBR maps
+    /// are written as `*_diffuse/_normal/_roughness.png` sidecars next to
+    /// it. Requires an ENABLE_ONNX build + the
+    /// TripoSR model (downloads on first use / clear message when not
+    /// hosted). There is no non-model fallback (generative feature), so
+    /// `--no-model` is rejected.
     static int cmdGenerate3d(int argc, char* argv[]);
 
     /// List the morph targets / blend shapes on a mesh file. Slice A1

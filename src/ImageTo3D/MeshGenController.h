@@ -56,21 +56,29 @@ public:
 
     // Generate from the currently-selected image (selectImage() first). No-op if
     // nothing selected or already busy. Emits progress → (completed | error).
-    // `quality` is the encoder tier: 0=fp32 (best), 1=fp16, 2=int8 (smallest).
+    // `quality` is the encoder tier: 0=fp32 (best), 1=int8 (smallest).
+    //
+    // `options` are the user-selectable pipeline stages (all optional; defaults
+    // in braces): {"smooth": true, "refine": true, "bake_texture": true,
+    // "upscale_texture": false, "generate_pbr": true, "texture_size": 1024}.
+    // The QML panel exposes them as checkboxes next to "Remove background".
     Q_INVOKABLE void generateSelected(int resolution = 256,
                                       bool removeBackground = true,
-                                      int quality = 0);
+                                      int quality = 0,
+                                      const QVariantMap& options = {});
 
     // Open a native file dialog to pick an image and start generation immediately.
     // Convenience one-shot (kept for callers/tests). Returns immediately.
     Q_INVOKABLE void pickImageAndGenerate(int resolution = 256,
                                           bool removeBackground = true,
-                                          int quality = 0);
+                                          int quality = 0,
+                                          const QVariantMap& options = {});
 
     // Start generation from an explicit image path on the worker thread. No-op if
     // already busy. Emits progress → (completed | error). Returns immediately.
     Q_INVOKABLE void generate(const QString& imagePath, int resolution = 256,
-                              bool removeBackground = true, int quality = 0);
+                              bool removeBackground = true, int quality = 0,
+                              const QVariantMap& options = {});
 
     // Request cancellation of the in-flight run (flips the atomic the predictor's
     // progress callback checks). The run ends with meshGenError("cancelled").
@@ -108,6 +116,10 @@ private:
     QString m_selectedImage;    // currently-selected source image path
     QString m_previewSource;    // data:image/png;base64 thumbnail of it
     MeshGenPredictor::Quality m_quality = MeshGenPredictor::Quality::Fp32;
+    // Parsed pipeline options for the in-flight run (see generateSelected doc).
+    bool m_generatePbr = true;          // consumed by buildOnMainThread
+    bool m_upscaleTexture = false;      // consumed by the worker (post-predict)
+    QString m_upscaleModelPath;         // ensured on the main thread pre-worker
     static MeshGenController* s_instance;
 
     // Map a QML int (0/1/2) to the encoder tier.

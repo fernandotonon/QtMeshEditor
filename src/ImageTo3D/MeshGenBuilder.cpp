@@ -1,9 +1,17 @@
 #include "MeshGenBuilder.h"
 
 #include "Manager.h"
+#include "AIAssistManager.h"   // #404 PBR map synthesis (normal + roughness)
+#include "RTShaderHelper.h"    // canonical-slot FFP wiring + RTSS normal map
+
+#include <QDateTime>
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
 
 #include <OgreEntity.h>
 #include <OgreHardwareBufferManager.h>
+#include <OgreLogManager.h>
 #include <OgreMaterialManager.h>
 #include <OgreMesh.h>
 #include <OgreMeshManager.h>
@@ -57,7 +65,8 @@ std::vector<float> computeNormals(const std::vector<float>& pos,
 
 namespace MeshGenBuilder {
 
-Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& meshName)
+Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& meshName,
+                      const QString& texturePngPath)
 {
     if (result.vertexCount <= 0 || result.triangleCount <= 0
         || result.positions.size() != static_cast<size_t>(result.vertexCount) * 3)
@@ -72,8 +81,13 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
         if (i >= static_cast<uint32_t>(result.vertexCount))
             return nullptr;
 
-    const bool hasColor =
-        result.colors.size() == static_cast<size_t>(result.vertexCount) * 3;
+    // Baked-texture path: UV0 + a diffuse texture (preferred). Vertex colour is
+    // the fallback when no bake ran.
+    const bool hasUv =
+        result.uvs.size() == static_cast<size_t>(result.vertexCount) * 2
+        && !texturePngPath.isEmpty();
+    const bool hasColor = !hasUv
+        && result.colors.size() == static_cast<size_t>(result.vertexCount) * 3;
     const std::vector<float> normals = computeNormals(result.positions, result.indices);
 
     auto& mm = Ogre::MeshManager::getSingleton();
@@ -94,7 +108,10 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     size_t offset = 0;
     offset += decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION).getSize();
     offset += decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL).getSize();
-    if (hasColor)
+    if (hasUv)
+        offset += decl->addElement(0, offset, Ogre::VET_FLOAT2,
+                                   Ogre::VES_TEXTURE_COORDINATES, 0).getSize();
+    else if (hasColor)
         offset += decl->addElement(0, offset, Ogre::VET_COLOUR, Ogre::VES_DIFFUSE).getSize();
 
     auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
@@ -130,7 +147,12 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
             f[0] = x; f[1] = y; f[2] = z;
             f[3] = nx; f[4] = ny; f[5] = nz;
             p += 6 * sizeof(float);
-            if (hasColor) {
+            if (hasUv) {
+                float* uv = reinterpret_cast<float*>(p);
+                uv[0] = result.uvs[2*i+0];
+                uv[1] = result.uvs[2*i+1];
+                p += 2 * sizeof(float);
+            } else if (hasColor) {
                 Ogre::ColourValue cv(result.colors[3*i+0], result.colors[3*i+1],
                                      result.colors[3*i+2], 1.0f);
                 Ogre::RGBA packed;
@@ -164,6 +186,28 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     sub->indexData->indexCount  = idxCount;
     sub->indexData->indexStart  = 0;
 
+    // Baked-texture path: a per-mesh lit material with the baked diffuse bound
+    // as the (named) diffuse_map slot, so the RTSS lighting path and PBR-aware
+    // tooling both resolve it, and the exporters carry the reference.
+    if (hasUv) {
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        const std::string matName = meshName.toStdString() + "_mat";
+        if (matMgr.resourceExists(matName))
+            matMgr.remove(matName);
+        Ogre::MaterialPtr tm = matMgr.create(
+            matName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        auto* pass = tm->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(true);
+        pass->setDiffuse(Ogre::ColourValue::White);
+        pass->setAmbient(Ogre::ColourValue(0.9f, 0.9f, 0.9f));
+        pass->setCullingMode(Ogre::CULL_CLOCKWISE);
+        auto* tus = pass->createTextureUnitState(
+            QFileInfo(texturePngPath).fileName().toStdString());
+        tus->setName("diffuse_map");
+        tm->compile();
+        sub->setMaterialName(matName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    }
+
     // When the mesh carries per-vertex color (TripoSR's predicted vertex color),
     // assign a lit material that TRACKS the diffuse channel from VES_DIFFUSE —
     // otherwise the default white material ignores the colors and the mesh renders
@@ -195,16 +239,143 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
 }
 
 Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
-                                const QString& baseName)
+                                const QString& baseName,
+                                const BuildOptions& opts)
 {
     // Make the mesh + node names UNIQUE per call so a second generation doesn't
     // clobber the first (or fail because the mesh/node name already exists). All
-    // callers pass the same base ("qtmesh_gen3d"); disambiguate with a counter.
+    // callers pass the same base ("qtmesh_gen3d"); disambiguate with a counter
+    // PLUS a timestamp: the counter alone is per-PROCESS, so a second CLI run
+    // (or a new GUI session) into the same output directory re-used the same
+    // "…_1_diffuse.png" file name — OVERWRITING the previous generation's baked
+    // texture and leaving the older mesh's UVs pointing into the wrong atlas
+    // (a scrambled chart-patchwork on the first mesh). Ogre's TextureManager
+    // also caches by name, so name collisions could serve stale pixels even
+    // when the file was rewritten. The epoch-ms token makes the mesh, node,
+    // material, and every texture sidecar name globally unique (same idiom as
+    // MCP create_primitive's auto names).
     static int s_counter = 0;
-    const QString unique = baseName + QStringLiteral("_%1").arg(++s_counter);
+    const QString unique = baseName + QStringLiteral("_%1_%2")
+        .arg(++s_counter)
+        .arg(QDateTime::currentMSecsSinceEpoch());
 
-    Ogre::Mesh* mesh = buildMesh(result, unique + QStringLiteral("_mesh"));
+    // Baked-texture path: persist the QImage as a PNG (viewport material +
+    // exporters resolve it from a registered resource location).
+    QString texPath;
+    QString normalPath, roughnessPath;   // optional #404 PBR stage outputs
+    if (!result.texture.isNull()
+        && result.uvs.size() == static_cast<size_t>(result.vertexCount) * 2) {
+        QString dir = opts.textureDir;
+        if (dir.isEmpty())
+            dir = QDir(QStandardPaths::writableLocation(
+                           QStandardPaths::AppDataLocation))
+                      .filePath(QStringLiteral("generated_textures"));
+        QDir().mkpath(dir);
+        const QString candidate =
+            QDir(dir).filePath(unique + QStringLiteral("_diffuse.png"));
+        if (result.texture.save(candidate, "PNG")) {
+            texPath = candidate;
+
+            // Optional PBR stage (#404): synthesize normal + roughness from the
+            // baked diffuse BEFORE the resource location is (re)indexed so the
+            // new PNGs land in the index below. Height is skipped — nothing in
+            // this material path consumes it. Fails soft: a missing model /
+            // non-ONNX build just leaves the maps empty (diffuse-only result).
+            if (opts.generatePbrMaps) {
+                PbrMapSynth::Options po;
+                po.generateHeight = false;
+                const PbrMapSynthResult pr =
+                    AIAssistManager::instance()->synthesizePbrMaps(texPath, po);
+                if (pr.ok) {
+                    normalPath    = pr.normalPath;
+                    roughnessPath = pr.roughnessPath;
+                } else {
+                    Ogre::LogManager::getSingleton().logWarning(
+                        ("MeshGenBuilder: PBR map synthesis failed ("
+                         + pr.error + ") — continuing with diffuse only.")
+                            .toStdString());
+                }
+            }
+
+            // Register the directory so Ogre's resource system (and the
+            // exporters' resource walk) can find the files. When the location
+            // is ALREADY registered (second+ generation into the same dir),
+            // ADD IT AGAIN — a re-add re-lists the directory into the group's
+            // file index (picking up the fresh PNGs) while ArchiveManager
+            // reuses the same Archive instance. Do NOT removeResourceLocation
+            // to force the refresh: the same directory is commonly registered
+            // in MULTIPLE groups (the mesh-import path uses a dir-named group
+            // + DEFAULT), Ogre shares one Archive per path across groups, and
+            // removal DESTROYS it — every other group's index then dangles and
+            // the next openResource dies with EXC_BAD_ACCESS inside
+            // ResourceGroupManager::openResourceImpl (reproduced under lldb:
+            // generate → export .mesh → reload in the same session).
+            try {
+                auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+                const std::string loc = QDir(dir).absolutePath().toStdString();
+                const std::string grp =
+                    Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+                rgm.addResourceLocation(loc, "FileSystem", grp);
+                rgm.initialiseResourceGroup(grp);
+            } catch (const Ogre::Exception& e) {
+                Ogre::LogManager::getSingleton().logWarning(
+                    "MeshGenBuilder: could not (re)register texture location: "
+                    + Ogre::String(e.what()));
+            }
+        } else {
+            // Losing the texture silently would produce a flat-white mesh with
+            // no explanation — the bake already replaced the vertex colours,
+            // so there is nothing to fall back to. Log loudly.
+            Ogre::LogManager::getSingleton().logWarning(
+                ("MeshGenBuilder: failed to save the baked texture to '"
+                 + candidate + "' — the generated mesh will render untextured.")
+                    .toStdString());
+        }
+    }
+
+    Ogre::Mesh* mesh = buildMesh(result, unique + QStringLiteral("_mesh"), texPath);
     if (!mesh) return nullptr;
+
+    // Bind the synthesized PBR maps into the material buildMesh just created —
+    // the same recipe as the Material Editor's "Generate PBR maps from diffuse"
+    // button: canonical named slots + FFP wiring + the RTSS normal-map
+    // sub-render-state (without applyNormalMap the bind is invisible in the
+    // viewport), then recompile.
+    if (!normalPath.isEmpty() || !roughnessPath.isEmpty()) {
+        const std::string matName =
+            (unique + QStringLiteral("_mesh")).toStdString() + "_mat";
+        Ogre::MaterialPtr mat =
+            Ogre::MaterialManager::getSingleton().getByName(matName);
+        if (mat) {
+            auto bindSlot = [&](const char* slot, const QString& path) {
+                if (path.isEmpty()) return;
+                for (auto* tech : mat->getTechniques()) {
+                    for (unsigned short p = 0; p < tech->getNumPasses(); ++p) {
+                        Ogre::Pass* pass = tech->getPass(p);
+                        Ogre::TextureUnitState* tus = nullptr;
+                        for (unsigned short i = 0;
+                             i < pass->getNumTextureUnitStates(); ++i)
+                            if (pass->getTextureUnitState(i)->getName() == slot) {
+                                tus = pass->getTextureUnitState(i); break;
+                            }
+                        if (!tus) {
+                            tus = pass->createTextureUnitState();
+                            tus->setName(slot);
+                        }
+                        tus->setTextureName(
+                            QFileInfo(path).fileName().toStdString());
+                    }
+                }
+            };
+            bindSlot("normal_map", normalPath);
+            bindSlot("roughness",  roughnessPath);
+            RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+            if (!normalPath.isEmpty())
+                RTShaderHelper::applyNormalMap(
+                    mat, QFileInfo(normalPath).fileName().toStdString());
+            mat->compile();
+        }
+    }
 
     auto* mgr = Manager::getSingletonPtr();
     if (!mgr) return nullptr;

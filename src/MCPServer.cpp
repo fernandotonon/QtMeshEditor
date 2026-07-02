@@ -52,6 +52,7 @@
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
 #include "PbrMapSynth.h"
+#include "TextureUpscaler.h"
 #endif
 #include "HDR/HDREnvironmentManager.h"
 #include "HDR/HdrEnvironmentController.h"
@@ -2368,6 +2369,18 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         else if (q == "fp32" || q.isEmpty()) opts.quality = MeshGenPredictor::Quality::Fp32;
         else return makeErrorResult("'quality' must be 'fp32' or 'int8'.");
     }
+    // Quality pass (defaults ON — see MeshGenPredictor::Options).
+    if (args.contains("smooth")) opts.smoothMesh = args["smooth"].toBool(true);
+    if (args.contains("refine")) opts.refineSurface = args["refine"].toBool(true);
+    if (args.contains("bake_texture")) opts.bakeTexture = args["bake_texture"].toBool(true);
+    if (args.contains("texture_size")) {
+        opts.textureSize = args["texture_size"].toInt(1024);
+        if (opts.textureSize < 64 || opts.textureSize > 8192)
+            return makeErrorResult("'texture_size' must be between 64 and 8192.");
+    }
+    const bool upscaleTex  = args.value("upscale_texture").toBool();
+    const bool generatePbr = args.contains("generate_pbr")
+        ? args["generate_pbr"].toBool(true) : true;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
         QStringLiteral("generate_mesh_from_image %1 res=%2")
@@ -2384,20 +2397,39 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (image.isNull())
         return makeErrorResult(QStringLiteral("failed to read image: %1").arg(imagePath));
 
-    const MeshGenPredictor::Result res = MeshGenPredictor::predict(
+    MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(opts.quality),
         MeshGenPredictor::decoderModelPath(), opts);
     if (!res.ok)
         return makeErrorResult(res.error.isEmpty()
             ? QStringLiteral("image-to-3D failed") : res.error);
 
-    Ogre::SceneNode* node =
-        MeshGenBuilder::buildSceneNode(res, QStringLiteral("qtmesh_gen3d"));
+    // Optional Real-ESRGAN 2x on the baked diffuse (best-effort; keeps the
+    // un-upscaled texture on any failure — same policy as the CLI).
+    if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
+        const QString upModel = AIAssistManager::instance()->ensureUpscaleModel(2);
+        if (!upModel.isEmpty()) {
+            const TextureUpscaler::Result ur =
+                TextureUpscaler::upscale(res.texture, upModel);
+            if (ur.ok && !ur.image.isNull())
+                res.texture = ur.image;
+        }
+    }
+
+    // Baked texture (+ synthesized PBR maps): land next to the export target
+    // when one is given so the references survive outside the app; else the
+    // AppData default.
+    const QString output = args.value("output").toString();
+    MeshGenBuilder::BuildOptions buildOpts;
+    if (!output.trimmed().isEmpty())
+        buildOpts.textureDir = QFileInfo(output).absolutePath();
+    buildOpts.generatePbrMaps = generatePbr && opts.bakeTexture && opts.vertexColor;
+    Ogre::SceneNode* node = MeshGenBuilder::buildSceneNode(
+        res, QStringLiteral("qtmesh_gen3d"), buildOpts);
     if (!node)
         return makeErrorResult("failed to build mesh from prediction.");
 
     QString meshPath;
-    const QString output = args.value("output").toString();
     if (!output.trimmed().isEmpty()) {
         const QString fmt = CLIPipeline::formatForExtension(output);
         SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
@@ -2416,6 +2448,9 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     result["vertexCount"]   = res.vertexCount;
     result["triangleCount"] = res.triangleCount;
     if (!meshPath.isEmpty()) result["meshPath"] = meshPath;
+    // Surface non-fatal degradations (bake fell back to vertex colours, …) so
+    // the MCP caller can tell a textured result from a fallback one.
+    if (!res.warning.isEmpty()) result["warning"] = res.warning;
     return result;
 #endif
 }
@@ -7209,6 +7244,12 @@ QJsonArray MCPServer::buildToolsList()
         props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "Bake TripoSR's predicted per-vertex color (default true)."}};
         props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; TripoSR needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
         props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Encoder precision/size tier (default fp32). fp32 = best (~1.7GB), int8 = smallest, slight quality loss (~430MB). The chosen tier downloads on demand."}};
+        props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "Taubin-smooth the extracted mesh to remove marching-cubes stair-stepping (default true; volume-preserving)."}};
+        props["refine"] = QJsonObject{{"type", "boolean"}, {"description", "After smoothing, Newton-project each vertex back onto the network's true iso-surface via extra decoder queries (default true; recovers grid-quantized detail)."}};
+        props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails)."}};
+        props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
+        props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
+        props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "
