@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QObject>
+#include <QRandomGenerator>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
@@ -20,6 +21,7 @@
 
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
+#include <random>
 #include <array>
 #include <vector>
 #endif
@@ -220,10 +222,20 @@ MotionGenerator::Result MotionGenerator::generate(
 #endif
         Ort::AllocatorWithDefaultOptions alloc;
 
-        // inputs: tokens[1,V] (one-hot), seed[1,Z] (zeros = mean clip)
+        // inputs: tokens[1,V] (one-hot), seed[1,Z]. The seed is SAMPLED, not
+        // zero: z=0 decodes the CVAE's conditional MEAN, which averages the
+        // action's phase-misaligned training windows into low-coherence
+        // wiggle (renders as shaking). A gaussian seed at ~0.6σ decodes a
+        // coherent, real-like clip (measured: local motion statistics match
+        // the template clips) — and each generate gives a fresh take.
         std::vector<float> tokens(static_cast<size_t>(V), 0.0f);
         tokens[static_cast<size_t>(act)] = 1.0f;
         std::vector<float> seed(static_cast<size_t>(Z), 0.0f);
+        {
+            std::mt19937 rng(QRandomGenerator::global()->generate());
+            std::normal_distribution<float> gauss(0.0f, 0.6f);
+            for (float& v : seed) v = gauss(rng);
+        }
 
         Ort::MemoryInfo memInfo =
             Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
