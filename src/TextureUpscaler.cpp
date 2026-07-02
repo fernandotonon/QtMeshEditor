@@ -4,6 +4,7 @@
 #include <QtGlobal>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <new>
 #include <thread>
 #include <vector>
@@ -46,8 +47,28 @@ bool runTile(Ort::Session& session, Ort::AllocatorWithDefaultOptions& alloc,
              const QImage& rgbTile, TileOut& out, QString& err)
 {
     const int w = rgbTile.width(), h = rgbTile.height();
-    std::vector<float> input = PbrMapSynth::toNCHW(rgbTile, 3);
-    const std::array<int64_t, 4> shape = {1, 3, h, w};
+    // Real-ESRGAN x2plus pixel-unshuffles its INPUT by 2, so a tile with an odd
+    // width/height fails inside the graph (Reshape {1,3,H,1,W} → {1,3,-1,2,W}).
+    // Edge tiles from the overlapping tiler are frequently odd. Pad such tiles
+    // to even dimensions (edge-replicate) and crop the model output back below —
+    // bit-identical for already-even tiles.
+    const int pw = w + (w & 1), ph = h + (h & 1);
+    QImage tile = rgbTile;
+    if (pw != w || ph != h) {
+        QImage padded(pw, ph, QImage::Format_RGB888);
+        const QImage src888 = rgbTile.convertToFormat(QImage::Format_RGB888);
+        for (int y = 0; y < ph; ++y) {
+            const uchar* srcLine = src888.constScanLine(std::min(y, h - 1));
+            uchar* dst = padded.scanLine(y);
+            std::memcpy(dst, srcLine, static_cast<size_t>(w) * 3);
+            if (pw != w)
+                std::memcpy(dst + static_cast<size_t>(w) * 3,
+                            srcLine + static_cast<size_t>(w - 1) * 3, 3);
+        }
+        tile = padded;
+    }
+    std::vector<float> input = PbrMapSynth::toNCHW(tile, 3);
+    const std::array<int64_t, 4> shape = {1, 3, ph, pw};
     Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     Ort::Value inT = Ort::Value::CreateTensor<float>(
         mem, input.data(), input.size(), shape.data(), shape.size());
@@ -81,6 +102,24 @@ bool runTile(Ort::Session& session, Ort::AllocatorWithDefaultOptions& alloc,
     }
     const float* d = outs[0].GetTensorData<float>();
     out.rgb.assign(d, d + oplane * 3);
+
+    // Crop the padding back off so the composite sees exactly (w*s, h*s).
+    if ((pw != w || ph != h) && pw > 0 && ph > 0
+        && out.ow % pw == 0 && out.ow / pw == out.oh / ph) {
+        const int s  = out.ow / pw;
+        const int cw = w * s, ch = h * s;
+        std::vector<float> cropped(static_cast<size_t>(cw) * ch * 3);
+        const size_t iplane = static_cast<size_t>(out.ow) * out.oh;
+        const size_t cplane = static_cast<size_t>(cw) * ch;
+        for (int c = 0; c < 3; ++c)
+            for (int y = 0; y < ch; ++y)
+                std::memcpy(cropped.data() + c * cplane + static_cast<size_t>(y) * cw,
+                            out.rgb.data() + c * iplane + static_cast<size_t>(y) * out.ow,
+                            static_cast<size_t>(cw) * sizeof(float));
+        out.rgb = std::move(cropped);
+        out.ow = cw;
+        out.oh = ch;
+    }
     return true;
 }
 
