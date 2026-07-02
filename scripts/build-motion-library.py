@@ -104,19 +104,27 @@ MAX_FRAMES = 120          # cap clip length (~4s @ 30fps); keeps the library sma
 # bus"; 05_02 ballet (pirouettes fold badly with a locked root) → 60_08 salsa;
 # plus sit / throw / boxing coverage.
 CURATED = [
-    ("07_01", "walk"),     # plain walk cycle
-    ("09_02", "run"),      # subject 09 = run
-    ("16_01", "jump"),     # 16_* has clean locomotion jumps
-    ("60_08", "dance"),    # salsa — rhythmic, upright (ballet pirouettes broke)
-    ("20_06", "march"),    # soldiers march
-    ("10_01", "kick"),     # soccer kick
-    ("02_05", "punch"),    # punch/strike
-    ("13_26", "wave"),     # direct traffic, wave
-    ("01_02", "climb"),    # playground climb
-    ("40_10", "idle"),     # wait for bus (69_01 was mislabelled — it walks)
-    ("13_01", "sit"),      # sit on high stool, stand up
-    ("111_33", "throw"),   # dedicated throwing trial
-    ("13_17", "boxing"),   # boxing
+    # Several takes per action: matchPrompt picks among same-action clips at
+    # random, so repeat generates give VARIETY with real-mocap quality — the
+    # practical answer to "generative" until a licensable model exists.
+    ("07_01", "walk"), ("07_02", "walk"), ("08_01", "walk"),
+    ("08_06", "walk"), ("02_01", "walk"), ("38_01", "walk"),
+    ("09_01", "run"), ("09_02", "run"), ("09_05", "run"), ("02_03", "run"),
+    ("16_01", "jump"), ("16_05", "jump"), ("13_11", "jump"), ("13_19", "jump"),
+    ("60_02", "dance"), ("60_05", "dance"), ("60_08", "dance"),
+    ("60_12", "dance"), ("55_02", "dance"),
+    ("20_06", "march"), ("21_06", "march"),
+    ("10_01", "kick"), ("10_02", "kick"), ("10_05", "kick"), ("11_01", "kick"),
+    ("02_05", "punch"),
+    ("13_26", "wave"), ("13_27", "wave"), ("14_24", "wave"),
+    ("01_02", "climb"), ("01_04", "climb"),
+    ("40_10", "idle"), ("40_11", "idle"),
+    ("13_01", "sit"), ("13_02", "sit"), ("13_03", "sit"),
+    ("111_33", "throw"),
+    ("13_17", "boxing"), ("13_18", "boxing"), ("14_01", "boxing"),
+    ("14_02", "boxing"), ("15_13", "boxing"), ("17_10", "boxing"),
+    ("13_23", "sweep"), ("13_24", "sweep"),
+    ("13_20", "wash"), ("13_21", "wash"),
 ]
 
 # ---- active-window selection -------------------------------------------------

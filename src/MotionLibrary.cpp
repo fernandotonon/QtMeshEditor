@@ -1,4 +1,6 @@
 #include "MotionLibrary.h"
+
+#include <QRandomGenerator>
 #include "ModelDownloader.h"
 
 #include <QDir>
@@ -144,11 +146,24 @@ int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) co
         return -1;
     };
 
+    // The v4 library carries SEVERAL takes per action — pick one at random so
+    // repeat generates give variety (real-mocap quality is the draw; variety
+    // is what the generative path was chasing).
+    auto pickAmong = [&](const QString& action) -> int {
+        QList<int> hits;
+        for (int i = 0; i < static_cast<int>(m_clips.size()); ++i)
+            if (m_clips[i].action.compare(action, Qt::CaseInsensitive) == 0)
+                hits.append(i);
+        if (hits.isEmpty()) return -1;
+        if (hits.size() == 1) return hits.first();
+        return hits.at(QRandomGenerator::global()->bounded(hits.size()));
+    };
+
     // 1. Direct: a library action name appears in the prompt.
     for (int i = 0; i < static_cast<int>(m_clips.size()); ++i) {
         if (p.contains(m_clips[i].action.toLower())) {
             if (matchedAction) *matchedAction = m_clips[i].action;
-            return i;
+            return pickAmong(m_clips[i].action);
         }
     }
     // 2. Synonyms → action.
@@ -157,7 +172,7 @@ int MotionLibrary::matchPrompt(const QString& prompt, QString* matchedAction) co
             const int idx = findAction(QString::fromLatin1(s.action));
             if (idx >= 0) {
                 if (matchedAction) *matchedAction = m_clips[idx].action;
-                return idx;
+                return pickAmong(m_clips[idx].action);
             }
         }
     }

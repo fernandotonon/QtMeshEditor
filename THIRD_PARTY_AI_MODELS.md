@@ -133,8 +133,10 @@ the binary). Attribution + licenses for the models and their training data:
   snapped to a calm near-neutral start frame — the retarget deltas against clip
   frame 0), replacing the first-4-seconds slices that mostly captured idle
   lead-ins, and covers **13 actions** (walk, run, jump, dance, march, kick,
-  punch, wave, climb, sit, throw, boxing, idle).
-- **Hosting:** `motion/motion-library.json` (~1.1 MB, 13 actions) in the
+  punch, wave, climb, sit, throw, boxing, idle, sweep, wash) with SEVERAL
+  takes per action — the matcher picks among them at random so repeat
+  generates vary while every result is real mocap.
+- **Hosting:** `motion/motion-library.json` (~4 MB, 47 clips / 15 actions) in the
   [`fernandotonon/QtMeshEditor-models`](https://huggingface.co/fernandotonon/QtMeshEditor-models)
   HF repo, downloaded on first use to `AppData/ai_models/motion/` (override
   `QTMESH_MOTION_LIBRARY_BASE_URL` / `QSettings ai/motionLibraryBaseUrl`; offline
