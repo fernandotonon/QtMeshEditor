@@ -77,6 +77,8 @@ qtmesh lod model.fbx --count 3 --algo meshopt -o out.fbx  # meshoptimizer backen
 qtmesh lod model.fbx --auto                    # auto-generate LODs
 qtmesh lod model.fbx --remove -o clean.fbx     # strip LODs and save
 qtmesh material model.fbx --preset "Metallic-Roughness" -o out.fbx  # apply a built-in material preset (writes .material sidecar)
+qtmesh material model.fbx --env studio_neutral --env-intensity 1.5 --env-tint "#fff5e6" -o out.fbx  # HDR env + per-material IBL tuning (#473)
+qtmesh material model.fbx --env /path/to/custom.hdr -o out.fbx      # load HDRI + write .hdr-env.json sidecar
 qtmesh material --list-presets                 # list built-in preset names (incl. PBR templates + HDR Environment presets)
 qtmesh hdri --list                             # bundled HDRI catalog + on-disk status (#472)
 qtmesh hdri --download studio_neutral          # fetch optional CC0 HDRI into <AppData>/hdri/
@@ -226,6 +228,15 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### Theme System
 
 - **ThemeManager** (`src/ThemeManager.h/cpp`): QML_SINGLETON providing canonical theme colors synced from QPalette. All colors (window, panel, header, text, button, highlight, border, accent) derived from the active QPalette.
+
+### HDR & IBL (#466)
+
+- **HDREnvironmentManager** (`src/HDR/HDREnvironmentManager.h/cpp`, Slices A–D): global HDR environment load, cubemap registration, async IBL precompute (irradiance + prefiltered specular + BRDF LUT), tonemap defaults, and skybox. Bundled names resolve under `media/hdri/`; user downloads land in `<AppData>/hdri/`. **IBL disk cache:** `<AppData>/hdr_cache/<sha1>/` (delete that folder to force a rebake; see `HdrCache::cacheRootDirectory()`).
+- **HdrEnvironmentController** (`src/HDR/HdrEnvironmentController.h/cpp`, Slice E #471): QML bridge for Inspector **Environment** (Object mode): HDRI picker, Browse, skybox toggle, background blur, tonemap controls. Wired to all viewports via `HdrViewportController`.
+- **HdrMaterialScript** (`src/HDR/HdrMaterialScript.h/cpp`, Slice D): serialises per-material `pbr_environment_intensity` / `pbr_environment_tint` lines in `.material` sidecars; stripped before feeding scripts to Ogre.
+- **HdrBundledLibrary** (Slice F #472): CC0 bundled HDRIs, `qtmesh hdri --list/--download`, first-run defaults (`studio_neutral` + ACES + 0 EV). See `THIRD_PARTY_HDRI.md`.
+- **Slice G (#473) parity:** `qtmesh material --env/--env-intensity/--env-tint`; MCP `set_hdr_environment`, `get_hdr_environment`, `set_tonemap`, `set_env_intensity`, `set_env_tint`. Sentry breadcrumbs: `render.hdr.load`, `render.hdr.precompute`, `render.hdr.bind`, `render.hdr.tonemap`, `render.hdr.preset`, `render.hdr.skybox`, `ui.action` on inspector changes.
+- **Stretch (not in 3.15):** `qtmesh render` headless tonemapped preview PNG — turntable/isometric paths cover most batch preview needs today.
 
 ### Indie Game Dev Features
 
