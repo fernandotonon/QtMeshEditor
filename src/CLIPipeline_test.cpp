@@ -3259,6 +3259,26 @@ TEST(CLIPipelineCmdMaterial, ListPresetsExitsZero)
     EXPECT_EQ(CLIPipeline::cmdMaterial(args.argc(), args.argv()), 0);
 }
 
+// -- cmdHdri (Slice F, #472) --
+
+TEST(CLIPipelineCmdHdri, ListCatalogExitsZero)
+{
+    TestArgv args({"qtmesh", "hdri", "--list"});
+    EXPECT_EQ(CLIPipeline::cmdHdri(args.argc(), args.argv()), 0);
+}
+
+TEST(CLIPipelineCmdHdri, HelpExitsZero)
+{
+    TestArgv args({"qtmesh", "hdri", "--help"});
+    EXPECT_EQ(CLIPipeline::cmdHdri(args.argc(), args.argv()), 0);
+}
+
+TEST(CLIPipelineCmdHdri, UnknownDownloadNameFails)
+{
+    TestArgv args({"qtmesh", "hdri", "--download", "not_a_real_hdri"});
+    EXPECT_EQ(CLIPipeline::cmdHdri(args.argc(), args.argv()), 1);
+}
+
 // -- cmdPackTextures (slice G) --
 
 TEST(CLIPipelineCmdPackTextures, MissingOutputFails)
