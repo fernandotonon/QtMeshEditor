@@ -14,6 +14,7 @@ Rectangle {
     property real yCenter: 0   // value at the vertical center of the canvas
 
     property int leftStripWidth: 130
+    property var hiddenChannels: ({})
 
     property var rows: AnimationControlController.allBoneRows()
     readonly property string selectedBone: AnimationControlController.selectedBone
@@ -49,6 +50,33 @@ Rectangle {
 
     function activeChannelsForSelected() {
         return activeChannelsFor(selectedBoneRow())
+    }
+
+    function isChannelVisible(channelId) {
+        return hiddenChannels[channelId] !== true
+    }
+
+    function visibleChannelsFor(row) {
+        var active = activeChannelsFor(row)
+        var result = []
+        for (var i = 0; i < active.length; i++) {
+            if (isChannelVisible(active[i].id)) result.push(active[i])
+        }
+        return result
+    }
+
+    function visibleChannelsForSelected() {
+        return visibleChannelsFor(selectedBoneRow())
+    }
+
+    function toggleChannelVisibility(channelId) {
+        var nextHidden = {}
+        for (var key in hiddenChannels) nextHidden[key] = hiddenChannels[key]
+        if (nextHidden[channelId] === true) delete nextHidden[channelId]
+        else nextHidden[channelId] = true
+        hiddenChannels = nextHidden
+        if (panArea.dragChannel === channelId) panArea.dragMode = ""
+        curveCanvas.requestPaint()
     }
 
     // anchorPx is the pixel that should stay fixed while zooming.
@@ -254,18 +282,49 @@ Rectangle {
 
             Repeater {
                 model: root.activeChannelsForSelected()
-                Row {
-                    spacing: 4
-                    Rectangle {
-                        width: 10; height: 10; radius: 2
-                        color: modelData.color
-                        anchors.verticalCenter: parent.verticalCenter
+                Rectangle {
+                    width: tagRow.implicitWidth + 8
+                    height: 18
+                    radius: 4
+                    color: "transparent"
+                    border.width: 1
+                    border.color: root.isChannelVisible(modelData.id)
+                                  ? modelData.color
+                                  : AnimationControlController.borderColor
+                    opacity: root.isChannelVisible(modelData.id) ? 1.0 : 0.45
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Row {
+                        id: tagRow
+                        anchors.centerIn: parent
+                        spacing: 4
+
+                        Rectangle {
+                            width: 10; height: 10; radius: 2
+                            color: root.isChannelVisible(modelData.id)
+                                   ? modelData.color
+                                   : AnimationControlController.borderColor
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Text {
+                            text: modelData.label
+                            color: AnimationControlController.textColor
+                            font.pixelSize: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
                     }
-                    Text {
-                        text: modelData.label
-                        color: AnimationControlController.textColor
-                        font.pixelSize: 10
-                        anchors.verticalCenter: parent.verticalCenter
+
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
+                        cursorShape: Qt.PointingHandCursor
+                        hoverEnabled: true
+                        onClicked: root.toggleChannelVisibility(modelData.id)
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: root.isChannelVisible(modelData.id)
+                                      ? "Click to hide " + modelData.label
+                                      : "Click to show " + modelData.label
                     }
                 }
             }
@@ -334,7 +393,7 @@ Rectangle {
             }
             ctx.globalAlpha = 1.0
 
-            var chans = root.activeChannelsForSelected()
+            var chans = root.visibleChannelsForSelected()
             for (var c = 0; c < chans.length; c++) {
                 var ch = chans[c]
                 ctx.strokeStyle = ch.color; ctx.lineWidth = 2
@@ -415,7 +474,7 @@ Rectangle {
         var row = selectedBoneRow()
         if (!row) return null
         var midY = (curveCanvas.height - 16) / 2
-        var chans = activeChannelsFor(row)
+        var chans = visibleChannelsFor(row)
         for (var c = 0; c < chans.length; c++) {
             var ch = chans[c]
             for (var k = 0; k < row.keyTimes.length; k++) {
@@ -436,7 +495,7 @@ Rectangle {
         var row = selectedBoneRow()
         if (!row) return null
         var midY = (curveCanvas.height - 16) / 2
-        var chans = activeChannelsFor(row)
+        var chans = visibleChannelsFor(row)
         var handlePx = 30
         for (var c = 0; c < chans.length; c++) {
             var ch = chans[c]
