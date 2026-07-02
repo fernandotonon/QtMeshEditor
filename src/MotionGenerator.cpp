@@ -18,6 +18,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
 
 #ifdef ENABLE_ONNX
 #include <onnxruntime_cxx_api.h>
@@ -225,27 +226,20 @@ MotionGenerator::Result MotionGenerator::generate(
         // inputs: tokens[1,V] (one-hot), seed[1,Z]. The seed is SAMPLED, not
         // zero: z=0 decodes the CVAE's conditional MEAN, which averages the
         // action's phase-misaligned training windows into low-coherence
-        // wiggle (renders as shaking). A gaussian seed at ~0.6σ decodes a
-        // coherent, real-like clip (measured: local motion statistics match
-        // the template clips) — and each generate gives a fresh take.
+        // wiggle (renders as shaking). But single random samples are a
+        // lottery — tail seeds decode to extreme poses (body folded, arms
+        // flung). So: BEST-OF-N — draw N seeds, decode each (the model is
+        // ~ms per run), score every candidate on motion plausibility, keep
+        // the winner. Scoring uses the DERIVED LOCALS (what the retarget
+        // renders): energy near real-clip statistics, temporal coherence
+        // high, and no extreme articulation from the starting pose.
         std::vector<float> tokens(static_cast<size_t>(V), 0.0f);
         tokens[static_cast<size_t>(act)] = 1.0f;
-        std::vector<float> seed(static_cast<size_t>(Z), 0.0f);
-        {
-            std::mt19937 rng(QRandomGenerator::global()->generate());
-            std::normal_distribution<float> gauss(0.0f, 0.6f);
-            for (float& v : seed) v = gauss(rng);
-        }
 
         Ort::MemoryInfo memInfo =
             Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         const std::array<int64_t, 2> tShape{1, V};
         const std::array<int64_t, 2> sShape{1, Z};
-        std::vector<Ort::Value> inputs;
-        inputs.push_back(Ort::Value::CreateTensor<float>(
-            memInfo, tokens.data(), tokens.size(), tShape.data(), tShape.size()));
-        inputs.push_back(Ort::Value::CreateTensor<float>(
-            memInfo, seed.data(), seed.size(), sShape.data(), sShape.size()));
 
         // input/output names (discover, don't hardcode the order beyond the two)
         std::vector<Ort::AllocatedStringPtr> inHolders, outHolders;
@@ -262,18 +256,90 @@ MotionGenerator::Result MotionGenerator::generate(
             r.error = QStringLiteral("t2m model has unexpected I/O"); return r;
         }
 
-        auto out = session.Run(Ort::RunOptions{nullptr}, inNames.data(),
-                               inputs.data(), inputs.size(),
-                               outNames.data(), 1);
-        if (out.empty() || !out[0].IsTensor()) {
-            r.error = QStringLiteral("t2m inference produced no tensor"); return r;
+        // quat helpers (x,y,z,w) for the plausibility score
+        using Q4 = std::array<float, 4>;
+        auto qConj = [](const Q4& q) { return Q4{-q[0], -q[1], -q[2], q[3]}; };
+        auto qMul = [](const Q4& a, const Q4& b) {
+            return Q4{ a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1],
+                       a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0],
+                       a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3],
+                       a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2] };
+        };
+        auto qAngle = [](const Q4& q) {
+            return 2.0f * std::acos(std::min(1.0f, std::abs(q[3])));
+        };
+        // canonical parent map — matches AnimationMerger's kParentCanon
+        static const int kParent[22] = { -1, 0, 1, 2, 3, 4,  2, 6, 7, 8,
+                                         2, 10, 11, 12,  0, 14, 15, 16,
+                                         0, 18, 19, 20 };
+
+        std::mt19937 rng(QRandomGenerator::global()->generate());
+        std::normal_distribution<float> gauss(0.0f, 0.5f);
+        constexpr int kCandidates = 8;
+        constexpr float kTargetStep = 0.048f;   // rad/frame — real-clip locals
+        constexpr float kMaxArtic  = 1.5f;      // rad from the starting pose
+
+        std::vector<std::vector<Q4>> best;      // [T][J]
+        float bestScore = -1e30f;
+        for (int cand = 0; cand < kCandidates; ++cand) {
+            std::vector<float> seed(static_cast<size_t>(Z), 0.0f);
+            for (float& v : seed) v = gauss(rng);
+            std::vector<Ort::Value> inputs;
+            inputs.push_back(Ort::Value::CreateTensor<float>(
+                memInfo, tokens.data(), tokens.size(), tShape.data(), tShape.size()));
+            inputs.push_back(Ort::Value::CreateTensor<float>(
+                memInfo, seed.data(), seed.size(), sShape.data(), sShape.size()));
+            auto out = session.Run(Ort::RunOptions{nullptr}, inNames.data(),
+                                   inputs.data(), inputs.size(),
+                                   outNames.data(), 1);
+            if (out.empty() || !out[0].IsTensor()) continue;
+            const auto info = out[0].GetTensorTypeAndShapeInfo();
+            if (info.GetElementCount() < static_cast<int64_t>(T) * C) continue;
+            const float* m = out[0].GetTensorData<float>();
+
+            // unpack world quats [T][J]
+            std::vector<std::vector<Q4>> w(static_cast<size_t>(T),
+                                           std::vector<Q4>(static_cast<size_t>(J)));
+            for (int f = 0; f < T; ++f)
+                for (int j = 0; j < J; ++j) {
+                    const float* q = m + (static_cast<size_t>(f) * C + j * 10) + 3;
+                    w[f][j] = { q[0], q[1], q[2], q[3] };
+                }
+            // derived locals
+            std::vector<std::vector<Q4>> loc = w;
+            for (int f = 0; f < T; ++f)
+                for (int j = 0; j < J && j < 22; ++j)
+                    if (kParent[j] >= 0)
+                        loc[f][j] = qMul(qConj(w[f][kParent[j]]), w[f][j]);
+            // score: energy near target, coherent step axes, bounded articulation
+            double stepSum = 0.0, cohSum = 0.0; int cohN = 0;
+            float maxArtic = 0.0f;
+            std::vector<Q4> prevStep(static_cast<size_t>(J), Q4{0,0,0,1});
+            for (int f = 0; f + 1 < T; ++f)
+                for (int j = 1; j < J; ++j) {
+                    const Q4 d = qMul(qConj(loc[f][j]), loc[f + 1][j]);
+                    stepSum += qAngle(d);
+                    const float n1 = std::sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+                    const Q4& pd = prevStep[j];
+                    const float n0 = std::sqrt(pd[0]*pd[0] + pd[1]*pd[1] + pd[2]*pd[2]);
+                    if (f > 0 && n1 > 1e-6f && n0 > 1e-6f) {
+                        cohSum += (d[0]*pd[0] + d[1]*pd[1] + d[2]*pd[2]) / (n1 * n0);
+                        ++cohN;
+                    }
+                    prevStep[j] = d;
+                    const Q4 fromStart = qMul(qConj(loc[0][j]), loc[f + 1][j]);
+                    maxArtic = std::max(maxArtic, qAngle(fromStart));
+                }
+            const float step = static_cast<float>(stepSum / ((T - 1) * (J - 1)));
+            const float coh  = cohN ? static_cast<float>(cohSum / cohN) : 0.0f;
+            const float score = -std::abs(step - kTargetStep) * 40.0f
+                                + coh * 2.0f
+                                - std::max(0.0f, maxArtic - kMaxArtic) * 4.0f;
+            if (score > bestScore) { bestScore = score; best = std::move(w); }
         }
-        const float* m = out[0].GetTensorData<float>();
-        const auto info = out[0].GetTensorTypeAndShapeInfo();
-        const auto shape = info.GetShape();   // [1,T,C]
-        const int64_t total = info.GetElementCount();
-        if (total < static_cast<int64_t>(T) * C) {
-            r.error = QStringLiteral("t2m output smaller than expected"); return r;
+        if (best.empty()) {
+            r.error = QStringLiteral("t2m inference produced no usable candidate");
+            return r;
         }
 
         // ---- pack into a MotionLibrary::Clip ----
@@ -284,10 +350,8 @@ MotionGenerator::Result MotionGenerator::generate(
         clip.quats.resize(static_cast<size_t>(T));
         for (int f = 0; f < T; ++f) {
             clip.quats[f].resize(static_cast<size_t>(J));
-            for (int j = 0; j < J; ++j) {
-                const float* q = m + (static_cast<size_t>(f) * C + j * 10) + 3;
-                clip.quats[f][j] = { q[0], q[1], q[2], q[3] };  // xyzw
-            }
+            for (int j = 0; j < J; ++j)
+                clip.quats[f][j] = best[f][j];
         }
         clip.frames = T;
 
