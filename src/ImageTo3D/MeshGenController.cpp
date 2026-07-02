@@ -13,6 +13,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImage>
+#include <QCoreApplication>   // qApp
 #include <QMetaObject>
 #include <QThread>
 
@@ -32,13 +33,22 @@ MeshGenController::MeshGenController(QObject* parent) : QObject(parent) {}
 
 MeshGenController* MeshGenController::instance()
 {
-    if (!s_instance) s_instance = new MeshGenController();
+    // Parent to qApp so the process-wide singleton has a well-defined owner/lifetime
+    // (cleaned up once at app exit) rather than being an unparented QObject that
+    // multiple QML engines reference across construct/teardown cycles — which
+    // crashed MainWindow/MCPServer tests that build a fresh MainWindow (hence a new
+    // QQmlEngine loading PropertiesPanel.qml) per test.
+    if (!s_instance) s_instance = new MeshGenController(qApp);
     return s_instance;
 }
 
-MeshGenController* MeshGenController::create(QQmlEngine*, QJSEngine*)
+MeshGenController* MeshGenController::create(QQmlEngine* engine, QJSEngine*)
 {
-    QQmlEngine::setObjectOwnership(instance(), QQmlEngine::CppOwnership);
+    // Match the IsometricSpritesController/other-controller pattern: only pin
+    // CppOwnership when an engine is actually provided (guards the singleton from a
+    // stale/second engine trying to take ownership).
+    if (engine)
+        QQmlEngine::setObjectOwnership(instance(), QQmlEngine::CppOwnership);
     return instance();
 }
 

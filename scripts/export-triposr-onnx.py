@@ -198,7 +198,12 @@ def main():
         try:
             from onnxruntime.quantization import quantize_dynamic, QuantType
             int8_path = os.path.join(args.out, "triposr_encoder_int8.onnx")
-            quantize_dynamic(enc_path, int8_path, weight_type=QuantType.QInt8)
+            # MatMul-only: leaving Conv unquantized avoids ConvInteger, which our
+            # ONNX Runtime CPU EP has no kernel for (the ViT patch-embed Conv would
+            # otherwise fail inference: "Could not find an implementation for
+            # ConvInteger"). ViT weight is MatMul-heavy so it still shrinks ~4x.
+            quantize_dynamic(enc_path, int8_path, weight_type=QuantType.QInt8,
+                             op_types_to_quantize=['MatMul'])
             print(f"[ok] wrote {int8_path}")
         except Exception as e:  # noqa: BLE001 — best-effort; fp32 still ships
             print(f"[warn] int8 export skipped: {e}")
