@@ -108,6 +108,12 @@ def capsule_surf(p0, p1, r, n, rng):
     side = p0 + t * axis + d * r
     caps_dir = _unit_dirs(nc, rng)
     which = rng.random(nc) < 0.5
+    # keep caps on the EXTERIOR: reflect directions pointing into the shaft
+    # onto the outward hemisphere (p0 cap faces -u, p1 cap faces +u) — a full
+    # sphere would put half the cap points inside the cylinder, off-surface
+    along = caps_dir @ u
+    flip = (which & (along > 0)) | (~which & (along < 0))
+    caps_dir[flip] -= 2 * along[flip, None] * u
     caps = np.where(which[:, None], p0 + caps_dir * r, p1 + caps_dir * r)
     return np.concatenate([side, caps])
 
@@ -387,11 +393,11 @@ def canonicalise(P, L, fname=""):
     cent = {p: P[L == p].mean(0) for p in range(1, 7) if (L == p).sum() >= 8}
     legs = [cent[p] for p in (LLEG, RLEG) if p in cent]
     if not legs:
-        return P, L, False, "no leg labels — cannot infer up axis"
+        return P, L, False, "no leg labels — cannot infer up axis", 0.0
     legs_c = np.mean(legs, axis=0)
     body_c = cent.get(TORSO, cent.get(HEAD))
     if body_c is None:
-        return P, L, False, "no torso/head labels"
+        return P, L, False, "no torso/head labels", 0.0
     # Two "up" candidates, scored below by how many leg points land below the
     # body: (A) torso−legs centroid vector — right for humanoids and compact
     # quadrupeds; (B) per-limb leg PCA — right when a big tail drags the torso
@@ -452,21 +458,27 @@ def canonicalise(P, L, fname=""):
 
     frames = [f for f in (build_frame(u) for u in candidates) if f is not None]
     if not frames:
-        return P, L, False, "no bilateral limb pair / degenerate axes"
+        return P, L, False, "no bilateral limb pair / degenerate axes", 0.0
     Pc, score = max(frames, key=lambda t: t[1])
     # require BOTH a coherent head (above legs or forward) and most leg points
     # below the body — incoherent clouds would only inject label noise
     if score < 0.95:
-        return P, L, False, f"incoherent after canonicalisation (score {score:.2f})"
+        return P, L, False, f"incoherent after canonicalisation (score {score:.2f})", 0.0
 
-    # geometric side reassignment (bind poses are bilaterally lateralised)
+    # geometric side reassignment (bind poses are bilaterally lateralised);
+    # sidefix = fraction of limb points whose MINED side disagreed with the
+    # geometry — an independent miner-quality signal surfaced by --check-real
     Lc = L.copy()
+    relabelled = 0; limbTotal = 0
     for a, b in ((LARM, RARM), (LLEG, RLEG)):
         m = (Lc == a) | (Lc == b)
         if m.sum() == 0: continue
         xm = Pc[m, 0] - np.median(Pc[:, 0])
-        Lc[m] = np.where(xm >= 0, a, b)
-    return normalise(Pc), Lc, True, ""
+        new = np.where(xm >= 0, a, b)
+        relabelled += int((new != Lc[m]).sum()); limbTotal += int(m.sum())
+        Lc[m] = new
+    sidefix = relabelled / limbTotal if limbTotal else 0.0
+    return normalise(Pc), Lc, True, "", sidefix
 
 
 def load_real_data(paths, aug, seed, exclude=(), only=()):
@@ -486,7 +498,7 @@ def load_real_data(paths, aug, seed, exclude=(), only=()):
         L = np.asarray(d["labels"], np.int64)
         if len(P) != len(L) or len(P) == 0:
             print(f"  skip {f}: points/labels mismatch"); continue
-        P, L, ok, msg = canonicalise(P, L, f)
+        P, L, ok, msg, _ = canonicalise(P, L, f)
         if not ok:
             print(f"  skip {os.path.basename(f)}: {msg}"); continue
         for k in range(1 + aug):
@@ -513,21 +525,24 @@ def check_real(paths):
         d = json.load(open(f))
         P = np.asarray(d["points"], np.float32).reshape(-1, 3)
         L = np.asarray(d["labels"], np.int64)
-        Pc, Lc, ok, msg = canonicalise(P, L, f)
+        Pc, Lc, ok, msg, sidefix = canonicalise(P, L, f)
         name = os.path.basename(f)[:44]
         if not ok:
             print(f"FAIL {name:44s} {msg}"); bad += 1; continue
         hy = Pc[Lc == HEAD, 1].mean() if (Lc == HEAD).any() else float("nan")
         hz = Pc[Lc == HEAD, 2].mean() if (Lc == HEAD).any() else float("nan")
         ly = Pc[(Lc == LLEG) | (Lc == RLEG), 1].mean()
-        lx = Pc[Lc == LARM, 0].mean() if (Lc == LARM).any() else float("nan")
-        rx = Pc[Lc == RARM, 0].mean() if (Lc == RARM).any() else float("nan")
-        # head must be above the legs (humanoid) OR forward at +Z (animal)
-        good = (np.isnan(hy) or hy > ly or hz > 0.05) \
-            and (np.isnan(lx) or lx > 0) and (np.isnan(rx) or rx < 0)
+        # The pass criterion is GEOMETRY-ONLY: head above the legs (humanoid)
+        # or forward at +Z (animal). Post-canonicalisation L/R centroids are
+        # NOT tested — canonicalise() rewrites sides geometrically, so they
+        # hold by construction. The independent miner-quality signal is
+        # `sidefix`: the fraction of limb points whose MINED side label
+        # disagreed with the geometric side (high values → suspect rig
+        # naming; a whole-file swap shows up as sidefix ≈ 1.0).
+        good = np.isnan(hy) or hy > ly or hz > 0.05
         if not good: bad += 1
         print(f"{'ok  ' if good else 'BAD '}{name:44s} head_y={hy:+.2f} head_z={hz:+.2f} "
-              f"legs_y={ly:+.2f} larm_x={lx:+.2f} rarm_x={rx:+.2f}")
+              f"legs_y={ly:+.2f} sidefix={sidefix:5.1%}")
     print(f"\n{len(files) - bad}/{len(files)} canonicalised cleanly")
 
 
