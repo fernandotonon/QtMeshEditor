@@ -27,15 +27,6 @@ class HdrEnvironmentController : public QObject
     Q_PROPERTY(bool defaultSkyBoxVisible READ defaultSkyBoxVisible WRITE setDefaultSkyBoxVisible
                    NOTIFY skyboxChanged)
     Q_PROPERTY(float backgroundBlur READ backgroundBlur WRITE setBackgroundBlur NOTIFY backgroundBlurChanged)
-    Q_PROPERTY(bool activeSkyBoxVisible READ activeSkyBoxVisible WRITE setActiveSkyBoxVisible
-                   NOTIFY viewportOverridesChanged)
-    Q_PROPERTY(bool activeTonemapOverride READ activeTonemapOverride WRITE setActiveTonemapOverride
-                   NOTIFY viewportOverridesChanged)
-    Q_PROPERTY(int activeTonemapOperator READ activeTonemapOperator WRITE setActiveTonemapOperator
-                   NOTIFY viewportOverridesChanged)
-    Q_PROPERTY(float activeExposureEv READ activeExposureEv WRITE setActiveExposureEv
-                   NOTIFY viewportOverridesChanged)
-    Q_PROPERTY(bool overlayVisible READ overlayVisible NOTIFY overlayVisibleChanged)
 
 public:
     static HdrEnvironmentController* instance();
@@ -60,17 +51,6 @@ public:
     float backgroundBlur() const;
     void setBackgroundBlur(float blur);
 
-    bool activeSkyBoxVisible() const;
-    void setActiveSkyBoxVisible(bool visible);
-    bool activeTonemapOverride() const;
-    void setActiveTonemapOverride(bool enabled);
-    int activeTonemapOperator() const;
-    void setActiveTonemapOperator(int op);
-    float activeExposureEv() const;
-    void setActiveExposureEv(float value);
-
-    bool overlayVisible() const;
-
     Q_INVOKABLE bool loadEnvironment(const QString& pathOrBundledName);
     Q_INVOKABLE bool loadEnvironmentChoice(int index);
     Q_INVOKABLE void browseForEnvironment();
@@ -94,8 +74,8 @@ signals:
     void tonemapChanged();
     void skyboxChanged();
     void backgroundBlurChanged();
-    void viewportOverridesChanged();
-    void overlayVisibleChanged();
+    /// Emitted when the user clicks Browse — MainWindow opens QFileDialog with a QWidget parent.
+    void browseRequested();
 
 private:
     explicit HdrEnvironmentController(QObject* parent = nullptr);

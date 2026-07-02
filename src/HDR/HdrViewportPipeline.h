@@ -8,40 +8,33 @@
 
 class OgreWidget;
 
-/// Per-viewport HDR render target + tonemap compositor (Slice D, #470).
+/// Per-viewport skybox sync + optional HDR tonemap compositor (Slice D, #470).
 class HdrViewportPipeline
 {
 public:
     static constexpr const char* kCompositorBaseName = "QtMeshHdrPipeline";
     static constexpr const char* kTonemapMaterialBaseName = "QtMesh/HdrTonemapPass";
+    /// Set true when #470 compositor render_scene works with RTSS; until then skybox/IBL
+    /// use the normal viewport path and tonemap uniforms are unused.
+    static constexpr bool kUseTonemapCompositor = false;
 
     explicit HdrViewportPipeline(OgreWidget* widget);
     ~HdrViewportPipeline();
 
     void refresh();
+    /// Pushes global tonemap settings to the compositor material (no-op while compositor off).
     void updateTonemapUniforms();
 
     void setSkyBoxVisible(bool visible);
     bool skyBoxVisible() const { return m_skyBoxVisible; }
 
-    bool tonemapOverride() const { return m_tonemapOverride; }
-    void setTonemapOverride(bool enabled);
-    HdrTonemap::Operator tonemapOperator() const;
-    void setTonemapOperator(HdrTonemap::Operator op);
-    float exposureEv() const;
-    void setExposureEv(float exposureEv);
-
-    const QString& compositorName() const { return m_compositorName; }
-    const QString& tonemapMaterialName() const { return m_tonemapMaterialName; }
-
 private:
-    void enablePipeline();
+    void syncViewportEnvironment();
     void disablePipeline();
+    void removeCompositor();
     void ensureTonemapMaterial();
     void ensureCompositorScript();
-
-    HdrTonemap::Operator effectiveTonemapOperator() const;
-    float effectiveExposureEv() const;
+    bool attachTonemapCompositor(Ogre::Viewport* vp);
 
     OgreWidget* m_widget = nullptr;
     Ogre::Viewport* m_viewport = nullptr;
@@ -50,8 +43,4 @@ private:
     QString m_tonemapMaterialName;
     bool m_skyBoxVisible = true;
     bool m_enabled = false;
-
-    bool m_tonemapOverride = false;
-    HdrTonemap::Operator m_localTonemapOperator = HdrTonemap::Operator::ACES;
-    float m_localExposureEv = 0.f;
 };

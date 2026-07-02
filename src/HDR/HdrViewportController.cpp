@@ -49,6 +49,7 @@ void HdrViewportController::registerWidget(OgreWidget* widget)
     auto it = m_pipelines.find(widget);
     if (it != m_pipelines.end()) {
         it->second->refresh();
+        syncAllSkyBoxesFromDefault();
         return;
     }
 
@@ -59,54 +60,6 @@ void HdrViewportController::registerWidget(OgreWidget* widget)
 void HdrViewportController::unregisterWidget(OgreWidget* widget)
 {
     m_pipelines.erase(widget);
-}
-
-void HdrViewportController::setSkyBoxVisible(OgreWidget* widget, bool visible)
-{
-    if (auto* pipe = pipelineFor(widget))
-        pipe->setSkyBoxVisible(visible);
-}
-
-bool HdrViewportController::tonemapOverride(const OgreWidget* widget) const
-{
-    if (!widget)
-        return false;
-    auto it = m_pipelines.find(const_cast<OgreWidget*>(widget));
-    return it == m_pipelines.end() ? false : it->second->tonemapOverride();
-}
-
-void HdrViewportController::setTonemapOverride(OgreWidget* widget, bool enabled)
-{
-    if (auto* pipe = pipelineFor(widget))
-        pipe->setTonemapOverride(enabled);
-}
-
-HdrTonemap::Operator HdrViewportController::tonemapOperator(const OgreWidget* widget) const
-{
-    if (!widget)
-        return HdrTonemap::Operator::ACES;
-    auto it = m_pipelines.find(const_cast<OgreWidget*>(widget));
-    return it == m_pipelines.end() ? HdrTonemap::Operator::ACES : it->second->tonemapOperator();
-}
-
-void HdrViewportController::setTonemapOperator(OgreWidget* widget, HdrTonemap::Operator op)
-{
-    if (auto* pipe = pipelineFor(widget))
-        pipe->setTonemapOperator(op);
-}
-
-float HdrViewportController::exposureEv(const OgreWidget* widget) const
-{
-    if (!widget)
-        return 0.f;
-    auto it = m_pipelines.find(const_cast<OgreWidget*>(widget));
-    return it == m_pipelines.end() ? 0.f : it->second->exposureEv();
-}
-
-void HdrViewportController::setExposureEv(OgreWidget* widget, float exposureEv)
-{
-    if (auto* pipe = pipelineFor(widget))
-        pipe->setExposureEv(exposureEv);
 }
 
 void HdrViewportController::setActiveWidget(OgreWidget* widget)
@@ -120,14 +73,20 @@ void HdrViewportController::tickViewport(OgreWidget* widget)
         pipe->updateTonemapUniforms();
 }
 
-bool HdrViewportController::skyBoxVisible(const OgreWidget* widget) const
+void HdrViewportController::syncAllSkyBoxesFromDefault()
 {
-    if (!widget)
-        return true;
-    auto it = m_pipelines.find(const_cast<OgreWidget*>(widget));
-    if (it == m_pipelines.end())
-        return HDREnvironmentManager::getSingleton()->defaultSkyBoxVisible();
-    return it->second->skyBoxVisible();
+    auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
+    const bool visible = hdrMgr ? hdrMgr->defaultSkyBoxVisible() : true;
+
+    if (auto* mgr = Manager::getSingletonPtr(); hdrMgr && mgr && mgr->getSceneMgr()
+        && hdrMgr->hasEnvironment()) {
+        mgr->getSceneMgr()->setSkyRenderingEnabled(visible);
+    }
+
+    for (auto& [widget, pipeline] : m_pipelines) {
+        Q_UNUSED(widget);
+        pipeline->setSkyBoxVisible(visible);
+    }
 }
 
 void HdrViewportController::tickActiveViewports()
@@ -148,20 +107,20 @@ void HdrViewportController::onEnvironmentChanged()
             hdrMgr->removeSkyBox(mgr->getSceneMgr());
     }
     refreshAll();
+    syncAllSkyBoxesFromDefault();
 }
 
 void HdrViewportController::onTonemapChanged()
 {
-    refreshAll();
+    for (auto& [widget, pipeline] : m_pipelines) {
+        Q_UNUSED(widget);
+        pipeline->updateTonemapUniforms();
+    }
 }
 
 void HdrViewportController::onSkyboxDefaultChanged()
 {
-    auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
-    if (auto* mgr = Manager::getSingletonPtr(); hdrMgr && mgr && mgr->getSceneMgr()
-        && hdrMgr->hasEnvironment()) {
-        mgr->getSceneMgr()->setSkyRenderingEnabled(hdrMgr->defaultSkyBoxVisible());
-    }
+    syncAllSkyBoxesFromDefault();
 }
 
 HdrViewportPipeline* HdrViewportController::pipelineFor(OgreWidget* widget) const

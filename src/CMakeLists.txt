@@ -129,7 +129,7 @@ HDR/HdrViewportPipeline.cpp
 HDR/HdrViewportController.cpp
 HDR/HdrMaterialScript.cpp
 HDR/HdrEnvironmentController.cpp
-HDR/HdrViewportOverlay.cpp
+HDR/HdrBundledLibrary.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp
@@ -327,7 +327,7 @@ HDR/HdrViewportPipeline.h
 HDR/HdrViewportController.h
 HDR/HdrMaterialScript.h
 HDR/HdrEnvironmentController.h
-HDR/HdrViewportOverlay.h
+HDR/HdrBundledLibrary.h
 )
 
 set(TEST_SOURCES "")

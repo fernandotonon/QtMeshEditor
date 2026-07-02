@@ -1,4 +1,5 @@
 #include "MaterialPresetLibrary.h"
+#include "HDR/HDREnvironmentManager.h"
 #include "Manager.h"
 #include "RTShaderHelper.h"
 #include "SelectionSet.h"
@@ -7,6 +8,7 @@
 #include "commands/TransformCommands.h"
 #include <Ogre.h>
 #include <OgreRTShaderSystem.h>
+#include <QHash>
 
 MaterialPresetLibrary* MaterialPresetLibrary::m_pSingleton = nullptr;
 
@@ -135,6 +137,64 @@ void applyPbrTemplate(Ogre::MaterialPtr& mat,
         Ogre::Any(Ogre::String(workflow.toStdString())));
 }
 
+struct HdrPresetConfig {
+    float amb[3];
+    float diff[3];
+    float spec[3];
+    float shininess;
+    float alpha;
+    float envIntensity;
+    float tint[3];
+    bool transparent;
+};
+
+void applyHdrPresetMaterial(Ogre::MaterialPtr& mat, const HdrPresetConfig& cfg)
+{
+    applyPbrTemplate(mat, MaterialPresetLibrary::kPbrWorkflowMetallic);
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+    pass->setAmbient(Ogre::ColourValue(cfg.amb[0], cfg.amb[1], cfg.amb[2]));
+    pass->setDiffuse(Ogre::ColourValue(cfg.diff[0], cfg.diff[1], cfg.diff[2], cfg.alpha));
+    pass->setSpecular(Ogre::ColourValue(cfg.spec[0], cfg.spec[1], cfg.spec[2]));
+    pass->setShininess(cfg.shininess);
+    pass->setLightingEnabled(true);
+    if (cfg.transparent) {
+        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        pass->setDepthWriteEnabled(false);
+    }
+    RTShaderHelper::setPbrEnvIntensity(pass, cfg.envIntensity);
+    RTShaderHelper::setPbrEnvTint(
+        pass, Ogre::ColourValue(cfg.tint[0], cfg.tint[1], cfg.tint[2]));
+}
+
+const HdrPresetConfig* hdrPresetConfigForName(const QString& name)
+{
+    static const QHash<QString, HdrPresetConfig> kConfigs = {
+        {QStringLiteral("Polished Metal (HDR)"),
+         {{0.18f, 0.18f, 0.18f}, {0.82f, 0.82f, 0.84f}, {1.f, 1.f, 1.f}, 90.f, 1.f, 1.35f,
+          {1.f, 1.f, 1.f}, false}},
+        {QStringLiteral("Brushed Metal (HDR)"),
+         {{0.15f, 0.15f, 0.15f}, {0.62f, 0.62f, 0.64f}, {0.55f, 0.55f, 0.55f}, 38.f, 1.f, 1.1f,
+          {1.f, 1.f, 1.f}, false}},
+        {QStringLiteral("Glass (HDR)"),
+         {{0.05f, 0.05f, 0.06f}, {0.72f, 0.84f, 0.92f}, {1.f, 1.f, 1.f}, 110.f, 0.32f, 1.5f,
+          {1.f, 1.f, 1.f}, true}},
+        {QStringLiteral("Plastic (HDR)"),
+         {{0.12f, 0.08f, 0.08f}, {0.82f, 0.18f, 0.16f}, {0.45f, 0.45f, 0.45f}, 32.f, 1.f, 1.0f,
+          {1.f, 1.f, 1.f}, false}},
+        {QStringLiteral("Painted Wood (HDR)"),
+         {{0.18f, 0.12f, 0.08f}, {0.58f, 0.36f, 0.2f}, {0.12f, 0.1f, 0.08f}, 8.f, 1.f, 0.9f,
+          {1.f, 0.96f, 0.9f}, false}},
+        {QStringLiteral("Skin (HDR-friendly)"),
+         {{0.22f, 0.16f, 0.14f}, {0.86f, 0.62f, 0.5f}, {0.18f, 0.14f, 0.12f}, 12.f, 1.f, 0.85f,
+          {1.f, 0.95f, 0.9f}, false}},
+        {QStringLiteral("Car Paint (HDR)"),
+         {{0.08f, 0.04f, 0.12f}, {0.18f, 0.08f, 0.55f}, {0.9f, 0.9f, 0.95f}, 98.f, 1.f, 1.45f,
+          {0.95f, 0.98f, 1.f}, false}},
+    };
+    const auto it = kConfigs.constFind(name);
+    return it == kConfigs.constEnd() ? nullptr : &(*it);
+}
+
 } // namespace
 
 QStringList MaterialPresetLibrary::presetNames() const
@@ -144,15 +204,27 @@ QStringList MaterialPresetLibrary::presetNames() const
             "Wood (Oak)", "Wood (Birch)",
             "Glass (Clear)", "Glass (Tinted)",
             "Unlit (White)", "Wireframe",
-            "Metallic-Roughness", "Specular-Glossiness", "Unlit PBR"};
+            "Metallic-Roughness", "Specular-Glossiness", "Unlit PBR",
+            "Polished Metal (HDR)", "Brushed Metal (HDR)", "Glass (HDR)",
+            "Plastic (HDR)", "Painted Wood (HDR)", "Skin (HDR-friendly)",
+            "Car Paint (HDR)"};
 }
 
 void MaterialPresetLibrary::applyPreset(const QString& name)
 {
     auto* sel = SelectionSet::getSingleton();
 
-    SentryReporter::addBreadcrumb("ui.action",
-        QString("Apply material preset: %1").arg(name));
+    const bool isHdrPreset = name.contains(QStringLiteral("(HDR)"));
+    if (isHdrPreset) {
+        SentryReporter::addBreadcrumb(QStringLiteral("render.hdr.preset"), name);
+        if (auto* hdrMgr = HDREnvironmentManager::getSingletonPtr()) {
+            if (!hdrMgr->hasEnvironment())
+                hdrMgr->loadEnvironment(QStringLiteral("studio_neutral.hdr"));
+        }
+    } else {
+        SentryReporter::addBreadcrumb("ui.action",
+            QString("Apply material preset: %1").arg(name));
+    }
 
     auto* mgr = Ogre::MaterialManager::getSingletonPtr();
     if (!mgr) return;
@@ -177,6 +249,8 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
             applyPbrTemplate(mat, kPbrWorkflowSpecular);
         } else if (name == "Unlit PBR") {
             applyPbrTemplate(mat, kPbrWorkflowUnlit);
+        } else if (const HdrPresetConfig* hdrCfg = hdrPresetConfigForName(name)) {
+            applyHdrPresetMaterial(mat, *hdrCfg);
         } else if (name.startsWith("Plastic")) {
             Ogre::ColourValue c(0.8f, 0.2f, 0.2f);
             if (name.contains("Blue"))  c = Ogre::ColourValue(0.2f, 0.3f, 0.9f);

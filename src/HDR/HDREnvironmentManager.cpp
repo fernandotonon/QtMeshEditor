@@ -1,5 +1,7 @@
 #include "HDR/HDREnvironmentManager.h"
 
+#include "HDR/HdrBundledLibrary.h"
+
 #include "HDR/HdrEquirectLoader.h"
 #include "HDR/HdrPrecomputeWorker.h"
 #include "RTShaderHelper.h"
@@ -112,38 +114,7 @@ void HDREnvironmentManager::shutdownWorkerThread()
 
 QString HDREnvironmentManager::resolvePath(const QString& pathOrBundledName) const
 {
-    QFileInfo info(pathOrBundledName);
-    if (info.isAbsolute())
-        return info.exists() ? info.absoluteFilePath() : QString{};
-
-    if (info.exists())
-        return info.absoluteFilePath();
-
-    const QString fileName = info.fileName();
-    QStringList candidates;
-    const QString appDir = QCoreApplication::applicationDirPath();
-    candidates << appDir + QStringLiteral("/media/hdri/") + fileName
-               << appDir + QStringLiteral("/../media/hdri/") + fileName;
-
-#ifdef Q_OS_MACOS
-    candidates << appDir + QStringLiteral("/../../media/hdri/") + fileName
-               << appDir + QStringLiteral("/../../../media/hdri/") + fileName;
-#endif
-
-#ifdef QTMESH_UT_SOURCE_ROOT
-    candidates << QDir(QString::fromUtf8(QTMESH_UT_SOURCE_ROOT))
-                        .filePath(QStringLiteral("media/hdri/") + fileName);
-#endif
-
-    for (const QString& candidate : candidates) {
-        const QFileInfo candidateInfo(candidate);
-        if (!candidateInfo.exists() || !candidateInfo.isFile())
-            continue;
-        const QString canon = candidateInfo.canonicalFilePath();
-        if (!canon.isEmpty())
-            return canon;
-    }
-    return {};
+    return HdrBundledLibrary::resolveHdriPath(pathOrBundledName);
 }
 
 bool HDREnvironmentManager::createOgreCubemap(const QString& cacheKey,
@@ -477,23 +448,16 @@ void HDREnvironmentManager::setWhitePoint(float whitePoint)
 QStringList HDREnvironmentManager::listBundledEnvironments()
 {
     QStringList names;
-    const QStringList searchRoots = [] {
-        QStringList roots;
-        const QString appDir = QCoreApplication::applicationDirPath();
-        roots << appDir + QStringLiteral("/media/hdri")
-              << appDir + QStringLiteral("/../media/hdri");
-#ifdef Q_OS_MACOS
-        roots << appDir + QStringLiteral("/../../media/hdri")
-              << appDir + QStringLiteral("/../../../media/hdri");
-#endif
-#ifdef QTMESH_UT_SOURCE_ROOT
-        roots << QDir(QString::fromUtf8(QTMESH_UT_SOURCE_ROOT)).filePath(QStringLiteral("media/hdri"));
-#endif
-        return roots;
-    }();
-
     QSet<QString> seen;
-    for (const QString& root : searchRoots) {
+
+    for (const QString& catalogName : HdrBundledLibrary::catalogFileNames()) {
+        if (HdrBundledLibrary::resolveHdriPath(catalogName).isEmpty())
+            continue;
+        names.append(catalogName);
+        seen.insert(catalogName);
+    }
+
+    for (const QString& root : HdrBundledLibrary::hdriSearchRoots()) {
         QDir dir(root);
         if (!dir.exists())
             continue;
@@ -509,7 +473,6 @@ QStringList HDREnvironmentManager::listBundledEnvironments()
             names.append(fileName);
         }
     }
-    names.sort(Qt::CaseInsensitive);
     return names;
 }
 
@@ -552,7 +515,11 @@ void HDREnvironmentManager::updateSkyBoxMaterial()
     if (!mat->isLoaded())
         mat->load();
 
-    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+    Ogre::Technique* tech = mat->getTechnique(0);
+    if (tech->getSchemeName() != Ogre::MSN_SHADERGEN)
+        tech->setSchemeName(Ogre::MSN_SHADERGEN);
+
+    Ogre::Pass* pass = tech->getPass(0);
     pass->setLightingEnabled(false);
     pass->setDepthWriteEnabled(false);
     pass->setCullingMode(Ogre::CULL_NONE);

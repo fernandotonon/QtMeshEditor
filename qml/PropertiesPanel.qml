@@ -664,15 +664,15 @@ Rectangle {
                 Component.onCompleted: content = animControlComponent
             }
 
-            // ---- LOD Generation ----
+            // ---- Environment (HDR / IBL, Object mode) ----
             CollapsibleSection {
-                title: "LOD Generation"
+                title: "Environment"
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ObjectMode,
-                    MeshLodController.hasSelection)
-                expanded: true
+                    true)
+                expanded: false
 
-                Component.onCompleted: content = lodComponent
+                Component.onCompleted: content = hdrEnvironmentComponent
             }
 
             // ---- Decimate (single-pass) ----
@@ -686,15 +686,15 @@ Rectangle {
                 Component.onCompleted: content = decimateComponent
             }
 
-            // ---- Environment (HDR / IBL, Material mode) ----
+            // ---- LOD Generation ----
             CollapsibleSection {
-                title: "Environment"
+                title: "LOD Generation"
                 sectionVisible: root.modeToolSectionVisible(
-                    EditorModeController.MaterialMode,
-                    true)
+                    EditorModeController.ObjectMode,
+                    MeshLodController.hasSelection)
                 expanded: true
 
-                Component.onCompleted: content = hdrEnvironmentComponent
+                Component.onCompleted: content = lodComponent
             }
 
             // ---- Material Editor (Material mode) ----
@@ -4242,7 +4242,7 @@ Rectangle {
         }
     }
 
-    // ---- HDR / IBL Environment (Material mode, Slice E #471) ----
+    // ---- HDR / IBL Environment (Object mode, Slice E #471) ----
     Component {
         id: hdrEnvironmentComponent
 
@@ -4251,8 +4251,6 @@ Rectangle {
             width: parent ? parent.width : 200
             padding: 8
             spacing: 8
-
-            property bool viewportOverridesExpanded: false
 
             function choiceIndexForCurrent() {
                 const idx = HdrEnvironmentController.currentChoiceIndex
@@ -4343,16 +4341,60 @@ Rectangle {
             }
 
             // Skybox + background blur
-            CheckBox {
+            Row {
+                spacing: 6
                 width: parent.width - 16
-                text: "Show skybox"
-                enabled: HdrEnvironmentController.hasEnvironment
-                checked: HdrEnvironmentController.defaultSkyBoxVisible
-                onToggled: HdrEnvironmentController.defaultSkyBoxVisible = checked
-                Connections {
-                    target: HdrEnvironmentController
-                    function onSkyboxChanged() {
-                        checked = HdrEnvironmentController.defaultSkyBoxVisible
+                Rectangle {
+                    id: hdrSkyboxChk
+                    width: 14; height: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    border.color: hdrSkyboxChk.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    border.width: hdrSkyboxChk.activeFocus ? 2 : 1
+                    radius: 2
+                    color: HdrEnvironmentController.defaultSkyBoxVisible
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    opacity: HdrEnvironmentController.hasEnvironment ? 1.0 : 0.4
+                    activeFocusOnTab: HdrEnvironmentController.hasEnvironment
+                    Accessible.role: Accessible.CheckBox
+                    Accessible.name: "Show skybox"
+                    Accessible.checkable: true
+                    Accessible.checked: HdrEnvironmentController.defaultSkyBoxVisible
+                    Keys.onSpacePressed: if (HdrEnvironmentController.hasEnvironment)
+                        HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                    Keys.onReturnPressed: if (HdrEnvironmentController.hasEnvironment)
+                        HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                    Text {
+                        anchors.centerIn: parent
+                        text: HdrEnvironmentController.defaultSkyBoxVisible ? "✓" : ""
+                        color: "white"; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: HdrEnvironmentController.hasEnvironment
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: {
+                            HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                            hdrSkyboxChk.forceActiveFocus()
+                        }
+                    }
+                }
+                Text {
+                    text: "Show skybox"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    opacity: HdrEnvironmentController.hasEnvironment ? 1.0 : 0.45
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: HdrEnvironmentController.hasEnvironment
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: {
+                            HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                            hdrSkyboxChk.forceActiveFocus()
+                        }
                     }
                 }
             }
@@ -4390,139 +4432,6 @@ Rectangle {
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-
-            // Per-viewport overrides (collapsed by default)
-            Rectangle {
-                width: parent.width - 16
-                height: 22
-                radius: 2
-                color: vpOverrideHeaderMa.containsMouse
-                    ? Qt.lighter(PropertiesPanelController.headerColor, 1.08)
-                    : "transparent"
-                Row {
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 4
-                    Text {
-                        text: hdrEnvCol.viewportOverridesExpanded ? "\u25BC" : "\u25B6"
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 9
-                    }
-                    Text {
-                        text: "Per-viewport overrides"
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 11
-                        font.bold: true
-                    }
-                }
-                MouseArea {
-                    id: vpOverrideHeaderMa
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    activeFocusOnTab: true
-                    onClicked: hdrEnvCol.viewportOverridesExpanded = !hdrEnvCol.viewportOverridesExpanded
-                    Keys.onReturnPressed: hdrEnvCol.viewportOverridesExpanded = !hdrEnvCol.viewportOverridesExpanded
-                    Keys.onSpacePressed: hdrEnvCol.viewportOverridesExpanded = !hdrEnvCol.viewportOverridesExpanded
-                }
-            }
-
-            Column {
-                width: parent.width - 16
-                spacing: 6
-                visible: hdrEnvCol.viewportOverridesExpanded
-                leftPadding: 8
-
-                CheckBox {
-                    text: "Viewport skybox"
-                    enabled: HdrEnvironmentController.hasEnvironment
-                    checked: HdrEnvironmentController.activeSkyBoxVisible
-                    onToggled: HdrEnvironmentController.activeSkyBoxVisible = checked
-                    Connections {
-                        target: HdrEnvironmentController
-                        function onViewportOverridesChanged() {
-                            checked = HdrEnvironmentController.activeSkyBoxVisible
-                        }
-                    }
-                }
-
-                CheckBox {
-                    text: "Tonemap override"
-                    enabled: HdrEnvironmentController.hasEnvironment
-                    checked: HdrEnvironmentController.activeTonemapOverride
-                    onToggled: HdrEnvironmentController.activeTonemapOverride = checked
-                    Connections {
-                        target: HdrEnvironmentController
-                        function onViewportOverridesChanged() {
-                            checked = HdrEnvironmentController.activeTonemapOverride
-                        }
-                    }
-                }
-
-                Row {
-                    spacing: 6
-                    width: parent.width - 24
-                    visible: HdrEnvironmentController.activeTonemapOverride
-
-                    Text {
-                        text: "Tonemap"
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 10
-                        width: 52
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    ThemedComboBox {
-                        id: vpTonemapCombo
-                        width: parent.width - 52 - 6
-                        height: 22
-                        font.pixelSize: 10
-                        model: ["Reinhard", "ACES", "AgX"]
-                        currentIndex: HdrEnvironmentController.activeTonemapOperator
-                        onActivated: HdrEnvironmentController.activeTonemapOperator = currentIndex
-                        Connections {
-                            target: HdrEnvironmentController
-                            function onViewportOverridesChanged() {
-                                vpTonemapCombo.currentIndex = HdrEnvironmentController.activeTonemapOperator
-                            }
-                        }
-                    }
-                }
-
-                Row {
-                    spacing: 6
-                    width: parent.width - 24
-                    visible: HdrEnvironmentController.activeTonemapOverride
-
-                    Text {
-                        text: "Exposure"
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 10
-                        width: 52
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    Slider {
-                        id: vpExposureSlider
-                        width: parent.width - 52 - evLabel.implicitWidth - 12
-                        from: -4
-                        to: 4
-                        stepSize: 0.1
-                        value: HdrEnvironmentController.activeExposureEv
-                        onMoved: HdrEnvironmentController.activeExposureEv = value
-                        Connections {
-                            target: HdrEnvironmentController
-                            function onViewportOverridesChanged() {
-                                vpExposureSlider.value = HdrEnvironmentController.activeExposureEv
-                            }
-                        }
-                    }
-                    Text {
-                        id: evLabel
-                        text: vpExposureSlider.value.toFixed(1) + " EV"
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 10
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
                 }
             }
         }
@@ -5421,9 +5330,17 @@ Rectangle {
                 // real PBR shading via the pbr_workflow Pass user-binding.
                 { name: "Metallic-Roughness",  label: "M-R",   cat: "PBR",     diff: "#bbbbbb", spec: "#888888", shin: 40,  alpha: 1.0,  wire: false, unlit: false },
                 { name: "Specular-Glossiness", label: "S-G",   cat: "PBR",     diff: "#bbbbbb", spec: "#dddddd", shin: 60,  alpha: 1.0,  wire: false, unlit: false },
-                { name: "Unlit PBR",           label: "Unlit",  cat: "PBR",    diff: "#dddddd", spec: "#dddddd", shin: 0,   alpha: 1.0,  wire: false, unlit: true  }
+                { name: "Unlit PBR",           label: "Unlit",  cat: "PBR",    diff: "#dddddd", spec: "#dddddd", shin: 0,   alpha: 1.0,  wire: false, unlit: true  },
+                // HDR presets (Slice F #472) — pair with studio_neutral by default.
+                { name: "Polished Metal (HDR)", label: "Polish", cat: "HDR",   diff: "#d0d0d6", spec: "#ffffff", shin: 90,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Brushed Metal (HDR)",  label: "Brush",  cat: "HDR",   diff: "#9e9ea4", spec: "#8c8c90", shin: 38,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Glass (HDR)",          label: "Glass",  cat: "HDR",   diff: "#b8d4eb", spec: "#ffffff", shin: 110, alpha: 0.32, wire: false, unlit: false },
+                { name: "Plastic (HDR)",        label: "Red",    cat: "HDR",   diff: "#d12e28", spec: "#737373", shin: 32,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Painted Wood (HDR)",   label: "Wood",   cat: "HDR",   diff: "#945c33", spec: "#1f1a14", shin: 8,   alpha: 1.0,  wire: false, unlit: false },
+                { name: "Skin (HDR-friendly)",  label: "Skin",   cat: "HDR",   diff: "#db9e80", spec: "#2e241e", shin: 12,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Car Paint (HDR)",      label: "Paint",  cat: "HDR",   diff: "#2e148c", spec: "#e6e6f2", shin: 98,  alpha: 1.0,  wire: false, unlit: false }
             ]
-            property var categories: ["Plastic", "Metal", "Wood", "Glass", "Other", "PBR"]
+            property var categories: ["Plastic", "Metal", "Wood", "Glass", "Other", "PBR", "HDR"]
             property string lastApplied: ""
 
             // Draw one category group

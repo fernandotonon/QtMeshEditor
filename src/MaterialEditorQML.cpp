@@ -352,8 +352,8 @@ bool MaterialEditorQML::applyMaterial()
     SentryReporter::addBreadcrumb("ui.material", "Apply material");
     // Safety check for Ogre availability
     if (!isOgreAvailable()) {
-        // Just validate the script and emit success if Ogre is not available
-        if (!validateMaterialScript(m_materialText)) {
+        const QString scriptForOgre = HdrMaterialScript::stripEnvironmentLines(m_materialText);
+        if (!validateMaterialScript(scriptForOgre)) {
             return false;
         }
         emit materialApplied();
@@ -371,7 +371,7 @@ bool MaterialEditorQML::applyMaterial()
             (void*)script.c_str(), script.length() * sizeof(char));
         Ogre::DataStreamPtr dataStream(memoryStream);
 
-        if (!validateMaterialScript(m_materialText)) {
+        if (!validateMaterialScript(scriptForOgre)) {
             return false;
         }
 

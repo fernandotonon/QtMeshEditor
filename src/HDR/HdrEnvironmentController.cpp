@@ -5,13 +5,10 @@
 #include "SentryReporter.h"
 
 #include <algorithm>
-#include <QApplication>
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QQmlEngine>
 #include <QSettings>
 #include <QSet>
-#include <QWidget>
 
 namespace {
 constexpr QLatin1String kRecentPathsKey("HdrEnvironment/recentPaths");
@@ -56,7 +53,6 @@ void HdrEnvironmentController::connectManagerSignals()
     connect(hdrMgr, &HDREnvironmentManager::environmentChanged, this, [this]() {
         rebuildEnvironmentChoices();
         emit environmentChanged();
-        emit overlayVisibleChanged();
     });
     connect(hdrMgr, &HDREnvironmentManager::iblPrecomputeCompleted, this, [this]() {
         emit iblReadyChanged();
@@ -64,7 +60,6 @@ void HdrEnvironmentController::connectManagerSignals()
     connect(hdrMgr, &HDREnvironmentManager::tonemapChanged, this, &HdrEnvironmentController::tonemapChanged);
     connect(hdrMgr, &HDREnvironmentManager::skyboxDefaultChanged, this, [this]() {
         emit skyboxChanged();
-        emit viewportOverridesChanged();
     });
     connect(hdrMgr, &HDREnvironmentManager::backgroundBlurChanged, this, &HdrEnvironmentController::backgroundBlurChanged);
 }
@@ -298,96 +293,6 @@ OgreWidget* HdrEnvironmentController::activeWidget() const
     return nullptr;
 }
 
-bool HdrEnvironmentController::activeSkyBoxVisible() const
-{
-    if (auto* widget = activeWidget()) {
-        if (auto* ctrl = HdrViewportController::getSingletonPtr())
-            return ctrl->skyBoxVisible(widget);
-    }
-    return defaultSkyBoxVisible();
-}
-
-void HdrEnvironmentController::setActiveSkyBoxVisible(bool visible)
-{
-    if (auto* widget = activeWidget()) {
-        if (auto* ctrl = HdrViewportController::getSingletonPtr()) {
-            ctrl->setSkyBoxVisible(widget, visible);
-            SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                           QStringLiteral("hdr.viewportSkybox=%1").arg(visible));
-            emit viewportOverridesChanged();
-        }
-    }
-}
-
-bool HdrEnvironmentController::activeTonemapOverride() const
-{
-    if (auto* widget = activeWidget()) {
-        if (auto* ctrl = HdrViewportController::getSingletonPtr())
-            return ctrl->tonemapOverride(widget);
-    }
-    return false;
-}
-
-void HdrEnvironmentController::setActiveTonemapOverride(bool enabled)
-{
-    if (auto* widget = activeWidget()) {
-        if (auto* ctrl = HdrViewportController::getSingletonPtr()) {
-            ctrl->setTonemapOverride(widget, enabled);
-            SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                           QStringLiteral("hdr.viewportTonemapOverride=%1")
-                                               .arg(enabled));
-            emit viewportOverridesChanged();
-        }
-    }
-}
-
-int HdrEnvironmentController::activeTonemapOperator() const
-{
-    if (auto* widget = activeWidget()) {
-        if (auto* ctrl = HdrViewportController::getSingletonPtr())
-            return static_cast<int>(ctrl->tonemapOperator(widget));
-    }
-    return tonemapOperator();
-}
-
-void HdrEnvironmentController::setActiveTonemapOperator(int op)
-{
-    if (auto* widget = activeWidget()) {
-        if (auto* ctrl = HdrViewportController::getSingletonPtr()) {
-            ctrl->setTonemapOperator(widget, static_cast<HdrTonemap::Operator>(std::clamp(op, 0, 2)));
-            SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                           QStringLiteral("hdr.viewportTonemapOperator=%1").arg(op));
-            emit viewportOverridesChanged();
-        }
-    }
-}
-
-float HdrEnvironmentController::activeExposureEv() const
-{
-    if (auto* widget = activeWidget()) {
-        if (auto* ctrl = HdrViewportController::getSingletonPtr())
-            return ctrl->exposureEv(widget);
-    }
-    return exposureEv();
-}
-
-void HdrEnvironmentController::setActiveExposureEv(float value)
-{
-    if (auto* widget = activeWidget()) {
-        if (auto* ctrl = HdrViewportController::getSingletonPtr()) {
-            ctrl->setExposureEv(widget, value);
-            SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                           QStringLiteral("hdr.viewportExposureEv=%1").arg(value));
-            emit viewportOverridesChanged();
-        }
-    }
-}
-
-bool HdrEnvironmentController::overlayVisible() const
-{
-    return hasEnvironment();
-}
-
 bool HdrEnvironmentController::loadEnvironment(const QString& pathOrBundledName)
 {
     auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
@@ -428,38 +333,9 @@ QString HdrEnvironmentController::browseStartDirectory() const
 
 void HdrEnvironmentController::browseForEnvironment()
 {
-    // Match VATBakerController::chooseOutputDir / MaterialEditorQML file
-    // pickers: raise the active window and parent the dialog to it. Parenting
-    // to MainWindow from a deferred slot centers a window-modal Qt dialog on
-    // the main frame and drags the whole app when moved.
-    QApplication::processEvents();
-    QWidget* parent = QApplication::activeWindow();
-    if (parent) {
-        parent->raise();
-        parent->activateWindow();
-    }
-    QApplication::processEvents();
-
-    QFileDialog::Options options = QFileDialog::DontUseCustomDirectoryIcons;
-#ifdef Q_OS_MACOS
-    // Native pickers hosted from QQuickWidget have been observed to no-op on macOS.
-    options |= QFileDialog::DontUseNativeDialog;
-#endif
-
-    const QString path = QFileDialog::getOpenFileName(
-        parent,
-        tr("Select HDR Environment"),
-        browseStartDirectory(),
-        tr("HDR Images (*.hdr *.exr);;All Files (*)"),
-        nullptr,
-        options);
-
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                  path.isEmpty()
-                                      ? QStringLiteral("hdr.browseCancelled")
-                                      : QStringLiteral("hdr.browseAccepted=%1")
-                                            .arg(QFileInfo(path).fileName()));
-    completeBrowseFromDialog(path);
+    // MainWindow opens the dialog with `this` as parent — synchronous
+    // QFileDialog from QML/QQuickWidget re-enters the event loop and freezes the viewport.
+    emit browseRequested();
 }
 
 QString HdrEnvironmentController::browseEnvironment()
@@ -488,8 +364,6 @@ void HdrEnvironmentController::setActiveWidget(OgreWidget* widget)
     m_activeWidget = widget;
     if (auto* ctrl = HdrViewportController::getSingletonPtr())
         ctrl->setActiveWidget(widget);
-    emit viewportOverridesChanged();
-    emit overlayVisibleChanged();
 }
 
 QString HdrEnvironmentController::tonemapOperatorName(int op) const

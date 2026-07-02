@@ -124,6 +124,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrViewportController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrMaterialScript.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrEnvironmentController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrBundledLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MorphAnimationManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MorphCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NodeAnimationManager.cpp
