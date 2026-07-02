@@ -200,6 +200,9 @@ public:
     /// UV channels without mutating. Issue #400.
     static int cmdUv(int argc, char* argv[]);
 
+    /// Slice F (#472): list bundled HDRIs and download optional CC0 packs.
+    static int cmdHdri(int argc, char* argv[]);
+
     /// Quad retopology via triangle pairing. Walks every interior edge
     /// whose two adjacent faces are triangles and scores the merge by
     /// coplanarity + quad shape + aspect ratio; takes the best pairs

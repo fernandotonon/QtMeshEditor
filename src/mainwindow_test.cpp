@@ -66,6 +66,7 @@ protected:
         QCoreApplication::setOrganizationName("QtMeshEditorTests");
         QCoreApplication::setApplicationName("MainWindowTest");
         QSettings().clear();
+        QSettings().setValue(QStringLiteral("HdrEnvironment/defaultsAppliedV1"), true);
 
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
