@@ -57,6 +57,10 @@ struct Options {
     // Points per sampler call (bounds the query buffer; same idea as
     // MeshGenPredictor::Options::chunkPoints).
     int chunkPoints = 262144;
+    // Optional per-chunk progress: (texelsDone, texelsTotal); return false to
+    // CANCEL (bake returns cancelled, no partial data). The baker knows the
+    // true texel total, which the sampler owner doesn't.
+    std::function<bool(int done, int total)> progress;
 };
 
 // Unwrap + bake. `positions`/`indices` describe the input triangle mesh

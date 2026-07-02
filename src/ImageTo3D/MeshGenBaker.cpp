@@ -170,7 +170,10 @@ Result bake(const std::vector<float>& positions,
     for (size_t start = 0; start < total; start += chunk) {
         const size_t n = std::min(chunk, total - start);
         rgb.resize(n * 3);
-        if (!sampler(queryPts.data() + start * 3, n, rgb.data())) {
+        if (!sampler(queryPts.data() + start * 3, n, rgb.data())
+            || (opts.progress
+                && !opts.progress(static_cast<int>(start + n),
+                                  static_cast<int>(total)))) {
             // Honour the "no partial data on failure" contract; typed cancel
             // flag so callers don't have to string-match the error.
             r = Result{};

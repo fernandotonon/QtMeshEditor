@@ -1498,9 +1498,17 @@ Rectangle {
         id: meshGenToolsComponent
 
         Column {
+            id: mgRoot
             width: parent ? parent.width : 200
             padding: 8
             spacing: 6
+
+            // Per-step progress state (see the step list below). `mgSteps` is
+            // built from the enabled checkboxes when Generate is clicked, so
+            // the list mirrors exactly the stages that will run.
+            property var mgSteps: []
+            property int mgActiveIdx: -1
+            property real mgActiveProgress: -1   // 0..1; < 0 → indeterminate
 
             // A small local button factory (raw QML — the Themed* wrappers blank
             // this dynamically-loaded panel, so we style raw controls with the
@@ -1783,30 +1791,110 @@ Rectangle {
             }
 
             // Step 2: generate from the selected image. Disabled until one is
-            // picked (or while busy).
+            // picked (or while busy). Builds the per-step progress list from
+            // the enabled stages before kicking off.
             InspectorButton {
                 text: "Generate 3D"
                 clickEnabled: !MeshGenController.busy
                     && MeshGenController.selectedImagePath.length > 0
-                onClicked: MeshGenController.generateSelected(
-                    mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex,
-                    {
-                        "smooth": mgSmooth.checked,
-                        "refine": mgRefine.checked,
-                        "bake_texture": mgBake.checked,
-                        "generate_pbr": mgPbr.checked,
-                        "upscale_texture": mgUpscale.checked
-                    })
+                onClicked: {
+                    var steps = [{ key: "prep", label: "Prepare models" }]
+                    if (mgRemoveBg.checked)
+                        steps.push({ key: "background", label: "Remove background" })
+                    steps.push({ key: "encode", label: "Encode image" })
+                    steps.push({ key: "decode", label: "Reconstruct 3D" })
+                    if (mgRefine.checked)
+                        steps.push({ key: "refine", label: "Refine surface" })
+                    if (mgBake.checked)
+                        steps.push({ key: "bake", label: "Bake texture" })
+                    else
+                        steps.push({ key: "color", label: "Vertex colors" })
+                    if (mgUpscale.checked && mgBake.checked)
+                        steps.push({ key: "upscale", label: "Upscale texture 2×" })
+                    steps.push({ key: "build",
+                                 label: (mgPbr.checked && mgBake.checked)
+                                        ? "Build mesh + PBR maps" : "Build mesh" })
+                    mgRoot.mgSteps = steps
+                    mgRoot.mgActiveIdx = 0
+                    mgRoot.mgActiveProgress = -1
+
+                    MeshGenController.generateSelected(
+                        mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex,
+                        {
+                            "smooth": mgSmooth.checked,
+                            "refine": mgRefine.checked,
+                            "bake_texture": mgBake.checked,
+                            "generate_pbr": mgPbr.checked,
+                            "upscale_texture": mgUpscale.checked
+                        })
+                }
             }
 
-            // Progress bar (only while busy)
-            ProgressBar {
-                id: mgProgress
+            // Per-step progress list (only while busy): every selected stage
+            // gets its own row — ✓ when done, a live bar while active, dimmed
+            // while pending — so it's always clear WHICH phase is running.
+            Column {
                 width: parent.width - 16
-                visible: MeshGenController.busy
-                from: 0; to: 1
-                indeterminate: value <= 0
-                value: 0
+                spacing: 3
+                visible: MeshGenController.busy && mgRoot.mgSteps.length > 0
+
+                Repeater {
+                    model: mgRoot.mgSteps
+
+                    delegate: Item {
+                        required property var modelData
+                        required property int index
+                        readonly property bool stepDone: index < mgRoot.mgActiveIdx
+                        readonly property bool stepActive: index === mgRoot.mgActiveIdx
+                        width: parent ? parent.width : 200
+                        height: 18
+
+                        Text {
+                            id: stepLabel
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: (stepDone ? "✓ " : "• ") + modelData.label
+                            color: PropertiesPanelController.textColor
+                            opacity: stepDone ? 0.9 : (stepActive ? 1.0 : 0.4)
+                            font.pixelSize: 10
+                            font.bold: stepActive
+                        }
+
+                        // Mini per-step bar: full when done, live fraction while
+                        // active (pulsing when the stage can't report a total).
+                        Rectangle {
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 70
+                            height: 5
+                            radius: 2
+                            color: PropertiesPanelController.inputColor
+                            border.color: PropertiesPanelController.borderColor
+                            border.width: 1
+                            Rectangle {
+                                id: stepFill
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                radius: 2
+                                color: PropertiesPanelController.highlightColor
+                                width: stepDone ? parent.width
+                                     : stepActive
+                                       ? (mgRoot.mgActiveProgress >= 0
+                                          ? Math.max(3, parent.width * mgRoot.mgActiveProgress)
+                                          : parent.width)
+                                       : 0
+                                opacity: stepActive && mgRoot.mgActiveProgress < 0 ? 0.35 : 1.0
+                                SequentialAnimation on opacity {
+                                    running: stepActive && mgRoot.mgActiveProgress < 0
+                                    loops: Animation.Infinite
+                                    NumberAnimation { from: 0.2; to: 0.6; duration: 600 }
+                                    NumberAnimation { from: 0.6; to: 0.2; duration: 600 }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             Text {
@@ -1829,14 +1917,23 @@ Rectangle {
             Connections {
                 target: MeshGenController
                 function onProgress(stage, done, total) {
-                    if (total > 0 && done >= 0) {
-                        mgProgress.indeterminate = (stage === "prep" || stage === "background")
-                        mgProgress.value = total > 0 ? (done / total) : 0
+                    // Advance the step list. Stages not in the list (e.g. the
+                    // vertex-colour fallback after a failed bake) are ignored.
+                    var idx = -1
+                    for (var i = 0; i < mgRoot.mgSteps.length; i++)
+                        if (mgRoot.mgSteps[i].key === stage) { idx = i; break }
+                    if (idx < 0)
+                        return
+                    if (idx > mgRoot.mgActiveIdx) {
+                        mgRoot.mgActiveIdx = idx
+                        mgRoot.mgActiveProgress = -1
                     }
+                    if (idx === mgRoot.mgActiveIdx)
+                        mgRoot.mgActiveProgress = total > 0 ? done / total : -1
                 }
                 function onStatusMessage(msg) { mgStatus.text = msg }
                 function onCompleted(result) {
-                    mgProgress.value = 1
+                    mgRoot.mgActiveIdx = mgRoot.mgSteps.length   // all ✓
                     mgStatus.text = "Done: " + result.vertexCount + " verts, "
                         + result.triangleCount + " tris"
                 }

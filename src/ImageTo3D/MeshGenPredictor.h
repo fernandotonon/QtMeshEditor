@@ -122,10 +122,21 @@ public:
     // Honours QTMESH_TRIPOSR_NO_DOWNLOAD + the base-URL override.
     static QString ensureModelBlocking(Quality q = Quality::Fp32);
 
-    // Progress/cancel callback for the (long) grid query. Invoked per decoder
-    // chunk with (pointsDone, pointsTotal); return false to CANCEL (predict then
-    // returns ok=false, error="cancelled").
-    using ProgressFn = std::function<bool(int pointsDone, int pointsTotal)>;
+    // Pipeline stage identifiers for the progress callback — one per
+    // user-visible step of predict() (the GUI shows a per-step progress list).
+    enum class Stage {
+        Encode,   // TripoSR encoder run (single blocking call: 0/1 → 1/1)
+        Decode,   // res³ grid decode (per-chunk; the long one)
+        Refine,   // iso-surface reprojection probes (per-chunk)
+        Bake,     // texture bake colour queries (per-chunk, baker-reported)
+        Color,    // per-vertex colour fallback pass (per-chunk)
+    };
+
+    // Progress/cancel callback. Invoked per unit of work with
+    // (stage, done, total); return false to CANCEL (predict then returns
+    // ok=false, error="cancelled"). May also be invoked with total <= 0 as a
+    // pure CANCELLATION CHECK — treat that as "no bar update".
+    using ProgressFn = std::function<bool(Stage stage, int done, int total)>;
 
     // Run TripoSR against the two .onnx files. `image` is the input photo (any
     // format; converted to RGB and resized to the encoder's 512² internally).

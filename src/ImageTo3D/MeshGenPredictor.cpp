@@ -259,7 +259,13 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         auto encOutName = encoder.GetOutputNameAllocated(0, alloc);
         const char* encIn[]  = { encInName.get() };
         const char* encOut[] = { encOutName.get() };
+        // The encoder is one blocking Run (not cancellable mid-flight) — report
+        // the stage boundary so the GUI's step list can mark it active/done.
+        if (progress && !progress(Stage::Encode, 0, 1))
+            return fail(QStringLiteral("cancelled"));
         auto encRes = encoder.Run(Ort::RunOptions{nullptr}, encIn, &imgTensor, 1, encOut, 1);
+        if (progress && !progress(Stage::Encode, 1, 1))
+            return fail(QStringLiteral("cancelled"));
 
         // scene_codes tensor: keep its data + shape to re-feed the decoder.
         auto scInfo = encRes[0].GetTensorTypeAndShapeInfo();
@@ -327,7 +333,7 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
             for (size_t i = 0; i < n; ++i)
                 densityField[start + i] = dens[i];   // density[1,n,1] contiguous
 
-            if (progress && !progress(static_cast<int>(start + n),
+            if (progress && !progress(Stage::Decode, static_cast<int>(start + n),
                                       static_cast<int>(totalPts)))
                 return fail(QStringLiteral("cancelled"));
         }
@@ -358,15 +364,21 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         // Chunked decoder query over a materialized point buffer. Fills
         // outDensity (raw density, one float/point) and/or outRgb (three
         // floats/point) when non-null. The pass-specific loops below (refine,
-        // vertex colour, texture bake) all share this. Returns false when the
-        // caller's progress callback requests cancellation (reported at the
-        // completed grid total so the progress bar doesn't jump backwards).
+        // vertex colour, texture bake) all share this. `stage` labels the
+        // per-chunk progress reports; pass report=false when someone ELSE owns
+        // the stage's progress accounting (the texture baker reports its own
+        // texel totals) — cancellation is then still checked via total = -1.
         auto sampleBuffer = [&](const float* pts, size_t count,
-                                float* outDensity, float* outRgb) -> bool {
+                                float* outDensity, float* outRgb,
+                                Stage stage, bool report = true) -> bool {
             for (size_t start = 0; start < count; start += static_cast<size_t>(chunk)) {
-                if (progress && !progress(static_cast<int>(totalPts),
-                                          static_cast<int>(totalPts)))
-                    return false;
+                if (progress) {
+                    const bool keep = report
+                        ? progress(stage, static_cast<int>(start),
+                                   static_cast<int>(count))
+                        : progress(stage, -1, -1);   // cancel check only
+                    if (!keep) return false;
+                }
                 const size_t n = std::min(static_cast<size_t>(chunk), count - start);
                 const int64_t ptShape[3] = {1, static_cast<int64_t>(n), 3};
                 // The decoder input is non-const in the C API; the buffer is
@@ -413,7 +425,8 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
                 q[3] += eps; q[7] += eps; q[11] += eps;
             }
             std::vector<float> dens(nv * 4);
-            if (!sampleBuffer(probes.data(), nv * 4, dens.data(), nullptr))
+            if (!sampleBuffer(probes.data(), nv * 4, dens.data(), nullptr,
+                              Stage::Refine))
                 return fail(QStringLiteral("cancelled"));
             std::vector<float> f(nv), grad(nv * 3);
             for (size_t v = 0; v < nv; ++v) {
@@ -432,10 +445,17 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
             MeshGenBaker::Options bakeOpts;
             bakeOpts.textureSize = opts.textureSize;
             bakeOpts.chunkPoints = chunk;
+            // The baker owns the Bake stage's progress (it knows the true
+            // texel total); the sampler only cancellation-checks.
+            if (progress)
+                bakeOpts.progress = [&](int done, int total) {
+                    return progress(Stage::Bake, done, total);
+                };
             const MeshGenBaker::Result baked = MeshGenBaker::bake(
                 out.positions, out.indices,
                 [&](const float* pts, size_t count, float* rgb) {
-                    return sampleBuffer(pts, count, nullptr, rgb);
+                    return sampleBuffer(pts, count, nullptr, rgb,
+                                        Stage::Bake, /*report=*/false);
                 },
                 bakeOpts);
             if (baked.ok) {
@@ -457,7 +477,8 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         if (wantColor && out.vertexCount > 0 && out.uvs.empty()) {
             const size_t nv = static_cast<size_t>(out.vertexCount);
             out.colors.assign(nv * 3, 0.8f);
-            if (!sampleBuffer(out.positions.data(), nv, nullptr, out.colors.data()))
+            if (!sampleBuffer(out.positions.data(), nv, nullptr, out.colors.data(),
+                              Stage::Color))
                 return fail(QStringLiteral("cancelled"));
         }
 

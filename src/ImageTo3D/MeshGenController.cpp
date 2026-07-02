@@ -276,9 +276,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         };
 
         // Models are guaranteed present (ensured on the main thread before this
-        // worker started), so this thread only reads files — no event loop needed.
-        post(QStringLiteral("encode"), 0, 1);
-
+        // worker started), so this thread only reads files — no event loop
+        // needed. (The encode stage is reported by the predictor itself.)
         QImage subject = image;
         if (rembg) {
             post(QStringLiteral("background"), 0, 1);
@@ -302,8 +301,21 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
             Q_ARG(QString, tr("Reconstructing…")));
 
-        auto progressFn = [this, &post](int done, int total) -> bool {
-            post(QStringLiteral("decode"), done, total);
+        // Map the predictor's typed stages onto the string stages the QML
+        // step list keys on. total <= 0 = pure cancellation check (no post).
+        auto progressFn = [this, &post](MeshGenPredictor::Stage st,
+                                        int done, int total) -> bool {
+            if (total > 0) {
+                const char* name = nullptr;
+                switch (st) {
+                    case MeshGenPredictor::Stage::Encode: name = "encode"; break;
+                    case MeshGenPredictor::Stage::Decode: name = "decode"; break;
+                    case MeshGenPredictor::Stage::Refine: name = "refine"; break;
+                    case MeshGenPredictor::Stage::Bake:   name = "bake";   break;
+                    case MeshGenPredictor::Stage::Color:  name = "color";  break;
+                }
+                if (name) post(QString::fromLatin1(name), done, total);
+            }
             return !m_cancel.load();
         };
 
@@ -317,8 +329,12 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             && !r.uvs.empty() && !r.texture.isNull() && !m_cancel.load()) {
             QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
                 Q_ARG(QString, tr("Upscaling texture…")));
-            const TextureUpscaler::Result ur =
-                TextureUpscaler::upscale(r.texture, m_upscaleModelPath);
+            const TextureUpscaler::Result ur = TextureUpscaler::upscale(
+                r.texture, m_upscaleModelPath, {},
+                [this, &post](int done, int total) {
+                    post(QStringLiteral("upscale"), done, total);
+                    return !m_cancel.load();
+                });
             if (ur.ok && !ur.image.isNull())
                 r.texture = ur.image;
         }
@@ -350,6 +366,9 @@ void MeshGenController::buildOnMainThread()
     emit statusMessage(m_generatePbr && !r.uvs.empty()
                            ? tr("Building mesh + PBR maps…")
                            : tr("Building mesh…"));
+    // Give the QML a chance to repaint the step list before buildSceneNode
+    // blocks this (main) thread on mesh construction + PBR synthesis.
+    QCoreApplication::processEvents();
 
     // PBR synthesis (when enabled) runs inside buildSceneNode on this (main)
     // thread — same as the Material Editor's button; the PBRify models are
