@@ -1,22 +1,38 @@
 #!/usr/bin/env bash
 # One-shot driver for the TripoSG ONNX export (see scripts/export-triposg-onnx.py).
-# Reuses the TripoSR export venv from /tmp/rmib_train, adds the missing deps,
-# clones the upstream repo, runs the export with ORT verification, and leaves
-# the graphs in /tmp/triposg_export/dist/triposg_onnx ready for HF upload.
+# Creates a DEDICATED venv (do NOT reuse the TripoSR export venv — its
+# transformers 4.35 pin conflicts with TripoSG's >=4.45 requirement, and a
+# shared install drags huggingface_hub past <1.0 and breaks both), clones the
+# upstream repo, runs the export with ORT verification, and leaves the graphs
+# in /tmp/triposg_export/dist/triposg_onnx ready for HF upload.
 #
 # Usage:  bash scripts/run-triposg-export.sh
 # Runtime: ~8 GB HF download + CPU export — expect 1-2 hours.
 set -euo pipefail
 
-VENV=/tmp/rmib_train/triposr_venv
 WORK=/tmp/triposg_export
+VENV="$WORK/venv"
 REPO_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/export-triposg-onnx.py"
 
 mkdir -p "$WORK"
 cd "$WORK"
 
-echo "[deps] installing diffusers/jaxtyping/accelerate into $VENV"
-"$VENV/bin/pip" install -q "diffusers==0.30.3" jaxtyping accelerate
+if [ ! -x "$VENV/bin/python" ]; then
+  echo "[venv] creating $VENV"
+  python3 -m venv "$VENV"
+fi
+
+echo "[deps] installing pinned export stack"
+"$VENV/bin/pip" install -q --upgrade pip
+"$VENV/bin/pip" install -q torch --index-url https://download.pytorch.org/whl/cpu
+# huggingface_hub pinned <1.0: transformers 4.4x and diffusers 0.30.x both
+# require it; unpinned installs pull 1.x and break transformers' version gate.
+"$VENV/bin/pip" install -q \
+    "diffusers==0.30.3" \
+    "transformers==4.46.3" \
+    "huggingface_hub==0.26.5" \
+    "tokenizers>=0.20,<0.21" \
+    onnx onnxruntime numpy einops jaxtyping safetensors accelerate
 
 if [ ! -d TripoSG ]; then
   echo "[clone] VAST-AI-Research/TripoSG"
