@@ -1694,7 +1694,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                       MotionGenerator::vocabPath(), duration);
             if (mr.ok) {
                 action = mr.matchedAction; quats = mr.clip.quats; fps = mr.clip.fps;
-                worldFrame = false; clipSource = QStringLiteral("model"); gotClip = true;
+                worldFrame = mr.worldFrame; clipSource = QStringLiteral("model"); gotClip = true;
             }
         }
         if (!gotClip)

@@ -40,6 +40,9 @@ const Syn kSynonyms[] = {
     {"dancing", "dance"}, {"punching", "punch"}, {"kicking", "kick"},
     {"waving", "wave"}, {"marching", "march"}, {"climbing", "climb"},
     {"idle", "idle"}, {"stand", "idle"}, {"standing", "idle"},
+    {"sitting", "sit"}, {"seat", "sit"},
+    {"throwing", "throw"}, {"toss", "throw"}, {"pitch", "throw"},
+    {"box", "boxing"}, {"fight", "boxing"}, {"spar", "boxing"},
 };
 }  // namespace
 
@@ -179,6 +182,12 @@ MotionGenerator::Result MotionGenerator::generate(
         const int T = vj.value("T").toInt(40);
         const int C = vj.value("C").toInt(220);
         const int J = vj.value("J").toInt(22);
+        // v4 models emit WORLD-frame quats (trained on FK world orientations,
+        // consumed by the same world retarget as the v3 template library);
+        // v3 vocab jsons have no "frame" key → local.
+        const bool worldFrame =
+            vj.value("frame").toString() == QLatin1String("world");
+        const int fps = vj.value("fps").toInt(30);
         const int V = vocab.size();
         if (V == 0 || T <= 0 || C != J * 10) {
             r.error = QStringLiteral("t2m vocab json malformed"); return r;
@@ -255,11 +264,11 @@ MotionGenerator::Result MotionGenerator::generate(
             r.error = QStringLiteral("t2m output smaller than expected"); return r;
         }
 
-        // ---- pack into a MotionLibrary::Clip (LOCAL-frame quats) ----
+        // ---- pack into a MotionLibrary::Clip ----
         MotionLibrary::Clip clip;
         clip.action = matched;
         clip.source = QStringLiteral("t2m-model");
-        clip.fps = 30;
+        clip.fps = fps;
         clip.quats.resize(static_cast<size_t>(T));
         for (int f = 0; f < T; ++f) {
             clip.quats[f].resize(static_cast<size_t>(J));
@@ -285,6 +294,7 @@ MotionGenerator::Result MotionGenerator::generate(
         }
 
         r.clip = std::move(clip);
+        r.worldFrame = worldFrame;
         r.ok = true;
         return r;
     } catch (const Ort::Exception& e) {

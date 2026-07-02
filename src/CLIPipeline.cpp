@@ -1886,7 +1886,7 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
                 action = mr.matchedAction;
                 quats = mr.clip.quats;
                 fps = mr.clip.fps;
-                worldFrame = false;          // model emits LOCAL-frame quats
+                worldFrame = mr.worldFrame;  // v4 models: world-frame quats
                 clipSource = QStringLiteral("model");
                 gotClip = true;
             } else {

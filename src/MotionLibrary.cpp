@@ -33,6 +33,9 @@ const Syn kSynonyms[] = {
     {"waving", "wave"}, {"greet", "wave"}, {"hello", "wave"},
     {"climbing", "climb"},
     {"idle", "idle"}, {"stand", "idle"}, {"standing", "idle"}, {"rest", "idle"},
+    {"sitting", "sit"}, {"seat", "sit"},
+    {"throwing", "throw"}, {"toss", "throw"}, {"pitch", "throw"},
+    {"box", "boxing"}, {"fight", "boxing"}, {"spar", "boxing"},
 };
 } // namespace
 
