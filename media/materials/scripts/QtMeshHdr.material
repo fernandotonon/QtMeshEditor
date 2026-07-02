@@ -23,6 +23,18 @@ material QtMesh/HdrTonemapPass
             }
             fragment_program_ref QtMeshHdrTonemapFp
             {
+                param_named hdrTex int 0
+                param_named exposureMul float 1.0
+                param_named tonemapOp int 1
+                param_named whitePoint float 1.0
+            }
+
+            // Compositor render_quad binds input 0 to texture unit 0.
+            texture_unit hdrTex
+            {
+                tex_coord_set 0
+                tex_address_mode clamp
+                filtering none
             }
         }
     }
@@ -32,6 +44,7 @@ material QtMesh/HdrSkybox
 {
     technique
     {
+        scheme ShaderGeneratorDefaultScheme
         pass
         {
             depth_write off

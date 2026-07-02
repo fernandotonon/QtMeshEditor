@@ -49,6 +49,7 @@ void HdrViewportController::registerWidget(OgreWidget* widget)
     auto it = m_pipelines.find(widget);
     if (it != m_pipelines.end()) {
         it->second->refresh();
+        syncAllSkyBoxesFromDefault();
         return;
     }
 
@@ -61,20 +62,31 @@ void HdrViewportController::unregisterWidget(OgreWidget* widget)
     m_pipelines.erase(widget);
 }
 
-void HdrViewportController::setSkyBoxVisible(OgreWidget* widget, bool visible)
+void HdrViewportController::setActiveWidget(OgreWidget* widget)
 {
-    if (auto* pipe = pipelineFor(widget))
-        pipe->setSkyBoxVisible(visible);
+    m_activeWidget = widget;
 }
 
-bool HdrViewportController::skyBoxVisible(const OgreWidget* widget) const
+void HdrViewportController::tickViewport(OgreWidget* widget)
 {
-    if (!widget)
-        return true;
-    auto it = m_pipelines.find(const_cast<OgreWidget*>(widget));
-    if (it == m_pipelines.end())
-        return HDREnvironmentManager::getSingleton()->defaultSkyBoxVisible();
-    return it->second->skyBoxVisible();
+    if (auto* pipe = pipelineFor(widget))
+        pipe->updateTonemapUniforms();
+}
+
+void HdrViewportController::syncAllSkyBoxesFromDefault()
+{
+    auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
+    const bool visible = hdrMgr ? hdrMgr->defaultSkyBoxVisible() : false;
+
+    if (auto* mgr = Manager::getSingletonPtr(); hdrMgr && mgr && mgr->getSceneMgr()
+        && hdrMgr->hasEnvironment()) {
+        mgr->getSceneMgr()->setSkyRenderingEnabled(visible);
+    }
+
+    for (auto& [widget, pipeline] : m_pipelines) {
+        Q_UNUSED(widget);
+        pipeline->setSkyBoxVisible(visible);
+    }
 }
 
 void HdrViewportController::tickActiveViewports()
@@ -95,20 +107,20 @@ void HdrViewportController::onEnvironmentChanged()
             hdrMgr->removeSkyBox(mgr->getSceneMgr());
     }
     refreshAll();
+    syncAllSkyBoxesFromDefault();
 }
 
 void HdrViewportController::onTonemapChanged()
 {
-    refreshAll();
+    for (auto& [widget, pipeline] : m_pipelines) {
+        Q_UNUSED(widget);
+        pipeline->updateTonemapUniforms();
+    }
 }
 
 void HdrViewportController::onSkyboxDefaultChanged()
 {
-    auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
-    if (auto* mgr = Manager::getSingletonPtr(); hdrMgr && mgr && mgr->getSceneMgr()
-        && hdrMgr->hasEnvironment()) {
-        mgr->getSceneMgr()->setSkyRenderingEnabled(hdrMgr->defaultSkyBoxVisible());
-    }
+    syncAllSkyBoxesFromDefault();
 }
 
 HdrViewportPipeline* HdrViewportController::pipelineFor(OgreWidget* widget) const

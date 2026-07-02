@@ -122,6 +122,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrTonemap.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrViewportPipeline.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrViewportController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrMaterialScript.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrEnvironmentController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HDR/HdrBundledLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MorphAnimationManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MorphCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NodeAnimationManager.cpp
@@ -137,6 +140,13 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MarchingCubes.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshRefine.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBaker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBuilder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/BackgroundRemover.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PbrMapSynth.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureUpscaler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIAssistManager.cpp

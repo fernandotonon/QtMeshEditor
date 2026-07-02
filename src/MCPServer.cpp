@@ -16,6 +16,8 @@
 #include "TransformOperator.h"
 #include "MeshImporterExporter.h"
 #include "CLIPipeline.h"
+#include "ImageTo3D/MeshGenPredictor.h"
+#include "ImageTo3D/MeshGenBuilder.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
 #include "AnimationWidget.h"
@@ -50,8 +52,12 @@
 #ifdef ENABLE_ONNX
 #include "AIAssistManager.h"
 #include "PbrMapSynth.h"
-#include "RTShaderHelper.h"
+#include "TextureUpscaler.h"
 #endif
+#include "HDR/HDREnvironmentManager.h"
+#include "HDR/HdrEnvironmentController.h"
+#include "HDR/HdrTonemap.h"
+#include "RTShaderHelper.h"
 #include <QEventLoop>
 #include <QDebug>
 #include <QFile>
@@ -66,6 +72,7 @@
 #include <QMetaObject>
 #include <QPixmap>
 #include <QSet>
+#include <optional>
 #include <OgreException.h>
 #include <OgreMaterialManager.h>
 #include <OgreMaterial.h>
@@ -576,6 +583,11 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("apply_material"), &MCPServer::toolApplyMaterial},
         {QStringLiteral("list_material_presets"), &MCPServer::toolListMaterialPresets},
         {QStringLiteral("apply_material_preset"), &MCPServer::toolApplyMaterialPreset},
+        {QStringLiteral("set_hdr_environment"), &MCPServer::toolSetHdrEnvironment},
+        {QStringLiteral("get_hdr_environment"), &MCPServer::toolGetHdrEnvironment},
+        {QStringLiteral("set_tonemap"), &MCPServer::toolSetTonemap},
+        {QStringLiteral("set_env_intensity"), &MCPServer::toolSetEnvIntensity},
+        {QStringLiteral("set_env_tint"), &MCPServer::toolSetEnvTint},
         {QStringLiteral("describe_material"), &MCPServer::toolDescribeMaterial},
         {QStringLiteral("load_mesh"), &MCPServer::toolLoadMesh},
         {QStringLiteral("get_mesh_info"), &MCPServer::toolGetMeshInfo},
@@ -618,6 +630,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("motion_in_between"), &MCPServer::toolMotionInBetween},
         {QStringLiteral("generate_motion"), &MCPServer::toolGenerateMotion},
         {QStringLiteral("segment_mesh"), &MCPServer::toolSegmentMesh},
+        {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
         {QStringLiteral("validate_mesh"), &MCPServer::toolValidateMesh},
@@ -691,6 +704,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("motion_in_between"),
         QStringLiteral("generate_motion"),
         QStringLiteral("segment_mesh"),
+        QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
         QStringLiteral("bake_vat"),
@@ -1143,6 +1157,203 @@ QJsonObject MCPServer::toolApplyMaterialPreset(const QJsonObject &args)
         return makeSuccessResult(QString("Applied preset '%1'").arg(preset));
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+namespace {
+
+QString hdrTonemapOperatorSlug(HdrTonemap::Operator op)
+{
+    switch (op) {
+    case HdrTonemap::Operator::Reinhard:
+        return QStringLiteral("reinhard");
+    case HdrTonemap::Operator::AgX:
+        return QStringLiteral("agx");
+    case HdrTonemap::Operator::ACES:
+    default:
+        return QStringLiteral("aces");
+    }
+}
+
+std::optional<HdrTonemap::Operator> parseHdrTonemapOperator(const QString& raw)
+{
+    const QString t = raw.trimmed().toLower();
+    if (t.isEmpty())
+        return std::nullopt;
+    if (t == QStringLiteral("reinhard"))
+        return HdrTonemap::Operator::Reinhard;
+    if (t == QStringLiteral("agx"))
+        return HdrTonemap::Operator::AgX;
+    if (t == QStringLiteral("aces"))
+        return HdrTonemap::Operator::ACES;
+    return std::nullopt;
+}
+
+bool parseHexTint(const QString& raw, QColor& out)
+{
+    const QColor c(raw);
+    if (!c.isValid())
+        return false;
+    out = c;
+    return true;
+}
+
+} // namespace
+
+QJsonObject MCPServer::toolSetHdrEnvironment(const QJsonObject &args)
+{
+    QString path = args[QStringLiteral("path_or_name")].toString();
+    if (path.isEmpty()) path = args[QStringLiteral("path")].toString();
+    if (path.isEmpty()) path = args[QStringLiteral("name")].toString();
+    if (path.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'path_or_name' is required"));
+
+    auto* ctrl = HdrEnvironmentController::instance();
+    if (!ctrl->loadEnvironment(path))
+        return makeErrorResult(QStringLiteral("Error: Failed to load environment '%1'").arg(path));
+
+    if (auto* hdrMgr = HDREnvironmentManager::getSingletonPtr()) {
+        return makeSuccessResult(QStringLiteral("Loaded HDR environment: %1")
+                                     .arg(hdrMgr->currentEnvironment()));
+    }
+    return makeSuccessResult(QStringLiteral("Loaded HDR environment: %1").arg(path));
+}
+
+QJsonObject MCPServer::toolGetHdrEnvironment(const QJsonObject &)
+{
+    auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
+    if (!hdrMgr)
+        return makeErrorResult(QStringLiteral("Error: HDREnvironmentManager not available"));
+
+    QJsonObject root;
+    root[QStringLiteral("environment")] = hdrMgr->currentEnvironment();
+    root[QStringLiteral("cache_key")] = hdrMgr->currentCacheKey();
+    root[QStringLiteral("ibl_ready")] = hdrMgr->isIblReady();
+    root[QStringLiteral("has_environment")] = hdrMgr->hasEnvironment();
+
+    QJsonObject tonemap;
+    tonemap[QStringLiteral("operator")] = hdrTonemapOperatorSlug(hdrMgr->tonemapOperator());
+    tonemap[QStringLiteral("exposure_ev")] = hdrMgr->exposureEv();
+    tonemap[QStringLiteral("white_point")] = hdrMgr->whitePoint();
+    root[QStringLiteral("tonemap")] = tonemap;
+    root[QStringLiteral("skybox_visible")] = hdrMgr->defaultSkyBoxVisible();
+    root[QStringLiteral("background_blur")] = hdrMgr->backgroundBlur();
+
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetTonemap(const QJsonObject &args)
+{
+    auto* ctrl = HdrEnvironmentController::instance();
+    auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
+    if (!hdrMgr || !ctrl)
+        return makeErrorResult(QStringLiteral("Error: HDREnvironmentManager not available"));
+
+    QString opStr = args[QStringLiteral("operator")].toString();
+    if (opStr.isEmpty())
+        opStr = args[QStringLiteral("tonemap")].toString();
+
+    QStringList changes;
+    if (!opStr.isEmpty()) {
+        const auto parsed = parseHdrTonemapOperator(opStr);
+        if (!parsed)
+            return makeErrorResult(QStringLiteral("Error: Unknown tonemap operator '%1' (use aces, reinhard, or agx)").arg(opStr));
+        ctrl->setTonemapOperator(static_cast<int>(*parsed));
+        changes << QStringLiteral("operator=%1").arg(hdrTonemapOperatorSlug(*parsed));
+    }
+    if (args.contains(QStringLiteral("exposure")) || args.contains(QStringLiteral("exposure_ev"))) {
+        const float exposure = static_cast<float>(
+            args.contains(QStringLiteral("exposure"))
+                ? args[QStringLiteral("exposure")].toDouble()
+                : args[QStringLiteral("exposure_ev")].toDouble());
+        ctrl->setExposureEv(exposure);
+        changes << QStringLiteral("exposure_ev=%1").arg(exposure);
+    }
+    if (args.contains(QStringLiteral("white_point"))) {
+        const float whitePoint = static_cast<float>(args[QStringLiteral("white_point")].toDouble());
+        ctrl->setWhitePoint(whitePoint);
+        changes << QStringLiteral("white_point=%1").arg(whitePoint);
+    }
+
+    if (changes.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: Provide operator and/or exposure and/or white_point"));
+
+    return makeSuccessResult(QStringLiteral("Updated tonemap: %1").arg(changes.join(QStringLiteral(", "))));
+}
+
+QJsonObject MCPServer::toolSetEnvIntensity(const QJsonObject &args)
+{
+    QString name = args[QStringLiteral("material")].toString();
+    if (name.isEmpty()) name = args[QStringLiteral("name")].toString();
+    if (name.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'material' is required"));
+
+    if (!args.contains(QStringLiteral("value")) && !args.contains(QStringLiteral("intensity")))
+        return makeErrorResult(QStringLiteral("Error: 'value' (or 'intensity') is required"));
+
+    const float intensity = static_cast<float>(args.contains(QStringLiteral("value"))
+                                                   ? args[QStringLiteral("value")].toDouble()
+                                                   : args[QStringLiteral("intensity")].toDouble());
+
+    try {
+        Ogre::MaterialPtr material =
+            Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
+        if (!material)
+            return makeErrorResult(QStringLiteral("Error: Material '%1' not found").arg(name));
+        if (material->getNumTechniques() == 0 || material->getTechnique(0)->getNumPasses() == 0)
+            return makeErrorResult(QStringLiteral("Error: Material '%1' has no passes").arg(name));
+
+        Ogre::Pass* pass = material->getTechnique(0)->getPass(0);
+        RTShaderHelper::setPbrEnvIntensity(pass, intensity);
+        RTShaderHelper::wirePbrSlotsForFFP(material.get());
+        material->compile(false);
+        material->load();
+
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+                                      QStringLiteral("set_env_intensity %1=%2").arg(name).arg(intensity));
+        return makeSuccessResult(QStringLiteral("Set env intensity on '%1' to %2").arg(name).arg(intensity));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+                                   .arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+QJsonObject MCPServer::toolSetEnvTint(const QJsonObject &args)
+{
+    QString name = args[QStringLiteral("material")].toString();
+    if (name.isEmpty()) name = args[QStringLiteral("name")].toString();
+    if (name.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'material' is required"));
+
+    const QString hex = args[QStringLiteral("hex")].toString();
+    if (hex.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'hex' is required (e.g. #fff5e6)"));
+
+    QColor tint;
+    if (!parseHexTint(hex, tint))
+        return makeErrorResult(QStringLiteral("Error: Invalid hex color '%1'").arg(hex));
+
+    try {
+        Ogre::MaterialPtr material =
+            Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
+        if (!material)
+            return makeErrorResult(QStringLiteral("Error: Material '%1' not found").arg(name));
+        if (material->getNumTechniques() == 0 || material->getTechnique(0)->getNumPasses() == 0)
+            return makeErrorResult(QStringLiteral("Error: Material '%1' has no passes").arg(name));
+
+        Ogre::Pass* pass = material->getTechnique(0)->getPass(0);
+        RTShaderHelper::setPbrEnvTint(
+            pass, Ogre::ColourValue(tint.redF(), tint.greenF(), tint.blueF()));
+        RTShaderHelper::wirePbrSlotsForFFP(material.get());
+        material->compile(false);
+        material->load();
+
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+                                      QStringLiteral("set_env_tint %1=%2").arg(name, hex));
+        return makeSuccessResult(QStringLiteral("Set env tint on '%1' to %2").arg(name, hex));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Ogre error: %1")
+                                   .arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -2128,6 +2339,118 @@ QJsonObject MCPServer::toolGeneratePbrMaps(const QJsonObject &args)
     result["heightPath"]    = res.heightPath;
     result["fromCache"]     = res.fromCache;
     result["boundSubmeshes"] = bound;
+    return result;
+#endif
+}
+
+QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "This build was compiled without AI image-to-3D generation "
+        "(rebuild with -DENABLE_ONNX=ON).");
+#else
+    const QString imagePath = args.value("image_path").toString();
+    if (imagePath.trimmed().isEmpty())
+        return makeErrorResult("'image_path' is required.");
+    if (!QFileInfo::exists(imagePath))
+        return makeErrorResult(QStringLiteral("image not found: %1").arg(imagePath));
+
+    MeshGenPredictor::Options opts;
+    if (args.contains("resolution")) opts.sdfResolution = args["resolution"].toInt(256);
+    if (args.contains("vertex_color")) opts.vertexColor = args["vertex_color"].toBool();
+    if (args.contains("remove_bg")) opts.removeBackground = args["remove_bg"].toBool();
+    if (opts.sdfResolution < 16 || opts.sdfResolution > 1024)
+        return makeErrorResult("'resolution' must be between 16 and 1024.");
+    if (args.contains("quality")) {
+        const QString q = args["quality"].toString().toLower();
+        if (q == "int8") opts.quality = MeshGenPredictor::Quality::Int8;
+        else if (q == "fp32" || q.isEmpty()) opts.quality = MeshGenPredictor::Quality::Fp32;
+        else return makeErrorResult("'quality' must be 'fp32' or 'int8'.");
+    }
+    // Quality pass (defaults ON — see MeshGenPredictor::Options).
+    if (args.contains("smooth")) opts.smoothMesh = args["smooth"].toBool(true);
+    if (args.contains("refine")) opts.refineSurface = args["refine"].toBool(true);
+    if (args.contains("bake_texture")) opts.bakeTexture = args["bake_texture"].toBool(true);
+    if (args.contains("texture_size")) {
+        opts.textureSize = args["texture_size"].toInt(1024);
+        if (opts.textureSize < 64 || opts.textureSize > 8192)
+            return makeErrorResult("'texture_size' must be between 64 and 8192.");
+    }
+    const bool upscaleTex  = args.value("upscale_texture").toBool();
+    const bool generatePbr = args.contains("generate_pbr")
+        ? args["generate_pbr"].toBool(true) : true;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
+        QStringLiteral("generate_mesh_from_image %1 res=%2")
+            .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution));
+
+    const QString enc = MeshGenPredictor::ensureModelBlocking(opts.quality);
+    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(opts.quality))
+        return makeErrorResult(
+            "TripoSR model unavailable — it downloads on first use; if it is not "
+            "hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL / ai/triposrModelBaseUrl "
+            "or drop the files in the ai_models/triposr/ cache.");
+
+    QImage image(imagePath);
+    if (image.isNull())
+        return makeErrorResult(QStringLiteral("failed to read image: %1").arg(imagePath));
+
+    MeshGenPredictor::Result res = MeshGenPredictor::predict(
+        image, MeshGenPredictor::encoderModelPath(opts.quality),
+        MeshGenPredictor::decoderModelPath(), opts);
+    if (!res.ok)
+        return makeErrorResult(res.error.isEmpty()
+            ? QStringLiteral("image-to-3D failed") : res.error);
+
+    // Optional Real-ESRGAN 2x on the baked diffuse (best-effort; keeps the
+    // un-upscaled texture on any failure — same policy as the CLI).
+    if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
+        const QString upModel = AIAssistManager::instance()->ensureUpscaleModel(2);
+        if (!upModel.isEmpty()) {
+            const TextureUpscaler::Result ur =
+                TextureUpscaler::upscale(res.texture, upModel);
+            if (ur.ok && !ur.image.isNull())
+                res.texture = ur.image;
+        }
+    }
+
+    // Baked texture (+ synthesized PBR maps): land next to the export target
+    // when one is given so the references survive outside the app; else the
+    // AppData default.
+    const QString output = args.value("output").toString();
+    MeshGenBuilder::BuildOptions buildOpts;
+    if (!output.trimmed().isEmpty())
+        buildOpts.textureDir = QFileInfo(output).absolutePath();
+    buildOpts.generatePbrMaps = generatePbr && opts.bakeTexture && opts.vertexColor;
+    Ogre::SceneNode* node = MeshGenBuilder::buildSceneNode(
+        res, QStringLiteral("qtmesh_gen3d"), buildOpts);
+    if (!node)
+        return makeErrorResult("failed to build mesh from prediction.");
+
+    QString meshPath;
+    if (!output.trimmed().isEmpty()) {
+        const QString fmt = CLIPipeline::formatForExtension(output);
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("Exporting %1").arg(QFileInfo(output).absoluteFilePath()));
+        if (MeshImporterExporter::exporter(node, QFileInfo(output).absoluteFilePath(), fmt) != 0)
+            return makeErrorResult(QStringLiteral("export failed: %1").arg(output));
+        meshPath = QFileInfo(output).absoluteFilePath();
+    }
+
+    QJsonObject result = makeSuccessResult(QStringLiteral(
+        "Generated a 3D mesh from '%1' (%2 verts, %3 tris)%4.")
+        .arg(QFileInfo(imagePath).fileName())
+        .arg(res.vertexCount).arg(res.triangleCount)
+        .arg(meshPath.isEmpty() ? QStringLiteral(" and loaded it into the scene")
+                                : QStringLiteral(" and saved it")));
+    result["vertexCount"]   = res.vertexCount;
+    result["triangleCount"] = res.triangleCount;
+    if (!meshPath.isEmpty()) result["meshPath"] = meshPath;
+    // Surface non-fatal degradations (bake fell back to vertex colours, …) so
+    // the MCP caller can tell a textured result from a fallback one.
+    if (!res.warning.isEmpty()) result["warning"] = res.warning;
     return result;
 #endif
 }
@@ -6318,7 +6641,7 @@ QJsonArray MCPServer::buildToolsList()
     // list_material_presets
     appendTool(
         "list_material_presets",
-        "List the built-in material presets (Plastic / Metal / Wood / Glass / Unlit / Wireframe + PBR templates: Metallic-Roughness, Specular-Glossiness, Unlit PBR). Pass any returned name to apply_material_preset.",
+        "List the built-in material presets (Plastic / Metal / Wood / Glass / Unlit / Wireframe + PBR templates: Metallic-Roughness, Specular-Glossiness, Unlit PBR + HDR Environment presets: Polished Metal (HDR), Glass (HDR), Skin (HDR-friendly), etc.). Pass any returned name to apply_material_preset.",
         QJsonObject());
 
     // apply_material_preset
@@ -6335,6 +6658,75 @@ QJsonArray MCPServer::buildToolsList()
             "Apply a built-in material preset to a mesh. PBR templates (Metallic-Roughness / Specular-Glossiness / Unlit PBR) create the canonical 6-slot texture-unit layout (albedo / normal_map / metallic / roughness / ao / emissive) and tag the pass with a 'pbr_workflow' user binding so PBR-aware shaders can detect intent.",
             inputSchema
         ));
+    }
+
+    // set_hdr_environment
+  {
+        QJsonObject properties;
+        properties["path_or_name"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Absolute path or bundled HDRI name (e.g. studio_neutral or studio_neutral.hdr)"}};
+        appendTool(
+            "set_hdr_environment",
+            "Load a global HDR environment for image-based lighting (IBL). Mirrors the Inspector Environment picker.",
+            properties,
+            QJsonArray{"path_or_name"});
+    }
+
+    // get_hdr_environment
+    appendTool(
+        "get_hdr_environment",
+        "Return the active HDR environment path, IBL readiness, tonemap settings, and skybox defaults as JSON.",
+        QJsonObject());
+
+    // set_tonemap
+    {
+        QJsonObject properties;
+        properties["operator"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Tonemap operator: aces (default), reinhard, or agx"}};
+        properties["exposure"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Exposure in EV stops (alias: exposure_ev)"}};
+        properties["white_point"] = QJsonObject{
+            {"type", "number"},
+            {"description", "Reinhard white point (ignored for ACES/AgX)"}};
+        appendTool(
+            "set_tonemap",
+            "Set global viewport tonemap operator, exposure, and optional Reinhard white point.",
+            properties);
+    }
+
+    // set_env_intensity
+    {
+        QJsonObject properties;
+        properties["material"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Ogre material name (use list_materials)"}};
+        properties["value"] = QJsonObject{
+            {"type", "number"},
+            {"description", "IBL environment intensity multiplier (0..4, alias: intensity)"}};
+        appendTool(
+            "set_env_intensity",
+            "Set per-material IBL environment intensity (pbr_environment_intensity).",
+            properties,
+            QJsonArray{"material", "value"});
+    }
+
+    // set_env_tint
+    {
+        QJsonObject properties;
+        properties["material"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Ogre material name (use list_materials)"}};
+        properties["hex"] = QJsonObject{
+            {"type", "string"},
+            {"description", "Environment tint as #rrggbb (e.g. #fff5e6)"}};
+        appendTool(
+            "set_env_tint",
+            "Set per-material IBL environment tint (pbr_environment_tint).",
+            properties,
+            QJsonArray{"material", "hex"});
     }
 
     // describe_material (#406)
@@ -6859,6 +7251,37 @@ QJsonArray MCPServer::buildToolsList()
             props
         );
     }
+
+#ifdef ENABLE_ONNX
+    // generate_mesh_from_image (#764) — only advertised when ONNX is compiled in.
+    {
+        QJsonObject props;
+        props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the source image (a single object, ideally background-removed). Required."}};
+        props["output"] = QJsonObject{{"type", "string"}, {"description", "Optional path to save the generated mesh (e.g. /tmp/out.glb). If omitted, the mesh is loaded into the current scene instead."}};
+        props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..1024 (default 256; 128 is a fast/preview tier). Higher = more detail + slower. Cost is res^3 floats in RAM: 512~=0.5 GB, 768~=1.7 GB, 1024~=4.3 GB. The encoder input is fixed at 512^2, so detail gains taper off above 512."}};
+        props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "Bake TripoSR's predicted per-vertex color (default true)."}};
+        props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; TripoSR needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
+        props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Encoder precision/size tier (default fp32). fp32 = best (~1.7GB), int8 = smallest, slight quality loss (~430MB). The chosen tier downloads on demand."}};
+        props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "Taubin-smooth the extracted mesh to remove marching-cubes stair-stepping (default true; volume-preserving)."}};
+        props["refine"] = QJsonObject{{"type", "boolean"}, {"description", "After smoothing, Newton-project each vertex back onto the network's true iso-surface via extra decoder queries (default true; recovers grid-quantized detail)."}};
+        props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails)."}};
+        props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
+        props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
+        props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
+        appendTool(
+            "generate_mesh_from_image",
+            "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "
+            "reconstruct a 3D mesh from a single image. Runs the TripoSR encoder "
+            "(image -> triplane) + decoder (density grid) and extracts the surface "
+            "with native marching cubes. Returns vertexCount/triangleCount and, when "
+            "'output' is given, the saved meshPath; otherwise the mesh is loaded into "
+            "the scene. The model downloads on first use; without it (or a non-ONNX "
+            "build) the call returns a clear error (no crash).",
+            props,
+            QJsonArray{"image_path"}
+        );
+    }
+#endif // ENABLE_ONNX
 
     // save_scene
     {

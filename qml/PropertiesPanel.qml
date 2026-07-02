@@ -7,6 +7,7 @@ import EditorMode 1.0
 import MaterialEditorQML 1.0
 import ThemeManager 1.0
 import AssetBrowser 1.0
+import HdrEnvironment 1.0
 
 Rectangle {
     id: root
@@ -262,6 +263,25 @@ Rectangle {
         }
     }
 
+    // On load, honor the current mode's default tab (e.g. Object mode → Mode
+    // Tools now that it has tools). Without this the panel always started on the
+    // Inspector tab because onModeChanged only fires on a subsequent mode switch.
+    //
+    // DEFERRED via Qt.callLater: assigning currentTab inside Component.onCompleted
+    // runs during QQmlObjectCreator::finalize, and the resulting binding cascade
+    // (section visibility -> CollapsibleSection content Loaders) triggers NESTED
+    // component instantiation mid-finalize. Under Mesa/Xvfb that reliably
+    // SIGSEGV'd the SECOND MainWindow constructed in-process
+    // (MainWindowTest/MCPServerTest, signal 11 — confirmed by the crashHandler
+    // backtrace: finalize -> bound signal -> StoreNameSloppy -> QQuickLoader
+    // qt_metacall -> QQmlIncubator -> create). Deferring moves the tab flip to
+    // the next event-loop turn, after creation has fully settled.
+    Component.onCompleted: {
+        Qt.callLater(function() {
+            root.currentTab = root.defaultTabForMode(EditorModeController.currentMode)
+        })
+    }
+
     ScrollView {
         anchors.fill: parent
         clip: true
@@ -469,6 +489,17 @@ Rectangle {
                 Component.onCompleted: content = editModeToolsComponent
             }
 
+            // ---- AI: Image → 3D (epic #764, Object mode) ----
+            CollapsibleSection {
+                title: "AI: Image → 3D"
+                sectionVisible: root.currentTab === root.modeToolsTab
+                    && MeshGenController.available
+                    && root.modeToolMatches(EditorModeController.ObjectMode)
+                expanded: false
+
+                Component.onCompleted: content = meshGenToolsComponent
+            }
+
             // ---- VAT ----
             // Bake Vertex Animation Texture (OpenVAT format). Lives in
             // the Animation Mode tools so it only surfaces when the
@@ -666,15 +697,15 @@ Rectangle {
                 Component.onCompleted: content = animControlComponent
             }
 
-            // ---- LOD Generation ----
+            // ---- Environment (HDR / IBL, Object mode) ----
             CollapsibleSection {
-                title: "LOD Generation"
+                title: "Environment"
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ObjectMode,
-                    MeshLodController.hasSelection)
-                expanded: true
+                    true)
+                expanded: false
 
-                Component.onCompleted: content = lodComponent
+                Component.onCompleted: content = hdrEnvironmentComponent
             }
 
             // ---- Decimate (single-pass) ----
@@ -686,6 +717,17 @@ Rectangle {
                 expanded: true
 
                 Component.onCompleted: content = decimateComponent
+            }
+
+            // ---- LOD Generation ----
+            CollapsibleSection {
+                title: "LOD Generation"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    MeshLodController.hasSelection)
+                expanded: true
+
+                Component.onCompleted: content = lodComponent
             }
 
             // ---- Material Editor (Material mode) ----
@@ -1445,6 +1487,457 @@ Rectangle {
                         ? "Render an isometric directions×frames PNG atlas from the live scene."
                         : "Select a mesh first."
                 }
+            }
+        }
+    }
+
+    // ---- AI: Image → 3D Content (Object mode, epic #764) ----
+    // Runs TripoSR on a worker thread (MeshGenController) so the app stays
+    // responsive; shows a staged progress bar + Cancel.
+    Component {
+        id: meshGenToolsComponent
+
+        Column {
+            id: mgRoot
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            // Per-step progress state (see the step list below). `mgSteps` is
+            // built from the enabled checkboxes when Generate is clicked, so
+            // the list mirrors exactly the stages that will run.
+            property var mgSteps: []
+            property int mgActiveIdx: -1
+            property real mgActiveProgress: -1   // 0..1; < 0 → indeterminate
+
+            // A small local button factory (raw QML — the Themed* wrappers blank
+            // this dynamically-loaded panel, so we style raw controls with the
+            // PropertiesPanelController palette to match the Inspector).
+            component InspectorButton: Rectangle {
+                id: ibRoot
+                property alias text: ibLabel.text
+                property bool clickEnabled: true
+                signal clicked()
+                width: Math.min(parent ? parent.width - 16 : 200, ibLabel.implicitWidth + 20)
+                height: 26
+                radius: 3
+                opacity: clickEnabled ? 1.0 : 0.45
+                color: (ibMa.containsMouse || ibRoot.activeFocus) && clickEnabled
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: ibRoot.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: ibRoot.activeFocus ? 2 : 1
+                // Keyboard accessibility: focusable via Tab, activatable via
+                // Space/Enter, and exposed to assistive tech.
+                activeFocusOnTab: clickEnabled
+                Accessible.role: Accessible.Button
+                Accessible.name: ibLabel.text
+                Keys.onSpacePressed: if (clickEnabled) clicked()
+                Keys.onReturnPressed: if (clickEnabled) clicked()
+                Keys.onEnterPressed: if (clickEnabled) clicked()
+                Text {
+                    id: ibLabel
+                    anchors.centerIn: parent
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: ibMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: ibRoot.clickEnabled
+                    cursorShape: ibRoot.clickEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: ibRoot.clicked()
+                }
+            }
+
+            // Inspector-styled CheckBox (flat 16px box + checkmark, palette
+            // colors) — one factory for the pipeline-stage toggles below,
+            // matching the ThemedCheckBox look without the wrapper that breaks
+            // this dynamically-loaded panel.
+            component InspectorCheck: CheckBox {
+                id: icRoot
+                spacing: 6
+                enabled: !MeshGenController.busy
+                indicator: Rectangle {
+                    x: icRoot.leftPadding
+                    y: icRoot.height / 2 - height / 2
+                    implicitWidth: 16
+                    implicitHeight: 16
+                    radius: 2
+                    color: icRoot.checked
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    opacity: icRoot.enabled ? 1.0 : 0.45
+                    Text {
+                        anchors.centerIn: parent
+                        visible: icRoot.checked
+                        text: "✓"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                }
+                contentItem: Text {
+                    text: icRoot.text
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    leftPadding: icRoot.indicator.width + icRoot.spacing
+                    verticalAlignment: Text.AlignVCenter
+                    opacity: icRoot.enabled ? 1.0 : 0.45
+                }
+            }
+
+            // Inspector-styled ComboBox (raw ComboBox re-skinned with the
+            // PropertiesPanelController palette — same look as ThemedComboBox, but
+            // inlined because the Themed* wrappers blank this dynamically-loaded
+            // panel). Used for the Resolution + Model dropdowns below.
+            component InspectorComboBox: ComboBox {
+                id: cbRoot
+                height: 26
+                font.pixelSize: 11
+                delegate: ItemDelegate {
+                    id: cbItem
+                    width: cbRoot.width
+                    implicitHeight: 22
+                    padding: 0; leftPadding: 6; rightPadding: 6
+                    contentItem: Text {
+                        text: modelData
+                        color: PropertiesPanelController.textColor
+                        font: cbRoot.font
+                        elide: Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    highlighted: cbRoot.highlightedIndex === index
+                    background: Rectangle {
+                        color: cbItem.highlighted ? PropertiesPanelController.highlightColor
+                                                  : "transparent"
+                    }
+                }
+                indicator: Canvas {
+                    id: cbArrow
+                    x: cbRoot.width - width - cbRoot.rightPadding
+                    y: cbRoot.topPadding + (cbRoot.availableHeight - height) / 2
+                    width: 9; height: 5; contextType: "2d"
+                    Connections { target: cbRoot; function onPressedChanged() { cbArrow.requestPaint() } }
+                    onPaint: {
+                        context.reset()
+                        context.moveTo(0, 0); context.lineTo(width, 0); context.lineTo(width / 2, height)
+                        context.closePath()
+                        context.fillStyle = PropertiesPanelController.textColor
+                        context.fill()
+                    }
+                }
+                contentItem: Text {
+                    leftPadding: 6
+                    rightPadding: cbRoot.indicator.width + cbRoot.spacing + 4
+                    text: cbRoot.displayText
+                    font: cbRoot.font
+                    color: PropertiesPanelController.textColor
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                background: Rectangle {
+                    implicitWidth: 120; implicitHeight: 26
+                    color: PropertiesPanelController.inputColor
+                    border.color: cbRoot.visualFocus ? PropertiesPanelController.highlightColor
+                                                     : PropertiesPanelController.borderColor
+                    border.width: cbRoot.visualFocus ? 2 : 1
+                    radius: 3
+                }
+                popup: Popup {
+                    popupType: Popup.Window
+                    y: cbRoot.height
+                    width: cbRoot.width
+                    implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
+                    padding: 1
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: cbRoot.delegateModel
+                        currentIndex: cbRoot.highlightedIndex
+                        highlightFollowsCurrentItem: false
+                        ScrollIndicator.vertical: ScrollIndicator { }
+                    }
+                    background: Rectangle {
+                        color: PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        radius: 3
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Reconstruct a 3D mesh from a single image (TripoSR). "
+                    + "Select an image, then Generate. Background removal (U²-Net) runs first."
+            }
+
+            // Step 1: select the source image (no generation yet).
+            InspectorButton {
+                text: "Select Image…"
+                clickEnabled: !MeshGenController.busy
+                onClicked: MeshGenController.selectImage()
+            }
+
+            // Preview of the selected image (shown once one is chosen).
+            Rectangle {
+                width: parent.width - 16
+                height: visible ? 140 : 0
+                visible: MeshGenController.selectedImagePath.length > 0
+                color: PropertiesPanelController.inputColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                radius: 3
+                Image {
+                    anchors.fill: parent
+                    anchors.margins: 4
+                    source: MeshGenController.previewSource
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    cache: false
+                }
+            }
+
+            // Resolution picker — marching-cubes grid resolution. Cost grows with
+            // the cube of the value (the decoder queries resolution³ points), so
+            // higher = more detail but much slower. Labels flag the trade-off.
+            Row {
+                spacing: 6
+                Text {
+                    text: "Resolution"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgResCombo
+                    width: 150
+                    enabled: !MeshGenController.busy
+                    model: ["128 (fast)", "192", "256 (default)", "320",
+                            "384", "448", "512 (slow, detailed)",
+                            "640 (~1 GB)", "768 (~1.7 GB)", "1024 (~4 GB, very slow)"]
+                    currentIndex: 2
+                    readonly property var resValues: [128, 192, 256, 320, 384, 448, 512,
+                                                      640, 768, 1024]
+                    property int resValue: resValues[currentIndex]
+                }
+            }
+
+            // Model quality/size tier — the encoder downloads in the picked
+            // precision (fp32 best/largest → int8 smallest). index maps 1:1 to the
+            // MeshGenController quality int (0/1).
+            Row {
+                spacing: 6
+                Text {
+                    text: "Model"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgQualityCombo
+                    width: 150
+                    enabled: !MeshGenController.busy
+                    model: ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
+                    currentIndex: 0
+                }
+            }
+
+            // ---- User-selectable pipeline stages -------------------------------
+            // Each toggle maps 1:1 to a stage of the generation pipeline (see
+            // MeshGenController::generateSelected). Defaults = the polished
+            // pipeline: smooth + refine + bake + PBR maps; upscale opt-in.
+            InspectorCheck {
+                id: mgRemoveBg
+                text: "Remove background"
+                checked: true
+            }
+            InspectorCheck {
+                id: mgSmooth
+                text: "Smooth mesh (Taubin)"
+                checked: true
+            }
+            InspectorCheck {
+                id: mgRefine
+                text: "Refine surface (re-project)"
+                checked: true
+            }
+            InspectorCheck {
+                id: mgBake
+                text: "Bake diffuse texture"
+                checked: true
+            }
+            InspectorCheck {
+                id: mgPbr
+                text: "Generate PBR maps (normal + roughness)"
+                checked: true
+                enabled: !MeshGenController.busy && mgBake.checked
+            }
+            InspectorCheck {
+                id: mgUpscale
+                text: "Upscale texture 2× (Real-ESRGAN)"
+                checked: false
+                enabled: !MeshGenController.busy && mgBake.checked
+            }
+
+            // Step 2: generate from the selected image. Disabled until one is
+            // picked (or while busy). Builds the per-step progress list from
+            // the enabled stages before kicking off.
+            InspectorButton {
+                text: "Generate 3D"
+                clickEnabled: !MeshGenController.busy
+                    && MeshGenController.selectedImagePath.length > 0
+                onClicked: {
+                    var steps = [{ key: "prep", label: "Prepare models" }]
+                    if (mgRemoveBg.checked)
+                        steps.push({ key: "background", label: "Remove background" })
+                    steps.push({ key: "encode", label: "Encode image" })
+                    steps.push({ key: "decode", label: "Reconstruct 3D" })
+                    if (mgRefine.checked)
+                        steps.push({ key: "refine", label: "Refine surface" })
+                    if (mgBake.checked)
+                        steps.push({ key: "bake", label: "Bake texture" })
+                    else
+                        steps.push({ key: "color", label: "Vertex colors" })
+                    if (mgUpscale.checked && mgBake.checked)
+                        steps.push({ key: "upscale", label: "Upscale texture 2×" })
+                    steps.push({ key: "build",
+                                 label: (mgPbr.checked && mgBake.checked)
+                                        ? "Build mesh + PBR maps" : "Build mesh" })
+                    mgRoot.mgSteps = steps
+                    mgRoot.mgActiveIdx = 0
+                    mgRoot.mgActiveProgress = -1
+
+                    MeshGenController.generateSelected(
+                        mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex,
+                        {
+                            "smooth": mgSmooth.checked,
+                            "refine": mgRefine.checked,
+                            "bake_texture": mgBake.checked,
+                            "generate_pbr": mgPbr.checked,
+                            "upscale_texture": mgUpscale.checked
+                        })
+                }
+            }
+
+            // Per-step progress list (only while busy): every selected stage
+            // gets its own row — ✓ when done, a live bar while active, dimmed
+            // while pending — so it's always clear WHICH phase is running.
+            Column {
+                width: parent.width - 16
+                spacing: 3
+                visible: MeshGenController.busy && mgRoot.mgSteps.length > 0
+
+                Repeater {
+                    model: mgRoot.mgSteps
+
+                    delegate: Item {
+                        required property var modelData
+                        required property int index
+                        readonly property bool stepDone: index < mgRoot.mgActiveIdx
+                        readonly property bool stepActive: index === mgRoot.mgActiveIdx
+                        width: parent ? parent.width : 200
+                        height: 18
+
+                        Text {
+                            id: stepLabel
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: (stepDone ? "✓ " : "• ") + modelData.label
+                            color: PropertiesPanelController.textColor
+                            opacity: stepDone ? 0.9 : (stepActive ? 1.0 : 0.4)
+                            font.pixelSize: 10
+                            font.bold: stepActive
+                        }
+
+                        // Mini per-step bar: full when done, live fraction while
+                        // active (pulsing when the stage can't report a total).
+                        Rectangle {
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 70
+                            height: 5
+                            radius: 2
+                            color: PropertiesPanelController.inputColor
+                            border.color: PropertiesPanelController.borderColor
+                            border.width: 1
+                            Rectangle {
+                                id: stepFill
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                radius: 2
+                                color: PropertiesPanelController.highlightColor
+                                width: stepDone ? parent.width
+                                     : stepActive
+                                       ? (mgRoot.mgActiveProgress >= 0
+                                          ? Math.max(3, parent.width * mgRoot.mgActiveProgress)
+                                          : parent.width)
+                                       : 0
+                                opacity: stepActive && mgRoot.mgActiveProgress < 0 ? 0.35 : 1.0
+                                SequentialAnimation on opacity {
+                                    running: stepActive && mgRoot.mgActiveProgress < 0
+                                    loops: Animation.Infinite
+                                    NumberAnimation { from: 0.2; to: 0.6; duration: 600 }
+                                    NumberAnimation { from: 0.6; to: 0.2; duration: 600 }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text {
+                id: mgStatus
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                visible: text.length > 0
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: ""
+            }
+
+            // Cancel (only while busy)
+            InspectorButton {
+                text: "Cancel"
+                visible: MeshGenController.busy
+                onClicked: MeshGenController.cancel()
+            }
+
+            Connections {
+                target: MeshGenController
+                function onProgress(stage, done, total) {
+                    // Advance the step list. Stages not in the list (e.g. the
+                    // vertex-colour fallback after a failed bake) are ignored.
+                    var idx = -1
+                    for (var i = 0; i < mgRoot.mgSteps.length; i++)
+                        if (mgRoot.mgSteps[i].key === stage) { idx = i; break }
+                    if (idx < 0)
+                        return
+                    if (idx > mgRoot.mgActiveIdx) {
+                        mgRoot.mgActiveIdx = idx
+                        mgRoot.mgActiveProgress = -1
+                    }
+                    if (idx === mgRoot.mgActiveIdx)
+                        mgRoot.mgActiveProgress = total > 0 ? done / total : -1
+                }
+                function onStatusMessage(msg) { mgStatus.text = msg }
+                function onCompleted(result) {
+                    mgRoot.mgActiveIdx = mgRoot.mgSteps.length   // all ✓
+                    mgStatus.text = "Done: " + result.vertexCount + " verts, "
+                        + result.triangleCount + " tris"
+                }
+                function onError(msg) { mgStatus.text = "Error: " + msg }
             }
         }
     }
@@ -4233,6 +4726,201 @@ Rectangle {
         }
     }
 
+    // ---- HDR / IBL Environment (Object mode, Slice E #471) ----
+    Component {
+        id: hdrEnvironmentComponent
+
+        Column {
+            id: hdrEnvCol
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            function choiceIndexForCurrent() {
+                const idx = HdrEnvironmentController.currentChoiceIndex
+                return idx >= 0 ? idx : -1
+            }
+
+            // Environment picker
+            Text {
+                text: "HDRI"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+
+                ThemedComboBox {
+                    id: hdrEnvCombo
+                    width: parent.width - browseBtn.width - 6
+                    height: 22
+                    font.pixelSize: 11
+                    enabled: HdrEnvironmentController.environmentChoices.length > 0
+                    model: HdrEnvironmentController.environmentChoices.length > 0
+                        ? HdrEnvironmentController.environmentChoices
+                        : [qsTr("(no environments — use Browse…)")]
+                    currentIndex: hdrEnvCol.choiceIndexForCurrent()
+                    onActivated: index => {
+                        if (HdrEnvironmentController.environmentChoices.length > 0)
+                            HdrEnvironmentController.loadEnvironmentChoice(index)
+                    }
+                    Connections {
+                        target: HdrEnvironmentController
+                        function onEnvironmentChanged() {
+                            hdrEnvCombo.currentIndex = hdrEnvCol.choiceIndexForCurrent()
+                        }
+                        function onEnvironmentChoicesChanged() {
+                            hdrEnvCombo.currentIndex = hdrEnvCol.choiceIndexForCurrent()
+                        }
+                    }
+                }
+
+                Rectangle {
+                    id: browseBtn
+                    width: 58
+                    height: 22
+                    radius: 3
+                    color: browseMa.containsMouse
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Browse…"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: browseMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: HdrEnvironmentController.browseForEnvironment()
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width - 16
+                elide: Text.ElideMiddle
+                color: PropertiesPanelController.textColor
+                opacity: 0.75
+                font.pixelSize: 10
+                text: HdrEnvironmentController.hasEnvironment
+                    ? ("Loaded: " + HdrEnvironmentController.currentEnvironmentLabel)
+                    : "No environment loaded (use Browse or add files to media/hdri/)"
+            }
+
+            Text {
+                visible: HdrEnvironmentController.hasEnvironment && !HdrEnvironmentController.iblReady
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                color: "#c9b64f"
+                font.pixelSize: 10
+                text: "IBL precompute in progress…"
+            }
+
+            // Skybox + background blur
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Rectangle {
+                    id: hdrSkyboxChk
+                    width: 14; height: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    border.color: hdrSkyboxChk.activeFocus
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.borderColor
+                    border.width: hdrSkyboxChk.activeFocus ? 2 : 1
+                    radius: 2
+                    color: HdrEnvironmentController.defaultSkyBoxVisible
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.controlBgColor
+                    opacity: HdrEnvironmentController.hasEnvironment ? 1.0 : 0.4
+                    activeFocusOnTab: HdrEnvironmentController.hasEnvironment
+                    Accessible.role: Accessible.CheckBox
+                    Accessible.name: "Show skybox"
+                    Accessible.checkable: true
+                    Accessible.checked: HdrEnvironmentController.defaultSkyBoxVisible
+                    Keys.onSpacePressed: if (HdrEnvironmentController.hasEnvironment)
+                        HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                    Keys.onReturnPressed: if (HdrEnvironmentController.hasEnvironment)
+                        HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                    Text {
+                        anchors.centerIn: parent
+                        text: HdrEnvironmentController.defaultSkyBoxVisible ? "✓" : ""
+                        color: "white"; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: HdrEnvironmentController.hasEnvironment
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: {
+                            HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                            hdrSkyboxChk.forceActiveFocus()
+                        }
+                    }
+                }
+                Text {
+                    text: "Show skybox"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                    opacity: HdrEnvironmentController.hasEnvironment ? 1.0 : 0.45
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: HdrEnvironmentController.hasEnvironment
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                        onClicked: {
+                            HdrEnvironmentController.defaultSkyBoxVisible = !HdrEnvironmentController.defaultSkyBoxVisible
+                            hdrSkyboxChk.forceActiveFocus()
+                        }
+                    }
+                }
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                visible: HdrEnvironmentController.hasEnvironment
+
+                Text {
+                    text: "Blur"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    width: 44
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    id: bgBlurSlider
+                    width: parent.width - 44 - blurValue.implicitWidth - 12
+                    from: 0
+                    to: 1
+                    stepSize: 0.05
+                    value: HdrEnvironmentController.backgroundBlur
+                    onMoved: HdrEnvironmentController.backgroundBlur = value
+                    Connections {
+                        target: HdrEnvironmentController
+                        function onBackgroundBlurChanged() {
+                            bgBlurSlider.value = HdrEnvironmentController.backgroundBlur
+                        }
+                    }
+                }
+                Text {
+                    id: blurValue
+                    text: Math.round(bgBlurSlider.value * 100) + "%"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+        }
+    }
+
     // ---- Material Library + Mode-Tools tools (Material mode) ----
     //
     // Slice I: this column replaces the old "Open Material Editor"
@@ -5126,9 +5814,17 @@ Rectangle {
                 // real PBR shading via the pbr_workflow Pass user-binding.
                 { name: "Metallic-Roughness",  label: "M-R",   cat: "PBR",     diff: "#bbbbbb", spec: "#888888", shin: 40,  alpha: 1.0,  wire: false, unlit: false },
                 { name: "Specular-Glossiness", label: "S-G",   cat: "PBR",     diff: "#bbbbbb", spec: "#dddddd", shin: 60,  alpha: 1.0,  wire: false, unlit: false },
-                { name: "Unlit PBR",           label: "Unlit",  cat: "PBR",    diff: "#dddddd", spec: "#dddddd", shin: 0,   alpha: 1.0,  wire: false, unlit: true  }
+                { name: "Unlit PBR",           label: "Unlit",  cat: "PBR",    diff: "#dddddd", spec: "#dddddd", shin: 0,   alpha: 1.0,  wire: false, unlit: true  },
+                // HDR presets (Slice F #472) — pair with studio_neutral by default.
+                { name: "Polished Metal (HDR)", label: "Polish", cat: "HDR",   diff: "#d0d0d6", spec: "#ffffff", shin: 90,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Brushed Metal (HDR)",  label: "Brush",  cat: "HDR",   diff: "#9e9ea4", spec: "#8c8c90", shin: 38,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Glass (HDR)",          label: "Glass",  cat: "HDR",   diff: "#b8d4eb", spec: "#ffffff", shin: 110, alpha: 0.32, wire: false, unlit: false },
+                { name: "Plastic (HDR)",        label: "Red",    cat: "HDR",   diff: "#d12e28", spec: "#737373", shin: 32,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Painted Wood (HDR)",   label: "Wood",   cat: "HDR",   diff: "#945c33", spec: "#1f1a14", shin: 8,   alpha: 1.0,  wire: false, unlit: false },
+                { name: "Skin (HDR-friendly)",  label: "Skin",   cat: "HDR",   diff: "#db9e80", spec: "#2e241e", shin: 12,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Car Paint (HDR)",      label: "Paint",  cat: "HDR",   diff: "#2e148c", spec: "#e6e6f2", shin: 98,  alpha: 1.0,  wire: false, unlit: false }
             ]
-            property var categories: ["Plastic", "Metal", "Wood", "Glass", "Other", "PBR"]
+            property var categories: ["Plastic", "Metal", "Wood", "Glass", "Other", "PBR", "HDR"]
             property string lastApplied: ""
 
             // Draw one category group

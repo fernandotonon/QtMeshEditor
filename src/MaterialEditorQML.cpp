@@ -1,4 +1,5 @@
 #include "MaterialEditorQML.h"
+#include "HDR/HdrMaterialScript.h"
 #include "MaterialPreviewRenderer.h"
 #include "Manager.h"
 #include "SentryReporter.h"
@@ -351,8 +352,8 @@ bool MaterialEditorQML::applyMaterial()
     SentryReporter::addBreadcrumb("ui.material", "Apply material");
     // Safety check for Ogre availability
     if (!isOgreAvailable()) {
-        // Just validate the script and emit success if Ogre is not available
-        if (!validateMaterialScript(m_materialText)) {
+        const QString scriptForOgre = HdrMaterialScript::stripEnvironmentLines(m_materialText);
+        if (!validateMaterialScript(scriptForOgre)) {
             return false;
         }
         emit materialApplied();
@@ -360,12 +361,17 @@ bool MaterialEditorQML::applyMaterial()
     }
     
     try {
-        Ogre::String script = m_materialText.toStdString();
+        float parsedIntensity = m_pbrEnvIntensity;
+        QColor parsedTint = m_pbrEnvTint;
+        HdrMaterialScript::parseEnvironmentLines(m_materialText, parsedIntensity, parsedTint);
+        const QString scriptForOgre = HdrMaterialScript::stripEnvironmentLines(m_materialText);
+
+        Ogre::String script = scriptForOgre.toStdString();
         Ogre::MemoryDataStream *memoryStream = new Ogre::MemoryDataStream(
             (void*)script.c_str(), script.length() * sizeof(char));
         Ogre::DataStreamPtr dataStream(memoryStream);
 
-        if (!validateMaterialScript(m_materialText)) {
+        if (!validateMaterialScript(scriptForOgre)) {
             return false;
         }
 
@@ -401,6 +407,12 @@ bool MaterialEditorQML::applyMaterial()
             // SRS_COOK_TORRANCE_LIGHTING. Returns false silently for
             // non-tagged materials → slice E FFP wiring stays.
             RTShaderHelper::applyPbrIfTagged(m_ogreMaterial);
+            if (m_ogreMaterial->getNumTechniques() > 0) {
+                Ogre::Pass* pass = m_ogreMaterial->getTechnique(0)->getPass(0);
+                RTShaderHelper::setPbrEnvIntensity(pass, parsedIntensity);
+                const Ogre::ColourValue tint(parsedTint.redF(), parsedTint.greenF(), parsedTint.blueF());
+                RTShaderHelper::setPbrEnvTint(pass, tint);
+            }
         }
 
         // Re-apply the edited material to sub-entities that use it.
@@ -437,6 +449,10 @@ bool MaterialEditorQML::applyMaterial()
 
         // Reload the material to update UI
         loadMaterial(m_materialName);
+        m_pbrEnvIntensity = parsedIntensity;
+        m_pbrEnvTint = parsedTint;
+        emit pbrEnvIntensityChanged();
+        emit pbrEnvTintChanged();
 
         MaterialPreviewRenderer::instance()->clearCache();
         
@@ -1639,6 +1655,18 @@ void MaterialEditorQML::updatePassProperties()
     emit fogDensityChanged();
     emit fogStartChanged();
     emit fogEndChanged();
+
+    m_pbrEnvIntensity = RTShaderHelper::pbrEnvIntensity(pass);
+    const Ogre::ColourValue envTint = RTShaderHelper::pbrEnvTint(pass);
+    m_pbrEnvTint = QColor::fromRgbF(envTint.r, envTint.g, envTint.b);
+    float parsedIntensity = m_pbrEnvIntensity;
+    QColor parsedTint = m_pbrEnvTint;
+    if (HdrMaterialScript::parseEnvironmentLines(m_materialText, parsedIntensity, parsedTint)) {
+        m_pbrEnvIntensity = parsedIntensity;
+        m_pbrEnvTint = parsedTint;
+    }
+    emit pbrEnvIntensityChanged();
+    emit pbrEnvTintChanged();
 }
 
 void MaterialEditorQML::resetPropertiesToDefaults()
@@ -1704,6 +1732,8 @@ void MaterialEditorQML::resetPropertiesToDefaults()
     m_textureVScale = 1.0f;
     m_textureRotation = 0.0f;
     m_environmentMapping = 0; // None
+    m_pbrEnvIntensity = HdrMaterialScript::kDefaultEnvIntensity;
+    m_pbrEnvTint = QColor::fromRgbF(1., 1., 1.);
     m_rotateAnimSpeed = 0.0;
     
     // Emit all property change signals to update UI
@@ -1763,6 +1793,8 @@ void MaterialEditorQML::resetPropertiesToDefaults()
     emit textureVScaleChanged();
     emit textureRotationChanged();
     emit environmentMappingChanged();
+    emit pbrEnvIntensityChanged();
+    emit pbrEnvTintChanged();
     emit rotateAnimSpeedChanged();
 }
 
@@ -1865,7 +1897,15 @@ void MaterialEditorQML::updateMaterialText()
     try {
         Ogre::MaterialSerializer ms;
         ms.queueForExport(m_ogreMaterial, false, false, m_materialName.toStdString());
-        setMaterialText(QString::fromStdString(ms.getQueuedAsString()));
+        QString text = QString::fromStdString(ms.getQueuedAsString());
+        if (Ogre::Pass* pass = getCurrentPass()) {
+            const Ogre::ColourValue tint = RTShaderHelper::pbrEnvTint(pass);
+            text = HdrMaterialScript::injectEnvironmentLines(
+                text,
+                RTShaderHelper::pbrEnvIntensity(pass),
+                QColor::fromRgbF(tint.r, tint.g, tint.b));
+        }
+        setMaterialText(text);
     } catch (const std::exception& e) {
         qDebug() << "Error updating material text:" << e.what();
     }
@@ -3008,6 +3048,49 @@ void MaterialEditorQML::setEnvironmentMapping(int mapping)
         }
         emit environmentMappingChanged();
     }
+}
+
+void MaterialEditorQML::setPbrEnvIntensity(float intensity)
+{
+    intensity = qBound(HdrMaterialScript::kMinEnvIntensity,
+                       intensity,
+                       HdrMaterialScript::kMaxEnvIntensity);
+    if (qFuzzyCompare(m_pbrEnvIntensity, intensity))
+        return;
+
+    Ogre::Pass* pass = getCurrentPass();
+    if (pass)
+        RTShaderHelper::setPbrEnvIntensity(pass, intensity);
+
+    m_pbrEnvIntensity = intensity;
+    if (pass)
+        updateMaterialText();
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("material.pbrEnvIntensity=%1").arg(intensity));
+    emit pbrEnvIntensityChanged();
+}
+
+void MaterialEditorQML::setPbrEnvTint(const QColor& tint)
+{
+    if (m_pbrEnvTint == tint)
+        return;
+
+    Ogre::Pass* pass = getCurrentPass();
+    if (pass) {
+        RTShaderHelper::setPbrEnvTint(
+            pass,
+            Ogre::ColourValue(tint.redF(), tint.greenF(), tint.blueF()));
+    }
+
+    m_pbrEnvTint = tint;
+    if (pass)
+        updateMaterialText();
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("material.pbrEnvTint=%1,%2,%3")
+                                      .arg(tint.redF())
+                                      .arg(tint.greenF())
+                                      .arg(tint.blueF()));
+    emit pbrEnvTintChanged();
 }
 
 void MaterialEditorQML::setRotateAnimSpeed(double speed)

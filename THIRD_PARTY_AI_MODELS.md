@@ -19,6 +19,51 @@ the binary). Attribution + licenses for the models and their training data:
   `encoder.onnx` + `decoder.onnx` via ONNX Runtime (`src/UniRigPredictor.cpp`),
   downloading them on first use to `AppData/ai_models/unirig/`.
 
+## TripoSR — image-to-3D mesh generation (epic #764)
+
+- **Model:** TripoSR single-image 3D reconstruction (DINO ViT tokenizer +
+  triplane transformer + NeRF decoder), exported to ONNX as an encoder
+  (image → triplane) + decoder (triplane + points → density/color) pair.
+- **Source:** Tripo AI + Stability AI — *"TripoSR: Fast 3D Object Reconstruction
+  from a Single Image"* (arXiv 2403.02151).
+  https://github.com/VAST-AI-Research/TripoSR — code **MIT**.
+  Weights: https://huggingface.co/stabilityai/TripoSR — **MIT** (code AND weights).
+- MIT code+weights is the deciding factor: it clears QtMeshEditor's permissive-
+  redistribution bar (Homebrew / Snap / WinGet / Docker), the same reason UniRig
+  (#408) passed. Non-commercial SF3D / Stable-Fast-3D was rejected on license.
+- The host-side iso-surface step (density grid → mesh) is a native, from-scratch
+  Lorensen marching cubes (`src/ImageTo3D/MarchingCubes.{h,cpp}`, public-domain
+  tables — no vendored/GPL dependency); TripoSR's own `torchmcubes` is torch/GPU-only.
+- The ONNX export is produced by `scripts/export-triposr-onnx.py` (one-time,
+  offline developer tool — not shipped). The app runs the resulting encoder +
+  `triposr_decoder.onnx` via ONNX Runtime (`src/ImageTo3D/MeshGenPredictor.cpp`),
+  downloading them on first use to `AppData/ai_models/triposr/`.
+- **Encoder size tiers** (all the SAME MIT weights, just re-precisioned by the
+  export script — no separate license): `triposr_encoder.onnx` (fp32, ~1.68 GB) and
+  `triposr_encoder_int8.onnx` (~430 MB, ORT dynamic quantization). The user picks
+  the tier; each downloads on demand. (fp16 was dropped — TripoSR's attention has a
+  hardcoded Cast-to-float32 the ONNX fp16 converters can't rewrite into a loadable
+  graph; int8 is smaller anyway.)
+- **Hosted** on the `fernandotonon/QtMeshEditor-models` HF repo:
+  `triposr/triposr_encoder.onnx`, `triposr/triposr_encoder_int8.onnx`,
+  `triposr/triposr_decoder.onnx`, `rembg/u2net.onnx` (uploaded via
+  `scripts/upload-triposr-models.sh`). First use downloads them; if ever absent the
+  feature reports a clean "not yet hosted" state (no crash) — the RigNet precedent.
+
+## U²-Net — background removal for image-to-3D (epic #764)
+
+- **Model:** U²-Net salient-object detection (`u2net.onnx`) — the default
+  foreground-segmentation model shipped by [rembg](https://github.com/danielgatis/rembg).
+- **Source:** Qin et al., *"U²-Net: Going Deeper with Nested U-Structure for
+  Salient Object Detection"* (Pattern Recognition 2020),
+  https://github.com/xuebinqin/U-2-Net — code **Apache-2.0**; the released ONNX
+  weights are redistributed by rembg under the same permissive terms.
+- Used only as a **pre-process** for TripoSR image-to-3D (`src/BackgroundRemover.cpp`):
+  isolate the subject so the reconstruction sees a clean background. Downloads on
+  first use to `AppData/ai_models/rembg/u2net.onnx` (override
+  `QTMESH_REMBG_MODEL_BASE_URL` / `QSettings ai/rembgModelBaseUrl`; offline guard
+  `QTMESH_REMBG_NO_DOWNLOAD`). Falls back to the raw image when unavailable.
+
 ## PBRify_Remix — PBR map synthesis (issue #404)
 
 - Three SPAN models from https://github.com/Kim2091/PBRify_Remix — **CC0-1.0**,

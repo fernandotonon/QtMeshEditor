@@ -55,7 +55,9 @@ ViewportGrid::ViewportGrid(const Ogre::ColourValue& colour, const unsigned int s
         m_pGridLineNode->attachObject(m_pGridLine);
     }
 
-    m_pGridLine->setRenderQueueGroup(Ogre::RENDER_QUEUE_BACKGROUND/*ZORDER_OVERLAY*/); // when using this, ensure Depth Check is Off in the material
+    // After skies (SKIES_EARLY=5) so HDR skybox does not paint over the grid;
+    // before MAIN (50) so scene geometry still draws on top.
+    m_pGridLine->setRenderQueueGroup(Ogre::RENDER_QUEUE_1);
 
     mPosition = Ogre::Vector3::ZERO;
 

@@ -133,6 +133,11 @@ private:
     QJsonObject toolApplyMaterial(const QJsonObject &args);
     QJsonObject toolListMaterialPresets(const QJsonObject &args);
     QJsonObject toolApplyMaterialPreset(const QJsonObject &args);
+    QJsonObject toolSetHdrEnvironment(const QJsonObject &args);
+    QJsonObject toolGetHdrEnvironment(const QJsonObject &args);
+    QJsonObject toolSetTonemap(const QJsonObject &args);
+    QJsonObject toolSetEnvIntensity(const QJsonObject &args);
+    QJsonObject toolSetEnvTint(const QJsonObject &args);
     /// #406: LLM-assisted material from a natural-language description. Drives
     /// the local LLM synchronously and binds the generated material to the
     /// target/selected mesh. Errors gracefully when no model is loaded.
@@ -201,6 +206,7 @@ private:
     QJsonObject toolMotionInBetween(const QJsonObject &args);
     QJsonObject toolGenerateMotion(const QJsonObject &args);    // #411 text-to-motion
     QJsonObject toolSegmentMesh(const QJsonObject &args);
+    QJsonObject toolGenerateMeshFromImage(const QJsonObject &args);   // #764 image-to-3D
     QJsonObject toolSaveScene(const QJsonObject &args);
     QJsonObject toolOpenScene(const QJsonObject &args);
     QJsonObject toolValidateMesh(const QJsonObject &args);

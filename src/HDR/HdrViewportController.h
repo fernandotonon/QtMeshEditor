@@ -21,9 +21,10 @@ public:
     void registerWidget(OgreWidget* widget);
     void unregisterWidget(OgreWidget* widget);
 
-    void setSkyBoxVisible(OgreWidget* widget, bool visible);
-    bool skyBoxVisible(const OgreWidget* widget) const;
+    void setActiveWidget(OgreWidget* widget);
+    OgreWidget* activeWidget() const { return m_activeWidget; }
 
+    void tickViewport(OgreWidget* widget);
     void tickActiveViewports();
 
 private slots:
@@ -37,7 +38,9 @@ private:
 
     HdrViewportPipeline* pipelineFor(OgreWidget* widget) const;
     void refreshAll();
+    void syncAllSkyBoxesFromDefault();
 
     static HdrViewportController* s_singleton;
+    OgreWidget* m_activeWidget = nullptr;
     std::unordered_map<OgreWidget*, std::unique_ptr<HdrViewportPipeline>> m_pipelines;
 };

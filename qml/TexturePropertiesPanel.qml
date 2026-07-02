@@ -842,6 +842,91 @@ GroupBox {
             }
         }
         
+        // PBR IBL environment (per-material intensity + tint, Slice E #471)
+        GroupBox {
+            id: pbrIblGroup
+            Layout.fillWidth: true
+            visible: MaterialEditorQML.isPbrMaterial()
+            topPadding: 22
+            leftPadding: 6
+            rightPadding: 6
+            bottomPadding: 6
+            background: Rectangle {
+                color: "transparent"
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 1
+                    color: MaterialEditorQML.borderColor
+                }
+            }
+            label: ThemedLabel {
+                text: "PBR Environment (IBL)"
+                font.bold: true
+                topPadding: 4
+            }
+
+            Connections {
+                target: MaterialEditorQML
+                function onTextureUnitsChanged() { pbrIblGroup.visible = MaterialEditorQML.isPbrMaterial() }
+                function onTextureUnitListChanged() { pbrIblGroup.visible = MaterialEditorQML.isPbrMaterial() }
+                function onMaterialApplied() { pbrIblGroup.visible = MaterialEditorQML.isPbrMaterial() }
+            }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 8
+
+                RowLayout {
+                    ThemedLabel { text: "Intensity:" }
+                    Slider {
+                        id: pbrEnvIntensitySlider
+                        Layout.fillWidth: true
+                        from: 0
+                        to: 4
+                        stepSize: 0.05
+                        value: MaterialEditorQML.pbrEnvIntensity
+                        onMoved: MaterialEditorQML.pbrEnvIntensity = value
+                        Connections {
+                            target: MaterialEditorQML
+                            function onPbrEnvIntensityChanged() {
+                                pbrEnvIntensitySlider.value = MaterialEditorQML.pbrEnvIntensity
+                            }
+                        }
+                    }
+                    ThemedLabel {
+                        text: pbrEnvIntensitySlider.value.toFixed(2)
+                        Layout.preferredWidth: 36
+                    }
+                }
+
+                RowLayout {
+                    ThemedLabel { text: "Tint:" }
+                    Rectangle {
+                        width: 30
+                        height: 20
+                        color: MaterialEditorQML.pbrEnvTint
+                        border.color: MaterialEditorQML.borderColor
+                        border.width: 1
+                        radius: 2
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: colorPickerPopup.openForColor(
+                                "pbrEnvTint", MaterialEditorQML.pbrEnvTint)
+                        }
+                    }
+                    ThemedLabel {
+                        Layout.fillWidth: true
+                        text: "#" + MaterialEditorQML.pbrEnvTint.toString().slice(1, 7)
+                        font.pixelSize: 10
+                        color: MaterialEditorQML.disabledTextColor
+                    }
+                }
+            }
+        }
+
         // Environment Mapping Group
         GroupBox {
             title: "Environment Mapping"

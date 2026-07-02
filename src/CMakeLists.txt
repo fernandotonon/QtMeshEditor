@@ -129,12 +129,22 @@ HDR/HdrIblRtss.cpp
 HDR/HdrTonemap.cpp
 HDR/HdrViewportPipeline.cpp
 HDR/HdrViewportController.cpp
+HDR/HdrMaterialScript.cpp
+HDR/HdrEnvironmentController.cpp
+HDR/HdrBundledLibrary.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
+ImageTo3D/MarchingCubes.cpp
+ImageTo3D/MeshRefine.cpp
+ImageTo3D/MeshGenBaker.cpp
+ImageTo3D/MeshGenPredictor.cpp
+ImageTo3D/MeshGenBuilder.cpp
+ImageTo3D/MeshGenController.cpp
+ImageTo3D/BackgroundRemover.cpp
 PbrMapSynth.cpp
 TextureUpscaler.cpp
 AIAssistManager.cpp
@@ -313,6 +323,7 @@ MaterialPreviewRenderer.h
 ModelTurntableRenderer.h
 ModelIsometricRenderer.h
 IsometricSpritesController.h
+ImageTo3D/MeshGenController.h
 EditableMesh.h
 EditModeController.h
 EditorModeController.h
@@ -326,6 +337,9 @@ HDR/HdrIblRtss.h
 HDR/HdrTonemap.h
 HDR/HdrViewportPipeline.h
 HDR/HdrViewportController.h
+HDR/HdrMaterialScript.h
+HDR/HdrEnvironmentController.h
+HDR/HdrBundledLibrary.h
 )
 
 set(TEST_SOURCES "")

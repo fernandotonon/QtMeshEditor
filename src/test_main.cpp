@@ -18,6 +18,7 @@
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
+#include <execinfo.h>   // backtrace dump from crashHandler (diagnosing CI SIGSEGV)
 #endif
 
 // GCC coverage flush — only available when built with --coverage
@@ -32,6 +33,20 @@ static volatile bool g_testsCompleted = false;
 
 static void crashHandler(int sig)
 {
+#ifndef Q_OS_WIN
+    // Dump a backtrace to stderr so CI logs show WHERE a signal-11 landed
+    // (suites that crash under Xvfb are otherwise a black box — the runner
+    // only reports "Suite X CRASHED"). backtrace_symbols_fd writes straight
+    // to the fd with no malloc, so it is safe enough in a signal handler;
+    // main() pre-loads libgcc by calling backtrace() once at startup.
+    {
+        const char banner[] = "=== crashHandler backtrace ===\n";
+        write(STDERR_FILENO, banner, sizeof(banner) - 1);
+        void* frames[64];
+        const int n = backtrace(frames, 64);
+        backtrace_symbols_fd(frames, n, STDERR_FILENO);
+    }
+#endif
 #ifdef COVERAGE_BUILD
     __gcov_dump();
     if (g_testsCompleted) {
@@ -82,6 +97,8 @@ int main(int argc, char **argv)
         "QTMESH_INBETWEEN_NO_DOWNLOAD",
         "QTMESH_MOTION_NO_DOWNLOAD",
         "QTMESH_T2M_NO_DOWNLOAD",
+        "QTMESH_TRIPOSR_NO_DOWNLOAD",
+        "QTMESH_REMBG_NO_DOWNLOAD",
     };
     for (const char* guard : kNoDownloadGuards) {
         if (!qEnvironmentVariableIsSet(guard))
@@ -99,6 +116,15 @@ int main(int argc, char **argv)
 
     // Suppress Qt debug messages
     qInstallMessageHandler(testMessageHandler);
+
+#ifndef Q_OS_WIN
+    // Pre-load libgcc's unwinder so the first backtrace() call inside the
+    // signal handler doesn't have to (it may allocate on first use).
+    {
+        void* preload[2];
+        backtrace(preload, 2);
+    }
+#endif
 
     // Install signal handlers AFTER QApplication to avoid Qt overwriting them.
     signal(SIGSEGV, crashHandler);

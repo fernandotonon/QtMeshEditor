@@ -230,6 +230,14 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
+        // Match MainWindowTest: mark the org as the test harness so the MainWindow
+        // construct/destruct paths that gate on it skip work that segfaults under
+        // Mesa/Xvfb — HDR first-run IBL defaults (HdrBundledLibrary) and the AI
+        // Image→3D QML section (MeshGenController::available). The 6 tests here that
+        // build a real MainWindow otherwise hit those unguarded paths.
+        previousOrganizationName = QCoreApplication::organizationName();
+        QCoreApplication::setOrganizationName(QStringLiteral("QtMeshEditorTests"));
+
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
@@ -243,7 +251,10 @@ protected:
         {
             app->processEvents();
         }
+        QCoreApplication::setOrganizationName(previousOrganizationName);
     }
+
+    QString previousOrganizationName;
 
     Ogre::Entity* createAndSelectTriangleEntity(const QString& baseName)
     {
@@ -5601,6 +5612,68 @@ TEST_F(MCPServerTest, ListMaterialPresets_AppearsInToolList)
         }
     }
     EXPECT_TRUE(found) << "list_material_presets must be exposed in tools/list";
+}
+
+// ==========================================================================
+// HDR / IBL MCP tools (#473)
+// ==========================================================================
+
+TEST_F(MCPServerTest, GetHdrEnvironment_ReturnsJson)
+{
+    QJsonObject result = server->callTool("get_hdr_environment", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    const QString text = getResultText(result);
+    EXPECT_TRUE(text.contains(QStringLiteral("tonemap")));
+    EXPECT_TRUE(text.contains(QStringLiteral("environment")));
+}
+
+TEST_F(MCPServerTest, SetTonemap_AcesExposure)
+{
+    QJsonObject args;
+    args[QStringLiteral("operator")] = QStringLiteral("aces");
+    args[QStringLiteral("exposure")] = 0.5;
+    QJsonObject result = server->callTool("set_tonemap", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains(QStringLiteral("exposure_ev=0.5")));
+}
+
+TEST_F(MCPServerTest, SetEnvIntensity_OnCreatedMaterial)
+{
+    QJsonObject createArgs{{QStringLiteral("name"), QStringLiteral("HdrEnvTestMat")}};
+    ASSERT_FALSE(isError(server->callTool("create_material", createArgs)));
+
+    QJsonObject args;
+    args[QStringLiteral("material")] = QStringLiteral("HdrEnvTestMat");
+    args[QStringLiteral("value")] = 2.0;
+    QJsonObject result = server->callTool("set_env_intensity", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains(QStringLiteral("2")));
+}
+
+TEST_F(MCPServerTest, SetEnvTint_OnCreatedMaterial)
+{
+    QJsonObject createArgs{{QStringLiteral("name"), QStringLiteral("HdrTintTestMat")}};
+    ASSERT_FALSE(isError(server->callTool("create_material", createArgs)));
+
+    QJsonObject args;
+    args[QStringLiteral("material")] = QStringLiteral("HdrTintTestMat");
+    args[QStringLiteral("hex")] = QStringLiteral("#fff5e6");
+    QJsonObject result = server->callTool("set_env_tint", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains(QStringLiteral("#fff5e6")));
+}
+
+TEST_F(MCPServerTest, HdrTools_AppearInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    QStringList names;
+    for (const auto& t : tools)
+        names << t.toObject()[QStringLiteral("name")].toString();
+    EXPECT_TRUE(names.contains(QStringLiteral("set_hdr_environment")));
+    EXPECT_TRUE(names.contains(QStringLiteral("get_hdr_environment")));
+    EXPECT_TRUE(names.contains(QStringLiteral("set_tonemap")));
+    EXPECT_TRUE(names.contains(QStringLiteral("set_env_intensity")));
+    EXPECT_TRUE(names.contains(QStringLiteral("set_env_tint")));
 }
 
 // ==========================================================================

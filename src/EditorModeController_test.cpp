@@ -70,7 +70,9 @@ TEST_F(EditorModeControllerTest, InspectorTabPolicyDefaultsByMode)
 {
     auto* ctrl = EditorModeController::instance();
 
-    EXPECT_FALSE(ctrl->modeHasModeTools(EditorModeController::ObjectMode));
+    // Object mode gained a Mode Tools section (image-to-3D, #764), so it now
+    // reports mode tools and defaults to the Mode Tools tab like the other modes.
+    EXPECT_TRUE(ctrl->modeHasModeTools(EditorModeController::ObjectMode));
     EXPECT_TRUE(ctrl->modeHasModeTools(EditorModeController::EditMode));
     EXPECT_TRUE(ctrl->modeHasModeTools(EditorModeController::AnimationMode));
     EXPECT_TRUE(ctrl->modeHasModeTools(EditorModeController::MaterialMode));
@@ -78,7 +80,7 @@ TEST_F(EditorModeControllerTest, InspectorTabPolicyDefaultsByMode)
     EXPECT_FALSE(ctrl->modeHasModeTools(99));
 
     EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::ObjectMode),
-              EditorModeController::InspectorTab);
+              EditorModeController::ModeToolsTab);
     EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::EditMode),
               EditorModeController::ModeToolsTab);
     EXPECT_EQ(ctrl->defaultInspectorTabForMode(EditorModeController::AnimationMode),

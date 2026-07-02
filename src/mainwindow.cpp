@@ -89,7 +89,13 @@
 #include "SubEntityHighlight.h"
 #include "SpaceCamera.h"
 #include "ViewCube/ViewCubeController.h"
+#include "HDR/HdrEnvironmentController.h"
+#include "HDR/HdrViewportController.h"
+#include "HDR/HdrBundledLibrary.h"
 #include "LLMManager.h"
+#ifdef ENABLE_ONNX
+#include "AIAssistManager.h"
+#endif
 #ifdef ENABLE_PS1_RIP
 #include "PS1/runtime/PS1RipSessionWindow.h"
 #endif
@@ -119,6 +125,7 @@
 #include "VATBakerController.h"
 #include "ThemeManager.h"
 #include "IsometricSpritesController.h"
+#include "ImageTo3D/MeshGenController.h"
 #include "MorphAnimationManager.h"
 #include "EditorModeController.h"
 #include "QtMeshCloudClient.h"
@@ -250,6 +257,12 @@ MainWindow::MainWindow(QWidget *parent) :
     createEditorViewport(/*TODO add the type of view (perspective, left,....*/);
 
     manager->loadResources(); // Resources should be loaded after createRenderWindow...
+
+    // First-run HDR defaults need a GL context + RTSS (initRTShaderSystem runs in
+    // loadResources). Loading in Manager's constructor was too early and could segfault.
+    QTimer::singleShot(0, this, []() {
+        HdrBundledLibrary::applyFirstRunDefaultsIfNeeded();
+    });
 
     m_pRoot = manager->getRoot();
     m_pRoot->addFrameListener(this);
@@ -522,6 +535,7 @@ MainWindow::~MainWindow()
         QuadRetopoController::kill();
         SkinWeightsController::kill();
         IsometricSpritesController::kill();
+        MeshGenController::kill();
         MeshDepthRenderer::shutdown();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
@@ -744,6 +758,10 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MaterialPresetLibrary::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<HdrEnvironmentController>("HdrEnvironment", 1, 0, "HdrEnvironmentController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return HdrEnvironmentController::qmlInstance(engine, nullptr);
+            });
         qmlRegisterSingletonType<AIChatManager>("AIChatPanel", 1, 0, "AIChatManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AIChatManager::qmlInstance(engine, nullptr);
@@ -789,6 +807,59 @@ void MainWindow::initToolBar()
                                      : QStringLiteral("Isometric sprite save dialog accepted: %1")
                                            .arg(chosen));
                 emit IsometricSpritesController::instance()->outputPathPicked(chosen);
+            });
+        });
+        // Registered under MaterialEditorQML (NOT PropertiesPanel): both
+        // PropertiesPanel.qml and AISettingsDialog.qml already import
+        // MaterialEditorQML, so a single registration resolves for both — and it
+        // avoids registering the same C++ type under two module URIs (which
+        // crashed MainWindow/MCPServer tests that reconstruct the window per test).
+        //
+        // TWO guards, both essential (CI signal-11 diagnosis, crashHandler
+        // backtraces in run 28573967237):
+        //  * ONCE per process — in the real app main.cpp registers this URI's
+        //    other singletons once at startup; re-registering MeshGenController
+        //    on every MainWindow construction creates duplicate QQmlType
+        //    entries, and a SECOND in-process window then crashed inside
+        //    QQmlEnginePrivate::singletonInstance resolving the stale one.
+        //  * NOT in the unit-test harness — the test binary (test_main.cpp)
+        //    never runs main.cpp's registrations, so on master the
+        //    "import MaterialEditorQML" in PropertiesPanel.qml simply failed
+        //    in tests and the panel tree never instantiated. This registration
+        //    made the import succeed for the first time, pulling the whole
+        //    panel (mode-tools Loaders and all) into every MainWindowTest /
+        //    MCPServerTest window under Mesa/Xvfb — where the second window's
+        //    stale-singleton lookup segfaulted. Skipping the registration
+        //    restores master's exact harness behavior; the feature's QML is
+        //    covered by MaterialEditorQML_qml_test, which registers the
+        //    singleton explicitly in its own engine.
+        if (QCoreApplication::organizationName() != QLatin1String("QtMeshEditorTests")) {
+            static bool meshGenSingletonRegistered = false;
+            if (!meshGenSingletonRegistered) {
+                meshGenSingletonRegistered = true;
+                qmlRegisterSingletonType<MeshGenController>("MaterialEditorQML", 1, 0, "MeshGenController",
+                    [](QQmlEngine* engine, QJSEngine* js) -> QObject* {
+                        return MeshGenController::create(engine, js);
+                    });
+            }
+        }
+        connect(HdrEnvironmentController::instance(), &HdrEnvironmentController::browseRequested,
+                this, [this]() {
+            QTimer::singleShot(0, this, [this]() {
+                auto* hdrCtrl = HdrEnvironmentController::instance();
+                const QString path = QFileDialog::getOpenFileName(
+                    this,
+                    tr("Select HDR Environment"),
+                    hdrCtrl->browseStartDirectory(),
+                    tr("HDR Images (*.hdr *.exr);;All Files (*)"),
+                    nullptr,
+                    QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons);
+                SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                              path.isEmpty()
+                                                  ? QStringLiteral("hdr.browseCancelled")
+                                                  : QStringLiteral("hdr.browseAccepted=%1")
+                                                        .arg(QFileInfo(path).fileName()));
+                hdrCtrl->completeBrowseFromDialog(path);
             });
         });
         qmlRegisterSingletonType<MorphAnimationManager>("PropertiesPanel", 1, 0, "MorphAnimationManager",
@@ -2424,6 +2495,15 @@ void MainWindow::initToolBar()
         m_viewCubeController->setActiveWidget(mDockWidgetList.first()->getOgreWidget());
     m_viewCubeController->setVisible(true);
 
+    for (EditorViewport* vp : mDockWidgetList) {
+        connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget,
+                [](OgreWidget* widget) {
+                    if (auto* ctrl = HdrViewportController::getSingletonPtr())
+                        ctrl->setActiveWidget(widget);
+                    HdrEnvironmentController::instance()->setActiveWidget(widget);
+                });
+    }
+
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
     aiMenu->setObjectName("menuAI");
@@ -2510,6 +2590,9 @@ void MainWindow::initToolBar()
     // Initialize LLMManager after the window is up — starting the worker thread
     // during initToolBar competes with Ogre + QML startup on the main thread.
     QTimer::singleShot(0, this, []() { LLMManager::instance(); });
+
+    // Image-to-3D (epic #764) lives in the Object-mode "Mode Tools" panel
+    // (qml/PropertiesPanel.qml → MeshGenController), not a Tools-menu item.
 
 #ifdef ENABLE_PS1_RIP
     QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
@@ -4605,6 +4688,12 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
     if (m_viewCubeController)
         connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget,
                 m_viewCubeController, &ViewCubeController::setActiveWidget);
+    connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget,
+            [](OgreWidget* widget) {
+                if (auto* ctrl = HdrViewportController::getSingletonPtr())
+                    ctrl->setActiveWidget(widget);
+                HdrEnvironmentController::instance()->setActiveWidget(widget);
+            });
 
     if(!mDockWidgetList.isEmpty())
     {

@@ -16,3 +16,4 @@ FileSystem=media/materials/programs
 FileSystem=media/materials/scripts
 FileSystem=media/compositors
 FileSystem=media/materials/textures
+FileSystem=media/hdri

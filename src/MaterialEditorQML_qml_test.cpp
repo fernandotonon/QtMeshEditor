@@ -15,6 +15,7 @@
 #include "MaterialEditorQML.h"
 #include "LLMManager.h"
 #include "ModelDownloader.h"
+#include "ImageTo3D/MeshGenController.h"
 #include "QMLMaterialHighlighter.h"
 #include "ThemeManager.h"
 
@@ -192,6 +193,13 @@ protected:
         qmlRegisterSingletonType<ModelDownloader>("MaterialEditorQML", 1, 0, "ModelDownloader",
             [](QQmlEngine *eng, QJSEngine *js) -> QObject * {
                 return ModelDownloader::qmlInstance(eng, js);
+            }
+        );
+        // AISettingsDialog.qml references MeshGenController (image-to-3D #764) under
+        // the MaterialEditorQML module — register it so the load test resolves it.
+        qmlRegisterSingletonType<MeshGenController>("MaterialEditorQML", 1, 0, "MeshGenController",
+            [](QQmlEngine *eng, QJSEngine *js) -> QObject * {
+                return MeshGenController::create(eng, js);
             }
         );
         qmlRegisterType<QMLMaterialHighlighter>("MaterialEditorQML", 1, 0, "MaterialHighlighter");
