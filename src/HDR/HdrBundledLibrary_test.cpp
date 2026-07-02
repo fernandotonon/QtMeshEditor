@@ -1,5 +1,7 @@
 #include "HDR/HdrBundledLibrary.h"
 
+#include "TestHelpers.h"
+
 #include <gtest/gtest.h>
 
 #include <QDir>
@@ -38,4 +40,11 @@ TEST(HdrBundledLibraryTest, UserHdriDirectoryIsWritable)
     const QString dir = HdrBundledLibrary::userHdriDirectory();
     EXPECT_FALSE(dir.isEmpty());
     EXPECT_TRUE(QDir(dir).exists());
+}
+
+TEST(HdrBundledLibraryTest, RegisterUserHdriResourceLocationIsIdempotent)
+{
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    HdrBundledLibrary::registerUserHdriResourceLocation();
+    EXPECT_NO_THROW(HdrBundledLibrary::registerUserHdriResourceLocation());
 }

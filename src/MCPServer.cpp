@@ -6300,7 +6300,7 @@ QJsonArray MCPServer::buildToolsList()
     // list_material_presets
     appendTool(
         "list_material_presets",
-        "List the built-in material presets (Plastic / Metal / Wood / Glass / Unlit / Wireframe + PBR templates: Metallic-Roughness, Specular-Glossiness, Unlit PBR). Pass any returned name to apply_material_preset.",
+        "List the built-in material presets (Plastic / Metal / Wood / Glass / Unlit / Wireframe + PBR templates: Metallic-Roughness, Specular-Glossiness, Unlit PBR + HDR Environment presets: Polished Metal (HDR), Glass (HDR), Skin (HDR-friendly), etc.). Pass any returned name to apply_material_preset.",
         QJsonObject());
 
     // apply_material_preset

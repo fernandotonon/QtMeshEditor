@@ -77,7 +77,7 @@ public:
     float backgroundBlur() const { return m_backgroundBlur; }
     void setBackgroundBlur(float blur);
 
-    /// Scan bundled HDRIs under `media/hdri/` (Slice F fills the folder; empty until then).
+    /// Scan bundled HDRIs under `media/hdri/` (registered via resources.cfg).
     static QStringList listBundledEnvironments();
 
     /// Install or refresh the shared scene skybox from the active cubemap.

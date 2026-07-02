@@ -195,6 +195,12 @@ const HdrPresetConfig* hdrPresetConfigForName(const QString& name)
     return it == kConfigs.constEnd() ? nullptr : &(*it);
 }
 
+bool isHdrPresetName(const QString& name)
+{
+    return name.contains(QStringLiteral("(HDR)"))
+        || name.contains(QStringLiteral("HDR-friendly"), Qt::CaseInsensitive);
+}
+
 } // namespace
 
 QStringList MaterialPresetLibrary::presetNames() const
@@ -214,7 +220,7 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
 {
     auto* sel = SelectionSet::getSingleton();
 
-    const bool isHdrPreset = name.contains(QStringLiteral("(HDR)"));
+    const bool isHdrPreset = isHdrPresetName(name);
     if (isHdrPreset) {
         SentryReporter::addBreadcrumb(QStringLiteral("render.hdr.preset"), name);
         if (auto* hdrMgr = HDREnvironmentManager::getSingletonPtr()) {
