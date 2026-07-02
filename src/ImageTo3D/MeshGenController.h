@@ -42,6 +42,7 @@ class MeshGenController : public QObject
 public:
     static MeshGenController* instance();
     static MeshGenController* create(QQmlEngine*, QJSEngine*);
+    static void kill();
 
     bool available() const;         // ENABLE_ONNX build
     bool busy() const { return m_busy; }

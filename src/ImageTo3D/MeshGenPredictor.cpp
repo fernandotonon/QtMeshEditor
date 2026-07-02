@@ -287,10 +287,13 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         const bool wantColor = opts.vertexColor && colorIdx >= 0;
 
         // ---- (2) Tile the grid through the decoder -> density grid ------------
-        // Points are GENERATED PER CHUNK into a small reusable buffer rather than
-        // materialising the whole res^3 * 3 grid up front (that's ~192 MiB at 256,
-        // ~1.5 GiB at 512 — enough to OOM before the ONNX buffers). Order matches
-        // MarchingCubes' row-major field[z*n*n + y*n + x] (x fastest).
+        // The density FIELD itself is unavoidably res^3 floats (it's the MC input):
+        // ~64 MiB at 256, ~512 MiB at 512, ~4.3 GiB at 1024 — the caller is warned
+        // above 512 (see CLIPipeline/MCPServer). Chunking does NOT cap that; it caps
+        // the *query-point* buffer, which is generated per chunk into a small
+        // reusable vector rather than materialising the whole res^3 * 3 point grid
+        // up front (another ~192 MiB at 256 / ~1.5 GiB at 512 on top of the field).
+        // Order matches MarchingCubes' row-major field[z*n*n + y*n + x] (x fastest).
         const size_t totalPts = static_cast<size_t>(res) * res * res;
         std::vector<float> densityField(totalPts, 0.0f);
         const float step = (2.0f * kRadius) / float(res - 1);

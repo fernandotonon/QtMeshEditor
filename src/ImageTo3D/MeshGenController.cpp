@@ -13,7 +13,6 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImage>
-#include <QCoreApplication>   // qApp
 #include <QMetaObject>
 #include <QThread>
 
@@ -33,12 +32,15 @@ MeshGenController::MeshGenController(QObject* parent) : QObject(parent) {}
 
 MeshGenController* MeshGenController::instance()
 {
-    // Parent to qApp so the process-wide singleton has a well-defined owner/lifetime
-    // (cleaned up once at app exit) rather than being an unparented QObject that
-    // multiple QML engines reference across construct/teardown cycles — which
-    // crashed MainWindow/MCPServer tests that build a fresh MainWindow (hence a new
-    // QQmlEngine loading PropertiesPanel.qml) per test.
-    if (!s_instance) s_instance = new MeshGenController(qApp);
+    // Unparented process-wide singleton — matches every other PropertiesPanel
+    // controller (IsometricSpritesController, UvUnwrapController, …). Its lifetime
+    // is bounded by kill(), called from the MainWindow teardown, so each
+    // MainWindow/MCPServer test (which builds a fresh MainWindow + QQmlEngine
+    // loading PropertiesPanel.qml, then tears it down) starts and ends clean. An
+    // earlier attempt parented this to qApp and never killed it — the surviving
+    // singleton was then referenced by the NEXT test's engine after the previous
+    // engine had been destroyed, crashing MainWindowTest/MCPServerTest (signal 11).
+    if (!s_instance) s_instance = new MeshGenController();
     return s_instance;
 }
 
@@ -50,6 +52,12 @@ MeshGenController* MeshGenController::create(QQmlEngine* engine, QJSEngine*)
     if (engine)
         QQmlEngine::setObjectOwnership(instance(), QQmlEngine::CppOwnership);
     return instance();
+}
+
+void MeshGenController::kill()
+{
+    delete s_instance;
+    s_instance = nullptr;
 }
 
 bool MeshGenController::available() const
@@ -68,6 +76,8 @@ void MeshGenController::cancel()
 {
     if (m_busy) {
         m_cancel = true;
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
+                                      QStringLiteral("MeshGenController cancel"));
         emit statusMessage(tr("Cancelling…"));
     }
 }
@@ -126,6 +136,8 @@ void MeshGenController::selectImage()
             m_previewSource = QStringLiteral("data:image/png;base64,")
                               + QString::fromLatin1(png.toBase64());
     }
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
+        QStringLiteral("MeshGenController selectImage %1").arg(QFileInfo(path).fileName()));
     emit selectedImageChanged();
     emit statusMessage(tr("Selected: %1").arg(QFileInfo(path).fileName()));
 }

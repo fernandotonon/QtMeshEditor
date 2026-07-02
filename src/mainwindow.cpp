@@ -526,6 +526,7 @@ MainWindow::~MainWindow()
         QuadRetopoController::kill();
         SkinWeightsController::kill();
         IsometricSpritesController::kill();
+        MeshGenController::kill();
         MeshDepthRenderer::shutdown();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
