@@ -1412,24 +1412,23 @@ void MeshImporterExporter::registerImportResourceDirectory(const QString& path)
     const std::string group = absPath.toStdString();
     auto& rgm = Ogre::ResourceGroupManager::getSingleton();
 
-    // If the directory was already registered earlier in this process (common in tests and CLI),
-    // Ogre's FileSystem archive may have been initialised before new files were written there.
-    // Re-registering the same location forces Ogre to re-scan the directory so freshly exported
-    // `.mesh` / `.material` sidecars are discoverable by name.
-    if (const bool haveLocation = rgm.resourceLocationExists(group, group);
-        haveLocation && rgm.isResourceGroupInitialised(group))
-    {
-        try {
-            rgm.removeResourceLocation(group, group);
-        } catch (const Ogre::Exception& e) {
-            Ogre::LogManager::getSingleton().logMessage(
-                "Note: removeResourceLocation: " + e.getFullDescription());
-        }
-    }
-
+    // If the directory was already registered earlier in this process (common in
+    // tests, the CLI, and generate→export→reimport flows), its file index may
+    // predate freshly exported `.mesh`/`.material`/texture sidecars. Refresh by
+    // ADDING the location again: a re-add re-lists the directory into the
+    // group's index while ArchiveManager reuses the same Archive instance.
+    //
+    // Do NOT removeResourceLocation to force the refresh. The same directory is
+    // routinely registered in MULTIPLE groups (this function itself puts it in a
+    // dir-named group AND in DEFAULT; MeshGenBuilder registers texture dirs in
+    // DEFAULT). Ogre shares ONE Archive object per path across groups, and
+    // removeResourceLocation DESTROYS it — every other group's index then holds
+    // a dangling Archive* and the next openResource crashes with EXC_BAD_ACCESS
+    // inside ResourceGroupManager::openResourceImpl (reproduced under lldb via
+    // generate → export .mesh → reload in the same session; same signature as
+    // the long-standing "known GL/Xvfb" CI crashes in the CLI coverage suites).
     try {
-        if (!rgm.resourceLocationExists(group, group))
-            rgm.addResourceLocation(group, "FileSystem", group);
+        rgm.addResourceLocation(group, "FileSystem", group);
         rgm.initialiseResourceGroup(group);
     } catch (const Ogre::Exception& e) {
         Ogre::LogManager::getSingleton().logMessage(
@@ -1439,14 +1438,15 @@ void MeshImporterExporter::registerImportResourceDirectory(const QString& path)
     // Assimp's MaterialProcessor loads sidecar textures through the Default
     // group. Cloud downloads land in a cache folder outside resources.cfg, so
     // register the import directory there too (recursive for nested textures/).
+    // Same re-add-to-refresh idiom as above — never remove.
     try {
-        if (rgm.resourceLocationExists(group, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
-            rgm.removeResourceLocation(group, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
         rgm.addResourceLocation(group,
                                 "FileSystem",
                                 Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
                                 false,
                                 true);
+        rgm.initialiseResourceGroup(
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     } catch (const Ogre::Exception& e) {
         Ogre::LogManager::getSingleton().logMessage(
             "Warning during Default resource group registration: " + e.getFullDescription());

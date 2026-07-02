@@ -300,15 +300,21 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
             // Register the directory so Ogre's resource system (and the
             // exporters' resource walk) can find the files. When the location
             // is ALREADY registered (second+ generation into the same dir),
-            // remove and re-add it: the group's file index was built before
-            // these PNGs existed and would miss them otherwise.
+            // ADD IT AGAIN — a re-add re-lists the directory into the group's
+            // file index (picking up the fresh PNGs) while ArchiveManager
+            // reuses the same Archive instance. Do NOT removeResourceLocation
+            // to force the refresh: the same directory is commonly registered
+            // in MULTIPLE groups (the mesh-import path uses a dir-named group
+            // + DEFAULT), Ogre shares one Archive per path across groups, and
+            // removal DESTROYS it — every other group's index then dangles and
+            // the next openResource dies with EXC_BAD_ACCESS inside
+            // ResourceGroupManager::openResourceImpl (reproduced under lldb:
+            // generate → export .mesh → reload in the same session).
             try {
                 auto& rgm = Ogre::ResourceGroupManager::getSingleton();
                 const std::string loc = QDir(dir).absolutePath().toStdString();
                 const std::string grp =
                     Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
-                if (rgm.resourceLocationExists(loc, grp))
-                    rgm.removeResourceLocation(loc, grp);
                 rgm.addResourceLocation(loc, "FileSystem", grp);
                 rgm.initialiseResourceGroup(grp);
             } catch (const Ogre::Exception& e) {
