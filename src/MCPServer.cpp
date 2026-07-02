@@ -53,6 +53,7 @@
 #include "AIAssistManager.h"
 #include "PbrMapSynth.h"
 #include "RTShaderHelper.h"
+#include "TextureUpscaler.h"
 #endif
 #include <QEventLoop>
 #include <QDebug>
@@ -2171,6 +2172,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (opts.textureSize < 64 || opts.textureSize > 8192)
             return makeErrorResult("'texture_size' must be between 64 and 8192.");
     }
+    const bool upscaleTex = args.value("upscale_texture").toBool();
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
         QStringLiteral("generate_mesh_from_image %1 res=%2")
@@ -2187,12 +2189,24 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (image.isNull())
         return makeErrorResult(QStringLiteral("failed to read image: %1").arg(imagePath));
 
-    const MeshGenPredictor::Result res = MeshGenPredictor::predict(
+    MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(opts.quality),
         MeshGenPredictor::decoderModelPath(), opts);
     if (!res.ok)
         return makeErrorResult(res.error.isEmpty()
             ? QStringLiteral("image-to-3D failed") : res.error);
+
+    // Optional Real-ESRGAN 2x on the baked diffuse (best-effort; keeps the
+    // un-upscaled texture on any failure — same policy as the CLI).
+    if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
+        const QString upModel = AIAssistManager::instance()->ensureUpscaleModel(2);
+        if (!upModel.isEmpty()) {
+            const TextureUpscaler::Result ur =
+                TextureUpscaler::upscale(res.texture, upModel);
+            if (ur.ok && !ur.image.isNull())
+                res.texture = ur.image;
+        }
+    }
 
     // Baked texture: land it next to the export target when one is given so
     // the reference survives outside the app; else the AppData default.
@@ -6951,6 +6965,7 @@ QJsonArray MCPServer::buildToolsList()
         props["refine"] = QJsonObject{{"type", "boolean"}, {"description", "After smoothing, Newton-project each vertex back onto the network's true iso-surface via extra decoder queries (default true; recovers grid-quantized detail)."}};
         props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails)."}};
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
+        props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "
