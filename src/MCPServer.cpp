@@ -17,6 +17,7 @@
 #include "MeshImporterExporter.h"
 #include "CLIPipeline.h"
 #include "ImageTo3D/MeshGenPredictor.h"
+#include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
@@ -2381,17 +2382,39 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     const bool upscaleTex  = args.value("upscale_texture").toBool();
     const bool generatePbr = args.contains("generate_pbr")
         ? args["generate_pbr"].toBool(true) : true;
+    if (args.contains("backend")) {
+        const QString b = args["backend"].toString().toLower();
+        if (b == "triposg")      opts.backend = MeshGenPredictor::Backend::TripoSG;
+        else if (b == "triposr" || b.isEmpty())
+            opts.backend = MeshGenPredictor::Backend::TripoSR;
+        else return makeErrorResult("'backend' must be 'triposr' or 'triposg'.");
+    }
+    if (args.contains("flow_steps")) {
+        opts.flowSteps = args["flow_steps"].toInt(25);
+        if (opts.flowSteps < 1 || opts.flowSteps > 200)
+            return makeErrorResult("'flow_steps' must be between 1 and 200.");
+    }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
         QStringLiteral("generate_mesh_from_image %1 res=%2")
             .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution));
 
-    const QString enc = MeshGenPredictor::ensureModelBlocking(opts.quality);
-    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(opts.quality))
-        return makeErrorResult(
-            "TripoSR model unavailable — it downloads on first use; if it is not "
-            "hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL / ai/triposrModelBaseUrl "
-            "or drop the files in the ai_models/triposr/ cache.");
+    if (opts.backend == MeshGenPredictor::Backend::TripoSG) {
+        const QString enc = TripoSGPredictor::ensureModelBlocking(
+            opts.quality == MeshGenPredictor::Quality::Int8);
+        if (enc.isEmpty())
+            return makeErrorResult(
+                "TripoSG models unavailable — they download on first use; if not "
+                "hosted yet, set QTMESH_TRIPOSG_MODEL_BASE_URL / ai/triposgModelBaseUrl "
+                "or drop the files in the ai_models/triposg/ cache.");
+    } else {
+        const QString enc = MeshGenPredictor::ensureModelBlocking(opts.quality);
+        if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(opts.quality))
+            return makeErrorResult(
+                "TripoSR model unavailable — it downloads on first use; if it is not "
+                "hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL / ai/triposrModelBaseUrl "
+                "or drop the files in the ai_models/triposr/ cache.");
+    }
 
     QImage image(imagePath);
     if (image.isNull())
@@ -7250,6 +7273,8 @@ QJsonArray MCPServer::buildToolsList()
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
+        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"triposr", "triposg"}}, {"description", "Generation backend (default triposr). triposr = fast single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only (no texture bake). Both MIT. TripoSG models download on first use."}};
+        props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "TripoSG rectified-flow Euler steps 1..200 (default 25; 50 = reference quality, 10 = fast preview). Ignored by triposr."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "

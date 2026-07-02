@@ -94,6 +94,7 @@ docs/*
 !docs/AUTO_UPDATER_DESIGN.md
 !docs/IMAGE_TO_3D_SPIKE_764.md
 !docs/IMAGE_TO_3D_QUALITY.md
+!docs/TRIPOSG_EXPORT_NOTES.md
 !docs/MESH_SEGMENTATION_STRATEGY.md
 
 # minisign — never commit secret keys

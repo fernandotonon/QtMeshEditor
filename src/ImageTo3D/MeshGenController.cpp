@@ -1,6 +1,7 @@
 #include "MeshGenController.h"
 
 #include "MeshGenPredictor.h"
+#include "TripoSGPredictor.h"
 #include "MeshGenBuilder.h"
 #include "BackgroundRemover.h"
 #include "MeshImporterExporter.h"
@@ -216,6 +217,13 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     m_generatePbr          = optBool("generate_pbr", true) && wantBake;
     const int  textureSize = options.contains(QLatin1String("texture_size"))
         ? options.value(QLatin1String("texture_size")).toInt() : 1024;
+    // Backend: "triposr" (default, fast + textured) or "triposg" (rectified
+    // flow — higher-fidelity geometry, geometry-only, slower).
+    const bool useSG = options.value(QLatin1String("backend")).toString()
+                           .compare(QLatin1String("triposg"),
+                                    Qt::CaseInsensitive) == 0;
+    const int flowSteps = options.contains(QLatin1String("flow_steps"))
+        ? options.value(QLatin1String("flow_steps")).toInt() : 25;
 
     // Mark busy BEFORE ensureModelBlocking() — it spins a nested QEventLoop for the
     // first-use download, during which the QML button would otherwise stay enabled
@@ -224,17 +232,31 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     setBusy(true);
     emit progress(QStringLiteral("prep"), 0, 1);
 
-    // Ensure models on the MAIN thread first — ensureModelBlocking() spins a local
-    // QEventLoop for the download, which must not run on the worker thread. Once
-    // present, the worker only reads the files (no event loop needed).
+    // Ensure the chosen backend's models on the MAIN thread first —
+    // ensureModelBlocking() spins a local QEventLoop for the download, which
+    // must not run on the worker thread. Once present, the worker only reads
+    // the files (no event loop needed).
     emit statusMessage(tr("Checking model…"));
-    const QString enc = MeshGenPredictor::ensureModelBlocking(m_quality);
-    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(m_quality)) {
-        setBusy(false);
-        emit error(tr("TripoSR model unavailable — it downloads on first use; if it "
-                      "is not hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL or drop "
-                      "the files in the ai_models/triposr/ cache."));
-        return;
+    if (useSG) {
+        const QString enc = TripoSGPredictor::ensureModelBlocking(
+            m_quality == MeshGenPredictor::Quality::Int8);
+        if (enc.isEmpty()) {
+            setBusy(false);
+            emit error(tr("TripoSG models unavailable — they download on first "
+                          "use; if not hosted yet, set "
+                          "QTMESH_TRIPOSG_MODEL_BASE_URL or drop the files in "
+                          "the ai_models/triposg/ cache."));
+            return;
+        }
+    } else {
+        const QString enc = MeshGenPredictor::ensureModelBlocking(m_quality);
+        if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(m_quality)) {
+            setBusy(false);
+            emit error(tr("TripoSR model unavailable — it downloads on first use; if it "
+                          "is not hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL or drop "
+                          "the files in the ai_models/triposr/ cache."));
+            return;
+        }
     }
     if (removeBackground)
         BackgroundRemover::ensureModelBlocking();   // best-effort; falls back if absent
@@ -269,7 +291,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // connection so the GUI thread updates the bar.
     m_pending->worker = std::thread([this, image, res, rembg,
                                      wantSmooth, wantRefine, wantBake,
-                                     textureSize]() {
+                                     textureSize, useSG, flowSteps]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
                 Q_ARG(QString, stage), Q_ARG(int, done), Q_ARG(int, total));
@@ -279,7 +301,10 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // worker started), so this thread only reads files — no event loop
         // needed. (The encode stage is reported by the predictor itself.)
         QImage subject = image;
-        if (rembg) {
+        if (rembg && !useSG) {
+            // TripoSR path: composite over gray-128 (its training background).
+            // The TripoSG path leaves removal to the predictor dispatch, which
+            // composites over WHITE per its reference pipeline.
             post(QStringLiteral("background"), 0, 1);
             QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
                 Q_ARG(QString, tr("Removing background…")));
@@ -292,11 +317,17 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         MeshGenPredictor::Options opts;
         opts.sdfResolution   = res;
         opts.vertexColor     = true;
-        opts.removeBackground = false;   // already handled above
+        // TripoSR removal already ran above; TripoSG's white-background
+        // removal happens inside the predictor dispatch.
+        opts.removeBackground = rembg && useSG;
         opts.smoothMesh      = wantSmooth;
         opts.refineSurface   = wantRefine;
         opts.bakeTexture     = wantBake;
         opts.textureSize     = textureSize;
+        opts.backend         = useSG ? MeshGenPredictor::Backend::TripoSG
+                                     : MeshGenPredictor::Backend::TripoSR;
+        opts.flowSteps       = flowSteps;
+        opts.quality         = m_quality;
 
         QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
             Q_ARG(QString, tr("Reconstructing…")));
@@ -308,11 +339,12 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             if (total > 0) {
                 const char* name = nullptr;
                 switch (st) {
-                    case MeshGenPredictor::Stage::Encode: name = "encode"; break;
-                    case MeshGenPredictor::Stage::Decode: name = "decode"; break;
-                    case MeshGenPredictor::Stage::Refine: name = "refine"; break;
-                    case MeshGenPredictor::Stage::Bake:   name = "bake";   break;
-                    case MeshGenPredictor::Stage::Color:  name = "color";  break;
+                    case MeshGenPredictor::Stage::Encode:  name = "encode";  break;
+                    case MeshGenPredictor::Stage::Denoise: name = "denoise"; break;
+                    case MeshGenPredictor::Stage::Decode:  name = "decode";  break;
+                    case MeshGenPredictor::Stage::Refine:  name = "refine";  break;
+                    case MeshGenPredictor::Stage::Bake:    name = "bake";    break;
+                    case MeshGenPredictor::Stage::Color:   name = "color";   break;
                 }
                 if (name) post(QString::fromLatin1(name), done, total);
             }

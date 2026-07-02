@@ -1753,6 +1753,26 @@ Rectangle {
                 }
             }
 
+            // Backend: TripoSR (fast, textured) vs TripoSG (rectified flow —
+            // higher-fidelity geometry, geometry-only, slower; models download
+            // on first use).
+            Row {
+                spacing: 6
+                Text {
+                    text: "Backend"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgBackendCombo
+                    width: 190
+                    enabled: !MeshGenController.busy
+                    model: ["TripoSR (fast, textured)", "TripoSG (best geometry)"]
+                    currentIndex: 0
+                }
+            }
+
             // ---- User-selectable pipeline stages -------------------------------
             // Each toggle maps 1:1 to a stage of the generation pipeline (see
             // MeshGenController::generateSelected). Defaults = the polished
@@ -1776,18 +1796,22 @@ Rectangle {
                 id: mgBake
                 text: "Bake diffuse texture"
                 checked: true
+                // Texture stages are TripoSR-only (TripoSG has no colour decoder).
+                enabled: !MeshGenController.busy && mgBackendCombo.currentIndex === 0
             }
             InspectorCheck {
                 id: mgPbr
                 text: "Generate PBR maps (normal + roughness)"
                 checked: true
                 enabled: !MeshGenController.busy && mgBake.checked
+                    && mgBackendCombo.currentIndex === 0
             }
             InspectorCheck {
                 id: mgUpscale
                 text: "Upscale texture 2× (Real-ESRGAN)"
                 checked: false
                 enabled: !MeshGenController.busy && mgBake.checked
+                    && mgBackendCombo.currentIndex === 0
             }
 
             // Step 2: generate from the selected image. Disabled until one is
@@ -1798,21 +1822,26 @@ Rectangle {
                 clickEnabled: !MeshGenController.busy
                     && MeshGenController.selectedImagePath.length > 0
                 onClicked: {
+                    var sg = mgBackendCombo.currentIndex === 1   // TripoSG
                     var steps = [{ key: "prep", label: "Prepare models" }]
                     if (mgRemoveBg.checked)
                         steps.push({ key: "background", label: "Remove background" })
                     steps.push({ key: "encode", label: "Encode image" })
+                    if (sg)
+                        steps.push({ key: "denoise", label: "Denoise (flow steps)" })
                     steps.push({ key: "decode", label: "Reconstruct 3D" })
                     if (mgRefine.checked)
                         steps.push({ key: "refine", label: "Refine surface" })
-                    if (mgBake.checked)
-                        steps.push({ key: "bake", label: "Bake texture" })
-                    else
-                        steps.push({ key: "color", label: "Vertex colors" })
-                    if (mgUpscale.checked && mgBake.checked)
-                        steps.push({ key: "upscale", label: "Upscale texture 2×" })
+                    if (!sg) {
+                        if (mgBake.checked)
+                            steps.push({ key: "bake", label: "Bake texture" })
+                        else
+                            steps.push({ key: "color", label: "Vertex colors" })
+                        if (mgUpscale.checked && mgBake.checked)
+                            steps.push({ key: "upscale", label: "Upscale texture 2×" })
+                    }
                     steps.push({ key: "build",
-                                 label: (mgPbr.checked && mgBake.checked)
+                                 label: (!sg && mgPbr.checked && mgBake.checked)
                                         ? "Build mesh + PBR maps" : "Build mesh" })
                     mgRoot.mgSteps = steps
                     mgRoot.mgActiveIdx = 0
@@ -1825,7 +1854,8 @@ Rectangle {
                             "refine": mgRefine.checked,
                             "bake_texture": mgBake.checked,
                             "generate_pbr": mgPbr.checked,
-                            "upscale_texture": mgUpscale.checked
+                            "upscale_texture": mgUpscale.checked,
+                            "backend": sg ? "triposg" : "triposr"
                         })
                 }
             }
