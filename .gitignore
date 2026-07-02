@@ -92,6 +92,7 @@ website/dist/
 website/node_modules/
 docs/*
 !docs/AUTO_UPDATER_DESIGN.md
+!docs/MESH_SEGMENTATION_STRATEGY.md
 
 # minisign — never commit secret keys
 minisign.key
@@ -105,3 +106,6 @@ src/project_for_llm.py
 # Segmentation training corpus (#410) — local, never committed (license provenance via SOURCES.md)
 training_rigs/
 mined_training_data/
+.meshseg_work/
+.venv-meshseg/
+__pycache__/

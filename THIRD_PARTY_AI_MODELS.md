@@ -73,11 +73,15 @@ the binary). Attribution + licenses for the models and their training data:
 - **Training data — synthetic / permissively derived.** The standard
   part-segmentation datasets (**ShapeNet-Part**, **PartNet**) are
   **non-commercial research-only** and so were rejected (same bar as #408
-  RigNet / #409 LAFAN1). Instead the shipped model is trained on **synthetic
-  data we own**: per-vertex part labels derived from **rigged-humanoid bone
-  weights** (each vertex's dominant bone → a canonical body part) on permissively
-  -licensed source rigs (e.g. CMU-derived), sampled into point clouds. The
-  derivation + labels are ours (CC0), so the weights are redistributable.
+  RigNet / #409 LAFAN1). The shipped v2 model is trained on a mix of
+  **synthetic surface-sampled bodies we own** (three parametric body plans —
+  humanoid incl. chibi proportions, quadruped, biped-with-tail — with exact
+  by-construction labels; CC0, ours) and **CC0 rigged characters mined for
+  exact rig-derived labels** (Quaternius packs; provenance ledger kept with
+  the corpus). The derivation + labels are ours, all sources are CC0, so the
+  weights are redistributable. See `docs/MESH_SEGMENTATION_STRATEGY.md` for
+  the v1 failure analysis, the canonicalisation pipeline, and the
+  multi-category roadmap.
 - **Mined real data (continual improvement) — CC0 / CC-BY only.** Synthetic
   primitives can't capture real surface distributions, so the corpus is
   optionally augmented with REAL rigged characters mined for exact labels via
@@ -94,10 +98,11 @@ the binary). Attribution + licenses for the models and their training data:
   fetch-training-rigs.sh` (curated CC0 source ledger) + `scripts/
   mine-training-data.sh` assemble + mine the corpus; `export-meshseg-onnx.py
   --real-data <dir>` mixes it into the synthetic set.
-- **Model architecture:** a small PointNet-style segmenter (~0.3 MB ONNX).
-  Validated: 98% per-point accuracy on held-out synthetic humanoids, and it
-  transfers to real humanoid meshes (labels a Mixamo character into symmetric
-  head/torso/arms/legs — better limb symmetry than the geometric fallback).
+- **Model architecture:** a PointNet++-style segmenter with two kNN
+  local-aggregation blocks (~1 MB ONNX), trained at the app's inference
+  sample size (4096 points). Validated against EXACT rig-derived ground truth
+  on held-out CC0 rigs and on out-of-distribution rigged characters kept out
+  of training; accuracy figures live in `docs/MESH_SEGMENTATION_STRATEGY.md`.
 - **Export tool:** `scripts/export-meshseg-onnx.py` (one-time, offline, NOT
   shipped — the app never runs Python; it synthesises the data + trains + exports).
 - **Hosting:** `meshseg.onnx` is hosted in the
