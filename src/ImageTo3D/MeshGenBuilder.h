@@ -33,18 +33,35 @@ namespace MeshGenBuilder {
 Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& meshName,
                       const QString& texturePngPath = {});
 
+// Options for buildSceneNode's texture/material stage.
+struct BuildOptions {
+    // Where the baked PNG (and any synthesized PBR maps) land. Empty →
+    // AppData/generated_textures/. The CLI passes the export target's
+    // directory so the sidecars land next to the mesh.
+    QString textureDir;
+    // Chain #404 PBR map synthesis onto the baked diffuse: synthesize
+    // normal + roughness PNGs next to it and bind them into the material's
+    // canonical slots (normal_map / roughness) with the RTSS normal-map
+    // sub-render-state applied — the same treatment as the Material Editor's
+    // "Generate PBR maps from diffuse" button, which is what turns the flat
+    // diffuse-only result into a polished, surface-detailed one. Ignored
+    // when there is no baked texture; fails soft (diffuse-only material)
+    // when the models are unavailable.
+    bool generatePbrMaps = false;
+};
+
 // buildMesh + create a child SceneNode under the scene root with an entity on it
 // (via Manager::createEntity), ready to hand to MeshImporterExporter::exporter.
 // Returns the SceneNode (owns the entity) or null on failure.
 //
 // When the result carries a baked texture, it is saved as `<unique>_diffuse.png`
-// into `textureDir` (default: AppData/generated_textures/) and that directory is
-// registered as an Ogre resource location so both the viewport material and the
-// exporters (FBX Video.Content embed / glTF reference) can resolve it. Pass the
-// export target's directory from the CLI so the PNG lands next to the mesh.
+// into `opts.textureDir` (default: AppData/generated_textures/) and that
+// directory is registered as an Ogre resource location so both the viewport
+// material and the exporters (FBX Video.Content embed / glTF reference) can
+// resolve it — plus the optional PBR stage above.
 Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
                                 const QString& baseName,
-                                const QString& textureDir = {});
+                                const BuildOptions& opts = {});
 
 } // namespace MeshGenBuilder
 

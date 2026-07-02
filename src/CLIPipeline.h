@@ -229,12 +229,14 @@ public:
     /// single image. `generate3d <image> [-o out.glb] [--resolution 16..1024]
     /// [--no-color] [--remove-bg] [--quality fp32|int8] [--no-smooth]
     /// [--no-refine] [--no-bake-texture] [--texture-size 64..8192]
-    /// [--upscale-texture]`. The quality pass (Taubin smoothing + iso-surface
-    /// reprojection + xatlas diffuse-texture bake, all ON by default) is
-    /// opt-out via the --no-* flags; --upscale-texture additionally runs
+    /// [--upscale-texture] [--no-pbr]`. The quality pass (Taubin smoothing +
+    /// iso-surface reprojection + xatlas diffuse-texture bake + #404 PBR
+    /// normal/roughness synthesis bound into the material, all ON by default)
+    /// is opt-out via the --no-* flags; --upscale-texture additionally runs
     /// Real-ESRGAN 2x (#405) on the baked diffuse (model downloads on
-    /// demand). Default output = <image>.glb; a baked texture is written as a
-    /// `*_diffuse.png` sidecar next to it. Requires an ENABLE_ONNX build + the
+    /// demand). Default output = <image>.glb; the baked texture and PBR maps
+    /// are written as `*_diffuse/_normal/_roughness.png` sidecars next to
+    /// it. Requires an ENABLE_ONNX build + the
     /// TripoSR model (downloads on first use / clear message when not
     /// hosted). There is no non-model fallback (generative feature), so
     /// `--no-model` is rejected.

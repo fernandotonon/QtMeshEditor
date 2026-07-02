@@ -5,6 +5,8 @@
 #include "BackgroundRemover.h"
 #include "MeshImporterExporter.h"
 #include "SentryReporter.h"
+#include "AIAssistManager.h"    // ensureUpscaleModel (main-thread model fetch)
+#include "TextureUpscaler.h"    // worker-side Real-ESRGAN 2x on the baked diffuse
 
 #include <OgreSceneNode.h>
 
@@ -155,13 +157,14 @@ void MeshGenController::selectImage()
     emit statusMessage(tr("Selected: %1").arg(QFileInfo(path).fileName()));
 }
 
-void MeshGenController::generateSelected(int resolution, bool removeBackground, int quality)
+void MeshGenController::generateSelected(int resolution, bool removeBackground,
+                                         int quality, const QVariantMap& options)
 {
     if (m_selectedImage.isEmpty()) {
         emit error(tr("Select an image first."));
         return;
     }
-    generate(m_selectedImage, resolution, removeBackground, quality);
+    generate(m_selectedImage, resolution, removeBackground, quality, options);
 }
 
 MeshGenPredictor::Quality MeshGenController::qualityFromInt(int q)
@@ -171,7 +174,8 @@ MeshGenPredictor::Quality MeshGenController::qualityFromInt(int q)
                     : MeshGenPredictor::Quality::Fp32;
 }
 
-void MeshGenController::pickImageAndGenerate(int resolution, bool removeBackground, int quality)
+void MeshGenController::pickImageAndGenerate(int resolution, bool removeBackground,
+                                             int quality, const QVariantMap& options)
 {
     if (m_busy) return;
     const QString path = QFileDialog::getOpenFileName(
@@ -179,11 +183,12 @@ void MeshGenController::pickImageAndGenerate(int resolution, bool removeBackgrou
         tr("Images (*.png *.jpg *.jpeg *.bmp *.webp)"),
         nullptr, QFileDialog::DontUseNativeDialog);
     if (path.isEmpty()) return;
-    generate(path, resolution, removeBackground, quality);
+    generate(path, resolution, removeBackground, quality, options);
 }
 
 void MeshGenController::generate(const QString& imagePath, int resolution,
-                                 bool removeBackground, int quality)
+                                 bool removeBackground, int quality,
+                                 const QVariantMap& options)
 {
     if (m_busy) return;
     if (!available()) {
@@ -197,6 +202,20 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     if (image.isNull()) { emit error(tr("Could not load image: %1").arg(imagePath)); return; }
 
     m_quality = qualityFromInt(quality);
+
+    // Parse the user-selectable pipeline stages (defaults match the predictor's
+    // — see generateSelected()'s doc). Missing keys keep the defaults.
+    auto optBool = [&options](const char* key, bool def) {
+        return options.contains(QLatin1String(key))
+            ? options.value(QLatin1String(key)).toBool() : def;
+    };
+    const bool wantSmooth  = optBool("smooth", true);
+    const bool wantRefine  = optBool("refine", true);
+    const bool wantBake    = optBool("bake_texture", true);
+    m_upscaleTexture       = optBool("upscale_texture", false);
+    m_generatePbr          = optBool("generate_pbr", true) && wantBake;
+    const int  textureSize = options.contains(QLatin1String("texture_size"))
+        ? options.value(QLatin1String("texture_size")).toInt() : 1024;
 
     // Mark busy BEFORE ensureModelBlocking() — it spins a nested QEventLoop for the
     // first-use download, during which the QML button would otherwise stay enabled
@@ -220,9 +239,21 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     if (removeBackground)
         BackgroundRemover::ensureModelBlocking();   // best-effort; falls back if absent
 
+    // The optional post-bake upscale runs on the WORKER, so its model must be
+    // ensured here on the main thread (event loop) first. Best-effort: an empty
+    // path just skips the upscale later.
+    m_upscaleModelPath.clear();
+    if (m_upscaleTexture) {
+        emit statusMessage(tr("Checking upscale model…"));
+        m_upscaleModelPath = AIAssistManager::instance()->ensureUpscaleModel(2);
+    }
+
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
-        QStringLiteral("MeshGenController generate %1 res=%2 rembg=%3")
-            .arg(fi.fileName()).arg(resolution).arg(removeBackground));
+        QStringLiteral("MeshGenController generate %1 res=%2 rembg=%3 smooth=%4 "
+                       "refine=%5 bake=%6 upscale=%7 pbr=%8")
+            .arg(fi.fileName()).arg(resolution).arg(removeBackground)
+            .arg(wantSmooth).arg(wantRefine).arg(wantBake)
+            .arg(m_upscaleTexture).arg(m_generatePbr));
 
     emit statusMessage(tr("Preparing…"));
 
@@ -236,7 +267,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // --- Worker thread: model download + background removal + inference --------
     // Everything here is pure data (no Ogre). Progress is emitted via a queued
     // connection so the GUI thread updates the bar.
-    m_pending->worker = std::thread([this, image, res, rembg]() {
+    m_pending->worker = std::thread([this, image, res, rembg,
+                                     wantSmooth, wantRefine, wantBake,
+                                     textureSize]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
                 Q_ARG(QString, stage), Q_ARG(int, done), Q_ARG(int, total));
@@ -261,6 +294,10 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         opts.sdfResolution   = res;
         opts.vertexColor     = true;
         opts.removeBackground = false;   // already handled above
+        opts.smoothMesh      = wantSmooth;
+        opts.refineSurface   = wantRefine;
+        opts.bakeTexture     = wantBake;
+        opts.textureSize     = textureSize;
 
         QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
             Q_ARG(QString, tr("Reconstructing…")));
@@ -273,6 +310,18 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         MeshGenPredictor::Result r = MeshGenPredictor::predict(
             subject, MeshGenPredictor::encoderModelPath(m_quality),
             MeshGenPredictor::decoderModelPath(), opts, progressFn);
+
+        // Optional Real-ESRGAN 2x on the baked diffuse — pure CPU, so it stays
+        // on this worker. Model was ensured on the main thread; best-effort.
+        if (r.ok && m_upscaleTexture && !m_upscaleModelPath.isEmpty()
+            && !r.uvs.empty() && !r.texture.isNull() && !m_cancel.load()) {
+            QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
+                Q_ARG(QString, tr("Upscaling texture…")));
+            const TextureUpscaler::Result ur =
+                TextureUpscaler::upscale(r.texture, m_upscaleModelPath);
+            if (ur.ok && !ur.image.isNull())
+                r.texture = ur.image;
+        }
 
         m_pending->result = std::move(r);
         // Hand back to the main thread to build/attach the Ogre mesh.
@@ -298,10 +347,17 @@ void MeshGenController::buildOnMainThread()
     }
 
     emit progress(QStringLiteral("build"), 0, 1);
-    emit statusMessage(tr("Building mesh…"));
+    emit statusMessage(m_generatePbr && !r.uvs.empty()
+                           ? tr("Building mesh + PBR maps…")
+                           : tr("Building mesh…"));
 
+    // PBR synthesis (when enabled) runs inside buildSceneNode on this (main)
+    // thread — same as the Material Editor's button; the PBRify models are
+    // small and download on first use via the main-thread event loop.
+    MeshGenBuilder::BuildOptions buildOpts;
+    buildOpts.generatePbrMaps = m_generatePbr;
     Ogre::SceneNode* node =
-        MeshGenBuilder::buildSceneNode(r, QStringLiteral("qtmesh_gen3d"));
+        MeshGenBuilder::buildSceneNode(r, QStringLiteral("qtmesh_gen3d"), buildOpts);
     emit progress(QStringLiteral("build"), 1, 1);
     finish();
 

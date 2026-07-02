@@ -1545,6 +1545,45 @@ Rectangle {
                 }
             }
 
+            // Inspector-styled CheckBox (flat 16px box + checkmark, palette
+            // colors) — one factory for the pipeline-stage toggles below,
+            // matching the ThemedCheckBox look without the wrapper that breaks
+            // this dynamically-loaded panel.
+            component InspectorCheck: CheckBox {
+                id: icRoot
+                spacing: 6
+                enabled: !MeshGenController.busy
+                indicator: Rectangle {
+                    x: icRoot.leftPadding
+                    y: icRoot.height / 2 - height / 2
+                    implicitWidth: 16
+                    implicitHeight: 16
+                    radius: 2
+                    color: icRoot.checked
+                        ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+                    opacity: icRoot.enabled ? 1.0 : 0.45
+                    Text {
+                        anchors.centerIn: parent
+                        visible: icRoot.checked
+                        text: "✓"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                }
+                contentItem: Text {
+                    text: icRoot.text
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    leftPadding: icRoot.indicator.width + icRoot.spacing
+                    verticalAlignment: Text.AlignVCenter
+                    opacity: icRoot.enabled ? 1.0 : 0.45
+                }
+            }
+
             // Inspector-styled ComboBox (raw ComboBox re-skinned with the
             // PropertiesPanelController palette — same look as ThemedComboBox, but
             // inlined because the Themed* wrappers blank this dynamically-loaded
@@ -1706,43 +1745,41 @@ Rectangle {
                 }
             }
 
-            // Remove-background toggle — styled to match the Inspector (flat 16px
-            // box + checkmark, PropertiesPanelController palette), matching the
-            // ThemedCheckBox look without the wrapper that breaks this panel.
-            CheckBox {
+            // ---- User-selectable pipeline stages -------------------------------
+            // Each toggle maps 1:1 to a stage of the generation pipeline (see
+            // MeshGenController::generateSelected). Defaults = the polished
+            // pipeline: smooth + refine + bake + PBR maps; upscale opt-in.
+            InspectorCheck {
                 id: mgRemoveBg
                 text: "Remove background"
                 checked: true
-                enabled: !MeshGenController.busy
-                spacing: 6
-                indicator: Rectangle {
-                    x: mgRemoveBg.leftPadding
-                    y: mgRemoveBg.height / 2 - height / 2
-                    implicitWidth: 16
-                    implicitHeight: 16
-                    radius: 2
-                    color: mgRemoveBg.checked
-                        ? PropertiesPanelController.highlightColor
-                        : PropertiesPanelController.inputColor
-                    border.color: PropertiesPanelController.borderColor
-                    border.width: 1
-                    opacity: mgRemoveBg.enabled ? 1.0 : 0.45
-                    Text {
-                        anchors.centerIn: parent
-                        visible: mgRemoveBg.checked
-                        text: "✓"
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 12
-                        font.bold: true
-                    }
-                }
-                contentItem: Text {
-                    text: mgRemoveBg.text
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                    leftPadding: mgRemoveBg.indicator.width + mgRemoveBg.spacing
-                    verticalAlignment: Text.AlignVCenter
-                }
+            }
+            InspectorCheck {
+                id: mgSmooth
+                text: "Smooth mesh (Taubin)"
+                checked: true
+            }
+            InspectorCheck {
+                id: mgRefine
+                text: "Refine surface (re-project)"
+                checked: true
+            }
+            InspectorCheck {
+                id: mgBake
+                text: "Bake diffuse texture"
+                checked: true
+            }
+            InspectorCheck {
+                id: mgPbr
+                text: "Generate PBR maps (normal + roughness)"
+                checked: true
+                enabled: !MeshGenController.busy && mgBake.checked
+            }
+            InspectorCheck {
+                id: mgUpscale
+                text: "Upscale texture 2× (Real-ESRGAN)"
+                checked: false
+                enabled: !MeshGenController.busy && mgBake.checked
             }
 
             // Step 2: generate from the selected image. Disabled until one is
@@ -1752,7 +1789,14 @@ Rectangle {
                 clickEnabled: !MeshGenController.busy
                     && MeshGenController.selectedImagePath.length > 0
                 onClicked: MeshGenController.generateSelected(
-                    mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex)
+                    mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex,
+                    {
+                        "smooth": mgSmooth.checked,
+                        "refine": mgRefine.checked,
+                        "bake_texture": mgBake.checked,
+                        "generate_pbr": mgPbr.checked,
+                        "upscale_texture": mgUpscale.checked
+                    })
             }
 
             // Progress bar (only while busy)

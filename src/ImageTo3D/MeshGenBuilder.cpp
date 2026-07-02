@@ -1,6 +1,8 @@
 #include "MeshGenBuilder.h"
 
 #include "Manager.h"
+#include "AIAssistManager.h"   // #404 PBR map synthesis (normal + roughness)
+#include "RTShaderHelper.h"    // canonical-slot FFP wiring + RTSS normal map
 
 #include <QDir>
 #include <QFileInfo>
@@ -237,7 +239,7 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
 
 Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
                                 const QString& baseName,
-                                const QString& textureDir)
+                                const BuildOptions& opts)
 {
     // Make the mesh + node names UNIQUE per call so a second generation doesn't
     // clobber the first (or fail because the mesh/node name already exists). All
@@ -248,9 +250,10 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
     // Baked-texture path: persist the QImage as a PNG (viewport material +
     // exporters resolve it from a registered resource location).
     QString texPath;
+    QString normalPath, roughnessPath;   // optional #404 PBR stage outputs
     if (!result.texture.isNull()
         && result.uvs.size() == static_cast<size_t>(result.vertexCount) * 2) {
-        QString dir = textureDir;
+        QString dir = opts.textureDir;
         if (dir.isEmpty())
             dir = QDir(QStandardPaths::writableLocation(
                            QStandardPaths::AppDataLocation))
@@ -260,11 +263,33 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
             QDir(dir).filePath(unique + QStringLiteral("_diffuse.png"));
         if (result.texture.save(candidate, "PNG")) {
             texPath = candidate;
+
+            // Optional PBR stage (#404): synthesize normal + roughness from the
+            // baked diffuse BEFORE the resource location is (re)indexed so the
+            // new PNGs land in the index below. Height is skipped — nothing in
+            // this material path consumes it. Fails soft: a missing model /
+            // non-ONNX build just leaves the maps empty (diffuse-only result).
+            if (opts.generatePbrMaps) {
+                PbrMapSynth::Options po;
+                po.generateHeight = false;
+                const PbrMapSynthResult pr =
+                    AIAssistManager::instance()->synthesizePbrMaps(texPath, po);
+                if (pr.ok) {
+                    normalPath    = pr.normalPath;
+                    roughnessPath = pr.roughnessPath;
+                } else {
+                    Ogre::LogManager::getSingleton().logWarning(
+                        ("MeshGenBuilder: PBR map synthesis failed ("
+                         + pr.error + ") — continuing with diffuse only.")
+                            .toStdString());
+                }
+            }
+
             // Register the directory so Ogre's resource system (and the
-            // exporters' resource walk) can find the file. When the location
+            // exporters' resource walk) can find the files. When the location
             // is ALREADY registered (second+ generation into the same dir),
             // remove and re-add it: the group's file index was built before
-            // this PNG existed and would miss it otherwise.
+            // these PNGs existed and would miss them otherwise.
             try {
                 auto& rgm = Ogre::ResourceGroupManager::getSingleton();
                 const std::string loc = QDir(dir).absolutePath().toStdString();
@@ -292,6 +317,47 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
 
     Ogre::Mesh* mesh = buildMesh(result, unique + QStringLiteral("_mesh"), texPath);
     if (!mesh) return nullptr;
+
+    // Bind the synthesized PBR maps into the material buildMesh just created —
+    // the same recipe as the Material Editor's "Generate PBR maps from diffuse"
+    // button: canonical named slots + FFP wiring + the RTSS normal-map
+    // sub-render-state (without applyNormalMap the bind is invisible in the
+    // viewport), then recompile.
+    if (!normalPath.isEmpty() || !roughnessPath.isEmpty()) {
+        const std::string matName =
+            (unique + QStringLiteral("_mesh")).toStdString() + "_mat";
+        Ogre::MaterialPtr mat =
+            Ogre::MaterialManager::getSingleton().getByName(matName);
+        if (mat) {
+            auto bindSlot = [&](const char* slot, const QString& path) {
+                if (path.isEmpty()) return;
+                for (auto* tech : mat->getTechniques()) {
+                    for (unsigned short p = 0; p < tech->getNumPasses(); ++p) {
+                        Ogre::Pass* pass = tech->getPass(p);
+                        Ogre::TextureUnitState* tus = nullptr;
+                        for (unsigned short i = 0;
+                             i < pass->getNumTextureUnitStates(); ++i)
+                            if (pass->getTextureUnitState(i)->getName() == slot) {
+                                tus = pass->getTextureUnitState(i); break;
+                            }
+                        if (!tus) {
+                            tus = pass->createTextureUnitState();
+                            tus->setName(slot);
+                        }
+                        tus->setTextureName(
+                            QFileInfo(path).fileName().toStdString());
+                    }
+                }
+            };
+            bindSlot("normal_map", normalPath);
+            bindSlot("roughness",  roughnessPath);
+            RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+            if (!normalPath.isEmpty())
+                RTShaderHelper::applyNormalMap(
+                    mat, QFileInfo(normalPath).fileName().toStdString());
+            mat->compile();
+        }
+    }
 
     auto* mgr = Manager::getSingletonPtr();
     if (!mgr) return nullptr;

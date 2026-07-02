@@ -2172,7 +2172,9 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (opts.textureSize < 64 || opts.textureSize > 8192)
             return makeErrorResult("'texture_size' must be between 64 and 8192.");
     }
-    const bool upscaleTex = args.value("upscale_texture").toBool();
+    const bool upscaleTex  = args.value("upscale_texture").toBool();
+    const bool generatePbr = args.contains("generate_pbr")
+        ? args["generate_pbr"].toBool(true) : true;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
         QStringLiteral("generate_mesh_from_image %1 res=%2")
@@ -2208,13 +2210,16 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         }
     }
 
-    // Baked texture: land it next to the export target when one is given so
-    // the reference survives outside the app; else the AppData default.
+    // Baked texture (+ synthesized PBR maps): land next to the export target
+    // when one is given so the references survive outside the app; else the
+    // AppData default.
     const QString output = args.value("output").toString();
+    MeshGenBuilder::BuildOptions buildOpts;
+    if (!output.trimmed().isEmpty())
+        buildOpts.textureDir = QFileInfo(output).absolutePath();
+    buildOpts.generatePbrMaps = generatePbr && opts.bakeTexture && opts.vertexColor;
     Ogre::SceneNode* node = MeshGenBuilder::buildSceneNode(
-        res, QStringLiteral("qtmesh_gen3d"),
-        output.trimmed().isEmpty() ? QString()
-                                   : QFileInfo(output).absolutePath());
+        res, QStringLiteral("qtmesh_gen3d"), buildOpts);
     if (!node)
         return makeErrorResult("failed to build mesh from prediction.");
 
@@ -6969,6 +6974,7 @@ QJsonArray MCPServer::buildToolsList()
         props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails)."}};
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
+        props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "

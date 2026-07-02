@@ -8731,6 +8731,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool refine = true;
     bool bake = true;
     bool upscaleTex = false;    // optional Real-ESRGAN 2x on the baked texture
+    bool generatePbr = true;    // #404 normal+roughness synthesis on the baked diffuse
     int textureSize = 1024;
     MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
 
@@ -8744,6 +8745,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-refine") { refine = false; continue; }
         if (arg == "--no-bake-texture") { bake = false; continue; }
         if (arg == "--upscale-texture") { upscaleTex = true; continue; }
+        if (arg == "--no-pbr") { generatePbr = false; continue; }
         if (arg == "--texture-size") {
             if (i + 1 >= argc) {
                 err() << "Error: --texture-size requires a value (e.g. 512, 1024, 2048)." << Qt::endl;
@@ -8803,7 +8805,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
-                 "[--upscale-texture]"
+                 "[--upscale-texture] [--no-pbr]"
               << Qt::endl;
         return 2;
     }
@@ -8894,11 +8896,14 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         }
     }
 
-    // Baked texture lands next to the exported mesh (registered as a resource
-    // location inside buildSceneNode so the exporters can resolve/embed it).
+    // Baked texture (+ synthesized PBR maps) land next to the exported mesh
+    // (registered as a resource location inside buildSceneNode so the
+    // exporters can resolve/embed them).
+    MeshGenBuilder::BuildOptions buildOpts;
+    buildOpts.textureDir      = QFileInfo(outputPath).absolutePath();
+    buildOpts.generatePbrMaps = generatePbr && bake && vertexColor;
     Ogre::SceneNode* node = MeshGenBuilder::buildSceneNode(
-        res, QStringLiteral("qtmesh_gen3d"),
-        QFileInfo(outputPath).absolutePath());
+        res, QStringLiteral("qtmesh_gen3d"), buildOpts);
     if (!node) {
         err() << "Error: failed to build mesh from prediction." << Qt::endl;
         return 1;
