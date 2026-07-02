@@ -4,6 +4,7 @@
 #include "AIAssistManager.h"   // #404 PBR map synthesis (normal + roughness)
 #include "RTShaderHelper.h"    // canonical-slot FFP wiring + RTSS normal map
 
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QStandardPaths>
@@ -243,9 +244,20 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
 {
     // Make the mesh + node names UNIQUE per call so a second generation doesn't
     // clobber the first (or fail because the mesh/node name already exists). All
-    // callers pass the same base ("qtmesh_gen3d"); disambiguate with a counter.
+    // callers pass the same base ("qtmesh_gen3d"); disambiguate with a counter
+    // PLUS a timestamp: the counter alone is per-PROCESS, so a second CLI run
+    // (or a new GUI session) into the same output directory re-used the same
+    // "…_1_diffuse.png" file name — OVERWRITING the previous generation's baked
+    // texture and leaving the older mesh's UVs pointing into the wrong atlas
+    // (a scrambled chart-patchwork on the first mesh). Ogre's TextureManager
+    // also caches by name, so name collisions could serve stale pixels even
+    // when the file was rewritten. The epoch-ms token makes the mesh, node,
+    // material, and every texture sidecar name globally unique (same idiom as
+    // MCP create_primitive's auto names).
     static int s_counter = 0;
-    const QString unique = baseName + QStringLiteral("_%1").arg(++s_counter);
+    const QString unique = baseName + QStringLiteral("_%1_%2")
+        .arg(++s_counter)
+        .arg(QDateTime::currentMSecsSinceEpoch());
 
     // Baked-texture path: persist the QImage as a PNG (viewport material +
     // exporters resolve it from a registered resource location).
