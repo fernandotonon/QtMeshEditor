@@ -279,11 +279,11 @@ Split View|Skeleton Animation Controls
 - **Pose export** — bake animation frames as static meshes (3D printing)
 - **LOD generation** — automatic level-of-detail mesh reduction
 - **Paint tools** — vertex paint, texture paint (BaseColor), bake vertex colors to texture with seam dilation
-- **Material editor** — visual editing with AI-assisted generation
+- **Material editor** — visual editing with AI-assisted generation; PBR + HDR/IBL materials look correct on first import (bundled studio HDRI, ACES tonemap, env intensity/tint per material)
 - **Skeleton inspection** — bone weights, debug overlays, animation preview
 - **Scene management** — duplicate (Ctrl+D), group (Ctrl+G), snap, pivot modes
 - **AI chat** — natural language scene editing via local LLMs
-- **MCP server** — 52 tools for AI agents (Claude, Cursor, etc.), including QtMesh Cloud (`cloud_*`)
+- **MCP server** — 57+ tools for AI agents (Claude, Cursor, etc.), including HDR/IBL (`set_hdr_environment`, `set_tonemap`, …) and QtMesh Cloud (`cloud_*`)
 - **REST API** — HTTP interface for external automation
 
 ---

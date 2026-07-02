@@ -131,7 +131,7 @@ private:
     TonemapOperator m_tonemapOperator = TonemapOperator::ACES;
     float m_exposureEv = 0.f;
     float m_whitePoint = 1.f;
-    bool m_defaultSkyBoxVisible = true;
+    bool m_defaultSkyBoxVisible = false;
     float m_backgroundBlur = 0.f;
     bool m_skyBoxInstalled = false;
 

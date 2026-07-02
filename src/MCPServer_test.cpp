@@ -5604,6 +5604,68 @@ TEST_F(MCPServerTest, ListMaterialPresets_AppearsInToolList)
 }
 
 // ==========================================================================
+// HDR / IBL MCP tools (#473)
+// ==========================================================================
+
+TEST_F(MCPServerTest, GetHdrEnvironment_ReturnsJson)
+{
+    QJsonObject result = server->callTool("get_hdr_environment", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    const QString text = getResultText(result);
+    EXPECT_TRUE(text.contains(QStringLiteral("tonemap")));
+    EXPECT_TRUE(text.contains(QStringLiteral("environment")));
+}
+
+TEST_F(MCPServerTest, SetTonemap_AcesExposure)
+{
+    QJsonObject args;
+    args[QStringLiteral("operator")] = QStringLiteral("aces");
+    args[QStringLiteral("exposure")] = 0.5;
+    QJsonObject result = server->callTool("set_tonemap", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains(QStringLiteral("exposure_ev=0.5")));
+}
+
+TEST_F(MCPServerTest, SetEnvIntensity_OnCreatedMaterial)
+{
+    QJsonObject createArgs{{QStringLiteral("name"), QStringLiteral("HdrEnvTestMat")}};
+    ASSERT_FALSE(isError(server->callTool("create_material", createArgs)));
+
+    QJsonObject args;
+    args[QStringLiteral("material")] = QStringLiteral("HdrEnvTestMat");
+    args[QStringLiteral("value")] = 2.0;
+    QJsonObject result = server->callTool("set_env_intensity", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains(QStringLiteral("2")));
+}
+
+TEST_F(MCPServerTest, SetEnvTint_OnCreatedMaterial)
+{
+    QJsonObject createArgs{{QStringLiteral("name"), QStringLiteral("HdrTintTestMat")}};
+    ASSERT_FALSE(isError(server->callTool("create_material", createArgs)));
+
+    QJsonObject args;
+    args[QStringLiteral("material")] = QStringLiteral("HdrTintTestMat");
+    args[QStringLiteral("hex")] = QStringLiteral("#fff5e6");
+    QJsonObject result = server->callTool("set_env_tint", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains(QStringLiteral("#fff5e6")));
+}
+
+TEST_F(MCPServerTest, HdrTools_AppearInToolList)
+{
+    QJsonArray tools = server->buildToolsList();
+    QStringList names;
+    for (const auto& t : tools)
+        names << t.toObject()[QStringLiteral("name")].toString();
+    EXPECT_TRUE(names.contains(QStringLiteral("set_hdr_environment")));
+    EXPECT_TRUE(names.contains(QStringLiteral("get_hdr_environment")));
+    EXPECT_TRUE(names.contains(QStringLiteral("set_tonemap")));
+    EXPECT_TRUE(names.contains(QStringLiteral("set_env_intensity")));
+    EXPECT_TRUE(names.contains(QStringLiteral("set_env_tint")));
+}
+
+// ==========================================================================
 // NEW COVERAGE: apply_material_preset tool
 // ==========================================================================
 

@@ -256,7 +256,7 @@ bool HdrEnvironmentController::defaultSkyBoxVisible() const
 {
     if (auto* hdrMgr = HDREnvironmentManager::getSingletonPtr())
         return hdrMgr->defaultSkyBoxVisible();
-    return true;
+    return false;
 }
 
 void HdrEnvironmentController::setDefaultSkyBoxVisible(bool visible)

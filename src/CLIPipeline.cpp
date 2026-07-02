@@ -25,6 +25,13 @@
 #include "ExportOptimizer.h"
 #include "UvUnwrap.h"
 #include "HDR/HdrBundledLibrary.h"
+#include "HDR/HDREnvironmentManager.h"
+#include "HDR/HdrMaterialScript.h"
+#include "RTShaderHelper.h"
+#include <QColor>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSet>
 #include "UvPipeline.h"
 #include "UvProject.h"
 #include "QuadRetopo.h"
@@ -621,6 +628,10 @@ void CLIPipeline::printUsage()
         "                                  Apply a built-in material preset to every sub-entity\n"
         "                                  (Plastic/Metal/Wood/Glass/Unlit/Wireframe + PBR templates:\n"
         "                                  Metallic-Roughness, Specular-Glossiness, Unlit PBR)\n"
+        "  material <file> --env <path-or-bundled-name> [--env-intensity N]\n"
+        "                  [--env-tint \"#rrggbb\"] [-o <output>]\n"
+        "                                  Load an HDRI environment + optional per-material IBL\n"
+        "                                  intensity/tint (writes .hdr-env.json + .material sidecar)\n"
         "  material --list-presets         List the built-in preset names\n"
         "  material <file> --generate-texture \"<prompt>\" [--model <name>]\n"
         "                  [--controlnet <path>] [--controlnet-strength <0..1>]\n"
@@ -3878,16 +3889,121 @@ int CLIPipeline::cmdIsometric(int argc, char* argv[])
     return 0;
 }
 
+namespace {
+
+bool parseEnvTintHex(const QString& hex, QColor& out)
+{
+    if (hex.isEmpty())
+        return false;
+    const QColor c(hex);
+    if (!c.isValid())
+        return false;
+    out = c;
+    return true;
+}
+
+void applyEnvParamsToEntityMaterials(const QList<Ogre::Entity*>& entities,
+                                     float intensity,
+                                     bool hasIntensity,
+                                     const QColor& tint,
+                                     bool hasTint)
+{
+    if (!hasIntensity && !hasTint)
+        return;
+
+    QSet<QString> touched;
+    for (auto* ent : entities) {
+        if (!ent)
+            continue;
+        for (unsigned short i = 0; i < ent->getNumSubEntities(); ++i) {
+            Ogre::SubEntity* sub = ent->getSubEntity(i);
+            Ogre::MaterialPtr mat = sub->getMaterial();
+            if (mat.isNull())
+                continue;
+            const QString matName = QString::fromStdString(mat->getName());
+            if (touched.contains(matName))
+                continue;
+            touched.insert(matName);
+            if (mat->getNumTechniques() == 0)
+                continue;
+            Ogre::Technique* tech = mat->getTechnique(0);
+            if (!tech || tech->getNumPasses() == 0)
+                continue;
+            RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+            mat->compile(false);
+            mat->load();
+            if (mat->getNumTechniques() == 0 || mat->getTechnique(0)->getNumPasses() == 0)
+                continue;
+            Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+            if (hasIntensity)
+                RTShaderHelper::setPbrEnvIntensity(pass, intensity);
+            if (hasTint) {
+                RTShaderHelper::setPbrEnvTint(
+                    pass, Ogre::ColourValue(tint.redF(), tint.greenF(), tint.blueF()));
+            }
+        }
+    }
+}
+
+QString serializeMaterialWithEnv(Ogre::MaterialPtr mat, float intensity, const QColor& tint)
+{
+    if (mat.isNull())
+        return {};
+    const std::string matName = mat->getName();
+    Ogre::MaterialSerializer ms;
+    ms.queueForExport(mat, false, false, matName);
+    QString text = QString::fromStdString(ms.getQueuedAsString());
+    return HdrMaterialScript::injectEnvironmentLines(text, intensity, tint);
+}
+
+bool writeTextFile(const QString& path, const QString& text)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+    f.write(text.toUtf8());
+    return true;
+}
+
+QString readTextFileOrEmpty(const QString& path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+        return {};
+    return QString::fromUtf8(f.readAll());
+}
+
+bool writeEnvironmentSidecar(const QFileInfo& outFi, const QString& envPath)
+{
+    if (envPath.isEmpty())
+        return true;
+    QJsonObject root;
+    root[QStringLiteral("environment")] = envPath;
+    QFile f(outFi.absoluteDir().filePath(outFi.completeBaseName() + QStringLiteral(".hdr-env.json")));
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    return true;
+}
+
+} // namespace
+
 int CLIPipeline::cmdMaterial(int argc, char* argv[])
 {
     // Parse:
     //   material <file> --preset <name> [-o <output>]
+    //   material <file> --env <path-or-bundled-name> [--env-intensity N] [--env-tint "#rrggbb"]
     //   material <file> --generate-texture <prompt> [--model <name>]
     //                   [--controlnet <path>] [--controlnet-strength <0..1>]
     //                   [--width N] [--height N] [-o <output>]
     //   material <file> --list-presets
     //   material --list-presets
     QString inputPath, outputPath, presetName;
+    QString envName;
+    bool hasEnvIntensity = false;
+    float envIntensity = HdrMaterialScript::kDefaultEnvIntensity;
+    QString envTintHex;
+    bool hasEnvTint = false;
     QString genPrompt, sdModel, controlNetPath;
     double controlStrength = 0.9;
     int genWidth = 512, genHeight = 512;
@@ -3908,6 +4024,25 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
         if (arg == "--list-presets") { listPresets = true; continue; }
         if (arg == "--preset" && i + 1 < argc) {
             presetName = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--env" && i + 1 < argc) {
+            envName = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--env-intensity" && i + 1 < argc) {
+            bool ok = false;
+            envIntensity = QString(argv[++i]).toFloat(&ok);
+            if (!ok) {
+                err() << "Error: --env-intensity must be a number." << Qt::endl;
+                return 2;
+            }
+            hasEnvIntensity = true;
+            continue;
+        }
+        if (arg == "--env-tint" && i + 1 < argc) {
+            envTintHex = QString(argv[++i]);
+            hasEnvTint = true;
             continue;
         }
         if (arg == "--generate-texture" && i + 1 < argc) {
@@ -4014,15 +4149,34 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
         return 0;
     }
 
-    if (inputPath.isEmpty() || presetName.isEmpty()) {
+    const bool hasHdrMaterialOps = !envName.isEmpty() || hasEnvIntensity || hasEnvTint;
+
+    if (inputPath.isEmpty() || (presetName.isEmpty() && !hasHdrMaterialOps)) {
         err() << "Error: Missing required arguments." << Qt::endl;
         err() << "Usage: qtmesh material <file> --preset <name> [-o <output>]" << Qt::endl;
+        err() << "       qtmesh material <file> --env <path-or-name> [--env-intensity N]"
+                 " [--env-tint \"#rrggbb\"] [-o <output>]" << Qt::endl;
         err() << "       qtmesh material <file> --describe \"<description>\" [--model <name>] [-o <output>]" << Qt::endl;
         err() << "       qtmesh material --list-presets" << Qt::endl;
         return 2;
     }
 
-    if (!names.contains(presetName)) {
+    if (hasEnvIntensity
+        && (envIntensity < HdrMaterialScript::kMinEnvIntensity
+            || envIntensity > HdrMaterialScript::kMaxEnvIntensity)) {
+        err() << "Error: --env-intensity must be in ["
+              << HdrMaterialScript::kMinEnvIntensity << ", "
+              << HdrMaterialScript::kMaxEnvIntensity << "]." << Qt::endl;
+        return 2;
+    }
+
+    QColor envTint;
+    if (hasEnvTint && !parseEnvTintHex(envTintHex, envTint)) {
+        err() << "Error: Invalid --env-tint color (use #rrggbb or a QColor name)." << Qt::endl;
+        return 2;
+    }
+
+    if (!presetName.isEmpty() && !names.contains(presetName)) {
         err() << "Error: Unknown preset '" << presetName << "'." << Qt::endl;
         err() << "Available presets:" << Qt::endl;
         for (const QString& n : names)
@@ -4041,9 +4195,20 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
 
     if (!initOgreHeadless()) return 1;
 
+    if (!envName.isEmpty()) {
+        auto* hdrMgr = HDREnvironmentManager::getSingletonPtr();
+        if (hdrMgr)
+            hdrMgr->setBackgroundIblPrecomputeEnabled(false);
+        if (!hdrMgr || !hdrMgr->loadEnvironment(envName)) {
+            err() << "Error: Failed to load environment '" << envName << "'." << Qt::endl;
+            return 1;
+        }
+    }
+
     SentryReporter::addBreadcrumb("cli.material",
-        QString("Apply preset '%1' to .%2 -> .%3")
-            .arg(presetName, fi.suffix(), outFi.suffix()));
+        QString("Apply %1 to .%2 -> .%3")
+            .arg(presetName.isEmpty() ? QStringLiteral("HDR env/material") : QStringLiteral("preset '%1'").arg(presetName),
+                  fi.suffix(), outFi.suffix()));
     SentryReporter::addBreadcrumb("file.import",
         QString("Importing file %1").arg(fi.absoluteFilePath()));
 
@@ -4074,7 +4239,35 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
         return 1;
     }
 
-    lib->applyPreset(presetName);
+    if (!presetName.isEmpty())
+        lib->applyPreset(presetName);
+
+    auto* matMgr = Ogre::MaterialManager::getSingletonPtr();
+    if (!presetName.isEmpty() && matMgr && (hasEnvIntensity || hasEnvTint)) {
+        const std::string presetMatName = ("Preset/" + presetName).toStdString();
+        if (matMgr->resourceExists(presetMatName)) {
+            Ogre::MaterialPtr presetMat = matMgr->getByName(presetMatName);
+            if (!presetMat.isNull() && presetMat->getNumTechniques() > 0
+                && presetMat->getTechnique(0)->getNumPasses() > 0) {
+                RTShaderHelper::wirePbrSlotsForFFP(presetMat.get());
+                presetMat->compile(false);
+                presetMat->load();
+                if (presetMat->getNumTechniques() > 0
+                    && presetMat->getTechnique(0)->getNumPasses() > 0) {
+                    Ogre::Pass* pass = presetMat->getTechnique(0)->getPass(0);
+                    if (hasEnvIntensity)
+                        RTShaderHelper::setPbrEnvIntensity(pass, envIntensity);
+                    if (hasEnvTint) {
+                        RTShaderHelper::setPbrEnvTint(
+                            pass,
+                            Ogre::ColourValue(envTint.redF(), envTint.greenF(), envTint.blueF()));
+                    }
+                }
+            }
+        }
+    } else if (hasEnvIntensity || hasEnvTint) {
+        applyEnvParamsToEntityMaterials(entities, envIntensity, hasEnvIntensity, envTint, hasEnvTint);
+    }
 
     Ogre::Entity* entity = entities.first();
     Ogre::SceneNode* node = entity->getParentSceneNode();
@@ -4092,44 +4285,103 @@ int CLIPipeline::cmdMaterial(int argc, char* argv[])
     }
 
     // Write a sidecar .material file alongside the output mesh so that
-    // engines/tools that expect Ogre material scripts can pick up the preset.
-    // Sidecar generation is part of the core feature contract — failures
-    // here propagate as a non-zero exit code, not silent success.
-    const std::string matName = ("Preset/" + presetName).toStdString();
-    auto matMgr = Ogre::MaterialManager::getSingletonPtr();
-    if (!matMgr || !matMgr->resourceExists(matName)) {
-        err() << "Error: Material resource not found for sidecar export: "
-              << QString::fromStdString(matName) << Qt::endl;
-        return 1;
-    }
-    Ogre::MaterialPtr mat = matMgr->getByName(matName);
-    if (!mat) {
-        err() << "Error: Failed to resolve material for sidecar export: "
-              << QString::fromStdString(matName) << Qt::endl;
-        return 1;
-    }
-    Ogre::MaterialSerializer ms;
-    ms.queueForExport(mat, false, false, matName);
-    const QString matText = QString::fromStdString(ms.getQueuedAsString());
+    // engines/tools that expect Ogre material scripts can pick up the preset
+    // or per-material IBL tuning. Sidecar generation is part of the core
+    // feature contract — failures here propagate as a non-zero exit code.
+    if (!presetName.isEmpty()) {
+        const std::string matName = ("Preset/" + presetName).toStdString();
+        if (!matMgr || !matMgr->resourceExists(matName)) {
+            err() << "Error: Material resource not found for sidecar export: "
+                  << QString::fromStdString(matName) << Qt::endl;
+            return 1;
+        }
+        Ogre::MaterialPtr mat = matMgr->getByName(matName);
+        if (!mat) {
+            err() << "Error: Failed to resolve material for sidecar export: "
+                  << QString::fromStdString(matName) << Qt::endl;
+            return 1;
+        }
+        Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+        const Ogre::ColourValue tintCv = RTShaderHelper::pbrEnvTint(pass);
+        const QColor sidecarTint = QColor::fromRgbF(tintCv.r, tintCv.g, tintCv.b);
+        const QString matText =
+            serializeMaterialWithEnv(mat, RTShaderHelper::pbrEnvIntensity(pass), sidecarTint);
 
-    const QString sidecarPath = QDir(outFi.absolutePath())
-        .filePath(outFi.completeBaseName() + ".material");
-    QFile matFile(sidecarPath);
-    if (!matFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        err() << "Error: Failed to write material sidecar: " << sidecarPath << Qt::endl;
-        return 1;
+        const QString sidecarPath = QDir(outFi.absolutePath())
+            .filePath(outFi.completeBaseName() + ".material");
+        if (!writeTextFile(sidecarPath, matText)) {
+            err() << "Error: Failed to write material sidecar: " << sidecarPath << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb("file.export",
+            QString("Wrote material sidecar %1").arg(sidecarPath));
+    } else if (hasEnvIntensity || hasEnvTint) {
+        const QString sidecarPath =
+            outFi.absoluteDir().filePath(outFi.completeBaseName() + QStringLiteral(".material"));
+        QString script;
+        if (QFile::exists(sidecarPath))
+            script = readTextFileOrEmpty(sidecarPath);
+        if (script.trimmed().isEmpty()) {
+            for (auto* ent : entities) {
+                if (!ent)
+                    continue;
+                for (unsigned short i = 0; i < ent->getNumSubEntities(); ++i) {
+                    Ogre::MaterialPtr mat = ent->getSubEntity(i)->getMaterial();
+                    if (!mat)
+                        continue;
+                    script += serializeMaterialWithEnv(
+                        mat,
+                        hasEnvIntensity ? envIntensity : HdrMaterialScript::kDefaultEnvIntensity,
+                        hasEnvTint ? envTint : QColor::fromRgbF(1., 1., 1.));
+                    script += QLatin1Char('\n');
+                }
+            }
+        } else {
+            script = HdrMaterialScript::injectEnvironmentLines(
+                script,
+                hasEnvIntensity ? envIntensity : HdrMaterialScript::kDefaultEnvIntensity,
+                hasEnvTint ? envTint : QColor::fromRgbF(1., 1., 1.));
+        }
+        if (script.trimmed().isEmpty()) {
+            err() << "Error: No material sidecar content to update." << Qt::endl;
+            return 1;
+        }
+        if (!writeTextFile(sidecarPath, script)) {
+            err() << "Error: Failed to write material sidecar: " << sidecarPath << Qt::endl;
+            return 1;
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                      QStringLiteral("Wrote material sidecar %1").arg(sidecarPath));
     }
-    matFile.write(matText.toUtf8());
-    matFile.close();
-    SentryReporter::addBreadcrumb("file.export",
-        QString("Wrote material sidecar %1").arg(sidecarPath));
 
-    cliWrite(QString("Applied preset '%1' to %2 (%3 entit%4). Saved: %5\n")
-        .arg(presetName)
-        .arg(fi.fileName())
-        .arg(selectedEntityCount)
-        .arg(selectedEntityCount == 1 ? "y" : "ies")
-        .arg(outFi.fileName()));
+    if (!envName.isEmpty()) {
+        if (!writeEnvironmentSidecar(
+                outFi, HDREnvironmentManager::getSingletonPtr()->currentEnvironment())) {
+            err() << "Error: Failed to write HDR environment sidecar." << Qt::endl;
+            return 1;
+        }
+    }
+
+    QString summary;
+    if (!presetName.isEmpty()) {
+        summary = QString("Applied preset '%1' to %2 (%3 entit%4). Saved: %5\n")
+                      .arg(presetName)
+                      .arg(fi.fileName())
+                      .arg(selectedEntityCount)
+                      .arg(selectedEntityCount == 1 ? "y" : "ies")
+                      .arg(outFi.fileName());
+    } else {
+        summary = QString("Applied HDR material settings to %1 (%2 entit%3). Saved: %4\n")
+                      .arg(fi.fileName())
+                      .arg(selectedEntityCount)
+                      .arg(selectedEntityCount == 1 ? "y" : "ies")
+                      .arg(outFi.fileName());
+    }
+    if (!envName.isEmpty()) {
+        summary += QString("Environment: %1\n")
+                       .arg(HDREnvironmentManager::getSingletonPtr()->currentEnvironment());
+    }
+    cliWrite(summary);
 
     return 0;
 }

@@ -41,6 +41,6 @@ private:
     Ogre::CompositorInstance* m_compositor = nullptr;
     QString m_compositorName;
     QString m_tonemapMaterialName;
-    bool m_skyBoxVisible = true;
+    bool m_skyBoxVisible = false;
     bool m_enabled = false;
 };
