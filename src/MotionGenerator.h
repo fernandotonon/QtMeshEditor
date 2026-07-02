@@ -50,7 +50,12 @@ public:
         bool ok = false;
         QString error;                   // populated when !ok
         QString matchedAction;           // vocab action the prompt resolved to
-        MotionLibrary::Clip clip;        // the generated clip (LOCAL-frame quats)
+        MotionLibrary::Clip clip;        // the generated clip
+        // Frame convention of clip.quats, from the vocab json's "frame" key:
+        // true = WORLD-space joint orientations (v4 models — rides the same
+        // superior retarget path as the v3 template library), false = LOCAL
+        // parent-relative quats (v3 models). Pass to applyMotionClip.
+        bool worldFrame = false;
     };
 
     // Generate a canonical clip for `prompt` using the model at `modelPath`

@@ -3898,7 +3898,7 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
                                                           MotionGenerator::vocabPath(), duration);
                 if (mr.ok) {
                     action = mr.matchedAction; quats = mr.clip.quats; fps = mr.clip.fps;
-                    worldFrame = false; clipSource = QStringLiteral("model"); gotClip = true;
+                    worldFrame = mr.worldFrame; clipSource = QStringLiteral("model"); gotClip = true;
                 }
             }
         }
@@ -3932,11 +3932,29 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         }
 
         const std::string animName = ("generated_" + action).toStdString();
+        // Auto-rigged (no prior animation) meshes that face −Z would walk
+        // backward — detect facing from the mesh's foot region.
+        const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
         const auto r = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
-                                                        worldFrame, cmuRest);
+                                                        worldFrame, cmuRest,
+                                                        /*refineWithModel=*/false,
+                                                        /*refineStride=*/8, yaw180);
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
         entity->refreshAvailableAnimationState();
+        // Exclusively enable the generated clip — enabled states BLEND in
+        // Ogre, and mixing with the import's auto-enabled animation renders
+        // as a shaking mid-pose (same fix as the GUI generate path).
+        if (auto* animSet = entity->getAllAnimationStates()) {
+            for (const auto& [key, state] : animSet->getAnimationStates())
+                state->setEnabled(false);
+            if (animSet->hasAnimationState(animName)) {
+                auto* gen = animSet->getAnimationState(animName);
+                gen->setEnabled(true);
+                gen->setLoop(true);
+                gen->setTimePosition(0.0f);
+            }
+        }
         if (auto* acc = AnimationControlController::instance())
             acc->notifyExternalAnimationEdit();
 

@@ -169,20 +169,36 @@ the binary). Attribution + licenses for the models and their training data:
   which derive from **AMASS** = **academic / non-commercial** (the same wall as
   #409 LAFAN1). A from-scratch generative model proved feasible-but-hard (collapses
   without multi-day ML effort), so the shipped MVP is a **template-clip** approach.
-- **Data:** a small curated set of clips from the **CMU Graphics Lab Motion Capture
+- **Data:** a curated set of clips from the **CMU Graphics Lab Motion Capture
   Database** (mocap.cs.cmu.edu) — **permissively licensed, commercial-OK** (the same
   source as the #409 RMIB model). Built offline by `scripts/build-motion-library.py`
-  into a `qtmesh-motion-library-v1` JSON (per-frame, per-joint canonical-quaternion
-  poses on the 22-joint CMU core-body skeleton) — no model weights, no AMASS.
-- **Hosting:** `motion/motion-library.json` (~0.9 MB, 10 actions) in the
+  into a `qtmesh-motion-library-v3` JSON (per-frame, per-joint canonical WORLD-frame
+  quaternions on the 22-joint CMU core-body skeleton) — no model weights, no AMASS.
+  The v4 library build selects each clip's **active window** (max motion energy,
+  snapped to a calm near-neutral start frame — the retarget deltas against clip
+  frame 0), replacing the first-4-seconds slices that mostly captured idle
+  lead-ins, and covers **13 actions** (walk, run, jump, dance, march, kick,
+  punch, wave, climb, sit, throw, boxing, idle, sweep, wash) with SEVERAL
+  takes per action — the matcher picks among them at random so repeat
+  generates vary while every result is real mocap.
+- **Hosting:** `motion/motion-library.json` (~4 MB, 47 clips / 15 actions) in the
   [`fernandotonon/QtMeshEditor-models`](https://huggingface.co/fernandotonon/QtMeshEditor-models)
   HF repo, downloaded on first use to `AppData/ai_models/motion/` (override
   `QTMESH_MOTION_LIBRARY_BASE_URL` / `QSettings ai/motionLibraryBaseUrl`; offline
   guard `QTMESH_MOTION_NO_DOWNLOAD`).
 - **Retargeting:** `AnimationMerger::applyMotionClip` maps the canonical clip onto
   the user's rig via `MotionInbetween::canonicalIndexForBone` (shared with #409).
-- **Generative path:** postponed; the dev prototype `scripts/export-t2m-onnx.py`
-  is kept for a future upgrade but is NOT shipped (no model file).
+- **Generative path (opt-in, experimental) — trained by us.** `motion/t2m.onnx`
+  (+ `t2m-vocab.json`), a CVAE transformer trained **from scratch on the same
+  CMU source** by `scripts/prep-t2m-v4.py` + `scripts/train-t2m-onnx-v4.py`
+  (offline dev tools, not shipped): 30 fps world-frame windows with neutral
+  starts, absolute-pose decoder, per-sample + rotation-space velocity matching,
+  derived-local supervision (what the retarget renders), and z=0 latent
+  supervision (the app's inference condition). The vocab json declares
+  `"frame":"world"` so model clips ride the same retarget path as the template
+  library. Selected via `--model` (CLI) / `model:true` (MCP) / the GUI
+  checkbox; the template library remains the default and the automatic
+  fallback. Same CMU licensing basis as above.
 
 All of the above clear QtMeshEditor's permissive-redistribution bar (MIT app,
 distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed
