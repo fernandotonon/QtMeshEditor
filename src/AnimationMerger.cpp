@@ -1034,6 +1034,14 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     }
 
     res.canonicalJoints = distinct;
+    // Bones-per-role: rigs segment chains differently (Mixamo has Spine AND
+    // Spine1 in the canonical "abdomen" span; some rigs multi-segment arms).
+    // Applying the full role delta to EVERY mapped bone would bend the chain
+    // N times over — distribute it instead: each of the N bones gets the
+    // N-th fractional rotation so the chain's total matches the clip.
+    std::vector<int> canonDup(MotionInbetween::canonicalJointCount(), 0);
+    for (int i = 0; i < nBones; ++i)
+        if (boneToCanon[i] >= 0) ++canonDup[boneToCanon[i]];
     // Need a humanoid-ish rig: require a reasonable share of the 22 roles.
     if (distinct < (MotionInbetween::canonicalJointCount() * 1) / 2) {
         res.error = QStringLiteral(
@@ -1188,10 +1196,14 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             Mc = Mc * kYawPi;
         }
         const Ogre::Quaternion McInv = Mc.Inverse();
+        const int dup = std::max(1, canonDup[c]);
         for (int f = 0; f < frames; ++f) {
-            const Ogre::Quaternion local = (c == 0)
-                ? bind
-                : (bind * (McInv * cmuLocalDelta[c][f] * Mc));
+            Ogre::Quaternion artic = McInv * cmuLocalDelta[c][f] * Mc;
+            if (dup > 1)   // share the role's rotation across its N bones
+                artic = Ogre::Quaternion::Slerp(1.0f / static_cast<float>(dup),
+                                                Ogre::Quaternion::IDENTITY,
+                                                artic, /*shortestPath=*/true);
+            const Ogre::Quaternion local = (c == 0) ? bind : (bind * artic);
             Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(f * dt);
             kf->setRotation(local);
             kf->setTranslate(standPos);
