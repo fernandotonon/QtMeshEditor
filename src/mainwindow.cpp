@@ -795,13 +795,11 @@ void MainWindow::initToolBar()
                 emit IsometricSpritesController::instance()->outputPathPicked(chosen);
             });
         });
-        qmlRegisterSingletonType<MeshGenController>("PropertiesPanel", 1, 0, "MeshGenController",
-            [](QQmlEngine* engine, QJSEngine* js) -> QObject* {
-                return MeshGenController::create(engine, js);
-            });
-        // Also expose under MaterialEditorQML so AISettingsDialog.qml (which imports
-        // that module, not PropertiesPanel) can reach it — a QML singleton may be
-        // registered under multiple module names.
+        // Registered under MaterialEditorQML (NOT PropertiesPanel): both
+        // PropertiesPanel.qml and AISettingsDialog.qml already import
+        // MaterialEditorQML, so a single registration resolves for both — and it
+        // avoids registering the same C++ type under two module URIs (which
+        // crashed MainWindow/MCPServer tests that reconstruct the window per test).
         qmlRegisterSingletonType<MeshGenController>("MaterialEditorQML", 1, 0, "MeshGenController",
             [](QQmlEngine* engine, QJSEngine* js) -> QObject* {
                 return MeshGenController::create(engine, js);
