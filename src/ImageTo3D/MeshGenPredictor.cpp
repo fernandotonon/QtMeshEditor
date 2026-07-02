@@ -1,6 +1,8 @@
 #include "MeshGenPredictor.h"
 
 #include "MarchingCubes.h"
+#include "MeshRefine.h"    // Taubin smoothing + iso-surface reprojection
+#include "MeshGenBaker.h"  // xatlas unwrap + diffuse texture bake
 #include "PbrMapSynth.h"   // toNCHW (image → planar [0,1])
 #include "BackgroundRemover.h"
 
@@ -353,25 +355,110 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         out.triangleCount = mc.triangleCount;
         out.usedModel     = true;
 
-        // ---- (4) Optional per-vertex color: one more decoder pass on verts ----
-        if (wantColor && out.vertexCount > 0) {
-            const size_t nv = static_cast<size_t>(out.vertexCount);
-            out.colors.assign(nv * 3, 0.8f);
-            for (size_t start = 0; start < nv; start += static_cast<size_t>(chunk)) {
-                const size_t n = std::min(static_cast<size_t>(chunk), nv - start);
+        // Chunked decoder query over a materialized point buffer. Fills
+        // outDensity (raw density, one float/point) and/or outRgb (three
+        // floats/point) when non-null. The pass-specific loops below (refine,
+        // vertex colour, texture bake) all share this. Returns false when the
+        // caller's progress callback requests cancellation (reported at the
+        // completed grid total so the progress bar doesn't jump backwards).
+        auto sampleBuffer = [&](const float* pts, size_t count,
+                                float* outDensity, float* outRgb) -> bool {
+            for (size_t start = 0; start < count; start += static_cast<size_t>(chunk)) {
+                if (progress && !progress(static_cast<int>(totalPts),
+                                          static_cast<int>(totalPts)))
+                    return false;
+                const size_t n = std::min(static_cast<size_t>(chunk), count - start);
                 const int64_t ptShape[3] = {1, static_cast<int64_t>(n), 3};
+                // The decoder input is non-const in the C API; the buffer is
+                // only read, so the const_cast is safe.
                 Ort::Value ptTensor = Ort::Value::CreateTensor<float>(
-                    mem, out.positions.data() + start * 3, n * 3, ptShape, 3);
+                    mem, const_cast<float*>(pts) + start * 3, n * 3, ptShape, 3);
                 Ort::Value scTensor = Ort::Value::CreateTensor<float>(
                     mem, sceneCodes.data(), sceneCodes.size(), scShape.data(), scShape.size());
                 const char* decIn[] = { decScName.get(), decPtName.get() };
                 Ort::Value decInVals[] = { std::move(scTensor), std::move(ptTensor) };
                 auto decRes = decoder.Run(Ort::RunOptions{nullptr}, decIn, decInVals, 2,
                                           decOutNames.data(), decOutNames.size());
-                const float* col = decRes[colorIdx].GetTensorData<float>();
-                for (size_t i = 0; i < n * 3; ++i)
-                    out.colors[start * 3 + i] = col[i];
+                if (outDensity) {
+                    const float* dens = decRes[densityIdx].GetTensorData<float>();
+                    std::copy(dens, dens + n, outDensity + start);
+                }
+                if (outRgb && colorIdx >= 0) {
+                    const float* col = decRes[colorIdx].GetTensorData<float>();
+                    std::copy(col, col + n * 3, outRgb + start * 3);
+                }
             }
+            return true;
+        };
+
+        // ---- (4) Polish: Taubin smoothing + iso-surface reprojection ----------
+        // Smoothing removes the res^3-grid stair-stepping; the projection step
+        // then snaps the smoothed vertices back onto the network's true
+        // iso-surface (field + forward-difference gradient sampled from the
+        // decoder), recovering detail the grid quantized away.
+        if (opts.smoothMesh && opts.smoothIterations > 0)
+            MeshRefine::taubinSmooth(out.positions, out.indices, opts.smoothIterations);
+
+        if (opts.refineSurface && out.vertexCount > 0) {
+            const size_t nv  = static_cast<size_t>(out.vertexCount);
+            const float  eps = step * 0.5f;   // probe offset: half a grid cell
+            // Probe layout per vertex: [v, v+εx̂, v+εŷ, v+εẑ] — forward differences.
+            std::vector<float> probes(nv * 4 * 3);
+            for (size_t v = 0; v < nv; ++v) {
+                const float* p = out.positions.data() + v * 3;
+                float* q = probes.data() + v * 12;
+                for (int k = 0; k < 4; ++k) {
+                    q[k * 3 + 0] = p[0]; q[k * 3 + 1] = p[1]; q[k * 3 + 2] = p[2];
+                }
+                q[3] += eps; q[7] += eps; q[11] += eps;
+            }
+            std::vector<float> dens(nv * 4);
+            if (!sampleBuffer(probes.data(), nv * 4, dens.data(), nullptr))
+                return fail(QStringLiteral("cancelled"));
+            std::vector<float> f(nv), grad(nv * 3);
+            for (size_t v = 0; v < nv; ++v) {
+                const float f0 = dens[v * 4 + 0] - opts.threshold;
+                f[v] = f0;
+                grad[v * 3 + 0] = (dens[v * 4 + 1] - opts.threshold - f0) / eps;
+                grad[v * 3 + 1] = (dens[v * 4 + 2] - opts.threshold - f0) / eps;
+                grad[v * 3 + 2] = (dens[v * 4 + 3] - opts.threshold - f0) / eps;
+            }
+            // Clamp each move to one grid cell — the vertex is already close.
+            MeshRefine::isoProjectStep(out.positions, f, grad, step);
+        }
+
+        // ---- (5) Colour: baked texture (preferred) or per-vertex ---------------
+        if (wantColor && out.vertexCount > 0 && opts.bakeTexture) {
+            MeshGenBaker::Options bakeOpts;
+            bakeOpts.textureSize = opts.textureSize;
+            bakeOpts.chunkPoints = chunk;
+            const MeshGenBaker::Result baked = MeshGenBaker::bake(
+                out.positions, out.indices,
+                [&](const float* pts, size_t count, float* rgb) {
+                    return sampleBuffer(pts, count, nullptr, rgb);
+                },
+                bakeOpts);
+            if (baked.ok) {
+                out.positions     = baked.positions;   // re-indexed along UV seams
+                out.indices       = baked.indices;
+                out.uvs           = baked.uvs;
+                out.texture       = baked.texture;
+                out.vertexCount   = baked.vertexCount;
+                out.triangleCount = baked.triangleCount;
+            } else if (baked.error == QLatin1String("cancelled")) {
+                return fail(QStringLiteral("cancelled"));
+            } else {
+                out.warning = QStringLiteral("texture bake failed (%1) — using "
+                                             "vertex colours").arg(baked.error);
+            }
+        }
+
+        // ---- (6) Per-vertex colour (bake disabled or fell back) ---------------
+        if (wantColor && out.vertexCount > 0 && out.uvs.empty()) {
+            const size_t nv = static_cast<size_t>(out.vertexCount);
+            out.colors.assign(nv * 3, 0.8f);
+            if (!sampleBuffer(out.positions.data(), nv, nullptr, out.colors.data()))
+                return fail(QStringLiteral("cancelled"));
         }
 
         out.ok = true;

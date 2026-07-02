@@ -312,7 +312,15 @@ void MeshGenController::buildOnMainThread()
         {"vertexCount", r.vertexCount},
         {"triangleCount", r.triangleCount},
     };
-    emit statusMessage(tr("Generated %1 verts, %2 tris")
-                           .arg(r.vertexCount).arg(r.triangleCount));
+    if (!r.warning.isEmpty()) out["warning"] = r.warning;
+    emit statusMessage(!r.warning.isEmpty()
+                           ? tr("Generated %1 verts, %2 tris (%3)")
+                                 .arg(r.vertexCount).arg(r.triangleCount).arg(r.warning)
+                           : r.uvs.empty()
+                                 ? tr("Generated %1 verts, %2 tris")
+                                       .arg(r.vertexCount).arg(r.triangleCount)
+                                 : tr("Generated %1 verts, %2 tris + %3px texture")
+                                       .arg(r.vertexCount).arg(r.triangleCount)
+                                       .arg(r.texture.width()));
     emit completed(out);
 }

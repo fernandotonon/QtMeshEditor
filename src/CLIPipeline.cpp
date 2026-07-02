@@ -8727,6 +8727,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool vertexColor = true;
     bool noModel = false;
     bool removeBg = false;
+    bool smooth = true;         // quality pass defaults ON
+    bool refine = true;
+    bool bake = true;
+    int textureSize = 1024;
     MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
 
     for (int i = 1; i < argc; ++i) {
@@ -8735,6 +8739,22 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-color") { vertexColor = false; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
         if (arg == "--remove-bg" || arg == "--rembg") { removeBg = true; continue; }
+        if (arg == "--no-smooth") { smooth = false; continue; }
+        if (arg == "--no-refine") { refine = false; continue; }
+        if (arg == "--no-bake-texture") { bake = false; continue; }
+        if (arg == "--texture-size") {
+            if (i + 1 >= argc) {
+                err() << "Error: --texture-size requires a value (e.g. 512, 1024, 2048)." << Qt::endl;
+                return 2;
+            }
+            bool okNum = false;
+            textureSize = QString::fromLocal8Bit(argv[++i]).toInt(&okNum);
+            if (!okNum || textureSize < 64 || textureSize > 8192) {
+                err() << "Error: --texture-size must be an integer in [64..8192]." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--quality") {
             if (i + 1 >= argc) {
                 err() << "Error: --quality requires fp32 or int8." << Qt::endl;
@@ -8779,7 +8799,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     if (inputPath.isEmpty()) {
         err() << "Error: No input image specified." << Qt::endl;
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
-                 "[--no-color] [--remove-bg] [--quality fp32|int8]" << Qt::endl;
+                 "[--no-color] [--remove-bg] [--quality fp32|int8] "
+                 "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024]"
+              << Qt::endl;
         return 2;
     }
     QFileInfo fi(inputPath);
@@ -8831,6 +8853,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.vertexColor     = vertexColor;
     opts.removeBackground = removeBg;
     opts.quality         = quality;
+    opts.smoothMesh      = smooth;
+    opts.refineSurface   = refine;
+    opts.bakeTexture     = bake;
+    opts.textureSize     = textureSize;
     const MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(quality),
         MeshGenPredictor::decoderModelPath(), opts);
@@ -8838,9 +8864,14 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Error: image-to-3D failed: " << res.error << Qt::endl;
         return 1;
     }
+    if (!res.warning.isEmpty())
+        err() << "Warning: " << res.warning << Qt::endl;
 
-    Ogre::SceneNode* node =
-        MeshGenBuilder::buildSceneNode(res, QStringLiteral("qtmesh_gen3d"));
+    // Baked texture lands next to the exported mesh (registered as a resource
+    // location inside buildSceneNode so the exporters can resolve/embed it).
+    Ogre::SceneNode* node = MeshGenBuilder::buildSceneNode(
+        res, QStringLiteral("qtmesh_gen3d"),
+        QFileInfo(outputPath).absolutePath());
     if (!node) {
         err() << "Error: failed to build mesh from prediction." << Qt::endl;
         return 1;
@@ -8856,7 +8887,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
 
     cliWrite(QString("Generated 3D mesh: %1 verts, %2 tris%3\nWrote: %4\n")
                  .arg(res.vertexCount).arg(res.triangleCount)
-                 .arg(res.colors.empty() ? QString() : QStringLiteral(" (+vertex color)"))
+                 .arg(!res.uvs.empty()
+                          ? QStringLiteral(" (+baked %1px diffuse texture)").arg(res.texture.width())
+                          : (res.colors.empty() ? QString()
+                                                : QStringLiteral(" (+vertex color)")))
                  .arg(QFileInfo(outputPath).fileName()));
     return 0;
 #endif

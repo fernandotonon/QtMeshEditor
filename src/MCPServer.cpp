@@ -2162,6 +2162,15 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         else if (q == "fp32" || q.isEmpty()) opts.quality = MeshGenPredictor::Quality::Fp32;
         else return makeErrorResult("'quality' must be 'fp32' or 'int8'.");
     }
+    // Quality pass (defaults ON — see MeshGenPredictor::Options).
+    if (args.contains("smooth")) opts.smoothMesh = args["smooth"].toBool(true);
+    if (args.contains("refine")) opts.refineSurface = args["refine"].toBool(true);
+    if (args.contains("bake_texture")) opts.bakeTexture = args["bake_texture"].toBool(true);
+    if (args.contains("texture_size")) {
+        opts.textureSize = args["texture_size"].toInt(1024);
+        if (opts.textureSize < 64 || opts.textureSize > 8192)
+            return makeErrorResult("'texture_size' must be between 64 and 8192.");
+    }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
         QStringLiteral("generate_mesh_from_image %1 res=%2")
@@ -2185,13 +2194,17 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         return makeErrorResult(res.error.isEmpty()
             ? QStringLiteral("image-to-3D failed") : res.error);
 
-    Ogre::SceneNode* node =
-        MeshGenBuilder::buildSceneNode(res, QStringLiteral("qtmesh_gen3d"));
+    // Baked texture: land it next to the export target when one is given so
+    // the reference survives outside the app; else the AppData default.
+    const QString output = args.value("output").toString();
+    Ogre::SceneNode* node = MeshGenBuilder::buildSceneNode(
+        res, QStringLiteral("qtmesh_gen3d"),
+        output.trimmed().isEmpty() ? QString()
+                                   : QFileInfo(output).absolutePath());
     if (!node)
         return makeErrorResult("failed to build mesh from prediction.");
 
     QString meshPath;
-    const QString output = args.value("output").toString();
     if (!output.trimmed().isEmpty()) {
         const QString fmt = CLIPipeline::formatForExtension(output);
         SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
@@ -6934,6 +6947,10 @@ QJsonArray MCPServer::buildToolsList()
         props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "Bake TripoSR's predicted per-vertex color (default true)."}};
         props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; TripoSR needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
         props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Encoder precision/size tier (default fp32). fp32 = best (~1.7GB), int8 = smallest, slight quality loss (~430MB). The chosen tier downloads on demand."}};
+        props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "Taubin-smooth the extracted mesh to remove marching-cubes stair-stepping (default true; volume-preserving)."}};
+        props["refine"] = QJsonObject{{"type", "boolean"}, {"description", "After smoothing, Newton-project each vertex back onto the network's true iso-surface via extra decoder queries (default true; recovers grid-quantized detail)."}};
+        props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails)."}};
+        props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "

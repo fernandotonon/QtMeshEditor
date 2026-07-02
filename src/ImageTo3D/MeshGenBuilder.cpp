@@ -2,6 +2,10 @@
 
 #include "Manager.h"
 
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
+
 #include <OgreEntity.h>
 #include <OgreHardwareBufferManager.h>
 #include <OgreMaterialManager.h>
@@ -57,7 +61,8 @@ std::vector<float> computeNormals(const std::vector<float>& pos,
 
 namespace MeshGenBuilder {
 
-Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& meshName)
+Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& meshName,
+                      const QString& texturePngPath)
 {
     if (result.vertexCount <= 0 || result.triangleCount <= 0
         || result.positions.size() != static_cast<size_t>(result.vertexCount) * 3)
@@ -72,8 +77,13 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
         if (i >= static_cast<uint32_t>(result.vertexCount))
             return nullptr;
 
-    const bool hasColor =
-        result.colors.size() == static_cast<size_t>(result.vertexCount) * 3;
+    // Baked-texture path: UV0 + a diffuse texture (preferred). Vertex colour is
+    // the fallback when no bake ran.
+    const bool hasUv =
+        result.uvs.size() == static_cast<size_t>(result.vertexCount) * 2
+        && !texturePngPath.isEmpty();
+    const bool hasColor = !hasUv
+        && result.colors.size() == static_cast<size_t>(result.vertexCount) * 3;
     const std::vector<float> normals = computeNormals(result.positions, result.indices);
 
     auto& mm = Ogre::MeshManager::getSingleton();
@@ -94,7 +104,10 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     size_t offset = 0;
     offset += decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION).getSize();
     offset += decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL).getSize();
-    if (hasColor)
+    if (hasUv)
+        offset += decl->addElement(0, offset, Ogre::VET_FLOAT2,
+                                   Ogre::VES_TEXTURE_COORDINATES, 0).getSize();
+    else if (hasColor)
         offset += decl->addElement(0, offset, Ogre::VET_COLOUR, Ogre::VES_DIFFUSE).getSize();
 
     auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
@@ -130,7 +143,12 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
             f[0] = x; f[1] = y; f[2] = z;
             f[3] = nx; f[4] = ny; f[5] = nz;
             p += 6 * sizeof(float);
-            if (hasColor) {
+            if (hasUv) {
+                float* uv = reinterpret_cast<float*>(p);
+                uv[0] = result.uvs[2*i+0];
+                uv[1] = result.uvs[2*i+1];
+                p += 2 * sizeof(float);
+            } else if (hasColor) {
                 Ogre::ColourValue cv(result.colors[3*i+0], result.colors[3*i+1],
                                      result.colors[3*i+2], 1.0f);
                 Ogre::RGBA packed;
@@ -164,6 +182,28 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     sub->indexData->indexCount  = idxCount;
     sub->indexData->indexStart  = 0;
 
+    // Baked-texture path: a per-mesh lit material with the baked diffuse bound
+    // as the (named) diffuse_map slot, so the RTSS lighting path and PBR-aware
+    // tooling both resolve it, and the exporters carry the reference.
+    if (hasUv) {
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        const std::string matName = meshName.toStdString() + "_mat";
+        if (matMgr.resourceExists(matName))
+            matMgr.remove(matName);
+        Ogre::MaterialPtr tm = matMgr.create(
+            matName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        auto* pass = tm->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(true);
+        pass->setDiffuse(Ogre::ColourValue::White);
+        pass->setAmbient(Ogre::ColourValue(0.9f, 0.9f, 0.9f));
+        pass->setCullingMode(Ogre::CULL_CLOCKWISE);
+        auto* tus = pass->createTextureUnitState(
+            QFileInfo(texturePngPath).fileName().toStdString());
+        tus->setName("diffuse_map");
+        tm->compile();
+        sub->setMaterialName(matName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    }
+
     // When the mesh carries per-vertex color (TripoSR's predicted vertex color),
     // assign a lit material that TRACKS the diffuse channel from VES_DIFFUSE —
     // otherwise the default white material ignores the colors and the mesh renders
@@ -195,7 +235,8 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
 }
 
 Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
-                                const QString& baseName)
+                                const QString& baseName,
+                                const QString& textureDir)
 {
     // Make the mesh + node names UNIQUE per call so a second generation doesn't
     // clobber the first (or fail because the mesh/node name already exists). All
@@ -203,7 +244,34 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
     static int s_counter = 0;
     const QString unique = baseName + QStringLiteral("_%1").arg(++s_counter);
 
-    Ogre::Mesh* mesh = buildMesh(result, unique + QStringLiteral("_mesh"));
+    // Baked-texture path: persist the QImage as a PNG (viewport material +
+    // exporters resolve it from a registered resource location).
+    QString texPath;
+    if (!result.texture.isNull()
+        && result.uvs.size() == static_cast<size_t>(result.vertexCount) * 2) {
+        QString dir = textureDir;
+        if (dir.isEmpty())
+            dir = QDir(QStandardPaths::writableLocation(
+                           QStandardPaths::AppDataLocation))
+                      .filePath(QStringLiteral("generated_textures"));
+        QDir().mkpath(dir);
+        const QString candidate =
+            QDir(dir).filePath(unique + QStringLiteral("_diffuse.png"));
+        if (result.texture.save(candidate, "PNG")) {
+            texPath = candidate;
+            // Register the directory once per location so Ogre's resource
+            // system (and the exporters' resource walk) can find the file.
+            auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+            const std::string loc = QDir(dir).absolutePath().toStdString();
+            const std::string grp = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+            if (!rgm.resourceLocationExists(loc, grp)) {
+                rgm.addResourceLocation(loc, "FileSystem", grp);
+                rgm.initialiseResourceGroup(grp);
+            }
+        }
+    }
+
+    Ogre::Mesh* mesh = buildMesh(result, unique + QStringLiteral("_mesh"), texPath);
     if (!mesh) return nullptr;
 
     auto* mgr = Manager::getSingletonPtr();

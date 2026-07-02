@@ -64,14 +64,37 @@ public:
         // Decoder query-point chunk size (points per decoder Run). Bounds memory
         // on the resolution^3 grid; 0 → one shot (only for tiny grids).
         int   chunkPoints   = 262144;
+
+        // ---- Quality pass (post-extraction polish; defaults ON) --------------
+        // Taubin λ|μ smoothing removes the marching-cubes stair-stepping
+        // without shrinking the model (see MeshRefine). 0 iterations disables.
+        bool smoothMesh       = true;
+        int  smoothIterations = 6;
+        // After smoothing, run one Newton projection step per vertex back onto
+        // the network's true iso-surface (field + gradient sampled from the
+        // decoder at the smoothed positions) — recovers detail the MC grid
+        // quantized away and undoes any residual smoothing drift.
+        bool refineSurface = true;
+        // Bake a real diffuse TEXTURE via xatlas unwrap + per-texel decoder
+        // colour queries (MeshGenBaker) instead of per-vertex colours. Colour
+        // sharpness then scales with textureSize, not with vertex density.
+        // Requires vertexColor-style colour output on the decoder; falls back
+        // to vertex colours (Result::warning set) if the unwrap/bake fails.
+        bool bakeTexture = true;
+        int  textureSize = 1024;
     };
 
     struct Result {
         bool ok = false;
         QString error;                 // populated when !ok
+        QString warning;               // non-fatal (e.g. bake fell back to vertex colours)
         std::vector<float>    positions; // Nx3, world space
         std::vector<uint32_t> indices;   // Mx3
         std::vector<float>    colors;    // Nx3 in [0,1], empty if not generated
+        // Baked-texture path (Options::bakeTexture): UV0 per vertex + the baked
+        // diffuse image. Both empty/null when the bake was disabled or fell back.
+        std::vector<float>    uvs;       // Nx2 in [0,1]
+        QImage                texture;
         int vertexCount   = 0;
         int triangleCount = 0;
         bool usedModel    = false;     // true iff the ONNX path ran

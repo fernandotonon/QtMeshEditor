@@ -139,6 +139,8 @@ ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
 ImageTo3D/MarchingCubes.cpp
+ImageTo3D/MeshRefine.cpp
+ImageTo3D/MeshGenBaker.cpp
 ImageTo3D/MeshGenPredictor.cpp
 ImageTo3D/MeshGenBuilder.cpp
 ImageTo3D/MeshGenController.cpp
