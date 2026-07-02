@@ -1736,6 +1736,20 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     out["source"] = clipSource;
 
     entity->refreshAvailableAnimationState();
+    // Make the generated clip the ONLY enabled animation. Ogre AVERAGES all
+    // enabled animation states, so leaving the import's auto-enabled clip (or
+    // previously generated ones) on blends them into a shaking mid-pose —
+    // "generate walk" must visibly walk.
+    if (auto* animSet = entity->getAllAnimationStates()) {
+        for (const auto& [key, state] : animSet->getAnimationStates())
+            state->setEnabled(false);
+        if (animSet->hasAnimationState(animName)) {
+            auto* gen = animSet->getAnimationState(animName);
+            gen->setEnabled(true);
+            gen->setLoop(true);
+            gen->setTimePosition(0.0f);
+        }
+    }
     // Adding an animation can reallocate skeleton state — drop cached pointers
     // and refresh the dope sheet, like the in-between path.
     m_selectedTrack   = nullptr;

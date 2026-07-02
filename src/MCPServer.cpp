@@ -3614,6 +3614,19 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         if (!r.ok) return makeErrorResult(QString("Error: %1").arg(r.error));
 
         entity->refreshAvailableAnimationState();
+        // Exclusively enable the generated clip — enabled states BLEND in
+        // Ogre, and mixing with the import's auto-enabled animation renders
+        // as a shaking mid-pose (same fix as the GUI generate path).
+        if (auto* animSet = entity->getAllAnimationStates()) {
+            for (const auto& [key, state] : animSet->getAnimationStates())
+                state->setEnabled(false);
+            if (animSet->hasAnimationState(animName)) {
+                auto* gen = animSet->getAnimationState(animName);
+                gen->setEnabled(true);
+                gen->setLoop(true);
+                gen->setTimePosition(0.0f);
+            }
+        }
         if (auto* acc = AnimationControlController::instance())
             acc->notifyExternalAnimationEdit();
 
