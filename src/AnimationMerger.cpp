@@ -1115,17 +1115,36 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         const auto& q = clipQuats[frame][joint];
         return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
     };
+    // REFERENCE FRAME: deltas (and the Mc frame map below) are taken against
+    // the clip's CALMEST frame, not blindly frame 0. Template windows open on
+    // a settled pose so this stays ~frame 0 for them; MODEL-generated clips
+    // have noisy per-joint frame-0 orientations, and referencing them gave
+    // every bone a slightly wrong constant offset (weird arm positions on
+    // rigs that use the standing-pose path).
+    int refFrame = 0;
+    if (frames > 2) {
+        double bestE = 1e30;
+        for (int f = 0; f + 1 < frames; ++f) {
+            double e = 0.0;
+            for (int c = 1; c < J; ++c) {
+                const Ogre::Quaternion d = clipQ(f, c).Inverse() * clipQ(f + 1, c);
+                e += 2.0 * std::acos(std::min(1.0, std::abs(static_cast<double>(d.w))));
+            }
+            if (e < bestE) { bestE = e; refFrame = f; }
+        }
+    }
     std::vector<std::vector<Ogre::Quaternion>> cmuLocalDelta(
         J, std::vector<Ogre::Quaternion>(frames, Ogre::Quaternion::IDENTITY));
     for (int c = 0; c < J; ++c) {
         const int pc = kParentCanon[c];
-        Ogre::Quaternion local0;
+        const Ogre::Quaternion localRef = (worldFrame && pc >= 0)
+            ? clipQ(refFrame, pc).Inverse() * clipQ(refFrame, c)
+            : clipQ(refFrame, c);
         for (int f = 0; f < frames; ++f) {
             Ogre::Quaternion local = (worldFrame && pc >= 0)
                 ? clipQ(f, pc).Inverse() * clipQ(f, c)   // world→local
                 : clipQ(f, c);                            // already local (or root)
-            if (f == 0) local0 = local;
-            cmuLocalDelta[c][f] = local0.Inverse() * local;
+            cmuLocalDelta[c][f] = localRef.Inverse() * local;
         }
     }
     // Standing-pose world orientation per bone (for the M_c roll correction).
@@ -1186,7 +1205,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         const bool haveAnyStand = !standPose.empty();
         Ogre::Quaternion Mc = Ogre::Quaternion::IDENTITY;
         if (worldFrame && c > 0 && haveAnyStand && restsAreIdentity)
-            Mc = standWorldOf(bone).Inverse() * clipQ(0, c);  // target-stand → CMU-rest
+            Mc = standWorldOf(bone).Inverse() * clipQ(refFrame, c);  // target-stand → clip rest
         // −Z-facing rig on the RAW path (no harvested stand → Mc == identity,
         // deltas act in ~world axes): view every delta in a 180°-yawed frame
         // so the sagittal swing matches the mesh's facing (else it walks
