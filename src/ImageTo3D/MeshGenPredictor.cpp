@@ -239,7 +239,10 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         sg.smoothIterations = opts.smoothIterations;
         sg.refineSurface    = opts.refineSurface;
         sg.chunkPoints      = opts.chunkPoints;
-        return TripoSGPredictor::predict(subject, sg, progress);
+        Result r = TripoSGPredictor::predict(subject, sg, progress);
+        // TripoSG's field is already +Y-up — skip the TripoSR frame bake.
+        r.bakeTripoSROrientation = false;
+        return r;
     }
     if (!QFileInfo::exists(encoderModelPath) || !QFileInfo::exists(decoderModelPath))
         return fail(QStringLiteral("MeshGen: TripoSR model not found (not hosted yet? "

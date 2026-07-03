@@ -111,6 +111,11 @@ public:
         int vertexCount   = 0;
         int triangleCount = 0;
         bool usedModel    = false;     // true iff the ONNX path ran
+        // TripoSR's reconstruction frame lies on its back + faces 90° off, so
+        // MeshGenBuilder bakes a fixed -90°X/+90°Y into the vertex data.
+        // TripoSG's field is already +Y-up (upstream exports the marching-cubes
+        // trimesh as-is), so its dispatch sets this false to skip the bake.
+        bool bakeTripoSROrientation = true;
     };
 
     // True only when built with ENABLE_ONNX. (Model presence is checked per call.)

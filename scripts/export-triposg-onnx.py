@@ -458,8 +458,13 @@ def main():
         try:
             from onnxruntime.quantization import quantize_dynamic, QuantType
             int8_path = os.path.join(args.out, "triposg_dit_step_int8.onnx")
+            # per_channel is ESSENTIAL here: per-tensor dynamic quant on this
+            # DiT compounds over the flow loop (2 CFG calls/step, guidance 7×)
+            # and the decoded field degenerates into disconnected noise blobs.
+            # Verified live: fp32 → coherent figure; per-tensor int8 → noise.
             quantize_dynamic(dit_path, int8_path, weight_type=QuantType.QInt8,
                              op_types_to_quantize=["MatMul"],
+                             per_channel=True, reduce_range=True,
                              use_external_data_format=False)
             log("ok", f"wrote {int8_path}")
         except Exception as e:  # noqa: BLE001 — best-effort; fp32 still ships

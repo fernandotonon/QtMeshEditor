@@ -340,3 +340,31 @@ repo's demo scripts and never touches the export or the C++ runtime path.
   pins (the script documents `diffusers==0.30.3` from the checkpoint metadata
   and `transformers>=4.45`), and the `TripoSGDecoder` internal attribute names
   (not needed — the wrappers call whole modules, never sub-attributes).
+
+---
+
+## Live-test findings (2026-07-03, first end-to-end C++ runs)
+
+- **Per-tensor int8 destroys the geometry.** The shipped
+  `triposg_dit_step_int8.onnx` (MatMul-only dynamic QInt8, per-tensor) has
+  max-rel-err 1.67e-02 on a single step, but the error COMPOUNDS over the flow
+  loop (2 CFG calls/step, amplified 7× by guidance): 4 steps → blobby but
+  semi-coherent, 8 steps → fragmented, 25 steps → disconnected noise splatter.
+  The fp32 DiT with the identical C++ loop produces a coherent single figure —
+  the loop/export/decode are correct; the quantization is the culprit.
+  `export-triposg-onnx.py` now quantizes `per_channel=True, reduce_range=True`;
+  the hosted int8 file must be re-exported + re-uploaded before the int8 tier
+  is trustworthy. Until then fp32 is the only recommended tier.
+- **Decoder chunk must stay small (8192).** The VAE decoder cross-attends every
+  query point to the 2048 kv tokens, so per-Run activation memory is linear in
+  P with a huge constant: TripoSR's 262144-point chunk transiently allocated
+  ~90 GB at res 256 and macOS killed the process. `TripoSGPredictor` hard-caps
+  the chunk at 8192 (a few hundred MB per Run).
+- **Sessions are staged, not concurrent.** Encoder (~1.1 GB), DiT (1.3–5.4 GB)
+  and vae_latents (~769 MB) are each opened when their stage starts and
+  destroyed when it completes; only the ~48 MB point decoder lives through the
+  long decode/refine tail. Peak RSS ≈ the largest single stage (measured
+  ~1.1 GB int8 end-to-end), instead of the >4 GB sum that previously tripped
+  memory pressure alongside the 90 GB chunk bug.
+- **Image preprocessing matches BitImageProcessor now:** resize shortest edge
+  to 8/7·crop (256 for 224) + centre-crop, not a squash-resize.

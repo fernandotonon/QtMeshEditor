@@ -8987,6 +8987,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool generatePbr = true;    // #404 normal+roughness synthesis on the baked diffuse
     int textureSize = 1024;
     int flowSteps = 25;         // TripoSG rectified-flow steps
+    float guidance = 7.0f;      // TripoSG CFG scale (0 disables CFG)
     MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
     MeshGenPredictor::Backend backend = MeshGenPredictor::Backend::TripoSR;
 
@@ -9021,6 +9022,19 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             flowSteps = QString::fromLocal8Bit(argv[++i]).toInt(&okNum);
             if (!okNum || flowSteps < 1 || flowSteps > 200) {
                 err() << "Error: --flow-steps must be an integer in [1..200]." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--guidance") {
+            if (i + 1 >= argc) {
+                err() << "Error: --guidance requires a value (e.g. 7.0; 0 disables CFG)." << Qt::endl;
+                return 2;
+            }
+            bool okNum = false;
+            guidance = QString::fromLocal8Bit(argv[++i]).toFloat(&okNum);
+            if (!okNum || guidance < 0.0f || guidance > 30.0f) {
+                err() << "Error: --guidance must be in [0..30]." << Qt::endl;
                 return 2;
             }
             continue;
@@ -9085,7 +9099,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
                  "[--upscale-texture] [--no-pbr] "
-                 "[--backend triposr|triposg] [--flow-steps 25]"
+                 "[--backend triposr|triposg] [--flow-steps 25] [--guidance 7.0]"
               << Qt::endl;
         return 2;
     }
@@ -9164,6 +9178,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.textureSize     = textureSize;
     opts.backend         = backend;
     opts.flowSteps       = flowSteps;
+    opts.guidanceScale   = guidance;
     MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(quality),
         MeshGenPredictor::decoderModelPath(), opts);

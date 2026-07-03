@@ -302,10 +302,19 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
                 if (shape.size() == 4 && shape[2] > 0)
                     imgSize = static_cast<int>(shape[2]);
             }
-            QImage resized = image.convertToFormat(QImage::Format_RGB888)
-                                 .scaled(imgSize, imgSize, Qt::IgnoreAspectRatio,
-                                         Qt::SmoothTransformation);
-            // Preprocessing baked INTO the exported graph (raw [0,1] RGB in).
+            // BitImageProcessor recipe: resize SHORTEST edge to 8/7·crop
+            // (256 for 224), then centre-crop — not a squash-resize (which
+            // changes the framing the encoder was trained on).
+            const int resizeEdge = (imgSize * 8) / 7;
+            QImage pre = image.convertToFormat(QImage::Format_RGB888)
+                             .scaled(resizeEdge, resizeEdge,
+                                     Qt::KeepAspectRatioByExpanding,
+                                     Qt::SmoothTransformation);
+            QImage resized = pre.copy((pre.width() - imgSize) / 2,
+                                      (pre.height() - imgSize) / 2,
+                                      imgSize, imgSize);
+            // Mean/std normalization baked INTO the exported graph
+            // (raw [0,1] RGB in).
             std::vector<float> imgNCHW = PbrMapSynth::toNCHW(resized, 3);
             const int64_t imgShape[4] = {1, 3, imgSize, imgSize};
             Ort::Value imgTensor = Ort::Value::CreateTensor<float>(

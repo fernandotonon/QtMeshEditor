@@ -127,7 +127,11 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     //   step 1: -90° about X to stand it up:  (x, y, z) -> (x, z, -y)
     //   step 2: +90° about Y to face forward: (x, y, z) -> (z, y, -x)
     // Composed: (x, y, z) -> (-y, z, -x).
-    auto orient = [](float& x, float& y, float& z) {
+    // TripoSG results are already +Y-up (Result::bakeTripoSROrientation is
+    // false) — baking the TripoSR frame onto them lays the model on its back.
+    const bool bakeOrientation = result.bakeTripoSROrientation;
+    auto orient = [bakeOrientation](float& x, float& y, float& z) {
+        if (!bakeOrientation) return;
         const float nx = -y, ny = z, nz = -x;
         x = nx; y = ny; z = nz;
     };
