@@ -829,22 +829,20 @@ void RTShaderHelper::wirePbrSlotsForFFP(Ogre::Material* mat)
                         Ogre::LBX_ADD,
                         Ogre::LBS_TEXTURE,
                         Ogre::LBS_CURRENT);
-                } else if (n == "metallic") {
-                    // FFP approximation: signed-add brightens current
-                    // toward white in textured (metal) regions. Slice F
-                    // shader replaces with a real metal BRDF lobe when
-                    // pbr_workflow is tagged.
-                    tus->setColourOperationEx(
-                        Ogre::LBX_ADD_SIGNED,
-                        Ogre::LBS_TEXTURE,
-                        Ogre::LBS_CURRENT);
-                } else if (n == "roughness") {
-                    // FFP approximation: modulate-x2 brightens smooth
-                    // (low-roughness) regions.
-                    tus->setColourOperationEx(
-                        Ogre::LBX_MODULATE_X2,
-                        Ogre::LBS_TEXTURE,
-                        Ogre::LBS_CURRENT);
+                } else if (n == "metallic" || n == "roughness") {
+                    // Metallic and roughness are BRDF *specular-lobe* inputs,
+                    // not colour channels — in the FFP fallback (no real
+                    // Cook-Torrance BRDF) they must NOT touch the diffuse
+                    // albedo. The old MODULATE_X2 (roughness) / ADD_SIGNED
+                    // (metallic) ops multiplied the roughness/metallic grey
+                    // value straight into the visible colour: a typical
+                    // roughness map (mean ~0.44) × 2 ≈ 0.87, darkening the
+                    // whole surface ("PBR looks like it's in shadow" — the
+                    // AI-PBR-generation bug). Make the unit inert (pass the
+                    // current colour through unchanged) and non-FFP; the real
+                    // metal-roughness BRDF is applied by applyPbrIfTagged when
+                    // the material is PBR-tagged and IBL is present.
+                    markNormalUnitNonFfp(tus);
                 }
             }
         }

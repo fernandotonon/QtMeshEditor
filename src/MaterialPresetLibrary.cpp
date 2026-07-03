@@ -87,16 +87,17 @@ void configurePbrSlots(Ogre::Pass* pass)
                 Ogre::LBX_ADD,
                 Ogre::LBS_TEXTURE,
                 Ogre::LBS_CURRENT);
-        } else if (n == "metallic") {
+        } else if (n == "metallic" || n == "roughness") {
+            // Metallic/roughness are BRDF specular-lobe inputs, not colour
+            // channels. In the FFP fallback (no real Cook-Torrance BRDF) they
+            // must be inert — the old MODULATE_X2 / ADD_SIGNED ops multiplied
+            // a mid-grey map into the diffuse and darkened the surface. Mark
+            // non-FFP and pass the current colour through unchanged; the real
+            // metal-roughness BRDF is applied by applyPbrIfTagged when IBL is
+            // present. (Mirrors RTShaderHelper::wirePbrSlotsForFFP.)
+            Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
             tus->setColourOperationEx(
-                Ogre::LBX_ADD_SIGNED,
-                Ogre::LBS_TEXTURE,
-                Ogre::LBS_CURRENT);
-        } else if (n == "roughness") {
-            tus->setColourOperationEx(
-                Ogre::LBX_MODULATE_X2,
-                Ogre::LBS_TEXTURE,
-                Ogre::LBS_CURRENT);
+                Ogre::LBX_SOURCE1, Ogre::LBS_CURRENT, Ogre::LBS_CURRENT);
         }
     }
 }

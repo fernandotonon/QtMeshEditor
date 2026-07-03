@@ -64,3 +64,35 @@ TEST_F(SyncMaterialForViewportTest, HydratesEmbeddedTextureAndBuildsRtssTechniqu
     ASSERT_NE(diffuseTus, nullptr);
     EXPECT_EQ(diffuseTus->getTextureName(), "sync_test_diffuse.png");
 }
+
+// Regression: the FFP fallback must NOT let the roughness / metallic maps
+// modulate the visible diffuse. They are BRDF specular-lobe inputs; the old
+// MODULATE_X2 (roughness) / ADD_SIGNED (metallic) ops multiplied a mid-grey
+// map straight into the colour and darkened the whole surface (the AI-PBR
+// "looks like it's in shadow" bug). wirePbrSlotsForFFP must make those units
+// inert (LBX_SOURCE1 → pass the current colour through unchanged).
+TEST_F(SyncMaterialForViewportTest, PbrFfpRoughnessMetallicDoNotDarkenDiffuse)
+{
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
+        "SyncMaterialViewportTest",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+
+    Ogre::TextureUnitState* albedo = pass->createTextureUnitState();
+    albedo->setName("albedo");
+    Ogre::TextureUnitState* rough = pass->createTextureUnitState();
+    rough->setName("roughness");
+    Ogre::TextureUnitState* metal = pass->createTextureUnitState();
+    metal->setName("metallic");
+
+    RTShaderHelper::wirePbrSlotsForFFP(mat.get());
+
+    // Albedo still modulates the lit diffuse (it IS the base colour).
+    EXPECT_EQ(albedo->getColourBlendMode().operation, Ogre::LBX_MODULATE);
+    // Roughness + metallic pass the current colour through untouched — never
+    // MODULATE_X2 / ADD_SIGNED, which darkened the surface.
+    EXPECT_EQ(rough->getColourBlendMode().operation, Ogre::LBX_SOURCE1);
+    EXPECT_EQ(metal->getColourBlendMode().operation, Ogre::LBX_SOURCE1);
+    EXPECT_NE(rough->getColourBlendMode().operation, Ogre::LBX_MODULATE_X2);
+    EXPECT_NE(metal->getColourBlendMode().operation, Ogre::LBX_ADD_SIGNED);
+}

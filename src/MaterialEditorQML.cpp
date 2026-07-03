@@ -326,12 +326,15 @@ void MaterialEditorQML::createNewMaterial(const QString &materialName)
 //   albedo    → modulates with the per-vertex diffuse colour (textured base)
 //   ao        → modulates the per-vertex diffuse (darkens lit base)
 //   emissive  → adds on top of the running colour (self-illumination)
-//   metallic  → ADD_SIGNED with running colour: brightens / tints toward
-//               metal in textured regions (FFP approximation)
-//   roughness → MODULATE_X2 with running colour: brightens smooth (low-
-//               roughness) regions to fake spec gloss; FFP approximation
+//   metallic  → inert (marked non-FFP, passes current colour through). It's
+//               a BRDF specular-lobe input, not a colour channel — the old
+//               ADD_SIGNED tinted the diffuse and darkened the surface.
+//   roughness → inert, same rationale (the old MODULATE_X2 multiplied a
+//               mid-grey map into the colour → "PBR looks in shadow").
 //   normal_map → marked non-FFP; RTShaderHelper::applyNormalMap wires
 //                it through SRS_NORMALMAP elsewhere when a texture is set
+// The real metal-roughness contribution comes from applyPbrIfTagged's
+// Cook-Torrance SRS when the material is PBR-tagged and IBL is present.
 //
 // AO/metallic/roughness use LBS_DIFFUSE (per-vertex diffuse from
 // lighting+material) instead of LBS_CURRENT so the result doesn't
