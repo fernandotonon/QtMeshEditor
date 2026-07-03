@@ -4305,12 +4305,36 @@ void MaterialEditorQML::generatePbrFromDiffuse()
         bindSlot("roughness",  res.roughnessPath);
         RTShaderHelper::wirePbrSlotsForFFP(m_ogreMaterial.get());
         // wirePbrSlotsForFFP only marks the normal unit non-FFP; it does NOT
-        // make RTSS sample it. applyNormalMap wires the SRS_NORMALMAP (or
-        // Cook-Torrance) sub-render-state so the normal map actually perturbs
-        // viewport shading — without this the bind is invisible on the mesh.
+        // make RTSS sample it. The RTSS SRS_NORMALMAP wiring needs per-vertex
+        // TANGENTS — without them the tangent-space basis is degenerate, N·L
+        // collapses to ~0, and the surface renders unlit/dark ("lights off on
+        // the model"). applyNormalMapsToEntity builds tangents (when UVs
+        // exist) FIRST, then wires SRS_NORMALMAP — the same routine the mesh
+        // importer uses, so live PBR generation lights identically to an
+        // export→reload. Run it on every scene entity that uses this material.
         if (!res.normalPath.isEmpty()) {
-            RTShaderHelper::applyNormalMap(
-                m_ogreMaterial, QFileInfo(res.normalPath).fileName().toStdString());
+            const std::string matName = m_ogreMaterial->getName();
+            bool wiredViaEntity = false;
+            if (auto* mgr = Manager::getSingletonPtr()) {
+                for (Ogre::Entity* ent : mgr->getEntities()) {
+                    if (!ent || ent->getMovableType() != "Entity") continue;
+                    bool uses = false;
+                    for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s) {
+                        const auto sm = ent->getSubEntity(s)->getMaterial();
+                        if (sm && sm->getName() == matName) { uses = true; break; }
+                    }
+                    if (uses) {
+                        MeshImporterExporter::applyNormalMapsToEntity(ent);
+                        wiredViaEntity = true;
+                    }
+                }
+            }
+            // Fallback (no entity found — e.g. editing an unbound material):
+            // wire the SRS directly. Tangents may be missing, but this at least
+            // preserves the previous behaviour.
+            if (!wiredViaEntity)
+                RTShaderHelper::applyNormalMap(
+                    m_ogreMaterial, QFileInfo(res.normalPath).fileName().toStdString());
         }
         m_ogreMaterial->compile();
         // The bind above may have CREATED new texture units (normal_map /
