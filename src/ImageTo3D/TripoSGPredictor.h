@@ -70,7 +70,13 @@ public:
         int  smoothIterations = 6;
         bool refineSurface    = true;
         // Decoder query-point chunk size (bounds memory on the res³ grid).
-        int  chunkPoints = 262144;
+        // MUCH smaller than TripoSR's (262144): TripoSG's decoder is a
+        // CROSS-ATTENTION from every query point to the 2048 kv tokens, so
+        // per-Run activation memory scales with P × 2048 × heads — 256k
+        // points/chunk materialised ~90 GB of attention logits and got the
+        // process killed. 8192 keeps the transient under a few hundred MB.
+        // predict() clamps to this cap regardless of what the caller passes.
+        int  chunkPoints = 8192;
     };
 
     // True only when built with ENABLE_ONNX.

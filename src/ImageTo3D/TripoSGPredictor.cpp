@@ -448,8 +448,15 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
         const size_t totalPts = static_cast<size_t>(res) * res * res;
         std::vector<float> field(totalPts, 0.0f);
         const float step = (2.0f * kRadius) / float(res - 1);
-        const int chunk = (opts.chunkPoints > 0) ? opts.chunkPoints
-                                                 : static_cast<int>(totalPts);
+        // HARD cap the chunk — the decoder cross-attends every query point to
+        // the 2048 kv tokens, so activation memory is linear in P with a huge
+        // constant (P=262144 transiently allocated ~90 GB and the OS killed
+        // the process). 8192 keeps each Run's transient in the hundreds of MB.
+        constexpr int kMaxDecoderChunk = 8192;
+        const int chunk = std::min(
+            (opts.chunkPoints > 0) ? opts.chunkPoints
+                                   : static_cast<int>(totalPts),
+            kMaxDecoderChunk);
 
         // Chunked field sampler shared by the grid pass and the refine pass.
         // The exported decoder already emits the INSIDE-POSITIVE field (raw
