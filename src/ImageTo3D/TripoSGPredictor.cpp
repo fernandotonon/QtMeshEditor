@@ -285,7 +285,11 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
         // BitImageProcessor's crop size; mean/std are baked into the graph).
         int imgSize = 224;
         {
-            auto info = imgEnc.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
+            // Keep the owning TypeInfo alive — GetTensorTypeAndShapeInfo()
+            // returns an unowned view into it; chaining off the temporary
+            // dangles and GetShape() then segfaults inside GetDimensions.
+            Ort::TypeInfo ti = imgEnc.GetInputTypeInfo(0);
+            auto info = ti.GetTensorTypeAndShapeInfo();
             const auto shape = info.GetShape();
             if (shape.size() == 4 && shape[2] > 0)
                 imgSize = static_cast<int>(shape[2]);
@@ -325,7 +329,9 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
         IoNames ditIo = ioNames(ditStep, alloc);
         std::vector<int64_t> latShape;
         {
-            auto info = ditStep.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
+            // Same TypeInfo-lifetime rule as above.
+            Ort::TypeInfo ti = ditStep.GetInputTypeInfo(0);
+            auto info = ti.GetTensorTypeAndShapeInfo();
             latShape = info.GetShape();
             for (auto& d : latShape)
                 if (d < 0) d = 1;   // defensive: dynamic dims default to 1
