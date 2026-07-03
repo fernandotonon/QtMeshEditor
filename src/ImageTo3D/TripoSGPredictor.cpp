@@ -260,17 +260,37 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
 
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_triposg");
-        Ort::SessionOptions so;
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        // Two session-option flavours:
+        //  - cpuOnly: for the DiT + the two one-shot graphs. CoreML/MLProgram
+        //    COMPILES the model on session open — for the 1.5-5.4 GB DiT that
+        //    burned minutes of CPU and ~8 GB RSS per generation (sessions are
+        //    staged, so the compile would repeat every run) for an uncertain
+        //    win. Opt back in with QTMESH_TRIPOSG_COREML_DIT=1 to experiment.
+        //  - gpu (MLProgram, ALL compute units): for the ~48 MB point decoder,
+        //    which is invoked ~2000×/run — the one graph where GPU dispatch
+        //    clearly pays and the compile cost is trivial.
+        Ort::SessionOptions cpuOnly;
+        cpuOnly.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        Ort::SessionOptions gpu;
+        gpu.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        bool gpuAvailable = false;
 #ifdef __APPLE__
         try {
+            // Legacy "NeuralNetwork" format maps almost none of these ops —
+            // MLProgram is what actually reaches the M-series GPU/ANE.
             std::unordered_map<std::string, std::string> coreml;
-            so.AppendExecutionProvider("CoreML", coreml);
+            coreml["ModelFormat"]    = "MLProgram";
+            coreml["MLComputeUnits"] = "ALL";
+            gpu.AppendExecutionProvider("CoreML", coreml);
+            gpuAvailable = true;
         } catch (const Ort::Exception&) {}
 #endif
-        auto open = [&](const QString& p) {
+        const bool ditOnGpu = gpuAvailable
+            && qEnvironmentVariableIntValue("QTMESH_TRIPOSG_COREML_DIT") == 1;
+        auto open = [&](const QString& p, bool wantGpu = false) {
             const std::string s = p.toStdString();
-            return Ort::Session(env, s.c_str(), so);
+            return Ort::Session(env, s.c_str(),
+                                (wantGpu && gpuAvailable) ? gpu : cpuOnly);
         };
         Ort::AllocatorWithDefaultOptions alloc;
         Ort::MemoryInfo mem =
@@ -342,7 +362,7 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
         std::vector<int64_t> latShape;
         std::vector<float> latents;
         {
-            Ort::Session ditStep = open(ditStepPath(opts.useInt8Dit));
+            Ort::Session ditStep = open(ditStepPath(opts.useInt8Dit), ditOnGpu);
             IoNames ditIo = ioNames(ditStep, alloc);
             {
                 // Same TypeInfo-lifetime rule as above.
@@ -451,8 +471,9 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
         std::vector<float>().swap(latents);
 
         // Only the small per-point decoder (~48 MB) stays alive for the long
-        // Decode/Refine tail.
-        Ort::Session vaeDec = open(vaeDecoderPath());
+        // Decode/Refine tail. It runs ~2000 chunked calls per generation, so
+        // it gets the GPU (MLProgram) session — trivial compile, big win.
+        Ort::Session vaeDec = open(vaeDecoderPath(), true);
         IoNames vaeIo = ioNames(vaeDec, alloc);
         const size_t totalPts = static_cast<size_t>(res) * res * res;
         std::vector<float> field(totalPts, 0.0f);
@@ -492,7 +513,15 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
                                           vaeIo.in.data(), ins, 2,
                                           vaeIo.out.data(), 1);
                 const float* d = outVals[0].GetTensorData<float>();
-                std::copy(d, d + n, out + start);
+                // NEGATE into our MarchingCubes' inside-positive convention.
+                // The exported graph's own negation lands OUTSIDE-positive in
+                // practice — extracting it un-negated yields the identical
+                // surface with INVERTED face winding/normals (live-verified:
+                // GUI models rendered inside-out). The refine pass's Newton
+                // step is sign-agnostic (f·∇f is even), so this flip is the
+                // only place the sign matters.
+                for (size_t k = 0; k < n; ++k)
+                    out[start + k] = -d[k];
             }
             return true;
         };

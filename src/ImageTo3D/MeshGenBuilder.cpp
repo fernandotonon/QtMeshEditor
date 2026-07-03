@@ -235,6 +235,27 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
         sub->setMaterialName(kMat, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     }
 
+    // Geometry-only result (TripoSG, or TripoSR with every colour stage off):
+    // without a material the default flat-white one hides all surface relief.
+    // Assign a shared neutral LIT clay material so the shape actually shades.
+    if (!hasUv && !hasColor) {
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        const char* kMat = "MeshGen/NeutralClay";
+        Ogre::MaterialPtr clay = matMgr.getByName(kMat);
+        if (!clay) {
+            clay = matMgr.create(kMat, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            auto* pass = clay->getTechnique(0)->getPass(0);
+            pass->setLightingEnabled(true);
+            pass->setDiffuse(Ogre::ColourValue(0.72f, 0.68f, 0.62f));   // warm clay
+            pass->setAmbient(Ogre::ColourValue(0.35f, 0.33f, 0.30f));
+            pass->setSpecular(Ogre::ColourValue(0.15f, 0.15f, 0.15f));
+            pass->setShininess(24.0f);
+            pass->setCullingMode(Ogre::CULL_CLOCKWISE);
+            clay->compile();
+        }
+        sub->setMaterialName(kMat, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    }
+
     Ogre::AxisAlignedBox aabb(mn, mx);
     mesh->_setBounds(aabb);
     mesh->_setBoundingSphereRadius(0.5f * (mx - mn).length());
