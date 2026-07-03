@@ -27,12 +27,15 @@ echo "[deps] installing pinned export stack"
 "$VENV/bin/pip" install -q torch --index-url https://download.pytorch.org/whl/cpu
 # huggingface_hub pinned <1.0: transformers 4.4x and diffusers 0.30.x both
 # require it; unpinned installs pull 1.x and break transformers' version gate.
+# The tail (trimesh…tqdm) are triposg-package IMPORT-time deps; the CUDA-only
+# `diso` is deliberately absent — the export script stubs it.
 "$VENV/bin/pip" install -q \
     "diffusers==0.30.3" \
     "transformers==4.46.3" \
     "huggingface_hub==0.26.5" \
     "tokenizers>=0.20,<0.21" \
-    onnx onnxruntime numpy einops jaxtyping safetensors accelerate
+    onnx onnxruntime numpy einops jaxtyping safetensors accelerate \
+    trimesh scipy scikit-image omegaconf typeguard tqdm pillow
 
 if [ ! -d TripoSG ]; then
   echo "[clone] VAST-AI-Research/TripoSG"

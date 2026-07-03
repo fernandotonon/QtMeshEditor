@@ -127,6 +127,23 @@ def load_pipeline(triposg_dir, weights_dir):
     """Import the triposg package from a git checkout and build the diffusers
     pipeline from the HF weights. Returns the TripoSGPipeline on CPU/fp32."""
     sys.path.insert(0, os.path.abspath(triposg_dir))
+
+    # `triposg.inference_utils` imports `from diso import DiffDMC` at module
+    # scope. diso is a CUDA-only differentiable-marching-cubes package that
+    # neither installs on macOS/CPU boxes nor matters here: this export only
+    # touches the pipeline's MODELS (image encoder / DiT / VAE); the app does
+    # surface extraction with its own native marching cubes. Stub it out —
+    # the exact torchmcubes trick the TripoSR exporter uses.
+    import types  # noqa: E402
+    if "diso" not in sys.modules:
+        _diso = types.ModuleType("diso")
+        class _DiffDMCStub:  # noqa: N801 — never instantiated by this export
+            def __init__(self, *a, **k):
+                raise RuntimeError("diso stub: not available in this export env")
+        _diso.DiffDMC = _DiffDMCStub
+        sys.modules["diso"] = _diso
+        log("note", "stubbed CUDA-only 'diso' (unused by the export)")
+
     from triposg.pipelines.pipeline_triposg import TripoSGPipeline  # noqa: E402
 
     if weights_dir is None:
