@@ -42,9 +42,32 @@ if [ ! -d TripoSG ]; then
   git clone --depth 1 https://github.com/VAST-AI-Research/TripoSG
 fi
 
+# HF's xet CDN read-times-out on the multi-GB safetensors from this network.
+# Use the classic CDN, a generous read timeout, and a resume-retry loop to
+# fetch the snapshot BEFORE the export (downloads resume across attempts), so
+# the export itself runs exactly once against the local weights.
+export HF_HUB_DISABLE_XET=1
+export HF_HUB_DOWNLOAD_TIMEOUT=120
+echo "[weights] downloading VAST-AI/TripoSG (resumes across retries)"
+ok=""
+for attempt in 1 2 3 4 5 6 7 8; do
+  if "$VENV/bin/huggingface-cli" download VAST-AI/TripoSG > /dev/null 2>>"$WORK/download.log"; then
+    ok=1; break
+  fi
+  echo "[weights] attempt $attempt failed — retrying in 20s (see $WORK/download.log)"
+  sleep 20
+done
+[ -n "$ok" ] || { echo "[fatal] weights download kept failing"; exit 1; }
+WEIGHTS="$("$VENV/bin/python" - <<'PY'
+from huggingface_hub import snapshot_download
+print(snapshot_download("VAST-AI/TripoSG", local_files_only=True))
+PY
+)"
+echo "[weights] snapshot at $WEIGHTS"
+
 echo "[export] running (log: $WORK/export.log)"
-"$VENV/bin/python" "$REPO_SCRIPT" --triposg ./TripoSG --out dist/triposg_onnx --verify \
-  2>&1 | tee "$WORK/export.log"
+"$VENV/bin/python" "$REPO_SCRIPT" --triposg ./TripoSG --weights "$WEIGHTS" \
+  --out dist/triposg_onnx --verify 2>&1 | tee "$WORK/export.log"
 
 echo "[done] artifacts:"
 ls -lh dist/triposg_onnx
