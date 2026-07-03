@@ -272,140 +272,151 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
             const std::string s = p.toStdString();
             return Ort::Session(env, s.c_str(), so);
         };
-        Ort::Session imgEnc  = open(imageEncoderPath());
-        Ort::Session ditStep = open(ditStepPath(opts.useInt8Dit));
-        Ort::Session vaeLat  = open(vaeLatentsPath());
-        Ort::Session vaeDec  = open(vaeDecoderPath());
         Ort::AllocatorWithDefaultOptions alloc;
         Ort::MemoryInfo mem =
             Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
+        // The four graphs total ~4-6 GB of weights. Sessions are opened ONE AT
+        // A TIME and released as soon as their stage completes — holding them
+        // all made the 25-step run's working set big enough for macOS to
+        // SIGTERM the process under memory pressure. Peak is now the largest
+        // single stage (the DiT), not the sum.
+
         // ---- (1) Image encoder: preprocessed RGB → conditioning tokens -------
-        // Input size comes from the graph itself (fallback 224 — the
-        // BitImageProcessor's crop size; mean/std are baked into the graph).
-        int imgSize = 224;
-        {
-            // Keep the owning TypeInfo alive — GetTensorTypeAndShapeInfo()
-            // returns an unowned view into it; chaining off the temporary
-            // dangles and GetShape() then segfaults inside GetDimensions.
-            Ort::TypeInfo ti = imgEnc.GetInputTypeInfo(0);
-            auto info = ti.GetTensorTypeAndShapeInfo();
-            const auto shape = info.GetShape();
-            if (shape.size() == 4 && shape[2] > 0)
-                imgSize = static_cast<int>(shape[2]);
-        }
-        QImage resized = image.convertToFormat(QImage::Format_RGB888)
-                             .scaled(imgSize, imgSize, Qt::IgnoreAspectRatio,
-                                     Qt::SmoothTransformation);
-        // Preprocessing baked INTO the exported graph (raw [0,1] RGB in) so
-        // the C++ never hardcodes normalization constants — the export script
-        // wraps the encoder with the mean/std the pipeline uses.
-        std::vector<float> imgNCHW = PbrMapSynth::toNCHW(resized, 3);
-        const int64_t imgShape[4] = {1, 3, imgSize, imgSize};
-        Ort::Value imgTensor = Ort::Value::CreateTensor<float>(
-            mem, imgNCHW.data(), imgNCHW.size(), imgShape, 4);
-
-        IoNames encIo = ioNames(imgEnc, alloc);
-        if (progress && !progress(Stage::Encode, 0, 1))
-            return fail(QStringLiteral("cancelled"));
-        auto encRes = imgEnc.Run(Ort::RunOptions{nullptr}, encIo.in.data(),
-                                 &imgTensor, 1, encIo.out.data(),
-                                 encIo.out.size());
-        if (progress && !progress(Stage::Encode, 1, 1))
-            return fail(QStringLiteral("cancelled"));
-
         // Conditioning tokens (image_embeds [1,257,1024]). CFG's unconditional
         // embedding is simply ZEROS of the same shape (upstream zeros_like).
-        auto condInfo = encRes[0].GetTensorTypeAndShapeInfo();
-        std::vector<int64_t> condShape = condInfo.GetShape();
-        const float* condData = encRes[0].GetTensorData<float>();
-        std::vector<float> cond(condData,
-                                condData + condInfo.GetElementCount());
+        std::vector<float> cond;
+        std::vector<int64_t> condShape;
+        {
+            Ort::Session imgEnc = open(imageEncoderPath());
+            // Input size comes from the graph itself (fallback 224 — the
+            // BitImageProcessor's crop size; mean/std are baked in).
+            int imgSize = 224;
+            {
+                // Keep the owning TypeInfo alive — GetTensorTypeAndShapeInfo()
+                // returns an unowned view into it; chaining off the temporary
+                // dangles and GetShape() segfaults inside GetDimensions.
+                Ort::TypeInfo ti = imgEnc.GetInputTypeInfo(0);
+                auto info = ti.GetTensorTypeAndShapeInfo();
+                const auto shape = info.GetShape();
+                if (shape.size() == 4 && shape[2] > 0)
+                    imgSize = static_cast<int>(shape[2]);
+            }
+            QImage resized = image.convertToFormat(QImage::Format_RGB888)
+                                 .scaled(imgSize, imgSize, Qt::IgnoreAspectRatio,
+                                         Qt::SmoothTransformation);
+            // Preprocessing baked INTO the exported graph (raw [0,1] RGB in).
+            std::vector<float> imgNCHW = PbrMapSynth::toNCHW(resized, 3);
+            const int64_t imgShape[4] = {1, 3, imgSize, imgSize};
+            Ort::Value imgTensor = Ort::Value::CreateTensor<float>(
+                mem, imgNCHW.data(), imgNCHW.size(), imgShape, 4);
+
+            IoNames encIo = ioNames(imgEnc, alloc);
+            if (progress && !progress(Stage::Encode, 0, 1))
+                return fail(QStringLiteral("cancelled"));
+            auto encRes = imgEnc.Run(Ort::RunOptions{nullptr}, encIo.in.data(),
+                                     &imgTensor, 1, encIo.out.data(),
+                                     encIo.out.size());
+            if (progress && !progress(Stage::Encode, 1, 1))
+                return fail(QStringLiteral("cancelled"));
+
+            auto condInfo = encRes[0].GetTensorTypeAndShapeInfo();
+            condShape = condInfo.GetShape();
+            const float* condData = encRes[0].GetTensorData<float>();
+            cond.assign(condData, condData + condInfo.GetElementCount());
+        }   // encoder session (~1.1 GB) released here
         std::vector<float> uncond(cond.size(), 0.0f);
         std::vector<int64_t> uncondShape = condShape;
 
         // ---- (2) Rectified-flow Euler loop over the DiT step graph -----------
         // Latent shape from the DiT's `latents` input (e.g. [1, 2048, 64]).
-        IoNames ditIo = ioNames(ditStep, alloc);
         std::vector<int64_t> latShape;
+        std::vector<float> latents;
         {
-            // Same TypeInfo-lifetime rule as above.
-            Ort::TypeInfo ti = ditStep.GetInputTypeInfo(0);
-            auto info = ti.GetTensorTypeAndShapeInfo();
-            latShape = info.GetShape();
-            for (auto& d : latShape)
-                if (d < 0) d = 1;   // defensive: dynamic dims default to 1
-        }
-        size_t latCount = 1;
-        for (int64_t d : latShape) latCount *= static_cast<size_t>(d);
-        if (latCount <= 1)
-            return fail(QStringLiteral("TripoSG: could not determine the "
-                                       "latent shape from the DiT graph."));
+            Ort::Session ditStep = open(ditStepPath(opts.useInt8Dit));
+            IoNames ditIo = ioNames(ditStep, alloc);
+            {
+                // Same TypeInfo-lifetime rule as above.
+                Ort::TypeInfo ti = ditStep.GetInputTypeInfo(0);
+                auto info = ti.GetTensorTypeAndShapeInfo();
+                latShape = info.GetShape();
+                for (auto& d : latShape)
+                    if (d < 0) d = 1;   // defensive: dynamic dims default to 1
+            }
+            size_t latCount = 1;
+            for (int64_t d : latShape) latCount *= static_cast<size_t>(d);
+            if (latCount <= 1)
+                return fail(QStringLiteral("TripoSG: could not determine the "
+                                           "latent shape from the DiT graph."));
 
-        // Deterministic gaussian init (same image + seed → same mesh).
-        std::vector<float> latents(latCount);
-        {
-            std::mt19937 rng(opts.seed);
-            std::normal_distribution<float> gauss(0.0f, 1.0f);
-            for (float& v : latents) v = gauss(rng);
-        }
-
-        const std::vector<float> sigmas = sigmaSchedule(steps);
-        const bool wantCfg = opts.guidanceScale > 0.0f;
-
-        std::vector<float> vPred(latCount), vUncond(latCount);
-        for (int i = 0; i < steps; ++i) {
-            if (progress && !progress(Stage::Denoise, i, steps))
-                return fail(QStringLiteral("cancelled"));
-
-            // One DiT evaluation for a given conditioning buffer. Contract:
-            // (latents[1,2048,64], timestep[1] = 1000·σ, image_embeds
-            // [1,257,1024]) → velocity[1,2048,64]. CFG runs as two B=1 calls
-            // (the export's --verify checks this equals the doubled batch).
-            auto evalStep = [&](std::vector<float>& condBuf,
-                                std::vector<int64_t>& condShp,
-                                std::vector<float>& out) {
-                float tval = kNumTrainTimesteps
-                           * sigmas[static_cast<size_t>(i)];
-                const int64_t tShape[1] = {1};
-
-                std::vector<Ort::Value> ins;
-                ins.push_back(Ort::Value::CreateTensor<float>(
-                    mem, latents.data(), latents.size(), latShape.data(),
-                    latShape.size()));
-                ins.push_back(Ort::Value::CreateTensor<float>(
-                    mem, &tval, 1, tShape, 1));
-                ins.push_back(Ort::Value::CreateTensor<float>(
-                    mem, condBuf.data(), condBuf.size(), condShp.data(),
-                    condShp.size()));
-
-                auto outVals = ditStep.Run(Ort::RunOptions{nullptr},
-                                           ditIo.in.data(), ins.data(),
-                                           std::min<size_t>(ins.size(),
-                                                            ditIo.in.size()),
-                                           ditIo.out.data(), 1);
-                const float* d = outVals[0].GetTensorData<float>();
-                out.assign(d, d + latCount);
-            };
-
-            evalStep(cond, condShape, vPred);
-            if (wantCfg) {
-                // Classifier-free guidance: v = v_u + s·(v_c − v_u), with the
-                // unconditional pass conditioned on zero embeddings.
-                evalStep(uncond, uncondShape, vUncond);
-                for (size_t k = 0; k < latCount; ++k)
-                    vPred[k] = vUncond[k]
-                             + opts.guidanceScale * (vPred[k] - vUncond[k]);
+            // Deterministic gaussian init (same image + seed → same mesh).
+            latents.resize(latCount);
+            {
+                std::mt19937 rng(opts.seed);
+                std::normal_distribution<float> gauss(0.0f, 1.0f);
+                for (float& v : latents) v = gauss(rng);
             }
 
-            // TripoSG RectifiedFlowScheduler update: x ← x + (σᵢ − σᵢ₊₁)·v.
-            // NOTE the sign — opposite of diffusers' stock FlowMatchEuler
-            // (TripoSG's model predicts ≈ x₀ − ε).
-            const float dSigma = sigmas[static_cast<size_t>(i)]
-                               - sigmas[static_cast<size_t>(i) + 1];
-            for (size_t k = 0; k < latCount; ++k)
-                latents[k] += dSigma * vPred[k];
-        }
+            const std::vector<float> sigmas = sigmaSchedule(steps);
+            const bool wantCfg = opts.guidanceScale > 0.0f;
+
+            std::vector<float> vPred(latCount), vUncond(latCount);
+            for (int i = 0; i < steps; ++i) {
+                if (progress && !progress(Stage::Denoise, i, steps))
+                    return fail(QStringLiteral("cancelled"));
+
+                // One DiT evaluation for a given conditioning buffer. Contract:
+                // (latents[1,2048,64], timestep[1] = 1000·σ, image_embeds
+                // [1,257,1024]) → velocity[1,2048,64]. CFG runs as two B=1
+                // calls (the export's --verify checks this equals the doubled
+                // batch).
+                auto evalStep = [&](std::vector<float>& condBuf,
+                                    std::vector<int64_t>& condShp,
+                                    std::vector<float>& out) {
+                    float tval = kNumTrainTimesteps
+                               * sigmas[static_cast<size_t>(i)];
+                    const int64_t tShape[1] = {1};
+
+                    std::vector<Ort::Value> ins;
+                    ins.push_back(Ort::Value::CreateTensor<float>(
+                        mem, latents.data(), latents.size(), latShape.data(),
+                        latShape.size()));
+                    ins.push_back(Ort::Value::CreateTensor<float>(
+                        mem, &tval, 1, tShape, 1));
+                    ins.push_back(Ort::Value::CreateTensor<float>(
+                        mem, condBuf.data(), condBuf.size(), condShp.data(),
+                        condShp.size()));
+
+                    auto outVals = ditStep.Run(
+                        Ort::RunOptions{nullptr}, ditIo.in.data(), ins.data(),
+                        std::min<size_t>(ins.size(), ditIo.in.size()),
+                        ditIo.out.data(), 1);
+                    const float* d = outVals[0].GetTensorData<float>();
+                    out.assign(d, d + latCount);
+                };
+
+                evalStep(cond, condShape, vPred);
+                if (wantCfg) {
+                    // Classifier-free guidance: v = v_u + s·(v_c − v_u), with
+                    // the unconditional pass conditioned on zero embeddings.
+                    evalStep(uncond, uncondShape, vUncond);
+                    for (size_t k = 0; k < latCount; ++k)
+                        vPred[k] = vUncond[k]
+                                 + opts.guidanceScale * (vPred[k] - vUncond[k]);
+                }
+
+                // TripoSG RectifiedFlowScheduler update: x ← x + (σᵢ − σᵢ₊₁)·v.
+                // NOTE the sign — opposite of diffusers' stock FlowMatchEuler
+                // (TripoSG's model predicts ≈ x₀ − ε).
+                const float dSigma = sigmas[static_cast<size_t>(i)]
+                                   - sigmas[static_cast<size_t>(i) + 1];
+                for (size_t k = 0; k < latCount; ++k)
+                    latents[k] += dSigma * vPred[k];
+            }
+        }   // DiT session (the largest graph, 1.3-5.4 GB) released here
+        // Conditioning buffers are only consumed by the DiT.
+        std::vector<float>().swap(cond);
+        std::vector<float>().swap(uncond);
         if (progress && !progress(Stage::Denoise, steps, steps))
             return fail(QStringLiteral("cancelled"));
 
@@ -413,10 +424,11 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
         // res³ grid through the per-point decoder. The kv-cache split saves
         // re-running the VAE's 16-block latent self-attention stack for every
         // chunk (~hundreds of chunks at high resolution).
-        IoNames latIo = ioNames(vaeLat, alloc);
         std::vector<float> kvCache;
         std::vector<int64_t> kvShape;
         {
+            Ort::Session vaeLat = open(vaeLatentsPath());
+            IoNames latIo = ioNames(vaeLat, alloc);
             Ort::Value latTensor = Ort::Value::CreateTensor<float>(
                 mem, latents.data(), latents.size(), latShape.data(),
                 latShape.size());
@@ -426,8 +438,12 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
             kvShape = info.GetShape();
             const float* d = kvRes[0].GetTensorData<float>();
             kvCache.assign(d, d + info.GetElementCount());
-        }
+        }   // vae_latents session (~769 MB) released here
+        std::vector<float>().swap(latents);
 
+        // Only the small per-point decoder (~48 MB) stays alive for the long
+        // Decode/Refine tail.
+        Ort::Session vaeDec = open(vaeDecoderPath());
         IoNames vaeIo = ioNames(vaeDec, alloc);
         const size_t totalPts = static_cast<size_t>(res) * res * res;
         std::vector<float> field(totalPts, 0.0f);
