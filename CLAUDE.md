@@ -132,7 +132,7 @@ qtmesh generate3d image.png --texture-size 2048 -o out.glb  # quality pass (ON b
 qtmesh generate3d image.png --no-smooth --no-refine --no-bake-texture -o out.glb  # raw marching-cubes output with per-vertex color (pre-quality-pass behavior)
 qtmesh generate3d image.png --upscale-texture -o out.glb  # + Real-ESRGAN 2x on the baked diffuse (sharper color; upscale model downloads on demand)
 qtmesh generate3d image.png --no-pbr -o out.glb  # skip the PBR stage (#404 normal+roughness synthesized from the baked diffuse and bound into the material — ON by default; the polished-surface look; writes *_normal/_roughness.png sidecars)
-qtmesh generate3d image.png --backend triposg --flow-steps 25 -o out.glb  # TripoSG backend (1.5B rectified-flow DiT, MIT): higher-fidelity GEOMETRY, slower, geometry-only (no texture); models download on first use; --quality int8 selects the smaller DiT tier
+qtmesh generate3d image.png --backend triposg --flow-steps 25 --guidance 7 -o out.glb  # TripoSG backend (1.5B rectified-flow DiT, MIT): higher-fidelity GEOMETRY, slower, geometry-only (no texture); models download on first use; --guidance 0 disables CFG; use --quality fp32 — the hosted per-tensor int8 DiT degrades to noise over the flow loop (per-channel re-quant pending)
 qtmesh segment model.fbx                       # AI part segmentation: per-part vertex/face counts (head/torso/arm/leg) (#410)
 qtmesh segment model.fbx --json                # full vertex/face → label arrays + per-part summary (stable schema)
 qtmesh segment model.fbx --no-model --up-axis y  # force the deterministic geometric fallback (skip the ONNX model)

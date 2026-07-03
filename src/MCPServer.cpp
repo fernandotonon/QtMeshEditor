@@ -2394,6 +2394,11 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (opts.flowSteps < 1 || opts.flowSteps > 200)
             return makeErrorResult("'flow_steps' must be between 1 and 200.");
     }
+    if (args.contains("guidance")) {
+        opts.guidanceScale = static_cast<float>(args["guidance"].toDouble(7.0));
+        if (opts.guidanceScale < 0.0f || opts.guidanceScale > 30.0f)
+            return makeErrorResult("'guidance' must be between 0 and 30.");
+    }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
         QStringLiteral("generate_mesh_from_image %1 res=%2")
@@ -7275,6 +7280,7 @@ QJsonArray MCPServer::buildToolsList()
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
         props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"triposr", "triposg"}}, {"description", "Generation backend (default triposr). triposr = fast single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only (no texture bake). Both MIT. TripoSG models download on first use."}};
         props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "TripoSG rectified-flow Euler steps 1..200 (default 25; 50 = reference quality, 10 = fast preview). Ignored by triposr."}};
+        props["guidance"] = QJsonObject{{"type", "number"}, {"description", "TripoSG classifier-free-guidance scale 0..30 (default 7; 0 disables CFG and halves DiT cost). Ignored by triposr."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "
