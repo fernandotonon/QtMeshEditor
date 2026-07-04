@@ -1,7 +1,6 @@
 #include "LightRigLibrary.h"
 
 #include "AppSettingsKeys.h"
-#include "HDR/HdrEnvironmentController.h"
 #include "Manager.h"
 #include "SentryReporter.h"
 
@@ -205,6 +204,25 @@ void tagRigGroup(Ogre::SceneNode* node)
     node->getUserObjectBindings().setUserAny(LightRigLibrary::kRigGroupTag, Ogre::Any(true));
 }
 
+QList<LightSnapshot> captureLightsInRigGroups()
+{
+    QList<LightSnapshot> snapshots;
+    auto* lights = LightManager::getSingletonPtr();
+    if (!lights)
+        return snapshots;
+
+    for (const LightHandle& handle : lights->lights())
+    {
+        if (!handle.isValid() || !handle.sceneNode)
+            continue;
+        Ogre::Node* parent = handle.sceneNode->getParent();
+        auto* parentNode = static_cast<Ogre::SceneNode*>(parent);
+        if (parentNode && LightRigLibrary::sceneNodeIsRigGroup(parentNode))
+            snapshots.append(LightSnapshot::fromHandle(handle));
+    }
+    return snapshots;
+}
+
 } // namespace
 
 namespace LightRigLibrary
@@ -311,23 +329,17 @@ void destroyAllRigGroups()
         mgr->destroySceneNode(name);
 }
 
-QList<LightSnapshot> captureLightsInRigGroups()
+Ogre::SceneNode* createRigGroupForRig(const QString& rigId)
 {
-    QList<LightSnapshot> snapshots;
+    const RigSpec* spec = findRigSpec(rigId);
     auto* lights = LightManager::getSingletonPtr();
-    if (!lights)
-        return snapshots;
+    if (!spec || !lights)
+        return nullptr;
 
-    for (const LightHandle& handle : lights->lights())
-    {
-        if (!handle.isValid() || !handle.sceneNode)
-            continue;
-        Ogre::Node* parent = handle.sceneNode->getParent();
-        auto* parentNode = static_cast<Ogre::SceneNode*>(parent);
-        if (parentNode && sceneNodeIsRigGroup(parentNode))
-            snapshots.append(LightSnapshot::fromHandle(handle));
-    }
-    return snapshots;
+    Ogre::SceneNode* rigGroup = lights->createRigGroupNode(spec->groupName);
+    if (rigGroup)
+        tagRigGroup(rigGroup);
+    return rigGroup;
 }
 
 LightRigApplyResult apply(const QString& rigId, bool replaceExisting)
@@ -405,7 +417,8 @@ LightRigApplyResult apply(const QString& rigId, bool replaceExisting)
     if (!result.ok)
         result.error = QStringLiteral("Rig produced no lights");
 
-    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.apply_rig"), rigId);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Apply light rig: %1").arg(rigId));
 
     return result;
 }

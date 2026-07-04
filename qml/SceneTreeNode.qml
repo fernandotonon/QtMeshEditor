@@ -90,8 +90,9 @@ Column {
             acceptedButtons: Qt.LeftButton | Qt.RightButton
 
             onClicked: function(mouse) {
-                if (mouse.button === Qt.RightButton && treeNode.isLightType) {
-                    lightContextMenu.popup()
+                if (mouse.button === Qt.RightButton) {
+                    if (treeNode.isLightType)
+                        lightContextMenu.popup()
                     return
                 }
                 if (treeModel) {

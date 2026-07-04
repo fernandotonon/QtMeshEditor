@@ -162,6 +162,21 @@ int EditLightPropertyCommand::id() const
     return static_cast<int>(m_propertyClass);
 }
 
+namespace
+{
+
+QStringList sortedLightNames(const QList<LightSnapshot>& snapshots)
+{
+    QStringList names;
+    names.reserve(snapshots.size());
+    for (const LightSnapshot& snapshot : snapshots)
+        names.append(snapshot.name);
+    names.sort();
+    return names;
+}
+
+} // namespace
+
 bool EditLightPropertyCommand::mergeWith(const QUndoCommand* other)
 {
     if (other->id() != id())
@@ -169,6 +184,8 @@ bool EditLightPropertyCommand::mergeWith(const QUndoCommand* other)
 
     const auto* cmd = static_cast<const EditLightPropertyCommand*>(other);
     if (cmd->m_propertyClass != m_propertyClass)
+        return false;
+    if (sortedLightNames(cmd->m_after) != sortedLightNames(m_after))
         return false;
 
     m_after = cmd->m_after;
@@ -214,7 +231,28 @@ void ApplyLightRigCommand::redo()
         return;
     }
 
-    LightRigLibrary::apply(m_rigId, m_replaceExisting);
+    auto* lights = LightManager::getSingleton();
+    auto* mgr = Manager::getSingletonPtr();
+    if (!lights || !mgr || !mgr->getSceneMgr())
+        return;
+
+    LightRigLibrary::destroyAllRigGroups();
+    if (m_replaceExisting)
+        lights->deleteAllUserLights();
+    else
+    {
+        for (const LightSnapshot& snapshot : m_removedLights)
+            lights->deleteLight(snapshot.name);
+    }
+
+    Ogre::SceneNode* rigGroup = LightRigLibrary::createRigGroupForRig(m_rigId);
+    if (!rigGroup)
+        return;
+
+    for (const LightSnapshot& snapshot : m_addedLights)
+        lights->restoreSnapshotUnderParent(rigGroup, snapshot);
+
+    mgr->getSceneMgr()->setAmbientLight(m_ambientAfter);
 }
 
 void SetSceneAmbientCommand::applyAmbient(const Ogre::ColourValue& ambient)

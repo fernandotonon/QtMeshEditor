@@ -199,7 +199,7 @@ void LightManager::applySnapshotToHandle(const LightSnapshot& snapshot, LightHan
 
 LightHandle LightManager::createLightInternal(Ogre::Light::LightTypes type, const QString& baseName)
 {
-    const int stackIndex = m_lights.size();
+    const int stackIndex = m_nextStackIndex++;
     const Ogre::Vector3 stackedOffset(
         static_cast<Ogre::Real>(stackIndex) * 0.25f,
         static_cast<Ogre::Real>(stackIndex) * 0.1f,
@@ -333,8 +333,8 @@ LightHandle LightManager::createDefaultKeyLight()
     handle.sceneNode->setPosition(Ogre::Vector3::ZERO);
     handle.sceneNode->setDirection(Ogre::Vector3(1, -1, 1));
 
-    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.create"),
-                                  QStringLiteral("default key light"));
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Create default key light"));
 
     emit lightChanged(handle.name);
     return handle;
@@ -361,8 +361,8 @@ LightHandle LightManager::duplicateLight(const QString& sourceName)
     LightHandle clone = restoreSnapshot(snapshot);
     if (clone.isValid())
     {
-        SentryReporter::addBreadcrumb(QStringLiteral("scene.light.duplicate"),
-                                      sourceName);
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Duplicate light: %1").arg(sourceName));
     }
     return clone;
 }
@@ -482,8 +482,8 @@ bool LightManager::renameLight(const QString& oldName, const QString& newName)
     if (!renamed.isValid())
         return false;
 
-    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.rename"),
-                                  oldName + QStringLiteral(" -> ") + newName);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Rename light: %1 -> %2").arg(oldName, newName));
     emit lightChanged(renamed.name);
     return true;
 }

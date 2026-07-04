@@ -7,6 +7,11 @@
 #include <QString>
 #include <QStringList>
 
+namespace Ogre
+{
+class SceneNode;
+}
+
 struct LightRigApplyResult
 {
     bool ok = false;
@@ -35,6 +40,9 @@ void setDefaultRigId(const QString& id);
 
 LightRigApplyResult apply(const QString& rigId, bool replaceExisting);
 void applyDefaultSceneLighting();
+
+void destroyAllRigGroups();
+Ogre::SceneNode* createRigGroupForRig(const QString& rigId);
 
 bool sceneNodeIsRigGroup(Ogre::SceneNode* node);
 void destroyRigGroupNode(const QString& nodeName);

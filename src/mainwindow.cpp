@@ -462,6 +462,8 @@ MainWindow::~MainWindow()
     m_meshInfoOverlay = nullptr;
     delete m_normalVisualizer;
     m_normalVisualizer = nullptr;
+    delete m_lightVisualizer;
+    m_lightVisualizer = nullptr;
 
     // Stop MCP server if running
     if (m_mcpServer) {

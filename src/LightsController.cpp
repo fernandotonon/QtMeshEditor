@@ -144,8 +144,9 @@ void LightsController::addLight(Ogre::Light::LightTypes type, bool atViewport)
     if (!handle.isValid())
         return;
 
-    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.create"),
-                                  LightManager::defaultBaseNameForType(type));
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Create light: %1")
+                                      .arg(LightManager::defaultBaseNameForType(type)));
 
     UndoManager::getSingleton()->push(new CreateLightCommand(LightSnapshot::fromHandle(handle)));
     selectLightHandle(handle.name);
@@ -210,9 +211,16 @@ void LightsController::duplicateSelectedLights()
 
     UndoManager::getSingleton()->push(new DuplicateLightsCommand(cloneSnapshots));
 
+    auto* mgr = Manager::getSingletonPtr();
     sel->clearList();
     for (const QString& name : cloneNames)
-        selectLightHandle(name);
+    {
+        if (!mgr)
+            break;
+        Ogre::SceneNode* node = mgr->getSceneNode(name);
+        if (node)
+            sel->append(node);
+    }
 }
 
 void LightsController::deleteSelectedLights()
@@ -244,7 +252,8 @@ void LightsController::deleteSelectedLights()
     for (const QString& name : names)
     {
         lights->deleteLight(name);
-        SentryReporter::addBreadcrumb(QStringLiteral("scene.light.delete"), name);
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Delete light: %1").arg(name));
     }
 
     sel->clearList();

@@ -124,6 +124,7 @@ private:
     static LightManager* s_singleton;
 
     QList<LightHandle> m_lights;
+    int m_nextStackIndex = 0;
     bool m_connectedToManager = false;
     bool m_suppressSceneNodeDestroyed = false;
 };

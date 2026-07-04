@@ -133,7 +133,7 @@ void LightPropertiesController::commitEdit(LightPropertyClass propertyClass,
 
     UndoManager::getSingleton()->push(
         new EditLightPropertyCommand(propertyClass, before, after));
-    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.edit"),
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   lightPropertyClassLabel(propertyClass));
 }
 

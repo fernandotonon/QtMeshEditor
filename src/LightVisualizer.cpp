@@ -310,9 +310,9 @@ void LightVisualizer::ensureResources()
 
 void LightVisualizer::setIconsVisible(bool visible)
 {
-    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.gizmo_toggle"),
-                                  visible ? QStringLiteral("show icons")
-                                          : QStringLiteral("hide icons"));
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  visible ? QStringLiteral("Show light icons")
+                                          : QStringLiteral("Hide light icons"));
     if (mIconsVisible == visible)
         return;
     mIconsVisible = visible;
@@ -328,9 +328,9 @@ void LightVisualizer::setIconsVisible(bool visible)
 
 void LightVisualizer::setSelectedGizmosOnly(bool selectedOnly)
 {
-    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.gizmo_toggle"),
-                                  selectedOnly ? QStringLiteral("selected gizmos only")
-                                               : QStringLiteral("all gizmos"));
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  selectedOnly ? QStringLiteral("Light gizmos: selected only")
+                                               : QStringLiteral("Light gizmos: show all"));
     if (mSelectedGizmosOnly == selectedOnly)
         return;
     mSelectedGizmosOnly = selectedOnly;
@@ -417,9 +417,9 @@ void LightVisualizer::buildOverlay(const LightHandle& handle)
     data.overlayNode->attachObject(data.gizmo);
 
     rebuildGizmoGeometry(data, handle, isLightSelected(handle.name));
-    updateOverlayVisibility(handle.name);
 
     mOverlays.insert(handle.name, data);
+    updateOverlayVisibility(handle.name);
 }
 
 void LightVisualizer::destroyOverlay(const QString& name)
