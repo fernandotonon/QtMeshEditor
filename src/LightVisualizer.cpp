@@ -194,8 +194,13 @@ Ogre::TexturePtr uploadIconTexture(Ogre::SceneManager* sceneMgr, const QString& 
                                Ogre::PF_BYTE_RGBA);
     texture->loadImage(ogreImage);
 
-    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
-        texName + "/Mat", Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+    const Ogre::String matName = texName + "/Mat";
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    if (matMgr.resourceExists(matName))
+        matMgr.remove(matName);
+
+    Ogre::MaterialPtr mat = matMgr.create(
+        matName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
     Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
     pass->setLightingEnabled(false);
     pass->setDepthCheckEnabled(false);

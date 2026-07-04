@@ -8,6 +8,10 @@ namespace
 {
 QString propertiesPanelQmlPath()
 {
+#ifdef QTMESH_UT_SOURCE_ROOT
+    return QDir(QString::fromUtf8(QTMESH_UT_SOURCE_ROOT))
+        .filePath(QStringLiteral("qml/PropertiesPanel.qml"));
+#endif
     return QDir(QDir::currentPath()).filePath(QStringLiteral("../qml/PropertiesPanel.qml"));
 }
 } // namespace
