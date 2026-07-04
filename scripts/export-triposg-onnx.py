@@ -506,8 +506,21 @@ def main():
         f"kv-split vs vae.decode(): match={split_ok} "
         f"max|diff|={float((sdf_ref - sdf_upstream).abs().max()):.3e}")
     if not split_ok:
-        log("warn", "kv-cache split does NOT reproduce upstream decode — "
-                    "ship the --monolithic graph instead and fix the split")
+        log("error", "kv-cache split does NOT reproduce upstream decode — the "
+                     "split VAE graphs are WRONG and must not be shipped.")
+        # Quarantine the mismatched split graphs so a partial/wrong export
+        # can't be uploaded, then abort — unless --monolithic was requested
+        # (that path ships the unsplit reference graph instead).
+        for f in ("triposg_vae_latents.onnx", "triposg_vae_decoder.onnx"):
+            p = os.path.join(args.out, f)
+            if os.path.exists(p):
+                os.remove(p)
+                log("error", f"  removed mismatched {f}")
+        if not args.monolithic:
+            log("error", "  re-run with --monolithic to ship the unsplit graph, "
+                         "or fix the split. Aborting.")
+            sys.exit(1)
+        log("warn", "  --monolithic set: shipping the unsplit graph below.")
 
     # ---- optional monolithic reference graph ----------------------------------
     if args.monolithic:

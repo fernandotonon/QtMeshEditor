@@ -1860,7 +1860,11 @@ Rectangle {
                 onClicked: {
                     var sg = mgBackendCombo.currentIndex === 1   // TripoSG
                     var steps = [{ key: "prep", label: "Prepare models" }]
-                    if (mgRemoveBg.checked)
+                    // The worker only posts a "background" stage on the TripoSR
+                    // path; TripoSG removes the bg inside its predict() dispatch
+                    // without a discrete progress event, so a "background" row
+                    // there would never resolve and look stuck.
+                    if (mgRemoveBg.checked && !sg)
                         steps.push({ key: "background", label: "Remove background" })
                     steps.push({ key: "encode", label: "Encode image" })
                     if (sg)

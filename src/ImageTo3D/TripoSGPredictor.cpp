@@ -288,9 +288,16 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
         const bool ditOnGpu = gpuAvailable
             && qEnvironmentVariableIntValue("QTMESH_TRIPOSG_COREML_DIT") == 1;
         auto open = [&](const QString& p, bool wantGpu = false) {
+            Ort::SessionOptions& so = (wantGpu && gpuAvailable) ? gpu : cpuOnly;
+#ifdef _WIN32
+            // Ort::Session takes ORTCHAR_T* (wchar_t*) on Windows — a narrow
+            // std::string path fails to open (matches the TripoSR path).
+            const std::wstring s = p.toStdWString();
+            return Ort::Session(env, s.c_str(), so);
+#else
             const std::string s = p.toStdString();
-            return Ort::Session(env, s.c_str(),
-                                (wantGpu && gpuAvailable) ? gpu : cpuOnly);
+            return Ort::Session(env, s.c_str(), so);
+#endif
         };
         Ort::AllocatorWithDefaultOptions alloc;
         Ort::MemoryInfo mem =
@@ -379,9 +386,11 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
                                            "latent shape from the DiT graph."));
 
             // Deterministic gaussian init (same image + seed → same mesh).
+            // NOT a security context — this is the diffusion latent noise;
+            // reproducibility REQUIRES a fixed, non-cryptographic PRNG.
             latents.resize(latCount);
             {
-                std::mt19937 rng(opts.seed);
+                std::mt19937 rng(opts.seed);  // NOSONAR - deterministic seed by design (not security)
                 std::normal_distribution<float> gauss(0.0f, 1.0f);
                 for (float& v : latents) v = gauss(rng);
             }

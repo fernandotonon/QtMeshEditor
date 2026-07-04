@@ -2401,8 +2401,10 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
-        QStringLiteral("generate_mesh_from_image %1 res=%2")
-            .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution));
+        QStringLiteral("generate_mesh_from_image %1 res=%2 backend=%3")
+            .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution)
+            .arg(opts.backend == MeshGenPredictor::Backend::TripoSG
+                     ? QStringLiteral("triposg") : QStringLiteral("triposr")));
 
     if (opts.backend == MeshGenPredictor::Backend::TripoSG) {
         // TripoSG always runs the fp32 DiT (int8 tier dropped — degraded
