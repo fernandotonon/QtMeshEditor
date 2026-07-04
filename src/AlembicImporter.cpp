@@ -137,6 +137,8 @@ ReadResult readFrameSet(const QString& path, int maxFrames)
         size_t decodeCount = numSamples;
         if (maxFrames > 0 && static_cast<size_t>(maxFrames) < decodeCount)
             decodeCount = static_cast<size_t>(maxFrames);
+        r.totalFrames = static_cast<int>(numSamples);
+        r.truncated = (decodeCount < numSamples);
 
         VertexAnimationManager::FrameSet& fs = r.frames;
         fs.vertexCount = static_cast<int>(baseVerts);
@@ -353,6 +355,18 @@ Ogre::SceneNode* importToScene(const QString& path, QString* error)
     ReadResult rr = readFrameSet(path, /*maxFrames=*/512);
     if (!rr.ok)
         return fail(rr.error);
+
+    // No silent caps (CLAUDE.md): VAT_POSE holds every frame resident as an
+    // Ogre::Pose, so a multi-thousand-frame cache would balloon GPU memory.
+    // We cap the decode at 512 frames; say so loudly when it bites. True
+    // disk-streaming (swapping vertex buffers per frame) is future work.
+    if (rr.truncated) {
+        Ogre::LogManager::getSingleton().logWarning(
+            ("Alembic '" + QFileInfo(path).fileName().toStdString() + "': imported "
+             + std::to_string(rr.frames.frames.size()) + " of "
+             + std::to_string(rr.totalFrames)
+             + " frames (capped at 512 — VAT_POSE holds every frame resident).").c_str());
+    }
 
     auto* mgr = Manager::getSingletonPtr();
     if (!mgr || !mgr->getSceneMgr())

@@ -43,6 +43,8 @@ struct ReadResult {
     QString error;
     VertexAnimationManager::FrameSet frames;  ///< decoded cache (empty on !ok)
     QString meshName;                          ///< source IPolyMesh name (for the clip)
+    int totalFrames = 0;   ///< frames present in the archive (before any maxFrames cap)
+    bool truncated = false;///< true when maxFrames dropped frames (frames.size() < totalFrames)
 };
 
 /// Cheap metadata about an .abc cache WITHOUT decoding every frame's vertex

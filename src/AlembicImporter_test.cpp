@@ -18,6 +18,10 @@ TEST(AlembicImporterStandalone, UnavailableWithoutFlag) {
     QString err;
     EXPECT_EQ(AlembicImporter::importToScene("/nonexistent.abc", &err), nullptr);
     EXPECT_FALSE(err.isEmpty());
+    // readInfo (B3) must also fail-soft without the flag.
+    auto info = AlembicImporter::readInfo("/nonexistent.abc");
+    EXPECT_FALSE(info.ok);
+    EXPECT_FALSE(info.error.isEmpty());
 }
 
 #else  // ENABLE_ALEMBIC
@@ -112,6 +116,37 @@ TEST_F(AlembicImporterTest, MissingFileFailsGracefully) {
     auto rr = AlembicImporter::readFrameSet("/no/such/file.abc");
     EXPECT_FALSE(rr.ok);
     EXPECT_FALSE(rr.error.isEmpty());
+}
+
+// B3: readInfo returns the same metadata as a full decode but without reading
+// every frame's positions. On the 2-frame quad it must match readFrameSet.
+TEST_F(AlembicImporterTest, ReadInfoMatchesDecode) {
+    auto info = AlembicImporter::readInfo(abcPath);
+    ASSERT_TRUE(info.ok) << info.error.toStdString();
+    EXPECT_EQ(info.frameCount, 2);
+    EXPECT_EQ(info.vertexCount, 4);
+    EXPECT_EQ(info.fps, 30);
+    // One quad → 2 triangles.
+    EXPECT_EQ(info.faceCount, 2);
+    // 2 frames is well under the pose/stream threshold (32) → "poses".
+    EXPECT_EQ(info.storage, QStringLiteral("poses"));
+    // duration = (frameCount - 1) / fps for uniform sampling.
+    EXPECT_NEAR(info.durationSec, 1.0f / 30.0f, 1e-4f);
+}
+
+// B3: maxFrames caps the decode and flags truncation (no silent cap).
+TEST_F(AlembicImporterTest, MaxFramesTruncates) {
+    auto rr = AlembicImporter::readFrameSet(abcPath, /*maxFrames=*/1);
+    ASSERT_TRUE(rr.ok) << rr.error.toStdString();
+    EXPECT_EQ(rr.frames.frames.size(), 1u);
+    EXPECT_EQ(rr.totalFrames, 2);
+    EXPECT_TRUE(rr.truncated);
+
+    // maxFrames >= total (or 0) must not flag truncation.
+    auto full = AlembicImporter::readFrameSet(abcPath, /*maxFrames=*/0);
+    ASSERT_TRUE(full.ok);
+    EXPECT_EQ(full.totalFrames, 2);
+    EXPECT_FALSE(full.truncated);
 }
 
 #endif  // ENABLE_ALEMBIC
