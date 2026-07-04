@@ -425,7 +425,7 @@ void colorizeWithTripoSR(MeshGenPredictor::Result& out, const QImage& image,
         // keep the nearest z per cell. Resolution ≈ texture size so texel-level
         // occlusion is resolved.
         const int DB = std::clamp(opts.textureSize, 256, 2048);
-        std::vector<float> depth(size_t(DB) * DB, 1e30f);
+        std::vector<float> depth(size_t(DB) * DB, -1e30f);  // nearest = max z
         auto toScreen = [&](const float* p, int& sx, int& sy) {
             const float u = (p[0] - uMin[0]) / projW;
             const float vv = (uMax[1] - p[1]) / projH;
@@ -456,14 +456,18 @@ void colorizeWithTripoSR(MeshGenPredictor::Result& out, const QImage& image,
                     if (w0 < -0.01f || w1 < -0.01f || w2 < -0.01f) continue;
                     const float z = w0 * P[0][2] + w1 * P[1][2] + w2 * P[2][2];
                     float& slot = depth[size_t(yy) * DB + xx];
-                    if (z < slot) slot = z;
+                    // Camera looks along -Z toward +Z (turntable frame-0 sits
+                    // at +Z): the FRONT-MOST surface has the LARGEST z. Keep
+                    // the max per cell.
+                    if (z > slot) slot = z;
                 }
         }
 
         // Combined sampler: photo projection where the point is (a) inside the
-        // silhouette, (b) the FRONT-MOST surface at that pixel (within a slab),
-        // and (c) on an opaque photo pixel; else the TripoSR colour field.
-        const float zSlab = 0.03f * (uMax[2] - uMin[2] + 1e-6f);
+        // silhouette, (b) the FRONT-MOST surface at that pixel (within a slab
+        // below the near-most z), and (c) on an opaque photo pixel; else the
+        // TripoSR colour field.
+        const float zSlab = 0.05f * (uMax[2] - uMin[2] + 1e-6f);
         std::vector<float> mapped;   // scratch: TripoSG frame → TripoSR frame
         auto combinedSampler =
             [&](const float* pts, size_t count, float* rgb) -> bool {
@@ -480,8 +484,8 @@ void colorizeWithTripoSR(MeshGenPredictor::Result& out, const QImage& image,
             for (size_t i = 0; i < count; ++i) {
                 const float* p = pts + i * 3;
                 int sx, sy; toScreen(p, sx, sy);
-                if (p[2] > depth[size_t(sy) * DB + sx] + zSlab)
-                    continue;   // occluded by nearer geometry → keep field
+                if (p[2] < depth[size_t(sy) * DB + sx] - zSlab)
+                    continue;   // behind the near-most surface → keep field
                 const float u = (p[0] - uMin[0]) / projW;
                 const float vv = (uMax[1] - p[1]) / projH;
                 const int px = std::clamp(int(u * (pw - 1) + 0.5f), 0, pw - 1);
