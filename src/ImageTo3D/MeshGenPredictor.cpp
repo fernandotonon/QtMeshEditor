@@ -463,15 +463,20 @@ void colorizeWithTripoSR(MeshGenPredictor::Result& out, const QImage& image,
                 }
         }
 
-        // Combined sampler: photo projection where the point is (a) inside the
-        // silhouette, (b) the FRONT-MOST surface at that pixel (within a slab
-        // below the near-most z), and (c) on an opaque photo pixel; else the
-        // TripoSR colour field.
-        const float zSlab = 0.05f * (uMax[2] - uMin[2] + 1e-6f);
+        // Combined sampler. For each texel:
+        //   • Front-facing & photo-covered → the actual photo pixel (truth).
+        //   • Behind the near-most surface (occluded back) → TripoSR field.
+        //   • Front but on a background/silhouette-edge photo pixel → the
+        //     TripoSR field (avoids grey where bg-removal ate the edge).
+        // A soft depth band (not a hard cut) blends photo→field across the
+        // side of the mesh so there's no seam line where they meet, which is
+        // what left the earlier hard-cut result patchy.
+        const float zRange = std::max(1e-6f, uMax[2] - uMin[2]);
+        const float zBand  = 0.20f * zRange;   // photo→field crossfade width
         std::vector<float> mapped;   // scratch: TripoSG frame → TripoSR frame
         auto combinedSampler =
             [&](const float* pts, size_t count, float* rgb) -> bool {
-            // Field fallback for the whole chunk first (cheap to overwrite).
+            // Field colour for the whole chunk first (the fallback layer).
             mapped.resize(count * 3);
             for (size_t i = 0; i < count; ++i) {
                 float n[3]; toNative(pts + i * 3, n);
@@ -480,21 +485,27 @@ void colorizeWithTripoSR(MeshGenPredictor::Result& out, const QImage& image,
                 mapped[i * 3 + 2] = s[2] * n[2] + t[2];
             }
             if (!query(mapped.data(), count, nullptr, rgb)) return false;
-            // Overwrite front-visible, photo-covered texels with the real image.
+            // Blend the photo over the front, crossfading to the field on the
+            // sides so the two colour sources meet without a seam.
             for (size_t i = 0; i < count; ++i) {
                 const float* p = pts + i * 3;
                 int sx, sy; toScreen(p, sx, sy);
-                if (p[2] < depth[size_t(sy) * DB + sx] - zSlab)
-                    continue;   // behind the near-most surface → keep field
+                const float nearZ = depth[size_t(sy) * DB + sx];
+                // 1 at the near-most surface, ramping to 0 zBand behind it.
+                const float w = std::clamp(1.0f - (nearZ - p[2]) / zBand,
+                                           0.0f, 1.0f);
+                if (w <= 0.0f) continue;   // clearly occluded → field only
                 const float u = (p[0] - uMin[0]) / projW;
                 const float vv = (uMax[1] - p[1]) / projH;
                 const int px = std::clamp(int(u * (pw - 1) + 0.5f), 0, pw - 1);
                 const int py = std::clamp(int(vv * (ph - 1) + 0.5f), 0, ph - 1);
                 const QRgb c = photo.pixel(px, py);
-                if (qAlpha(c) < 128) continue;   // background pixel → keep field
-                rgb[i * 3 + 0] = qRed(c)   / 255.0f;
-                rgb[i * 3 + 1] = qGreen(c) / 255.0f;
-                rgb[i * 3 + 2] = qBlue(c)  / 255.0f;
+                if (qAlpha(c) < 128) continue;   // silhouette edge → field
+                const float pr = qRed(c) / 255.0f, pg = qGreen(c) / 255.0f,
+                            pb = qBlue(c) / 255.0f;
+                rgb[i * 3 + 0] = w * pr + (1.0f - w) * rgb[i * 3 + 0];
+                rgb[i * 3 + 1] = w * pg + (1.0f - w) * rgb[i * 3 + 1];
+                rgb[i * 3 + 2] = w * pb + (1.0f - w) * rgb[i * 3 + 2];
             }
             return true;
         };
