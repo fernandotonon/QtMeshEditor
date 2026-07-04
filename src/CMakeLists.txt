@@ -34,6 +34,12 @@ PrimitiveObject.cpp
 ViewportGrid.cpp
 AnimationWidget.cpp
 SelectionSet.cpp
+LightManager.cpp
+LightRigLibrary.cpp
+LightVisualizer.cpp
+LightsController.cpp
+LightPropertiesController.cpp
+SceneLightingController.cpp
 SelectionBoxObject.cpp
 ObjectItemModel.cpp
 MaterialComboDelegate.cpp
@@ -60,6 +66,7 @@ UndoManager.cpp
 SubMeshTransform.cpp
 SubEntityHighlight.cpp
 commands/TransformCommands.cpp
+commands/LightCommands.cpp
 commands/MoveKeyframeCommand.cpp
 commands/BulkKeyframeCommands.cpp
 commands/SetKeyframeValueCommand.cpp
@@ -222,6 +229,12 @@ ViewportGrid.h
 ViewportSettingsKeys.h
 AnimationWidget.h
 SelectionSet.h
+LightManager.h
+LightRigLibrary.h
+LightVisualizer.h
+LightsController.h
+LightPropertiesController.h
+SceneLightingController.h
 SelectionBoxObject.h
 ObjectItemModel.h
 MaterialComboDelegate.h
@@ -247,6 +260,7 @@ UndoManager.h
 SubMeshTransform.h
 SubEntityHighlight.h
 commands/TransformCommands.h
+commands/LightCommands.h
 commands/ApplyMaterialCommand.h
 PropertiesPanelController.h
 SceneTreeModel.h

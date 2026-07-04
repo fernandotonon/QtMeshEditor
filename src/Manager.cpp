@@ -49,6 +49,8 @@ THE SOFTWARE.
 #include "HDR/HDREnvironmentManager.h"
 #include "HDR/HdrBundledLibrary.h"
 #include "HDR/HdrViewportController.h"
+#include "LightManager.h"
+#include "LightRigLibrary.h"
 
 #if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
  #include <CoreFoundation/CoreFoundation.h>
@@ -108,6 +110,7 @@ void Manager::kill()
     if (m_pSingleton != nullptr)
     {
         TransformOperator::kill();
+        LightManager::kill();
         SelectionSet::kill();
         delete m_pSingleton;
         m_pSingleton = nullptr;
@@ -131,6 +134,7 @@ Manager::Manager(MainWindow* parent):
 
     HDREnvironmentManager::getSingleton();
     HdrViewportController::getSingleton();
+    LightManager::getSingleton()->tryConnectToManager();
 
     if (SelectionSet *sel = SelectionSet::getSingletonPtr())
         sel->tryConnectToManager();
@@ -206,20 +210,7 @@ void Manager::CreateEmptyScene()
     const bool previousState = mInitializingScene;
     mInitializingScene = true;
 
-    { //TODO: Add the hability of the user adding/removing lights
-        mSceneMgr->setAmbientLight(Ogre::ColourValue(0.3f, 0.3f, 0.3f));
-
-        Ogre::Light* light = mSceneMgr->createLight();
-
-        light->setType(Ogre::Light::LT_DIRECTIONAL);
-
-        light->setDiffuseColour(1.0f, 1.0f, 1.0f);
-        light->setSpecularColour(.8f, .8f, .8f);// color of 'reflected' light
-
-        Ogre::SceneNode* lightSceneNode = mSceneMgr->getRootSceneNode()->createChildSceneNode();
-        lightSceneNode->attachObject(light);
-        lightSceneNode->setDirection(1, -1, 1);
-    }
+    LightRigLibrary::applyDefaultSceneLighting();
 
     m_pViewportGrid = new ViewportGrid();
 

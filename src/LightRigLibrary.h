@@ -1,0 +1,42 @@
+#pragma once
+
+#include "LightManager.h"
+
+#include <OgreColourValue.h>
+
+#include <QString>
+#include <QStringList>
+
+struct LightRigApplyResult
+{
+    bool ok = false;
+    QString error;
+    QString rigId;
+    QString rigGroupNodeName;
+    QList<LightSnapshot> addedLights;
+    QList<LightSnapshot> removedLights;
+    Ogre::ColourValue ambientBefore = Ogre::ColourValue::Black;
+    Ogre::ColourValue ambientAfter = Ogre::ColourValue::Black;
+    QString suggestedHdri;
+    bool replaceExisting = false;
+};
+
+namespace LightRigLibrary
+{
+inline constexpr const char* kRigGroupTag = "light_rig_group";
+
+QStringList rigIds();
+QString displayNameForId(const QString& id);
+int indexOfRig(const QString& id);
+
+QString defaultRigId();
+QString readDefaultRigId();
+void setDefaultRigId(const QString& id);
+
+LightRigApplyResult apply(const QString& rigId, bool replaceExisting);
+void applyDefaultSceneLighting();
+
+bool sceneNodeIsRigGroup(Ogre::SceneNode* node);
+void destroyRigGroupNode(const QString& nodeName);
+
+} // namespace LightRigLibrary

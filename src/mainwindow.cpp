@@ -65,6 +65,7 @@
 #include "OgreRenderTargetUtil.h"
 #include "QtInputManager.h"
 #include "Manager.h"
+#include "LightManager.h"
 #include <OgreCamera.h>
 
 #include "material.h"
@@ -85,6 +86,7 @@
 #include "MCPSettingsDialog.h"
 #include "MCPServer.h"
 #include "NormalVisualizer.h"
+#include "LightVisualizer.h"
 #include "MeshInfoOverlay.h"
 #include "SubEntityHighlight.h"
 #include "SpaceCamera.h"
@@ -112,6 +114,10 @@
 #include "UVEditorController.h"
 #include "QuadRetopoController.h"
 #include "SkinWeightsController.h"
+#include "LightsController.h"
+#include "LightRigLibrary.h"
+#include "SceneLightingController.h"
+#include "LightPropertiesController.h"
 #include "AutoRigController.h"
 #include "MeshDepthRenderer.h"
 #include "MaterialPresetLibrary.h"
@@ -132,6 +138,7 @@
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
+#include <QQmlError>
 #include <QToolButton>
 #include <QStyle>
 #include <QMenu>
@@ -534,6 +541,9 @@ MainWindow::~MainWindow()
         UVEditorController::kill();
         QuadRetopoController::kill();
         SkinWeightsController::kill();
+        LightsController::kill();
+        LightPropertiesController::kill();
+        SceneLightingController::kill();
         IsometricSpritesController::kill();
         MeshGenController::kill();
         MeshDepthRenderer::shutdown();
@@ -719,6 +729,21 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return SkinWeightsController::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<LightsController>(
+            "PropertiesPanel", 1, 0, "LightsController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return LightsController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<LightPropertiesController>(
+            "PropertiesPanel", 1, 0, "LightPropertiesController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return LightPropertiesController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<SceneLightingController>(
+            "PropertiesPanel", 1, 0, "SceneLightingController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return SceneLightingController::qmlInstance(engine, nullptr);
+            });
         qmlRegisterSingletonType<AutoRigController>(
             "PropertiesPanel", 1, 0, "AutoRigController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -888,6 +913,12 @@ void MainWindow::initToolBar()
 #endif
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
+        if (m_propertiesPanel->status() != QQuickWidget::Ready)
+        {
+            const auto errors = m_propertiesPanel->errors();
+            for (const QQmlError& error : errors)
+                qWarning() << "PropertiesPanel QML:" << error.toString();
+        }
         if (auto* root = m_propertiesPanel->rootObject()) {
             root->setProperty("bottomToolHost",
                               QVariant::fromValue(static_cast<QObject*>(this)));
@@ -1252,6 +1283,60 @@ void MainWindow::initToolBar()
     addPrimitiveButton->setMenu(addPrimitiveMenu);
     QAction* addPrimitiveAction = ui->objectsToolbar->addWidget(addPrimitiveButton);
     addPrimitiveAction->setObjectName("modeObjectPrimitiveAction");
+
+    auto addLightButton = new QToolButton(ui->objectsToolbar);
+    addLightButton->setText(QStringLiteral("\u2600"));
+    addLightButton->setToolTip(tr("Add Light"));
+    addLightButton->setPopupMode(QToolButton::InstantPopup);
+    QFont lightFont = addLightButton->font();
+    lightFont.setPixelSize(15);
+    addLightButton->setFont(lightFont);
+    addLightButton->setStyleSheet(QStringLiteral(
+        "QToolButton { color: #6cdc6c; border: none; padding: 2px 4px; }"
+        "QToolButton:hover:enabled { color: #8cef8c; }"
+        "QToolButton:pressed:enabled { color: #4cb84c; }"
+        "QToolButton:disabled { color: #b8b8b8; }"));
+
+    auto addLightMenu = new QMenu(addLightButton);
+    auto addDirectional = addLightMenu->addAction(tr("Directional Light"));
+    auto addPoint = addLightMenu->addAction(tr("Point Light"));
+    auto addSpot = addLightMenu->addAction(tr("Spot Light"));
+    addLightMenu->addSeparator();
+    auto addDirectionalViewport = addLightMenu->addAction(tr("Directional at Viewport Center"));
+    auto addPointViewport = addLightMenu->addAction(tr("Point at Viewport Center"));
+    auto addSpotViewport = addLightMenu->addAction(tr("Spot at Viewport Center"));
+
+    connect(addDirectional, &QAction::triggered, this, []() {
+        LightsController::instance()->addDirectionalLight();
+    });
+    connect(addPoint, &QAction::triggered, this, []() {
+        LightsController::instance()->addPointLight();
+    });
+    connect(addSpot, &QAction::triggered, this, []() {
+        LightsController::instance()->addSpotLight();
+    });
+    connect(addDirectionalViewport, &QAction::triggered, this, []() {
+        LightsController::instance()->addDirectionalLightAtViewport();
+    });
+    connect(addPointViewport, &QAction::triggered, this, []() {
+        LightsController::instance()->addPointLightAtViewport();
+    });
+    connect(addSpotViewport, &QAction::triggered, this, []() {
+        LightsController::instance()->addSpotLightAtViewport();
+    });
+    addLightMenu->addSeparator();
+    QMenu* presetRigMenu = addLightMenu->addMenu(tr("Preset Rig…"));
+    for (const QString& rigId : LightRigLibrary::rigIds())
+    {
+        QAction* rigAction = presetRigMenu->addAction(LightRigLibrary::displayNameForId(rigId));
+        connect(rigAction, &QAction::triggered, this, [rigId]() {
+            SceneLightingController::instance()->applyRig(rigId, true);
+        });
+    }
+
+    addLightButton->setMenu(addLightMenu);
+    QAction* addLightAction = ui->objectsToolbar->addWidget(addLightButton);
+    addLightAction->setObjectName("modeObjectLightAction");
 
     // Topology tools — toolbar shortcuts for Extrude / Bevel. They
     // delegate to the same EditModeController actions the Inspector
@@ -2340,6 +2425,14 @@ void MainWindow::initToolBar()
     m_normalVisualizer = new NormalVisualizer(Manager::getSingleton()->getSceneMgr(), this);
     connect(ui->actionShow_Normals, &QAction::toggled, m_normalVisualizer, &NormalVisualizer::setVisible);
 
+    // viewport light icons + helper gizmos (Slice D #486)
+    m_lightVisualizer = new LightVisualizer(Manager::getSingleton()->getSceneMgr(), this);
+    connect(ui->actionShow_Light_Icons, &QAction::toggled, m_lightVisualizer, &LightVisualizer::setIconsVisible);
+    connect(ui->actionShow_Selected_Light_Gizmo_Only,
+            &QAction::toggled,
+            m_lightVisualizer,
+            &LightVisualizer::setSelectedGizmosOnly);
+
     // Sub-entity selection highlight (auto-connects to SelectionSet signals)
     SubEntityHighlight::getSingleton();
 
@@ -2505,6 +2598,38 @@ void MainWindow::initToolBar()
     }
 
     // AI Settings menu
+    QMenu* sceneMenu = menuBar()->addMenu(tr("&Scene"));
+    sceneMenu->setObjectName("menuScene");
+    QMenu* addLightSceneMenu = sceneMenu->addMenu(tr("Add Light"));
+    addLightSceneMenu->addAction(tr("Directional Light"), this, []() {
+        LightsController::instance()->addDirectionalLight();
+    });
+    addLightSceneMenu->addAction(tr("Point Light"), this, []() {
+        LightsController::instance()->addPointLight();
+    });
+    addLightSceneMenu->addAction(tr("Spot Light"), this, []() {
+        LightsController::instance()->addSpotLight();
+    });
+    addLightSceneMenu->addSeparator();
+    addLightSceneMenu->addAction(tr("Directional at Viewport Center"), this, []() {
+        LightsController::instance()->addDirectionalLightAtViewport();
+    });
+    addLightSceneMenu->addAction(tr("Point at Viewport Center"), this, []() {
+        LightsController::instance()->addPointLightAtViewport();
+    });
+    addLightSceneMenu->addAction(tr("Spot at Viewport Center"), this, []() {
+        LightsController::instance()->addSpotLightAtViewport();
+    });
+    addLightSceneMenu->addSeparator();
+    QMenu* scenePresetRigMenu = addLightSceneMenu->addMenu(tr("Preset Rig…"));
+    for (const QString& rigId : LightRigLibrary::rigIds())
+    {
+        QAction* rigAction = scenePresetRigMenu->addAction(LightRigLibrary::displayNameForId(rigId));
+        connect(rigAction, &QAction::triggered, this, [rigId]() {
+            SceneLightingController::instance()->applyRig(rigId, true);
+        });
+    }
+
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
     aiMenu->setObjectName("menuAI");
     QAction* aiChatAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Chat..."));
@@ -3592,6 +3717,24 @@ void MainWindow::duplicateSelected()
     if (!sel || sel->getNodesCount() == 0) return;
 
     QList<Ogre::SceneNode*> sources = sel->getNodesSelectionList();
+  if (!sources.isEmpty())
+  {
+    bool allLights = true;
+    for (Ogre::SceneNode* src : sources)
+    {
+      if (!LightManager::sceneNodeIsUserLight(src))
+      {
+        allLights = false;
+        break;
+      }
+    }
+    if (allLights)
+    {
+      LightsController::instance()->duplicateSelectedLights();
+      return;
+    }
+  }
+
     QList<Ogre::SceneNode*> clones;
 
     for (Ogre::SceneNode* src : sources) {
@@ -4695,9 +4838,9 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
                 HdrEnvironmentController::instance()->setActiveWidget(widget);
             });
 
-    if(!mDockWidgetList.isEmpty())
+    if (!mDockWidgetList.isEmpty())
     {
-        QColor c =  mDockWidgetList.at(0)->getOgreWidget()->getBackgroundColor();
+        QColor c = mDockWidgetList.at(0)->getOgreWidget()->getBackgroundColor();
         pOgreViewport->getOgreWidget()->setBackgroundColor(c);
     }
 

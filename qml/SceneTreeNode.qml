@@ -15,7 +15,11 @@ Column {
     property string nodeName: treeModel ? (treeModel.data(nodeIndex) || "") : ""
     property bool selected: false
     // Only Node-type items are draggable (not entities/submeshes)
-    property bool isNodeType: treeModel ? (treeModel.data(nodeIndex, 259) === "Node" || treeModel.data(nodeIndex, 259) === "Group") : false
+    property bool isNodeType: treeModel ? (treeModel.data(nodeIndex, 259) === "Node"
+                                           || treeModel.data(nodeIndex, 259) === "Group"
+                                           || treeModel.data(nodeIndex, 259) === "Light") : false
+    property bool isLightType: treeModel ? (treeModel.data(nodeIndex, 259) === "Light") : false
+    property bool renaming: false
 
     width: parent ? parent.width : 200
 
@@ -35,6 +39,8 @@ Column {
         case "Node":
         case "Group":
             return "PLACEMENT"
+        case "Light":
+            return "LIGHT"
         case "Mesh":
             return "MESH DATA"
         case "Submesh":
@@ -49,6 +55,8 @@ Column {
         case "Node":
         case "Group":
             return "#6ca0dc"
+        case "Light":
+            return "#6cdc6c"
         case "Mesh":
             return "#55b65a"
         case "Submesh":
@@ -79,12 +87,23 @@ Column {
             anchors.fill: parent
             hoverEnabled: true
 
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+
             onClicked: function(mouse) {
+                if (mouse.button === Qt.RightButton && treeNode.isLightType) {
+                    lightContextMenu.popup()
+                    return
+                }
                 if (treeModel) {
                     var multiSelect = (mouse.modifiers & Qt.ControlModifier) ||
                                       (mouse.modifiers & Qt.ShiftModifier)
                     treeModel.selectItem(nodeIndex.row, treeModel.parent(nodeIndex), multiSelect)
                 }
+            }
+
+            onDoubleClicked: function(mouse) {
+                if (treeNode.isLightType)
+                    treeNode.renaming = true
             }
 
         }
@@ -125,6 +144,7 @@ Column {
                     var t = treeModel.data(nodeIndex, 259)
                     switch(t) {
                     case "Node":    return "\u25A0"
+                    case "Light":   return "\u2600"
                     case "Mesh":    return "\u25C6"
                     case "Submesh": return "\u25CB"
                     default:        return "\u25A1"
@@ -136,6 +156,7 @@ Column {
                     var t = treeModel.data(nodeIndex, 259)
                     switch(t) {
                     case "Node":    return "#6ca0dc"
+                    case "Light":   return "#6cdc6c"
                     case "Mesh":    return "#6cdc6c"
                     case "Submesh": return "#dcdc6c"
                     default:        return PropertiesPanelController.textColor
@@ -148,6 +169,7 @@ Column {
             // Name + type label
             Text {
                 id: nameLabel
+                visible: !treeNode.renaming
                 text: {
                     if (!treeModel) return ""
                     var n = treeNode.nodeName
@@ -164,6 +186,25 @@ Column {
                                 - (treeNode.isNodeType ? 26 : 0)
                                 - 8)
                 anchors.verticalCenter: parent.verticalCenter
+            }
+
+            TextInput {
+                id: renameInput
+                visible: treeNode.renaming
+                text: treeNode.nodeName
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                selectByMouse: true
+                width: nameLabel.width
+                anchors.verticalCenter: parent.verticalCenter
+                onVisibleChanged: if (visible) { selectAll(); forceActiveFocus() }
+                onEditingFinished: {
+                    var trimmed = text.trim()
+                    if (trimmed.length > 0 && trimmed !== treeNode.nodeName)
+                        PropertiesPanelController.renameSceneTreeLight(treeNode.nodeName, trimmed)
+                    treeNode.renaming = false
+                }
+                Keys.onEscapePressed: treeNode.renaming = false
             }
 
             Rectangle {
@@ -244,9 +285,31 @@ Column {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     z: 20
-                    onClicked: PropertiesPanelController.deleteSceneTreeNode(treeNode.nodeName)
+                    onClicked: {
+                        if (treeNode.isLightType)
+                            LightsController.deleteLightByName(treeNode.nodeName)
+                        else
+                            PropertiesPanelController.deleteSceneTreeNode(treeNode.nodeName)
+                    }
                 }
             }
+        }
+    }
+
+    Menu {
+        id: lightContextMenu
+
+        MenuItem {
+            text: qsTr("Rename")
+            onTriggered: treeNode.renaming = true
+        }
+        MenuItem {
+            text: qsTr("Duplicate")
+            onTriggered: LightsController.duplicateLightByName(treeNode.nodeName)
+        }
+        MenuItem {
+            text: qsTr("Delete")
+            onTriggered: LightsController.deleteLightByName(treeNode.nodeName)
         }
     }
 

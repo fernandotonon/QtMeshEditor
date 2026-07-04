@@ -16,7 +16,7 @@ namespace Ogre {
 class SceneTreeItem
 {
 public:
-    enum ItemType { Root, Node, Entity, SubEntity };
+    enum ItemType { Root, Node, Light, Entity, SubEntity };
 
     SceneTreeItem(const QString& name, ItemType type, void* ogrePtr, SceneTreeItem* parent = nullptr);
     ~SceneTreeItem();

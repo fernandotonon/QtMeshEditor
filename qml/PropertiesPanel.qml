@@ -655,6 +655,16 @@ Rectangle {
                 Component.onCompleted: content = transformComponent
             }
 
+            // ---- Light (#484 / #485) ----
+            CollapsibleSection {
+                title: "Light"
+                sectionVisible: root.currentTab === root.inspectorTab
+                    && LightPropertiesController.hasLightSelection
+                expanded: false
+
+                Component.onCompleted: content = lightPropertiesComponent
+            }
+
             // ---- Snap Settings ----
             CollapsibleSection {
                 title: "Snap Settings"
@@ -697,6 +707,17 @@ Rectangle {
                 Component.onCompleted: content = animControlComponent
             }
 
+            // ---- Lighting (preset rigs + ambient/background, Slice E #487) ----
+            CollapsibleSection {
+                title: "Lighting"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    true)
+                expanded: false
+
+                Component.onCompleted: content = sceneLightingComponent
+            }
+
             // ---- Environment (HDR / IBL, Object mode) ----
             CollapsibleSection {
                 title: "Environment"
@@ -714,7 +735,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ObjectMode,
                     MeshDecimatorController.hasSelection)
-                expanded: true
+                expanded: false
 
                 Component.onCompleted: content = decimateComponent
             }
@@ -725,7 +746,7 @@ Rectangle {
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.ObjectMode,
                     MeshLodController.hasSelection)
-                expanded: true
+                expanded: false
 
                 Component.onCompleted: content = lodComponent
             }
@@ -3796,6 +3817,370 @@ Rectangle {
         }
     }
 
+    // ---- Light properties (Slice C #485) ----
+    Component {
+        id: lightPropertiesComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            function mixedLabel(isMixed, valueText) {
+                return isMixed ? qsTr("Mixed") : valueText
+            }
+
+            // Type
+            Text {
+                text: qsTr("Type")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            ThemedComboBox {
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: LightPropertiesController.lightTypeChoices
+                enabled: !LightPropertiesController.mixedLightType
+                currentIndex: LightPropertiesController.mixedLightType
+                    ? 0
+                    : LightPropertiesController.lightType
+                onActivated: index => LightPropertiesController.lightType = index
+            }
+            Text {
+                visible: LightPropertiesController.mixedLightType
+                text: qsTr("Mixed types in selection")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+
+            // Enabled
+            Row {
+                spacing: 8
+                width: parent.width - 16
+                Text {
+                    text: qsTr("Enabled")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                CheckBox {
+                    anchors.verticalCenter: parent.verticalCenter
+                    tristate: true
+                    checkState: LightPropertiesController.mixedEnabled
+                        ? Qt.PartiallyChecked
+                        : (LightPropertiesController.enabled ? Qt.Checked : Qt.Unchecked)
+                    onCheckStateChanged: {
+                        if (checkState === Qt.PartiallyChecked)
+                            return
+                        LightPropertiesController.enabled = (checkState === Qt.Checked)
+                    }
+                }
+                Text {
+                    visible: LightPropertiesController.mixedEnabled
+                    text: qsTr("Mixed")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Colour
+            Text {
+                text: qsTr("Colour")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                spacing: 8
+                width: parent.width - 16
+                Column {
+                    spacing: 2
+                    Text {
+                        text: qsTr("Diffuse")
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    Rectangle {
+                        width: 40
+                        height: 22
+                        color: LightPropertiesController.mixedDiffuseColor
+                            ? PropertiesPanelController.inputColor
+                            : LightPropertiesController.diffuseColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            visible: LightPropertiesController.mixedDiffuseColor
+                            text: "—"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: LightPropertiesController.pickDiffuseColor()
+                        }
+                    }
+                }
+                Column {
+                    spacing: 2
+                    Text {
+                        text: qsTr("Specular")
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                    }
+                    Rectangle {
+                        width: 40
+                        height: 22
+                        color: LightPropertiesController.mixedSpecularColor
+                            ? PropertiesPanelController.inputColor
+                            : LightPropertiesController.specularColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            visible: LightPropertiesController.mixedSpecularColor
+                            text: "—"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: !LightPropertiesController.colorsLinked
+                            opacity: enabled ? 1.0 : 0.45
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: LightPropertiesController.pickSpecularColor()
+                        }
+                    }
+                }
+                CheckBox {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("Link")
+                    checked: LightPropertiesController.colorsLinked
+                    onToggled: LightPropertiesController.colorsLinked = checked
+                }
+            }
+
+            // Intensity
+            Text {
+                text: qsTr("Intensity")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                Slider {
+                    id: intensitySlider
+                    width: parent.width - 56
+                    height: 22
+                    from: 0
+                    to: 10
+                    stepSize: 0.01
+                    value: LightPropertiesController.mixedIntensity
+                        ? 0
+                        : LightPropertiesController.intensity
+                    enabled: !LightPropertiesController.mixedIntensity
+                    onPressedChanged: {
+                        if (pressed)
+                            LightPropertiesController.beginSliderEdit(3)
+                        else
+                            LightPropertiesController.endSliderEdit(3)
+                    }
+                    onMoved: LightPropertiesController.intensity = value
+                    Connections {
+                        target: LightPropertiesController
+                        function onPropertiesChanged() {
+                            if (!intensitySlider.pressed)
+                                intensitySlider.value = LightPropertiesController.intensity
+                        }
+                    }
+                }
+                Text {
+                    width: 48
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    text: LightPropertiesController.mixedIntensity
+                        ? qsTr("Mixed")
+                        : LightPropertiesController.intensity.toFixed(2)
+                }
+            }
+
+            // Range (point / spot)
+            Text {
+                visible: LightPropertiesController.isPointOrSpot
+                text: qsTr("Range")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                visible: LightPropertiesController.isPointOrSpot
+                spacing: 6
+                width: parent.width - 16
+                Slider {
+                    id: rangeSlider
+                    width: parent.width - 56
+                    height: 22
+                    from: 0.01
+                    to: 100
+                    stepSize: 0.01
+                    value: LightPropertiesController.mixedRange
+                        ? 0.01
+                        : LightPropertiesController.range
+                    enabled: !LightPropertiesController.mixedRange
+                    onPressedChanged: {
+                        if (pressed)
+                            LightPropertiesController.beginSliderEdit(4)
+                        else
+                            LightPropertiesController.endSliderEdit(4)
+                    }
+                    onMoved: LightPropertiesController.range = value
+                    Connections {
+                        target: LightPropertiesController
+                        function onPropertiesChanged() {
+                            if (!rangeSlider.pressed)
+                                rangeSlider.value = LightPropertiesController.range
+                        }
+                    }
+                }
+                Text {
+                    width: 48
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    text: LightPropertiesController.mixedRange
+                        ? qsTr("Mixed")
+                        : LightPropertiesController.range.toFixed(2)
+                }
+            }
+
+            // Attenuation
+            Text {
+                visible: LightPropertiesController.isPointOrSpot
+                text: qsTr("Attenuation")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            ThemedComboBox {
+                visible: LightPropertiesController.isPointOrSpot
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: LightPropertiesController.attenuationPresetChoices
+                enabled: !LightPropertiesController.mixedAttenuationPreset
+                currentIndex: LightPropertiesController.mixedAttenuationPreset
+                    ? 0
+                    : LightPropertiesController.attenuationPreset
+                onActivated: index => LightPropertiesController.attenuationPreset = index
+            }
+
+            // Advanced attenuation
+            Text {
+                visible: LightPropertiesController.isPointOrSpot
+                text: qsTr("Advanced attenuation")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+            Row {
+                visible: LightPropertiesController.isPointOrSpot
+                spacing: 4
+                width: parent.width - 16
+
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "C"
+                    value: LightPropertiesController.mixedAttenuationConstant
+                        ? 0 : LightPropertiesController.attenuationConstant
+                    color: "#808080"
+                    step: 0.001
+                    decimals: 3
+                    onNewValue: function(val) { LightPropertiesController.attenuationConstant = val }
+                }
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "L"
+                    value: LightPropertiesController.mixedAttenuationLinear
+                        ? 0 : LightPropertiesController.attenuationLinear
+                    color: "#808080"
+                    step: 0.001
+                    decimals: 3
+                    onNewValue: function(val) { LightPropertiesController.attenuationLinear = val }
+                }
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "Q"
+                    value: LightPropertiesController.mixedAttenuationQuadratic
+                        ? 0 : LightPropertiesController.attenuationQuadratic
+                    color: "#808080"
+                    step: 0.001
+                    decimals: 3
+                    onNewValue: function(val) { LightPropertiesController.attenuationQuadratic = val }
+                }
+            }
+
+            // Spot cone
+            Text {
+                visible: LightPropertiesController.isSpot
+                text: qsTr("Spot cone")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                visible: LightPropertiesController.isSpot
+                spacing: 4
+                width: parent.width - 16
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "In"
+                    value: LightPropertiesController.mixedSpotInnerAngle ? 0 : LightPropertiesController.spotInnerAngle
+                    color: "#c08040"
+                    step: 1
+                    decimals: 1
+                    onNewValue: function(val) { LightPropertiesController.spotInnerAngle = val }
+                }
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "Out"
+                    value: LightPropertiesController.mixedSpotOuterAngle ? 0 : LightPropertiesController.spotOuterAngle
+                    color: "#c0a040"
+                    step: 1
+                    decimals: 1
+                    onNewValue: function(val) { LightPropertiesController.spotOuterAngle = val }
+                }
+                TransformField {
+                    width: (parent.width - 8) / 3
+                    label: "F"
+                    value: LightPropertiesController.mixedSpotFalloff ? 0 : LightPropertiesController.spotFalloff
+                    color: "#808080"
+                    step: 0.1
+                    decimals: 2
+                    onNewValue: function(val) { LightPropertiesController.spotFalloff = val }
+                }
+            }
+
+            // Directional softness placeholder
+            Text {
+                visible: LightPropertiesController.isDirectional
+                text: qsTr("Directional softness (advanced) — coming soon")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                font.italic: true
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
+            }
+        }
+    }
+
     component ModeToolShortcutButton: Button {
         id: shortcutButton
         implicitHeight: 24
@@ -4581,6 +4966,104 @@ Rectangle {
                 font.pixelSize: 10
                 color: "#60c060"
                 text: ""
+            }
+        }
+    }
+
+    // ---- Scene lighting (Object mode, Slice E #487) ----
+    Component {
+        id: sceneLightingComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            Text {
+                text: "Preset rig"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+
+            ThemedComboBox {
+                id: rigPicker
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: SceneLightingController.rigNames
+                currentIndex: SceneLightingController.selectedRigIndex
+                onActivated: index => SceneLightingController.selectedRigIndex = index
+                Connections {
+                    target: SceneLightingController
+                    function onSelectedRigIndexChanged() {
+                        rigPicker.currentIndex = SceneLightingController.selectedRigIndex
+                    }
+                }
+            }
+
+            Row {
+                spacing: 6
+                width: parent.width - 16
+
+                CheckBox {
+                    id: replaceLightsCheck
+                    text: "Replace existing lights"
+                    checked: SceneLightingController.replaceExistingLights
+                    onToggled: SceneLightingController.replaceExistingLights = checked
+                    spacing: 6
+                    indicator: Rectangle {
+                        x: replaceLightsCheck.leftPadding
+                        y: replaceLightsCheck.height / 2 - height / 2
+                        implicitWidth: 16
+                        implicitHeight: 16
+                        radius: 2
+                        color: replaceLightsCheck.checked
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            visible: replaceLightsCheck.checked
+                            text: "✓"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
+                    }
+                    contentItem: Text {
+                        text: replaceLightsCheck.text
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        leftPadding: replaceLightsCheck.indicator.width + replaceLightsCheck.spacing
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+
+            Rectangle {
+                width: parent.width - 16
+                height: 24
+                radius: 3
+                color: applyRigMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+                Text {
+                    anchors.centerIn: parent
+                    text: "Apply preset rig"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: applyRigMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: SceneLightingController.applySelectedRig()
+                }
             }
         }
     }
@@ -7208,7 +7691,7 @@ Rectangle {
                                 Keys.onEscapePressed: { cancelled = true; visible = false }
                             }
                             Slider {
-                                id: weightSlider
+                                id: morphWeightSlider
                                 from: 0; to: 1; stepSize: 0.01
                                 width: parent.width - 222
                                 // Bind to `weightTick` so changes that
@@ -7220,7 +7703,7 @@ Rectangle {
                                 onMoved: MorphAnimationManager.setWeightForSelection(modelData, value)
                             }
                             Text {
-                                text: weightSlider.value.toFixed(2)
+                                text: morphWeightSlider.value.toFixed(2)
                                 color: PropertiesPanelController.textColor
                                 font.pixelSize: 10
                                 width: 36
