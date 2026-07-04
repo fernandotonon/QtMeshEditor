@@ -125,6 +125,24 @@ bool VertexAnimationManager::buildClipFromFrames(Ogre::Mesh* mesh,
     if (mesh->hasAnimation(animName))
         mesh->removeAnimation(animName);
 
+    // Rebuilding the same clip must also drop the dense per-frame poses it
+    // created last time ("<clip>/frameN"). Ogre poses are mesh-level and are
+    // still walked by the dope-sheet / export paths, so without this a
+    // re-import appends stale poses (and shifts every pose index). removePose
+    // is index-based, so collect matching indices and erase from the back to
+    // keep the remaining indices stable. (Same pattern as MorphCommands.)
+    {
+        const std::string prefix = animName + "/frame";
+        const auto& poseList = mesh->getPoseList();
+        std::vector<unsigned short> drop;
+        for (unsigned short pi = 0; pi < poseList.size(); ++pi) {
+            if (poseList[pi] && poseList[pi]->getName().compare(0, prefix.size(), prefix) == 0)
+                drop.push_back(pi);
+        }
+        for (auto it = drop.rbegin(); it != drop.rend(); ++it)
+            mesh->removePose(*it);
+    }
+
     // VAT_POSE targets submesh handle 1 (submesh 0); 0 is shared geometry.
     Ogre::SubMesh* sub = mesh->getSubMesh(0);
     const unsigned short target = sub->useSharedVertices ? 0 : 1;

@@ -145,6 +145,31 @@ TEST_F(VertexAnimationManagerTest, BuildClipFromFramesCreatesPosesAndTrack) {
     EXPECT_NEAR(a->getLength(), 7.0f / 30.0f, 1e-4f);
 }
 
+// Rebuilding the same clip must not leak the previous run's per-frame poses
+// ("<clip>/frameN"). Ogre poses are mesh-level; a leak would accumulate and
+// shift pose indices (regression from the B3 review).
+TEST_F(VertexAnimationManagerTest, RebuildDoesNotLeakPoses) {
+    auto mesh = createStaticMesh("vam_rebuild", 3);
+
+    ASSERT_TRUE(VertexAnimationManager::buildClipFromFrames(
+        mesh.get(), "wobble", makeWobble(3, 8)));
+    EXPECT_EQ(mesh->getPoseCount(), 8u);
+
+    // Rebuild with a DIFFERENT frame count — pose count must reflect only the
+    // new build, not 8 + 5.
+    ASSERT_TRUE(VertexAnimationManager::buildClipFromFrames(
+        mesh.get(), "wobble", makeWobble(3, 5)));
+    EXPECT_EQ(mesh->getPoseCount(), 5u);
+    ASSERT_TRUE(mesh->hasAnimation("wobble"));
+    EXPECT_EQ(mesh->getAnimation("wobble")->getVertexTrack(1)->getNumKeyFrames(), 5u);
+
+    // A second, differently-named clip must coexist (only same-named frames
+    // are dropped).
+    ASSERT_TRUE(VertexAnimationManager::buildClipFromFrames(
+        mesh.get(), "other", makeWobble(3, 4)));
+    EXPECT_EQ(mesh->getPoseCount(), 9u);   // 5 (wobble) + 4 (other)
+}
+
 TEST_F(VertexAnimationManagerTest, BuildClipRejectsVertexCountMismatch) {
     auto mesh = createStaticMesh("vam_mismatch", 3);
     auto fs = makeWobble(5, 4);  // 5 verts vs the mesh's 3
