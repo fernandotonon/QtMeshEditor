@@ -112,6 +112,8 @@ private:
     QList<LightSnapshot> m_removedLights;
     Ogre::ColourValue m_ambientBefore;
     Ogre::ColourValue m_ambientAfter;
+    QString m_hdriBefore;
+    QString m_suggestedHdri;
     bool m_replaceExisting = false;
     bool m_firstRedo = true;
 };

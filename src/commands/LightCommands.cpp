@@ -1,10 +1,13 @@
 #include "commands/LightCommands.h"
 
+#include "HDR/HdrEnvironmentController.h"
 #include "LightManager.h"
 #include "LightRigLibrary.h"
 #include "Manager.h"
 
 #include <OgreSceneManager.h>
+
+#include <QFileInfo>
 
 CreateLightCommand::CreateLightCommand(const LightSnapshot& snapshot, QUndoCommand* parent)
     : QUndoCommand(QObject::tr("Create Light"), parent)
@@ -192,6 +195,41 @@ bool EditLightPropertyCommand::mergeWith(const QUndoCommand* other)
     return true;
 }
 
+namespace
+{
+
+void restoreHdriEnvironment(const QString& pathOrBundledName, const QString& suggestedHdri)
+{
+    auto* hdr = HdrEnvironmentController::instance();
+    if (!hdr)
+        return;
+
+    if (!suggestedHdri.isEmpty())
+    {
+        const QString current = hdr->currentEnvironment();
+        const bool alreadyLoaded =
+            !current.isEmpty()
+            && QFileInfo(current).fileName().compare(suggestedHdri, Qt::CaseInsensitive) == 0;
+        if (!alreadyLoaded)
+            hdr->loadEnvironment(suggestedHdri);
+        if (hdr->hasEnvironment())
+            hdr->setDefaultSkyBoxVisible(true);
+        return;
+    }
+
+    if (pathOrBundledName.isEmpty())
+    {
+        hdr->setDefaultSkyBoxVisible(false);
+        return;
+    }
+
+    hdr->loadEnvironment(pathOrBundledName);
+    if (hdr->hasEnvironment())
+        hdr->setDefaultSkyBoxVisible(true);
+}
+
+} // namespace
+
 ApplyLightRigCommand::ApplyLightRigCommand(const LightRigApplyResult& result, QUndoCommand* parent)
     : QUndoCommand(QObject::tr("Apply Light Rig"), parent)
     , m_rigId(result.rigId)
@@ -200,6 +238,8 @@ ApplyLightRigCommand::ApplyLightRigCommand(const LightRigApplyResult& result, QU
     , m_removedLights(result.removedLights)
     , m_ambientBefore(result.ambientBefore)
     , m_ambientAfter(result.ambientAfter)
+    , m_hdriBefore(result.hdriBefore)
+    , m_suggestedHdri(result.suggestedHdri)
     , m_replaceExisting(result.replaceExisting)
 {
     if (!result.rigId.isEmpty())
@@ -221,6 +261,8 @@ void ApplyLightRigCommand::undo()
         if (Ogre::SceneManager* sceneMgr = mgr->getSceneMgr())
             sceneMgr->setAmbientLight(m_ambientBefore);
     }
+
+    restoreHdriEnvironment(m_hdriBefore, QString());
 }
 
 void ApplyLightRigCommand::redo()
@@ -253,6 +295,7 @@ void ApplyLightRigCommand::redo()
         lights->restoreSnapshotUnderParent(rigGroup, snapshot);
 
     mgr->getSceneMgr()->setAmbientLight(m_ambientAfter);
+    restoreHdriEnvironment(m_hdriBefore, m_suggestedHdri);
 }
 
 void SetSceneAmbientCommand::applyAmbient(const Ogre::ColourValue& ambient)

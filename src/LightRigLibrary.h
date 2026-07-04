@@ -22,6 +22,7 @@ struct LightRigApplyResult
     QList<LightSnapshot> removedLights;
     Ogre::ColourValue ambientBefore = Ogre::ColourValue::Black;
     Ogre::ColourValue ambientAfter = Ogre::ColourValue::Black;
+    QString hdriBefore;
     QString suggestedHdri;
     bool replaceExisting = false;
 };

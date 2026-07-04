@@ -140,7 +140,11 @@ void SceneLightingController::applyRig(const QString& rigId, bool replaceExistin
         return;
     }
 
-    UndoManager::getSingleton()->push(new ApplyLightRigCommand(result));
+    LightRigApplyResult undoResult = result;
+    if (auto* hdr = HdrEnvironmentController::instance())
+        undoResult.hdriBefore = hdr->currentEnvironment();
+
+    UndoManager::getSingleton()->push(new ApplyLightRigCommand(undoResult));
     maybeLoadSuggestedHdri(result.suggestedHdri);
 }
 
