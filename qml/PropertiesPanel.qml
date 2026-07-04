@@ -1820,16 +1820,12 @@ Rectangle {
                 checked: true
                 enabled: !MeshGenController.busy && mgBake.checked
             }
-            InspectorCheck {
-                id: mgUpscale
-                text: "Upscale texture 2× (Real-ESRGAN)"
-                checked: false
-                enabled: !MeshGenController.busy && mgBake.checked
-            }
             // AI texture (multi-view, depth-ControlNet). Most useful for
             // TripoSG (geometry-only): the front is textured from the input
             // photo, back/sides are SD-generated conditioned on the shape.
-            // Requires a loaded SD model; runs AFTER the mesh is built.
+            // Requires a loaded SD model; runs AFTER the mesh is built. Placed
+            // before Upscale so the upscale (which acts on the baked texture)
+            // reads as the final step of the texture chain.
             InspectorCheck {
                 id: mgAiTexture
                 text: "Generate texture (AI, front photo + generated back)"
@@ -1846,6 +1842,12 @@ Rectangle {
                 font.pixelSize: 10
                 wrapMode: Text.WordWrap
                 width: parent.width - 16
+            }
+            InspectorCheck {
+                id: mgUpscale
+                text: "Upscale texture 2× (Real-ESRGAN)"
+                checked: false
+                enabled: !MeshGenController.busy && mgBake.checked
             }
 
             // Step 2: generate from the selected image. Disabled until one is
@@ -1877,6 +1879,16 @@ Rectangle {
                     steps.push({ key: "build",
                                  label: (mgPbr.checked && mgBake.checked)
                                         ? "Build mesh + PBR maps" : "Build mesh" })
+                    // The AI texture pass runs after the mesh is built: one
+                    // generated view (the front is the pinned photo, no SD),
+                    // then the projection bake.
+                    if (mgAiTexture.checked
+                        && MaterialEditorQML.stableDiffusionEnabled) {
+                        steps.push({ key: "aitex_gen",
+                                     label: "AI texture: generate back view" })
+                        steps.push({ key: "aitex_bake",
+                                     label: "AI texture: project + bake" })
+                    }
                     mgRoot.mgSteps = steps
                     mgRoot.mgActiveIdx = 0
                     mgRoot.mgActiveProgress = -1
@@ -2014,6 +2026,10 @@ Rectangle {
                         // Select the new entity so the multi-view bake targets
                         // it, then kick off front-photo + generated-back.
                         PropertiesPanelController.selectNodeByName(result.entityName)
+                        // Mark the AI-texture generate step active (leave the
+                        // build ✓); the bake step advances on SD completion.
+                        mgRoot.mgActiveIdx = mgRoot.mgSteps.length - 2
+                        mgRoot.mgActiveProgress = -1
                         mgStatus.text = "Mesh built — generating AI texture "
                             + "(front photo + back)…"
                         MaterialEditorQML.generateMeshTextureMultiView(
@@ -2023,6 +2039,28 @@ Rectangle {
                     }
                 }
                 function onError(msg) { mgStatus.text = "Error: " + msg }
+            }
+            // Drive the two AI-texture progress rows from the SD signals.
+            Connections {
+                target: MaterialEditorQML
+                enabled: mgAiTexture.checked
+                function onSdGenerationProgressChanged() {
+                    var n = mgRoot.mgSteps.length
+                    if (n < 2 || mgRoot.mgSteps[n - 2].key !== "aitex_gen") return
+                    // Generating the back view — show indeterminate progress.
+                    if (mgRoot.mgActiveIdx < n - 2) mgRoot.mgActiveIdx = n - 2
+                    mgRoot.mgActiveProgress = MaterialEditorQML.sdGenerationProgress
+                }
+                function onSdTextureGenerated(path) {
+                    var n = mgRoot.mgSteps.length
+                    if (n >= 1 && mgRoot.mgSteps[n - 1].key === "aitex_bake") {
+                        mgRoot.mgActiveIdx = n   // all ✓ (bake done + applied)
+                        mgStatus.text = "AI texture applied."
+                    }
+                }
+                function onSdGenerationError(msg) {
+                    mgStatus.text = "AI texture error: " + msg
+                }
             }
         }
     }
