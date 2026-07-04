@@ -211,6 +211,7 @@ public:
 
     /// Delete one scene node by name (scene-tree trash control).
     Q_INVOKABLE void deleteSceneTreeNode(const QString& nodeName);
+    Q_INVOKABLE void renameSceneTreeLight(const QString& oldName, const QString& newName);
     /// Remove all user objects from the scene (after confirmation).
     Q_INVOKABLE void clearSceneTreeAllNodes();
 

@@ -7,6 +7,9 @@
 #include "GlobalDefinitions.h"
 
 #include "TransformOperator.h"
+#include "LightManager.h"
+#include "LightVisualizer.h"
+#include "LightsController.h"
 #include "RotationGizmo.h"
 #include "TranslationGizmo.h"
 #include "ScaleGizmo.h"
@@ -533,19 +536,40 @@ void TransformOperator::toggleTransformSpace()
 
 void TransformOperator::removeSelected()
 {
-    SentryReporter::addBreadcrumb("ui.action", "Remove selected objects");
-    SelectionSet* pCurrentSelection = SelectionSet::getSingleton();
-    if(!pCurrentSelection->isEmpty())
-    {
-        foreach(Ogre::SceneNode* node,SelectionSet::getSingleton()->getNodesSelectionList())
-        {
-            Manager::getSingleton()->destroySceneNode(node);
-        }
-        pCurrentSelection->clearList();
+  SentryReporter::addBreadcrumb("ui.action", "Remove selected objects");
+  SelectionSet* pCurrentSelection = SelectionSet::getSingleton();
+  if (pCurrentSelection->isEmpty())
+    return;
 
-        // Clear undo stack — destroyed nodes invalidate any stored commands
-        UndoManager::getSingleton()->clear();
+  if (pCurrentSelection->hasNodes())
+  {
+    bool allLights = true;
+    for (Ogre::SceneNode* node : pCurrentSelection->getNodesSelectionList())
+    {
+      if (!LightManager::sceneNodeIsUserLight(node))
+      {
+        allLights = false;
+        break;
+      }
     }
+    if (allLights)
+    {
+      LightsController::instance()->deleteSelectedLights();
+      return;
+    }
+  }
+
+  if (!pCurrentSelection->isEmpty())
+  {
+    foreach (Ogre::SceneNode* node, SelectionSet::getSingleton()->getNodesSelectionList())
+    {
+      Manager::getSingleton()->destroySceneNode(node);
+    }
+    pCurrentSelection->clearList();
+
+    // Clear undo stack — destroyed nodes invalidate any stored commands
+    UndoManager::getSingleton()->clear();
+  }
 }
 
 
@@ -1135,28 +1159,42 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
         if(mTransformState == TS_SELECT)
         {
-            // Bone-pick: when the skeleton overlay is on, a click on a bone
-            // visual selects that bone in the Animation Control panel
-            // instead of starting a box-select. Box-select still kicks in
-            // when the click misses the skeleton.
+            // Light / bone viewport picks before box-select. Walk hits
+            // front-to-back and accept the first tagged movable.
             if (m_pRayQuery)
             {
                 m_pRayQuery->setRay(rayFromScreenPoint(e->pos()));
-                m_pRayQuery->setQueryMask(BONE_QUERY_FLAGS);
+                m_pRayQuery->setQueryMask(LIGHT_QUERY_FLAGS | BONE_QUERY_FLAGS);
                 m_pRayQuery->setSortByDistance(true);
-                // Walk hits front-to-back: skip non-bone movables that
-                // happen to share the mask, accept the first tagged one.
                 Ogre::RaySceneQueryResult& res = m_pRayQuery->execute();
                 for (const auto& hit : res)
                 {
-                    if (!hit.movable) continue;
+                    if (!hit.movable)
+                        continue;
+
+                    const QString lightName = LightVisualizer::lightNameForMovable(hit.movable);
+                    if (!lightName.isEmpty())
+                    {
+                        Ogre::SceneNode* node = Manager::getSingleton()->getSceneNode(lightName);
+                        if (node)
+                        {
+                            SelectionSet::getSingleton()->selectOne(node);
+                            SentryReporter::addBreadcrumb(
+                                QStringLiteral("ui.action"),
+                                QStringLiteral("Light picked: %1").arg(lightName));
+                        }
+                        return;
+                    }
+
                     Ogre::String boneName = SkeletonDebug::boneNameForMovable(hit.movable);
-                    if (boneName.empty()) continue;
-                    AnimationControlController::instance()->selectBone(
-                        QString::fromStdString(boneName));
-                    SentryReporter::addBreadcrumb("ui.action",
-                        QString("Bone picked: %1").arg(QString::fromStdString(boneName)));
-                    return;
+                    if (!boneName.empty())
+                    {
+                        AnimationControlController::instance()->selectBone(
+                            QString::fromStdString(boneName));
+                        SentryReporter::addBreadcrumb("ui.action",
+                            QString("Bone picked: %1").arg(QString::fromStdString(boneName)));
+                        return;
+                    }
                 }
             }
 

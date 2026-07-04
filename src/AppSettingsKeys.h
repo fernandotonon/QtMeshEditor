@@ -158,6 +158,38 @@ inline const QString& updaterSkippedVersion()
     return k;
 }
 
+/** @brief Default preset rig for new empty scenes (Slice E #487). */
+inline const QString& lightingDefaultRig()
+{
+    static const QString k(QStringLiteral("Lighting/defaultRig"));
+    return k;
+}
+
+/** @brief Viewport background mode: 0=solid, 1=gradient, 2=HDR skybox. */
+inline const QString& lightingBackgroundMode()
+{
+    static const QString k(QStringLiteral("Lighting/backgroundMode"));
+    return k;
+}
+
+inline const QString& lightingSolidBackground()
+{
+    static const QString k(QStringLiteral("Lighting/solidBackground"));
+    return k;
+}
+
+inline const QString& lightingGradientTop()
+{
+    static const QString k(QStringLiteral("Lighting/gradientTop"));
+    return k;
+}
+
+inline const QString& lightingGradientBottom()
+{
+    static const QString k(QStringLiteral("Lighting/gradientBottom"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H
