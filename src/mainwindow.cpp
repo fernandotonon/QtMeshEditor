@@ -127,6 +127,7 @@
 #include "IsometricSpritesController.h"
 #include "ImageTo3D/MeshGenController.h"
 #include "MorphAnimationManager.h"
+#include "VertexAnimationManager.h"
 #include "EditorModeController.h"
 #include "QtMeshCloudClient.h"
 #include <QDockWidget>
@@ -865,6 +866,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<MorphAnimationManager>("PropertiesPanel", 1, 0, "MorphAnimationManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MorphAnimationManager::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<VertexAnimationManager>("PropertiesPanel", 1, 0, "VertexAnimationManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return VertexAnimationManager::qmlInstance(engine, nullptr);
             });
 
         // Same image provider the detached editor window uses — serves the

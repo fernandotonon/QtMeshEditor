@@ -135,6 +135,7 @@ HDR/HdrBundledLibrary.cpp
 MorphAnimationManager.cpp
 NodeAnimationManager.cpp
 PoseLibrary.cpp
+VertexAnimationManager.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
