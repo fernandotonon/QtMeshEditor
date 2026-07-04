@@ -131,6 +131,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/NodeAnimCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PoseLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/PoseLibraryCommands.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexAnimationManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UVEditCommand.cpp
