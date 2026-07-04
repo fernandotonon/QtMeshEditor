@@ -1826,6 +1826,27 @@ Rectangle {
                 checked: false
                 enabled: !MeshGenController.busy && mgBake.checked
             }
+            // AI texture (multi-view, depth-ControlNet). Most useful for
+            // TripoSG (geometry-only): the front is textured from the input
+            // photo, back/sides are SD-generated conditioned on the shape.
+            // Requires a loaded SD model; runs AFTER the mesh is built.
+            InspectorCheck {
+                id: mgAiTexture
+                text: "Generate texture (AI, front photo + generated back)"
+                checked: false
+                enabled: !MeshGenController.busy
+                    && MaterialEditorQML.stableDiffusionEnabled
+            }
+            Text {
+                visible: mgAiTexture.checked && !MaterialEditorQML.sdModelLoaded
+                text: MaterialEditorQML.stableDiffusionEnabled
+                    ? "  ⚠ Load a Stable Diffusion model in AI Settings first."
+                    : "  ⚠ This build has no Stable Diffusion support."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
+            }
 
             // Step 2: generate from the selected image. Disabled until one is
             // picked (or while busy). Builds the per-step progress list from
@@ -1979,6 +2000,27 @@ Rectangle {
                     mgRoot.mgActiveIdx = mgRoot.mgSteps.length   // all ✓
                     mgStatus.text = "Done: " + result.vertexCount + " verts, "
                         + result.triangleCount + " tris"
+
+                    // Optional AI texture pass: front from the input photo,
+                    // back/sides SD-generated (depth-ControlNet). Runs on the
+                    // just-built entity; needs a loaded SD model.
+                    if (mgAiTexture.checked && result.entityName
+                        && MaterialEditorQML.stableDiffusionEnabled) {
+                        if (!MaterialEditorQML.sdModelLoaded) {
+                            mgStatus.text = "Mesh built; skipped AI texture "
+                                + "(no SD model loaded — see AI Settings)."
+                            return
+                        }
+                        // Select the new entity so the multi-view bake targets
+                        // it, then kick off front-photo + generated-back.
+                        PropertiesPanelController.selectNodeByName(result.entityName)
+                        mgStatus.text = "Mesh built — generating AI texture "
+                            + "(front photo + back)…"
+                        MaterialEditorQML.generateMeshTextureMultiView(
+                            "", 512, 512, 0.9,
+                            ["front", "back"],
+                            MeshGenController.selectedImagePath)
+                    }
                 }
                 function onError(msg) { mgStatus.text = "Error: " + msg }
             }

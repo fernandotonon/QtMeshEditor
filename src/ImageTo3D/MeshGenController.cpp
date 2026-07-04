@@ -427,6 +427,13 @@ void MeshGenController::buildOnMainThread()
         {"vertexCount", r.vertexCount},
         {"triangleCount", r.triangleCount},
     };
+    // Expose the built entity's name so QML can run a follow-up AI texture bake
+    // on it (the "Generate texture (AI)" option for the geometry-only TripoSG
+    // backend). The node has exactly one attached Entity.
+    if (node->numAttachedObjects() > 0) {
+        if (auto* obj = node->getAttachedObject(0))
+            out["entityName"] = QString::fromStdString(obj->getName());
+    }
     if (!r.warning.isEmpty()) out["warning"] = r.warning;
     emit statusMessage(!r.warning.isEmpty()
                            ? tr("Generated %1 verts, %2 tris (%3)")
