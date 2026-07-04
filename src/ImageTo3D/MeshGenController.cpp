@@ -238,8 +238,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // the files (no event loop needed).
     emit statusMessage(tr("Checking model…"));
     if (useSG) {
-        const QString enc = TripoSGPredictor::ensureModelBlocking(
-            m_quality == MeshGenPredictor::Quality::Int8);
+        // TripoSG always runs the fp32 DiT — the int8 tier is dropped
+        // (quantized geometry degrades to blobs; no ARM speed win).
+        const QString enc = TripoSGPredictor::ensureModelBlocking(false);
         if (enc.isEmpty()) {
             setBusy(false);
             emit error(tr("TripoSG models unavailable — they download on first "
@@ -247,6 +248,13 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                           "QTMESH_TRIPOSG_MODEL_BASE_URL or drop the files in "
                           "the ai_models/triposg/ cache."));
             return;
+        }
+        // TripoSG's colour bake queries TripoSR's image-conditioned colour
+        // field — ensure those models too (best-effort: if unavailable the
+        // predictor falls back to the clay look with a warning).
+        if (wantBake) {
+            emit statusMessage(tr("Checking colour model…"));
+            MeshGenPredictor::ensureModelBlocking(m_quality);
         }
     } else {
         const QString enc = MeshGenPredictor::ensureModelBlocking(m_quality);

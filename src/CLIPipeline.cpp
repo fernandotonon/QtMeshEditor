@@ -9136,8 +9136,11 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     // Download the chosen backend's models on first use (blocks; clear
     // message when not hosted).
     if (useSG) {
-        const QString enc = TripoSGPredictor::ensureModelBlocking(
-            quality == MeshGenPredictor::Quality::Int8);
+        if (quality == MeshGenPredictor::Quality::Int8)
+            err() << "Note: --quality int8 is not available for the triposg "
+                     "backend (the quantized DiT degrades geometry); using fp32."
+                  << Qt::endl;
+        const QString enc = TripoSGPredictor::ensureModelBlocking(false);
         if (enc.isEmpty()) {
             err() << "  (looked for models in: "
                   << QFileInfo(TripoSGPredictor::imageEncoderPath()).absolutePath()
@@ -9150,6 +9153,11 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                   << Qt::endl;
             return 1;
         }
+        // TripoSG's colour bake queries TripoSR's image-conditioned colour
+        // field — ensure those models too (best-effort: absent models fall
+        // back to the untextured clay result with a warning).
+        if (bake)
+            MeshGenPredictor::ensureModelBlocking(quality);
     } else {
         const QString enc = MeshGenPredictor::ensureModelBlocking(quality);
         if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(quality)) {

@@ -206,6 +206,228 @@ MeshGenPredictor::Result fail(const QString& msg)
     return r;
 }
 
+// Colour oracle for the geometry-only TripoSG backend (#764): TripoSR's
+// decoder predicts an image-conditioned colour for ANY 3D point — including
+// occluded ones, consistently with the input photo — so it bakes the diffuse
+// for a TripoSG mesh. The mesh (TripoSG frame, +Y-up) is mapped into
+// TripoSR's native reconstruction frame (inverse of MeshGenBuilder's
+// -90°X/+90°Y fix-up) and affine-fitted per axis onto TripoSR's own occupied
+// bounds (coarse density probe) so corresponding body regions line up
+// despite the two models' different normalisations. Best-effort: on any
+// failure the result keeps its clay look and gains a warning.
+void colorizeWithTripoSR(MeshGenPredictor::Result& out, const QImage& image,
+                         const MeshGenPredictor::Options& opts,
+                         const MeshGenPredictor::ProgressFn& progress)
+{
+    using Stage = MeshGenPredictor::Stage;
+    auto warn = [&](const QString& w) {
+        out.warning = out.warning.isEmpty()
+            ? w : out.warning + QStringLiteral("; ") + w;
+    };
+    // Prefer the requested TripoSR tier, fall back to fp32; never download
+    // here (the colour bake is opportunistic — missing models just warn).
+    QString encPath = MeshGenPredictor::encoderModelPath(opts.quality);
+    if (!QFileInfo::exists(encPath))
+        encPath = MeshGenPredictor::encoderModelPath(MeshGenPredictor::Quality::Fp32);
+    const QString decPath = MeshGenPredictor::decoderModelPath();
+    if (!QFileInfo::exists(encPath) || !QFileInfo::exists(decPath)) {
+        warn(QStringLiteral("colour bake skipped — TripoSR models not on disk "
+                            "(they provide the colour field for TripoSG geometry)"));
+        return;
+    }
+    try {
+        Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_sg_colorize");
+        Ort::SessionOptions so;
+        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+#ifdef __APPLE__
+        try {
+            std::unordered_map<std::string, std::string> coremlOpts;
+            so.AppendExecutionProvider("CoreML", coremlOpts);
+        } catch (const Ort::Exception&) {}
+#endif
+        Ort::Session encoder = openSession(env, so, encPath);
+        Ort::Session decoder = openSession(env, so, decPath);
+        Ort::AllocatorWithDefaultOptions alloc;
+        Ort::MemoryInfo mem =
+            Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+        // TripoSR's own background convention (gray-128 composite) — the
+        // TripoSG dispatch composited over WHITE, which TripoSR reads as a
+        // reconstructed wall.
+        QImage subject = image;
+        if (opts.removeBackground) {
+            const QString bgModel = BackgroundRemover::ensureModelBlocking();
+            subject = BackgroundRemover::removeBackground(image, bgModel, {}).image;
+        }
+        QImage resized = subject.convertToFormat(QImage::Format_RGB888)
+                             .scaled(kEncoderImageSize, kEncoderImageSize,
+                                     Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        std::vector<float> imgNCHW = PbrMapSynth::toNCHW(resized, 3);
+        const int64_t imgShape[4] = {1, 3, kEncoderImageSize, kEncoderImageSize};
+        Ort::Value imgTensor = Ort::Value::CreateTensor<float>(
+            mem, imgNCHW.data(), imgNCHW.size(), imgShape, 4);
+        auto encInName  = encoder.GetInputNameAllocated(0, alloc);
+        auto encOutName = encoder.GetOutputNameAllocated(0, alloc);
+        const char* encIn[]  = { encInName.get() };
+        const char* encOut[] = { encOutName.get() };
+        if (progress && !progress(Stage::Bake, -1, -1))
+            return;   // cancelled — caller returns the geometry it has
+        auto encRes = encoder.Run(Ort::RunOptions{nullptr}, encIn, &imgTensor,
+                                  1, encOut, 1);
+        auto scInfo = encRes[0].GetTensorTypeAndShapeInfo();
+        std::vector<int64_t> scShape = scInfo.GetShape();
+        const float* scData = encRes[0].GetTensorData<float>();
+        std::vector<float> sceneCodes(scData, scData + scInfo.GetElementCount());
+
+        auto decScName = decoder.GetInputNameAllocated(0, alloc);
+        auto decPtName = decoder.GetInputNameAllocated(1, alloc);
+        const size_t decOutCount = decoder.GetOutputCount();
+        std::vector<Ort::AllocatedStringPtr> outHolders;
+        std::vector<const char*> outNames;
+        int densityIdx = -1, colorIdx = -1;
+        for (size_t i = 0; i < decOutCount; ++i) {
+            outHolders.push_back(decoder.GetOutputNameAllocated(i, alloc));
+            outNames.push_back(outHolders.back().get());
+            const std::string nm = outHolders.back().get();
+            if (nm.find("color") != std::string::npos) colorIdx = int(i);
+            else if (nm.find("density") != std::string::npos) densityIdx = int(i);
+        }
+        if (colorIdx < 0 || densityIdx < 0) {
+            warn(QStringLiteral(
+                "colour bake skipped — TripoSR decoder exposes no colour output"));
+            return;
+        }
+
+        const int chunk =
+            std::max(1, opts.chunkPoints > 0 ? opts.chunkPoints : 262144);
+        auto query = [&](const float* pts, size_t count, float* outDens,
+                         float* outRgb) -> bool {
+            for (size_t start = 0; start < count; start += size_t(chunk)) {
+                if (progress && !progress(Stage::Bake, -1, -1)) return false;
+                const size_t n = std::min(size_t(chunk), count - start);
+                const int64_t ptShape[3] = {1, int64_t(n), 3};
+                Ort::Value ptTensor = Ort::Value::CreateTensor<float>(
+                    mem, const_cast<float*>(pts) + start * 3, n * 3, ptShape, 3);
+                Ort::Value scTensor = Ort::Value::CreateTensor<float>(
+                    mem, sceneCodes.data(), sceneCodes.size(), scShape.data(),
+                    scShape.size());
+                const char* decIn[] = { decScName.get(), decPtName.get() };
+                Ort::Value ins[] = { std::move(scTensor), std::move(ptTensor) };
+                auto res = decoder.Run(Ort::RunOptions{nullptr}, decIn, ins, 2,
+                                       outNames.data(), outNames.size());
+                if (outDens) {
+                    const float* d = res[size_t(densityIdx)].GetTensorData<float>();
+                    std::copy(d, d + n, outDens + start);
+                }
+                if (outRgb) {
+                    const float* c = res[size_t(colorIdx)].GetTensorData<float>();
+                    std::copy(c, c + n * 3, outRgb + start * 3);
+                }
+            }
+            return true;
+        };
+
+        // Coarse occupied AABB of TripoSR's own reconstruction of this image.
+        constexpr int kProbe = 40;
+        std::vector<float> probePts(size_t(kProbe) * kProbe * kProbe * 3);
+        {
+            const float pstep = (2.0f * kRadius) / float(kProbe - 1);
+            size_t idx = 0;
+            for (int z = 0; z < kProbe; ++z)
+                for (int y = 0; y < kProbe; ++y)
+                    for (int x = 0; x < kProbe; ++x) {
+                        probePts[idx++] = -kRadius + x * pstep;
+                        probePts[idx++] = -kRadius + y * pstep;
+                        probePts[idx++] = -kRadius + z * pstep;
+                    }
+        }
+        std::vector<float> probeDens(size_t(kProbe) * kProbe * kProbe);
+        if (!query(probePts.data(), probeDens.size(), probeDens.data(), nullptr))
+            return;
+        float srMin[3] = {1e30f, 1e30f, 1e30f};
+        float srMax[3] = {-1e30f, -1e30f, -1e30f};
+        bool any = false;
+        for (size_t i = 0; i < probeDens.size(); ++i) {
+            if (probeDens[i] - opts.threshold <= 0.0f) continue;
+            any = true;
+            for (int a = 0; a < 3; ++a) {
+                srMin[a] = std::min(srMin[a], probePts[i * 3 + a]);
+                srMax[a] = std::max(srMax[a], probePts[i * 3 + a]);
+            }
+        }
+        if (!any) {
+            warn(QStringLiteral(
+                "colour bake skipped — TripoSR found no surface for this image"));
+            return;
+        }
+
+        // Mesh AABB in TripoSR's native frame. MeshGenBuilder's fix-up is
+        // F(n) = (-n_y, n_z, -n_x); TripoSG output is already upright, so
+        // native = F⁻¹(u) = (-u_z, -u_x, u_y).
+        auto toNative = [](const float* u, float* n) {
+            n[0] = -u[2]; n[1] = -u[0]; n[2] = u[1];
+        };
+        float mMin[3] = {1e30f, 1e30f, 1e30f};
+        float mMax[3] = {-1e30f, -1e30f, -1e30f};
+        for (int v = 0; v < out.vertexCount; ++v) {
+            float n[3];
+            toNative(out.positions.data() + size_t(v) * 3, n);
+            for (int a = 0; a < 3; ++a) {
+                mMin[a] = std::min(mMin[a], n[a]);
+                mMax[a] = std::max(mMax[a], n[a]);
+            }
+        }
+        // Per-axis affine fit, native-mesh box → TripoSR box: both models
+        // reconstruct the SAME subject, so corresponding extents align.
+        float s[3], t[3];
+        for (int a = 0; a < 3; ++a) {
+            const float me = mMax[a] - mMin[a];
+            s[a] = (me > 1e-6f) ? (srMax[a] - srMin[a]) / me : 1.0f;
+            t[a] = srMin[a] - s[a] * mMin[a];
+        }
+
+        MeshGenBaker::Options bakeOpts;
+        bakeOpts.textureSize = opts.textureSize;
+        bakeOpts.chunkPoints = chunk;
+        if (progress)
+            bakeOpts.progress = [&](int done, int total) {
+                return progress(Stage::Bake, done, total);
+            };
+        std::vector<float> mapped;   // scratch: TripoSG frame → TripoSR frame
+        const MeshGenBaker::Result baked = MeshGenBaker::bake(
+            out.positions, out.indices,
+            [&](const float* pts, size_t count, float* rgb) -> bool {
+                mapped.resize(count * 3);
+                for (size_t i = 0; i < count; ++i) {
+                    float n[3];
+                    toNative(pts + i * 3, n);
+                    mapped[i * 3 + 0] = s[0] * n[0] + t[0];
+                    mapped[i * 3 + 1] = s[1] * n[1] + t[1];
+                    mapped[i * 3 + 2] = s[2] * n[2] + t[2];
+                }
+                return query(mapped.data(), count, nullptr, rgb);
+            },
+            bakeOpts);
+        if (baked.ok) {
+            out.positions     = baked.positions;
+            out.indices       = baked.indices;
+            out.uvs           = baked.uvs;
+            out.texture       = baked.texture;
+            out.vertexCount   = baked.vertexCount;
+            out.triangleCount = baked.triangleCount;
+        } else if (!baked.cancelled) {
+            warn(QStringLiteral("colour bake failed (%1) — clay material kept")
+                     .arg(baked.error));
+        }
+    } catch (const Ort::Exception& e) {
+        warn(QStringLiteral("colour bake failed (ONNX: %1) — clay material kept")
+                 .arg(QString::fromUtf8(e.what())));
+    } catch (const std::exception& e) {
+        warn(QStringLiteral("colour bake failed (%1) — clay material kept")
+                 .arg(QString::fromUtf8(e.what())));
+    }
+}
+
 } // namespace
 
 MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
@@ -234,7 +456,11 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         sg.sdfResolution    = opts.sdfResolution;
         sg.flowSteps        = opts.flowSteps;
         sg.guidanceScale    = opts.guidanceScale;
-        sg.useInt8Dit       = (opts.quality == Quality::Int8);
+        // int8 tier DROPPED for TripoSG: the quantized 1.5B DiT degrades to
+        // blobs over the flow loop (verified live even with per-channel
+        // quant), and dynamic-int8 MatMuls are no faster than fp32 on ARM.
+        // The tier picker stays meaningful for TripoSR only.
+        sg.useInt8Dit       = false;
         sg.smoothMesh       = opts.smoothMesh;
         sg.smoothIterations = opts.smoothIterations;
         sg.refineSurface    = opts.refineSurface;
@@ -242,6 +468,10 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
         Result r = TripoSGPredictor::predict(subject, sg, progress);
         // TripoSG's field is already +Y-up — skip the TripoSR frame bake.
         r.bakeTripoSROrientation = false;
+        // TripoSG is geometry-only; bake colour from TripoSR's image-
+        // conditioned field on the same input (best-effort — clay on failure).
+        if (r.ok && opts.bakeTexture && r.vertexCount > 0)
+            colorizeWithTripoSR(r, image, opts, progress);
         return r;
     }
     if (!QFileInfo::exists(encoderModelPath) || !QFileInfo::exists(decoderModelPath))

@@ -2405,13 +2405,19 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution));
 
     if (opts.backend == MeshGenPredictor::Backend::TripoSG) {
-        const QString enc = TripoSGPredictor::ensureModelBlocking(
-            opts.quality == MeshGenPredictor::Quality::Int8);
+        // TripoSG always runs the fp32 DiT (int8 tier dropped — degraded
+        // geometry, no ARM speed win); 'quality' still selects the TripoSR
+        // tier used for the colour bake.
+        const QString enc = TripoSGPredictor::ensureModelBlocking(false);
         if (enc.isEmpty())
             return makeErrorResult(
                 "TripoSG models unavailable — they download on first use; if not "
                 "hosted yet, set QTMESH_TRIPOSG_MODEL_BASE_URL / ai/triposgModelBaseUrl "
                 "or drop the files in the ai_models/triposg/ cache.");
+        // TripoSG's colour bake queries TripoSR's colour field — best-effort
+        // ensure (absent models fall back to clay with a warning).
+        if (opts.bakeTexture)
+            MeshGenPredictor::ensureModelBlocking(opts.quality);
     } else {
         const QString enc = MeshGenPredictor::ensureModelBlocking(opts.quality);
         if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(opts.quality))

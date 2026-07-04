@@ -471,9 +471,14 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
         std::vector<float>().swap(latents);
 
         // Only the small per-point decoder (~48 MB) stays alive for the long
-        // Decode/Refine tail. It runs ~2000 chunked calls per generation, so
-        // it gets the GPU (MLProgram) session — trivial compile, big win.
-        Ort::Session vaeDec = open(vaeDecoderPath(), true);
+        // Decode/Refine tail. CPU by DEFAULT despite the ~2000 calls/run:
+        // every CoreML call re-uploads the 8.4 MB kv-cache input (≈17 GB of
+        // CPU→GPU traffic at res 256) plus per-dispatch overhead — a live GUI
+        // run spent >1h in the decode stage where CPU takes ~15-20 min.
+        // QTMESH_TRIPOSG_COREML_DECODER=1 opts back in for experiments.
+        const bool decOnGpu = gpuAvailable
+            && qEnvironmentVariableIntValue("QTMESH_TRIPOSG_COREML_DECODER") == 1;
+        Ort::Session vaeDec = open(vaeDecoderPath(), decOnGpu);
         IoNames vaeIo = ioNames(vaeDec, alloc);
         const size_t totalPts = static_cast<size_t>(res) * res * res;
         std::vector<float> field(totalPts, 0.0f);

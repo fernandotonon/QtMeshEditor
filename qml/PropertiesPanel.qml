@@ -1796,22 +1796,22 @@ Rectangle {
                 id: mgBake
                 text: "Bake diffuse texture"
                 checked: true
-                // Texture stages are TripoSR-only (TripoSG has no colour decoder).
-                enabled: !MeshGenController.busy && mgBackendCombo.currentIndex === 0
+                // TripoSG has no colour decoder, but its bake queries
+                // TripoSR's image-conditioned colour field instead — so the
+                // texture stages work on BOTH backends.
+                enabled: !MeshGenController.busy
             }
             InspectorCheck {
                 id: mgPbr
                 text: "Generate PBR maps (normal + roughness)"
                 checked: true
                 enabled: !MeshGenController.busy && mgBake.checked
-                    && mgBackendCombo.currentIndex === 0
             }
             InspectorCheck {
                 id: mgUpscale
                 text: "Upscale texture 2× (Real-ESRGAN)"
                 checked: false
                 enabled: !MeshGenController.busy && mgBake.checked
-                    && mgBackendCombo.currentIndex === 0
             }
 
             // Step 2: generate from the selected image. Disabled until one is
@@ -1832,16 +1832,16 @@ Rectangle {
                     steps.push({ key: "decode", label: "Reconstruct 3D" })
                     if (mgRefine.checked)
                         steps.push({ key: "refine", label: "Refine surface" })
-                    if (!sg) {
-                        if (mgBake.checked)
-                            steps.push({ key: "bake", label: "Bake texture" })
-                        else
-                            steps.push({ key: "color", label: "Vertex colors" })
-                        if (mgUpscale.checked && mgBake.checked)
-                            steps.push({ key: "upscale", label: "Upscale texture 2×" })
-                    }
+                    if (mgBake.checked)
+                        steps.push({ key: "bake",
+                                     label: sg ? "Bake texture (TripoSR colour)"
+                                               : "Bake texture" })
+                    else if (!sg)
+                        steps.push({ key: "color", label: "Vertex colors" })
+                    if (mgUpscale.checked && mgBake.checked)
+                        steps.push({ key: "upscale", label: "Upscale texture 2×" })
                     steps.push({ key: "build",
-                                 label: (!sg && mgPbr.checked && mgBake.checked)
+                                 label: (mgPbr.checked && mgBake.checked)
                                         ? "Build mesh + PBR maps" : "Build mesh" })
                     mgRoot.mgSteps = steps
                     mgRoot.mgActiveIdx = 0
