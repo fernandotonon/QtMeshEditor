@@ -2700,6 +2700,7 @@ QString MeshImporterExporter::importFileDialogFilterFromExtensionList(
     const QString allSupported = globs.join(QLatin1Char(' '));
     return QStringLiteral(
                "All supported (%1);;"
+               "Alembic vertex cache (*.abc);;"
                "PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply);;"
                "All files (*.*)")
         .arg(allSupported);

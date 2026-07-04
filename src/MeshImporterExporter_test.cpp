@@ -587,6 +587,7 @@ TEST(MeshImporterExporterStandaloneTest, ImportFileDialogFilterFromExtensionList
 {
     QString f = MeshImporterExporter::importFileDialogFilterFromExtensionList(QStringLiteral(".fbx .obj"));
     EXPECT_TRUE(f.startsWith(QStringLiteral("All supported (*.fbx *.obj);;")));
+    EXPECT_TRUE(f.contains(QStringLiteral("Alembic vertex cache (*.abc)")));
     EXPECT_TRUE(f.contains(QStringLiteral("PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply)")));
     EXPECT_TRUE(f.endsWith(QStringLiteral("All files (*.*)")));
 }
