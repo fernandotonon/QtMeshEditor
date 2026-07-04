@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "LightManager.h"
+#include "LightRigLibrary.h"
 #include "LightsController.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
@@ -86,4 +87,34 @@ TEST_F(LightCommandsOgreTest, RenameUndoRedo)
 
     UndoManager::getSingleton()->redo();
     EXPECT_NE(LightManager::getSingleton()->findLight(QStringLiteral("NewName")), nullptr);
+}
+
+TEST_F(LightCommandsOgreTest, ApplyLightRigUndoRestoresRigGroupParent)
+{
+    const LightRigApplyResult first =
+        LightRigLibrary::apply(QStringLiteral("single_key"), false);
+    ASSERT_TRUE(first.ok) << first.error.toStdString();
+    ASSERT_EQ(first.removedRigGroups.size(), 0);
+
+    const QString keyLightName = first.addedLights.first().name;
+    const LightHandle* keyBefore = LightManager::getSingleton()->findLight(keyLightName);
+    ASSERT_NE(keyBefore, nullptr);
+    ASSERT_TRUE(keyBefore->sceneNode && keyBefore->sceneNode->getParent());
+    EXPECT_TRUE(LightRigLibrary::sceneNodeIsRigGroup(
+        static_cast<Ogre::SceneNode*>(keyBefore->sceneNode->getParent())));
+
+    const LightRigApplyResult second =
+        LightRigLibrary::apply(QStringLiteral("three_point_studio"), false);
+    ASSERT_TRUE(second.ok) << second.error.toStdString();
+    ASSERT_EQ(second.removedRigGroups.size(), 1);
+    ASSERT_EQ(second.removedRigGroups.first().lights.size(), 1);
+
+    UndoManager::getSingleton()->push(new ApplyLightRigCommand(second));
+    UndoManager::getSingleton()->undo();
+
+    const LightHandle* keyAfter = LightManager::getSingleton()->findLight(keyLightName);
+    ASSERT_NE(keyAfter, nullptr);
+    ASSERT_TRUE(keyAfter->sceneNode && keyAfter->sceneNode->getParent());
+    EXPECT_TRUE(LightRigLibrary::sceneNodeIsRigGroup(
+        static_cast<Ogre::SceneNode*>(keyAfter->sceneNode->getParent())));
 }

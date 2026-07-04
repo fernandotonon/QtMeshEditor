@@ -39,6 +39,9 @@ protected:
         TransformOperator::kill();
         SelectionSet::kill();
         Manager::kill();
+        if (!canLoadMeshFiles()) {
+            GTEST_SKIP() << "Light visualizer tests require GL mesh loading (Xvfb in CI)";
+        }
         ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
         LightManager::getSingleton()->tryConnectToManager();

@@ -4,6 +4,7 @@
 #include "LightManager.h"
 #include "LightRigLibrary.h"
 #include "Manager.h"
+#include "SentryReporter.h"
 #include "UndoManager.h"
 #include "commands/LightCommands.h"
 #include "mainwindow.h"
@@ -146,6 +147,10 @@ void SceneLightingController::applyRig(const QString& rigId, bool replaceExistin
 
     UndoManager::getSingleton()->push(new ApplyLightRigCommand(undoResult));
     maybeLoadSuggestedHdri(result.suggestedHdri);
+
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ui.action"),
+        QStringLiteral("Apply light rig: %1").arg(rigId));
 }
 
 void SceneLightingController::applySelectedRig()

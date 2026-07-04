@@ -3909,8 +3909,17 @@ Rectangle {
                         color: LightPropertiesController.mixedDiffuseColor
                             ? PropertiesPanelController.inputColor
                             : LightPropertiesController.diffuseColor
-                        border.color: PropertiesPanelController.borderColor
-                        border.width: 1
+                        border.color: diffuseColorBtn.activeFocus
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.borderColor
+                        border.width: diffuseColorBtn.activeFocus ? 2 : 1
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("Pick diffuse color")
+                        Keys.onSpacePressed: LightPropertiesController.pickDiffuseColor()
+                        Keys.onReturnPressed: LightPropertiesController.pickDiffuseColor()
+                        Keys.onEnterPressed: LightPropertiesController.pickDiffuseColor()
+                        id: diffuseColorBtn
                         Text {
                             anchors.centerIn: parent
                             visible: LightPropertiesController.mixedDiffuseColor
@@ -3938,8 +3947,18 @@ Rectangle {
                         color: LightPropertiesController.mixedSpecularColor
                             ? PropertiesPanelController.inputColor
                             : LightPropertiesController.specularColor
-                        border.color: PropertiesPanelController.borderColor
-                        border.width: 1
+                        border.color: specularColorBtn.activeFocus
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.borderColor
+                        border.width: specularColorBtn.activeFocus ? 2 : 1
+                        activeFocusOnTab: !LightPropertiesController.colorsLinked
+                        enabled: !LightPropertiesController.colorsLinked
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("Pick specular color")
+                        Keys.onSpacePressed: if (enabled) LightPropertiesController.pickSpecularColor()
+                        Keys.onReturnPressed: if (enabled) LightPropertiesController.pickSpecularColor()
+                        Keys.onEnterPressed: if (enabled) LightPropertiesController.pickSpecularColor()
+                        id: specularColorBtn
                         Text {
                             anchors.centerIn: parent
                             visible: LightPropertiesController.mixedSpecularColor
@@ -5043,14 +5062,23 @@ Rectangle {
             }
 
             Rectangle {
+                id: applyRigBtn
                 width: parent.width - 16
                 height: 24
                 radius: 3
-                color: applyRigMa.containsMouse
+                color: applyRigMa.containsMouse || applyRigBtn.activeFocus
                     ? PropertiesPanelController.highlightColor
                     : PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
+                border.color: applyRigBtn.activeFocus
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.borderColor
+                border.width: applyRigBtn.activeFocus ? 2 : 1
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: qsTr("Apply preset rig")
+                Keys.onSpacePressed: applyRigMa.clicked(null)
+                Keys.onReturnPressed: applyRigMa.clicked(null)
+                Keys.onEnterPressed: applyRigMa.clicked(null)
                 Text {
                     anchors.centerIn: parent
                     text: "Apply preset rig"

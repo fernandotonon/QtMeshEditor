@@ -306,11 +306,7 @@ void LightManager::deleteAllUserLights()
 
 void LightManager::clearAllLights()
 {
-    while (!m_lights.isEmpty())
-    {
-        const QString name = m_lights.last().name;
-        deleteLight(name);
-    }
+    deleteAllUserLights();
 }
 
 LightHandle LightManager::createDefaultKeyLight()

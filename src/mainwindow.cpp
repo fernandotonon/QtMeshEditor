@@ -1309,21 +1309,33 @@ void MainWindow::initToolBar()
     auto addSpotViewport = addLightMenu->addAction(tr("Spot at Viewport Center"));
 
     connect(addDirectional, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add directional light"));
         LightsController::instance()->addDirectionalLight();
     });
     connect(addPoint, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add point light"));
         LightsController::instance()->addPointLight();
     });
     connect(addSpot, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add spot light"));
         LightsController::instance()->addSpotLight();
     });
     connect(addDirectionalViewport, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add directional light at viewport"));
         LightsController::instance()->addDirectionalLightAtViewport();
     });
     connect(addPointViewport, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add point light at viewport"));
         LightsController::instance()->addPointLightAtViewport();
     });
     connect(addSpotViewport, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Add spot light at viewport"));
         LightsController::instance()->addSpotLightAtViewport();
     });
     addLightMenu->addSeparator();
@@ -1332,6 +1344,9 @@ void MainWindow::initToolBar()
     {
         QAction* rigAction = presetRigMenu->addAction(LightRigLibrary::displayNameForId(rigId));
         connect(rigAction, &QAction::triggered, this, [rigId]() {
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("ui.action"),
+                QStringLiteral("Apply preset rig from toolbar: %1").arg(rigId));
             SceneLightingController::instance()->applyRig(rigId, true);
         });
     }
@@ -2628,6 +2643,9 @@ void MainWindow::initToolBar()
     {
         QAction* rigAction = scenePresetRigMenu->addAction(LightRigLibrary::displayNameForId(rigId));
         connect(rigAction, &QAction::triggered, this, [rigId]() {
+            SentryReporter::addBreadcrumb(
+                QStringLiteral("ui.action"),
+                QStringLiteral("Apply preset rig from menu: %1").arg(rigId));
             SceneLightingController::instance()->applyRig(rigId, true);
         });
     }

@@ -204,22 +204,41 @@ void tagRigGroup(Ogre::SceneNode* node)
     node->getUserObjectBindings().setUserAny(LightRigLibrary::kRigGroupTag, Ogre::Any(true));
 }
 
-QList<LightSnapshot> captureLightsInRigGroups()
+QList<RemovedRigGroupSnapshot> captureRemovedRigGroups()
+{
+    QList<RemovedRigGroupSnapshot> groups;
+    auto* mgr = Manager::getSingletonPtr();
+    auto* lights = LightManager::getSingletonPtr();
+    if (!mgr || !mgr->getSceneMgr() || !lights)
+        return groups;
+
+    Ogre::SceneNode* root = mgr->getSceneMgr()->getRootSceneNode();
+    for (const auto& child : root->getChildren())
+    {
+        auto* groupNode = static_cast<Ogre::SceneNode*>(child);
+        if (!LightRigLibrary::sceneNodeIsRigGroup(groupNode))
+            continue;
+
+        RemovedRigGroupSnapshot group;
+        group.groupBaseName = QString::fromStdString(groupNode->getName());
+        for (const LightHandle& handle : lights->lights())
+        {
+            if (!handle.isValid() || !handle.sceneNode)
+                continue;
+            if (handle.sceneNode->getParent() == groupNode)
+                group.lights.append(LightSnapshot::fromHandle(handle));
+        }
+        if (!group.lights.isEmpty())
+            groups.append(group);
+    }
+    return groups;
+}
+
+QList<LightSnapshot> flattenRemovedRigGroups(const QList<RemovedRigGroupSnapshot>& groups)
 {
     QList<LightSnapshot> snapshots;
-    auto* lights = LightManager::getSingletonPtr();
-    if (!lights)
-        return snapshots;
-
-    for (const LightHandle& handle : lights->lights())
-    {
-        if (!handle.isValid() || !handle.sceneNode)
-            continue;
-        Ogre::Node* parent = handle.sceneNode->getParent();
-        auto* parentNode = static_cast<Ogre::SceneNode*>(parent);
-        if (parentNode && LightRigLibrary::sceneNodeIsRigGroup(parentNode))
-            snapshots.append(LightSnapshot::fromHandle(handle));
-    }
+    for (const RemovedRigGroupSnapshot& group : groups)
+        snapshots.append(group.lights);
     return snapshots;
 }
 
@@ -342,6 +361,11 @@ Ogre::SceneNode* createRigGroupForRig(const QString& rigId)
     return rigGroup;
 }
 
+void tagRigGroupNode(Ogre::SceneNode* node)
+{
+    tagRigGroup(node);
+}
+
 LightRigApplyResult apply(const QString& rigId, bool replaceExisting)
 {
     LightRigApplyResult result;
@@ -367,13 +391,14 @@ LightRigApplyResult apply(const QString& rigId, bool replaceExisting)
     // Preset rigs always replace any previous rig installation so repeated
     // Apply clicks do not stack lights. replaceExisting additionally clears
     // individually-added user lights.
-    result.removedLights = captureLightsInRigGroups();
+    result.removedRigGroups = captureRemovedRigGroups();
+    result.removedLights = flattenRemovedRigGroups(result.removedRigGroups);
     destroyAllRigGroups();
 
     if (replaceExisting)
     {
-        const QList<LightSnapshot> remaining = lights->captureAllSnapshots();
-        result.removedLights.append(remaining);
+        result.removedUserLights = lights->captureAllSnapshots();
+        result.removedLights.append(result.removedUserLights);
         lights->deleteAllUserLights();
     }
 

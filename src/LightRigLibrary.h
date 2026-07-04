@@ -12,6 +12,12 @@ namespace Ogre
 class SceneNode;
 }
 
+struct RemovedRigGroupSnapshot
+{
+    QString groupBaseName;
+    QList<LightSnapshot> lights;
+};
+
 struct LightRigApplyResult
 {
     bool ok = false;
@@ -19,6 +25,8 @@ struct LightRigApplyResult
     QString rigId;
     QString rigGroupNodeName;
     QList<LightSnapshot> addedLights;
+    QList<RemovedRigGroupSnapshot> removedRigGroups;
+    QList<LightSnapshot> removedUserLights;
     QList<LightSnapshot> removedLights;
     Ogre::ColourValue ambientBefore = Ogre::ColourValue::Black;
     Ogre::ColourValue ambientAfter = Ogre::ColourValue::Black;
@@ -44,6 +52,7 @@ void applyDefaultSceneLighting();
 
 void destroyAllRigGroups();
 Ogre::SceneNode* createRigGroupForRig(const QString& rigId);
+void tagRigGroupNode(Ogre::SceneNode* node);
 
 bool sceneNodeIsRigGroup(Ogre::SceneNode* node);
 void destroyRigGroupNode(const QString& nodeName);

@@ -254,9 +254,15 @@ LightVisualizer::LightVisualizer(Ogre::SceneManager* sceneMgr, QObject* parent)
 
 LightVisualizer::~LightVisualizer()
 {
-    const QStringList names = mOverlays.keys();
-    for (const QString& name : names)
-        destroyOverlay(name);
+    try
+    {
+        const QStringList names = mOverlays.keys();
+        for (const QString& name : names)
+            destroyOverlay(name);
+    }
+    catch (...)
+    {
+    }
 }
 
 QString LightVisualizer::lightNameForMovable(const Ogre::MovableObject* obj)
@@ -430,26 +436,33 @@ void LightVisualizer::buildOverlay(const LightHandle& handle)
 void LightVisualizer::destroyOverlay(const QString& name)
 {
     auto it = mOverlays.find(name);
-    if (it == mOverlays.end())
+    if (it == mOverlays.end() || !mSceneMgr)
         return;
 
-    OverlayData data = it.value();
-    if (data.overlayNode)
+    try
     {
+        OverlayData data = it.value();
+        if (data.overlayNode)
+        {
+            if (data.icon)
+                data.overlayNode->detachObject(data.icon);
+            if (data.gizmo)
+                data.overlayNode->detachObject(data.gizmo);
+            if (data.overlayNode->getParent())
+                data.overlayNode->getParent()->removeChild(data.overlayNode);
+            mSceneMgr->destroySceneNode(data.overlayNode);
+        }
         if (data.icon)
-            data.overlayNode->detachObject(data.icon);
+            mSceneMgr->destroyBillboardSet(data.icon);
         if (data.gizmo)
-            data.overlayNode->detachObject(data.gizmo);
-        if (data.overlayNode->getParent())
-            data.overlayNode->getParent()->removeChild(data.overlayNode);
-        mSceneMgr->destroySceneNode(data.overlayNode);
-    }
-    if (data.icon)
-        mSceneMgr->destroyBillboardSet(data.icon);
-    if (data.gizmo)
-        mSceneMgr->destroyManualObject(data.gizmo);
+            mSceneMgr->destroyManualObject(data.gizmo);
 
-    mOverlays.erase(it);
+        mOverlays.erase(it);
+    }
+    catch (...)
+    {
+        mOverlays.erase(it);
+    }
 }
 
 void LightVisualizer::refreshOverlay(const QString& name)

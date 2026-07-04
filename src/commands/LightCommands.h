@@ -109,6 +109,8 @@ private:
     QString m_rigId;
     QString m_rigGroupNodeName;
     QList<LightSnapshot> m_addedLights;
+    QList<RemovedRigGroupSnapshot> m_removedRigGroups;
+    QList<LightSnapshot> m_removedUserLights;
     QList<LightSnapshot> m_removedLights;
     Ogre::ColourValue m_ambientBefore;
     Ogre::ColourValue m_ambientAfter;

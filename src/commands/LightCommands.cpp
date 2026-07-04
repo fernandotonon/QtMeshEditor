@@ -235,6 +235,8 @@ ApplyLightRigCommand::ApplyLightRigCommand(const LightRigApplyResult& result, QU
     , m_rigId(result.rigId)
     , m_rigGroupNodeName(result.rigGroupNodeName)
     , m_addedLights(result.addedLights)
+    , m_removedRigGroups(result.removedRigGroups)
+    , m_removedUserLights(result.removedUserLights)
     , m_removedLights(result.removedLights)
     , m_ambientBefore(result.ambientBefore)
     , m_ambientAfter(result.ambientAfter)
@@ -253,7 +255,17 @@ void ApplyLightRigCommand::undo()
         lights->deleteLight(snapshot.name);
     LightRigLibrary::destroyRigGroupNode(m_rigGroupNodeName);
 
-    for (const LightSnapshot& snapshot : m_removedLights)
+    for (const RemovedRigGroupSnapshot& group : m_removedRigGroups)
+    {
+        Ogre::SceneNode* rigGroup = lights->createRigGroupNode(group.groupBaseName);
+        if (!rigGroup)
+            continue;
+        LightRigLibrary::tagRigGroupNode(rigGroup);
+        for (const LightSnapshot& snapshot : group.lights)
+            lights->restoreSnapshotUnderParent(rigGroup, snapshot);
+    }
+
+    for (const LightSnapshot& snapshot : m_removedUserLights)
         lights->restoreSnapshot(snapshot);
 
     if (auto* mgr = Manager::getSingletonPtr())
@@ -283,8 +295,11 @@ void ApplyLightRigCommand::redo()
         lights->deleteAllUserLights();
     else
     {
-        for (const LightSnapshot& snapshot : m_removedLights)
-            lights->deleteLight(snapshot.name);
+        for (const RemovedRigGroupSnapshot& group : m_removedRigGroups)
+        {
+            for (const LightSnapshot& snapshot : group.lights)
+                lights->deleteLight(snapshot.name);
+        }
     }
 
     Ogre::SceneNode* rigGroup = LightRigLibrary::createRigGroupForRig(m_rigId);
