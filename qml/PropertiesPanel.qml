@@ -1733,29 +1733,10 @@ Rectangle {
                 }
             }
 
-            // Model quality/size tier — the encoder downloads in the picked
-            // precision (fp32 best/largest → int8 smallest). index maps 1:1 to the
-            // MeshGenController quality int (0/1).
-            Row {
-                spacing: 6
-                Text {
-                    text: "Model"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-                InspectorComboBox {
-                    id: mgQualityCombo
-                    width: 150
-                    enabled: !MeshGenController.busy
-                    model: ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
-                    currentIndex: 0
-                }
-            }
-
             // Backend: TripoSR (fast, textured) vs TripoSG (rectified flow —
             // higher-fidelity geometry, geometry-only, slower; models download
-            // on first use).
+            // on first use). Declared BEFORE the Model row so the tier picker
+            // can react to it.
             Row {
                 spacing: 6
                 Text {
@@ -1769,6 +1750,38 @@ Rectangle {
                     width: 190
                     enabled: !MeshGenController.busy
                     model: ["TripoSR (fast, textured)", "TripoSG (best geometry)"]
+                    currentIndex: 0
+                    // Switching to TripoSG snaps the tier picker to fp32 (its
+                    // only geometry tier); the int8 option is meaningless there.
+                    onCurrentIndexChanged: {
+                        if (currentIndex === 1)
+                            mgQualityCombo.currentIndex = 0
+                    }
+                }
+            }
+
+            // Model quality/size tier. TripoSR: fp32 (best/largest) vs int8
+            // (smallest), 1:1 with the MeshGenController quality int. TripoSG:
+            // fp32 ONLY — the quantized 1.5B DiT degrades geometry to blobs
+            // and is no faster on ARM, so the list collapses to the single
+            // real option and locks.
+            Row {
+                spacing: 6
+                property bool isSG: mgBackendCombo.currentIndex === 1
+                Text {
+                    text: "Model"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgQualityCombo
+                    width: 190
+                    // Locked to the single option when TripoSG is active.
+                    enabled: !MeshGenController.busy && !parent.isSG
+                    model: parent.isSG
+                        ? ["fp32 (only option for TripoSG)"]
+                        : ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
                     currentIndex: 0
                 }
             }

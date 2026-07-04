@@ -206,15 +206,21 @@ MeshGenPredictor::Result fail(const QString& msg)
     return r;
 }
 
-// Colour oracle for the geometry-only TripoSG backend (#764): TripoSR's
-// decoder predicts an image-conditioned colour for ANY 3D point — including
-// occluded ones, consistently with the input photo — so it bakes the diffuse
-// for a TripoSG mesh. The mesh (TripoSG frame, +Y-up) is mapped into
-// TripoSR's native reconstruction frame (inverse of MeshGenBuilder's
-// -90°X/+90°Y fix-up) and affine-fitted per axis onto TripoSR's own occupied
-// bounds (coarse density probe) so corresponding body regions line up
-// despite the two models' different normalisations. Best-effort: on any
-// failure the result keeps its clay look and gains a warning.
+// Colour for the geometry-only TripoSG backend (#764), render-and-project +
+// field-fallback:
+//   PRIMARY — the FRONT of the mesh is textured by projecting the ACTUAL
+//   input photo onto it (the mesh is oriented so the camera-facing side is the
+//   image plane; a depth buffer rejects occluded texels). Pixel-accurate on
+//   everything the photo actually shows, with zero model-alignment error.
+//   FALLBACK — genuinely occluded/back texels use TripoSR's image-conditioned
+//   colour FIELD (its decoder predicts plausible colour for ANY 3D point,
+//   consistent with the photo). The TripoSG mesh is mapped into TripoSR's
+//   native frame (inverse of MeshGenBuilder's -90°X/+90°Y fix-up) and
+//   affine-fitted per axis onto TripoSR's occupied bounds so the two line up.
+// Best-effort: on any failure the result keeps its clay look and gains a
+// warning. (Earlier revision baked colour from the field ALONE — the two
+// models' scale mismatch left grey patches + seams on the back, which is why
+// the photo projection is now primary.)
 void colorizeWithTripoSR(MeshGenPredictor::Result& out, const QImage& image,
                          const MeshGenPredictor::Options& opts,
                          const MeshGenPredictor::ProgressFn& progress)
@@ -386,6 +392,109 @@ void colorizeWithTripoSR(MeshGenPredictor::Result& out, const QImage& image,
             t[a] = srMin[a] - s[a] * mMin[a];
         }
 
+        // ---- Front-view PHOTO projection (the primary colour source) --------
+        // The visible front of the mesh is textured from the ACTUAL input
+        // image — pixel-accurate, no model-alignment error (the field only
+        // fills the occluded back). MeshGenBuilder orients TripoSG output so
+        // the camera-facing side is -Z looking toward +Z with +Y up (the image
+        // frame): screen u = (x - minX)/(w), v = (maxY - y)/(h) using the mesh
+        // AABB in its FINAL (upright) frame; depth = z (smaller = nearer).
+        // A per-texel depth buffer rejects points occluded by nearer geometry
+        // so back-facing texels don't steal front pixels through the silhouette.
+        float uMin[3] = {1e30f, 1e30f, 1e30f}, uMax[3] = {-1e30f, -1e30f, -1e30f};
+        for (int v = 0; v < out.vertexCount; ++v)
+            for (int a = 0; a < 3; ++a) {
+                const float c = out.positions[size_t(v) * 3 + a];
+                uMin[a] = std::min(uMin[a], c); uMax[a] = std::max(uMax[a], c);
+            }
+        const float projW = std::max(1e-6f, uMax[0] - uMin[0]);
+        const float projH = std::max(1e-6f, uMax[1] - uMin[1]);
+        // The subject the photo actually shows (background-removed, same
+        // convention the TripoSR encoder ingested): sample this, not the raw
+        // input, so the projected colour is the isolated animal.
+        QImage photo = image.convertToFormat(QImage::Format_ARGB32);
+        {
+            const QString bgModel = BackgroundRemover::ensureModelBlocking();
+            if (!bgModel.isEmpty())
+                photo = BackgroundRemover::removeBackground(image, bgModel, {})
+                            .image.convertToFormat(QImage::Format_ARGB32);
+        }
+        const int pw = photo.width(), ph = photo.height();
+
+        // Depth buffer over the projected footprint: rasterize every triangle,
+        // keep the nearest z per cell. Resolution ≈ texture size so texel-level
+        // occlusion is resolved.
+        const int DB = std::clamp(opts.textureSize, 256, 2048);
+        std::vector<float> depth(size_t(DB) * DB, 1e30f);
+        auto toScreen = [&](const float* p, int& sx, int& sy) {
+            const float u = (p[0] - uMin[0]) / projW;
+            const float vv = (uMax[1] - p[1]) / projH;
+            sx = std::clamp(int(u * (DB - 1) + 0.5f), 0, DB - 1);
+            sy = std::clamp(int(vv * (DB - 1) + 0.5f), 0, DB - 1);
+        };
+        for (size_t f = 0; f + 2 < out.indices.size(); f += 3) {
+            const float* P[3] = {
+                out.positions.data() + size_t(out.indices[f + 0]) * 3,
+                out.positions.data() + size_t(out.indices[f + 1]) * 3,
+                out.positions.data() + size_t(out.indices[f + 2]) * 3};
+            int sx[3], sy[3];
+            for (int k = 0; k < 3; ++k) toScreen(P[k], sx[k], sy[k]);
+            int minx = std::min({sx[0], sx[1], sx[2]});
+            int maxx = std::max({sx[0], sx[1], sx[2]});
+            int miny = std::min({sy[0], sy[1], sy[2]});
+            int maxy = std::max({sy[0], sy[1], sy[2]});
+            const float d0 = float(sx[1] - sx[0]) * (sy[2] - sy[0])
+                           - float(sx[2] - sx[0]) * (sy[1] - sy[0]);
+            if (std::abs(d0) < 1e-6f) continue;
+            for (int yy = miny; yy <= maxy; ++yy)
+                for (int xx = minx; xx <= maxx; ++xx) {
+                    const float w0 = (float(sx[1] - xx) * (sy[2] - yy)
+                                    - float(sx[2] - xx) * (sy[1] - yy)) / d0;
+                    const float w1 = (float(sx[2] - xx) * (sy[0] - yy)
+                                    - float(sx[0] - xx) * (sy[2] - yy)) / d0;
+                    const float w2 = 1.0f - w0 - w1;
+                    if (w0 < -0.01f || w1 < -0.01f || w2 < -0.01f) continue;
+                    const float z = w0 * P[0][2] + w1 * P[1][2] + w2 * P[2][2];
+                    float& slot = depth[size_t(yy) * DB + xx];
+                    if (z < slot) slot = z;
+                }
+        }
+
+        // Combined sampler: photo projection where the point is (a) inside the
+        // silhouette, (b) the FRONT-MOST surface at that pixel (within a slab),
+        // and (c) on an opaque photo pixel; else the TripoSR colour field.
+        const float zSlab = 0.03f * (uMax[2] - uMin[2] + 1e-6f);
+        std::vector<float> mapped;   // scratch: TripoSG frame → TripoSR frame
+        auto combinedSampler =
+            [&](const float* pts, size_t count, float* rgb) -> bool {
+            // Field fallback for the whole chunk first (cheap to overwrite).
+            mapped.resize(count * 3);
+            for (size_t i = 0; i < count; ++i) {
+                float n[3]; toNative(pts + i * 3, n);
+                mapped[i * 3 + 0] = s[0] * n[0] + t[0];
+                mapped[i * 3 + 1] = s[1] * n[1] + t[1];
+                mapped[i * 3 + 2] = s[2] * n[2] + t[2];
+            }
+            if (!query(mapped.data(), count, nullptr, rgb)) return false;
+            // Overwrite front-visible, photo-covered texels with the real image.
+            for (size_t i = 0; i < count; ++i) {
+                const float* p = pts + i * 3;
+                int sx, sy; toScreen(p, sx, sy);
+                if (p[2] > depth[size_t(sy) * DB + sx] + zSlab)
+                    continue;   // occluded by nearer geometry → keep field
+                const float u = (p[0] - uMin[0]) / projW;
+                const float vv = (uMax[1] - p[1]) / projH;
+                const int px = std::clamp(int(u * (pw - 1) + 0.5f), 0, pw - 1);
+                const int py = std::clamp(int(vv * (ph - 1) + 0.5f), 0, ph - 1);
+                const QRgb c = photo.pixel(px, py);
+                if (qAlpha(c) < 128) continue;   // background pixel → keep field
+                rgb[i * 3 + 0] = qRed(c)   / 255.0f;
+                rgb[i * 3 + 1] = qGreen(c) / 255.0f;
+                rgb[i * 3 + 2] = qBlue(c)  / 255.0f;
+            }
+            return true;
+        };
+
         MeshGenBaker::Options bakeOpts;
         bakeOpts.textureSize = opts.textureSize;
         bakeOpts.chunkPoints = chunk;
@@ -393,21 +502,8 @@ void colorizeWithTripoSR(MeshGenPredictor::Result& out, const QImage& image,
             bakeOpts.progress = [&](int done, int total) {
                 return progress(Stage::Bake, done, total);
             };
-        std::vector<float> mapped;   // scratch: TripoSG frame → TripoSR frame
         const MeshGenBaker::Result baked = MeshGenBaker::bake(
-            out.positions, out.indices,
-            [&](const float* pts, size_t count, float* rgb) -> bool {
-                mapped.resize(count * 3);
-                for (size_t i = 0; i < count; ++i) {
-                    float n[3];
-                    toNative(pts + i * 3, n);
-                    mapped[i * 3 + 0] = s[0] * n[0] + t[0];
-                    mapped[i * 3 + 1] = s[1] * n[1] + t[1];
-                    mapped[i * 3 + 2] = s[2] * n[2] + t[2];
-                }
-                return query(mapped.data(), count, nullptr, rgb);
-            },
-            bakeOpts);
+            out.positions, out.indices, combinedSampler, bakeOpts);
         if (baked.ok) {
             out.positions     = baked.positions;
             out.indices       = baked.indices;
