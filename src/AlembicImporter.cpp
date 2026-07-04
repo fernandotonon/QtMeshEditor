@@ -62,6 +62,13 @@ Ogre::SceneNode* importToScene(const QString&, QString* error)
     return nullptr;
 }
 
+InfoResult readInfo(const QString&)
+{
+    InfoResult r;
+    r.error = QStringLiteral("Alembic info needs a build with -DENABLE_ALEMBIC.");
+    return r;
+}
+
 #else  // ENABLE_ALEMBIC
 
 using namespace Alembic::AbcGeom;
@@ -185,6 +192,60 @@ ReadResult readFrameSet(const QString& path, int maxFrames)
     } catch (const std::exception& e) {
         r.error = QStringLiteral("Alembic read error: %1").arg(QString::fromUtf8(e.what()));
         r.frames = {};
+        return r;
+    }
+}
+
+InfoResult readInfo(const QString& path)
+{
+    InfoResult r;
+    QFileInfo fi(path);
+    if (!fi.exists()) {
+        r.error = QStringLiteral("Alembic file not found: %1").arg(path);
+        return r;
+    }
+    try {
+        Alembic::AbcCoreFactory::IFactory factory;
+        IArchive archive = factory.getArchive(path.toStdString());
+        if (!archive.valid()) {
+            r.error = QStringLiteral("Not a readable Alembic archive: %1").arg(path);
+            return r;
+        }
+        IPolyMesh mesh = findFirstPolyMesh(archive.getTop());
+        if (!mesh.valid()) {
+            r.error = QStringLiteral("No polygon mesh found in %1").arg(fi.fileName());
+            return r;
+        }
+        IPolyMeshSchema& schema = mesh.getSchema();
+        const size_t numSamples = schema.getNumSamples();
+        Alembic::AbcCoreAbstract::TimeSamplingPtr ts = schema.getTimeSampling();
+        IPolyMeshSchema::Sample first;
+        schema.get(first, ISampleSelector(static_cast<index_t>(0)));
+
+        r.meshName    = QString::fromStdString(mesh.getName());
+        r.frameCount  = static_cast<int>(numSamples);
+        r.vertexCount = first.getPositions() ? static_cast<int>(first.getPositions()->size()) : 0;
+        // Sum triangles across n-gon faces (fan triangulation = n-2 per face).
+        int tris = 0;
+        if (auto fc = first.getFaceCounts())
+            for (size_t f = 0; f < fc->size(); ++f)
+                tris += std::max(0, (*fc)[f] - 2);
+        r.faceCount = tris;
+        const double dt = (numSamples > 1)
+            ? (ts->getSampleTime(1) - ts->getSampleTime(0)) : (1.0 / 30.0);
+        r.fps = (dt > 1e-9) ? static_cast<int>(std::lround(1.0 / dt)) : 30;
+        if (r.fps <= 0) r.fps = 30;
+        r.durationSec = (numSamples > 1)
+            ? static_cast<float>(ts->getSampleTime(numSamples - 1) - ts->getSampleTime(0))
+            : 0.0f;
+        r.storage = (VertexAnimationManager::sampleHeuristic(r.frameCount)
+                     == VertexAnimationManager::Storage::Poses) ? "poses" : "stream";
+        r.ok = (r.vertexCount > 0 && r.frameCount > 0);
+        if (!r.ok)
+            r.error = QStringLiteral("Alembic mesh '%1' has no usable samples").arg(r.meshName);
+        return r;
+    } catch (const std::exception& e) {
+        r.error = QStringLiteral("Alembic info error: %1").arg(QString::fromUtf8(e.what()));
         return r;
     }
 }

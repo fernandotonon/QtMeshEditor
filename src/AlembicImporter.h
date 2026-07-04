@@ -45,6 +45,24 @@ struct ReadResult {
     QString meshName;                          ///< source IPolyMesh name (for the clip)
 };
 
+/// Cheap metadata about an .abc cache WITHOUT decoding every frame's vertex
+/// positions (reads the schema header + first sample only). Powers
+/// `qtmesh anim <file>.abc --info` and the MCP info surface.
+struct InfoResult {
+    bool ok = false;
+    QString error;
+    QString meshName;
+    int frameCount = 0;
+    int vertexCount = 0;
+    int faceCount = 0;
+    int fps = 30;
+    float durationSec = 0.0f;
+    QString storage;   ///< "poses" or "stream" per VertexAnimationManager heuristic
+};
+
+/// Read an .abc's cache metadata without decoding all frames.
+InfoResult readInfo(const QString& path);
+
 /// Decode `path`'s first animated polymesh into a FrameSet. Pure data. The
 /// topology (index buffer) is taken from the first sample; positions are read
 /// per time-sample. A mesh whose topology changes between frames (variable
