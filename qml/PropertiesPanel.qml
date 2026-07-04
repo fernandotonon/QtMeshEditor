@@ -676,12 +676,16 @@ Rectangle {
             // ---- Animations ----
             // Shown for any skeleton-bearing selection (not just clips) so the
             // "Generate from text" control is available on a freshly-rigged mesh
-            // (e.g. a UniRig auto-rig with no animations yet).
+            // (e.g. a UniRig auto-rig with no animations yet). ALSO shown when
+            // the selection carries mesh/vertex animations (morph or Alembic
+            // vertex caches, #518/#519) even with no skeleton — otherwise those
+            // clips have no play/enable/loop controls (the "no play button" bug).
             CollapsibleSection {
                 title: "Animations"
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.AnimationMode,
-                    PropertiesPanelController.hasSkeletonSelection)
+                    PropertiesPanelController.hasSkeletonSelection
+                        || PropertiesPanelController.hasAnimations)
 
                 Component.onCompleted: content = animationComponent
             }
@@ -7103,17 +7107,22 @@ Rectangle {
                         }
                     }
 
-                    Row {
-                        spacing: 4
+                    // RowLayout (not a plain Row with a magic-number spacer):
+                    // the old `Item { width: parent.width - 320 }` went negative
+                    // on a narrow Inspector, overlapping the title with the
+                    // buttons. Here the title takes the flexible space and
+                    // elides; the buttons keep their intrinsic size at the right.
+                    RowLayout {
                         width: parent.width
+                        spacing: 4
                         Text {
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
                             text: "Morph Targets (" + morphCol.targetCount + ")"
                             color: PropertiesPanelController.textColor
                             font.pixelSize: 11
                             font.bold: true
-                            anchors.verticalCenter: parent.verticalCenter
                         }
-                        Item { width: parent.width - 320; height: 1 }
                         // Add from current edit — captures the user's current
                         // edit-mode geometry minus the bind-pose baseline as
                         // a new morph target. Disabled (greyed out, forbidden
@@ -7124,13 +7133,14 @@ Rectangle {
                         Rectangle {
                             id: addBtn
                             property bool canAddFromEdit: EditModeController.editModeActive
-                            width: 56; height: 20; radius: 3
+                            Layout.preferredWidth: 56
+                            Layout.preferredHeight: 20
+                            radius: 3
                             opacity: canAddFromEdit ? 1.0 : 0.45
                             color: addMa.containsMouse && canAddFromEdit
                                    ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
                                    : PropertiesPanelController.controlBgColor
                             border.color: PropertiesPanelController.borderColor
-                            anchors.verticalCenter: parent.verticalCenter
                             Text {
                                 anchors.centerIn: parent
                                 text: "+ Add…"
@@ -7154,12 +7164,13 @@ Rectangle {
                         }
                         // Reset all: walks every target and sets weight to 0.
                         Rectangle {
-                            width: 60; height: 20; radius: 3
+                            Layout.preferredWidth: 60
+                            Layout.preferredHeight: 20
+                            radius: 3
                             color: resetMa.containsMouse
                                    ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
                                    : PropertiesPanelController.controlBgColor
                             border.color: PropertiesPanelController.borderColor
-                            anchors.verticalCenter: parent.verticalCenter
                             Text {
                                 anchors.centerIn: parent
                                 text: "Reset all"

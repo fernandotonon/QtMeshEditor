@@ -10,6 +10,7 @@ The MIT License
 
 #include "MorphCommands.h"
 
+#include "../PropertiesPanelController.h"
 #include "../SentryReporter.h"
 
 #include <OgreAnimation.h>
@@ -50,6 +51,24 @@ void removePosesByName(Ogre::Mesh* mesh, const QString& name, Ogre::Entity* enti
 {
     if (!mesh) return;
     const std::string sn = name.toStdString();
+
+    // STOP PLAYBACK first. The render frame loop (MainWindow::
+    // frameRenderingQueued) iterates the entity's AnimationStateSet and reads
+    // each VAT_POSE track's pose references every frame. Removing a pose /
+    // animation / state here while a clip is playing frees data the loop is
+    // mid-read of → crash (reproduced: play a morph/vertex clip, delete a
+    // target). deleteAnimation/renameAnimation already stop playback before
+    // mutating; do the same at this shared mutation point so every entry
+    // (delete + rename redo/undo) is safe. Also disable the state before
+    // removing it so no dangling enabled state survives the refresh.
+    if (auto* ppc = PropertiesPanelController::instance())
+        ppc->setPlaying(false);
+    if (entity) {
+        if (auto* states = entity->getAllAnimationStates()) {
+            if (states->hasAnimationState(sn))
+                states->getAnimationState(sn)->setEnabled(false);
+        }
+    }
 
     // removePose(name) only removes the *first* pose with that name —
     // when an importer pose has the same name across multiple submeshes
