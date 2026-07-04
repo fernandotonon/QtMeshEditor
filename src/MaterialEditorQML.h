@@ -606,7 +606,8 @@ public slots:
     Q_INVOKABLE void generateMeshTextureMultiView(const QString &prompt,
                                                   int width = 0, int height = 0,
                                                   double controlStrength = 0.9,
-                                                  const QStringList &views = {});
+                                                  const QStringList &views = {},
+                                                  const QString &frontPhotoPath = {});
     // True when a skinned/static mesh is selected — drives the
     // "use selected mesh" checkbox enabled state.
     Q_INVOKABLE bool hasSelectedMesh() const;

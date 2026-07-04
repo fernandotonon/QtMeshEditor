@@ -4533,6 +4533,11 @@ struct MaterialEditorQML::MultiViewBakeState {
     std::vector<MeshDepthRenderer::View> views;   // resolved camera views
     std::vector<MultiViewTextureBaker::View> baked; // accumulated image+matrices
     size_t current = 0;                            // index of the view being generated
+    // Optional: the real input photo, pinned as the FRONT view instead of an
+    // SD-generated one. For TripoSG (geometry-only) the front is textured from
+    // the actual image (accurate) and only the OTHER views are SD-generated
+    // (plausible, depth-conditioned). Empty → every view is SD-generated.
+    QImage  frontPhoto;                            // loaded, non-null when pinned
 };
 
 namespace {
@@ -4551,9 +4556,12 @@ MeshDepthRenderer::View resolveDepthView(const QString& name)
 void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
                                                      int width, int height,
                                                      double controlStrength,
-                                                     const QStringList &views)
+                                                     const QStringList &views,
+                                                     const QString &frontPhotoPath)
 {
-    if (prompt.isEmpty()) {
+    // A pinned front photo can carry the whole "what to draw" signal, so the
+    // prompt is only required when there's no photo to anchor the front.
+    if (prompt.isEmpty() && frontPhotoPath.isEmpty()) {
         emit sdGenerationError("Please enter a texture prompt");
         return;
     }
@@ -4578,7 +4586,13 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
     // LCOV_EXCL_START — requires a loaded SD model + a mesh
     auto st = std::make_unique<MultiViewBakeState>();
     st->entityName = QString::fromStdString(entity->getName());
-    st->prompt = prompt;
+    // The other (SD-generated) views still need a text prompt. When only a
+    // photo was supplied, fall back to a neutral texture prompt so the back
+    // is plausibly consistent rather than blank.
+    st->prompt = prompt.isEmpty()
+        ? QStringLiteral("high quality seamless PBR texture, consistent colours, "
+                         "matching the subject, even lighting")
+        : prompt;
     st->width = width > 0 ? width : 512;
     st->height = height > 0 ? height : 512;
     st->controlStrength = static_cast<float>(std::clamp(controlStrength, 0.0, 1.0));
@@ -4594,6 +4608,19 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
         ? QStringList{ QStringLiteral("front"), QStringLiteral("back") } : views;
     for (const QString& vn : viewNames)
         st->views.push_back(resolveDepthView(vn));
+
+    // Pin the input photo as the FRONT view if supplied (TripoSG path): that
+    // view is textured from the real image instead of an SD generation, so the
+    // front is photo-accurate while the other views stay SD-generated. Loaded
+    // here (main thread); startNextMultiViewGeneration skips SD for view 0.
+    if (!frontPhotoPath.isEmpty()) {
+        QImage p(frontPhotoPath);
+        if (!p.isNull())
+            st->frontPhoto = p.convertToFormat(QImage::Format_RGB888);
+        else
+            emit sdGenerationNotice(
+                "Front photo could not be loaded — generating that view too.");
+    }
 
     if (st->controlNetPath.isEmpty()) {
         emit sdGenerationNotice(
@@ -4654,6 +4681,25 @@ void MaterialEditorQML::startNextMultiViewGeneration()
     MultiViewTextureBaker::View bv;
     bv.viewProj = rr.projMatrix * rr.viewMatrix;
     bv.camDirection = rr.camDirection;
+
+    // Pinned front photo (view 0, TripoSG path): fill the view image from the
+    // real photo NOW — no SD call — and advance. The photo is fit to the same
+    // framed footprint the depth render used, so it projects through the same
+    // camera matrices the baker will use. This is the Metal-safe substitute
+    // for img2img: the front is the actual image, not a generation.
+    if (!s.frontPhoto.isNull() && s.current == 0) {
+        bv.image = s.frontPhoto.scaled(rr.depth.width(), rr.depth.height(),
+                                       Qt::IgnoreAspectRatio,
+                                       Qt::SmoothTransformation);
+        s.baked.push_back(bv);
+        ++s.current;
+        if (s.current >= s.views.size())
+            finishMultiViewBake();
+        else
+            startNextMultiViewGeneration();
+        return;
+    }
+
     s.baked.push_back(bv);  // image filled on completion
 
     m_sdGenerationProgress = 0.0f;
