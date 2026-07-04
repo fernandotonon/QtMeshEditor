@@ -326,12 +326,15 @@ void MaterialEditorQML::createNewMaterial(const QString &materialName)
 //   albedo    → modulates with the per-vertex diffuse colour (textured base)
 //   ao        → modulates the per-vertex diffuse (darkens lit base)
 //   emissive  → adds on top of the running colour (self-illumination)
-//   metallic  → ADD_SIGNED with running colour: brightens / tints toward
-//               metal in textured regions (FFP approximation)
-//   roughness → MODULATE_X2 with running colour: brightens smooth (low-
-//               roughness) regions to fake spec gloss; FFP approximation
+//   metallic  → inert (marked non-FFP, passes current colour through). It's
+//               a BRDF specular-lobe input, not a colour channel — the old
+//               ADD_SIGNED tinted the diffuse and darkened the surface.
+//   roughness → inert, same rationale (the old MODULATE_X2 multiplied a
+//               mid-grey map into the colour → "PBR looks in shadow").
 //   normal_map → marked non-FFP; RTShaderHelper::applyNormalMap wires
 //                it through SRS_NORMALMAP elsewhere when a texture is set
+// The real metal-roughness contribution comes from applyPbrIfTagged's
+// Cook-Torrance SRS when the material is PBR-tagged and IBL is present.
 //
 // AO/metallic/roughness use LBS_DIFFUSE (per-vertex diffuse from
 // lighting+material) instead of LBS_CURRENT so the result doesn't
@@ -4302,12 +4305,36 @@ void MaterialEditorQML::generatePbrFromDiffuse()
         bindSlot("roughness",  res.roughnessPath);
         RTShaderHelper::wirePbrSlotsForFFP(m_ogreMaterial.get());
         // wirePbrSlotsForFFP only marks the normal unit non-FFP; it does NOT
-        // make RTSS sample it. applyNormalMap wires the SRS_NORMALMAP (or
-        // Cook-Torrance) sub-render-state so the normal map actually perturbs
-        // viewport shading — without this the bind is invisible on the mesh.
+        // make RTSS sample it. The RTSS SRS_NORMALMAP wiring needs per-vertex
+        // TANGENTS — without them the tangent-space basis is degenerate, N·L
+        // collapses to ~0, and the surface renders unlit/dark ("lights off on
+        // the model"). applyNormalMapsToEntity builds tangents (when UVs
+        // exist) FIRST, then wires SRS_NORMALMAP — the same routine the mesh
+        // importer uses, so live PBR generation lights identically to an
+        // export→reload. Run it on every scene entity that uses this material.
         if (!res.normalPath.isEmpty()) {
-            RTShaderHelper::applyNormalMap(
-                m_ogreMaterial, QFileInfo(res.normalPath).fileName().toStdString());
+            const std::string matName = m_ogreMaterial->getName();
+            bool wiredViaEntity = false;
+            if (auto* mgr = Manager::getSingletonPtr()) {
+                for (Ogre::Entity* ent : mgr->getEntities()) {
+                    if (!ent || ent->getMovableType() != "Entity") continue;
+                    bool uses = false;
+                    for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s) {
+                        const auto sm = ent->getSubEntity(s)->getMaterial();
+                        if (sm && sm->getName() == matName) { uses = true; break; }
+                    }
+                    if (uses) {
+                        MeshImporterExporter::applyNormalMapsToEntity(ent);
+                        wiredViaEntity = true;
+                    }
+                }
+            }
+            // Fallback (no entity found — e.g. editing an unbound material):
+            // wire the SRS directly. Tangents may be missing, but this at least
+            // preserves the previous behaviour.
+            if (!wiredViaEntity)
+                RTShaderHelper::applyNormalMap(
+                    m_ogreMaterial, QFileInfo(res.normalPath).fileName().toStdString());
         }
         m_ogreMaterial->compile();
         // The bind above may have CREATED new texture units (normal_map /
