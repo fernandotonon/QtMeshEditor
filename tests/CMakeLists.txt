@@ -132,6 +132,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PoseLibrary.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/PoseLibraryCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexAnimationManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AlembicImporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/UVEditCommand.cpp
@@ -487,6 +488,9 @@ if(BUILD_TESTS)
     # the imported target on the link line too.
     if(ENABLE_ONNX)
         list(APPEND TEST_SUPPORT_LIBRARIES qtmesh_onnx)
+    endif()
+    if(ENABLE_ALEMBIC)
+        list(APPEND TEST_SUPPORT_LIBRARIES qtmesh_alembic)
     endif()
 
     add_library(qtmesh_test_common STATIC ${TEST_SRC_FILES} ${TEST_HEADER_FILES})

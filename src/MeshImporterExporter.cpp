@@ -27,6 +27,7 @@ THE SOFTWARE.
 */
 
 #include "MeshImporterExporter.h"
+#include "AlembicImporter.h"
 #include "FeedbackReportHelper.h"
 #include <assimp/Importer.hpp>
 #include <assimp/Exporter.hpp>
@@ -2096,7 +2097,23 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             Ogre::SceneNode *sn;
             const Ogre::Entity *en;
 
-            if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
+            if(!file.suffix().compare("abc",Qt::CaseInsensitive))
+            {
+                // Alembic vertex-animation cache (#519 Slice B). Delegates to
+                // the guarded reader; a build without -DENABLE_ALEMBIC returns
+                // a clear error rather than falling through to Assimp (which
+                // can't read .abc). The importer builds the base mesh + a
+                // VAT_POSE clip and creates the entity itself.
+                QString abcErr;
+                Ogre::SceneNode* abcNode =
+                    AlembicImporter::importToScene(file.absoluteFilePath(), &abcErr);
+                if (!abcNode) {
+                    Ogre::LogManager::getSingleton().logError(
+                        "Alembic import failed: " + abcErr.toStdString());
+                }
+                continue;
+            }
+            else if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
             {
                 tryLoadSidecarMaterialScript(file);
                 const Ogre::String meshResName = file.fileName().toStdString();

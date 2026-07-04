@@ -1066,7 +1066,8 @@ jobs:
             -DBUILD_QT_MESH_EDITOR=OFF \
             -DENABLE_SENTRY=OFF \
             -DENABLE_PS1_RIP=ON \
-            -DENABLE_ONNX=ON
+            -DENABLE_ONNX=ON \
+            -DENABLE_ALEMBIC=ON
 
     - name: Run build-wrapper
       env:
