@@ -5984,37 +5984,42 @@ QJsonObject MCPServer::toolImportAlembic(const QJsonObject &args)
     SentryReporter::addBreadcrumb("file.import",
         QString("Importing Alembic cache %1").arg(filePath));
 
-    QString err;
-    Ogre::SceneNode* node = AlembicImporter::importToScene(filePath, &err);
-    if (!node)
-        return makeErrorResult(
-            err.isEmpty() ? QString("Error: failed to import %1").arg(filePath) : err);
+    // importToScene creates scene nodes / entities, which can throw
+    // Ogre::Exception — run through runOgreOp so a failure returns a clean MCP
+    // error instead of taking down the server (matches the other Ogre tools).
+    return runOgreOp([&]() -> QJsonObject {
+        QString err;
+        Ogre::SceneNode* node = AlembicImporter::importToScene(filePath, &err);
+        if (!node)
+            return makeErrorResult(
+                err.isEmpty() ? QString("Error: failed to import %1").arg(filePath) : err);
 
-    // Report the node + the vertex clips the import produced so the agent can
-    // immediately drive play_vertex_animation.
-    QJsonObject content;
-    content["ok"] = true;
-    content["file"] = filePath;
-    content["node"] = QString::fromStdString(node->getName());
+        // Report the node + the vertex clips the import produced so the agent
+        // can immediately drive play_vertex_animation.
+        QJsonObject content;
+        content["ok"] = true;
+        content["file"] = filePath;
+        content["node"] = QString::fromStdString(node->getName());
 
-    QStringList entities, clips;
-    for (unsigned short i = 0; i < node->numAttachedObjects(); ++i) {
-        Ogre::MovableObject* obj = node->getAttachedObject(i);
-        if (!obj || obj->getMovableType() != "Entity") continue;
-        auto* ent = static_cast<Ogre::Entity*>(obj);
-        entities.append(QString::fromStdString(ent->getName()));
-        if (auto* m = VertexAnimationManager::instance()) {
-            for (const QString& c : m->vertexClipsFor(ent))
-                if (!clips.contains(c)) clips.append(c);
+        QStringList entities, clips;
+        for (unsigned short i = 0; i < node->numAttachedObjects(); ++i) {
+            Ogre::MovableObject* obj = node->getAttachedObject(i);
+            if (!obj || obj->getMovableType() != "Entity") continue;
+            auto* ent = static_cast<Ogre::Entity*>(obj);
+            entities.append(QString::fromStdString(ent->getName()));
+            if (auto* m = VertexAnimationManager::instance()) {
+                for (const QString& c : m->vertexClipsFor(ent))
+                    if (!clips.contains(c)) clips.append(c);
+            }
         }
-    }
-    QJsonArray entArr, clipArr;
-    for (const QString& e : entities) entArr.append(e);
-    for (const QString& c : clips) clipArr.append(c);
-    content["entities"] = entArr;
-    content["vertexClips"] = clipArr;
-    return makeSuccessResult(
-        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+        QJsonArray entArr, clipArr;
+        for (const QString& e : entities) entArr.append(e);
+        for (const QString& c : clips) clipArr.append(c);
+        content["entities"] = entArr;
+        content["vertexClips"] = clipArr;
+        return makeSuccessResult(
+            QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+    });
 }
 
 QJsonObject MCPServer::toolPlayVertexAnimation(const QJsonObject &args)

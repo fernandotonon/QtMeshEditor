@@ -220,6 +220,13 @@ InfoResult readInfo(const QString& path)
         }
         IPolyMeshSchema& schema = mesh.getSchema();
         const size_t numSamples = schema.getNumSamples();
+        // Accessing sample 0 on a zero-sample schema is UB in the Alembic API,
+        // so bail before schema.get() (mirrors readFrameSet's guard).
+        if (numSamples == 0) {
+            r.error = QStringLiteral("Alembic mesh '%1' has no samples")
+                          .arg(QString::fromStdString(mesh.getName()));
+            return r;
+        }
         Alembic::AbcCoreAbstract::TimeSamplingPtr ts = schema.getTimeSampling();
         IPolyMeshSchema::Sample first;
         schema.get(first, ISampleSelector(static_cast<index_t>(0)));

@@ -2159,6 +2159,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     // decoding all frames. Only meaningful for .abc; other formats fall through
     // to the normal anim modes.
     if (infoMode && QFileInfo(filePath).suffix().compare("abc", Qt::CaseInsensitive) == 0) {
+        SentryReporter::addBreadcrumb("cli.anim",
+            QString("Anim info .abc %1").arg(QFileInfo(filePath).fileName()));
         if (!AlembicImporter::available()) {
             err() << "Error: Alembic support not compiled in (rebuild with "
                      "-DENABLE_ALEMBIC=ON)." << Qt::endl;
