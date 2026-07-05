@@ -146,6 +146,7 @@ ImageTo3D/TripoSGPredictor.cpp
 ImageTo3D/MeshGenBuilder.cpp
 ImageTo3D/MeshGenController.cpp
 ImageTo3D/BackgroundRemover.cpp
+ImageTo3D/ImageCaptioner.cpp
 PbrMapSynth.cpp
 TextureUpscaler.cpp
 AIAssistManager.cpp
@@ -640,7 +641,8 @@ endif()
 
 # Link llama.cpp if enabled
 if(ENABLE_LOCAL_LLM)
-    target_link_libraries(${CMAKE_PROJECT_NAME} llama ggml)
+    # mtmd = multimodal (image captioning via SmolVLM, #764 describe-then-generate)
+    target_link_libraries(${CMAKE_PROJECT_NAME} llama ggml mtmd)
     if(APPLE)
         target_link_libraries(${CMAKE_PROJECT_NAME}
             "-framework Metal"
@@ -780,9 +782,9 @@ if(BUILD_TESTS)
         target_link_libraries(UnitTests advapi32)
     endif()
 
-    # Link llama.cpp for tests if enabled
+    # Link llama.cpp for tests if enabled (mtmd for the captioner)
     if(ENABLE_LOCAL_LLM)
-        target_link_libraries(UnitTests llama ggml)
+        target_link_libraries(UnitTests llama ggml mtmd)
     endif()
 
     # Link stable-diffusion.cpp for tests if enabled

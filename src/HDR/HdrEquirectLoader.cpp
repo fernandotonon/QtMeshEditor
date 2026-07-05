@@ -12,6 +12,10 @@
 #include <cstring>
 
 #define STB_IMAGE_IMPLEMENTATION
+// Make our stb_image symbols TU-local: llama.cpp's mtmd library bundles its
+// own stb_image, and without this the two copies collide at link time
+// (duplicate _stbi_* symbols) once mtmd is linked for image captioning (#764).
+#define STB_IMAGE_STATIC
 #define STBI_ONLY_HDR
 #define STBI_NO_BMP
 #define STBI_NO_PNG
