@@ -59,6 +59,7 @@ THE SOFTWARE.
 #include "OgreXML/pugixml.hpp"
 
 #include "AnimationMerger.h"
+#include "MorphAnimationManager.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -909,6 +910,121 @@ static aiAnimation* buildAiAnimation(Ogre::Animation* ogreAnim, const std::strin
     return anim;
 }
 
+// Build a morph-weight aiAnimation from the mesh's "MorphAnim" clip so an
+// authored blend-shape weight-over-time animation round-trips to glTF.
+//
+// Ogre stores morph weight animation on ONE mesh Animation named
+// `MorphAnimationManager::kWeightClipName` ("MorphAnim"). That clip has one
+// VAT_POSE VertexAnimationTrack per submesh target handle (handle 0 = shared
+// vertex data, handle si+1 = submesh si's dedicated vertex data). Each
+// VertexPoseKeyFrame on a track carries a list of {poseIndex, influence}
+// references — influence is the target's weight at that keyframe time; poses
+// not referenced at a time are weight 0.
+//
+// Assimp models this as an aiAnimation whose mMorphMeshChannels holds one
+// aiMeshMorphAnim per animated NODE/mesh. Each aiMeshMorphAnim's mName is the
+// NODE the target mesh attaches to, and its mKeys are per-distinct-time
+// aiMeshMorphKey entries. A key's parallel mValues/mWeights arrays are indexed
+// by anim-mesh index (0..mNumAnimMeshes-1 == aiMesh::mAnimMeshes[i]), so we map
+// each pose (by name) to its anim-mesh slot on that mesh and scatter the
+// keyframe influences into the matching slot (0 elsewhere).
+//
+// `new` allocations cross the Assimp C-API ownership boundary — aiAnimation's
+// dtor frees mMorphMeshChannels and each channel's mKeys (and the per-key
+// mValues/mWeights via aiMeshMorphKey's dtor) — so raw new[] matches every
+// other aiScene field in this file (no double-free in the manual
+// scene->mAnimations cleanup paths, which just delete each aiAnimation).
+//
+// Returns nullptr (emitting nothing) when there is no weight clip or no
+// submesh carries morph targets, so non-morph meshes are entirely unaffected.
+static aiAnimation* buildMorphWeightAiAnimation(const aiScene* scene,
+                                                const Ogre::MeshPtr& mesh,
+                                                const std::string& meshNodeName)
+{
+    const std::string clip = MorphAnimationManager::kWeightClipName;
+    if (!mesh->hasAnimation(clip)) return nullptr;
+    Ogre::Animation* weightClip = mesh->getAnimation(clip);
+    if (!weightClip) return nullptr;
+
+    const unsigned int numSub = mesh->getNumSubMeshes();
+    std::vector<aiMeshMorphAnim*> morphChannels;
+
+    // One channel per submesh that actually got morph targets (mAnimMeshes).
+    // All submeshes attach to the single node `meshNodeName` in buildAiScene,
+    // so every channel carries that node name; the anim-mesh index space is
+    // per-mesh, which is exactly what a per-mesh channel expresses.
+    for (unsigned int si = 0; si < numSub; ++si)
+    {
+        aiMesh* aiM = scene->mMeshes[si];
+        if (!aiM || aiM->mNumAnimMeshes == 0) continue;
+
+        // The weight track for this submesh lives under its target handle.
+        const Ogre::SubMesh* subMesh = mesh->getSubMesh(si);
+        const unsigned short targetHandle = subMesh->useSharedVertices
+            ? 0
+            : static_cast<unsigned short>(si + 1);
+        if (!weightClip->hasVertexTrack(targetHandle)) continue;
+        Ogre::VertexAnimationTrack* track = weightClip->getVertexTrack(targetHandle);
+        if (!track || track->getAnimationType() != Ogre::VAT_POSE) continue;
+
+        // Map pose name -> anim-mesh slot on this mesh (mAnimMeshes[i].mName is
+        // the Ogre pose name; see attachMorphTargetsToAiMesh).
+        std::map<std::string, unsigned int, std::less<>> poseNameToSlot;
+        for (unsigned int i = 0; i < aiM->mNumAnimMeshes; ++i)
+            if (aiM->mAnimMeshes[i])
+                poseNameToSlot[aiM->mAnimMeshes[i]->mName.C_Str()] = i;
+
+        const auto numKf = track->getNumKeyFrames();
+        if (numKf == 0) continue;
+
+        auto* channel = new aiMeshMorphAnim();  // NOSONAR — Assimp owns
+        channel->mName = aiString(meshNodeName);
+        channel->mNumKeys = static_cast<unsigned int>(numKf);
+        channel->mKeys = new aiMeshMorphKey[numKf];  // NOSONAR — Assimp owns
+
+        const Ogre::PoseList& poseList = mesh->getPoseList();
+        for (unsigned short ki = 0; ki < numKf; ++ki)
+        {
+            auto* kf = track->getVertexPoseKeyFrame(ki);
+            aiMeshMorphKey& key = channel->mKeys[ki];
+            key.mTime = kf->getTime();  // seconds; parent mTicksPerSecond = 1.0
+            // Parallel arrays over ALL anim-meshes on this mesh: mValues[i] is
+            // the anim-mesh index, mWeights[i] its weight at mTime (default 0).
+            key.mNumValuesAndWeights = aiM->mNumAnimMeshes;
+            key.mValues = new unsigned int[aiM->mNumAnimMeshes];   // NOSONAR — Assimp owns
+            key.mWeights = new double[aiM->mNumAnimMeshes];        // NOSONAR — Assimp owns
+            for (unsigned int i = 0; i < aiM->mNumAnimMeshes; ++i)
+            {
+                key.mValues[i] = i;
+                key.mWeights[i] = 0.0;
+            }
+            // Scatter each referenced pose's influence into its anim-mesh slot.
+            for (const auto& ref : kf->getPoseReferences())
+            {
+                if (ref.poseIndex >= poseList.size()) continue;
+                const Ogre::Pose* p = poseList[ref.poseIndex];
+                if (!p) continue;
+                auto it = poseNameToSlot.find(p->getName());
+                if (it != poseNameToSlot.end())
+                    key.mWeights[it->second] = static_cast<double>(ref.influence);
+            }
+        }
+        morphChannels.push_back(channel);
+    }
+
+    if (morphChannels.empty()) return nullptr;
+
+    auto* anim = new aiAnimation();  // NOSONAR — Assimp owns
+    anim->mName = aiString(std::string(MorphAnimationManager::kWeightClipName));
+    anim->mTicksPerSecond = 1.0;  // times are seconds, matching buildAiAnimation
+    anim->mDuration = weightClip->getLength();
+    anim->mNumMorphMeshChannels = static_cast<unsigned int>(morphChannels.size());
+    anim->mMorphMeshChannels = new aiMeshMorphAnim*[anim->mNumMorphMeshChannels];  // NOSONAR — Assimp owns
+    for (unsigned int ci = 0; ci < anim->mNumMorphMeshChannels; ++ci)
+        anim->mMorphMeshChannels[ci] = morphChannels[ci];
+    return anim;
+}
+
 // Build an aiScene directly from an Ogre Entity, bypassing the XML round-trip
 static aiScene* buildAiScene(const Ogre::Entity* entity)
 {
@@ -1014,12 +1130,33 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
     }
 
     // --- Animations ---
+    // Skeletal animations first (unchanged), then optionally one morph-weight
+    // animation from the mesh's "MorphAnim" clip. Both are gathered into a
+    // vector so the mAnimations array is sized to hold exactly what exists —
+    // this covers the no-skeleton + morph-only case (mAnimations was previously
+    // left null) and the has-skeleton + morph case (grow past the skeleton
+    // count) without special-casing either.
+    std::vector<aiAnimation*> animations;
     if (hasSkeleton && skeleton->getNumAnimations() > 0)
     {
-        scene->mNumAnimations = skeleton->getNumAnimations();
-        scene->mAnimations = new aiAnimation*[scene->mNumAnimations];
         for (unsigned short ai = 0; ai < skeleton->getNumAnimations(); ++ai)
-            scene->mAnimations[ai] = buildAiAnimation(skeleton->getAnimation(ai));
+            animations.push_back(buildAiAnimation(skeleton->getAnimation(ai)));
+    }
+
+    // The node every submesh attaches to (see node wiring above): the dedicated
+    // "<name>_mesh" node when there's a skeleton, else the root node itself.
+    const std::string meshNodeName = hasSkeleton
+        ? std::string(entity->getName()) + "_mesh"
+        : std::string(entity->getName());
+    if (aiAnimation* morphAnim = buildMorphWeightAiAnimation(scene, mesh, meshNodeName))
+        animations.push_back(morphAnim);
+
+    if (!animations.empty())
+    {
+        scene->mNumAnimations = static_cast<unsigned int>(animations.size());
+        scene->mAnimations = new aiAnimation*[scene->mNumAnimations];  // NOSONAR — Assimp owns
+        for (unsigned int ai = 0; ai < scene->mNumAnimations; ++ai)
+            scene->mAnimations[ai] = animations[ai];
     }
 
     return scene;

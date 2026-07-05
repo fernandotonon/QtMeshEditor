@@ -7163,16 +7163,52 @@ Rectangle {
                         font.pixelSize: 11
                         font.bold: true
                     }
-                    // Add from current edit — captures the user's current
-                    // edit-mode geometry minus the bind-pose baseline as
-                    // a new morph target. Disabled (greyed out, forbidden
-                    // cursor) when outside edit mode because
-                    // EditableSubMesh::originalPositions is only
-                    // populated by EditModeController and the C++ method
-                    // would return false anyway.
+                    // Sculpt toggle — begins/ends a non-destructive morph
+                    // sculpt session. While active, vertex edits are treated as
+                    // shaping a new target and the BASE mesh is restored when
+                    // the session ends (Blender shape-key behaviour). This is
+                    // the entry point: you can't "+ Add" without first sculpting.
+                    Rectangle {
+                        id: sculptBtn
+                        property bool active: EditModeController.morphSculptActive
+                        Layout.preferredWidth: 60
+                        Layout.preferredHeight: 20
+                        radius: 3
+                        opacity: EditModeController.editModeActive ? 1.0 : 0.45
+                        color: active
+                               ? PropertiesPanelController.highlightColor
+                               : (sculptMa.containsMouse && EditModeController.editModeActive
+                                  ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                  : PropertiesPanelController.controlBgColor)
+                        border.color: PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: sculptBtn.active ? "Done" : "Sculpt"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            id: sculptMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            enabled: EditModeController.editModeActive
+                            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                            onClicked: {
+                                if (EditModeController.morphSculptActive)
+                                    EditModeController.endMorphSculpt()
+                                else
+                                    EditModeController.beginMorphSculpt()
+                            }
+                            ToolTip.visible: containsMouse && !enabled
+                            ToolTip.text: "Enter Edit Mode (Tab) first."
+                        }
+                    }
+                    // Add captured shape — stores the current sculpt as a target
+                    // (delta vs the base captured when the session began). Only
+                    // available during an active sculpt session.
                     Rectangle {
                         id: addBtn
-                        property bool canAddFromEdit: EditModeController.editModeActive
+                        property bool canAddFromEdit: EditModeController.morphSculptActive
                         Layout.preferredWidth: 56
                         Layout.preferredHeight: 20
                         radius: 3
@@ -7199,7 +7235,7 @@ Rectangle {
                                 addNamePopup.open()
                             }
                             ToolTip.visible: containsMouse && !enabled
-                            ToolTip.text: "Enter Edit Mode (Tab) to add morph targets from current edit."
+                            ToolTip.text: "Click “Sculpt” first, then move vertices to shape the target."
                         }
                     }
                     // Reset all: walks every target and sets weight to 0.
@@ -7348,17 +7384,22 @@ Rectangle {
                     }
                 }
 
-                // Empty-state hint: this group lives in Edit Mode, so the flow
-                // is always "sculpt vertices → capture". Guide the user rather
-                // than leaving a bare header on a target-less mesh.
+                // Status / hint line. Guides the non-destructive sculpt flow
+                // and makes the active session obvious (the base is restored
+                // when you click Done / leave Edit Mode).
                 Text {
                     visible: morphCol.targetCount === 0
+                             || EditModeController.morphSculptActive
                     width: parent.width
                     wrapMode: Text.Wrap
-                    color: PropertiesPanelController.textColor
-                    opacity: 0.7
+                    color: EditModeController.morphSculptActive
+                           ? PropertiesPanelController.highlightColor
+                           : PropertiesPanelController.textColor
+                    opacity: EditModeController.morphSculptActive ? 1.0 : 0.7
                     font.pixelSize: 10
-                    text: "Move some vertices, then “+ Add…” to capture them as a morph target."
+                    text: EditModeController.morphSculptActive
+                          ? "Sculpting: move vertices to shape the target, then “+ Add…”. The base mesh is restored when you click “Done”."
+                          : "Click “Sculpt”, move vertices to shape a target, then “+ Add…”. The base mesh is never changed."
                 }
 
                 // Filter / search — characters often have 50+ blend
@@ -7439,9 +7480,9 @@ Rectangle {
                         Slider {
                             id: weightSlider
                             from: 0; to: 1; stepSize: 0.01
-                            // name(120) + weight(36) + up(16) + down(16) +
-                            // delete(18) + row spacings ≈ 254 reserved.
-                            width: parent.width - 254
+                            // name(120) + weight(36) + key(16) + up(16) +
+                            // down(16) + delete(18) + row spacings ≈ 272.
+                            width: parent.width - 272
                             // Bind to `weightTick` so changes that
                             // bypass user drag (Reset all, MCP, future
                             // dope-sheet scrubs) refresh the readout.
@@ -7456,6 +7497,40 @@ Rectangle {
                             font.pixelSize: 10
                             width: 36
                             anchors.verticalCenter: parent.verticalCenter
+                        }
+                        // Key weight at playhead (◈) — records the current
+                        // weight at the timeline playhead time as a keyframe on
+                        // the shared "MorphAnim" weight clip (Slice 2 #519).
+                        // Diamonds appear on the dope sheet; the clip plays +
+                        // exports to glTF as a morph-weights animation. Hidden
+                        // while filtering (keeps the row compact + the reorder
+                        // arrows already hide then).
+                        Rectangle {
+                            width: 16; height: 18; radius: 3
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: morphCol.filter === ""
+                            color: keyMa.containsMouse
+                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                   : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "◈"
+                                color: "#88ccff"   // matches the dope-sheet morph diamonds
+                                font.pixelSize: 11
+                            }
+                            MouseArea {
+                                id: keyMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    var t = AnimationControlController.sliderValue / 1000.0
+                                    MorphAnimationManager.setMorphWeightKeyframe(
+                                        modelData, t, weightSlider.value)
+                                }
+                                ToolTip.visible: containsMouse
+                                ToolTip.text: "Key this weight at the timeline playhead"
+                            }
                         }
                         // Move up (▲) — reorder via ReorderMorphTargetsCommand
                         // (undoable). Disabled on the first row. Reorder is only

@@ -249,6 +249,46 @@ TEST_F(MorphAnimationManagerSceneTest, SelectionDrivenAccessorsResolveFirstEntit
     EXPECT_NEAR(m->weightForSelection(QStringLiteral("Smile")), 0.6, 1e-4);
 }
 
+TEST_F(MorphAnimationManagerSceneTest, WeightKeyframingBuildsMorphAnimClip) {
+    auto mesh = createMorphTestMesh("Morph_KeyClip");
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    auto* entity = scene->createEntity("Morph_KeyClipEnt", mesh->getName());
+    auto* node = scene->getRootSceneNode()->createChildSceneNode();
+    node->attachObject(entity);
+    auto* sel = SelectionSet::getSingleton();
+    sel->clear();
+    sel->append(node);
+
+    auto* m = MorphAnimationManager::instance();
+    // No weight keyframes initially.
+    EXPECT_TRUE(m->morphWeightKeyframeTimes(QStringLiteral("Smile")).isEmpty());
+
+    // Key Smile at t=0 (w=0) and t=1 (w=1) → the shared "MorphAnim" clip.
+    EXPECT_TRUE(m->setMorphWeightKeyframe(QStringLiteral("Smile"), 0.0, 0.0));
+    EXPECT_TRUE(m->setMorphWeightKeyframe(QStringLiteral("Smile"), 1.0, 1.0));
+
+    ASSERT_TRUE(mesh->hasAnimation(MorphAnimationManager::kWeightClipName));
+    Ogre::Animation* clip = mesh->getAnimation(MorphAnimationManager::kWeightClipName);
+    EXPECT_NEAR(clip->getLength(), 1.0, 1e-4);
+
+    QVariantList times = m->morphWeightKeyframeTimes(QStringLiteral("Smile"));
+    ASSERT_EQ(times.size(), 2);
+    EXPECT_NEAR(times[0].toDouble(), 0.0, 1e-4);
+    EXPECT_NEAR(times[1].toDouble(), 1.0, 1e-4);
+
+    // Updating an existing time in place doesn't add a keyframe.
+    EXPECT_TRUE(m->setMorphWeightKeyframe(QStringLiteral("Smile"), 1.0, 0.5));
+    EXPECT_EQ(m->morphWeightKeyframeTimes(QStringLiteral("Smile")).size(), 2);
+
+    // Clearing removes it.
+    EXPECT_TRUE(m->clearMorphWeightKeyframe(QStringLiteral("Smile"), 0.0));
+    EXPECT_EQ(m->morphWeightKeyframeTimes(QStringLiteral("Smile")).size(), 1);
+    // Unknown target / time → no-op false.
+    EXPECT_FALSE(m->setMorphWeightKeyframe(QStringLiteral("Nope"), 0.0, 1.0));
+    EXPECT_FALSE(m->clearMorphWeightKeyframe(QStringLiteral("Smile"), 5.0));
+    sel->clear();
+}
+
 TEST_F(MorphAnimationManagerSceneTest, NoSelectionGivesEmptyList) {
     auto* m = MorphAnimationManager::instance();
     EXPECT_TRUE(m->morphTargetsForSelection().isEmpty());
@@ -336,6 +376,66 @@ TEST_F(MorphAnimationManagerSceneTest, RenameMorphTargetCommandRoundTrips) {
     cmd.undo();
     EXPECT_TRUE(mesh->hasAnimation("Smile"));
     EXPECT_FALSE(mesh->hasAnimation("Grin"));
+}
+
+TEST_F(MorphAnimationManagerSceneTest, ReorderMorphTargetsCommandRoundTrips) {
+    auto mesh = createMorphTestMesh("Morph_ReorderCmd");
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    auto* entity = scene->createEntity("Morph_ReorderCmdEnt", mesh->getName());
+    auto* node = scene->getRootSceneNode()->createChildSceneNode();
+    node->attachObject(entity);
+
+    auto* m = MorphAnimationManager::instance();
+    // Fixture order is JawOpen, Smile.
+    QStringList before = m->morphTargetsFor(entity);
+    ASSERT_EQ(before.size(), 2);
+    EXPECT_EQ(before[0], QStringLiteral("JawOpen"));
+    EXPECT_EQ(before[1], QStringLiteral("Smile"));
+
+    QStringList after = before;
+    after.move(0, 1);   // JawOpen -> after Smile
+
+    ReorderMorphTargetsCommand cmd(entity, before, after);
+    cmd.redo();
+    QStringList reordered = m->morphTargetsFor(entity);
+    ASSERT_EQ(reordered.size(), 2);
+    EXPECT_EQ(reordered[0], QStringLiteral("Smile"));
+    EXPECT_EQ(reordered[1], QStringLiteral("JawOpen"));
+    // Both animations survive the rebuild.
+    EXPECT_TRUE(mesh->hasAnimation("Smile"));
+    EXPECT_TRUE(mesh->hasAnimation("JawOpen"));
+
+    cmd.undo();
+    QStringList restored = m->morphTargetsFor(entity);
+    ASSERT_EQ(restored.size(), 2);
+    EXPECT_EQ(restored[0], QStringLiteral("JawOpen"));
+    EXPECT_EQ(restored[1], QStringLiteral("Smile"));
+}
+
+TEST_F(MorphAnimationManagerSceneTest, MoveMorphTargetReordersAndClampsAtEdges) {
+    auto mesh = createMorphTestMesh("Morph_MoveApi");
+    auto* scene = Manager::getSingleton()->getSceneMgr();
+    auto* entity = scene->createEntity("Morph_MoveApiEnt", mesh->getName());
+    auto* node = scene->getRootSceneNode()->createChildSceneNode();
+    node->attachObject(entity);
+    auto* sel = SelectionSet::getSingleton();
+    sel->clear();
+    sel->append(node);
+
+    auto* m = MorphAnimationManager::instance();
+    // Move JawOpen (index 0) down by 1 → Smile, JawOpen.
+    EXPECT_TRUE(m->moveMorphTarget(QStringLiteral("JawOpen"), 1));
+    QStringList o = m->morphTargetsFor(entity);
+    ASSERT_EQ(o.size(), 2);
+    EXPECT_EQ(o[0], QStringLiteral("Smile"));
+    EXPECT_EQ(o[1], QStringLiteral("JawOpen"));
+
+    // Moving the last item down is a clamped no-op.
+    EXPECT_FALSE(m->moveMorphTarget(QStringLiteral("JawOpen"), 1));
+    // Unknown name / zero delta are no-ops.
+    EXPECT_FALSE(m->moveMorphTarget(QStringLiteral("Nope"), -1));
+    EXPECT_FALSE(m->moveMorphTarget(QStringLiteral("Smile"), 0));
+    sel->clear();
 }
 
 TEST_F(MorphAnimationManagerSceneTest, RenameRejectsCollisionAndIdempotentName) {

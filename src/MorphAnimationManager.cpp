@@ -20,8 +20,11 @@ The MIT License
 #include <QCoreApplication>
 #include <QThread>
 
+#include <OgreAnimation.h>
 #include <OgreAnimationState.h>
+#include <OgreAnimationTrack.h>
 #include <OgreEntity.h>
+#include <OgreKeyFrame.h>
 #include <OgreMesh.h>
 #include <OgrePose.h>
 
@@ -161,6 +164,134 @@ bool MorphAnimationManager::setWeightForSelection(const QString& name, double w)
     auto ents = sel->getResolvedEntities();
     if (ents.isEmpty()) return false;
     return setWeight(ents.first(), name, static_cast<float>(w));
+}
+
+const char* MorphAnimationManager::kWeightClipName = "MorphAnim";
+
+namespace {
+
+// Find the pose index (into mesh->getPoseList()) for the first pose named
+// `name`. -1 if none. Weight keyframing references the pose by this index.
+int poseIndexForName(Ogre::Mesh* mesh, const std::string& name)
+{
+    const auto& poses = mesh->getPoseList();
+    for (unsigned short i = 0; i < poses.size(); ++i)
+        if (poses[i] && poses[i]->getName() == name) return i;
+    return -1;
+}
+
+// The weight-animation track for a target lives on the shared "MorphAnim"
+// clip, keyed on the pose's target submesh handle. Fetch-or-create the
+// clip + track. Returns nullptr if the pose doesn't exist.
+Ogre::VertexAnimationTrack* weightTrackFor(Ogre::Mesh* mesh, const std::string& name,
+                                           bool create)
+{
+    const int pi = poseIndexForName(mesh, name);
+    if (pi < 0) return nullptr;
+    const unsigned short handle = mesh->getPoseList()[pi]->getTarget();
+
+    const std::string clip = MorphAnimationManager::kWeightClipName;
+    Ogre::Animation* anim = mesh->hasAnimation(clip)
+        ? mesh->getAnimation(clip)
+        : (create ? mesh->createAnimation(clip, 0.0f) : nullptr);
+    if (!anim) return nullptr;
+
+    if (anim->hasVertexTrack(handle))
+        return anim->getVertexTrack(handle);
+    if (!create) return nullptr;
+    return anim->createVertexTrack(handle, Ogre::VAT_POSE);
+}
+
+} // namespace
+
+bool MorphAnimationManager::setMorphWeightKeyframe(const QString& name,
+                                                   double time, double weight)
+{
+    assertMainThread();
+    if (name.isEmpty() || time < 0.0) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return false;
+
+    const int pi = poseIndexForName(mesh.get(), name.toStdString());
+    if (pi < 0) return false;
+    Ogre::VertexAnimationTrack* track = weightTrackFor(mesh.get(), name.toStdString(), true);
+    if (!track) return false;
+
+    const float t = static_cast<float>(time);
+    const float w = std::clamp(static_cast<float>(weight), 0.0f, 1.0f);
+
+    // Update in place if a keyframe already exists at ~t, else create one.
+    Ogre::VertexPoseKeyFrame* kf = nullptr;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* k = static_cast<Ogre::VertexPoseKeyFrame*>(track->getKeyFrame(i));
+        if (std::abs(k->getTime() - t) < 1e-4f) { kf = k; break; }
+    }
+    if (!kf) kf = track->createVertexPoseKeyFrame(t);
+
+    // A VAT_POSE keyframe holds a list of pose references; for a weight track
+    // each keyframe references exactly this target's pose at influence = weight.
+    kf->removeAllPoseReferences();
+    kf->addPoseReference(static_cast<unsigned short>(pi), w);
+
+    // Extend the clip length to cover the new time.
+    Ogre::Animation* anim = mesh->getAnimation(kWeightClipName);
+    if (anim && t > anim->getLength())
+        anim->setLength(t);
+
+    // Refresh the entity's animation-state mirror so the new clip is playable.
+    entity->refreshAvailableAnimationState();
+    emit morphTargetsChanged();
+    SentryReporter::addBreadcrumb("scene.anim.morph",
+        QStringLiteral("key weight '%1' @%2 = %3").arg(name).arg(t).arg(w));
+    return true;
+}
+
+bool MorphAnimationManager::clearMorphWeightKeyframe(const QString& name, double time)
+{
+    assertMainThread();
+    if (name.isEmpty()) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::MeshPtr mesh = ents.first()->getMesh();
+    if (!mesh) return false;
+
+    Ogre::VertexAnimationTrack* track = weightTrackFor(mesh.get(), name.toStdString(), false);
+    if (!track) return false;
+    const float t = static_cast<float>(time);
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::abs(track->getKeyFrame(i)->getTime() - t) < 1e-4f) {
+            track->removeKeyFrame(i);
+            emit morphTargetsChanged();
+            return true;
+        }
+    }
+    return false;
+}
+
+QVariantList MorphAnimationManager::morphWeightKeyframeTimes(const QString& name) const
+{
+    QVariantList out;
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return out;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return out;
+    Ogre::MeshPtr mesh = ents.first()->getMesh();
+    if (!mesh) return out;
+
+    Ogre::VertexAnimationTrack* track = weightTrackFor(mesh.get(), name.toStdString(), false);
+    if (!track) return out;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i)
+        out.append(static_cast<double>(track->getKeyFrame(i)->getTime()));
+    return out;
 }
 
 namespace {

@@ -70,6 +70,28 @@ public:
     Q_INVOKABLE double weightForSelection(const QString& name) const;
     Q_INVOKABLE bool setWeightForSelection(const QString& name, double w);
 
+    /// Weight keyframing over time (Slice 2, #519). A single mesh Animation
+    /// named `kWeightClipName` ("MorphAnim") holds one VAT_POSE track per
+    /// target's pose; each keyframe references the pose at the influence
+    /// (= weight) recorded at that time. This is what glTF exports as a
+    /// morph-weights animation. Distinct from the static per-target Animation
+    /// (named exactly the target name) that only carries the shape.
+
+    /// Record `weight` for target `name` at `time` seconds on the weight clip
+    /// (creates the clip/track/keyframe as needed, updates in place otherwise).
+    /// Extends the clip length to cover `time`. Returns false on no-op.
+    Q_INVOKABLE bool setMorphWeightKeyframe(const QString& name, double time, double weight);
+
+    /// Remove the weight keyframe for `name` at (approximately) `time`.
+    Q_INVOKABLE bool clearMorphWeightKeyframe(const QString& name, double time);
+
+    /// Keyframe times (seconds) for `name`'s weight track on the selection,
+    /// ascending. Empty if none. For the dope sheet.
+    Q_INVOKABLE QVariantList morphWeightKeyframeTimes(const QString& name) const;
+
+    /// The weight-animation clip name used across the app + glTF export.
+    static const char* kWeightClipName;
+
     /// Authoring (slice A3). All three push a QUndoCommand on the
     /// shared UndoManager stack so Ctrl+Z reverses the change. All
     /// return false on no-op (entity missing, name collision, etc.).
