@@ -2690,20 +2690,53 @@ QString MeshImporterExporter::importFileDialogFilterFromExtensionList(
     const QString& spaceSeparatedDotExtensions)
 {
     const QStringList parts = spaceSeparatedDotExtensions.split(' ', Qt::SkipEmptyParts);
-    QStringList globs;
+    QStringList globs;                // "*.ext" for the "All supported" row
+    QSet<QString> present;            // lower-cased ".ext" set for lookups
     globs.reserve(parts.size());
     for (QString ext : parts) {
-        ext = ext.trimmed();
-        if (ext.startsWith('.'))
+        ext = ext.trimmed().toLower();
+        if (ext.startsWith('.')) {
             globs.append(QLatin1Char('*') + ext);
+            present.insert(ext);
+        }
     }
     const QString allSupported = globs.join(QLatin1Char(' '));
-    return QStringLiteral(
-               "All supported (%1);;"
-               "Alembic vertex cache (*.abc);;"
-               "PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply);;"
-               "All files (*.*)")
-        .arg(allSupported);
+
+    // Named per-format rows, in a sensible priority order. Each is emitted only
+    // if at least one of its extensions is in the valid list (so the dialog
+    // never advertises a format the loader can't handle). Grouped rows (e.g.
+    // glTF *.gltf/*.glb) show if ANY member is present. Anything valid but not
+    // named here still loads via "All supported" / "All files".
+    struct NamedFilter { const char* label; QStringList exts; };
+    const QList<NamedFilter> named = {
+        {"FBX (*.fbx)",                    {".fbx"}},
+        {"glTF 2.0 (*.gltf *.glb *.vrm)",  {".gltf", ".glb", ".vrm"}},
+        {"Wavefront OBJ (*.obj)",          {".obj"}},
+        {"Collada (*.dae)",                {".dae"}},
+        {"Ogre Mesh (*.mesh *.mesh.xml)",  {".mesh"}},
+        {"STL (*.stl)",                    {".stl"}},
+        {"PLY (*.ply)",                    {".ply"}},
+        {"3DS (*.3ds)",                    {".3ds"}},
+        {"Blender (*.blend)",              {".blend"}},
+        {"DirectX X (*.x)",                {".x"}},
+        {"Biovision BVH (*.bvh)",          {".bvh"}},
+        {"LightWave (*.lwo *.lws *.lxo)",  {".lwo", ".lws", ".lxo"}},
+        {"Alembic vertex cache (*.abc)",   {".abc"}},
+        {"PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply)", {".rsd", ".tmd", ".ply"}},
+    };
+
+    QStringList rows;
+    rows.reserve(named.size() + 2);
+    rows << QStringLiteral("All supported (%1)").arg(allSupported);
+    for (const NamedFilter& nf : named) {
+        bool any = false;
+        for (const QString& e : nf.exts)
+            if (present.contains(e)) { any = true; break; }
+        if (any)
+            rows << QString::fromLatin1(nf.label);
+    }
+    rows << QStringLiteral("All files (*.*)");
+    return rows.join(QStringLiteral(";;"));
 }
 
 QString MeshImporterExporter::importFileDialogFilter()

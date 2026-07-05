@@ -489,6 +489,21 @@ Rectangle {
                 Component.onCompleted: content = editModeToolsComponent
             }
 
+            // ---- Vertex Morph Animation (Edit Mode) ----
+            // Morph-target authoring belongs in Edit Mode: you sculpt vertices,
+            // then capture them as a target. (Previously the only morph UI lived
+            // in the Animation-Mode "Animations" section, whose "+ Add…" needed
+            // Edit Mode — an unreachable chicken-and-egg.)
+            CollapsibleSection {
+                title: "Vertex Morph Animation"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.EditMode,
+                    EditModeController.editModeActive)
+                expanded: false
+
+                Component.onCompleted: content = vertexMorphComponent
+            }
+
             // ---- AI: Image → 3D (epic #764, Object mode) ----
             CollapsibleSection {
                 title: "AI: Image → 3D"
@@ -691,11 +706,18 @@ Rectangle {
             }
 
             // ---- Animation Control (keyframe editor) ----
+            // Gated on a skeletal animation OR any mesh/vertex animation
+            // (morph + Alembic vertex clips surface as AnimationStates, which
+            // PropertiesPanelController.hasAnimations picks up). Without the
+            // hasAnimations clause the dope sheet / curve editor never appeared
+            // for a morph-only mesh, so a freshly-authored morph target had no
+            // timeline to key/scrub — even though allMorphRows() enumerates it.
             CollapsibleSection {
                 title: "Animation Control"
                 sectionVisible: root.modeToolSectionVisible(
                     EditorModeController.AnimationMode,
-                    AnimationControlController.hasAnimation)
+                    AnimationControlController.hasAnimation
+                        || PropertiesPanelController.hasAnimations)
                 expanded: false
 
                 Component.onCompleted: content = animControlComponent
@@ -7061,346 +7083,376 @@ Rectangle {
                 }
             }
 
-            // ---- Morph Targets / Blend Shapes (slice A2) ----
-            // Per-pose weight sliders, sourced from MorphAnimationManager.
-            // Lives at the bottom of the Animations section, outside the
-            // per-entity repeater above — morph data is read from the
-            // SelectionSet's first entity to keep the surface focused.
-            // Authoring (add/rename/delete) lands in A3.
-            Rectangle {
-                width: parent.width - 16
-                visible: morphCol.targetCount > 0
-                height: morphCol.implicitHeight + 12
-                color: PropertiesPanelController.headerColor
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
-                radius: 3
+        }
+    }
 
-                Column {
-                    id: morphCol
-                    anchors.fill: parent
-                    anchors.margins: 6
+    // ---- Vertex Morph Animation (Edit Mode authoring) ----
+    // Blend-shape / morph-target authoring lives in Edit Mode because you
+    // capture the CURRENT edited vertex positions (vs the bind pose) as a new
+    // target. Playback/weight tuning of existing targets also works here.
+    Component {
+        id: vertexMorphComponent
+
+        // ---- Morph Targets / Blend Shapes (slice A2) ----
+        // Per-pose weight sliders, sourced from MorphAnimationManager.
+        // Lives at the bottom of the Animations section, outside the
+        // per-entity repeater above — morph data is read from the
+        // SelectionSet's first entity to keep the surface focused.
+        // Authoring (add/rename/delete) lands in A3.
+        Rectangle {
+            width: parent.width - 16
+            // Show when the mesh already has targets, OR when an entity is
+            // selected so the FIRST target can be authored. Without the
+            // second clause the panel (and its "+ Add…" button) was gated on
+            // targetCount > 0 — a chicken-and-egg that made it impossible to
+            // create the first morph target from the UI. The Add button
+            // stays disabled outside Edit Mode (with a tooltip) so the empty
+            // panel just advertises the feature + the entry path.
+            visible: morphCol.targetCount > 0
+                     || PropertiesPanelController.hasEntitySelection
+            height: morphCol.implicitHeight + 12
+            color: PropertiesPanelController.headerColor
+            border.color: PropertiesPanelController.borderColor
+            border.width: 1
+            radius: 3
+
+            Column {
+                id: morphCol
+                anchors.fill: parent
+                anchors.margins: 6
+                spacing: 4
+
+                // Defensive `|| []` so an unexpected null return
+                // doesn't crash the binding — the manager currently
+                // always returns a QStringList, but contracts drift.
+                property var targets: MorphAnimationManager.morphTargetsForSelection() || []
+                property int targetCount: targets.length
+                property string filter: ""
+                // Bumped on `morphWeightChanged`; sliders bind their
+                // `value` to a function call gated on this counter so
+                // weight changes from any code path (Reset all,
+                // dope-sheet scrubs in later slices, MCP, etc.) flow
+                // back into the UI rather than going stale until the
+                // delegate is recreated.
+                property int weightTick: 0
+
+                Connections {
+                    target: MorphAnimationManager
+                    function onMorphTargetsChanged() {
+                        morphCol.targets = MorphAnimationManager.morphTargetsForSelection() || []
+                        morphCol.weightTick = morphCol.weightTick + 1
+                    }
+                    function onMorphWeightChanged(entity, name, weight) {
+                        morphCol.weightTick = morphCol.weightTick + 1
+                    }
+                }
+
+                // RowLayout (not a plain Row with a magic-number spacer):
+                // the old `Item { width: parent.width - 320 }` went negative
+                // on a narrow Inspector, overlapping the title with the
+                // buttons. Here the title takes the flexible space and
+                // elides; the buttons keep their intrinsic size at the right.
+                RowLayout {
+                    width: parent.width
                     spacing: 4
-
-                    // Defensive `|| []` so an unexpected null return
-                    // doesn't crash the binding — the manager currently
-                    // always returns a QStringList, but contracts drift.
-                    property var targets: MorphAnimationManager.morphTargetsForSelection() || []
-                    property int targetCount: targets.length
-                    property string filter: ""
-                    // Bumped on `morphWeightChanged`; sliders bind their
-                    // `value` to a function call gated on this counter so
-                    // weight changes from any code path (Reset all,
-                    // dope-sheet scrubs in later slices, MCP, etc.) flow
-                    // back into the UI rather than going stale until the
-                    // delegate is recreated.
-                    property int weightTick: 0
-
-                    Connections {
-                        target: MorphAnimationManager
-                        function onMorphTargetsChanged() {
-                            morphCol.targets = MorphAnimationManager.morphTargetsForSelection() || []
-                            morphCol.weightTick = morphCol.weightTick + 1
+                    Text {
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                        text: "Morph Targets (" + morphCol.targetCount + ")"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        font.bold: true
+                    }
+                    // Add from current edit — captures the user's current
+                    // edit-mode geometry minus the bind-pose baseline as
+                    // a new morph target. Disabled (greyed out, forbidden
+                    // cursor) when outside edit mode because
+                    // EditableSubMesh::originalPositions is only
+                    // populated by EditModeController and the C++ method
+                    // would return false anyway.
+                    Rectangle {
+                        id: addBtn
+                        property bool canAddFromEdit: EditModeController.editModeActive
+                        Layout.preferredWidth: 56
+                        Layout.preferredHeight: 20
+                        radius: 3
+                        opacity: canAddFromEdit ? 1.0 : 0.45
+                        color: addMa.containsMouse && canAddFromEdit
+                               ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                               : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: "+ Add…"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
                         }
-                        function onMorphWeightChanged(entity, name, weight) {
-                            morphCol.weightTick = morphCol.weightTick + 1
+                        MouseArea {
+                            id: addMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            enabled: addBtn.canAddFromEdit
+                            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                            onClicked: {
+                                addNameField.text = ""
+                                addError.text = ""
+                                addNamePopup.open()
+                            }
+                            ToolTip.visible: containsMouse && !enabled
+                            ToolTip.text: "Enter Edit Mode (Tab) to add morph targets from current edit."
                         }
                     }
-
-                    // RowLayout (not a plain Row with a magic-number spacer):
-                    // the old `Item { width: parent.width - 320 }` went negative
-                    // on a narrow Inspector, overlapping the title with the
-                    // buttons. Here the title takes the flexible space and
-                    // elides; the buttons keep their intrinsic size at the right.
-                    RowLayout {
-                        width: parent.width
-                        spacing: 4
+                    // Reset all: walks every target and sets weight to 0.
+                    Rectangle {
+                        Layout.preferredWidth: 60
+                        Layout.preferredHeight: 20
+                        radius: 3
+                        color: resetMa.containsMouse
+                               ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                               : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
                         Text {
-                            Layout.fillWidth: true
-                            elide: Text.ElideRight
-                            text: "Morph Targets (" + morphCol.targetCount + ")"
+                            anchors.centerIn: parent
+                            text: "Reset all"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            id: resetMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                for (var i = 0; i < morphCol.targets.length; ++i)
+                                    MorphAnimationManager.setWeightForSelection(morphCol.targets[i], 0)
+                            }
+                        }
+                    }
+                }
+
+                // Inline name-entry popup for "Add from edit…". Kept
+                // simple (no styled component) so a misbehaving custom
+                // dialog can't break the rest of the panel — Popup is
+                // a built-in Qt Quick Controls primitive with no
+                // singleton dependencies.
+                Popup {
+                    id: addNamePopup
+                    modal: true
+                    focus: true
+                    width: 240
+                    contentItem: Column {
+                        spacing: 6
+                        Text {
+                            text: "New morph target name:"
                             color: PropertiesPanelController.textColor
                             font.pixelSize: 11
-                            font.bold: true
                         }
-                        // Add from current edit — captures the user's current
-                        // edit-mode geometry minus the bind-pose baseline as
-                        // a new morph target. Disabled (greyed out, forbidden
-                        // cursor) when outside edit mode because
-                        // EditableSubMesh::originalPositions is only
-                        // populated by EditModeController and the C++ method
-                        // would return false anyway.
-                        Rectangle {
-                            id: addBtn
-                            property bool canAddFromEdit: EditModeController.editModeActive
-                            Layout.preferredWidth: 56
-                            Layout.preferredHeight: 20
-                            radius: 3
-                            opacity: canAddFromEdit ? 1.0 : 0.45
-                            color: addMa.containsMouse && canAddFromEdit
-                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
-                                   : PropertiesPanelController.controlBgColor
-                            border.color: PropertiesPanelController.borderColor
-                            Text {
-                                anchors.centerIn: parent
-                                text: "+ Add…"
-                                color: PropertiesPanelController.textColor
-                                font.pixelSize: 9
-                            }
-                            MouseArea {
-                                id: addMa
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                enabled: addBtn.canAddFromEdit
-                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-                                onClicked: {
-                                    addNameField.text = ""
-                                    addError.text = ""
-                                    addNamePopup.open()
-                                }
-                                ToolTip.visible: containsMouse && !enabled
-                                ToolTip.text: "Enter Edit Mode (Tab) to add morph targets from current edit."
-                            }
+                        TextField {
+                            id: addNameField
+                            width: 220
+                            font.pixelSize: 11
+                            onAccepted: addConfirmMa.confirm()
+                            onTextChanged: addError.text = ""
+                            Component.onCompleted: forceActiveFocus()
                         }
-                        // Reset all: walks every target and sets weight to 0.
-                        Rectangle {
-                            Layout.preferredWidth: 60
-                            Layout.preferredHeight: 20
-                            radius: 3
-                            color: resetMa.containsMouse
-                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
-                                   : PropertiesPanelController.controlBgColor
-                            border.color: PropertiesPanelController.borderColor
-                            Text {
-                                anchors.centerIn: parent
-                                text: "Reset all"
-                                color: PropertiesPanelController.textColor
-                                font.pixelSize: 9
-                            }
-                            MouseArea {
-                                id: resetMa
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    for (var i = 0; i < morphCol.targets.length; ++i)
-                                        MorphAnimationManager.setWeightForSelection(morphCol.targets[i], 0)
-                                }
-                            }
+                        // Inline error: shown when the C++ side rejects
+                        // the request (duplicate name, no vertex moved,
+                        // not in edit mode, …). We deliberately keep the
+                        // popup open so the user can fix the input
+                        // without retyping.
+                        Text {
+                            id: addError
+                            text: ""
+                            visible: text.length > 0
+                            color: "#d65d5d"
+                            font.pixelSize: 10
+                            width: 220
+                            wrapMode: Text.Wrap
                         }
-                    }
-
-                    // Inline name-entry popup for "Add from edit…". Kept
-                    // simple (no styled component) so a misbehaving custom
-                    // dialog can't break the rest of the panel — Popup is
-                    // a built-in Qt Quick Controls primitive with no
-                    // singleton dependencies.
-                    Popup {
-                        id: addNamePopup
-                        modal: true
-                        focus: true
-                        width: 240
-                        contentItem: Column {
-                            spacing: 6
-                            Text {
-                                text: "New morph target name:"
-                                color: PropertiesPanelController.textColor
-                                font.pixelSize: 11
-                            }
-                            TextField {
-                                id: addNameField
-                                width: 220
-                                font.pixelSize: 11
-                                onAccepted: addConfirmMa.confirm()
-                                onTextChanged: addError.text = ""
-                                Component.onCompleted: forceActiveFocus()
-                            }
-                            // Inline error: shown when the C++ side rejects
-                            // the request (duplicate name, no vertex moved,
-                            // not in edit mode, …). We deliberately keep the
-                            // popup open so the user can fix the input
-                            // without retyping.
-                            Text {
-                                id: addError
-                                text: ""
-                                visible: text.length > 0
-                                color: "#d65d5d"
-                                font.pixelSize: 10
-                                width: 220
-                                wrapMode: Text.Wrap
-                            }
-                            Row {
-                                spacing: 6
-                                Rectangle {
-                                    width: 60; height: 20; radius: 3
-                                    color: addConfirmMa.containsMouse
-                                           ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
-                                           : PropertiesPanelController.controlBgColor
-                                    border.color: PropertiesPanelController.borderColor
-                                    Text { anchors.centerIn: parent; text: "Save"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
-                                    MouseArea {
-                                        id: addConfirmMa
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        function confirm() {
-                                            var n = addNameField.text.trim()
-                                            if (n.length === 0) {
-                                                addError.text = "Name cannot be empty."
-                                                return
-                                            }
-                                            if (!EditModeController.editModeActive) {
-                                                addError.text = "Enter Edit Mode (Tab) before saving."
-                                                return
-                                            }
-                                            var ok = MorphAnimationManager.addMorphTargetFromCurrentEdit(n)
-                                            if (ok) {
-                                                addNamePopup.close()
-                                            } else {
-                                                // C++ rejected — likely name collision or
-                                                // no vertex moved vs the bind baseline.
-                                                addError.text = "Couldn't save: name already in use, or no vertex was edited."
-                                            }
-                                        }
-                                        onClicked: confirm()
-                                    }
-                                }
-                                Rectangle {
-                                    width: 60; height: 20; radius: 3
-                                    color: addCancelMa.containsMouse
-                                           ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
-                                           : PropertiesPanelController.controlBgColor
-                                    border.color: PropertiesPanelController.borderColor
-                                    Text { anchors.centerIn: parent; text: "Cancel"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
-                                    MouseArea {
-                                        id: addCancelMa
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: addNamePopup.close()
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Filter / search — characters often have 50+ blend
-                    // shapes, scanning a flat list is hopeless without
-                    // a typeahead box.
-                    TextField {
-                        id: filterField
-                        width: parent.width
-                        placeholderText: "Filter targets…"
-                        font.pixelSize: 10
-                        onTextChanged: morphCol.filter = text
-                        visible: morphCol.targetCount > 6
-                    }
-
-                    // One row per target. Hidden when filter doesn't match.
-                    Repeater {
-                        model: morphCol.targets
                         Row {
-                            width: morphCol.width
-                            spacing: 4
-                            visible: morphCol.filter === ""
-                                  || modelData.toLowerCase().indexOf(morphCol.filter.toLowerCase()) >= 0
-                            height: visible ? 22 : 0
-
-                            // Name — double-click to rename in place,
-                            // matching the per-animation rename UX above.
-                            Text {
-                                id: morphNameText
-                                visible: !morphNameEdit.visible
-                                text: modelData
-                                color: PropertiesPanelController.textColor
-                                font.pixelSize: 10
-                                width: 120
-                                elide: Text.ElideRight
-                                anchors.verticalCenter: parent.verticalCenter
-                                MouseArea {
-                                    anchors.fill: parent
-                                    onDoubleClicked: {
-                                        morphNameEdit.text = modelData
-                                        morphNameEdit.visible = true
-                                        morphNameEdit.forceActiveFocus()
-                                        morphNameEdit.selectAll()
-                                    }
-                                }
-                            }
-                            TextInput {
-                                id: morphNameEdit
-                                visible: false
-                                width: 120
-                                color: PropertiesPanelController.textColor
-                                font.pixelSize: 10
-                                anchors.verticalCenter: parent.verticalCenter
-                                selectByMouse: true
-                                // Set by `Keys.onEscapePressed`; checked in
-                                // `onEditingFinished` so that hiding the
-                                // input on Escape (which causes focus loss
-                                // and fires `editingFinished`) doesn't
-                                // accidentally commit the rename.
-                                property bool cancelled: false
-                                Rectangle {
-                                    anchors.fill: parent
-                                    anchors.margins: -2
-                                    z: -1
-                                    color: PropertiesPanelController.inputColor
-                                    border.color: PropertiesPanelController.highlightColor
-                                    border.width: 1
-                                    radius: 2
-                                }
-                                onEditingFinished: {
-                                    if (cancelled) { cancelled = false; visible = false; return }
-                                    var trimmed = text.trim()
-                                    if (trimmed.length > 0 && trimmed !== modelData)
-                                        MorphAnimationManager.renameMorphTarget(modelData, trimmed)
-                                    visible = false
-                                }
-                                Keys.onEscapePressed: { cancelled = true; visible = false }
-                            }
-                            Slider {
-                                id: weightSlider
-                                from: 0; to: 1; stepSize: 0.01
-                                width: parent.width - 222
-                                // Bind to `weightTick` so changes that
-                                // bypass user drag (Reset all, MCP, future
-                                // dope-sheet scrubs) refresh the readout.
-                                value: (morphCol.weightTick,
-                                        MorphAnimationManager.weightForSelection(modelData))
-                                anchors.verticalCenter: parent.verticalCenter
-                                onMoved: MorphAnimationManager.setWeightForSelection(modelData, value)
-                            }
-                            Text {
-                                text: weightSlider.value.toFixed(2)
-                                color: PropertiesPanelController.textColor
-                                font.pixelSize: 10
-                                width: 36
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                            // Delete (×) — drops the pose + animation
-                            // through DeleteMorphTargetCommand so Ctrl+Z
-                            // restores it.
+                            spacing: 6
                             Rectangle {
-                                width: 18; height: 18; radius: 3
-                                anchors.verticalCenter: parent.verticalCenter
-                                color: morphDelMa.containsMouse
+                                width: 60; height: 20; radius: 3
+                                color: addConfirmMa.containsMouse
                                        ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
-                                       : "transparent"
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: "×"
-                                    color: PropertiesPanelController.textColor
-                                    font.pixelSize: 12
-                                    font.bold: true
-                                }
+                                       : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor
+                                Text { anchors.centerIn: parent; text: "Save"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
                                 MouseArea {
-                                    id: morphDelMa
+                                    id: addConfirmMa
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: MorphAnimationManager.deleteMorphTarget(modelData)
+                                    function confirm() {
+                                        var n = addNameField.text.trim()
+                                        if (n.length === 0) {
+                                            addError.text = "Name cannot be empty."
+                                            return
+                                        }
+                                        if (!EditModeController.editModeActive) {
+                                            addError.text = "Enter Edit Mode (Tab) before saving."
+                                            return
+                                        }
+                                        var ok = MorphAnimationManager.addMorphTargetFromCurrentEdit(n)
+                                        if (ok) {
+                                            addNamePopup.close()
+                                        } else {
+                                            // C++ rejected — likely name collision or
+                                            // no vertex moved vs the bind baseline.
+                                            addError.text = "Couldn't save: name already in use, or no vertex was edited."
+                                        }
+                                    }
+                                    onClicked: confirm()
                                 }
+                            }
+                            Rectangle {
+                                width: 60; height: 20; radius: 3
+                                color: addCancelMa.containsMouse
+                                       ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                       : PropertiesPanelController.controlBgColor
+                                border.color: PropertiesPanelController.borderColor
+                                Text { anchors.centerIn: parent; text: "Cancel"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                                MouseArea {
+                                    id: addCancelMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: addNamePopup.close()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Empty-state hint: this group lives in Edit Mode, so the flow
+                // is always "sculpt vertices → capture". Guide the user rather
+                // than leaving a bare header on a target-less mesh.
+                Text {
+                    visible: morphCol.targetCount === 0
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.7
+                    font.pixelSize: 10
+                    text: "Move some vertices, then “+ Add…” to capture them as a morph target."
+                }
+
+                // Filter / search — characters often have 50+ blend
+                // shapes, scanning a flat list is hopeless without
+                // a typeahead box.
+                TextField {
+                    id: filterField
+                    width: parent.width
+                    placeholderText: "Filter targets…"
+                    font.pixelSize: 10
+                    onTextChanged: morphCol.filter = text
+                    visible: morphCol.targetCount > 6
+                }
+
+                // One row per target. Hidden when filter doesn't match.
+                Repeater {
+                    model: morphCol.targets
+                    Row {
+                        width: morphCol.width
+                        spacing: 4
+                        visible: morphCol.filter === ""
+                              || modelData.toLowerCase().indexOf(morphCol.filter.toLowerCase()) >= 0
+                        height: visible ? 22 : 0
+
+                        // Name — double-click to rename in place,
+                        // matching the per-animation rename UX above.
+                        Text {
+                            id: morphNameText
+                            visible: !morphNameEdit.visible
+                            text: modelData
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                            width: 120
+                            elide: Text.ElideRight
+                            anchors.verticalCenter: parent.verticalCenter
+                            MouseArea {
+                                anchors.fill: parent
+                                onDoubleClicked: {
+                                    morphNameEdit.text = modelData
+                                    morphNameEdit.visible = true
+                                    morphNameEdit.forceActiveFocus()
+                                    morphNameEdit.selectAll()
+                                }
+                            }
+                        }
+                        TextInput {
+                            id: morphNameEdit
+                            visible: false
+                            width: 120
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                            selectByMouse: true
+                            // Set by `Keys.onEscapePressed`; checked in
+                            // `onEditingFinished` so that hiding the
+                            // input on Escape (which causes focus loss
+                            // and fires `editingFinished`) doesn't
+                            // accidentally commit the rename.
+                            property bool cancelled: false
+                            Rectangle {
+                                anchors.fill: parent
+                                anchors.margins: -2
+                                z: -1
+                                color: PropertiesPanelController.inputColor
+                                border.color: PropertiesPanelController.highlightColor
+                                border.width: 1
+                                radius: 2
+                            }
+                            onEditingFinished: {
+                                if (cancelled) { cancelled = false; visible = false; return }
+                                var trimmed = text.trim()
+                                if (trimmed.length > 0 && trimmed !== modelData)
+                                    MorphAnimationManager.renameMorphTarget(modelData, trimmed)
+                                visible = false
+                            }
+                            Keys.onEscapePressed: { cancelled = true; visible = false }
+                        }
+                        Slider {
+                            id: weightSlider
+                            from: 0; to: 1; stepSize: 0.01
+                            width: parent.width - 222
+                            // Bind to `weightTick` so changes that
+                            // bypass user drag (Reset all, MCP, future
+                            // dope-sheet scrubs) refresh the readout.
+                            value: (morphCol.weightTick,
+                                    MorphAnimationManager.weightForSelection(modelData))
+                            anchors.verticalCenter: parent.verticalCenter
+                            onMoved: MorphAnimationManager.setWeightForSelection(modelData, value)
+                        }
+                        Text {
+                            text: weightSlider.value.toFixed(2)
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                            width: 36
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        // Delete (×) — drops the pose + animation
+                        // through DeleteMorphTargetCommand so Ctrl+Z
+                        // restores it.
+                        Rectangle {
+                            width: 18; height: 18; radius: 3
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: morphDelMa.containsMouse
+                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                   : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "×"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 12
+                                font.bold: true
+                            }
+                            MouseArea {
+                                id: morphDelMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: MorphAnimationManager.deleteMorphTarget(modelData)
                             }
                         }
                     }
