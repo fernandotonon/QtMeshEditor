@@ -1509,6 +1509,7 @@ Rectangle {
             property var mgSteps: []
             property int mgActiveIdx: -1
             property real mgActiveProgress: -1   // 0..1; < 0 → indeterminate
+            property bool mgAiPending: false     // AI texture queued for onCompleted
 
             // A small local button factory (raw QML — the Themed* wrappers blank
             // this dynamically-loaded panel, so we style raw controls with the
@@ -1777,10 +1778,12 @@ Rectangle {
                 InspectorComboBox {
                     id: mgQualityCombo
                     width: 190
-                    // Locked to the single option when TripoSG is active.
+                    // TripoSG ships fp32 only (int8 degrades geometry); show
+                    // its size for consistency rather than a placeholder, and
+                    // lock the picker since there's nothing to switch to.
                     enabled: !MeshGenController.busy && !parent.isSG
                     model: parent.isSG
-                        ? ["fp32 (only option for TripoSG)"]
+                        ? ["fp32 (best, ~2GB)"]
                         : ["fp32 (best, ~1.7GB)", "int8 (smaller, ~430MB)"]
                     currentIndex: 0
                 }
@@ -1805,31 +1808,21 @@ Rectangle {
                 text: "Refine surface (re-project)"
                 checked: true
             }
-            InspectorCheck {
-                id: mgBake
-                text: "Bake diffuse texture"
-                checked: true
-                // TripoSG has no colour decoder, but its bake queries
-                // TripoSR's image-conditioned colour field instead — so the
-                // texture stages work on BOTH backends.
-                enabled: !MeshGenController.busy
-            }
-            InspectorCheck {
-                id: mgPbr
-                text: "Generate PBR maps (normal + roughness)"
-                checked: true
-                enabled: !MeshGenController.busy && mgBake.checked
-            }
-            // AI texture (multi-view, depth-ControlNet). Most useful for
-            // TripoSG (geometry-only): the front is textured from the input
-            // photo, back/sides are SD-generated conditioned on the shape.
-            // Requires a loaded SD model; runs AFTER the mesh is built. Placed
-            // before Upscale so the upscale (which acts on the baked texture)
-            // reads as the final step of the texture chain.
+            // ---- Colour / texture stages, in execution order ----------------
+            // TripoSG (geometry-only) gets its colour SOLELY from the AI
+            // texture pass — so when TripoSG is the backend, that checkbox
+            // leads and the plain "Bake diffuse" (TripoSR field colour) is
+            // hidden. TripoSR keeps the classic bake → PBR → upscale chain.
+            property bool sgSelected: mgBackendCombo.currentIndex === 1
+
+            // AI texture (multi-view depth-ControlNet): front from the input
+            // photo, back/sides SD-generated from the shape, then projected.
+            // For TripoSG this is the only colour source; for TripoSR it's an
+            // optional higher-quality alternative to the field bake.
             InspectorCheck {
                 id: mgAiTexture
                 text: "Generate texture (AI, front photo + generated back)"
-                checked: false
+                checked: parent.sgSelected
                 enabled: !MeshGenController.busy
                     && MaterialEditorQML.stableDiffusionEnabled
             }
@@ -1842,6 +1835,24 @@ Rectangle {
                 font.pixelSize: 10
                 wrapMode: Text.WordWrap
                 width: parent.width - 16
+            }
+            // Plain diffuse bake (TripoSR field colour). Hidden for TripoSG,
+            // where colour is the AI texture pass only.
+            InspectorCheck {
+                id: mgBake
+                text: "Bake diffuse texture"
+                checked: true
+                visible: !parent.sgSelected
+                enabled: !MeshGenController.busy
+            }
+            InspectorCheck {
+                id: mgPbr
+                text: "Generate PBR maps (normal + roughness)"
+                checked: true
+                // Valid whenever there's a diffuse to derive from: the plain
+                // bake OR the AI texture. Runs after whichever produced it.
+                enabled: !MeshGenController.busy
+                    && (mgAiTexture.checked || mgBake.checked)
             }
             InspectorCheck {
                 id: mgUpscale
@@ -1872,39 +1883,55 @@ Rectangle {
                     steps.push({ key: "decode", label: "Reconstruct 3D" })
                     if (mgRefine.checked)
                         steps.push({ key: "refine", label: "Refine surface" })
-                    if (mgBake.checked)
-                        steps.push({ key: "bake",
-                                     label: sg ? "Bake texture (TripoSR colour)"
-                                               : "Bake texture" })
-                    else if (!sg)
+                    // AI texture requested + available? (TripoSG's ONLY colour
+                    // source; optional extra for TripoSR.)
+                    var aiTex = mgAiTexture.checked
+                        && MaterialEditorQML.stableDiffusionEnabled
+
+                    // Colour stages. For TripoSG we do NOT bake colour at build
+                    // time (no TripoSR field colouring) — colour is entirely the
+                    // AI texture pass. With no AI, TripoSG ships an uncoloured
+                    // (neutral clay) mesh. TripoSR keeps its own field bake.
+                    var buildBake = mgBake.checked && (!sg || !aiTex)
+                    // PBR: for TripoSG+AI it runs AFTER the AI texture (below),
+                    // not at build time. Otherwise it runs at build from the
+                    // build-time bake.
+                    var buildPbr = mgPbr.checked && buildBake
+
+                    if (buildBake)
+                        steps.push({ key: "bake", label: "Bake texture" })
+                    else if (!sg && !mgBake.checked)
                         steps.push({ key: "color", label: "Vertex colors" })
-                    if (mgUpscale.checked && mgBake.checked)
+                    if (mgUpscale.checked && buildBake)
                         steps.push({ key: "upscale", label: "Upscale texture 2×" })
                     steps.push({ key: "build",
-                                 label: (mgPbr.checked && mgBake.checked)
-                                        ? "Build mesh + PBR maps" : "Build mesh" })
-                    // The AI texture pass runs after the mesh is built: one
-                    // generated view (the front is the pinned photo, no SD),
-                    // then the projection bake.
-                    if (mgAiTexture.checked
-                        && MaterialEditorQML.stableDiffusionEnabled) {
+                                 label: buildPbr ? "Build mesh + PBR maps"
+                                                 : "Build mesh" })
+                    // AI texture pass (after the mesh is built): the front is
+                    // the pinned photo (no SD), the back/sides are generated,
+                    // then projection-baked, then PBR from that final texture.
+                    if (aiTex) {
                         steps.push({ key: "aitex_gen",
-                                     label: "AI texture: generate back view" })
+                                     label: "AI texture: generate views" })
                         steps.push({ key: "aitex_bake",
                                      label: "AI texture: project + bake" })
+                        if (mgPbr.checked)
+                            steps.push({ key: "aitex_pbr",
+                                         label: "PBR maps from AI texture" })
                     }
                     mgRoot.mgSteps = steps
                     mgRoot.mgActiveIdx = 0
                     mgRoot.mgActiveProgress = -1
+                    mgRoot.mgAiPending = aiTex   // gate onCompleted's AI kickoff
 
                     MeshGenController.generateSelected(
                         mgResCombo.resValue, mgRemoveBg.checked, mgQualityCombo.currentIndex,
                         {
                             "smooth": mgSmooth.checked,
                             "refine": mgRefine.checked,
-                            "bake_texture": mgBake.checked,
-                            "generate_pbr": mgPbr.checked,
-                            "upscale_texture": mgUpscale.checked,
+                            "bake_texture": buildBake,
+                            "generate_pbr": buildPbr,
+                            "upscale_texture": mgUpscale.checked && buildBake,
                             "backend": sg ? "triposg" : "triposr"
                         })
                 }
@@ -2018,52 +2045,74 @@ Rectangle {
                         + result.triangleCount + " tris"
 
                     // Optional AI texture pass: front from the input photo,
-                    // back/sides SD-generated (depth-ControlNet). Runs on the
-                    // just-built entity; needs a loaded SD model.
-                    if (mgAiTexture.checked && result.entityName
-                        && MaterialEditorQML.stableDiffusionEnabled) {
+                    // back/sides SD-generated (depth-ControlNet), then PBR from
+                    // that final texture. Runs on the just-built entity.
+                    if (mgRoot.mgAiPending && result.entityName) {
+                        mgRoot.mgAiPending = false
                         if (!MaterialEditorQML.sdModelLoaded) {
                             mgStatus.text = "Mesh built; skipped AI texture "
                                 + "(no SD model loaded — see AI Settings)."
                             return
                         }
                         // Select the new entity so the multi-view bake targets
-                        // it, then kick off front-photo + generated-back.
+                        // it, then kick off front-photo + generated-back (+PBR).
                         PropertiesPanelController.selectNodeByName(result.entityName)
-                        // Mark the AI-texture generate step active (leave the
-                        // build ✓); the bake step advances on SD completion.
-                        mgRoot.mgActiveIdx = mgRoot.mgSteps.length - 2
+                        // Mark the first AI step active (leave build ✓); later
+                        // steps advance on the SD / bake / PBR signals.
+                        var pbrRows = mgPbr.checked ? 3 : 2
+                        mgRoot.mgActiveIdx = mgRoot.mgSteps.length - pbrRows
                         mgRoot.mgActiveProgress = -1
                         mgStatus.text = "Mesh built — generating AI texture "
                             + "(front photo + back)…"
                         MaterialEditorQML.generateMeshTextureMultiView(
                             "", 512, 512, 0.9,
                             ["front", "back"],
-                            MeshGenController.selectedImagePath)
+                            MeshGenController.selectedImagePath,
+                            mgPbr.checked)
                     }
                 }
                 function onError(msg) { mgStatus.text = "Error: " + msg }
             }
-            // Drive the two AI-texture progress rows from the SD signals.
+            // Drive the AI-texture progress rows (generate → bake → optional
+            // PBR) from the SD + PBR-synth signals. Rows are found by key so
+            // the optional PBR row doesn't shift the indices.
             Connections {
                 target: MaterialEditorQML
                 enabled: mgAiTexture.checked
+                function stepIdx(key) {
+                    for (var i = 0; i < mgRoot.mgSteps.length; i++)
+                        if (mgRoot.mgSteps[i].key === key) return i
+                    return -1
+                }
                 function onSdGenerationProgressChanged() {
-                    var n = mgRoot.mgSteps.length
-                    if (n < 2 || mgRoot.mgSteps[n - 2].key !== "aitex_gen") return
-                    // Generating the back view — show indeterminate progress.
-                    if (mgRoot.mgActiveIdx < n - 2) mgRoot.mgActiveIdx = n - 2
-                    mgRoot.mgActiveProgress = MaterialEditorQML.sdGenerationProgress
+                    var i = stepIdx("aitex_gen")
+                    if (i < 0) return
+                    if (mgRoot.mgActiveIdx < i) mgRoot.mgActiveIdx = i
+                    if (mgRoot.mgActiveIdx === i)
+                        mgRoot.mgActiveProgress = MaterialEditorQML.sdGenerationProgress
                 }
                 function onSdTextureGenerated(path) {
-                    var n = mgRoot.mgSteps.length
-                    if (n >= 1 && mgRoot.mgSteps[n - 1].key === "aitex_bake") {
-                        mgRoot.mgActiveIdx = n   // all ✓ (bake done + applied)
-                        mgStatus.text = "AI texture applied."
+                    // Views done + projected/applied → mark the bake row ✓.
+                    var b = stepIdx("aitex_bake")
+                    if (b >= 0 && mgRoot.mgActiveIdx <= b) {
+                        var p = stepIdx("aitex_pbr")
+                        if (p < 0) { mgRoot.mgActiveIdx = mgRoot.mgSteps.length
+                                     mgStatus.text = "AI texture applied." }
+                        else       { mgRoot.mgActiveIdx = p    // PBR now running
+                                     mgRoot.mgActiveProgress = -1 }
+                    }
+                }
+                function onPbrSynthCompleted(res) {
+                    if (stepIdx("aitex_pbr") >= 0) {
+                        mgRoot.mgActiveIdx = mgRoot.mgSteps.length   // all ✓
+                        mgStatus.text = "AI texture + PBR applied."
                     }
                 }
                 function onSdGenerationError(msg) {
                     mgStatus.text = "AI texture error: " + msg
+                }
+                function onPbrSynthError(msg) {
+                    mgStatus.text = "PBR error: " + msg
                 }
             }
         }

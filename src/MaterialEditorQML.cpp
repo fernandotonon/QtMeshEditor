@@ -4540,6 +4540,10 @@ struct MaterialEditorQML::MultiViewBakeState {
     // the actual image (accurate) and only the OTHER views are SD-generated
     // (plausible, depth-conditioned). Empty → every view is SD-generated.
     QImage  frontPhoto;                            // loaded, non-null when pinned
+    // Synthesize + bind #404 PBR maps (normal + roughness) FROM the freshly
+    // baked atlas after the bake applies it — so the maps match the final
+    // (AI) diffuse, not a throwaway one. Set by the generate3d GUI flow.
+    bool    generatePbrAfter = false;
 };
 
 namespace {
@@ -4622,7 +4626,8 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
                                                      int width, int height,
                                                      double controlStrength,
                                                      const QStringList &views,
-                                                     const QString &frontPhotoPath)
+                                                     const QString &frontPhotoPath,
+                                                     bool generatePbr)
 {
     // A pinned front photo can carry the whole "what to draw" signal, so the
     // prompt is only required when there's no photo to anchor the front.
@@ -4686,6 +4691,7 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
             emit sdGenerationNotice(
                 "Front photo could not be loaded — generating that view too.");
     }
+    st->generatePbrAfter = generatePbr;
 
     if (st->controlNetPath.isEmpty()) {
         emit sdGenerationNotice(
@@ -4866,6 +4872,13 @@ void MaterialEditorQML::finishMultiViewBake()
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mesh_texture_multiview"),
         QStringLiteral("baked %1 texels from %2 views (%3 dilated)")
             .arg(rep.pixelsWritten).arg(s->baked.size()).arg(rep.pixelsDilated));
+
+    // PBR AFTER the AI texture (issue: PBR was previously synthesized during
+    // mesh build from a throwaway diffuse, then the AI bake replaced the
+    // diffuse — leaving normal/roughness that didn't match the colours). Now
+    // synthesize + bind from the freshly-applied AI diffuse so the maps match.
+    if (s->generatePbrAfter && aiPbrAvailable())
+        generatePbrFromDiffuse();
 #endif
 }
 

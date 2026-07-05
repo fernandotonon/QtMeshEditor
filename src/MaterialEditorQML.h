@@ -607,7 +607,8 @@ public slots:
                                                   int width = 0, int height = 0,
                                                   double controlStrength = 0.9,
                                                   const QStringList &views = {},
-                                                  const QString &frontPhotoPath = {});
+                                                  const QString &frontPhotoPath = {},
+                                                  bool generatePbr = false);
     // True when a skinned/static mesh is selected — drives the
     // "use selected mesh" checkbox enabled state.
     Q_INVOKABLE bool hasSelectedMesh() const;
