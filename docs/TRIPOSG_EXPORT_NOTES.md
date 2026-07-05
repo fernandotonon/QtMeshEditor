@@ -22,7 +22,7 @@ Unlike TripoSR (#764 — one feed-forward encoder/decoder pair), TripoSG is a
 **rectified-flow diffusion** pipeline over a *vecset* latent (2048 tokens × 64
 channels, no spatial layout):
 
-```
+```text
 input image
   │  background removal + white-bg composite + foreground crop      (host C++)
   │  BitImageProcessor: resize shortest-edge 256 → center-crop 224
