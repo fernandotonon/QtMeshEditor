@@ -9,6 +9,7 @@
 #include "MultiViewTextureBaker.h"
 #include "TexturePaintBuffer.h"
 #include "ImageTo3D/BackgroundRemover.h"
+#include "UvUnwrap.h"
 #include <QPainter>
 #include "EmbeddedTextureCache.h"
 #include <OgreEntity.h>
@@ -4558,6 +4559,26 @@ MeshDepthRenderer::View resolveDepthView(const QString& name)
     return MeshDepthRenderer::front();
 }
 
+// True if every submesh of the entity's mesh exposes a UV0 (TEXCOORD 0) in
+// whichever vertex data it uses. The multi-view baker projects onto an
+// EXISTING UV0 atlas, so a UV-less mesh (e.g. a geometry-only TripoSG result)
+// must be unwrapped first.
+bool entityHasUv0(Ogre::Entity* entity)
+{
+    if (!entity || !entity->getMesh()) return false;
+    const Ogre::MeshPtr& mesh = entity->getMesh();
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        const Ogre::SubMesh* sm = mesh->getSubMesh(i);
+        const Ogre::VertexData* vd = sm->useSharedVertices
+            ? mesh->sharedVertexData : sm->vertexData;
+        if (!vd || !vd->vertexDeclaration
+            || !vd->vertexDeclaration->findElementBySemantic(
+                   Ogre::VES_TEXTURE_COORDINATES, 0))
+            return false;
+    }
+    return true;
+}
+
 // Tight bounding box of the mesh silhouette in a DEPTH map (near=white/
 // far=black over a black background): any pixel brighter than `thresh` counts.
 QRect silhouetteBounds(const QImage& depth, int thresh = 8)
@@ -4836,6 +4857,24 @@ void MaterialEditorQML::finishMultiViewBake()
         }
     }
     if (!entity) { emit sdGenerationError("Mesh gone before bake."); emit sdIsGeneratingChanged(); return; }
+
+    // The baker projects onto an EXISTING UV0 atlas. A geometry-only mesh
+    // (TripoSG, or any unwrap-less import) has none, so auto-unwrap it in place
+    // first via xatlas. Safe here because these are STATIC generated meshes
+    // (no skeleton — the in-place-mutation caveat that unwrapEntity warns about
+    // only affects live skinned meshes), and they SHOULD keep the new UVs (the
+    // texture binds to them and they're carried into any export).
+    if (!entityHasUv0(entity)) {
+        emit sdGenerationNotice("Mesh has no UVs — auto-unwrapping before bake…");
+        const UvUnwrapReport ur = UvUnwrap::unwrapEntity(entity);
+        if (!ur.applied || !entityHasUv0(entity)) {
+            emit sdGenerationError(QStringLiteral(
+                "AI texture: auto UV unwrap failed%1 — cannot bake.")
+                .arg(ur.error.isEmpty() ? QString() : (": " + ur.error)));
+            emit sdIsGeneratingChanged();
+            return;
+        }
+    }
 
     QString geoErr;
     std::vector<MultiViewTextureBaker::Triangle> tris =
