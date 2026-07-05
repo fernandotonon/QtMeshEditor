@@ -168,6 +168,12 @@ if(ENABLE_LOCAL_LLM)
     set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    # We need the `mtmd` multimodal library (tools/mtmd) for image captioning
+    # (SmolVLM). It only builds under LLAMA_BUILD_TOOLS + LLAMA_BUILD_COMMON.
+    # Tools also builds CLI binaries we don't ship, but the mtmd lib is the
+    # target we link; the extra binaries are harmless build artifacts.
+    set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TOOLS ON CACHE BOOL "" FORCE)
 
     # Enable Metal on macOS for GPU acceleration
     if(APPLE)
@@ -212,10 +218,12 @@ if(ENABLE_LOCAL_LLM)
 
     FetchContent_MakeAvailable(llama_cpp)
 
-    # Include llama.cpp headers
+    # Include llama.cpp headers (+ mtmd multimodal for image captioning)
     include_directories(
         ${llama_cpp_SOURCE_DIR}/include
         ${llama_cpp_SOURCE_DIR}/ggml/include
+        ${llama_cpp_SOURCE_DIR}/tools/mtmd
+        ${llama_cpp_SOURCE_DIR}/common
     )
 
     add_definitions(-DENABLE_LOCAL_LLM)
