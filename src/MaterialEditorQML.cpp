@@ -8,6 +8,8 @@
 #include "MeshDepthRenderer.h"
 #include "MultiViewTextureBaker.h"
 #include "TexturePaintBuffer.h"
+#include "ImageTo3D/BackgroundRemover.h"
+#include <QPainter>
 #include "EmbeddedTextureCache.h"
 #include <OgreEntity.h>
 #include <OgreSubEntity.h>
@@ -4551,6 +4553,69 @@ MeshDepthRenderer::View resolveDepthView(const QString& name)
     if (n == "bottom") return MeshDepthRenderer::bottom();
     return MeshDepthRenderer::front();
 }
+
+// Tight bounding box of the "occupied" pixels of an image. For a DEPTH map
+// that's the mesh silhouette (near=white/far=black over a black background):
+// any pixel brighter than `lumaThresh` counts. For an ALPHA-carrying photo
+// (background removed) pass useAlpha=true to use the alpha channel instead.
+QRect occupiedBounds(const QImage& img, bool useAlpha, int thresh = 8)
+{
+    int minX = img.width(), minY = img.height(), maxX = -1, maxY = -1;
+    for (int y = 0; y < img.height(); ++y) {
+        for (int x = 0; x < img.width(); ++x) {
+            const QRgb p = img.pixel(x, y);
+            const int v = useAlpha ? qAlpha(p) : qGray(p);
+            if (v > thresh) {
+                minX = std::min(minX, x); minY = std::min(minY, y);
+                maxX = std::max(maxX, x); maxY = std::max(maxY, y);
+            }
+        }
+    }
+    if (maxX < 0) return QRect();  // empty
+    return QRect(minX, minY, maxX - minX + 1, maxY - minY + 1);
+}
+
+// Register the input photo to the mesh's rendered silhouette so the photo
+// projects onto the geometry in alignment (eye→eye, not eye→ear). Both bugs
+// this fixes: (1) the raw photo's subject sits at an arbitrary size/offset
+// vs. the depth-camera framing; (2) the subject is fit to the SAME footprint
+// the mesh silhouette occupies in the depth render, so projecting the result
+// through that render's view/proj matrices lands photo features on the
+// matching mesh features. Returns an RGB image sized to `depth`, subject
+// scaled+centred onto the silhouette bbox (background = neutral, unused by
+// the baker's facing weights on the front). Null if either bbox is empty
+// (caller falls back to the naive scale).
+QImage registerPhotoToSilhouette(const QImage& photoRemovedBg,
+                                  const QImage& depth)
+{
+    const QRect meshBox = occupiedBounds(depth, /*useAlpha=*/false);
+    const QRect subjBox = occupiedBounds(photoRemovedBg, /*useAlpha=*/true);
+    if (!meshBox.isValid() || !subjBox.isValid()
+        || subjBox.width() <= 0 || subjBox.height() <= 0)
+        return QImage();
+
+    // Uniform scale that fits the subject bbox into the mesh silhouette bbox
+    // (preserve the photo's aspect — non-uniform would distort features).
+    const double sx = double(meshBox.width())  / subjBox.width();
+    const double sy = double(meshBox.height()) / subjBox.height();
+    const double scale = std::min(sx, sy);
+
+    QImage out(depth.size(), QImage::Format_RGB888);
+    out.fill(qRgb(127, 127, 127));   // neutral fill for uncovered texels
+    QPainter painter(&out);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    // Place the subject so its bbox centre lands on the mesh bbox centre.
+    const double drawW = subjBox.width()  * scale;
+    const double drawH = subjBox.height() * scale;
+    const double dstX = meshBox.center().x() - drawW / 2.0;
+    const double dstY = meshBox.center().y() - drawH / 2.0;
+    painter.drawImage(QRectF(dstX, dstY, drawW, drawH),
+                      photoRemovedBg,
+                      QRectF(subjBox.x(), subjBox.y(),
+                             subjBox.width(), subjBox.height()));
+    painter.end();
+    return out;
+}
 } // namespace
 
 void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
@@ -4683,14 +4748,31 @@ void MaterialEditorQML::startNextMultiViewGeneration()
     bv.camDirection = rr.camDirection;
 
     // Pinned front photo (view 0, TripoSG path): fill the view image from the
-    // real photo NOW — no SD call — and advance. The photo is fit to the same
-    // framed footprint the depth render used, so it projects through the same
-    // camera matrices the baker will use. This is the Metal-safe substitute
-    // for img2img: the front is the actual image, not a generation.
+    // real photo NOW — no SD call — and advance. This is the Metal-safe
+    // substitute for img2img: the front is the actual image, not a generation.
+    //
+    // REGISTRATION (the key correctness step): the raw photo's subject sits at
+    // an arbitrary size/offset relative to the depth-camera framing, so naive
+    // scaling projected photo features onto the wrong mesh features (eye→ear).
+    // Background-remove the photo, then fit its subject bbox onto the mesh
+    // SILHOUETTE bbox from this exact depth render — now the subject occupies
+    // the same screen footprint the mesh does, and projecting through the
+    // render's own view/proj matrices lands features in alignment.
     if (!s.frontPhoto.isNull() && s.current == 0) {
-        bv.image = s.frontPhoto.scaled(rr.depth.width(), rr.depth.height(),
-                                       Qt::IgnoreAspectRatio,
-                                       Qt::SmoothTransformation);
+        QImage photoRb = s.frontPhoto;
+        const QString bgModel = BackgroundRemover::ensureModelBlocking();
+        if (!bgModel.isEmpty()) {
+            const BackgroundRemover::Result br =
+                BackgroundRemover::removeBackground(s.frontPhoto, bgModel, {});
+            if (!br.image.isNull())
+                photoRb = br.image;   // carries alpha for the subject
+        }
+        QImage registered = registerPhotoToSilhouette(
+            photoRb.convertToFormat(QImage::Format_ARGB32), rr.depth);
+        bv.image = registered.isNull()
+            ? s.frontPhoto.scaled(rr.depth.width(), rr.depth.height(),
+                                  Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+            : registered;
         s.baked.push_back(bv);
         ++s.current;
         if (s.current >= s.views.size())
