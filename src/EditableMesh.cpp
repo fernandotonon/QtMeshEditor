@@ -34,6 +34,8 @@ THE SOFTWARE.
 #include "UvSeamData.h"
 #include <OgreRTShaderSystem.h>
 #include <OgreSubEntity.h>
+#include <OgreEntity.h>
+#include <OgreAnimationState.h>
 #include <OgrePlatform.h>
 #include <algorithm>
 #include <climits>
@@ -794,6 +796,19 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
             memcpy(dest, animCopy.data(), animBufSize);
             animBuf->unlock();
         }
+    }
+
+    // For entities with vertex (pose / morph) animation, Ogre renders from the
+    // per-frame pose vertex buffer — NOT the mesh VBO we just wrote — and only
+    // recomputes it when the animation state is dirty. During morph authoring
+    // the frame loop is usually paused (isPlaying == false), so without this
+    // the edited vertices never reach the screen. Bump the state set's dirty
+    // frame and re-run the animation so the pose buffer is re-derived from the
+    // updated base positions immediately.
+    if (entity->hasVertexAnimation()) {
+        if (auto* states = entity->getAllAnimationStates())
+            states->_notifyDirty();
+        entity->_updateAnimation();
     }
 
     // Clear the cached source-file path: the live GPU buffers have

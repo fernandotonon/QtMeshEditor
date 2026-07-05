@@ -170,6 +170,22 @@ public:
     Q_INVOKABLE void notifyMeshDataChanged();
     /// @}
 
+    /// @name Morph sculpt session (Blender-style non-destructive authoring, #519)
+    /// @{
+    /// True while a base-preserving morph sculpt session is active. While on,
+    /// vertex edits are treated as sculpt work for a morph target: `+ Add`
+    /// captures the delta vs the base, and ending the session (or exiting Edit
+    /// Mode) RESTORES the base mesh — the base is never permanently changed,
+    /// matching Blender shape keys / Maya blend shapes.
+    Q_PROPERTY(bool morphSculptActive READ morphSculptActive NOTIFY morphSculptChanged)
+    bool morphSculptActive() const { return m_morphSculptActive; }
+    /// Begin a morph sculpt session (must already be in Edit Mode).
+    Q_INVOKABLE bool beginMorphSculpt();
+    /// End the session. Always restores the base mesh from the entry snapshot
+    /// (the captured target already lives on the mesh as a Pose + weight).
+    Q_INVOKABLE void endMorphSculpt();
+    /// @}
+
     /// @name Component selection mode (Vertex/Edge/Face)
     /// @{
     int selectionMode() const { return static_cast<int>(m_selectionMode); }
@@ -871,6 +887,8 @@ signals:
     void segmentFinished(const QString& status, bool isError);
     /// Emitted when entering or exiting edit mode.
     void editModeChanged();
+    /// Emitted when a morph sculpt session starts/ends (#519).
+    void morphSculptChanged();
     /// Emitted when the mesh data is modified during edit mode.
     void meshDataChanged();
     /// Emitted when the selection changes (to update canEnterEditMode).
@@ -930,6 +948,13 @@ private:
     bool m_editModeActive = false;
     std::unique_ptr<EditableMesh> m_editableMesh;
     Ogre::Entity* m_editEntity = nullptr;
+
+    // Morph sculpt session (#519): pristine base positions captured at
+    // beginMorphSculpt(), restored on endMorphSculpt() so the base mesh is
+    // never permanently altered by morph-target authoring. One entry per
+    // submesh, flat xyz — matches EditableSubMesh vertex ordering.
+    bool m_morphSculptActive = false;
+    std::vector<std::vector<Ogre::Vector3>> m_morphBaseSnapshot;
 
     void refreshNormalVisualizer();
 
