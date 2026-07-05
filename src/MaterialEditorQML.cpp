@@ -9,6 +9,7 @@
 #include "MultiViewTextureBaker.h"
 #include "TexturePaintBuffer.h"
 #include "ImageTo3D/BackgroundRemover.h"
+#include "ImageTo3D/ImageCaptioner.h"
 #include "UvUnwrap.h"
 #include <QPainter>
 #include "EmbeddedTextureCache.h"
@@ -4536,11 +4537,6 @@ struct MaterialEditorQML::MultiViewBakeState {
     std::vector<MeshDepthRenderer::View> views;   // resolved camera views
     std::vector<MultiViewTextureBaker::View> baked; // accumulated image+matrices
     size_t current = 0;                            // index of the view being generated
-    // Optional: the real input photo, pinned as the FRONT view instead of an
-    // SD-generated one. For TripoSG (geometry-only) the front is textured from
-    // the actual image (accurate) and only the OTHER views are SD-generated
-    // (plausible, depth-conditioned). Empty → every view is SD-generated.
-    QImage  frontPhoto;                            // loaded, non-null when pinned
     // Synthesize + bind #404 PBR maps (normal + roughness) FROM the freshly
     // baked atlas after the bake applies it — so the maps match the final
     // (AI) diffuse, not a throwaway one. Set by the generate3d GUI flow.
@@ -4579,84 +4575,6 @@ bool entityHasUv0(Ogre::Entity* entity)
     return true;
 }
 
-// Tight bounding box of the mesh silhouette in a DEPTH map (near=white/
-// far=black over a black background): any pixel brighter than `thresh` counts.
-QRect silhouetteBounds(const QImage& depth, int thresh = 8)
-{
-    int minX = depth.width(), minY = depth.height(), maxX = -1, maxY = -1;
-    for (int y = 0; y < depth.height(); ++y)
-        for (int x = 0; x < depth.width(); ++x)
-            if (qGray(depth.pixel(x, y)) > thresh) {
-                minX = std::min(minX, x); minY = std::min(minY, y);
-                maxX = std::max(maxX, x); maxY = std::max(maxY, y);
-            }
-    if (maxX < 0) return QRect();
-    return QRect(minX, minY, maxX - minX + 1, maxY - minY + 1);
-}
-
-// Tight bounding box of the FOREGROUND subject in a background-removed photo.
-// BackgroundRemover returns RGB composited over a SOLID known colour (no
-// alpha), so the subject is every pixel that differs from that background
-// beyond `tol` (per-channel). (Using alpha here was wrong — the composited
-// image is fully opaque, so an alpha test selected the whole frame.)
-QRect subjectBounds(const QImage& img, QRgb bg, int tol = 24)
-{
-    int minX = img.width(), minY = img.height(), maxX = -1, maxY = -1;
-    const int br = qRed(bg), bgn = qGreen(bg), bb = qBlue(bg);
-    for (int y = 0; y < img.height(); ++y)
-        for (int x = 0; x < img.width(); ++x) {
-            const QRgb p = img.pixel(x, y);
-            if (std::abs(qRed(p) - br) > tol || std::abs(qGreen(p) - bgn) > tol
-                || std::abs(qBlue(p) - bb) > tol) {
-                minX = std::min(minX, x); minY = std::min(minY, y);
-                maxX = std::max(maxX, x); maxY = std::max(maxY, y);
-            }
-        }
-    if (maxX < 0) return QRect();
-    return QRect(minX, minY, maxX - minX + 1, maxY - minY + 1);
-}
-
-// Register the input photo to the mesh's rendered silhouette so the photo
-// projects onto the geometry in alignment (eye→eye, not eye→ear). Both bugs
-// this fixes: (1) the raw photo's subject sits at an arbitrary size/offset
-// vs. the depth-camera framing; (2) the subject is fit to the SAME footprint
-// the mesh silhouette occupies in the depth render, so projecting the result
-// through that render's view/proj matrices lands photo features on the
-// matching mesh features. Returns an RGB image sized to `depth`, subject
-// scaled+centred onto the silhouette bbox (background = neutral, unused by
-// the baker's facing weights on the front). Null if either bbox is empty
-// (caller falls back to the naive scale).
-QImage registerPhotoToSilhouette(const QImage& photoRemovedBg,
-                                  const QImage& depth, QRgb bg)
-{
-    const QRect meshBox = silhouetteBounds(depth);
-    const QRect subjBox = subjectBounds(photoRemovedBg, bg);
-    if (!meshBox.isValid() || !subjBox.isValid()
-        || subjBox.width() <= 0 || subjBox.height() <= 0)
-        return QImage();
-
-    // Uniform scale that fits the subject bbox into the mesh silhouette bbox
-    // (preserve the photo's aspect — non-uniform would distort features).
-    const double sx = double(meshBox.width())  / subjBox.width();
-    const double sy = double(meshBox.height()) / subjBox.height();
-    const double scale = std::min(sx, sy);
-
-    QImage out(depth.size(), QImage::Format_RGB888);
-    out.fill(qRgb(127, 127, 127));   // neutral fill for uncovered texels
-    QPainter painter(&out);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    // Place the subject so its bbox centre lands on the mesh bbox centre.
-    const double drawW = subjBox.width()  * scale;
-    const double drawH = subjBox.height() * scale;
-    const double dstX = meshBox.center().x() - drawW / 2.0;
-    const double dstY = meshBox.center().y() - drawH / 2.0;
-    painter.drawImage(QRectF(dstX, dstY, drawW, drawH),
-                      photoRemovedBg,
-                      QRectF(subjBox.x(), subjBox.y(),
-                             subjBox.width(), subjBox.height()));
-    painter.end();
-    return out;
-}
 } // namespace
 
 void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
@@ -4693,13 +4611,36 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
     // LCOV_EXCL_START — requires a loaded SD model + a mesh
     auto st = std::make_unique<MultiViewBakeState>();
     st->entityName = QString::fromStdString(entity->getName());
-    // The other (SD-generated) views still need a text prompt. When only a
-    // photo was supplied, fall back to a neutral texture prompt so the back
-    // is plausibly consistent rather than blank.
-    st->prompt = prompt.isEmpty()
+
+    // Describe-then-generate: when an input photo is supplied (the image-to-3D
+    // path) and no explicit prompt was given, CAPTION the photo with the local
+    // vision model (SmolVLM) and use that as the prompt for EVERY view. This
+    // replaces the old "pin the raw photo as the front view" approach — all
+    // views are now SD-generated from the caption + depth, so there's no
+    // photo-projection orientation/registration artifact, and front + back are
+    // stylistically consistent (shared caption + locked seed).
+    QString effectivePrompt = prompt;
+    if (effectivePrompt.isEmpty() && !frontPhotoPath.isEmpty()
+        && ImageCaptioner::isAvailable()) {
+        emit sdGenerationNotice(tr("Describing the image…"));
+        const QString capModel = ImageCaptioner::ensureModelBlocking();
+        if (!capModel.isEmpty()) {
+            QImage p(frontPhotoPath);
+            const QString cap = p.isNull() ? QString()
+                : ImageCaptioner::caption(p);
+            if (!cap.isEmpty()) {
+                effectivePrompt = cap;
+                emit sdGenerationNotice(tr("Image description: \"%1\"").arg(cap));
+            }
+        }
+        if (effectivePrompt.isEmpty())
+            emit sdGenerationNotice(tr("Image captioning unavailable — using a "
+                                       "neutral texture prompt."));
+    }
+    st->prompt = effectivePrompt.isEmpty()
         ? QStringLiteral("high quality seamless PBR texture, consistent colours, "
                          "matching the subject, even lighting")
-        : prompt;
+        : effectivePrompt;
     st->width = width > 0 ? width : 512;
     st->height = height > 0 ? height : 512;
     st->controlStrength = static_cast<float>(std::clamp(controlStrength, 0.0, 1.0));
@@ -4716,18 +4657,8 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
     for (const QString& vn : viewNames)
         st->views.push_back(resolveDepthView(vn));
 
-    // Pin the input photo as the FRONT view if supplied (TripoSG path): that
-    // view is textured from the real image instead of an SD generation, so the
-    // front is photo-accurate while the other views stay SD-generated. Loaded
-    // here (main thread); startNextMultiViewGeneration skips SD for view 0.
-    if (!frontPhotoPath.isEmpty()) {
-        QImage p(frontPhotoPath);
-        if (!p.isNull())
-            st->frontPhoto = p.convertToFormat(QImage::Format_RGB888);
-        else
-            emit sdGenerationNotice(
-                "Front photo could not be loaded — generating that view too.");
-    }
+    // Describe-then-generate: every view is SD-generated from the caption
+    // above (no raw-photo pinning), so nothing else to stash here.
     st->generatePbrAfter = generatePbr;
 
     if (st->controlNetPath.isEmpty()) {
@@ -4789,48 +4720,6 @@ void MaterialEditorQML::startNextMultiViewGeneration()
     MultiViewTextureBaker::View bv;
     bv.viewProj = rr.projMatrix * rr.viewMatrix;
     bv.camDirection = rr.camDirection;
-
-    // Pinned front photo (view 0, TripoSG path): fill the view image from the
-    // real photo NOW — no SD call — and advance. This is the Metal-safe
-    // substitute for img2img: the front is the actual image, not a generation.
-    //
-    // REGISTRATION (the key correctness step): the raw photo's subject sits at
-    // an arbitrary size/offset relative to the depth-camera framing, so naive
-    // scaling projected photo features onto the wrong mesh features (eye→ear).
-    // Background-remove the photo, then fit its subject bbox onto the mesh
-    // SILHOUETTE bbox from this exact depth render — now the subject occupies
-    // the same screen footprint the mesh does, and projecting through the
-    // render's own view/proj matrices lands features in alignment.
-    if (!s.frontPhoto.isNull() && s.current == 0) {
-        QImage photoRb = s.frontPhoto;
-        // Composite the cut-out over a solid MAGENTA the subject is very
-        // unlikely to contain, so subjectBounds can find the foreground by
-        // colour difference (BackgroundRemover returns opaque RGB, not an
-        // alpha matte — an alpha test would select the whole frame).
-        const QRgb kBg = qRgb(255, 0, 255);
-        const QString bgModel = BackgroundRemover::ensureModelBlocking();
-        if (!bgModel.isEmpty()) {
-            BackgroundRemover::Options bgo;
-            bgo.bgR = qRed(kBg); bgo.bgG = qGreen(kBg); bgo.bgB = qBlue(kBg);
-            const BackgroundRemover::Result br =
-                BackgroundRemover::removeBackground(s.frontPhoto, bgModel, bgo);
-            if (!br.image.isNull())
-                photoRb = br.image;
-        }
-        QImage registered = registerPhotoToSilhouette(
-            photoRb.convertToFormat(QImage::Format_RGB888), rr.depth, kBg);
-        bv.image = registered.isNull()
-            ? s.frontPhoto.scaled(rr.depth.width(), rr.depth.height(),
-                                  Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-            : registered;
-        s.baked.push_back(bv);
-        ++s.current;
-        if (s.current >= s.views.size())
-            finishMultiViewBake();
-        else
-            startNextMultiViewGeneration();
-        return;
-    }
 
     s.baked.push_back(bv);  // image filled on completion
 
