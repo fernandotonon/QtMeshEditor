@@ -251,3 +251,57 @@ void RenameMorphTargetCommand::undo()
     removePosesByName(mesh.get(), mNewName, mEntity);
     buildPosesFromSlices(mesh.get(), mOldName, mSnapshot, mEntity);
 }
+
+// ──────────────── ReorderMorphTargetsCommand ────────────────────────
+
+ReorderMorphTargetsCommand::ReorderMorphTargetsCommand(Ogre::Entity* entity,
+                                                       const QStringList& oldOrder,
+                                                       const QStringList& newOrder,
+                                                       QUndoCommand* parent)
+    : QUndoCommand(parent),
+      mEntity(entity),
+      mOldOrder(oldOrder),
+      mNewOrder(newOrder)
+{
+    setText(QStringLiteral("Reorder morph targets"));
+    if (mEntity) {
+        if (Ogre::MeshPtr mesh = mEntity->getMesh()) {
+            // Snapshot every target's slices once — both undo and redo rebuild
+            // from these, so the offsets survive the intermediate teardown.
+            for (const QString& n : mOldOrder)
+                mSnapshot[n] = snapshotByName(mesh.get(), n.toStdString());
+        }
+    }
+}
+
+void ReorderMorphTargetsCommand::applyOrder(const QStringList& order)
+{
+    if (!mEntity) return;
+    Ogre::MeshPtr mesh = mEntity->getMesh();
+    if (!mesh) return;
+
+    // Pose indices are positional and VAT_POSE keyframes reference them by
+    // index, so the only safe reorder is a full teardown + rebuild in the
+    // desired name-order. removePosesByName drops each target's poses +
+    // Animation; buildPosesFromSlices recreates them (and their keyframe
+    // references) fresh, in call order → the new display order.
+    for (const QString& n : order)
+        removePosesByName(mesh.get(), n, mEntity);
+    for (const QString& n : order) {
+        auto it = mSnapshot.find(n);
+        if (it != mSnapshot.end())
+            buildPosesFromSlices(mesh.get(), n, it->second, mEntity);
+    }
+}
+
+void ReorderMorphTargetsCommand::redo()
+{
+    applyOrder(mNewOrder);
+    SentryReporter::addBreadcrumb("scene.anim.morph",
+        QStringLiteral("reorder targets"));
+}
+
+void ReorderMorphTargetsCommand::undo()
+{
+    applyOrder(mOldOrder);
+}

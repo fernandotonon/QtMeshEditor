@@ -13,6 +13,7 @@ The MIT License
 
 #include <QUndoCommand>
 #include <QString>
+#include <QStringList>
 
 #include <OgreVector.h>
 
@@ -92,6 +93,31 @@ private:
     QString mOldName;
     QString mNewName;
     std::vector<MorphPoseSlice> mSnapshot;
+};
+
+// ReorderMorphTargetsCommand: change the display order of morph targets.
+// The order is defined by the sequence of unique names in the mesh's pose
+// list; VAT_POSE keyframes reference poses by INDEX, so a reorder rebuilds
+// every target's poses + driving Animation in the new order (recreating the
+// keyframe references correctly). Undo restores the previous order. Captures
+// both orders + a per-name slice snapshot at construction.
+class ReorderMorphTargetsCommand : public QUndoCommand
+{
+public:
+    ReorderMorphTargetsCommand(Ogre::Entity* entity,
+                               const QStringList& oldOrder,
+                               const QStringList& newOrder,
+                               QUndoCommand* parent = nullptr);
+    void undo() override;
+    void redo() override;
+
+private:
+    void applyOrder(const QStringList& order);
+    Ogre::Entity* mEntity = nullptr;
+    QStringList mOldOrder;
+    QStringList mNewOrder;
+    // name -> its pose slices, captured up-front so rebuild is exact.
+    std::map<QString, std::vector<MorphPoseSlice>> mSnapshot;
 };
 
 #endif // MORPH_COMMANDS_H

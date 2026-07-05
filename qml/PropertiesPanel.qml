@@ -7230,16 +7230,26 @@ Rectangle {
                     }
                 }
 
-                // Inline name-entry popup for "Add from edit…". Kept
-                // simple (no styled component) so a misbehaving custom
-                // dialog can't break the rest of the panel — Popup is
-                // a built-in Qt Quick Controls primitive with no
-                // singleton dependencies.
+                // Inline name-entry popup for "Add from edit…". Themed to
+                // match the Inspector (panel background + border) rather than
+                // the default Qt Quick Controls chrome.
                 Popup {
                     id: addNamePopup
                     modal: true
                     focus: true
                     width: 240
+                    padding: 10
+                    // Focus must be forced AFTER the popup is shown — a
+                    // forceActiveFocus() in the TextField's Component.onCompleted
+                    // runs while the popup is still hidden, so it never sticks
+                    // (the reported "can't type in the input" bug).
+                    onOpened: addNameField.forceActiveFocus()
+                    background: Rectangle {
+                        color: PropertiesPanelController.panelColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        radius: 4
+                    }
                     contentItem: Column {
                         spacing: 6
                         Text {
@@ -7251,9 +7261,23 @@ Rectangle {
                             id: addNameField
                             width: 220
                             font.pixelSize: 11
+                            color: PropertiesPanelController.textColor
+                            selectByMouse: true
+                            placeholderText: "e.g. Smile, BrowUp…"
+                            placeholderTextColor: Qt.rgba(
+                                PropertiesPanelController.textColor.r,
+                                PropertiesPanelController.textColor.g,
+                                PropertiesPanelController.textColor.b, 0.4)
+                            background: Rectangle {
+                                color: PropertiesPanelController.inputColor
+                                border.color: addNameField.activeFocus
+                                       ? PropertiesPanelController.highlightColor
+                                       : PropertiesPanelController.borderColor
+                                border.width: 1
+                                radius: 3
+                            }
                             onAccepted: addConfirmMa.confirm()
                             onTextChanged: addError.text = ""
-                            Component.onCompleted: forceActiveFocus()
                         }
                         // Inline error: shown when the C++ side rejects
                         // the request (duplicate name, no vertex moved,
@@ -7415,7 +7439,9 @@ Rectangle {
                         Slider {
                             id: weightSlider
                             from: 0; to: 1; stepSize: 0.01
-                            width: parent.width - 222
+                            // name(120) + weight(36) + up(16) + down(16) +
+                            // delete(18) + row spacings ≈ 254 reserved.
+                            width: parent.width - 254
                             // Bind to `weightTick` so changes that
                             // bypass user drag (Reset all, MCP, future
                             // dope-sheet scrubs) refresh the readout.
@@ -7430,6 +7456,55 @@ Rectangle {
                             font.pixelSize: 10
                             width: 36
                             anchors.verticalCenter: parent.verticalCenter
+                        }
+                        // Move up (▲) — reorder via ReorderMorphTargetsCommand
+                        // (undoable). Disabled on the first row. Reorder is only
+                        // meaningful with no filter applied (the index maps to
+                        // the full list), so hide the arrows while filtering.
+                        Rectangle {
+                            width: 16; height: 18; radius: 3
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: morphCol.filter === "" && morphCol.targetCount > 1
+                            opacity: index > 0 ? 1.0 : 0.3
+                            color: morphUpMa.containsMouse && index > 0
+                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                   : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "▲"; color: PropertiesPanelController.textColor
+                                font.pixelSize: 9
+                            }
+                            MouseArea {
+                                id: morphUpMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                enabled: index > 0
+                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                onClicked: MorphAnimationManager.moveMorphTarget(modelData, -1)
+                            }
+                        }
+                        // Move down (▼) — disabled on the last row.
+                        Rectangle {
+                            width: 16; height: 18; radius: 3
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: morphCol.filter === "" && morphCol.targetCount > 1
+                            opacity: index < morphCol.targetCount - 1 ? 1.0 : 0.3
+                            color: morphDownMa.containsMouse && index < morphCol.targetCount - 1
+                                   ? Qt.lighter(PropertiesPanelController.headerColor, 1.3)
+                                   : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "▼"; color: PropertiesPanelController.textColor
+                                font.pixelSize: 9
+                            }
+                            MouseArea {
+                                id: morphDownMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                enabled: index < morphCol.targetCount - 1
+                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                onClicked: MorphAnimationManager.moveMorphTarget(modelData, 1)
+                            }
                         }
                         // Delete (×) — drops the pose + animation
                         // through DeleteMorphTargetCommand so Ctrl+Z

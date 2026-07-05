@@ -10,7 +10,10 @@
 #include "AnimationMerger.h"
 #include "CurveEditModel.h"
 #include "EditModeController.h"
+#include "MorphAnimationManager.h"
 #include "SentryReporter.h"
+
+#include <QSet>
 #include "MeshImporterExporter.h"
 #include "UndoManager.h"
 #include "commands/ApplyMaterialCommand.h"
@@ -772,16 +775,30 @@ QVariantList PropertiesPanelController::animationData() const
         entityGroup["showSkeleton"] = mAnimationWidget ? mAnimationWidget->isSkeletonDebugActive(ent) : false;
         entityGroup["showWeights"] = mAnimationWidget ? mAnimationWidget->isBoneWeightsShown(ent) : false;
 
+        // Morph targets are each backed by a same-named Ogre::Animation, so
+        // getAllAnimationStates() lists every blend shape as a "clip". They're
+        // authored/edited in the Edit-Mode "Vertex Morph Animation" group, not
+        // here — filter them out so Animation Mode shows only real animation
+        // clips (skeletal + Alembic vertex caches), by NAME. A vertex-cache
+        // clip is NOT a pose name, so it survives the filter.
+        QSet<QString> morphNames;
+        for (const QString& n : MorphAnimationManager::instance()->morphTargetsFor(ent))
+            morphNames.insert(n);
+
         QVariantList anims;
         for (const auto& [key, state] : states->getAnimationStates())
         {
+            const QString name = QString::fromStdString(key);
+            if (morphNames.contains(name)) continue;   // blend shape, not a clip
             QVariantMap anim;
-            anim["name"] = QString::fromStdString(key);
+            anim["name"] = name;
             anim["enabled"] = state->getEnabled();
             anim["loop"] = state->getLoop();
             anim["length"] = state->getLength();
             anims.append(anim);
         }
+        // Skip an entity that only had morph targets — its group would be empty.
+        if (anims.isEmpty()) continue;
         entityGroup["animations"] = anims;
         result.append(entityGroup);
     }

@@ -312,3 +312,56 @@ bool MorphAnimationManager::deleteMorphTarget(const QString& name)
     emit morphTargetsChanged();
     return true;
 }
+
+bool MorphAnimationManager::moveMorphTarget(const QString& name, int delta)
+{
+    assertMainThread();
+    if (name.isEmpty() || delta == 0) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+
+    const QStringList order = morphTargetsFor(entity);
+    const int from = order.indexOf(name);
+    if (from < 0) return false;
+    int to = from + delta;
+    if (to < 0) to = 0;
+    if (to > order.size() - 1) to = order.size() - 1;
+    if (to == from) return false;   // already at the edge → no-op
+
+    return moveMorphTargetToIndex(name, to);
+}
+
+bool MorphAnimationManager::moveMorphTargetToIndex(const QString& name, int toIndex)
+{
+    assertMainThread();
+    if (name.isEmpty()) return false;
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return false;
+    auto ents = sel->getResolvedEntities();
+    if (ents.isEmpty() || !ents.first()) return false;
+    Ogre::Entity* entity = ents.first();
+
+    const QStringList oldOrder = morphTargetsFor(entity);
+    const int from = oldOrder.indexOf(name);
+    if (from < 0) return false;
+    int to = toIndex;
+    if (to < 0) to = 0;
+    if (to > oldOrder.size() - 1) to = oldOrder.size() - 1;
+    if (to == from) return false;
+
+    QStringList newOrder = oldOrder;
+    newOrder.move(from, to);
+    if (newOrder == oldOrder) return false;
+
+    auto* undo = UndoManager::getSingleton();
+    if (!undo) return false;
+    undo->push(new ReorderMorphTargetsCommand(entity, oldOrder, newOrder));
+
+    emit morphTargetsChanged();
+    return true;
+}

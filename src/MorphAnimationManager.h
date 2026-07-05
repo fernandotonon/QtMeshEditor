@@ -93,6 +93,16 @@ public:
     /// Animation, and resets any AnimationState that referenced it.
     Q_INVOKABLE bool deleteMorphTarget(const QString& name);
 
+    /// Reorder morph targets: move `name` by `delta` positions in the display
+    /// order (-1 = up, +1 = down; larger jumps clamp to the ends). Pushes an
+    /// undoable ReorderMorphTargetsCommand. Returns false if the move is a
+    /// no-op (already at the edge / name not found / no selection).
+    Q_INVOKABLE bool moveMorphTarget(const QString& name, int delta);
+
+    /// Reorder by absolute index: move `name` to position `toIndex` in the
+    /// display order (for drag-and-drop). Returns false on a no-op.
+    Q_INVOKABLE bool moveMorphTargetToIndex(const QString& name, int toIndex);
+
 signals:
     /// Emitted when a morph weight on any entity is changed via
     /// `setWeight`. QML uses this to re-fetch values.
