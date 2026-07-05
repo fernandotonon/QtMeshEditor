@@ -4558,24 +4558,40 @@ MeshDepthRenderer::View resolveDepthView(const QString& name)
     return MeshDepthRenderer::front();
 }
 
-// Tight bounding box of the "occupied" pixels of an image. For a DEPTH map
-// that's the mesh silhouette (near=white/far=black over a black background):
-// any pixel brighter than `lumaThresh` counts. For an ALPHA-carrying photo
-// (background removed) pass useAlpha=true to use the alpha channel instead.
-QRect occupiedBounds(const QImage& img, bool useAlpha, int thresh = 8)
+// Tight bounding box of the mesh silhouette in a DEPTH map (near=white/
+// far=black over a black background): any pixel brighter than `thresh` counts.
+QRect silhouetteBounds(const QImage& depth, int thresh = 8)
+{
+    int minX = depth.width(), minY = depth.height(), maxX = -1, maxY = -1;
+    for (int y = 0; y < depth.height(); ++y)
+        for (int x = 0; x < depth.width(); ++x)
+            if (qGray(depth.pixel(x, y)) > thresh) {
+                minX = std::min(minX, x); minY = std::min(minY, y);
+                maxX = std::max(maxX, x); maxY = std::max(maxY, y);
+            }
+    if (maxX < 0) return QRect();
+    return QRect(minX, minY, maxX - minX + 1, maxY - minY + 1);
+}
+
+// Tight bounding box of the FOREGROUND subject in a background-removed photo.
+// BackgroundRemover returns RGB composited over a SOLID known colour (no
+// alpha), so the subject is every pixel that differs from that background
+// beyond `tol` (per-channel). (Using alpha here was wrong — the composited
+// image is fully opaque, so an alpha test selected the whole frame.)
+QRect subjectBounds(const QImage& img, QRgb bg, int tol = 24)
 {
     int minX = img.width(), minY = img.height(), maxX = -1, maxY = -1;
-    for (int y = 0; y < img.height(); ++y) {
+    const int br = qRed(bg), bgn = qGreen(bg), bb = qBlue(bg);
+    for (int y = 0; y < img.height(); ++y)
         for (int x = 0; x < img.width(); ++x) {
             const QRgb p = img.pixel(x, y);
-            const int v = useAlpha ? qAlpha(p) : qGray(p);
-            if (v > thresh) {
+            if (std::abs(qRed(p) - br) > tol || std::abs(qGreen(p) - bgn) > tol
+                || std::abs(qBlue(p) - bb) > tol) {
                 minX = std::min(minX, x); minY = std::min(minY, y);
                 maxX = std::max(maxX, x); maxY = std::max(maxY, y);
             }
         }
-    }
-    if (maxX < 0) return QRect();  // empty
+    if (maxX < 0) return QRect();
     return QRect(minX, minY, maxX - minX + 1, maxY - minY + 1);
 }
 
@@ -4590,10 +4606,10 @@ QRect occupiedBounds(const QImage& img, bool useAlpha, int thresh = 8)
 // the baker's facing weights on the front). Null if either bbox is empty
 // (caller falls back to the naive scale).
 QImage registerPhotoToSilhouette(const QImage& photoRemovedBg,
-                                  const QImage& depth)
+                                  const QImage& depth, QRgb bg)
 {
-    const QRect meshBox = occupiedBounds(depth, /*useAlpha=*/false);
-    const QRect subjBox = occupiedBounds(photoRemovedBg, /*useAlpha=*/true);
+    const QRect meshBox = silhouetteBounds(depth);
+    const QRect subjBox = subjectBounds(photoRemovedBg, bg);
     if (!meshBox.isValid() || !subjBox.isValid()
         || subjBox.width() <= 0 || subjBox.height() <= 0)
         return QImage();
@@ -4766,15 +4782,22 @@ void MaterialEditorQML::startNextMultiViewGeneration()
     // render's own view/proj matrices lands features in alignment.
     if (!s.frontPhoto.isNull() && s.current == 0) {
         QImage photoRb = s.frontPhoto;
+        // Composite the cut-out over a solid MAGENTA the subject is very
+        // unlikely to contain, so subjectBounds can find the foreground by
+        // colour difference (BackgroundRemover returns opaque RGB, not an
+        // alpha matte — an alpha test would select the whole frame).
+        const QRgb kBg = qRgb(255, 0, 255);
         const QString bgModel = BackgroundRemover::ensureModelBlocking();
         if (!bgModel.isEmpty()) {
+            BackgroundRemover::Options bgo;
+            bgo.bgR = qRed(kBg); bgo.bgG = qGreen(kBg); bgo.bgB = qBlue(kBg);
             const BackgroundRemover::Result br =
-                BackgroundRemover::removeBackground(s.frontPhoto, bgModel, {});
+                BackgroundRemover::removeBackground(s.frontPhoto, bgModel, bgo);
             if (!br.image.isNull())
-                photoRb = br.image;   // carries alpha for the subject
+                photoRb = br.image;
         }
         QImage registered = registerPhotoToSilhouette(
-            photoRb.convertToFormat(QImage::Format_ARGB32), rr.depth);
+            photoRb.convertToFormat(QImage::Format_RGB888), rr.depth, kBg);
         bv.image = registered.isNull()
             ? s.frontPhoto.scaled(rr.depth.width(), rr.depth.height(),
                                   Qt::IgnoreAspectRatio, Qt::SmoothTransformation)

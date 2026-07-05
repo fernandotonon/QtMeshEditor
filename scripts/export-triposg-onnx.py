@@ -459,7 +459,7 @@ def main():
             from onnxruntime.quantization import quantize_dynamic, QuantType
             int8_path = os.path.join(args.out, "triposg_dit_step_int8.onnx")
             # per_channel is ESSENTIAL here: per-tensor dynamic quant on this
-            # DiT compounds over the flow loop (2 CFG calls/step, guidance 7×)
+            # DiT compounds over the flow loop (2 CFG calls/step, guidance 7x)
             # and the decoded field degenerates into disconnected noise blobs.
             # Verified live: fp32 → coherent figure; per-tensor int8 → noise.
             quantize_dynamic(dit_path, int8_path, weight_type=QuantType.QInt8,
@@ -505,6 +505,7 @@ def main():
     log("verify" if split_ok else "warn",
         f"kv-split vs vae.decode(): match={split_ok} "
         f"max|diff|={float((sdf_ref - sdf_upstream).abs().max()):.3e}")
+    split_graphs_available = True
     if not split_ok:
         log("error", "kv-cache split does NOT reproduce upstream decode — the "
                      "split VAE graphs are WRONG and must not be shipped.")
@@ -516,6 +517,7 @@ def main():
             if os.path.exists(p):
                 os.remove(p)
                 log("error", f"  removed mismatched {f}")
+        split_graphs_available = False
         if not args.monolithic:
             log("error", "  re-run with --monolithic to ship the unsplit graph, "
                          "or fix the split. Aborting.")
@@ -557,20 +559,28 @@ def main():
         log("verify", f"ORT dit_step B=1 {v1.shape} "
                       f"match-B2-row0={np.allclose(v1, v[:1], atol=1e-3)}")
 
-        s = sess(vae_lat_path)
-        kv = s.run(None, {"latents": lat1.numpy()})[0]
-        rel = np.abs(kv - kv_ref.numpy()).max() / (np.abs(kv_ref.numpy()).max() + 1e-9)
-        log("verify", f"ORT vae_latents {kv.shape} max-rel-err={rel:.2e}")
+        # The split VAE graphs only exist when the kv-split matched upstream
+        # (else they were quarantined above). Skip their ORT checks when they
+        # were removed; the monolithic graph is verified against sdf_upstream
+        # below in that case.
+        d = None
+        if split_graphs_available:
+            s = sess(vae_lat_path)
+            kv = s.run(None, {"latents": lat1.numpy()})[0]
+            rel = np.abs(kv - kv_ref.numpy()).max() / (np.abs(kv_ref.numpy()).max() + 1e-9)
+            log("verify", f"ORT vae_latents {kv.shape} max-rel-err={rel:.2e}")
 
-        s = sess(vae_q_path)
-        d = s.run(None, {"kv_cache": kv, "points": dummy_pts.numpy()})[0]
-        rel = np.abs(d - sdf_ref.numpy()).max() / (np.abs(sdf_ref.numpy()).max() + 1e-9)
-        log("verify", f"ORT vae_decoder {d.shape} max-rel-err={rel:.2e}")
-        # dynamic-P check with an odd chunk size
-        d2 = s.run(None, {"kv_cache": kv,
-                          "points": dummy_pts[:, :777].numpy()})[0]
-        log("verify", f"ORT vae_decoder P=777 {d2.shape} "
-                      f"match={np.allclose(d2, d[:, :777], atol=1e-3)}")
+            s = sess(vae_q_path)
+            d = s.run(None, {"kv_cache": kv, "points": dummy_pts.numpy()})[0]
+            rel = np.abs(d - sdf_ref.numpy()).max() / (np.abs(sdf_ref.numpy()).max() + 1e-9)
+            log("verify", f"ORT vae_decoder {d.shape} max-rel-err={rel:.2e}")
+            # dynamic-P check with an odd chunk size
+            d2 = s.run(None, {"kv_cache": kv,
+                              "points": dummy_pts[:, :777].numpy()})[0]
+            log("verify", f"ORT vae_decoder P=777 {d2.shape} "
+                          f"match={np.allclose(d2, d[:, :777], atol=1e-3)}")
+        else:
+            log("warn", "ORT vae split checks skipped (graphs quarantined).")
 
         if not args.no_quant and os.path.exists(
                 os.path.join(args.out, "triposg_dit_step_int8.onnx")):
@@ -586,8 +596,12 @@ def main():
             s = sess(os.path.join(args.out, "triposg_vae_decode_mono.onnx"))
             dm = s.run(None, {"latents": lat1.numpy(),
                               "points": dummy_pts.numpy()})[0]
+            # Compare against the split output when it exists, else against the
+            # torch upstream reference (the split graphs were quarantined).
+            ref = d if d is not None else sdf_upstream.numpy()
+            label = "match-split" if d is not None else "match-upstream"
             log("verify", f"ORT vae_decode_mono {dm.shape} "
-                          f"match-split={np.allclose(dm, d, atol=1e-3)}")
+                          f"{label}={np.allclose(dm, ref, atol=1e-3)}")
 
     log("done", "export complete. Host the .onnx files (and the DiT "
                 ".onnx.data sidecar) under triposg/ on the HF models repo.")

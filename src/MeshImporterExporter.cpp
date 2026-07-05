@@ -792,6 +792,14 @@ static std::vector<aiMesh*> splitLargeAiMesh(aiMesh* aiM)
     // Don't risk skinned / morph meshes — leave them for a dedicated pass.
     if (aiM->mNumBones > 0 || aiM->mNumAnimMeshes > 0)
         return { aiM };
+    // Only split all-triangle meshes. readSubmeshGeometry deliberately emits
+    // quads / n-gons from the cached qtme.faces list; the per-face repack
+    // below is triangle-only, so splitting a polygon mesh would DROP those
+    // faces. A >65k-vertex quad/n-gon mesh is rare — leave it intact (correct,
+    // if still subject to the Assimp exporter cap) rather than lose geometry.
+    for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
+        if (aiM->mFaces[f].mNumIndices != 3)
+            return { aiM };
 
     const bool hasN  = aiM->mNormals != nullptr;
     const bool hasUV = aiM->mTextureCoords[0] != nullptr;
