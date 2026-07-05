@@ -408,6 +408,11 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
     if (!node) return nullptr;
     Ogre::MeshPtr ptr = Ogre::MeshManager::getSingleton().getByName(mesh->getName());
     mgr->createEntity(node, ptr);
+    // Both image-to-3D backends reconstruct into a unit-ish box that lands the
+    // model quite small in the editor scene; scale x2 so it arrives at a
+    // workable size (matches TripoSR + TripoSG). Applied on the node, so it's
+    // baked into any export via the node transform.
+    node->setScale(2.0f, 2.0f, 2.0f);
     return node;
 }
 
