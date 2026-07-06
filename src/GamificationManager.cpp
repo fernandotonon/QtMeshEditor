@@ -580,7 +580,10 @@ void GamificationManager::flushNow()
     QPointer<GamificationManager> self(this);
     QThread* worker = QThread::create([self, token, featureBatch, operationBatch]() {
         const FlushOutcome outcome = performFlush(token, featureBatch, operationBatch);
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, outcome]() {
+        auto* app = QCoreApplication::instance();
+        if (!app)
+            return;  // app teardown raced the worker; nothing to deliver to
+        QMetaObject::invokeMethod(app, [self, outcome]() {
             if (!self)
                 return;
             self->m_flushInFlight = false;
@@ -670,7 +673,10 @@ void GamificationManager::refreshStats()
     QThread* worker = QThread::create([self, token]() {
         const QtMeshCloudClient::GamificationStatsResult result =
             QtMeshCloudClient::fetchGamificationStats(token);
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, result]() {
+        auto* app = QCoreApplication::instance();
+        if (!app)
+            return;  // app teardown raced the worker; nothing to deliver to
+        QMetaObject::invokeMethod(app, [self, result]() {
             if (!self)
                 return;
             self->m_statsRefreshInFlight = false;
@@ -842,7 +848,10 @@ void GamificationManager::performCloudDelete(const QString& token)
     QThread* worker = QThread::create([self, token]() {
         const QtMeshCloudClient::UploadResult result =
             QtMeshCloudClient::deleteGamificationData(token);
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, result]() {
+        auto* app = QCoreApplication::instance();
+        if (!app)
+            return;  // app teardown raced the worker; nothing to deliver to
+        QMetaObject::invokeMethod(app, [self, result]() {
             if (!self)
                 return;
             self->m_deleteInFlight = false;
@@ -870,7 +879,10 @@ void GamificationManager::refreshCloudPrefs()
     QThread* worker = QThread::create([self, token]() {
         const QtMeshCloudClient::GamificationPrefsResult result =
             QtMeshCloudClient::fetchGamificationPrefs(token);
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, result]() {
+        auto* app = QCoreApplication::instance();
+        if (!app)
+            return;  // app teardown raced the worker; nothing to deliver to
+        QMetaObject::invokeMethod(app, [self, result]() {
             if (!self || !result.ok)
                 return;
             self->m_profilePublic = result.profilePublic;
@@ -896,7 +908,10 @@ void GamificationManager::setProfilePublic(bool isPublic)
         patch.insert(QStringLiteral("profilePublic"), isPublic);
         const QtMeshCloudClient::GamificationPrefsResult result =
             QtMeshCloudClient::setGamificationPrefs(token, patch);
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, result, isPublic]() {
+        auto* app = QCoreApplication::instance();
+        if (!app)
+            return;  // app teardown raced the worker; nothing to deliver to
+        QMetaObject::invokeMethod(app, [self, result, isPublic]() {
             if (!self)
                 return;
             self->m_profilePublic = result.ok ? result.profilePublic : self->m_profilePublic;
