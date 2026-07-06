@@ -26,9 +26,16 @@
 namespace ImageCaptioner {
 
 // True only when built with ENABLE_LOCAL_LLM.
+// A DETAIL-seeking prompt: SmolVLM-500M defaults to terse answers ("a
+// rabbit"), which makes a weak texture prompt. Explicitly ask for a rich,
+// comma-separated visual description (colours, materials, markings, surface)
+// and forbid the one-word reply, so the caption feeds SD with real texture cues.
 static constexpr const char* kDefaultPrompt =
-    "Describe the main object in this image in a short phrase for a texture "
-    "prompt: its type, colours, and materials. Answer with only the phrase.";
+    "Describe this object in detail as a comma-separated visual texture prompt: "
+    "its type, all colours, materials, surface texture, patterns and markings. "
+    "Be specific and descriptive, not a single word. Example: 'a fluffy brown "
+    "and white rabbit, soft short fur, pink inner ears, dark eyes'. "
+    "Answer with only the description.";
 
 bool isAvailable();
 

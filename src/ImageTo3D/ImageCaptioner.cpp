@@ -25,6 +25,11 @@ namespace ImageCaptioner {
 namespace {
 // SmolVLM-500M-Instruct (Apache-2.0), the model + its vision projector. Hosted
 // on the QtMeshEditor models repo under caption/ (mirrored from ggml-org).
+// It's the smallest/fastest tier — captions are terse ("a rabbit"). For richer
+// descriptions a future "quality" tier can swap in Moondream2 (~1.7 GB) or
+// Qwen2-VL-2B (~1.5 GB), both Apache-2.0 + llama.cpp libmtmd-supported (see the
+// #764 captioner research); the detail-seeking prompt in the header pushes the
+// 500M model as far as it goes without the extra download.
 constexpr const char* kModelFile  = "SmolVLM-500M-Instruct-Q8_0.gguf";
 constexpr const char* kMmprojFile = "mmproj-SmolVLM-500M-Instruct-Q8_0.gguf";
 constexpr const char* kDefaultModelBaseUrl =
@@ -199,7 +204,7 @@ QString caption(const QImage& image, const QString& prompt)
         llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
 
         std::string out;
-        for (int i = 0; i < 64; ++i) {   // captions are short
+        for (int i = 0; i < 96; ++i) {   // room for a detailed comma-list
             const llama_token tok = llama_sampler_sample(smpl, lctx, -1);
             if (llama_vocab_is_eog(vocab, tok)) break;
             char buf[256];
