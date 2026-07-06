@@ -20,6 +20,7 @@
 #include <QTextStream>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstring>
 #include <unordered_map>
@@ -613,6 +614,26 @@ void restoreMesh(Ogre::Mesh* mesh, MeshSnapshot&& snap)
 
 namespace {
 
+// A weld epsilon proportional to the mesh's size, so xatlas merges the
+// near-coincident vertices that marching-cubes + smoothing (image-to-3D)
+// leave behind (its default ~1.2e-7 is effectively absolute and far too tight
+// for such meshes). ~1e-4 of the bounding-box diagonal is small enough to
+// preserve real detail but large enough to collapse sliver-producing dupes.
+inline float meshWeldEpsilon(const std::vector<float>& positions)
+{
+    if (positions.size() < 6) return 1.192092896e-07f;
+    float mn[3] = { positions[0], positions[1], positions[2] };
+    float mx[3] = { positions[0], positions[1], positions[2] };
+    for (size_t i = 0; i + 2 < positions.size(); i += 3)
+        for (int a = 0; a < 3; ++a) {
+            mn[a] = std::min(mn[a], positions[i + a]);
+            mx[a] = std::max(mx[a], positions[i + a]);
+        }
+    const float dx = mx[0] - mn[0], dy = mx[1] - mn[1], dz = mx[2] - mn[2];
+    const float diag = std::sqrt(dx * dx + dy * dy + dz * dz);
+    return std::max(1.192092896e-07f, diag * 1.0e-4f);
+}
+
 // Body of the unwrap shared between the destructive and the
 // keep-originals entry points. When `keepOriginalBuffers` is true,
 // the old `VertexData` / `IndexData` pointers are NOT deleted when
@@ -690,6 +711,14 @@ UvUnwrapReport runUnwrap(Ogre::Entity* entity,
         decl.vertexPositionStride = sizeof(float) * 3;
         decl.indexCount           = static_cast<uint32_t>(geoms[si].indices.size());
         decl.indexData            = geoms[si].indices.data();
+        // Weld near-coincident vertices. xatlas's default epsilon (~1.2e-7) is
+        // far too tight for marching-cubes + Taubin-smoothed meshes (image-to-3D
+        // output): near-but-not-exactly-coincident verts stay unmerged, leaving
+        // zero/near-zero-area sliver triangles that xatlas can't parameterize —
+        // they collapse to lines in UV space, producing the "star of thin
+        // streaks across the atlas + untextured patches" symptom. Scale the
+        // epsilon to the mesh so welding is proportional, not absolute.
+        decl.epsilon = std::max(1.192092896e-07f, meshWeldEpsilon(geoms[si].positions));
         decl.indexFormat          = xatlas::IndexFormat::UInt32;
         if (!faceIgnore.empty())
             decl.faceIgnoreData = reinterpret_cast<const bool*>(faceIgnore.data());
@@ -722,7 +751,14 @@ UvUnwrapReport runUnwrap(Ogre::Entity* entity,
     pack.resolution = static_cast<uint32_t>(std::max(64, opts.resolution));
     pack.padding    = static_cast<uint32_t>(std::max(0, opts.padding));
     pack.bilinear   = true;
-    xatlas::Generate(atlas, /*chartOptions=*/{}, pack);
+    // Chart quality: default maxIterations=1 seeds+grows once, which on noisy
+    // organic meshes leaves fragmented, distorted charts; 2 iterations produces
+    // rounder, better-parameterized charts. fixWinding enforces consistent UV
+    // winding so a flipped triangle can't invert a chart (another sliver source).
+    xatlas::ChartOptions chart;
+    chart.maxIterations = 2;
+    chart.fixWinding    = true;
+    xatlas::Generate(atlas, chart, pack);
 
     report.atlasWidth  = static_cast<int>(atlas->width);
     report.atlasHeight = static_cast<int>(atlas->height);

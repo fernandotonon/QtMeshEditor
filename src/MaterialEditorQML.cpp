@@ -11,7 +11,7 @@
 #include "ImageTo3D/BackgroundRemover.h"
 #include "ImageTo3D/ImageCaptioner.h"
 #include "UvUnwrap.h"
-#include <QPainter>
+#include "EditableMesh.h"
 #include "EmbeddedTextureCache.h"
 #include <OgreEntity.h>
 #include <OgreSubEntity.h>
@@ -4754,6 +4754,24 @@ void MaterialEditorQML::finishMultiViewBake()
     // only affects live skinned meshes), and they SHOULD keep the new UVs (the
     // texture binds to them and they're carried into any export).
     if (!entityHasUv0(entity)) {
+        // Clean degenerate (zero/near-zero-area) triangles FIRST. Marching
+        // cubes + Taubin smoothing (image-to-3D) leave slivers that xatlas
+        // can't parameterize — they collapse to lines in UV and produce the
+        // "streaks across the atlas + untextured patches" symptom. Removing
+        // them (plus the proportional weld epsilon inside unwrapEntity) gives
+        // xatlas clean charts.
+        {
+            EditableMesh em;
+            if (em.loadFromEntity(entity)) {
+                const int removed = em.removeDegenerateTriangles(1e-5f);
+                if (removed > 0) {
+                    em.commitToEntity(entity);
+                    emit sdGenerationNotice(
+                        tr("Cleaned %1 degenerate triangles before unwrap.")
+                            .arg(removed));
+                }
+            }
+        }
         emit sdGenerationNotice("Mesh has no UVs — auto-unwrapping before bake…");
         const UvUnwrapReport ur = UvUnwrap::unwrapEntity(entity);
         if (!ur.applied || !entityHasUv0(entity)) {
