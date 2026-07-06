@@ -7,7 +7,6 @@
 #include <QJsonDocument>
 #include <QLockFile>
 #include <QSaveFile>
-#include <QSet>
 #include <QtDebug>
 
 namespace {
@@ -27,6 +26,8 @@ QJsonObject GamificationEventQueue::entryToJson(const Entry& entry)
     QJsonObject o;
     o.insert(QStringLiteral("id"), entry.id);
     o.insert(QStringLiteral("kind"), entry.kind);
+    if (!entry.owner.isEmpty())
+        o.insert(QStringLiteral("owner"), entry.owner);
     o.insert(QStringLiteral("body"), entry.body);
     o.insert(QStringLiteral("queuedAt"), static_cast<double>(entry.queuedAt));
     return o;
@@ -37,6 +38,7 @@ GamificationEventQueue::Entry GamificationEventQueue::entryFromJson(const QJsonO
     Entry e;
     e.id = object.value(QStringLiteral("id")).toString();
     e.kind = object.value(QStringLiteral("kind")).toString();
+    e.owner = object.value(QStringLiteral("owner")).toString();
     e.body = object.value(QStringLiteral("body")).toObject();
     e.queuedAt = static_cast<qint64>(object.value(QStringLiteral("queuedAt")).toDouble());
     return e;
@@ -69,7 +71,8 @@ void GamificationEventQueue::loadLocked()
     QSet<QString> seen;
     for (const QJsonValue& v : events) {
         Entry e = entryFromJson(v.toObject());
-        if (e.id.isEmpty() || e.kind.isEmpty() || seen.contains(e.id))
+        if (e.id.isEmpty() || e.kind.isEmpty() || seen.contains(e.id)
+            || m_removedIds.contains(e.id))
             continue;
         seen.insert(e.id);
         m_entries.append(e);
@@ -100,14 +103,16 @@ bool GamificationEventQueue::saveLocked() const
 void GamificationEventQueue::mergeFromDisk()
 {
     // Union of in-memory entries and whatever another process persisted,
-    // keeping disk (older) entries first so eviction stays FIFO.
+    // keeping disk (older) entries first so eviction stays FIFO. Ids this
+    // instance removed are filtered on both sides (tombstones), so an
+    // acknowledge/clear can never be undone by a stale snapshot.
     const QList<Entry> mine = m_entries;
-    loadLocked();
+    loadLocked();  // already skips m_removedIds
     QSet<QString> seen;
     for (const Entry& e : std::as_const(m_entries))
         seen.insert(e.id);
     for (const Entry& e : mine) {
-        if (!seen.contains(e.id)) {
+        if (!seen.contains(e.id) && !m_removedIds.contains(e.id)) {
             seen.insert(e.id);
             m_entries.append(e);
         }
@@ -122,6 +127,15 @@ void GamificationEventQueue::enforceCapacity()
         qWarning() << "GamificationEventQueue: capacity" << m_capacity
                    << "exceeded — evicting oldest event" << dropped.id;
     }
+}
+
+void GamificationEventQueue::tombstone(const QSet<QString>& ids)
+{
+    m_removedIds.unite(ids);
+    // The tombstones only need to outlive concurrent stale snapshots, not the
+    // process — cap the set so a long editor session can't grow it unbounded.
+    if (m_removedIds.size() > 4 * m_capacity)
+        m_removedIds.clear();
 }
 
 bool GamificationEventQueue::append(const Entry& entry)
@@ -172,6 +186,7 @@ void GamificationEventQueue::acknowledge(const QStringList& ids)
     if (ids.isEmpty())
         return;
     const QSet<QString> acked(ids.cbegin(), ids.cend());
+    tombstone(acked);
     withFileLock([this, &acked]() {
         mergeFromDisk();
         for (int i = m_entries.size() - 1; i >= 0; --i) {
@@ -180,15 +195,54 @@ void GamificationEventQueue::acknowledge(const QStringList& ids)
         }
         saveLocked();
     });
+    // Even when the lock failed, drop them from memory — the tombstones keep
+    // the next successful merge/save from resurrecting them.
+    for (int i = m_entries.size() - 1; i >= 0; --i) {
+        if (acked.contains(m_entries.at(i).id))
+            m_entries.removeAt(i);
+    }
 }
 
-void GamificationEventQueue::clear()
+bool GamificationEventQueue::clear()
 {
-    withFileLock([this]() {
+    QSet<QString> ids;
+    bool saved = false;
+    const bool locked = withFileLock([this, &ids, &saved]() {
+        mergeFromDisk();
+        for (const Entry& e : std::as_const(m_entries))
+            ids.insert(e.id);
         m_entries.clear();
-        saveLocked();
+        saved = saveLocked();
     });
-    m_entries.clear();
+    if (!locked || !saved) {
+        // Persisted wipe failed: keep state so the caller can retry, and
+        // report the failure instead of pretending the data is gone.
+        return false;
+    }
+    tombstone(ids);
+    return true;
+}
+
+bool GamificationEventQueue::removeKind(const QString& kind)
+{
+    if (kind.isEmpty())
+        return true;
+    QSet<QString> ids;
+    bool saved = false;
+    const bool locked = withFileLock([this, &kind, &ids, &saved]() {
+        mergeFromDisk();
+        for (int i = m_entries.size() - 1; i >= 0; --i) {
+            if (m_entries.at(i).kind == kind) {
+                ids.insert(m_entries.at(i).id);
+                m_entries.removeAt(i);
+            }
+        }
+        saved = saveLocked();
+    });
+    if (!locked || !saved)
+        return false;
+    tombstone(ids);
+    return true;
 }
 
 void GamificationEventQueue::reload()

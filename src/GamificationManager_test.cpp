@@ -122,11 +122,13 @@ protected:
         CloudCredentialStore::resetCacheForTesting();
         cleanStorage();
         m_prevApiBase = qgetenv("QTMESH_API_BASE");
+        GamificationManager::setEmissionSuspended(false);
         GamificationManager::kill();
     }
 
     void TearDown() override
     {
+        GamificationManager::setEmissionSuspended(false);
         GamificationManager::kill();
         QSettings().clear();
         CloudCredentialStore::resetCacheForTesting();
@@ -340,6 +342,68 @@ TEST_F(GamificationManagerTest, SuggestionRotationAndDismissal)
     EXPECT_TRUE(gamify->suggestion().isEmpty());
     gamify->setNudgesEnabled(true);
     EXPECT_FALSE(gamify->suggestion().isEmpty());
+}
+
+TEST_F(GamificationManagerTest, ConsentPromptNotConsumedWithoutListener)
+{
+    // Headless contexts (CLI/MCP) have no MainWindow connected to
+    // consentPromptRequested — they must not burn the one-time GUI prompt.
+    signIn();
+    GamificationManager::instance();  // create WITHOUT a QSignalSpy attached
+    GamificationManager::noteFeature(QStringLiteral("retopo"));
+    EXPECT_FALSE(QSettings()
+                     .value(AppSettingsKeys::gamificationConsentPrompted(), false)
+                     .toBool());
+}
+
+TEST_F(GamificationManagerTest, EmissionSuspendedBlocksAllNotes)
+{
+    enableSync();
+    auto* gamify = GamificationManager::instance();
+    GamificationManager::setEmissionSuspended(true);
+    GamificationManager::noteFeature(QStringLiteral("retopo"));
+    GamificationManager::noteOperation(QStringLiteral("retopo"),
+                                       {{QStringLiteral("tris_before"), 10}});
+    EXPECT_EQ(gamify->pendingEventCount(), 0);
+    GamificationManager::setEmissionSuspended(false);
+    GamificationManager::noteFeature(QStringLiteral("retopo"));
+    EXPECT_EQ(gamify->pendingEventCount(), 1);
+}
+
+TEST_F(GamificationManagerTest, DisablingStreamDropsItsQueuedEvents)
+{
+    enableSync();
+    auto* gamify = GamificationManager::instance();
+    GamificationManager::noteFeature(QStringLiteral("retopo"));
+    GamificationManager::noteOperation(QStringLiteral("auto_rig"),
+                                       {{QStringLiteral("bones_created"), 19}});
+    // retopo feature + auto_rig feature alias + auto_rig operation
+    EXPECT_EQ(gamify->pendingEventCount(), 3);
+    gamify->setOpsEnabled(false);
+    EXPECT_EQ(gamify->pendingEventCount(), 2);  // operation dropped
+    gamify->setUsageEnabled(false);
+    EXPECT_EQ(gamify->pendingEventCount(), 0);  // features dropped
+}
+
+TEST_F(GamificationManagerTest, EventsFromAnotherAccountAreDroppedNotSent)
+{
+    GamifyHttpMock mock;
+    ASSERT_TRUE(mock.listen());
+    qputenv("QTMESH_API_BASE", mock.baseUrl().toUtf8());
+
+    enableSync();
+    signIn();
+    QSettings().setValue(AppSettingsKeys::cloudUserSlug(), QStringLiteral("user-a"));
+    auto* gamify = GamificationManager::instance();
+    GamificationManager::noteFeature(QStringLiteral("retopo"));
+    EXPECT_EQ(gamify->pendingEventCount(), 1);
+
+    // Account switch: same machine, different user.
+    QSettings().setValue(AppSettingsKeys::cloudUserSlug(), QStringLiteral("user-b"));
+    EXPECT_EQ(gamify->flushBlocking(), 0);
+    // user-a's event was dropped, not posted to user-b's account.
+    EXPECT_EQ(gamify->pendingEventCount(), 0);
+    EXPECT_TRUE(mock.paths.isEmpty());
 }
 
 TEST_F(GamificationManagerTest, AcceptAndDeclineConsent)

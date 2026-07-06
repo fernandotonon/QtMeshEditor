@@ -105,10 +105,63 @@ TEST_F(GamificationEventQueueTest, ClearDropsEverything)
 {
     GamificationEventQueue queue(m_path);
     queue.append(makeEntry(QStringLiteral("a")));
-    queue.clear();
+    EXPECT_TRUE(queue.clear());
     EXPECT_TRUE(queue.isEmpty());
     GamificationEventQueue reloaded(m_path);
     EXPECT_TRUE(reloaded.isEmpty());
+}
+
+TEST_F(GamificationEventQueueTest, RemoveKindDropsOnlyThatKind)
+{
+    GamificationEventQueue queue(m_path);
+    queue.append(makeEntry(QStringLiteral("f1")));
+    queue.append(makeEntry(QStringLiteral("o1"), QStringLiteral("operation")));
+    queue.append(makeEntry(QStringLiteral("f2")));
+    EXPECT_TRUE(queue.removeKind(QStringLiteral("feature")));
+    EXPECT_EQ(queue.size(), 1);
+    EXPECT_EQ(queue.peek(QString(), 10).first().kind, QStringLiteral("operation"));
+    GamificationEventQueue reloaded(m_path);
+    EXPECT_EQ(reloaded.size(), 1);
+}
+
+TEST_F(GamificationEventQueueTest, StaleSnapshotCannotResurrectRemovedIds)
+{
+    // Process A holds entries in memory; process B acknowledges them on
+    // disk. A's next append must not write the removed ids back.
+    GamificationEventQueue a(m_path);
+    a.append(makeEntry(QStringLiteral("stale")));
+
+    GamificationEventQueue b(m_path);
+    b.acknowledge({QStringLiteral("stale")});
+    EXPECT_TRUE(b.isEmpty());
+
+    b.append(makeEntry(QStringLiteral("fresh")));  // b writes; 'stale' stays gone
+    GamificationEventQueue reloaded(m_path);
+    ASSERT_EQ(reloaded.size(), 1);
+    EXPECT_EQ(reloaded.peek(QString(), 10).first().id, QStringLiteral("fresh"));
+
+    // Same guarantee within one instance after clear().
+    GamificationEventQueue c(m_path);
+    EXPECT_TRUE(c.clear());
+    c.append(makeEntry(QStringLiteral("post-clear")));
+    EXPECT_EQ(c.size(), 1);
+    EXPECT_EQ(c.peek(QString(), 10).first().id, QStringLiteral("post-clear"));
+}
+
+TEST_F(GamificationEventQueueTest, OwnerRoundTripsThroughPersistence)
+{
+    {
+        GamificationEventQueue queue(m_path);
+        auto owned = makeEntry(QStringLiteral("owned"));
+        owned.owner = QStringLiteral("ada");
+        queue.append(owned);
+        queue.append(makeEntry(QStringLiteral("unclaimed")));
+    }
+    GamificationEventQueue reloaded(m_path);
+    const auto entries = reloaded.peek(QString(), 10);
+    ASSERT_EQ(entries.size(), 2);
+    EXPECT_EQ(entries.first().owner, QStringLiteral("ada"));
+    EXPECT_TRUE(entries.last().owner.isEmpty());
 }
 
 TEST_F(GamificationEventQueueTest, ConcurrentWritersMergeById)

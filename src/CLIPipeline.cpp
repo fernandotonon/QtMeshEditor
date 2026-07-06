@@ -1475,6 +1475,12 @@ int CLIPipeline::run(int argc, char* argv[])
     // pollute the CLI pipeline output (JSON, info text, etc.)
     redirectStdout();
 
+    // --no-telemetry also suppresses gamification events at every call site
+    // for this process — without this, operation notes inside the subcommands
+    // would land in the persistent queue and flush on a later run (#796).
+    if (s_noTelemetry)
+        GamificationManager::setEmissionSuspended(true);
+
     // Telemetry: --no-telemetry permanently opts out.
     // On first run (no stored preference), show a one-time notice and enable.
     // In ephemeral environments (Docker), QTMESH_NO_TELEMETRY_NOTICE=1
@@ -6713,11 +6719,12 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
     }
 
     emitDecimationReport(report, fi, cmdArgs.outputPath, cmdArgs.jsonOutput);
-    GamificationManager::noteOperation(
-        QStringLiteral("decimate_lod"),
-        {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
-         {QStringLiteral("tris_after"), report.totalTrianglesAfter}},
-        GamificationManager::Surface::Cli);
+    if (report.applied)
+        GamificationManager::noteOperation(
+            QStringLiteral("decimate_lod"),
+            {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
+             {QStringLiteral("tris_after"), report.totalTrianglesAfter}},
+            GamificationManager::Surface::Cli);
     return 0;
 }
 

@@ -13,6 +13,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaMethod>
 #include <QMetaObject>
 #include <QPointer>
 #include <QSettings>
@@ -21,6 +22,8 @@
 #include <QTimer>
 #include <QUrl>
 #include <QUuid>
+
+#include <atomic>
 
 namespace {
 
@@ -71,9 +74,21 @@ QJsonObject numericMetricsOnly(const QVariantMap& metrics)
     return out;
 }
 
+std::atomic<bool> g_emissionSuspended{false};
+
 }  // namespace
 
 GamificationManager* GamificationManager::s_singleton = nullptr;
+
+void GamificationManager::setEmissionSuspended(bool suspended)
+{
+    g_emissionSuspended.store(suspended);
+}
+
+bool GamificationManager::emissionSuspended()
+{
+    return g_emissionSuspended.load();
+}
 
 GamificationManager* GamificationManager::instance()
 {
@@ -160,7 +175,7 @@ QString GamificationManager::newEventId()
 void GamificationManager::noteFeature(const QString& featureKey, Surface surface)
 {
     auto* app = QCoreApplication::instance();
-    if (!app)
+    if (!app || emissionSuspended())
         return;
     if (QThread::currentThread() != app->thread()) {
         QMetaObject::invokeMethod(app, [featureKey, surface]() {
@@ -175,7 +190,7 @@ void GamificationManager::noteOperation(const QString& opType, const QVariantMap
                                         Surface surface)
 {
     auto* app = QCoreApplication::instance();
-    if (!app)
+    if (!app || emissionSuspended())
         return;
     if (QThread::currentThread() != app->thread()) {
         QMetaObject::invokeMethod(app, [opType, metrics, surface]() {
@@ -257,12 +272,18 @@ void GamificationManager::setSyncEnabled(bool enabled)
 void GamificationManager::setUsageEnabled(bool enabled)
 {
     QSettings().setValue(AppSettingsKeys::gamificationUsageEnabled(), enabled);
+    // Disabling a stream also drops its already-queued events — otherwise a
+    // later flush would still send data the user just opted out of.
+    if (!enabled)
+        m_queue.removeKind(QStringLiteral("feature"));
     emit prefsChanged();
 }
 
 void GamificationManager::setOpsEnabled(bool enabled)
 {
     QSettings().setValue(AppSettingsKeys::gamificationOpsEnabled(), enabled);
+    if (!enabled)
+        m_queue.removeKind(QStringLiteral("operation"));
     emit prefsChanged();
 }
 
@@ -300,6 +321,13 @@ bool GamificationManager::maybeRequestConsent()
     if (settings.value(AppSettingsKeys::gamificationConsentPrompted(), false).toBool())
         return false;
     if (!signedIn())
+        return false;
+    // Only consume the one-time prompt when someone can actually show it —
+    // a headless CLI/MCP process has no listener and must not burn the
+    // user's only chance to see the GUI dialog.
+    static const QMetaMethod promptSignal =
+        QMetaMethod::fromSignal(&GamificationManager::consentPromptRequested);
+    if (!isSignalConnected(promptSignal))
         return false;
     settings.setValue(AppSettingsKeys::gamificationConsentPrompted(), true);
     emit consentPromptRequested();
@@ -356,6 +384,7 @@ void GamificationManager::noteFeatureInternal(const QString& featureKey, Surface
     GamificationEventQueue::Entry entry;
     entry.id = body.value(QStringLiteral("id")).toString();
     entry.kind = QStringLiteral("feature");
+    entry.owner = currentEventOwner();
     entry.body = body;
     entry.queuedAt = QDateTime::currentMSecsSinceEpoch();
     m_queue.append(entry);
@@ -400,6 +429,7 @@ void GamificationManager::noteOperationInternal(const QString& opType,
     GamificationEventQueue::Entry entry;
     entry.id = body.value(QStringLiteral("id")).toString();
     entry.kind = QStringLiteral("operation");
+    entry.owner = currentEventOwner();
     entry.body = body;
     entry.queuedAt = QDateTime::currentMSecsSinceEpoch();
     m_queue.append(entry);
@@ -416,6 +446,34 @@ void GamificationManager::scheduleFlushSoon()
 {
     if (m_flushTimer && !m_flushTimer->isActive())
         m_flushTimer->start(kFlushDebounceMs);
+}
+
+QString GamificationManager::currentEventOwner() const
+{
+    if (!signedIn())
+        return {};
+    return QSettings().value(AppSettingsKeys::cloudUserSlug()).toString().trimmed();
+}
+
+QList<GamificationEventQueue::Entry> GamificationManager::flushableBatch(
+    const QString& kind, QStringList* dropIds) const
+{
+    // Only entries recorded for the CURRENT account (or logged-out
+    // "unclaimed" ones) may flush; entries stamped for a different account
+    // must never post to this one — they get dropped instead.
+    const QString owner = currentEventOwner();
+    QList<GamificationEventQueue::Entry> out;
+    const QList<GamificationEventQueue::Entry> all =
+        m_queue.peek(kind, -1);
+    for (const GamificationEventQueue::Entry& e : all) {
+        if (e.owner.isEmpty() || e.owner == owner) {
+            if (out.size() < QtMeshCloudClient::kGamificationMaxBatch)
+                out.append(e);
+        } else if (dropIds) {
+            dropIds->append(e.id);
+        }
+    }
+    return out;
 }
 
 GamificationManager::FlushOutcome GamificationManager::performFlush(
@@ -489,7 +547,7 @@ void GamificationManager::applyFlushOutcome(const FlushOutcome& outcome)
 
 void GamificationManager::flushNow()
 {
-    if (m_flushInFlight || m_queue.isEmpty())
+    if (m_flushInFlight || m_deleteInFlight || m_queue.isEmpty())
         return;
     if (!consentAcknowledged() || !syncEnabled())
         return;
@@ -503,10 +561,20 @@ void GamificationManager::flushNow()
         return;
 
     // Snapshot the batches on the main thread; the worker only does network.
+    // Streams disabled since queueing are NOT sent (their queued entries were
+    // dropped by the toggle, but gate again in case the setting changed
+    // out-of-band); entries stamped for a different account are dropped.
+    QStringList foreignIds;
     const QList<GamificationEventQueue::Entry> featureBatch =
-        m_queue.peek(QStringLiteral("feature"), QtMeshCloudClient::kGamificationMaxBatch);
+        usageEnabled() ? flushableBatch(QStringLiteral("feature"), &foreignIds)
+                       : QList<GamificationEventQueue::Entry>();
     const QList<GamificationEventQueue::Entry> operationBatch =
-        m_queue.peek(QStringLiteral("operation"), QtMeshCloudClient::kGamificationMaxBatch);
+        opsEnabled() ? flushableBatch(QStringLiteral("operation"), &foreignIds)
+                     : QList<GamificationEventQueue::Entry>();
+    if (!foreignIds.isEmpty())
+        m_queue.acknowledge(foreignIds);
+    if (featureBatch.isEmpty() && operationBatch.isEmpty())
+        return;
 
     m_flushInFlight = true;
     QPointer<GamificationManager> self(this);
@@ -517,6 +585,12 @@ void GamificationManager::flushNow()
                 return;
             self->m_flushInFlight = false;
             self->applyFlushOutcome(outcome);
+            // A delete-my-data request arrived while this flush was in
+            // flight: run it now that the flush can no longer race it.
+            if (self->m_deleteRequestedDuringFlush) {
+                self->m_deleteRequestedDuringFlush = false;
+                self->deleteCloudData();
+            }
         });
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
@@ -525,7 +599,7 @@ void GamificationManager::flushNow()
 
 int GamificationManager::flushBlocking(int timeoutMs)
 {
-    if (m_flushInFlight || m_queue.isEmpty())
+    if (m_flushInFlight || m_deleteInFlight || m_queue.isEmpty())
         return 0;
     if (!consentAcknowledged() || !syncEnabled() || !signedIn())
         return 0;
@@ -533,11 +607,21 @@ int GamificationManager::flushBlocking(int timeoutMs)
     if (token.isEmpty())
         return 0;
 
+    QStringList foreignIds;
+    const QList<GamificationEventQueue::Entry> featureBatch =
+        usageEnabled() ? flushableBatch(QStringLiteral("feature"), &foreignIds)
+                       : QList<GamificationEventQueue::Entry>();
+    const QList<GamificationEventQueue::Entry> operationBatch =
+        opsEnabled() ? flushableBatch(QStringLiteral("operation"), &foreignIds)
+                     : QList<GamificationEventQueue::Entry>();
+    if (!foreignIds.isEmpty())
+        m_queue.acknowledge(foreignIds);
+    if (featureBatch.isEmpty() && operationBatch.isEmpty())
+        return 0;
+
     m_flushInFlight = true;
-    const FlushOutcome outcome = performFlush(
-        token, m_queue.peek(QStringLiteral("feature"), QtMeshCloudClient::kGamificationMaxBatch),
-        m_queue.peek(QStringLiteral("operation"), QtMeshCloudClient::kGamificationMaxBatch),
-        qMax(500, timeoutMs));
+    const FlushOutcome outcome =
+        performFlush(token, featureBatch, operationBatch, qMax(500, timeoutMs));
     m_flushInFlight = false;
     if (!outcome.ackedIds.isEmpty())
         m_queue.acknowledge(outcome.ackedIds);
@@ -719,17 +803,41 @@ void GamificationManager::advanceSuggestion()
 
 void GamificationManager::deleteCloudData()
 {
+    // Serialize with flushing: a flush already in flight could recreate
+    // server-side rows right after the purge, so defer until it settles;
+    // m_deleteInFlight blocks any NEW flush from starting meanwhile.
+    m_deleteInFlight = true;
+    if (m_flushInFlight) {
+        m_deleteRequestedDuringFlush = true;
+        return;
+    }
+    if (m_flushTimer)
+        m_flushTimer->stop();
+
+    // Local half first — queued events must stop being upload-eligible the
+    // moment the user asks, regardless of how the server call goes.
+    const bool localCleared = m_queue.clear();
+    m_sessionNotedFeatures.clear();
+    m_snapshot = Gamification::StatsSnapshot();
+    QFile::remove(statsCachePath());
+    emit statsChanged();
+    emit suggestionChanged();
+
     const QString token = CloudCredentialStore::loadSession().token;
     if (token.isEmpty()) {
-        // Not signed in: still honor the local half of the request.
-        m_queue.clear();
-        m_snapshot = Gamification::StatsSnapshot();
-        QFile::remove(statsCachePath());
-        emit statsChanged();
-        emit deleteCloudDataFinished(true, QString());
+        m_deleteInFlight = false;
+        emit deleteCloudDataFinished(
+            localCleared, localCleared
+                              ? QString()
+                              : tr("Could not clear the local event queue — try again."));
         return;
     }
 
+    performCloudDelete(token);
+}
+
+void GamificationManager::performCloudDelete(const QString& token)
+{
     QPointer<GamificationManager> self(this);
     QThread* worker = QThread::create([self, token]() {
         const QtMeshCloudClient::UploadResult result =
@@ -737,14 +845,7 @@ void GamificationManager::deleteCloudData()
         QMetaObject::invokeMethod(QCoreApplication::instance(), [self, result]() {
             if (!self)
                 return;
-            if (result.ok) {
-                self->m_queue.clear();
-                self->m_sessionNotedFeatures.clear();
-                self->m_snapshot = Gamification::StatsSnapshot();
-                QFile::remove(self->statsCachePath());
-                emit self->statsChanged();
-                emit self->suggestionChanged();
-            }
+            self->m_deleteInFlight = false;
             SentryReporter::addBreadcrumb(QStringLiteral("gamify.prefs"),
                                           result.ok
                                               ? QStringLiteral("Gamification data deleted")
@@ -758,6 +859,10 @@ void GamificationManager::deleteCloudData()
 
 void GamificationManager::refreshCloudPrefs()
 {
+    // Opted-out users get zero gamification network traffic, including the
+    // prefs fetch the Preferences pane triggers.
+    if (!syncEnabled())
+        return;
     const QString token = CloudCredentialStore::loadSession().token;
     if (token.isEmpty())
         return;
@@ -778,6 +883,8 @@ void GamificationManager::refreshCloudPrefs()
 
 void GamificationManager::setProfilePublic(bool isPublic)
 {
+    if (!syncEnabled())
+        return;
     const QString token = CloudCredentialStore::loadSession().token;
     if (token.isEmpty())
         return;

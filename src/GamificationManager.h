@@ -71,6 +71,12 @@ public:
     /// clear). Set while browsing/uploading a cloud project.
     static void setProjectContext(const QString& ownerSlug, const QString& projectSlug);
 
+    /// Process-wide kill switch: while suspended, noteFeature/noteOperation
+    /// are no-ops at every call site (CLI --no-telemetry sets this before
+    /// dispatching the subcommand).
+    static void setEmissionSuspended(bool suspended);
+    static bool emissionSuspended();
+
     // ---- Flush / stats ----
 
     /// Async flush of the pending queue (no-op logged-out/opted-out/backoff).
@@ -159,6 +165,15 @@ private:
                                Surface surface);
     bool maybeRequestConsent();
     void scheduleFlushSoon();
+    /// Owner slug for events queued right now (empty when logged out).
+    QString currentEventOwner() const;
+    /// Snapshot a flushable batch of @p kind for the current account, and
+    /// collect (into @p dropIds) queued ids that belong to a DIFFERENT
+    /// account — those are never sent and get dropped.
+    QList<GamificationEventQueue::Entry> flushableBatch(const QString& kind,
+                                                        QStringList* dropIds) const;
+    /// Runs the server-side purge; local queue/cache were already cleared.
+    void performCloudDelete(const QString& token);
 
     struct FlushOutcome {
         bool attempted = false;
@@ -192,6 +207,10 @@ private:
     QTimer* m_flushTimer = nullptr;
     bool m_flushInFlight = false;
     bool m_statsRefreshInFlight = false;
+    /// Set while a delete-my-data request is pending or in flight: blocks
+    /// flushes so a racing flush can't recreate server-side data.
+    bool m_deleteInFlight = false;
+    bool m_deleteRequestedDuringFlush = false;
     int m_consecutiveFlushFailures = 0;
     qint64 m_nextFlushAllowedAt = 0;
     qint64 m_lastStatsRefreshAt = 0;

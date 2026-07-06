@@ -323,12 +323,14 @@ Rectangle {
                             Text { text: "Show \u201ctry this next\u201d suggestions on the welcome screen"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
                         }
 
-                        // Public profile (account-level; needs a cloud session)
+                        // Public profile (account-level; needs a cloud session
+                        // AND sync enabled — no cloud traffic when opted out)
                         Row {
                             spacing: 6
                             width: parent.width
-                            visible: GamificationManager.signedIn
-                            Component.onCompleted: GamificationManager.refreshCloudPrefs()
+                            visible: GamificationManager.signedIn && GamificationManager.syncEnabled
+                            onVisibleChanged: if (visible) GamificationManager.refreshCloudPrefs()
+                            Component.onCompleted: if (visible) GamificationManager.refreshCloudPrefs()
 
                             Rectangle {
                                 width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
