@@ -68,6 +68,7 @@ private:
     QWidgetAction* m_gamifyAction = nullptr;
     QAction* m_gamifySeparator = nullptr;
     QAction* m_achievementsAction = nullptr;
+    QAction* m_enableSyncAction = nullptr;
     bool m_uploadAssetAvailable = false;
 };
 

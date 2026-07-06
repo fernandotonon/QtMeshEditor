@@ -299,19 +299,34 @@ void CloudAccountMenuButton::buildMenu()
     gamifyLayout->addWidget(m_gamifyNextLabel);
     gamifyLayout->addWidget(m_gamifyNextBar);
 
+    // Like the header above, the gamification entries are physically added /
+    // removed from the menu in updateGamificationSection() — QMenu (macOS in
+    // particular) keeps painting hidden QWidgetActions and mis-tracks item
+    // hover geometry when actions are merely setVisible(false).
     m_gamifyAction = new QWidgetAction(m_menu);
     m_gamifyAction->setDefaultWidget(m_gamifyWidget);
     m_gamifyAction->setEnabled(false);
-    m_menu->addAction(m_gamifyAction);
 
-    m_achievementsAction = m_menu->addAction(tr("View My Achievements…"));
+    m_achievementsAction = new QAction(tr("View My Achievements…"), m_menu);
     m_achievementsAction->setObjectName(QStringLiteral("actionQtMeshCloudAchievements"));
     connect(m_achievementsAction, &QAction::triggered, this, []() {
         SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                       QStringLiteral("Cloud toolbar: View Achievements"));
         GamificationManager::instance()->openProfile();
     });
-    m_gamifySeparator = m_menu->addSeparator();
+
+    m_enableSyncAction = new QAction(tr("Enable Progress Sync…"), m_menu);
+    m_enableSyncAction->setObjectName(QStringLiteral("actionQtMeshCloudEnableSync"));
+    connect(m_enableSyncAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Enable Progress Sync"));
+        GamificationManager::instance()->acceptConsent();
+        GamificationManager::instance()->refreshStats();
+        refresh();
+    });
+
+    m_gamifySeparator = new QAction(m_menu);
+    m_gamifySeparator->setSeparator(true);
 
     m_openProjectsAction = m_menu->addAction(tr("My Cloud Projects…"));
     m_openProjectsAction->setObjectName(QStringLiteral("actionQtMeshCloudOpenProjects"));
@@ -388,12 +403,42 @@ void CloudAccountMenuButton::updateGamificationSection(bool signedIn)
         return;
 
     auto* gamify = GamificationManager::instance();
-    const bool showStats = signedIn && gamify->syncEnabled() && gamify->statsAvailable();
+    const bool syncOn = gamify->syncEnabled();
+    const bool showStats = signedIn && syncOn && gamify->statsAvailable();
+    const bool showSyncing = signedIn && syncOn && !gamify->statsAvailable();
+    const bool showEnable = signedIn && !syncOn;
+    const bool showAchievements = signedIn && syncOn && !gamify->profileUrl().isEmpty();
 
-    m_gamifyAction->setVisible(showStats);
-    m_gamifySeparator->setVisible(signedIn);
-    m_achievementsAction->setVisible(signedIn && gamify->syncEnabled()
-                                     && !gamify->profileUrl().isEmpty());
+    // Rebuild the section by physically removing / re-inserting the actions
+    // (before "My Cloud Projects…") — see the note in buildMenu().
+    for (QAction* action : {static_cast<QAction*>(m_gamifyAction), m_achievementsAction,
+                            m_enableSyncAction, m_gamifySeparator}) {
+        if (m_menu->actions().contains(action))
+            m_menu->removeAction(action);
+    }
+
+    if (showStats || showSyncing)
+        m_menu->insertAction(m_openProjectsAction, m_gamifyAction);
+    if (showEnable)
+        m_menu->insertAction(m_openProjectsAction, m_enableSyncAction);
+    if (showAchievements)
+        m_menu->insertAction(m_openProjectsAction, m_achievementsAction);
+    if (showStats || showSyncing || showEnable || showAchievements)
+        m_menu->insertAction(m_openProjectsAction, m_gamifySeparator);
+
+    m_menu->updateGeometry();
+    m_menu->adjustSize();
+    m_menu->update();
+
+    if (showSyncing) {
+        // Enabled but the first stats fetch hasn't landed yet (it refreshes
+        // async on menu open) — say so instead of showing an empty block.
+        m_gamifyLevelLabel->setText(tr("Syncing progress…"));
+        m_gamifyXpBar->setVisible(false);
+        m_gamifyNextLabel->setVisible(false);
+        m_gamifyNextBar->setVisible(false);
+        return;
+    }
     if (!showStats)
         return;
 
@@ -402,6 +447,7 @@ void CloudAccountMenuButton::updateGamificationSection(bool signedIn)
         levelText += tr(" · 🔥 %n-day streak", nullptr, gamify->currentStreak());
     m_gamifyLevelLabel->setText(levelText);
 
+    m_gamifyXpBar->setVisible(true);
     m_gamifyXpBar->setRange(0, qMax(1, gamify->xpSpan()));
     m_gamifyXpBar->setValue(qBound(0, gamify->xpIntoLevel(), qMax(1, gamify->xpSpan())));
     m_gamifyXpBar->setToolTip(tr("%1 / %2 XP to level %3")

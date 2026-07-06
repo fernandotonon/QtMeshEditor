@@ -265,8 +265,10 @@ void GamificationManager::setSyncEnabled(bool enabled)
                                   QStringLiteral("Progress sync %1")
                                       .arg(enabled ? QStringLiteral("enabled")
                                                    : QStringLiteral("disabled")));
-    if (enabled)
+    if (enabled) {
         scheduleFlushSoon();
+        refreshStats();
+    }
 }
 
 void GamificationManager::setUsageEnabled(bool enabled)
@@ -302,6 +304,8 @@ void GamificationManager::acceptConsent()
     emit prefsChanged();
     SentryReporter::addBreadcrumb(QStringLiteral("gamify.prefs"),
                                   QStringLiteral("Progress-sync consent accepted"));
+    refreshStats();
+    scheduleFlushSoon();
 }
 
 void GamificationManager::declineConsent()
