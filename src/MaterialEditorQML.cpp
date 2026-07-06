@@ -4584,12 +4584,14 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
                                                      const QString &frontPhotoPath,
                                                      bool generatePbr)
 {
-    // A pinned front photo can carry the whole "what to draw" signal, so the
-    // prompt is only required when there's no photo to anchor the front.
-    if (prompt.isEmpty() && frontPhotoPath.isEmpty()) {
-        emit sdGenerationError("Please enter a texture prompt");
-        return;
-    }
+    // No hard requirement for a prompt: the describe-then-generate flow may
+    // arrive with an empty caption (model not yet downloaded / captioner
+    // unavailable), and the code below falls back to a neutral texture prompt.
+    // Just note it so the user knows the result is generic rather than
+    // image-described.
+    if (prompt.isEmpty() && frontPhotoPath.isEmpty())
+        emit sdGenerationNotice(tr("No image description available — using a "
+                                   "neutral texture prompt."));
 #ifdef ENABLE_STABLE_DIFFUSION
     SDManager *sdManager = SDManager::instance();
     if (!sdManager->isModelLoaded()) {
