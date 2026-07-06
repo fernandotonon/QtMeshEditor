@@ -213,10 +213,12 @@ bool GamificationEventQueue::clear()
             ids.insert(e.id);
         m_entries.clear();
         saved = saveLocked();
+        if (!saved)
+            loadLocked();  // save failed — re-hydrate so memory matches disk
     });
     if (!locked || !saved) {
-        // Persisted wipe failed: keep state so the caller can retry, and
-        // report the failure instead of pretending the data is gone.
+        // Persisted wipe failed: state was restored so the caller can retry,
+        // and we report the failure instead of pretending the data is gone.
         return false;
     }
     tombstone(ids);
@@ -238,6 +240,8 @@ bool GamificationEventQueue::removeKind(const QString& kind)
             }
         }
         saved = saveLocked();
+        if (!saved)
+            loadLocked();  // save failed — re-hydrate so memory matches disk
     });
     if (!locked || !saved)
         return false;

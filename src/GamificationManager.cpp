@@ -915,11 +915,13 @@ void GamificationManager::setProfilePublic(bool isPublic)
         auto* app = QCoreApplication::instance();
         if (!app)
             return;  // app teardown raced the worker; nothing to deliver to
-        QMetaObject::invokeMethod(app, [self, result, isPublic]() {
-            if (!self)
+        QMetaObject::invokeMethod(app, [self, result]() {
+            GamificationManager* mgr = self.data();
+            if (!mgr)
                 return;
-            self->m_profilePublic = result.ok ? result.profilePublic : self->m_profilePublic;
-            emit self->cloudPrefsChanged();
+            if (result.ok)
+                mgr->m_profilePublic = result.profilePublic;
+            emit mgr->cloudPrefsChanged();
         });
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
