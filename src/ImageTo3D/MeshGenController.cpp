@@ -8,6 +8,7 @@
 #include "SentryReporter.h"
 #include "AIAssistManager.h"    // ensureUpscaleModel (main-thread model fetch)
 #include "TextureUpscaler.h"    // worker-side Real-ESRGAN 2x on the baked diffuse
+#include "ImageCaptioner.h"     // background SmolVLM caption of the picked image
 
 #include <OgreSceneNode.h>
 
@@ -18,6 +19,7 @@
 #include <QImage>
 #include <QCoreApplication>   // organizationName() — test-harness guard
 #include <QMetaObject>
+#include <QPointer>
 #include <QThread>
 
 #include <thread>
@@ -156,6 +158,51 @@ void MeshGenController::selectImage()
         QStringLiteral("MeshGenController selectImage %1").arg(QFileInfo(path).fileName()));
     emit selectedImageChanged();
     emit statusMessage(tr("Selected: %1").arg(QFileInfo(path).fileName()));
+
+    // Caption the image in the BACKGROUND now, so it's ready by the time the
+    // (slow) mesh generation finishes and the AI texture pass needs it — no
+    // blocking the UI to caption. Shown under the thumbnail as it lands.
+    m_caption.clear();
+    startCaptioning(path);
+}
+
+void MeshGenController::startCaptioning(const QString& path)
+{
+    if (!ImageCaptioner::isAvailable() || path.isEmpty()) {
+        m_captioning = false;
+        emit captionChanged();
+        return;
+    }
+    m_captionForPath = path;
+    m_captioning = true;
+    emit captionChanged();
+
+    // Detached worker: ensure the model (first-use download) + caption, then
+    // marshal the result back to the main thread via a queued invocation.
+    QPointer<MeshGenController> self(this);
+    std::thread([self, path]() {
+        QString cap;
+        const QString model = ImageCaptioner::ensureModelBlocking();
+        if (!model.isEmpty()) {
+            QImage img(path);
+            if (!img.isNull())
+                cap = ImageCaptioner::caption(img);
+        }
+        if (!self) return;
+        QMetaObject::invokeMethod(self, "setCaptionResult", Qt::QueuedConnection,
+                                  Q_ARG(QString, cap), Q_ARG(QString, path));
+    }).detach();
+}
+
+void MeshGenController::setCaptionResult(const QString& caption, const QString& forPath)
+{
+    // Drop a stale result if the user picked a different image meanwhile.
+    if (forPath != m_captionForPath) return;
+    m_caption = caption;
+    m_captioning = false;
+    emit captionChanged();
+    if (!caption.isEmpty())
+        emit statusMessage(tr("Image described: \"%1\"").arg(caption));
 }
 
 void MeshGenController::generateSelected(int resolution, bool removeBackground,

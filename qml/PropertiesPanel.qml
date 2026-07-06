@@ -1709,6 +1709,24 @@ Rectangle {
                 }
             }
 
+            // Auto-generated caption of the selected image (SmolVLM), computed
+            // in the background the moment the image is picked. Shown here so
+            // the user sees what the model "read" from the image — it becomes
+            // the texture prompt. "Describing…" while it's still running.
+            Text {
+                width: parent.width - 16
+                visible: MeshGenController.selectedImagePath.length > 0
+                    && (MeshGenController.captioning
+                        || MeshGenController.caption.length > 0)
+                text: MeshGenController.captioning
+                    ? "🔍 Describing image…"
+                    : "📝 " + MeshGenController.caption
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.italic: MeshGenController.captioning
+                wrapMode: Text.WordWrap
+            }
+
             // Resolution picker — marching-cubes grid resolution. Cost grows with
             // the cube of the value (the decoder queries resolution³ points), so
             // higher = more detail but much slower. Labels flag the trade-off.
@@ -2055,19 +2073,22 @@ Rectangle {
                             return
                         }
                         // Select the new entity so the multi-view bake targets
-                        // it, then kick off front-photo + generated-back (+PBR).
+                        // it, then kick off the generated views (+PBR).
                         PropertiesPanelController.selectNodeByName(result.entityName)
                         // Mark the first AI step active (leave build ✓); later
                         // steps advance on the SD / bake / PBR signals.
                         var pbrRows = mgPbr.checked ? 3 : 2
                         mgRoot.mgActiveIdx = mgRoot.mgSteps.length - pbrRows
                         mgRoot.mgActiveProgress = -1
-                        mgStatus.text = "Mesh built — generating AI texture "
-                            + "(front photo + back)…"
+                        mgStatus.text = "Mesh built — generating AI texture…"
+                        // Pass the caption computed in the BACKGROUND when the
+                        // image was picked (ready by now — no UI-blocking
+                        // captioning here). Empty falls back to a neutral prompt
+                        // inside generateMeshTextureMultiView.
                         MaterialEditorQML.generateMeshTextureMultiView(
-                            "", 512, 512, 0.9,
+                            MeshGenController.caption, 512, 512, 0.9,
                             ["front", "back"],
-                            MeshGenController.selectedImagePath,
+                            "",                       // no photo pinning
                             mgPbr.checked)
                     }
                 }

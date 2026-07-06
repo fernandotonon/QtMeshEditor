@@ -38,6 +38,13 @@ class MeshGenController : public QObject
     // URL the QML Image element can show directly (same idiom as the texture
     // packer previews). Empty when no image is selected.
     Q_PROPERTY(QString previewSource READ previewSource NOTIFY selectedImageChanged)
+    // Auto-generated caption of the selected image (SmolVLM), computed on a
+    // WORKER thread the moment an image is picked so it's ready by the time the
+    // (slow) mesh generation finishes — the AI texture pass reuses it instead
+    // of blocking the UI to caption. The panel shows it under the thumbnail.
+    // Empty until captioning completes (or if the captioner is unavailable).
+    Q_PROPERTY(QString caption READ caption NOTIFY captionChanged)
+    Q_PROPERTY(bool captioning READ captioning NOTIFY captionChanged)
 
 public:
     static MeshGenController* instance();
@@ -48,6 +55,8 @@ public:
     bool busy() const { return m_busy; }
     QString selectedImagePath() const { return m_selectedImage; }
     QString previewSource() const { return m_previewSource; }
+    QString caption() const { return m_caption; }
+    bool captioning() const { return m_captioning; }
 
     // Open a native file dialog to pick a source image; stores it as the selected
     // image and builds the preview thumbnail (does NOT start generation). Returns
@@ -102,9 +111,15 @@ signals:
     void completed(QVariantMap result);   // {vertexCount, triangleCount}
     void error(const QString& message);
     void modelDownloadFinished(bool ok);  // pre-download from AI Settings
+    void captionChanged();                 // caption / captioning state updated
 
 private:
     explicit MeshGenController(QObject* parent = nullptr);
+
+    // Kick off SmolVLM captioning of `path` on a detached worker thread; the
+    // result is marshalled back to the main thread (setCaptionResult).
+    void startCaptioning(const QString& path);
+    Q_INVOKABLE void setCaptionResult(const QString& caption, const QString& forPath);
 
     // Runs on the MAIN thread (queued from the worker) to build + attach the mesh.
     Q_INVOKABLE void buildOnMainThread();
@@ -115,6 +130,11 @@ private:
     std::atomic<bool> m_cancel{false};
     QString m_selectedImage;    // currently-selected source image path
     QString m_previewSource;    // data:image/png;base64 thumbnail of it
+    QString m_caption;          // auto-caption of the selected image
+    bool    m_captioning = false;
+    // Guards against a stale caption landing after the image changed again:
+    // startCaptioning stamps the path, setCaptionResult drops mismatches.
+    QString m_captionForPath;
     MeshGenPredictor::Quality m_quality = MeshGenPredictor::Quality::Fp32;
     // Parsed pipeline options for the in-flight run (see generateSelected doc).
     bool m_generatePbr = true;          // consumed by buildOnMainThread
