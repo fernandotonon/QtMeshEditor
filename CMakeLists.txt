@@ -342,6 +342,12 @@ if(NOT TARGET xatlas)
     add_library(xatlas STATIC ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp)
     target_include_directories(xatlas PUBLIC ${xatlas_SOURCE_DIR}/source/xatlas)
     set_target_properties(xatlas PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    # Build xatlas SINGLE-THREADED (XA_MULTITHREADED=0). Its internal
+    # std::thread TaskScheduler livelocks on large/organic image-to-3D meshes —
+    # ComputeCharts spins forever in cthread_yield/swtch_pri, freezing the app
+    # with an untextured mesh (verified via process sampling, #764). Unwrap is a
+    # one-off; single-threaded is slower but deadlock-free and correct.
+    target_compile_definitions(xatlas PRIVATE XA_MULTITHREADED=0)
 endif()
 message(STATUS "xatlas enabled (auto UV unwrap)")
 
