@@ -1,5 +1,6 @@
 #include "MCPServer.h"
 #include "mainwindow.h"
+#include "GamificationManager.h"
 #include "Manager.h"
 #include "MaterialEditorQML.h"
 #include "MaterialPresetLibrary.h"
@@ -744,6 +745,46 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     if (toolResult.contains("isError") && toolResult["isError"].toBool()) {
         SentryReporter::addBreadcrumb("ai.tool_call",
             QStringLiteral("Tool error: %1").arg(name), "error");
+    } else {
+        // Gamification discovery (#798): first successful MCP tool call marks
+        // the mcp_server cluster; tools with a mapped editor cluster also
+        // count toward that cluster's discovery (deduped per session).
+        GamificationManager::noteFeature(QStringLiteral("mcp_server"),
+                                         GamificationManager::Surface::Mcp);
+        static const QHash<QString, QString> toolFeatureMap = {
+            {QStringLiteral("retopologize"), QStringLiteral("retopo")},
+            {QStringLiteral("decimate_mesh"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("generate_lods"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("optimize_mesh"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("auto_uv_unwrap"), QStringLiteral("uv_unwrap")},
+            {QStringLiteral("uv_unwrap_selection"), QStringLiteral("uv_unwrap")},
+            {QStringLiteral("uv_project"), QStringLiteral("uv_unwrap")},
+            {QStringLiteral("uv_set_seams"), QStringLiteral("uv_unwrap")},
+            {QStringLiteral("compute_skin_weights"), QStringLiteral("skin_weights")},
+            {QStringLiteral("auto_rig"), QStringLiteral("auto_rig")},
+            {QStringLiteral("motion_in_between"), QStringLiteral("motion_inbetween")},
+            {QStringLiteral("generate_motion"), QStringLiteral("animation_blend")},
+            {QStringLiteral("merge_animations"), QStringLiteral("animation_blend")},
+            {QStringLiteral("segment_mesh"), QStringLiteral("ai_assist")},
+            {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
+            {QStringLiteral("generate_pbr_maps"), QStringLiteral("pbr_synth")},
+            {QStringLiteral("upscale_texture"), QStringLiteral("pbr_synth")},
+            {QStringLiteral("generate_normal_map"), QStringLiteral("pbr_synth")},
+            {QStringLiteral("pack_textures"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("pack_atlas"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("apply_atlas"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("generate_isometric_sprites"), QStringLiteral("isometric_sprites")},
+            {QStringLiteral("bake_vat"), QStringLiteral("vat_bake")},
+            {QStringLiteral("list_morph_targets"), QStringLiteral("morph")},
+            {QStringLiteral("describe_material"), QStringLiteral("material_editor")},
+            {QStringLiteral("apply_material_preset"), QStringLiteral("material_editor")},
+            {QStringLiteral("create_material"), QStringLiteral("material_editor")},
+            {QStringLiteral("generate_mesh_texture"), QStringLiteral("stable_diffusion")},
+            {QStringLiteral("cloud_upload"), QStringLiteral("cloud_upload")},
+        };
+        const QString feature = toolFeatureMap.value(name);
+        if (!feature.isEmpty())
+            GamificationManager::noteFeature(feature, GamificationManager::Surface::Mcp);
     }
 
     if (txn) SentryReporter::finishTransaction(txn);

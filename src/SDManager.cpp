@@ -1,4 +1,5 @@
 #include "SDManager.h"
+#include "GamificationManager.h"
 #include <QCoreApplication>
 #include <QStandardPaths>
 #include <QDebug>
@@ -398,6 +399,8 @@ void SDManager::generateTexture(const QString &prompt, int width, int height, co
         emit generationError("No SD model loaded. Please load a model first.");
         return;
     }
+
+    GamificationManager::noteFeature(QStringLiteral("stable_diffusion"));
 
     // LCOV_EXCL_START — requires a loaded SD model
     // Override settings if width/height provided

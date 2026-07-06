@@ -1,5 +1,6 @@
 #include "AutoRigController.h"
 #include "AutoRig.h"
+#include "GamificationManager.h"
 #include "UniRigPredictor.h"
 #include "SkinWeights.h"
 #include "SelectionSet.h"
@@ -306,6 +307,12 @@ QVariantMap AutoRigController::autoRigSelected(const QString& templateName,
     if (!report.fallbackReason.isEmpty()) result["fallbackReason"] = report.fallbackReason;
     if (!report.error.isEmpty()) result["error"] = report.error;
 
+    if (report.applied)
+        GamificationManager::noteOperation(
+            QStringLiteral("auto_rig"),
+            {{QStringLiteral("bones_created"), report.boneCount},
+             {QStringLiteral("meshes_skinned"), skinned ? 1 : 0}});
+
     if (report.applied) emit rigged(result);
     else emit error(report.error.isEmpty()
                         ? QStringLiteral("Auto-rig failed") : report.error);
@@ -337,6 +344,12 @@ void AutoRigController::emitRigResult(const AutoRig::Report& report, bool skinne
     result["skinned"]          = skinned;
     if (!report.fallbackReason.isEmpty()) result["fallbackReason"] = report.fallbackReason;
     if (!report.error.isEmpty()) result["error"] = report.error;
+
+    if (report.applied)
+        GamificationManager::noteOperation(
+            QStringLiteral("auto_rig"),
+            {{QStringLiteral("bones_created"), report.boneCount},
+             {QStringLiteral("meshes_skinned"), skinned ? 1 : 0}});
 
     if (report.applied) emit rigged(result);
     else emit error(report.error.isEmpty()
@@ -621,6 +634,12 @@ QVariantMap AutoRigController::commitMarkerRig(bool alsoSkin)
     result["markersApplied"]  = report.markersApplied;
     result["skinned"]         = skinned;
     if (!report.error.isEmpty()) result["error"] = report.error;
+
+    if (report.applied)
+        GamificationManager::noteOperation(
+            QStringLiteral("auto_rig"),
+            {{QStringLiteral("bones_created"), report.boneCount},
+             {QStringLiteral("meshes_skinned"), skinned ? 1 : 0}});
 
     if (report.applied) emit rigged(result);
     else emit error(report.error.isEmpty() ? QStringLiteral("Auto-rig failed") : report.error);

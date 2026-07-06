@@ -1,4 +1,5 @@
 #include "MeshLodController.h"
+#include "GamificationManager.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "MeshImporterExporter.h"
@@ -273,6 +274,10 @@ void MeshLodController::generateLods(int count, const QVariantList& reductions, 
             }
         }
     }
+
+    GamificationManager::noteOperation(
+        QStringLiteral("decimate_lod"),
+        {{QStringLiteral("lod_levels_generated"), count}});
 
     emit lodChanged();
     emit generationSucceeded(count);

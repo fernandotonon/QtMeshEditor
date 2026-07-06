@@ -158,6 +158,65 @@ inline const QString& updaterSkippedVersion()
     return k;
 }
 
+// ---- Gamification / progress sync (#796) ----
+
+/** @brief One-time consent prompt answered (accept OR decline). Nothing is
+ *  ever queued or sent before this is true (E-P6: default off). */
+inline const QString& gamificationConsentAcknowledged()
+{
+    static const QString k(QStringLiteral("Gamification/consentAcknowledged"));
+    return k;
+}
+
+/** @brief Whether the one-time consent prompt has been shown. */
+inline const QString& gamificationConsentPrompted()
+{
+    static const QString k(QStringLiteral("Gamification/consentPrompted"));
+    return k;
+}
+
+/** @brief Master "Sync my QtMesh progress" toggle (default off). */
+inline const QString& gamificationSyncEnabled()
+{
+    static const QString k(QStringLiteral("Gamification/syncEnabled"));
+    return k;
+}
+
+/** @brief Sub-toggle: feature-usage (discovery) events. */
+inline const QString& gamificationUsageEnabled()
+{
+    static const QString k(QStringLiteral("Gamification/usageEnabled"));
+    return k;
+}
+
+/** @brief Sub-toggle: operations-history (before/after metrics) events. */
+inline const QString& gamificationOpsEnabled()
+{
+    static const QString k(QStringLiteral("Gamification/opsEnabled"));
+    return k;
+}
+
+/** @brief "Try this next" welcome-screen nudges on/off (E-P5). */
+inline const QString& gamificationNudgesEnabled()
+{
+    static const QString k(QStringLiteral("Gamification/nudgesEnabled"));
+    return k;
+}
+
+/** @brief Feature keys the user dismissed from the nudge card. */
+inline const QString& gamificationDismissedSuggestions()
+{
+    static const QString k(QStringLiteral("Gamification/dismissedSuggestions"));
+    return k;
+}
+
+/** @brief Rotation cursor so the nudge card cycles between app runs. */
+inline const QString& gamificationSuggestionCursor()
+{
+    static const QString k(QStringLiteral("Gamification/suggestionCursor"));
+    return k;
+}
+
 /** @brief Default preset rig for new empty scenes (Slice E #487). */
 inline const QString& lightingDefaultRig()
 {

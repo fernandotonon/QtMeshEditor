@@ -6,6 +6,7 @@
 class QAction;
 class QLabel;
 class QMenu;
+class QProgressBar;
 class QToolButton;
 class QWidgetAction;
 
@@ -42,6 +43,7 @@ private:
     void buildMenu();
     void applyMenuStyle();
     void updateHeader(const QString& displayName, bool signedIn);
+    void updateGamificationSection(bool signedIn);
 
     QToolButton* m_button = nullptr;
     QMenu* m_menu = nullptr;
@@ -56,6 +58,16 @@ private:
     QAction* m_uploadAction = nullptr;
     QAction* m_feedbackAction = nullptr;
     QAction* m_openProjectsAction = nullptr;
+    // Gamification status block (E-P4 #800): level + XP bar, streak, nearest
+    // unlockable achievement, "View my achievements" deep link.
+    QWidget* m_gamifyWidget = nullptr;
+    QLabel* m_gamifyLevelLabel = nullptr;
+    QProgressBar* m_gamifyXpBar = nullptr;
+    QLabel* m_gamifyNextLabel = nullptr;
+    QProgressBar* m_gamifyNextBar = nullptr;
+    QWidgetAction* m_gamifyAction = nullptr;
+    QAction* m_gamifySeparator = nullptr;
+    QAction* m_achievementsAction = nullptr;
     bool m_uploadAssetAvailable = false;
 };
 

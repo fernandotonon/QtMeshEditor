@@ -1,4 +1,5 @@
 #include "AnimationControlController.h"
+#include "GamificationManager.h"
 #include "PropertiesPanelController.h"
 #include "SelectionSet.h"
 #include "Manager.h"
@@ -1643,6 +1644,11 @@ QVariantMap AnimationControlController::inbetweenWindow(double t0, double t1,
     emit keyframeTicksChanged();
     emit currentKeyframeChanged();
 
+    GamificationManager::noteOperation(
+        QStringLiteral("motion_inbetween"),
+        {{QStringLiteral("keyframes_inserted"), r.keyframesInserted},
+         {QStringLiteral("tracks_affected"), r.tracksAffected}});
+
     QString msg = QStringLiteral("Inserted %1 keyframes across %2 track(s) via %3")
         .arg(r.keyframesInserted).arg(r.tracksAffected)
         .arg(r.usedModel ? QStringLiteral("RMIB model")
@@ -1678,6 +1684,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
         QStringLiteral("GUI generate_motion"));
+    GamificationManager::noteFeature(QStringLiteral("animation_blend"));
 
     // Acquire the canonical clip: EXPERIMENTAL trained model first (when opted in),
     // else the reliable TEMPLATE library — which is also the automatic fallback.

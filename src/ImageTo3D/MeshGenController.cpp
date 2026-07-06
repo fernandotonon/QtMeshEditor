@@ -1,5 +1,7 @@
 #include "MeshGenController.h"
 
+#include "GamificationManager.h"
+
 #include "MeshGenPredictor.h"
 #include "MeshGenBuilder.h"
 #include "BackgroundRemover.h"
@@ -216,6 +218,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     m_generatePbr          = optBool("generate_pbr", true) && wantBake;
     const int  textureSize = options.contains(QLatin1String("texture_size"))
         ? options.value(QLatin1String("texture_size")).toInt() : 1024;
+
+    GamificationManager::noteFeature(QStringLiteral("image_to_3d"));
 
     // Mark busy BEFORE ensureModelBlocking() — it spins a nested QEventLoop for the
     // first-use download, during which the QML button would otherwise stay enabled
