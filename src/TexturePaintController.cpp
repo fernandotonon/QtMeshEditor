@@ -1,6 +1,7 @@
 #include "TexturePaintController.h"
 
 #include "EditModeController.h"
+#include "GamificationManager.h"
 #include "EditableMesh.h"
 #include "Manager.h"
 #include "OgreWidget.h"
@@ -1752,6 +1753,11 @@ int TexturePaintController::bakeVertexColorsToTexture(int resolution,
         QStringLiteral("Vertex→Texture bake: %1×%1 (%2 pixels, dilation=%3)")
             .arg(res).arg(painted).arg(opts.dilationPixels));
 
+    GamificationManager::noteOperation(
+        QStringLiteral("vertex_color_bake"),
+        {{QStringLiteral("texture_size"), res},
+         {QStringLiteral("pixels_painted"), painted}});
+
     refreshPreviewUri();
     emit sessionChanged();
     return painted;
@@ -1869,6 +1875,7 @@ bool TexturePaintController::beginStrokeUV(double u, double v)
     if (!m_paintEnabled || m_strokeActive) return false;
     if (!hasActiveSession())
         if (!ensurePaintableTexture(1024)) return false;
+    GamificationManager::noteFeature(QStringLiteral("texture_paint"));
     m_strokeActive = true;
     m_strokeJustBegan = true;
     m_smudgeHavePrev = false;

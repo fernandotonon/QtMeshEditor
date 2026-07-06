@@ -2,6 +2,8 @@
 
 #include "AppSettingsKeys.h"
 #include "CloudCredentialStore.h"
+#include "GamificationManager.h"
+#include "GamificationTypes.h"
 #include "SentryReporter.h"
 
 #include <QAction>
@@ -9,6 +11,7 @@
 #include <QLabel>
 #include <QMenu>
 #include <QPainter>
+#include <QProgressBar>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QToolButton>
@@ -195,6 +198,10 @@ CloudAccountMenuButton::CloudAccountMenuButton(QWidget* parent)
     connect(m_menu, &QMenu::aboutToShow, this, [this]() {
         SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                       QStringLiteral("Cloud toolbar menu opened"));
+        // Opportunistic stats refresh so the status block stays current
+        // without polling (renders last-cached immediately, updates async).
+        if (CloudCredentialStore::hasSession())
+            GamificationManager::instance()->refreshStatsIfStale();
         refresh();
     });
 
@@ -253,6 +260,73 @@ void CloudAccountMenuButton::buildMenu()
     m_headerAction->setEnabled(false);
     m_menu->addAction(m_headerAction);
     m_headerSeparator = m_menu->addSeparator();
+
+    // ---- Gamification status block (E-P4 #800) ----
+    m_gamifyWidget = new QWidget(m_menu);
+    m_gamifyWidget->setObjectName(QStringLiteral("cloudAccountGamifyStatus"));
+    auto* gamifyLayout = new QVBoxLayout(m_gamifyWidget);
+    gamifyLayout->setContentsMargins(14, 6, 14, 8);
+    gamifyLayout->setSpacing(3);
+
+    m_gamifyLevelLabel = new QLabel(m_gamifyWidget);
+    m_gamifyLevelLabel->setObjectName(QStringLiteral("cloudAccountGamifyLevel"));
+    m_gamifyLevelLabel->setStyleSheet(QStringLiteral(
+        "color: #ececec; font-size: 12px; font-weight: 600; background: transparent;"));
+
+    const QString barStyle = QStringLiteral(
+        "QProgressBar { background: #1f1f1f; border: none; border-radius: 2px;"
+        "  min-height: 4px; max-height: 4px; }"
+        "QProgressBar::chunk { background: #4a7aa8; border-radius: 2px; }");
+    m_gamifyXpBar = new QProgressBar(m_gamifyWidget);
+    m_gamifyXpBar->setObjectName(QStringLiteral("cloudAccountGamifyXpBar"));
+    m_gamifyXpBar->setTextVisible(false);
+    m_gamifyXpBar->setStyleSheet(barStyle);
+
+    m_gamifyNextLabel = new QLabel(m_gamifyWidget);
+    m_gamifyNextLabel->setObjectName(QStringLiteral("cloudAccountGamifyNext"));
+    m_gamifyNextLabel->setStyleSheet(QStringLiteral(
+        "color: #9a9a9a; font-size: 11px; background: transparent;"));
+    m_gamifyNextLabel->setWordWrap(true);
+
+    m_gamifyNextBar = new QProgressBar(m_gamifyWidget);
+    m_gamifyNextBar->setObjectName(QStringLiteral("cloudAccountGamifyNextBar"));
+    m_gamifyNextBar->setTextVisible(false);
+    m_gamifyNextBar->setStyleSheet(barStyle);
+
+    gamifyLayout->addWidget(m_gamifyLevelLabel);
+    gamifyLayout->addWidget(m_gamifyXpBar);
+    gamifyLayout->addSpacing(4);
+    gamifyLayout->addWidget(m_gamifyNextLabel);
+    gamifyLayout->addWidget(m_gamifyNextBar);
+
+    // Like the header above, the gamification entries are physically added /
+    // removed from the menu in updateGamificationSection() — QMenu (macOS in
+    // particular) keeps painting hidden QWidgetActions and mis-tracks item
+    // hover geometry when actions are merely setVisible(false).
+    m_gamifyAction = new QWidgetAction(m_menu);
+    m_gamifyAction->setDefaultWidget(m_gamifyWidget);
+    m_gamifyAction->setEnabled(false);
+
+    m_achievementsAction = new QAction(tr("View My Achievements…"), m_menu);
+    m_achievementsAction->setObjectName(QStringLiteral("actionQtMeshCloudAchievements"));
+    connect(m_achievementsAction, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: View Achievements"));
+        GamificationManager::instance()->openProfile();
+    });
+
+    m_enableSyncAction = new QAction(tr("Enable Progress Sync…"), m_menu);
+    m_enableSyncAction->setObjectName(QStringLiteral("actionQtMeshCloudEnableSync"));
+    connect(m_enableSyncAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                      QStringLiteral("Cloud toolbar: Enable Progress Sync"));
+        GamificationManager::instance()->acceptConsent();
+        GamificationManager::instance()->refreshStats();
+        refresh();
+    });
+
+    m_gamifySeparator = new QAction(m_menu);
+    m_gamifySeparator->setSeparator(true);
 
     m_openProjectsAction = m_menu->addAction(tr("My Cloud Projects…"));
     m_openProjectsAction->setObjectName(QStringLiteral("actionQtMeshCloudOpenProjects"));
@@ -323,6 +397,84 @@ void CloudAccountMenuButton::updateHeader(const QString& displayName, bool signe
     m_menu->update();
 }
 
+void CloudAccountMenuButton::updateGamificationSection(bool signedIn)
+{
+    if (!m_gamifyAction)
+        return;
+
+    auto* gamify = GamificationManager::instance();
+    const bool syncOn = gamify->syncEnabled();
+    const bool showStats = signedIn && syncOn && gamify->statsAvailable();
+    const bool showSyncing = signedIn && syncOn && !gamify->statsAvailable();
+    const bool showEnable = signedIn && !syncOn;
+    const bool showAchievements = signedIn && syncOn && !gamify->profileUrl().isEmpty();
+
+    // Rebuild the section by physically removing / re-inserting the actions
+    // (before "My Cloud Projects…") — see the note in buildMenu().
+    for (QAction* action : {static_cast<QAction*>(m_gamifyAction), m_achievementsAction,
+                            m_enableSyncAction, m_gamifySeparator}) {
+        if (m_menu->actions().contains(action))
+            m_menu->removeAction(action);
+    }
+
+    if (showStats || showSyncing)
+        m_menu->insertAction(m_openProjectsAction, m_gamifyAction);
+    if (showEnable)
+        m_menu->insertAction(m_openProjectsAction, m_enableSyncAction);
+    if (showAchievements)
+        m_menu->insertAction(m_openProjectsAction, m_achievementsAction);
+    if (showStats || showSyncing || showEnable || showAchievements)
+        m_menu->insertAction(m_openProjectsAction, m_gamifySeparator);
+
+    m_menu->updateGeometry();
+    m_menu->adjustSize();
+    m_menu->update();
+
+    if (showSyncing) {
+        // Enabled but the first stats fetch hasn't landed yet (it refreshes
+        // async on menu open) — say so instead of showing an empty block.
+        m_gamifyLevelLabel->setText(tr("Syncing progress…"));
+        m_gamifyXpBar->setVisible(false);
+        m_gamifyNextLabel->setVisible(false);
+        m_gamifyNextBar->setVisible(false);
+        return;
+    }
+    if (!showStats)
+        return;
+
+    QString levelText = tr("Level %1 · %2 XP").arg(gamify->level()).arg(gamify->xp());
+    if (gamify->currentStreak() > 0)
+        levelText += tr(" · 🔥 %n-day streak", nullptr, gamify->currentStreak());
+    m_gamifyLevelLabel->setText(levelText);
+
+    m_gamifyXpBar->setVisible(true);
+    m_gamifyXpBar->setRange(0, qMax(1, gamify->xpSpan()));
+    m_gamifyXpBar->setValue(qBound(0, gamify->xpIntoLevel(), qMax(1, gamify->xpSpan())));
+    m_gamifyXpBar->setToolTip(tr("%1 / %2 XP to level %3")
+                                  .arg(gamify->xpIntoLevel())
+                                  .arg(gamify->xpSpan())
+                                  .arg(gamify->level() + 1));
+
+    const QVariantList next = gamify->nextUnlockables();
+    const bool hasNext = !next.isEmpty();
+    m_gamifyNextLabel->setVisible(hasNext);
+    m_gamifyNextBar->setVisible(hasNext);
+    if (hasNext) {
+        const QVariantMap u = next.first().toMap();
+        m_gamifyNextLabel->setText(tr("Next: %1 — %2 (%3/%4)")
+                                       .arg(u.value(QStringLiteral("title")).toString(),
+                                            u.value(QStringLiteral("description")).toString())
+                                       .arg(u.value(QStringLiteral("current")).toLongLong())
+                                       .arg(u.value(QStringLiteral("threshold")).toLongLong()));
+        const int threshold =
+            qMax(1, static_cast<int>(u.value(QStringLiteral("threshold")).toLongLong()));
+        m_gamifyNextBar->setRange(0, threshold);
+        m_gamifyNextBar->setValue(
+            qBound(0, static_cast<int>(u.value(QStringLiteral("current")).toLongLong()),
+                   threshold));
+    }
+}
+
 void CloudAccountMenuButton::refresh()
 {
     CloudCredentialStore::migrateLegacySettingsIfNeeded();
@@ -341,6 +493,7 @@ void CloudAccountMenuButton::refresh()
         avatar->setSignedIn(signedIn, initials);
 
     updateHeader(display, signedIn);
+    updateGamificationSection(signedIn);
 
     m_openProjectsAction->setEnabled(signedIn);
     if (signedIn)

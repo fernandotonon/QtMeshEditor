@@ -48,6 +48,8 @@
 #include "AppConsoleLog.h"
 #include "AppSettingsKeys.h"
 #include "CloudAccountMenuButton.h"
+#include "GamificationManager.h"
+#include "GamificationToast.h"
 #include "CloudCredentialStore.h"
 #include "CloudDeepLink.h"
 #include "AppLaunchHandler.h"
@@ -796,6 +798,14 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<WelcomeScreenController>("WelcomeScreen", 1, 0, "WelcomeScreenController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return WelcomeScreenController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<GamificationManager>("WelcomeScreen", 1, 0, "GamificationManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return GamificationManager::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<GamificationManager>("PropertiesPanel", 1, 0, "GamificationManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return GamificationManager::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<AssetBrowserController>("AssetBrowser", 1, 0, "AssetBrowserController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -2811,10 +2821,46 @@ void MainWindow::setupCloudAccountStatusControl()
     cloudAction->setObjectName(QStringLiteral("modeAnyCloudAccountAction"));
     updateCloudAuthActions();
     updateCloudUploadActionState();
+
+    // Gamification (#796): one restrained toast on unlock, and the one-time
+    // non-blocking consent prompt the first time an event would be recorded.
+    auto* gamify = GamificationManager::instance();
+    connect(gamify, &GamificationManager::achievementsUnlocked, this,
+            [this](const QVariantList& achievements) {
+                GamificationToast::showAchievements(this, achievements);
+            });
+    connect(gamify, &GamificationManager::statsChanged, this, [this]() {
+        if (m_cloudAccountControl)
+            m_cloudAccountControl->refresh();
+    });
+    connect(gamify, &GamificationManager::consentPromptRequested, this, [this]() {
+        auto* prompt = new QMessageBox(this);
+        prompt->setAttribute(Qt::WA_DeleteOnClose);
+        prompt->setWindowModality(Qt::NonModal);
+        prompt->setIcon(QMessageBox::Question);
+        prompt->setWindowTitle(tr("Sync your QtMesh progress?"));
+        prompt->setText(tr("Track the tools you discover and your editing milestones "
+                           "on your QtMesh Cloud profile?"));
+        prompt->setInformativeText(tr(
+            "Only feature names, counts and numeric before/after metrics are sent — "
+            "never your models, textures or file names. You can change this anytime "
+            "in Preferences."));
+        QPushButton* enable = prompt->addButton(tr("Enable sync"), QMessageBox::AcceptRole);
+        prompt->addButton(tr("Not now"), QMessageBox::RejectRole);
+        connect(prompt, &QMessageBox::finished, this, [prompt, enable]() {
+            auto* gamify = GamificationManager::instance();
+            if (prompt->clickedButton() == enable)
+                gamify->acceptConsent();
+            else
+                gamify->declineConsent();
+        });
+        prompt->show();
+    });
 }
 
 void MainWindow::updateCloudAuthActions()
 {
+    GamificationManager::instance()->handleSessionChanged();
     if (m_cloudAccountControl)
         m_cloudAccountControl->refresh();
     updateCloudUploadActionState();
@@ -3300,6 +3346,7 @@ void MainWindow::startCloudPackageUpload(QtMeshCloudSession* session,
 
                 m_cloudUploadProgress->finish(true, tr("Upload complete"));
                 statusBar()->showMessage(tr("Uploaded to QtMesh Cloud."), 5000);
+                GamificationManager::noteFeature(QStringLiteral("cloud_upload"));
 
                 QMessageBox done(this);
                 if (!error.isEmpty()) {

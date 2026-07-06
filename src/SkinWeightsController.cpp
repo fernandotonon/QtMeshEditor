@@ -1,4 +1,5 @@
 #include "SkinWeightsController.h"
+#include "GamificationManager.h"
 #include "SkinWeights.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -154,6 +155,10 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
     result["totalAssignmentsAfter"]  = report.totalAssignmentsAfter;
 
     if (report.applied) {
+        GamificationManager::noteOperation(
+            QStringLiteral("skin_weights"),
+            {{QStringLiteral("verts_weighted"), report.totalVerticesProcessed},
+             {QStringLiteral("max_influences"), maxInfluencesPerVertex}});
         emit weightsApplied(result);
     } else {
         // Always populate `error` in the result map, not just when

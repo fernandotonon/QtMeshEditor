@@ -236,6 +236,194 @@ Rectangle {
                             }
                             Text { text: "Show welcome screen on startup"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
                         }
+
+                        // ---- Progress Sync (gamification, #796 E-P6) ----
+                        Rectangle { width: parent.width; height: 1; color: borderColor }
+
+                        Text {
+                            text: "Progress Sync (QtMesh Cloud)"
+                            font.pixelSize: 12; font.bold: true; color: textColor
+                        }
+
+                        Text {
+                            text: "Tracks which tools you discover and your editing milestones "
+                                + "(e.g. \u201cretopo: 42,180 \u2192 8,004 tris\u201d) on your QtMesh Cloud "
+                                + "profile. Only feature names, counts and numeric before/after "
+                                + "metrics are shared \u2014 never your models, textures or file names."
+                            font.pixelSize: 11; font.italic: true; color: dimTextColor
+                            wrapMode: Text.WordWrap; width: parent.width
+                        }
+
+                        // Master toggle
+                        Row {
+                            spacing: 6
+                            width: parent.width
+                            Rectangle {
+                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                                border.color: borderColor; border.width: 1; radius: 2
+                                color: GamificationManager.syncEnabled ? highlightColor : "transparent"
+                                Text { anchors.centerIn: parent; text: GamificationManager.syncEnabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: GamificationManager.syncEnabled = !GamificationManager.syncEnabled
+                                }
+                            }
+                            Text { text: "Sync my QtMesh progress"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
+                        }
+
+                        // Per-stream sub-toggles
+                        Column {
+                            width: parent.width
+                            spacing: 6
+                            leftPadding: 20
+                            enabled: GamificationManager.syncEnabled
+                            opacity: GamificationManager.syncEnabled ? 1.0 : 0.45
+
+                            Row {
+                                spacing: 6
+                                Rectangle {
+                                    width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                                    border.color: borderColor; border.width: 1; radius: 2
+                                    color: GamificationManager.usageEnabled ? highlightColor : "transparent"
+                                    Text { anchors.centerIn: parent; text: GamificationManager.usageEnabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                        onClicked: GamificationManager.usageEnabled = !GamificationManager.usageEnabled
+                                    }
+                                }
+                                Text { text: "Feature usage (tool discovery)"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
+                            }
+
+                            Row {
+                                spacing: 6
+                                Rectangle {
+                                    width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                                    border.color: borderColor; border.width: 1; radius: 2
+                                    color: GamificationManager.opsEnabled ? highlightColor : "transparent"
+                                    Text { anchors.centerIn: parent; text: GamificationManager.opsEnabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                        onClicked: GamificationManager.opsEnabled = !GamificationManager.opsEnabled
+                                    }
+                                }
+                                Text { text: "Operations history (numeric before/after metrics)"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
+                            }
+                        }
+
+                        // Nudges toggle
+                        Row {
+                            spacing: 6
+                            width: parent.width
+                            Rectangle {
+                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                                border.color: borderColor; border.width: 1; radius: 2
+                                color: GamificationManager.nudgesEnabled ? highlightColor : "transparent"
+                                Text { anchors.centerIn: parent; text: GamificationManager.nudgesEnabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: GamificationManager.nudgesEnabled = !GamificationManager.nudgesEnabled
+                                }
+                            }
+                            Text { text: "Show \u201ctry this next\u201d suggestions on the welcome screen"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
+                        }
+
+                        // Public profile (account-level; needs a cloud session
+                        // AND sync enabled — no cloud traffic when opted out)
+                        Row {
+                            spacing: 6
+                            width: parent.width
+                            visible: GamificationManager.signedIn && GamificationManager.syncEnabled
+                            onVisibleChanged: if (visible) GamificationManager.refreshCloudPrefs()
+                            Component.onCompleted: if (visible) GamificationManager.refreshCloudPrefs()
+
+                            Rectangle {
+                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                                border.color: borderColor; border.width: 1; radius: 2
+                                color: GamificationManager.profilePublic ? highlightColor : "transparent"
+                                Text { anchors.centerIn: parent; text: GamificationManager.profilePublic ? "✓" : ""; color: "white"; font.pixelSize: 10 }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: GamificationManager.setProfilePublic(!GamificationManager.profilePublic)
+                                }
+                            }
+                            Text { text: "Public achievement profile (qtmesh.dev/u/…)"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
+                        }
+
+                        // What is shared? (expandable example payload)
+                        Column {
+                            width: parent.width
+                            spacing: 4
+                            property bool expanded: false
+
+                            Text {
+                                text: (parent.expanded ? "\u25be" : "\u25b8") + " What exactly is shared?"
+                                font.pixelSize: 11; color: highlightColor
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: parent.parent.expanded = !parent.parent.expanded }
+                            }
+
+                            Rectangle {
+                                visible: parent.expanded
+                                width: parent.width
+                                height: exampleText.implicitHeight + 16
+                                color: Qt.darker(panelColor, 1.1)
+                                border.color: borderColor; border.width: 1; radius: 3
+
+                                Text {
+                                    id: exampleText
+                                    anchors { fill: parent; margins: 8 }
+                                    text: GamificationManager.examplePayload()
+                                    font.family: "Menlo, Consolas, monospace"
+                                    font.pixelSize: 10
+                                    color: dimTextColor
+                                    wrapMode: Text.WrapAnywhere
+                                }
+                            }
+                        }
+
+                        // Delete gamification data (two-click confirm)
+                        Row {
+                            spacing: 8
+                            width: parent.width
+                            property bool confirming: false
+
+                            Rectangle {
+                                width: 220; height: 26; radius: 3
+                                color: parent.confirming ? "#a33" : Qt.darker(panelColor, 1.1)
+                                border.color: parent.confirming ? "#c55" : borderColor
+                                border.width: 1
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: parent.parent.confirming
+                                        ? "Click again to permanently delete"
+                                        : "Delete my gamification data\u2026"
+                                    font.pixelSize: 11
+                                    color: parent.parent.confirming ? "white" : textColor
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (parent.parent.confirming) {
+                                            parent.parent.confirming = false
+                                            GamificationManager.deleteCloudData()
+                                        } else {
+                                            parent.parent.confirming = true
+                                            confirmResetTimer.restart()
+                                        }
+                                    }
+                                }
+                                Timer {
+                                    id: confirmResetTimer
+                                    interval: 4000
+                                    onTriggered: parent.parent.confirming = false
+                                }
+                            }
+
+                            Text {
+                                text: "Removes achievements, XP, streaks and operations history from your account, and clears the local queue."
+                                font.pixelSize: 10; font.italic: true; color: dimTextColor
+                                wrapMode: Text.WordWrap
+                                width: parent.width - 236
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
                     }
 
                     // --- Appearance Tab ---

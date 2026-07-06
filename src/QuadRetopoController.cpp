@@ -1,4 +1,5 @@
 #include "QuadRetopoController.h"
+#include "GamificationManager.h"
 #include "QuadRetopo.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -105,6 +106,13 @@ QVariantMap QuadRetopoController::retopologizeSelected(int targetFaces,
     result["totalTrianglesAfter"]  = report.totalTrianglesAfterRetopo;
     result["quadDominance"]        = report.quadDominance();
     if (!report.error.isEmpty()) result["error"] = report.error;
+
+    if (report.applied)
+        GamificationManager::noteOperation(
+            QStringLiteral("retopo"),
+            {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
+             {QStringLiteral("tris_after"), report.totalTrianglesAfterRetopo},
+             {QStringLiteral("quad_ratio_after"), report.quadDominance()}});
 
     if (report.applied) emit retopoApplied(result);
     else                emit error(report.error.isEmpty()

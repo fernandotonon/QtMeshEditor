@@ -1,4 +1,5 @@
 #include "UvUnwrapController.h"
+#include "GamificationManager.h"
 #include "UvUnwrap.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -114,6 +115,13 @@ QVariantMap UvUnwrapController::unwrapSelectedToFile(const QString& outputPath,
     result["chartCount"]         = report.chartCount;
     result["utilization"]        = report.utilization;
     if (!report.error.isEmpty()) result["error"] = report.error;
+
+    if (report.applied)
+        GamificationManager::noteOperation(
+            QStringLiteral("uv_unwrap"),
+            {{QStringLiteral("uv_charts"), report.chartCount},
+             {QStringLiteral("verts_before"), report.verticesBefore},
+             {QStringLiteral("verts_after"), report.verticesAfter}});
 
     if (report.applied) emit unwrapApplied(result);
     else                emit error(report.error.isEmpty() ? QStringLiteral("UV unwrap failed") : report.error);

@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <QJsonArray>
 #include <QJsonObject>
 
 #include <atomic>
@@ -350,6 +351,75 @@ public:
     static FeedbackResult submitFeedback(const QString& bearerToken,
                                          const FeedbackSubmission& submission,
                                          int timeoutMs = 30000);
+
+    // ---- Gamification (#796 / qtmesh-cloud#79) ----
+
+    struct GamificationEventsResult {
+        bool ok = false;
+        int httpStatus = 0;
+        QString errorString;
+        QString responseBodySnippet;
+        int accepted = 0;
+        /// Achievements newly earned by this batch (serialized cloud objects:
+        /// key/category/title/description/icon/tier/xp/hidden).
+        QJsonArray newAchievements;
+    };
+
+    /// Max events/operations per POST accepted by the cloud.
+    static constexpr int kGamificationMaxBatch = 200;
+
+    /// POST /v1/events/editor — batched `feature.used` events. Each event:
+    /// {id, feature, at, surface}; `id` is the idempotency key.
+    static GamificationEventsResult postEditorEvents(const QString& bearerToken,
+                                                     const QJsonArray& events,
+                                                     int timeoutMs = 30000);
+
+    /// POST /v1/events/operations — batched `operation.completed` events.
+    /// Each op: {id, op, at, surface, metrics, ownerSlug?, projectSlug?};
+    /// `id` is REQUIRED (ops without one are dropped server-side).
+    static GamificationEventsResult postOperationEvents(const QString& bearerToken,
+                                                        const QJsonArray& operations,
+                                                        int timeoutMs = 30000);
+
+    struct GamificationStatsResult {
+        bool ok = false;
+        int httpStatus = 0;
+        QString errorString;
+        QString responseBodySnippet;
+        QJsonObject stats;  ///< full /v1/me/stats payload
+    };
+
+    /// GET /v1/me/stats — xp/level/streak/achievements/featureUsage/counters.
+    static GamificationStatsResult fetchGamificationStats(const QString& bearerToken,
+                                                          int timeoutMs = 30000);
+
+    struct GamificationPrefsResult {
+        bool ok = false;
+        int httpStatus = 0;
+        QString errorString;
+        bool sync = true;
+        bool usage = true;
+        bool ops = true;
+        bool profilePublic = false;
+    };
+
+    /// GET /v1/me/gamification/prefs.
+    static GamificationPrefsResult fetchGamificationPrefs(const QString& bearerToken,
+                                                          int timeoutMs = 30000);
+
+    /// PUT /v1/me/gamification/prefs — @p patch may carry any subset of
+    /// {sync, usage, ops, profilePublic} booleans.
+    static GamificationPrefsResult setGamificationPrefs(const QString& bearerToken,
+                                                        const QJsonObject& patch,
+                                                        int timeoutMs = 30000);
+
+    /// DELETE /v1/me/gamification — purges server-side stats/achievements/
+    /// operations for the user (E-P6 "delete my gamification data").
+    static UploadResult deleteGamificationData(const QString& bearerToken,
+                                               int timeoutMs = 30000);
+
+    /// Public achievement-wall URL for a user (https://qtmesh.dev/u/<slug>).
+    static QString profileUrl(const QString& userSlug);
 };
 
 #endif

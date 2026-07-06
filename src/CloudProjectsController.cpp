@@ -1,6 +1,7 @@
 #include "CloudProjectsController.h"
 
 #include "CloudCredentialStore.h"
+#include "GamificationManager.h"
 #include "QtMeshCloudSession.h"
 #include "SentryReporter.h"
 
@@ -242,6 +243,7 @@ void CloudProjectsController::closeProjectFiles()
     m_activeOwnerSlug.clear();
     m_activeProjectSlug.clear();
     m_projectFiles.clear();
+    GamificationManager::setProjectContext(QString(), QString());
     if (hadView) {
         emit loadingProjectFilesChanged();
         emit projectFilesChanged();
@@ -493,6 +495,8 @@ void CloudProjectsController::beginProjectFilesView(const QString& projectId,
     m_activeOwnerSlug = ownerSlug;
     m_activeProjectSlug = projectSlug;
     m_activeProjectName = projectName.isEmpty() ? projectSlug : projectName;
+    // Subsequent operation events attach to this cloud project (#799).
+    GamificationManager::setProjectContext(ownerSlug, projectSlug);
     m_projectFiles.clear();
     m_loadingProjectFiles = true;
     emit activeProjectChanged();

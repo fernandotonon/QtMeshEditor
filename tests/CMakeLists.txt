@@ -80,6 +80,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DependencyResolver.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ProjectPackager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudSession.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationTypes.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationEventQueue.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationToast.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudAccountMenuButton.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackDiagnostics.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackDialog.cpp
@@ -317,6 +321,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CLIPipeline.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudDeepLink.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudClient.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationTypes.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationEventQueue.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationToast.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewCube/ViewCubeController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UndoManager.h

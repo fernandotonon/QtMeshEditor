@@ -1,5 +1,6 @@
 #include "BatchExporter.h"
 #include "CLIPipeline.h"
+#include "GamificationManager.h"
 #include <QFileInfo>
 #include <QDir>
 
@@ -12,6 +13,8 @@ int BatchExporter::runCliPipeline(int argc, char* argv[]) { return CLIPipeline::
 
 void BatchExporter::execute()
 {
+    GamificationManager::noteFeature(QStringLiteral("batch_export"));
+
     int success = 0, fail = 0;
 
     for (int i = 0; i < static_cast<int>(mInputFiles.size()); ++i)

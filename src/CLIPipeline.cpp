@@ -1,5 +1,6 @@
 #include "CLIPipeline.h"
 #include "CloudCLIPipeline.h"
+#include "GamificationManager.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "AnimationMerger.h"
@@ -1474,6 +1475,12 @@ int CLIPipeline::run(int argc, char* argv[])
     // pollute the CLI pipeline output (JSON, info text, etc.)
     redirectStdout();
 
+    // --no-telemetry also suppresses gamification events at every call site
+    // for this process — without this, operation notes inside the subcommands
+    // would land in the persistent queue and flush on a later run (#796).
+    if (s_noTelemetry)
+        GamificationManager::setEmissionSuspended(true);
+
     // Telemetry: --no-telemetry permanently opts out.
     // On first run (no stored preference), show a one-time notice and enable.
     // In ephemeral environments (Docker), QTMESH_NO_TELEMETRY_NOTICE=1
@@ -1537,6 +1544,42 @@ int CLIPipeline::run(int argc, char* argv[])
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
         printUsage();
         rc = 2;
+    }
+
+    // Gamification discovery (#798): a successful subcommand counts as use of
+    // its feature cluster. Only queued/sent when the user enabled progress
+    // sync (consent, E-P6) and has a cloud session; --no-telemetry blocks it.
+    if (rc == 0 && !s_noTelemetry) {
+        static const QHash<QString, QString> cmdFeatureMap = {
+            {QStringLiteral("retopo"), QStringLiteral("retopo")},
+            {QStringLiteral("decimate"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("lod"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("optimize"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("vertex-cache"), QStringLiteral("decimate_lod")},
+            {QStringLiteral("uv"), QStringLiteral("uv_unwrap")},
+            {QStringLiteral("skin"), QStringLiteral("skin_weights")},
+            {QStringLiteral("rig"), QStringLiteral("auto_rig")},
+            {QStringLiteral("anim"), QStringLiteral("animation_blend")},
+            {QStringLiteral("morph"), QStringLiteral("morph")},
+            {QStringLiteral("vat"), QStringLiteral("vat_bake")},
+            {QStringLiteral("bake-vertex-colors"), QStringLiteral("vertex_color_bake")},
+            {QStringLiteral("atlas"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("atlas-apply"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("pack-textures"), QStringLiteral("texture_atlas")},
+            {QStringLiteral("normal-from-height"), QStringLiteral("pbr_synth")},
+            {QStringLiteral("isometric"), QStringLiteral("isometric_sprites")},
+            {QStringLiteral("turntable"), QStringLiteral("turntable")},
+            {QStringLiteral("scan"), QStringLiteral("cli_scan")},
+            {QStringLiteral("generate3d"), QStringLiteral("image_to_3d")},
+            {QStringLiteral("material"), QStringLiteral("material_editor")},
+            {QStringLiteral("segment"), QStringLiteral("ai_assist")},
+        };
+        const QString feature = cmdFeatureMap.value(cmd);
+        if (!feature.isEmpty())
+            GamificationManager::noteFeature(feature, GamificationManager::Surface::Cli);
+        // One-shot process: flush whatever is queued (including operation
+        // events noted inside the subcommands) before _exit.
+        GamificationManager::instance()->flushBlocking(4000);
     }
 
     SentryReporter::finishTransaction(cliTxn);
@@ -1862,6 +1905,13 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
     }
 
     cliWrite(report);
+    GamificationManager::noteOperation(
+        QStringLiteral("fix"),
+        {{QStringLiteral("verts_before"), static_cast<qint64>(vertsBefore)},
+         {QStringLiteral("verts_after"), static_cast<qint64>(vertsAfter)},
+         {QStringLiteral("tris_before"), static_cast<qint64>(trisBefore)},
+         {QStringLiteral("tris_after"), static_cast<qint64>(trisAfter)}},
+        GamificationManager::Surface::Cli);
     return 0;
 }
 
@@ -6669,6 +6719,12 @@ int CLIPipeline::cmdDecimate(int argc, char* argv[])
     }
 
     emitDecimationReport(report, fi, cmdArgs.outputPath, cmdArgs.jsonOutput);
+    if (report.applied)
+        GamificationManager::noteOperation(
+            QStringLiteral("decimate_lod"),
+            {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
+             {QStringLiteral("tris_after"), report.totalTrianglesAfter}},
+            GamificationManager::Surface::Cli);
     return 0;
 }
 
@@ -7019,6 +7075,12 @@ int CLIPipeline::cmdOptimize(int argc, char* argv[])
                             .arg(report.totalTrianglesBefore)
                             .arg(report.totalTrianglesAfter);
             s.details = MeshDecimator::toJson(report);
+            if (report.applied)
+                GamificationManager::noteOperation(
+                    QStringLiteral("optimize"),
+                    {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
+                     {QStringLiteral("tris_after"), report.totalTrianglesAfter}},
+                    GamificationManager::Surface::Cli);
             // Mirror cmdDecimate: when a positive reduction was asked for
             // but didn't apply, that's a hard error — the asset isn't
             // suitable for in-place reduction. Don't silently emit a
@@ -8699,6 +8761,12 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
         cliWrite(QuadRetopo::reportToText(report)
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
+    GamificationManager::noteOperation(
+        QStringLiteral("retopo"),
+        {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
+         {QStringLiteral("tris_after"), report.totalTrianglesAfterRetopo},
+         {QStringLiteral("quad_ratio_after"), report.quadDominance()}},
+        GamificationManager::Surface::Cli);
     return 0;
 }
 
@@ -8829,6 +8897,11 @@ int CLIPipeline::cmdSkin(int argc, char* argv[])
         cliWrite(SkinWeights::reportToText(report)
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
+    GamificationManager::noteOperation(
+        QStringLiteral("skin_weights"),
+        {{QStringLiteral("verts_weighted"), report.totalVerticesProcessed},
+         {QStringLiteral("max_influences"), opts.maxInfluencesPerVertex}},
+        GamificationManager::Surface::Cli);
     return 0;
 }
 
@@ -8972,6 +9045,11 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
                              : QString())
                  + QString("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
     }
+    GamificationManager::noteOperation(
+        QStringLiteral("auto_rig"),
+        {{QStringLiteral("bones_created"), report.boneCount},
+         {QStringLiteral("meshes_skinned"), skinned ? 1 : 0}},
+        GamificationManager::Surface::Cli);
     return 0;
 }
 

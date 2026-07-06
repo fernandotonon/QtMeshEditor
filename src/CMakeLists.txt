@@ -174,6 +174,10 @@ CloudAccountMenuButton.cpp
 DependencyResolver.cpp
 ProjectPackager.cpp
 QtMeshCloudSession.cpp
+GamificationTypes.cpp
+GamificationEventQueue.cpp
+GamificationManager.cpp
+GamificationToast.cpp
 CloudUploadDialog.cpp
 CloudProjectsController.cpp
 CloudDeepLink.cpp
@@ -322,6 +326,10 @@ CloudUploadPlanner.h
 DependencyResolver.h
 ProjectPackager.h
 QtMeshCloudSession.h
+GamificationTypes.h
+GamificationEventQueue.h
+GamificationManager.h
+GamificationToast.h
 CloudUploadDialog.h
 CloudProjectsController.h
 CloudDeepLink.h

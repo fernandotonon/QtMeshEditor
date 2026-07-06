@@ -1,4 +1,5 @@
 #include "MaterialEditorQML.h"
+#include "GamificationManager.h"
 #include "HDR/HdrMaterialScript.h"
 #include "MaterialPreviewRenderer.h"
 #include "Manager.h"
@@ -353,6 +354,7 @@ static void wirePbrSlotsForFFP(Ogre::Material* mat)
 bool MaterialEditorQML::applyMaterial()
 {
     SentryReporter::addBreadcrumb("ui.material", "Apply material");
+    GamificationManager::noteFeature(QStringLiteral("material_editor"));
     // Safety check for Ogre availability
     if (!isOgreAvailable()) {
         const QString scriptForOgre = HdrMaterialScript::stripEnvironmentLines(m_materialText);
@@ -3558,6 +3560,8 @@ QString MaterialEditorQML::packTextureChannels(const QString& redPath,
     spec.includeAlpha    = includeAlpha;
 
     auto r = TextureChannelPacker::packToFile(spec, outputPath);
+    if (r.ok)
+        GamificationManager::noteFeature(QStringLiteral("texture_atlas"));
     return r.ok ? QString() : r.error;
 }
 
@@ -3626,6 +3630,9 @@ QString MaterialEditorQML::generateNormalMap(const QString& sourcePath,
     spec.invertG = invertG;
 
     auto r = NormalMapGenerator::generateToFile(spec, outputPath);
+    if (r.ok)
+        GamificationManager::noteOperation(QStringLiteral("pbr_synth"),
+                                           {{QStringLiteral("maps_generated"), 1}});
     return r.ok ? QString() : r.error;
 }
 
@@ -3735,6 +3742,10 @@ QString MaterialEditorQML::packAtlas(const QStringList& sourcePaths,
     if (!r.ok) return r.error;
     SentryReporter::addBreadcrumb("file.export",
         QString("Atlas %1 tiles -> %2").arg(r.tiles.size()).arg(QFileInfo(outputPath).fileName()));
+    GamificationManager::noteOperation(
+        QStringLiteral("texture_atlas"),
+        {{QStringLiteral("textures_packed"), static_cast<int>(r.tiles.size())},
+         {QStringLiteral("atlas_size"), atlasWidth}});
 
     if (!manifestPath.isEmpty()) {
         const QString json = TextureAtlasPacker::manifestToJson(r, spec.padding);
