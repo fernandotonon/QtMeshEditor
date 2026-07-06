@@ -1,5 +1,6 @@
 #include "HDR/HdrEnvironmentController.h"
 
+#include "GamificationManager.h"
 #include "HDR/HDREnvironmentManager.h"
 #include "HDR/HdrViewportController.h"
 #include "SentryReporter.h"
@@ -304,6 +305,7 @@ bool HdrEnvironmentController::loadEnvironment(const QString& pathOrBundledName)
         SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                        QStringLiteral("hdr.loadEnvironment=%1")
                                            .arg(QFileInfo(pathOrBundledName).fileName()));
+        GamificationManager::noteFeature(QStringLiteral("lighting"));
     }
     return ok;
 }

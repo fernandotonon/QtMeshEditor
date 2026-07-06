@@ -1,5 +1,6 @@
 #include "LightsController.h"
 
+#include "GamificationManager.h"
 #include "LightManager.h"
 #include "Manager.h"
 #include "SelectionSet.h"
@@ -147,6 +148,7 @@ void LightsController::addLight(Ogre::Light::LightTypes type, bool atViewport)
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   QStringLiteral("Create light: %1")
                                       .arg(LightManager::defaultBaseNameForType(type)));
+    GamificationManager::noteFeature(QStringLiteral("lighting"));
 
     UndoManager::getSingleton()->push(new CreateLightCommand(LightSnapshot::fromHandle(handle)));
     selectLightHandle(handle.name);

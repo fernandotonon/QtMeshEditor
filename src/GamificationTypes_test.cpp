@@ -51,10 +51,10 @@ QJsonObject sampleStatsJson()
 
 }  // namespace
 
-TEST(GamificationTypes, FeatureCatalogHas24ValidKeys)
+TEST(GamificationTypes, FeatureCatalogMatchesCloudContract)
 {
     const auto& catalog = featureCatalog();
-    EXPECT_EQ(catalog.size(), 24);
+    EXPECT_EQ(catalog.size(), 25);  // qtmesh-cloud DISCOVERY_FEATURES count
     for (const FeatureInfo& f : catalog) {
         EXPECT_TRUE(isValidEventKey(f.key)) << f.key.toStdString();
         EXPECT_FALSE(f.title.isEmpty());
@@ -62,8 +62,9 @@ TEST(GamificationTypes, FeatureCatalogHas24ValidKeys)
     }
     // Exact contract keys (cloud DISCOVERY_FEATURES) — spot-check ends.
     EXPECT_EQ(catalog.first().key, QStringLiteral("retopo"));
-    EXPECT_EQ(catalog.last().key, QStringLiteral("cloud_upload"));
+    EXPECT_EQ(catalog.last().key, QStringLiteral("lighting"));
     EXPECT_NE(featureInfo(QStringLiteral("mcp_server")), nullptr);
+    EXPECT_NE(featureInfo(QStringLiteral("lighting")), nullptr);
     EXPECT_EQ(featureInfo(QStringLiteral("nope")), nullptr);
 }
 

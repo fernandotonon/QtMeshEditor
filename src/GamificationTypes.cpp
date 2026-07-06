@@ -59,6 +59,8 @@ const QList<FeatureInfo>& featureCatalog()
          QStringLiteral("Drive the editor from AI agents over the Model Context Protocol.")},
         {QStringLiteral("cloud_upload"), QStringLiteral("Cloud Upload"),
          QStringLiteral("Publish projects to QtMesh Cloud with scan reports and share links.")},
+        {QStringLiteral("lighting"), QStringLiteral("Scene Lighting"),
+         QStringLiteral("Light your scene with point/spot/directional lights or an HDR environment.")},
     };
     return catalog;
 }
