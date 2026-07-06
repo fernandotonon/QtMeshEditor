@@ -4878,6 +4878,19 @@ void MaterialEditorQML::onSDGenerationProgress()
     int total = sdManager->generationTotalSteps();
     m_sdGenerationProgress = (total > 0) ? static_cast<float>(step) / total : 0.0f;
     emit sdGenerationProgressChanged();
+    // During a multi-view bake, surface an unambiguous "view N/M — step X/Y"
+    // status so the (multi-minute) SD generation clearly reads as ALIVE rather
+    // than frozen. m_multiViewBake->current is the view whose image is pending.
+    if (m_multiViewBake && total > 0) {
+        const int nViews = static_cast<int>(m_multiViewBake->views.size());
+        const int viewIdx = static_cast<int>(m_multiViewBake->current) + 1;
+        const QString vn = (m_multiViewBake->current < m_multiViewBake->views.size())
+            ? QString::fromLatin1(m_multiViewBake->views[m_multiViewBake->current].name)
+            : QString();
+        emit sdGenerationNotice(
+            tr("AI texture: %1 view %2/%3 — step %4/%5")
+                .arg(vn).arg(viewIdx).arg(nViews).arg(step).arg(total));
+    }
 }
 
 void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
