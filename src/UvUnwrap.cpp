@@ -751,13 +751,16 @@ UvUnwrapReport runUnwrap(Ogre::Entity* entity,
     pack.resolution = static_cast<uint32_t>(std::max(64, opts.resolution));
     pack.padding    = static_cast<uint32_t>(std::max(0, opts.padding));
     pack.bilinear   = true;
-    // Chart quality: default maxIterations=1 seeds+grows once, which on noisy
-    // organic meshes leaves fragmented, distorted charts; 2 iterations produces
-    // rounder, better-parameterized charts. fixWinding enforces consistent UV
-    // winding so a flipped triangle can't invert a chart (another sliver source).
+    // Chart options: keep xatlas's DEFAULT maxIterations (1). A previous
+    // attempt at maxIterations=2 (for rounder charts) LIVELOCKED xatlas's
+    // internal TaskScheduler on large/organic image-to-3D meshes — the main
+    // thread spun forever in ComputeCharts (cthread_yield), freezing the whole
+    // app with an untextured mesh. The single-iteration path is the tested-
+    // stable one; sliver charts are already prevented by the proportional weld
+    // epsilon (MeshDecl.epsilon) + removeDegenerateTriangles before unwrap.
+    // fixWinding is cheap and only enforces consistent UV winding.
     xatlas::ChartOptions chart;
-    chart.maxIterations = 2;
-    chart.fixWinding    = true;
+    chart.fixWinding = true;
     xatlas::Generate(atlas, chart, pack);
 
     report.atlasWidth  = static_cast<int>(atlas->width);
