@@ -752,8 +752,10 @@ void LightPropertiesController::setCastShadows(bool value)
             pushImmediateEdit(LightPropertyClass::Shadow, [value](LightSnapshot& snapshot) {
                 snapshot.castShadows = value;
             });
-            SentryReporter::addBreadcrumb(QStringLiteral("scene.light.shadow_toggle"),
-                                          value ? QStringLiteral("on") : QStringLiteral("off"));
+            SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                          QStringLiteral("Light cast shadows: %1")
+                                              .arg(value ? QStringLiteral("on")
+                                                         : QStringLiteral("off")));
             return;
         }
     }

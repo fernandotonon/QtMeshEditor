@@ -547,7 +547,6 @@ MainWindow::~MainWindow()
         LightsController::kill();
         LightPropertiesController::kill();
         SceneLightingController::kill();
-        ShadowController::kill();
         IsometricSpritesController::kill();
         MeshGenController::kill();
         MeshDepthRenderer::shutdown();
@@ -555,10 +554,13 @@ MainWindow::~MainWindow()
         MaterialPresetLibrary::kill();
         MaterialPreviewRenderer::kill();
         AIChatManager::kill();
+        ShadowController::kill();
 
         // Only destroy Manager if it still exists and belongs to this MainWindow
         if (manager->getMainWindow() == this)
             Manager::kill();
+    } else {
+        ShadowController::kill();
     }
 }
 

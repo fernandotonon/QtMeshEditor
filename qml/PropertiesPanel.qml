@@ -5396,7 +5396,9 @@ Rectangle {
                     onCheckStateChanged: {
                         if (checkState === Qt.PartiallyChecked)
                             return
-                        PropertiesPanelController.receiveShadows = (checkState === Qt.Checked)
+                        const enabled = (checkState === Qt.Checked)
+                        if (PropertiesPanelController.receiveShadows !== enabled)
+                            PropertiesPanelController.receiveShadows = enabled
                     }
                 }
             }
@@ -5429,7 +5431,9 @@ Rectangle {
                     onCheckStateChanged: {
                         if (checkState === Qt.PartiallyChecked)
                             return
-                        LightPropertiesController.castShadows = (checkState === Qt.Checked)
+                        const enabled = (checkState === Qt.Checked)
+                        if (LightPropertiesController.castShadows !== enabled)
+                            LightPropertiesController.castShadows = enabled
                     }
                 }
             }

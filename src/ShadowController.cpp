@@ -42,17 +42,7 @@ bool hasActiveRenderContext()
     {
     }
 
-#if defined(__clang__) || defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-    if (root->getAutoCreatedWindow())
-        return true;
-#if defined(__clang__) || defined(__GNUC__)
-#pragma GCC diagnostic pop
-#endif
-
-    // Editor viewports use arbitrary render-window names — any GL context is enough.
+    // Root + render system is enough: editor viewports use arbitrary render-window names.
     return true;
 }
 
