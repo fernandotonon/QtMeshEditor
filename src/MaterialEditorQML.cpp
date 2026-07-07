@@ -12,6 +12,7 @@
 #include "ImageTo3D/ImageCaptioner.h"
 #include "UvUnwrap.h"
 #include "EditableMesh.h"
+#include "MeshDecimator.h"   // cap the texture-path mesh before unwrap
 #include "EmbeddedTextureCache.h"
 #include <OgreEntity.h>
 #include <OgreSubEntity.h>
@@ -4774,7 +4775,37 @@ void MaterialEditorQML::finishMultiViewBake()
                 }
             }
         }
-        emit sdGenerationNotice("Mesh has no UVs — auto-unwrapping before bake…");
+        // Decimate BEFORE unwrap. Image-to-3D meshes are 80k+ tris; xatlas
+        // (single-threaded, to avoid its scheduler deadlock) takes many minutes
+        // on that — effectively a freeze. A texture doesn't need that density:
+        // ~90% reduction (user-verified as visually fine) drops it to a few
+        // thousand tris that unwrap + bake in seconds. Reduction is capped for
+        // meshes that are already small so we don't over-decimate them.
+        {
+            EditableMesh em;
+            int tris = 0;
+            if (em.loadFromEntity(entity))
+                tris = static_cast<int>(em.totalTriangleCount());  // post-cleanup
+            // Decimate to a fixed TRIANGLE BUDGET (more robust than a flat 90%:
+            // a huge mesh is reduced hard, a moderate one gently, and small
+            // meshes are left alone). ~16k tris textures cleanly and unwraps in
+            // seconds; user-verified ~90% reduction (≈ an 80k→16k mesh) looks
+            // fine. reductionFromTargetTris returns 0 when already under budget.
+            constexpr int kTextureTriBudget = 16000;
+            const double reduction =
+                MeshDecimator::reductionFromTargetTris(tris, kTextureTriBudget);
+            if (reduction > 0.01) {
+                emit sdGenerationNotice(
+                    tr("Simplifying mesh for texturing (%1 → ~%2 tris)…")
+                        .arg(tris).arg(kTextureTriBudget));
+                // Meshopt backend, NOT Ogre's MeshLodGenerator — the latter
+                // SIGSEGVs on these dense image-to-3D meshes (verified); meshopt
+                // handles them cleanly.
+                MeshDecimator::decimateEntity(entity, reduction,
+                                              MeshDecimator::Algorithm::Meshopt);
+            }
+        }
+        emit sdGenerationNotice("Auto-unwrapping UVs before bake…");
         const UvUnwrapReport ur = UvUnwrap::unwrapEntity(entity);
         if (!ur.applied || !entityHasUv0(entity)) {
             emit sdGenerationError(QStringLiteral(
