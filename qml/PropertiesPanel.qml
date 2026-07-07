@@ -22,7 +22,7 @@ Rectangle {
     property var bottomToolHost: null
 
     // Themed checkbox matching Inspector palette (16px box + checkmark).
-    component InspectorThemedCheckBox: CheckBox {
+    component InspectorCheckBox: CheckBox {
         id: itcb
         spacing: 6
         property string accessibleLabel: ""
@@ -4060,7 +4060,7 @@ Rectangle {
                     font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                InspectorThemedCheckBox {
+                InspectorCheckBox {
                     anchors.verticalCenter: parent.verticalCenter
                     accessibleLabel: qsTr("Enabled")
                     tristate: true
@@ -4171,7 +4171,7 @@ Rectangle {
                         }
                     }
                 }
-                InspectorThemedCheckBox {
+                InspectorCheckBox {
                     anchors.verticalCenter: parent.verticalCenter
                     text: qsTr("Link")
                     checked: LightPropertiesController.colorsLinked
@@ -5210,7 +5210,7 @@ Rectangle {
                 spacing: 6
                 width: parent.width - 16
 
-                InspectorThemedCheckBox {
+                InspectorCheckBox {
                     id: replaceLightsCheck
                     text: qsTr("Replace existing lights")
                     checked: SceneLightingController.replaceExistingLights
@@ -5386,7 +5386,7 @@ Rectangle {
                     font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                InspectorThemedCheckBox {
+                InspectorCheckBox {
                     anchors.verticalCenter: parent.verticalCenter
                     accessibleLabel: qsTr("Receive shadows")
                     tristate: true
@@ -5419,7 +5419,7 @@ Rectangle {
                     font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                InspectorThemedCheckBox {
+                InspectorCheckBox {
                     anchors.verticalCenter: parent.verticalCenter
                     accessibleLabel: qsTr("Cast shadows")
                     tristate: true
