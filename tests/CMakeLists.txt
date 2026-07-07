@@ -538,6 +538,15 @@ if(BUILD_TESTS)
         BATCH_EXPORTER_TEST_SEAM
         QTMESH_UNIT_TESTS
         "QTMESH_UT_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    # Manager.cpp (compiled into this lib) picks plugins_d.cfg vs plugins.cfg at
+    # compile time via #ifdef DEBUG. The scoped-DEBUG fix (src/CMakeLists.txt)
+    # applied DEBUG to QtMeshEditor + UnitTests but NOT here, so the standalone
+    # per-file test executables (MaterialEditorQML_test, …) looked for the
+    # nonexistent plugins.cfg in a Debug build → Ogre init failed. Apply DEBUG
+    # here too (PRIVATE — can't leak into FetchContent deps).
+    if(QTMESH_DEFINE_DEBUG)
+        target_compile_definitions(qtmesh_test_common PRIVATE DEBUG)
+    endif()
     target_link_libraries(qtmesh_test_common PUBLIC ${TEST_SUPPORT_LIBRARIES})
 
     if(APPLE)
