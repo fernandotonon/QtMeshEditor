@@ -117,6 +117,7 @@
 #include "LightsController.h"
 #include "LightRigLibrary.h"
 #include "SceneLightingController.h"
+#include "ShadowController.h"
 #include "LightPropertiesController.h"
 #include "AutoRigController.h"
 #include "MeshDepthRenderer.h"
@@ -546,6 +547,7 @@ MainWindow::~MainWindow()
         LightsController::kill();
         LightPropertiesController::kill();
         SceneLightingController::kill();
+        ShadowController::kill();
         IsometricSpritesController::kill();
         MeshGenController::kill();
         MeshDepthRenderer::shutdown();
@@ -745,6 +747,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "SceneLightingController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return SceneLightingController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<ShadowController>(
+            "PropertiesPanel", 1, 0, "ShadowController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return ShadowController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<AutoRigController>(
             "PropertiesPanel", 1, 0, "AutoRigController",

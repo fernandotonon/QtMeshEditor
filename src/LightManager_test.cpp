@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
 #include "LightManager.h"
+#include "LightRigLibrary.h"
 #include "Manager.h"
 #include "MaterialPreviewRenderer.h"
 #include "SelectionSet.h"
+#include "ShadowController.h"
 #include "TestHelpers.h"
 
 #include <OgreLight.h>
@@ -15,6 +17,7 @@ class LightManagerTest : public ::testing::Test {
 protected:
     void TearDown() override
     {
+        ShadowController::kill();
         LightManager::kill();
         Manager::kill();
     }
@@ -133,4 +136,30 @@ TEST_F(LightManagerOgreTest, CreateEmptySceneTwice_ReplacesDefaultLights)
     Manager::getSingletonPtr()->CreateEmptyScene();
     const QList<LightHandle> lights = LightManager::getSingleton()->lights();
     ASSERT_EQ(lights.size(), 3);
+}
+
+TEST_F(LightManagerOgreTest, DestroyingRigGroupRemovesChildLights)
+{
+    Manager::getSingletonPtr()->CreateEmptyScene();
+    auto* lights = LightManager::getSingleton();
+    ASSERT_EQ(lights->lights().size(), 3);
+
+    Ogre::SceneNode* rigGroup = nullptr;
+    for (const LightHandle& handle : lights->lights())
+    {
+        ASSERT_TRUE(handle.sceneNode);
+        auto* parent = static_cast<Ogre::SceneNode*>(handle.sceneNode->getParent());
+        if (parent && LightRigLibrary::sceneNodeIsRigGroup(parent))
+        {
+            rigGroup = parent;
+            break;
+        }
+    }
+    ASSERT_NE(rigGroup, nullptr);
+
+    QSignalSpy deletedSpy(lights, &LightManager::lightDeleted);
+    Manager::getSingleton()->destroySceneNode(rigGroup);
+
+    EXPECT_EQ(lights->lights().size(), 0);
+    EXPECT_EQ(deletedSpy.count(), 3);
 }

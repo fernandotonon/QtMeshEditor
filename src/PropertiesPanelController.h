@@ -40,6 +40,9 @@ class PropertiesPanelController : public QObject
     Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY selectionChanged)
     Q_PROPERTY(bool mergeAnimationsEnabled READ mergeAnimationsEnabled NOTIFY selectionChanged)
     Q_PROPERTY(bool hasEntitySelection READ hasEntitySelection NOTIFY selectionChanged)
+    Q_PROPERTY(bool hasMeshInSelection READ hasMeshInSelection NOTIFY selectionChanged)
+    Q_PROPERTY(bool receiveShadows READ receiveShadows WRITE setReceiveShadows NOTIFY selectionChanged)
+    Q_PROPERTY(bool mixedReceiveShadows READ mixedReceiveShadows NOTIFY selectionChanged)
     Q_PROPERTY(QString selectionName READ selectionName NOTIFY selectionChanged)
     Q_PROPERTY(QString transformTargetKind READ transformTargetKind NOTIFY transformTargetMetadataChanged)
     Q_PROPERTY(QString transformTargetLabel READ transformTargetLabel NOTIFY transformTargetMetadataChanged)
@@ -150,6 +153,10 @@ public:
     bool hasSelection() const;
     bool mergeAnimationsEnabled() const;
     bool hasEntitySelection() const;
+    bool hasMeshInSelection() const;
+    bool receiveShadows() const;
+    void setReceiveShadows(bool enabled);
+    bool mixedReceiveShadows() const;
     QString selectionName() const;
     QString transformTargetKind() const;
     QString transformTargetLabel() const;

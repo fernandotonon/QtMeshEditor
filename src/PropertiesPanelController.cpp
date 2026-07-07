@@ -1,6 +1,8 @@
 #include "PropertiesPanelController.h"
 #include "SceneTreeModel.h"
 #include "LightsController.h"
+#include "LightManager.h"
+#include "LightRigLibrary.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
 #include "PrimitiveObject.h"
@@ -329,6 +331,30 @@ void PropertiesPanelController::deleteSceneTreeNode(const QString& nodeName)
         return;
     }
 
+    Ogre::SceneNode* node = Manager::getSingleton()->getSceneNode(nodeName);
+    if (node && LightRigLibrary::sceneNodeIsRigGroup(node))
+    {
+        SentryReporter::addBreadcrumb("ui.action", "Scene tree: delete light rig group");
+        QStringList lightNames;
+        if (auto* lights = LightManager::getSingletonPtr())
+        {
+            for (const LightHandle& handle : lights->lights())
+            {
+                if (!handle.sceneNode)
+                    continue;
+                if (static_cast<Ogre::SceneNode*>(handle.sceneNode->getParent()) == node)
+                    lightNames.append(handle.name);
+            }
+            for (const QString& lightName : lightNames)
+                lights->deleteLight(lightName);
+        }
+        Manager::getSingleton()->destroySceneNode(nodeName);
+        SelectionSet::getSingleton()->clearList();
+        UndoManager::getSingleton()->clear();
+        emit selectionChanged();
+        return;
+    }
+
     SentryReporter::addBreadcrumb("ui.action", "Scene tree: delete node");
     Manager::getSingleton()->destroySceneNode(nodeName);
     SelectionSet::getSingleton()->clearList();
@@ -367,6 +393,164 @@ void PropertiesPanelController::clearSceneTreeAllNodes()
 bool PropertiesPanelController::hasEntitySelection() const
 {
     return SelectionSet::getSingleton()->hasEntities() || SelectionSet::getSingleton()->hasSubEntities();
+}
+
+bool PropertiesPanelController::hasMeshInSelection() const
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel)
+        return false;
+
+    for (Ogre::SceneNode* node : sel->getNodesSelectionList())
+    {
+        if (!node)
+            continue;
+        for (unsigned short i = 0; i < node->numAttachedObjects(); ++i)
+        {
+            Ogre::MovableObject* obj = node->getAttachedObject(i);
+            if (obj && obj->getMovableType() == "Entity")
+                return true;
+        }
+    }
+
+    return sel->hasEntities() || sel->hasSubEntities();
+}
+
+namespace
+{
+
+QList<Ogre::Entity*> entitiesInSelection()
+{
+    QList<Ogre::Entity*> entities;
+    auto* sel = SelectionSet::getSingleton();
+
+    for (Ogre::SceneNode* node : sel->getNodesSelectionList())
+    {
+        for (unsigned short i = 0; i < node->numAttachedObjects(); ++i)
+        {
+            Ogre::MovableObject* obj = node->getAttachedObject(i);
+            if (obj && obj->getMovableType() == "Entity")
+                entities.append(static_cast<Ogre::Entity*>(obj));
+        }
+    }
+
+    for (Ogre::Entity* entity : sel->getEntitiesSelectionList())
+    {
+        if (entity && !entities.contains(entity))
+            entities.append(entity);
+    }
+
+    for (Ogre::SubEntity* sub : sel->getSubEntitiesSelectionList())
+    {
+        if (!sub)
+            continue;
+        Ogre::Entity* entity = sub->getParent();
+        if (entity && !entities.contains(entity))
+            entities.append(entity);
+    }
+
+    return entities;
+}
+
+bool materialReceivesShadows(const Ogre::MaterialPtr& material)
+{
+    return !material || material->getReceiveShadows();
+}
+
+void setEntityReceiveShadows(Ogre::Entity* entity, bool enabled)
+{
+    if (!entity)
+        return;
+
+    for (unsigned short i = 0; i < entity->getNumSubEntities(); ++i)
+    {
+        Ogre::SubEntity* sub = entity->getSubEntity(i);
+        if (!sub)
+            continue;
+
+        Ogre::MaterialPtr mat = sub->getMaterial();
+        if (!mat)
+            continue;
+
+        mat->setReceiveShadows(enabled);
+        mat->compile();
+    }
+}
+
+} // namespace
+
+bool PropertiesPanelController::receiveShadows() const
+{
+    const QList<Ogre::Entity*> entities = entitiesInSelection();
+    if (entities.isEmpty())
+        return true;
+
+    bool firstSet = false;
+    bool firstValue = true;
+    for (Ogre::Entity* entity : entities)
+    {
+        for (unsigned short i = 0; i < entity->getNumSubEntities(); ++i)
+        {
+            Ogre::SubEntity* sub = entity->getSubEntity(i);
+            if (!sub)
+                continue;
+            const bool receives = materialReceivesShadows(sub->getMaterial());
+            if (!firstSet)
+            {
+                firstValue = receives;
+                firstSet = true;
+            }
+            else if (receives != firstValue)
+            {
+                return firstValue;
+            }
+        }
+    }
+    return firstSet ? firstValue : true;
+}
+
+bool PropertiesPanelController::mixedReceiveShadows() const
+{
+    const QList<Ogre::Entity*> entities = entitiesInSelection();
+    if (entities.isEmpty())
+        return false;
+
+    bool firstSet = false;
+    bool firstValue = true;
+    for (Ogre::Entity* entity : entities)
+    {
+        for (unsigned short i = 0; i < entity->getNumSubEntities(); ++i)
+        {
+            Ogre::SubEntity* sub = entity->getSubEntity(i);
+            if (!sub)
+                continue;
+            const bool receives = materialReceivesShadows(sub->getMaterial());
+            if (!firstSet)
+            {
+                firstValue = receives;
+                firstSet = true;
+            }
+            else if (receives != firstValue)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void PropertiesPanelController::setReceiveShadows(bool enabled)
+{
+    const QList<Ogre::Entity*> entities = entitiesInSelection();
+    if (entities.isEmpty())
+        return;
+
+    for (Ogre::Entity* entity : entities)
+        setEntityReceiveShadows(entity, enabled);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Entity receive shadows: %1").arg(enabled ? "on" : "off"));
+    emit selectionChanged();
 }
 
 QString PropertiesPanelController::selectionName() const

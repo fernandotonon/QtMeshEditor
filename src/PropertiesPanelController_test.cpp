@@ -144,6 +144,19 @@ TEST_F(PropertiesPanelControllerTests, SelectionStateFollowsSelectedSceneNode)
     EXPECT_EQ(SelectionSet::getSingleton()->getSceneNode(0), node);
 }
 
+TEST_F(PropertiesPanelControllerTests, HasMeshInSelection_IncludesEntityOnSelectedNode)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    Ogre::SceneNode* node = Manager::getSingleton()->addSceneNode("MeshOnNodeSel");
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("MeshOnNodeSelMesh");
+    Manager::getSingleton()->createEntity(node, mesh);
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(node);
+
+    EXPECT_FALSE(controller->hasEntitySelection());
+    EXPECT_TRUE(controller->hasMeshInSelection());
+}
+
 TEST_F(PropertiesPanelControllerTests, TransformTargetMetadataExplainsSelectionImpact)
 {
     EXPECT_EQ(controller->transformTargetKind(), QString("none"));

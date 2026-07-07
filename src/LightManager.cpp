@@ -2,6 +2,7 @@
 
 #include "Manager.h"
 #include "SentryReporter.h"
+#include "ShadowController.h"
 
 #include <OgreLight.h>
 #include <OgreMath.h>
@@ -41,6 +42,15 @@ LightSnapshot LightSnapshot::fromHandle(const LightHandle& handle)
         snapshot.direction =
             handle.sceneNode->getOrientation() * Ogre::Vector3::NEGATIVE_UNIT_Z;
     }
+    snapshot.castShadows = handle.light->getCastShadows();
+
+    const auto& bindings = handle.light->getUserObjectBindings();
+    const auto depthAny = bindings.getUserAny(QStringLiteral("shadow_depth_bias").toStdString());
+    const auto slopeAny = bindings.getUserAny(QStringLiteral("shadow_slope_bias").toStdString());
+    if (depthAny.has_value())
+        snapshot.shadowDepthBias = Ogre::any_cast<float>(depthAny);
+    if (slopeAny.has_value())
+        snapshot.shadowSlopeBias = Ogre::any_cast<float>(slopeAny);
     return snapshot;
 }
 
@@ -58,7 +68,9 @@ bool LightSnapshot::operator==(const LightSnapshot& other) const
            && spotlightFalloff == other.spotlightFalloff
            && position == other.position && orientation == other.orientation
            && scale == other.scale && usesDirection == other.usesDirection
-           && direction == other.direction;
+           && direction == other.direction && castShadows == other.castShadows
+           && shadowDepthBias == other.shadowDepthBias
+           && shadowSlopeBias == other.shadowSlopeBias;
 }
 
 LightManager* LightManager::getSingleton()
@@ -195,6 +207,16 @@ void LightManager::applySnapshotToHandle(const LightSnapshot& snapshot, LightHan
     handle.sceneNode->setScale(snapshot.scale);
     if (snapshot.usesDirection)
         handle.sceneNode->setDirection(snapshot.direction);
+
+    handle.light->setCastShadows(snapshot.castShadows);
+    auto& bindings = handle.light->getUserObjectBindings();
+    bindings.setUserAny(QStringLiteral("shadow_depth_bias").toStdString(),
+                        Ogre::Any(snapshot.shadowDepthBias));
+    bindings.setUserAny(QStringLiteral("shadow_slope_bias").toStdString(),
+                        Ogre::Any(snapshot.shadowSlopeBias));
+
+    if (auto* shadows = ShadowController::instance())
+        shadows->syncFromScene();
 }
 
 LightHandle LightManager::createLightInternal(Ogre::Light::LightTypes type, const QString& baseName)
@@ -254,6 +276,12 @@ LightHandle LightManager::createLightUnderParent(Ogre::SceneNode* parent,
         light->setAttenuation(10.0f, 1.0f, 0.0f, 0.0f);
     if (type == Ogre::Light::LT_SPOTLIGHT)
         light->setSpotlightRange(Ogre::Degree(30.0f), Ogre::Degree(40.0f), 1.0f);
+    light->setCastShadows(false);
+    auto& bindings = light->getUserObjectBindings();
+    bindings.setUserAny(QStringLiteral("shadow_depth_bias").toStdString(),
+                        Ogre::Any(ShadowController::kDefaultDepthBias));
+    bindings.setUserAny(QStringLiteral("shadow_slope_bias").toStdString(),
+                        Ogre::Any(ShadowController::kDefaultSlopeBias));
     node->attachObject(light);
     tagAsUserLight(light);
     node->setPosition(position);
@@ -430,12 +458,31 @@ bool LightManager::deleteLight(const QString& name)
         if (node && Manager::getSingletonPtr())
         {
             m_suppressSceneNodeDestroyed = true;
-            Manager::getSingleton()->destroySceneNode(node);
+            // Overlays are torn down in lightDeleted; do not pre-destroy child nodes.
+            Manager::getSingleton()->destroySceneNode(node, false);
             m_suppressSceneNodeDestroyed = false;
         }
 
         return true;
     }
+    return false;
+}
+
+bool LightManager::deleteLightBySceneNode(Ogre::SceneNode* node)
+{
+    if (!node || m_suppressSceneNodeDestroyed)
+        return false;
+
+    if (LightHandle* handle = findLightBySceneNode(node))
+        return deleteLight(handle->name);
+
+    if (!sceneNodeIsUserLight(node))
+        return false;
+
+    const QString name = QString::fromStdString(node->getName());
+    if (findLight(name))
+        return deleteLight(name);
+
     return false;
 }
 

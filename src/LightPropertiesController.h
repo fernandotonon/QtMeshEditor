@@ -48,6 +48,14 @@ class LightPropertiesController : public QObject
     Q_PROPERTY(bool isPointOrSpot READ isPointOrSpot NOTIFY propertiesChanged)
     Q_PROPERTY(bool isSpot READ isSpot NOTIFY propertiesChanged)
     Q_PROPERTY(bool isDirectional READ isDirectional NOTIFY propertiesChanged)
+    Q_PROPERTY(bool castShadows READ castShadows WRITE setCastShadows NOTIFY propertiesChanged)
+    Q_PROPERTY(bool mixedCastShadows READ mixedCastShadows NOTIFY propertiesChanged)
+    Q_PROPERTY(double shadowDepthBias READ shadowDepthBias WRITE setShadowDepthBias
+                   NOTIFY propertiesChanged)
+    Q_PROPERTY(double shadowSlopeBias READ shadowSlopeBias WRITE setShadowSlopeBias
+                   NOTIFY propertiesChanged)
+    Q_PROPERTY(bool mixedShadowDepthBias READ mixedShadowDepthBias NOTIFY propertiesChanged)
+    Q_PROPERTY(bool mixedShadowSlopeBias READ mixedShadowSlopeBias NOTIFY propertiesChanged)
     Q_PROPERTY(QStringList lightTypeChoices READ lightTypeChoices CONSTANT)
     Q_PROPERTY(QStringList attenuationPresetChoices READ attenuationPresetChoices CONSTANT)
 
@@ -117,6 +125,18 @@ public:
     bool isPointOrSpot() const;
     bool isSpot() const;
     bool isDirectional() const;
+
+    bool castShadows() const;
+    void setCastShadows(bool value);
+    bool mixedCastShadows() const;
+
+    double shadowDepthBias() const;
+    void setShadowDepthBias(double value);
+    bool mixedShadowDepthBias() const;
+
+    double shadowSlopeBias() const;
+    void setShadowSlopeBias(double value);
+    bool mixedShadowSlopeBias() const;
 
     QStringList lightTypeChoices() const;
     QStringList attenuationPresetChoices() const;

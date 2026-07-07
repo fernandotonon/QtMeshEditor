@@ -3,6 +3,7 @@
 #include "LightManager.h"
 #include "Manager.h"
 #include "SelectionSet.h"
+#include "ShadowController.h"
 #include "UndoManager.h"
 #include "SentryReporter.h"
 #include "mainwindow.h"
@@ -713,6 +714,112 @@ bool LightPropertiesController::isDirectional() const
             return true;
     }
     return false;
+}
+
+bool LightPropertiesController::castShadows() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.isEmpty())
+        return false;
+    return snapshots.first().castShadows;
+}
+
+bool LightPropertiesController::mixedCastShadows() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.size() < 2)
+        return false;
+
+    const bool first = snapshots.first().castShadows;
+    for (const LightSnapshot& snapshot : snapshots)
+    {
+        if (snapshot.castShadows != first)
+            return true;
+    }
+    return false;
+}
+
+void LightPropertiesController::setCastShadows(bool value)
+{
+    pushImmediateEdit(LightPropertyClass::Shadow, [value](LightSnapshot& snapshot) {
+        snapshot.castShadows = value;
+    });
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.shadow_toggle"),
+                                  value ? QStringLiteral("on") : QStringLiteral("off"));
+}
+
+double LightPropertiesController::shadowDepthBias() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.isEmpty())
+        return ShadowController::kDefaultDepthBias;
+    return snapshots.first().shadowDepthBias;
+}
+
+bool LightPropertiesController::mixedShadowDepthBias() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.size() < 2)
+        return false;
+
+    const float first = snapshots.first().shadowDepthBias;
+    for (const LightSnapshot& snapshot : snapshots)
+    {
+        if (!nearlyEqual(snapshot.shadowDepthBias, first))
+            return true;
+    }
+    return false;
+}
+
+void LightPropertiesController::setShadowDepthBias(double value)
+{
+    const float clamped = static_cast<float>(std::max(value, 0.0));
+    if (m_sliderEditActive)
+    {
+        applyToSelection(
+            [clamped](LightSnapshot& snapshot) { snapshot.shadowDepthBias = clamped; }, true);
+        return;
+    }
+
+    pushImmediateEdit(LightPropertyClass::Shadow,
+                      [clamped](LightSnapshot& snapshot) { snapshot.shadowDepthBias = clamped; });
+}
+
+double LightPropertiesController::shadowSlopeBias() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.isEmpty())
+        return ShadowController::kDefaultSlopeBias;
+    return snapshots.first().shadowSlopeBias;
+}
+
+bool LightPropertiesController::mixedShadowSlopeBias() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.size() < 2)
+        return false;
+
+    const float first = snapshots.first().shadowSlopeBias;
+    for (const LightSnapshot& snapshot : snapshots)
+    {
+        if (!nearlyEqual(snapshot.shadowSlopeBias, first))
+            return true;
+    }
+    return false;
+}
+
+void LightPropertiesController::setShadowSlopeBias(double value)
+{
+    const float clamped = static_cast<float>(std::max(value, 0.0));
+    if (m_sliderEditActive)
+    {
+        applyToSelection(
+            [clamped](LightSnapshot& snapshot) { snapshot.shadowSlopeBias = clamped; }, true);
+        return;
+    }
+
+    pushImmediateEdit(LightPropertyClass::Shadow,
+                      [clamped](LightSnapshot& snapshot) { snapshot.shadowSlopeBias = clamped; });
 }
 
 void LightPropertiesController::beginSliderEdit(int propertyClass)

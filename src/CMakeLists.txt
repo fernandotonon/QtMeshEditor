@@ -40,6 +40,7 @@ LightVisualizer.cpp
 LightsController.cpp
 LightPropertiesController.cpp
 SceneLightingController.cpp
+ShadowController.cpp
 SelectionBoxObject.cpp
 ObjectItemModel.cpp
 MaterialComboDelegate.cpp
@@ -237,6 +238,7 @@ LightVisualizer.h
 LightsController.h
 LightPropertiesController.h
 SceneLightingController.h
+ShadowController.h
 SelectionBoxObject.h
 ObjectItemModel.h
 MaterialComboDelegate.h
