@@ -4,7 +4,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 
-#ifdef ENABLE_LOCAL_LLM
+#ifdef ENABLE_MTMD
 #include "ModelDownloader.h"
 #include <QEventLoop>
 #include <QObject>
@@ -47,7 +47,7 @@ QString modelDir()
 QString modelPath()  { return QDir(modelDir()).filePath(QString::fromLatin1(kModelFile)); }
 QString mmprojPath() { return QDir(modelDir()).filePath(QString::fromLatin1(kMmprojFile)); }
 
-#ifdef ENABLE_LOCAL_LLM
+#ifdef ENABLE_MTMD
 
 bool isAvailable() { return true; }
 
@@ -227,13 +227,13 @@ QString caption(const QImage& image, const QString& prompt)
     return result;
 }
 
-#else  // !ENABLE_LOCAL_LLM
+#else  // !ENABLE_MTMD
 
 bool    isAvailable()        { return false; }
 bool    modelsPresent()      { return false; }
 QString ensureModelBlocking(){ return {}; }
 QString caption(const QImage&, const QString&) { return {}; }
 
-#endif // ENABLE_LOCAL_LLM
+#endif // ENABLE_MTMD
 
 } // namespace ImageCaptioner
