@@ -2111,9 +2111,17 @@ Rectangle {
                         // image was picked (ready by now — no UI-blocking
                         // captioning here). Empty falls back to a neutral prompt
                         // inside generateMeshTextureMultiView.
+                        //
+                        // Views: front/back/left/right (MV-Adapter #805 slice 1
+                        // — its 6-view orthographic layout minus the two poles).
+                        // 4 equatorial views give full horizontal coverage +
+                        // seam overlap for the baker's cross-view blend, a clear
+                        // step up from the old 2 (front+back left the sides to
+                        // stretch/blur) without the ~3× cost of all 6. The two
+                        // poles (top/bottom) rarely help typical subjects.
                         MaterialEditorQML.generateMeshTextureMultiView(
                             MeshGenController.caption, 512, 512, 0.9,
-                            ["front", "back"],
+                            ["front", "back", "left", "right"],
                             "",                       // no photo pinning
                             mgPbr.checked)
                     }
