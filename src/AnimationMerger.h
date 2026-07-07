@@ -179,7 +179,18 @@ public:
         bool worldFrame = false,
         const std::vector<std::array<float, 4>>& cmuRestWorld = {},
         bool refineWithModel = false,
-        int refineStride = 8);
+        int refineStride = 8,
+        bool yaw180 = false);
+
+    /// True when the entity's mesh appears to FACE −Z (the retarget and the
+    /// CMU clips assume +Z): detected from the foot region — toe mass extends
+    /// forward of the ankle joints. Rigs WITH a harvested standing pose don't
+    /// need this (the world-frame change-of-basis absorbs facing), but
+    /// auto-rigged skeletons (UniRig / template, no prior animation) apply
+    /// motion axes raw — a −Z-facing mesh walks BACKWARD unless the caller
+    /// passes yaw180 = detectBackwardFacing(entity) to applyMotionClip.
+    /// Conservative: returns false when feet/geometry are inconclusive.
+    static bool detectBackwardFacing(Ogre::Entity* entity);
 
     /// Merge animations from sourceEntities into baseEntity's skeleton.
     /// Convenience wrapper; forwards an empty skeleton list to the 4-argument overload.

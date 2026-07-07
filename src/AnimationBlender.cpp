@@ -1,4 +1,5 @@
 #include "AnimationBlender.h"
+#include "GamificationManager.h"
 #include "AnimationControlController.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -507,6 +508,8 @@ QString AnimationBlender::bake(const QString& clipName, int fps)
     const int   sampleCount = std::max(2,
         static_cast<int>(std::ceil(length * static_cast<float>(fps))) + 1);
     const float step        = length / static_cast<float>(sampleCount - 1);
+
+    GamificationManager::noteFeature(QStringLiteral("animation_blend"));
 
     if (skel->hasAnimation(clipStd)) skel->removeAnimation(clipStd);
     Ogre::Animation* anim = skel->createAnimation(clipStd, length);

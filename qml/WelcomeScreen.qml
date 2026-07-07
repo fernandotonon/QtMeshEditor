@@ -317,6 +317,82 @@ Rectangle {
                 }
             }
 
+            // ---- Gamification: "try this next" discovery nudge (E-P5) ----
+            Rectangle {
+                id: suggestionCard
+                property var suggestion: GamificationManager.suggestion
+                visible: suggestion !== undefined && suggestion.featureKey !== undefined
+                Layout.fillWidth: true
+                implicitHeight: suggestionCol.implicitHeight + 20
+                radius: 6
+                color: PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.highlightColor
+                border.width: 1
+
+                ColumnLayout {
+                    id: suggestionCol
+                    anchors {
+                        left: parent.left; right: parent.right
+                        top: parent.top
+                        margins: 10
+                    }
+                    spacing: 3
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Text {
+                            text: (suggestionCard.suggestion && suggestionCard.suggestion.personalized
+                                   ? "✨ New to you: " : "✨ Try this: ")
+                                  + (suggestionCard.suggestion ? suggestionCard.suggestion.title : "")
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 12
+                            font.bold: true
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+
+                        // Rotate to another suggestion
+                        Text {
+                            text: "↻"
+                            color: Qt.darker(PropertiesPanelController.textColor, 1.4)
+                            font.pixelSize: 13
+                            MouseArea {
+                                anchors.fill: parent
+                                anchors.margins: -4
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: GamificationManager.advanceSuggestion()
+                            }
+                        }
+
+                        // Dismiss this suggestion permanently
+                        Text {
+                            text: "✕"
+                            color: Qt.darker(PropertiesPanelController.textColor, 1.4)
+                            font.pixelSize: 12
+                            MouseArea {
+                                anchors.fill: parent
+                                anchors.margins: -4
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (suggestionCard.suggestion)
+                                        GamificationManager.dismissSuggestion(suggestionCard.suggestion.featureKey)
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: suggestionCard.suggestion ? suggestionCard.suggestion.blurb : ""
+                        color: Qt.darker(PropertiesPanelController.textColor, 1.4)
+                        font.pixelSize: 10
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                }
+            }
+
             // ---- Separator ----
             Rectangle {
                 Layout.fillWidth: true

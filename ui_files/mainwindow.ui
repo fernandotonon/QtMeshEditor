@@ -64,6 +64,8 @@
      <addaction name="actionShow_Grid"/>
      <addaction name="actionShow_Normals"/>
      <addaction name="actionShow_Mesh_Info"/>
+     <addaction name="actionShow_Light_Icons"/>
+     <addaction name="actionShow_Selected_Light_Gizmo_Only"/>
      <addaction name="actionShow_View_Cube"/>
      <addaction name="separator"/>
      <addaction name="actionAsset_Browser"/>
@@ -266,6 +268,34 @@
    </property>
    <property name="toolTip">
     <string>Toggle Mesh Info Overlay</string>
+   </property>
+  </action>
+  <action name="actionShow_Light_Icons">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Show Light Icons</string>
+   </property>
+   <property name="toolTip">
+    <string>Toggle viewport light icons and helper gizmos</string>
+   </property>
+  </action>
+  <action name="actionShow_Selected_Light_Gizmo_Only">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Show Selected Light Gizmo Only</string>
+   </property>
+   <property name="toolTip">
+    <string>Hide helper gizmos for unselected lights</string>
    </property>
   </action>
   <action name="actionImport">

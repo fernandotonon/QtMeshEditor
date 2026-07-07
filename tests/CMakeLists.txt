@@ -46,6 +46,12 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportGrid.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationWidget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionSet.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightRigLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightVisualizer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightsController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightPropertiesController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightingController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionBoxObject.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ObjectItemModel.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.cpp
@@ -74,6 +80,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DependencyResolver.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ProjectPackager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudSession.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationTypes.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationEventQueue.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationToast.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudAccountMenuButton.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackDiagnostics.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FeedbackDialog.cpp
@@ -83,6 +93,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewCube/ViewCubeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UndoManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/TransformCommands.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/LightCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MoveKeyframeCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/BulkKeyframeCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SetKeyframeValueCommand.cpp
@@ -286,6 +297,12 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportGrid.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationWidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionSet.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightRigLibrary.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightVisualizer.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightsController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightPropertiesController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightingController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionBoxObject.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ObjectItemModel.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.h
@@ -305,10 +322,15 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CLIPipeline.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CloudDeepLink.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshCloudClient.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationTypes.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationEventQueue.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GamificationToast.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewCube/ViewCubeController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UndoManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/TransformCommands.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/LightCommands.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PropertiesPanelController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneTreeModel.h
 

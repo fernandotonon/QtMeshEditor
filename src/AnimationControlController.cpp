@@ -1,4 +1,6 @@
 #include "AnimationControlController.h"
+#include "GamificationManager.h"
+#include "PropertiesPanelController.h"
 #include "SelectionSet.h"
 #include "Manager.h"
 #include "SentryReporter.h"
@@ -1642,6 +1644,11 @@ QVariantMap AnimationControlController::inbetweenWindow(double t0, double t1,
     emit keyframeTicksChanged();
     emit currentKeyframeChanged();
 
+    GamificationManager::noteOperation(
+        QStringLiteral("motion_inbetween"),
+        {{QStringLiteral("keyframes_inserted"), r.keyframesInserted},
+         {QStringLiteral("tracks_affected"), r.tracksAffected}});
+
     QString msg = QStringLiteral("Inserted %1 keyframes across %2 track(s) via %3")
         .arg(r.keyframesInserted).arg(r.tracksAffected)
         .arg(r.usedModel ? QStringLiteral("RMIB model")
@@ -1677,6 +1684,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
         QStringLiteral("GUI generate_motion"));
+    GamificationManager::noteFeature(QStringLiteral("animation_blend"));
 
     // Acquire the canonical clip: EXPERIMENTAL trained model first (when opted in),
     // else the reliable TEMPLATE library — which is also the automatic fallback.
@@ -1694,7 +1702,7 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
                                                       MotionGenerator::vocabPath(), duration);
             if (mr.ok) {
                 action = mr.matchedAction; quats = mr.clip.quats; fps = mr.clip.fps;
-                worldFrame = false; clipSource = QStringLiteral("model"); gotClip = true;
+                worldFrame = mr.worldFrame; clipSource = QStringLiteral("model"); gotClip = true;
             }
         }
         if (!gotClip)
@@ -1730,12 +1738,37 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
     }
 
     const std::string animName = ("generated_" + action).toStdString();
+    // Auto-rigged (no prior animation) meshes that face −Z would walk
+    // backward — detect facing from the mesh's foot region.
+    const bool yaw180 = AnimationMerger::detectBackwardFacing(entity);
     const auto res = AnimationMerger::applyMotionClip(skel.get(), animName, quats, fps,
-                                                      worldFrame, cmuRest);
+                                                      worldFrame, cmuRest,
+                                                      /*refineWithModel=*/false,
+                                                      /*refineStride=*/8, yaw180);
     if (!res.ok) return fail(res.error);
     out["source"] = clipSource;
 
     entity->refreshAvailableAnimationState();
+    // Make the generated clip the ONLY enabled animation. Ogre AVERAGES all
+    // enabled animation states, so leaving the import's auto-enabled clip (or
+    // previously generated ones) on blends them into a shaking mid-pose —
+    // "generate walk" must visibly walk.
+    if (auto* animSet = entity->getAllAnimationStates()) {
+        for (const auto& [key, state] : animSet->getAnimationStates())
+            state->setEnabled(false);
+        if (animSet->hasAnimationState(animName)) {
+            auto* gen = animSet->getAnimationState(animName);
+            gen->setEnabled(true);
+            gen->setLoop(true);
+            gen->setTimePosition(0.0f);
+        }
+    }
+    // The Inspector's Animations checkboxes read enabled flags through
+    // PropertiesPanelController — notify it, or the panel shows STALE state
+    // (old clip still checked) and the user's next toggle crosses the
+    // enables back into a blended, shaking pose.
+    if (auto* ppc = PropertiesPanelController::instance())
+        emit ppc->animationStateChanged();
     // Adding an animation can reallocate skeleton state — drop cached pointers
     // and refresh the dope sheet, like the in-between path.
     m_selectedTrack   = nullptr;

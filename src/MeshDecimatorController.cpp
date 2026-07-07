@@ -1,4 +1,5 @@
 #include "MeshDecimatorController.h"
+#include "GamificationManager.h"
 #include "MeshDecimator.h"
 #include "MeshOptimizerLod.h"
 #include "Manager.h"
@@ -256,6 +257,10 @@ void MeshDecimatorController::applyReductionWithAlgo(double reduction, const QSt
     refreshBaseline();
     emit previewChanged();
     emit baseChanged();
+    GamificationManager::noteOperation(
+        QStringLiteral("decimate_lod"),
+        {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
+         {QStringLiteral("tris_after"), report.totalTrianglesAfter}});
     emit applied(report.totalTrianglesBefore, report.totalTrianglesAfter);
 }
 // LCOV_EXCL_STOP

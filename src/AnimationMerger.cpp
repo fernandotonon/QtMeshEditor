@@ -1,4 +1,5 @@
 #include "AnimationMerger.h"
+#include "AutoRig.h"
 #include "MotionInbetween.h"
 #include <OgreSkeleton.h>
 #include <OgreSkeletonInstance.h>
@@ -910,6 +911,53 @@ AnimationMerger::InbetweenResult AnimationMerger::inbetweenAnimation(
     return res;
 }
 
+bool AnimationMerger::detectBackwardFacing(Ogre::Entity* entity)
+{
+    // Escape hatch for exotic meshes where the foot-region heuristic guesses
+    // wrong: QTMESH_T2M_YAW180=1 forces the flip, =0 disables it.
+    const QByteArray force = qgetenv("QTMESH_T2M_YAW180");
+    if (!force.isEmpty()) return force != "0";
+    if (!entity || !entity->hasSkeleton()) return false;
+    Ogre::SkeletonInstance* skel = entity->getSkeleton();
+    if (!skel) return false;
+
+    // Ankle reference: bones resolving to the canonical foot roles (17/21).
+    Ogre::Vector3 ankleSum = Ogre::Vector3::ZERO;
+    int ankles = 0;
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+        Ogre::Bone* b = skel->getBone(i);
+        const int c = MotionInbetween::canonicalIndexForBone(
+            QString::fromStdString(b->getName()));
+        if (c == 17 || c == 21) { ankleSum += b->_getDerivedPosition(); ++ankles; }
+    }
+    if (ankles == 0) return false;
+    const Ogre::Vector3 ankle = ankleSum / static_cast<float>(ankles);
+
+    std::vector<float> verts;
+    std::vector<uint32_t> indices;
+    if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.size() < 9)
+        return false;
+    float minY = verts[1], maxY = verts[1];
+    for (size_t v = 1; v < verts.size() / 3; ++v) {
+        minY = std::min(minY, verts[3*v + 1]);
+        maxY = std::max(maxY, verts[3*v + 1]);
+    }
+    const float h = maxY - minY;
+    if (h < 1e-5f) return false;
+
+    // Foot region: vertices below (a little above) ankle height. Toes extend
+    // FORWARD of the ankle, so the region's Z centroid tells the facing.
+    const float band = ankle.y + 0.06f * h;
+    double zSum = 0.0; int n = 0;
+    for (size_t v = 0; v < verts.size() / 3; ++v) {
+        if (verts[3*v + 1] <= band) { zSum += verts[3*v + 2]; ++n; }
+    }
+    if (n < 16) return false;
+    const float dz = static_cast<float>(zSum / n) - ankle.z;
+    // conservative margin — skirts/long coats centre the low region near 0
+    return dz < -0.02f * h;
+}
+
 AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     Ogre::Skeleton* skel,
     const std::string& animName,
@@ -918,7 +966,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     bool worldFrame,
     const std::vector<std::array<float, 4>>& cmuRestWorld,
     bool refineWithModel,
-    int refineStride)
+    int refineStride,
+    bool yaw180)
 {
     ApplyMotionResult res;
     if (!skel) { res.error = QStringLiteral("no skeleton"); return res; }
@@ -985,6 +1034,14 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     }
 
     res.canonicalJoints = distinct;
+    // Bones-per-role: rigs segment chains differently (Mixamo has Spine AND
+    // Spine1 in the canonical "abdomen" span; some rigs multi-segment arms).
+    // Applying the full role delta to EVERY mapped bone would bend the chain
+    // N times over — distribute it instead: each of the N bones gets the
+    // N-th fractional rotation so the chain's total matches the clip.
+    std::vector<int> canonDup(MotionInbetween::canonicalJointCount(), 0);
+    for (int i = 0; i < nBones; ++i)
+        if (boneToCanon[i] >= 0) ++canonDup[boneToCanon[i]];
     // Need a humanoid-ish rig: require a reasonable share of the 22 roles.
     if (distinct < (MotionInbetween::canonicalJointCount() * 1) / 2) {
         res.error = QStringLiteral(
@@ -1013,7 +1070,14 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         Ogre::Animation* ref = nullptr;
         for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
             Ogre::Animation* a = skel->getAnimation(ai);
-            if (a && a->getName() != animName) { ref = a; break; }
+            // Never harvest OUR OWN generated clips as the rig's standing
+            // pose: on an auto-rigged skeleton the first --generate adds an
+            // animation, and the next --generate would harvest it and switch
+            // from the (correct) raw path to the standing-pose path — whose
+            // Mc is bogus on non-identity bone rests. Only rig-authored
+            // animations describe the true standing pose.
+            if (a && a->getName() != animName
+                && a->getName().rfind("generated_", 0) != 0) { ref = a; break; }
         }
         if (ref) {
             for (const auto& [h, trk] : ref->_getNodeTrackList()) {
@@ -1051,17 +1115,36 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         const auto& q = clipQuats[frame][joint];
         return Ogre::Quaternion(q[3], q[0], q[1], q[2]);   // (w,x,y,z)
     };
+    // REFERENCE FRAME: deltas (and the Mc frame map below) are taken against
+    // the clip's CALMEST frame, not blindly frame 0. Template windows open on
+    // a settled pose so this stays ~frame 0 for them; MODEL-generated clips
+    // have noisy per-joint frame-0 orientations, and referencing them gave
+    // every bone a slightly wrong constant offset (weird arm positions on
+    // rigs that use the standing-pose path).
+    int refFrame = 0;
+    if (frames > 2) {
+        double bestE = 1e30;
+        for (int f = 0; f + 1 < frames; ++f) {
+            double e = 0.0;
+            for (int c = 1; c < J; ++c) {
+                const Ogre::Quaternion d = clipQ(f, c).Inverse() * clipQ(f + 1, c);
+                e += 2.0 * std::acos(std::min(1.0, std::abs(static_cast<double>(d.w))));
+            }
+            if (e < bestE) { bestE = e; refFrame = f; }
+        }
+    }
     std::vector<std::vector<Ogre::Quaternion>> cmuLocalDelta(
         J, std::vector<Ogre::Quaternion>(frames, Ogre::Quaternion::IDENTITY));
     for (int c = 0; c < J; ++c) {
         const int pc = kParentCanon[c];
-        Ogre::Quaternion local0;
+        const Ogre::Quaternion localRef = (worldFrame && pc >= 0)
+            ? clipQ(refFrame, pc).Inverse() * clipQ(refFrame, c)
+            : clipQ(refFrame, c);
         for (int f = 0; f < frames; ++f) {
             Ogre::Quaternion local = (worldFrame && pc >= 0)
                 ? clipQ(f, pc).Inverse() * clipQ(f, c)   // world→local
                 : clipQ(f, c);                            // already local (or root)
-            if (f == 0) local0 = local;
-            cmuLocalDelta[c][f] = local0.Inverse() * local;
+            cmuLocalDelta[c][f] = localRef.Inverse() * local;
         }
     }
     // Standing-pose world orientation per bone (for the M_c roll correction).
@@ -1080,6 +1163,19 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         standWorldCache[h] = w;
         return w;
     };
+
+    // The standing-pose change-of-basis (Mc) assumes Mixamo-style skeletons
+    // whose bone rests are identity (the real pose lives in the animation).
+    // On rigs with authored/non-identity rests (UniRig / template auto-rig)
+    // standWorldOf accumulates the rests and Mc becomes a large bogus
+    // rotation — use the raw path there instead.
+    bool restsAreIdentity = true;
+    for (int i = 0; i < nBones && restsAreIdentity; ++i) {
+        Ogre::Bone* b = skel->getBone(static_cast<unsigned short>(i));
+        if (!b->getInitialOrientation().equals(Ogre::Quaternion::IDENTITY,
+                                               Ogre::Radian(0.02f)))
+            restsAreIdentity = false;
+    }
 
     for (int i = 0; i < nBones; ++i) {
         const int c = boneToCanon[i];
@@ -1108,13 +1204,25 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
         // robust pure-local delta (bind · delta), which renders upright on UniRig.
         const bool haveAnyStand = !standPose.empty();
         Ogre::Quaternion Mc = Ogre::Quaternion::IDENTITY;
-        if (worldFrame && c > 0 && haveAnyStand)
-            Mc = standWorldOf(bone).Inverse() * clipQ(0, c);  // target-stand → CMU-rest
+        if (worldFrame && c > 0 && haveAnyStand && restsAreIdentity)
+            Mc = standWorldOf(bone).Inverse() * clipQ(refFrame, c);  // target-stand → clip rest
+        // −Z-facing rig on the RAW path (no harvested stand → Mc == identity,
+        // deltas act in ~world axes): view every delta in a 180°-yawed frame
+        // so the sagittal swing matches the mesh's facing (else it walks
+        // backward). Rigs WITH a stand pose are covered by Mc itself.
+        if (yaw180 && !(worldFrame && haveAnyStand) && c > 0) {
+            static const Ogre::Quaternion kYawPi(0.0f, 0.0f, 1.0f, 0.0f); // 180° about +Y
+            Mc = Mc * kYawPi;
+        }
         const Ogre::Quaternion McInv = Mc.Inverse();
+        const int dup = std::max(1, canonDup[c]);
         for (int f = 0; f < frames; ++f) {
-            const Ogre::Quaternion local = (c == 0)
-                ? bind
-                : (bind * (McInv * cmuLocalDelta[c][f] * Mc));
+            Ogre::Quaternion artic = McInv * cmuLocalDelta[c][f] * Mc;
+            if (dup > 1)   // share the role's rotation across its N bones
+                artic = Ogre::Quaternion::Slerp(1.0f / static_cast<float>(dup),
+                                                Ogre::Quaternion::IDENTITY,
+                                                artic, /*shortestPath=*/true);
+            const Ogre::Quaternion local = (c == 0) ? bind : (bind * artic);
             Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(f * dt);
             kf->setRotation(local);
             kf->setTranslate(standPos);

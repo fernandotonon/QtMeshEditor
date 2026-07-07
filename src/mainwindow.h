@@ -16,6 +16,7 @@
 class LLMSettingsWidget;
 class MCPServer;
 class NormalVisualizer;
+class LightVisualizer;
 class MeshInfoOverlay;
 class ViewCubeController;
 class PropertiesPanelController;
@@ -204,6 +205,7 @@ private:
     const QPalette& darkPalette();
 
     NormalVisualizer* m_normalVisualizer = nullptr;
+    LightVisualizer* m_lightVisualizer = nullptr;
     MeshInfoOverlay* m_meshInfoOverlay = nullptr;
     ViewCubeController* m_viewCubeController = nullptr;
     MCPServer* m_mcpServer = nullptr;

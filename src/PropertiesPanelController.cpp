@@ -1,5 +1,6 @@
 #include "PropertiesPanelController.h"
 #include "SceneTreeModel.h"
+#include "LightsController.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
 #include "PrimitiveObject.h"
@@ -321,10 +322,23 @@ void PropertiesPanelController::deleteSceneTreeNode(const QString& nodeName)
     if (nodeName.isEmpty() || Manager::getSingleton()->isForbiddenNodeName(nodeName))
         return;
 
+    if (LightsController::instance()->isLightNode(nodeName))
+    {
+        LightsController::instance()->deleteLightByName(nodeName);
+        emit selectionChanged();
+        return;
+    }
+
     SentryReporter::addBreadcrumb("ui.action", "Scene tree: delete node");
     Manager::getSingleton()->destroySceneNode(nodeName);
     SelectionSet::getSingleton()->clearList();
     UndoManager::getSingleton()->clear();
+}
+
+void PropertiesPanelController::renameSceneTreeLight(const QString& oldName, const QString& newName)
+{
+    LightsController::instance()->renameLight(oldName, newName);
+    emit selectionChanged();
 }
 
 void PropertiesPanelController::clearSceneTreeAllNodes()

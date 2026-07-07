@@ -517,17 +517,18 @@ TEST_F(MaterialPresetLibraryTests, PbrSlotColourOpsApproximatePbrSemantics) {
     EXPECT_EQ(emissiveBlend.source1,   Ogre::LBS_TEXTURE);
     EXPECT_EQ(emissiveBlend.source2,   Ogre::LBS_CURRENT);
 
-    // metallic: ADD_SIGNED brightens the running colour where the texture
-    // is bright, faking a metallic look in pure FFP.
-    EXPECT_EQ(metallicBlend.operation, Ogre::LBX_ADD_SIGNED);
-    EXPECT_EQ(metallicBlend.source1,   Ogre::LBS_TEXTURE);
-    EXPECT_EQ(metallicBlend.source2,   Ogre::LBS_CURRENT);
+    // metallic + roughness are BRDF specular-lobe inputs, NOT colour channels.
+    // In the FFP fallback they must be INERT — pass the running colour through
+    // unchanged (LBX_SOURCE1 / LBS_CURRENT). The earlier ADD_SIGNED (metallic)
+    // / MODULATE_X2 (roughness) ops multiplied a mid-grey map into the diffuse
+    // and darkened the surface ("PBR looks in shadow"). The real metal-
+    // roughness response comes from the Cook-Torrance SRS when PBR-tagged +
+    // IBL is present.
+    EXPECT_EQ(metallicBlend.operation, Ogre::LBX_SOURCE1);
+    EXPECT_EQ(metallicBlend.source1,   Ogre::LBS_CURRENT);
 
-    // roughness: MODULATE_X2 brightens smooth (low-roughness) regions
-    // — opposite-direction approximation of glossiness, again pure FFP.
-    EXPECT_EQ(roughBlend.operation, Ogre::LBX_MODULATE_X2);
-    EXPECT_EQ(roughBlend.source1,   Ogre::LBS_TEXTURE);
-    EXPECT_EQ(roughBlend.source2,   Ogre::LBS_CURRENT);
+    EXPECT_EQ(roughBlend.operation, Ogre::LBX_SOURCE1);
+    EXPECT_EQ(roughBlend.source1,   Ogre::LBS_CURRENT);
 }
 
 // Slice F1: Metallic-Roughness preset auto-attaches Ogre's stock

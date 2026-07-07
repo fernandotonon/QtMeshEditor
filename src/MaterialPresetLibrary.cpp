@@ -1,4 +1,5 @@
 #include "MaterialPresetLibrary.h"
+#include "GamificationManager.h"
 #include "HDR/HDREnvironmentManager.h"
 #include "Manager.h"
 #include "RTShaderHelper.h"
@@ -61,8 +62,18 @@ constexpr const char* kPbrSlots[] = {
 // user can drag textures in via the existing Material Editor inspector.
 // The albedo slot is given a 1×1 white fallback so the material renders
 // before any texture is assigned.
-void configurePbrSlots(Ogre::Pass* pass)
+void configurePbrSlots(Ogre::Pass* pass, const QString& workflow)
 {
+    // The `metallic`/`roughness` slots are canonical texture-unit names reused
+    // across workflows. In METALLIC-ROUGHNESS they are BRDF specular-lobe
+    // inputs (the real response comes from applyPbrIfTagged's Cook-Torrance
+    // SRS) — modulating them into the FFP diffuse only darkens the surface, so
+    // they're kept inert. In SPECULAR-GLOSSINESS the same two slots carry the
+    // specular colour + glossiness, and that workflow stays on the FFP path
+    // (applyPbrIfTagged skips it), so their FFP colour ops are the ONLY thing
+    // that makes those maps visible — keep the legacy approximations there.
+    const bool metalRough =
+        workflow != MaterialPresetLibrary::kPbrWorkflowSpecular;
     for (const char* slotName : kPbrSlots) {
         Ogre::TextureUnitState* tus = pass->createTextureUnitState();
         tus->setName(slotName);
@@ -88,15 +99,26 @@ void configurePbrSlots(Ogre::Pass* pass)
                 Ogre::LBS_TEXTURE,
                 Ogre::LBS_CURRENT);
         } else if (n == "metallic") {
-            tus->setColourOperationEx(
-                Ogre::LBX_ADD_SIGNED,
-                Ogre::LBS_TEXTURE,
-                Ogre::LBS_CURRENT);
+            if (metalRough) {
+                // BRDF input — inert in FFP (real response via Cook-Torrance).
+                Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
+                tus->setColourOperationEx(
+                    Ogre::LBX_SOURCE1, Ogre::LBS_CURRENT, Ogre::LBS_CURRENT);
+            } else {
+                // Spec-gloss: this slot is the SPECULAR map — brighten.
+                tus->setColourOperationEx(
+                    Ogre::LBX_ADD_SIGNED, Ogre::LBS_TEXTURE, Ogre::LBS_CURRENT);
+            }
         } else if (n == "roughness") {
-            tus->setColourOperationEx(
-                Ogre::LBX_MODULATE_X2,
-                Ogre::LBS_TEXTURE,
-                Ogre::LBS_CURRENT);
+            if (metalRough) {
+                Ogre::RTShader::ShaderGenerator::_markNonFFP(tus);
+                tus->setColourOperationEx(
+                    Ogre::LBX_SOURCE1, Ogre::LBS_CURRENT, Ogre::LBS_CURRENT);
+            } else {
+                // Spec-gloss: this slot is the GLOSSINESS map.
+                tus->setColourOperationEx(
+                    Ogre::LBX_MODULATE_X2, Ogre::LBS_TEXTURE, Ogre::LBS_CURRENT);
+            }
         }
     }
 }
@@ -126,7 +148,7 @@ void applyPbrTemplate(Ogre::MaterialPtr& mat,
         pass->setLightingEnabled(false);
         pass->setDiffuse(Ogre::ColourValue::White);
     }
-    configurePbrSlots(pass);
+    configurePbrSlots(pass, workflow);
 
     // Tag the workflow on the pass so slice F can detect PBR intent
     // without name-matching the preset string. Ogre::Material doesn't
@@ -219,6 +241,8 @@ QStringList MaterialPresetLibrary::presetNames() const
 void MaterialPresetLibrary::applyPreset(const QString& name)
 {
     auto* sel = SelectionSet::getSingleton();
+
+    GamificationManager::noteFeature(QStringLiteral("material_editor"));
 
     const bool isHdrPreset = isHdrPresetName(name);
     if (isHdrPreset) {

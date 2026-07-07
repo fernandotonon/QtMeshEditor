@@ -1,5 +1,6 @@
 #include "IsometricSpritesController.h"
 
+#include "GamificationManager.h"
 #include "Manager.h"
 #include "ModelIsometricRenderer.h"
 #include "SelectionSet.h"
@@ -276,6 +277,10 @@ QVariantMap IsometricSpritesController::exportSelected(const QString &outputPath
     result["sheetHeight"] = sheet.height();
     result["directionOrder"] = ModelIsometricRenderer::directionOrderConvention();
     result["error"] = QString();
+    GamificationManager::noteOperation(
+        QStringLiteral("isometric_sprites"),
+        {{QStringLiteral("frames_rendered"), directions * frameCount},
+         {QStringLiteral("directions"), directions}});
     emit exportFinished(true, outputPath, QString());
     return result;
 }

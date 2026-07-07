@@ -10,6 +10,8 @@ The MIT License
 
 #include "PoseLibrary.h"
 
+#include "GamificationManager.h"
+
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 
@@ -510,6 +512,7 @@ bool PoseLibrary::savePoseForSelection(const QString& name)
     if (!sel) return false;
     auto ents = sel->getResolvedEntities();
     if (ents.isEmpty()) return false;
+    GamificationManager::noteFeature(QStringLiteral("pose_library"));
     return savePose(ents.first(), name);
 }
 

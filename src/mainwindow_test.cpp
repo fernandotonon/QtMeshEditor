@@ -640,12 +640,16 @@ TEST_F(MainWindowTest, ViewportDisplayActionsLiveInViewMenuNotToolbar)
     EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Grid));
     EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Normals));
     EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Mesh_Info));
+    EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Light_Icons));
+    EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_Selected_Light_Gizmo_Only));
     EXPECT_TRUE(viewMenuActions.contains(window->ui->actionShow_View_Cube));
 
     const QList<QAction*> topOptionsActions = window->ui->menuOp_es->actions();
     EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Grid));
     EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Normals));
     EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Mesh_Info));
+    EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Light_Icons));
+    EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_Selected_Light_Gizmo_Only));
     EXPECT_FALSE(topOptionsActions.contains(window->ui->actionShow_View_Cube));
 }
 

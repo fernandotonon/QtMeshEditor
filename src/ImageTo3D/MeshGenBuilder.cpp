@@ -2,6 +2,7 @@
 
 #include "Manager.h"
 #include "AIAssistManager.h"   // #404 PBR map synthesis (normal + roughness)
+#include "MeshImporterExporter.h"  // applyNormalMapsToEntity (tangents + RTSS)
 #include "RTShaderHelper.h"    // canonical-slot FFP wiring + RTSS normal map
 
 #include <QDateTime>
@@ -402,10 +403,16 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
             bindSlot("normal_map", normalPath);
             bindSlot("roughness",  roughnessPath);
             RTShaderHelper::wirePbrSlotsForFFP(mat.get());
-            if (!normalPath.isEmpty())
-                RTShaderHelper::applyNormalMap(
-                    mat, QFileInfo(normalPath).fileName().toStdString());
             mat->compile();
+            // NOTE: the RTSS SRS_NORMALMAP wiring is deferred to
+            // applyNormalMapsToEntity below — it must run AFTER the entity/mesh
+            // exists so it can first build TANGENT vectors. RTSS normal mapping
+            // needs per-vertex tangents; the generated mesh has none, and
+            // wiring SRS_NORMALMAP without them yields a degenerate tangent
+            // basis that collapses N·L to ~0 — the surface renders unlit/dark
+            // ("lights off on the model") while everything else lights fine.
+            // The import path already does this (MeshImporterExporter.cpp),
+            // which is why an export→reload looked correct but live gen didn't.
         }
     }
 
@@ -414,7 +421,12 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
     Ogre::SceneNode* node = mgr->addSceneNode(unique);
     if (!node) return nullptr;
     Ogre::MeshPtr ptr = Ogre::MeshManager::getSingleton().getByName(mesh->getName());
-    mgr->createEntity(node, ptr);
+    Ogre::Entity* ent = mgr->createEntity(node, ptr);
+    // Build tangents (if UVs exist) + wire RTSS normal mapping on the live
+    // entity — the same routine the importer uses, so a freshly generated mesh
+    // lights identically to an export→reload of it.
+    if (ent)
+        MeshImporterExporter::applyNormalMapsToEntity(ent);
     // Both image-to-3D backends reconstruct into a unit-ish box that lands the
     // model quite small in the editor scene; scale x2 so it arrives at a
     // workable size (matches TripoSR + TripoSG). Applied on the node, so it's

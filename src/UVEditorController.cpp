@@ -1,6 +1,7 @@
 #include "UVEditorController.h"
 
 #include "EditableMesh.h"
+#include "GamificationManager.h"
 #include "EditModeController.h"
 #include "HalfEdgeMesh.h"
 #include "EmbeddedTextureCache.h"
@@ -2062,6 +2063,8 @@ void UVEditorController::unwrapSelectedFaces()
 {
     if (!m_activeEntity || m_selectedUvFaces.isEmpty())
         return;
+
+    GamificationManager::noteFeature(QStringLiteral("uv_unwrap"));
 
     commitWorkingMeshUvs();
     const auto before = m_workingMesh.subMeshes();

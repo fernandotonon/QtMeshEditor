@@ -50,22 +50,122 @@ DROP = ("jaw", "oris", "tongue", "levator", "special", "eye", "orbicularis",
         "thumb", "__")
 J = len(CANON)
 OUT_FPS = 30
+
+# Canonical joint → accepted source-joint names, per BVH conversion flavour:
+# the Daz-friendly release uses lowercase anatomical names (hip, abdomen,
+# rcollar…), the MotionBuilder-friendly release (una-dinosauria/cmu-mocap)
+# uses Hips/LowerBack/RightShoulder…. FK world composition walks the FULL
+# joint tree, so extra intermediate joints (Spine between LowerBack and
+# Spine1) stay accounted for either way.
+ALIASES = {
+    "hip":       ["hip", "Hips"],
+    "abdomen":   ["abdomen", "LowerBack"],
+    "chest":     ["chest", "Spine1"],
+    "neck":      ["neck", "Neck"],
+    "neck1":     ["neck1", "Neck1"],
+    "head":      ["head", "Head"],
+    "rcollar":   ["rcollar", "RightShoulder"],
+    "rshoulder": ["rshoulder", "RightArm"],
+    "relbow":    ["relbow", "RightForeArm"],
+    "rhand":     ["rhand", "RightHand"],
+    "lcollar":   ["lcollar", "LeftShoulder"],
+    "lshoulder": ["lshoulder", "LeftArm"],
+    "lelbow":    ["lelbow", "LeftForeArm"],
+    "lhand":     ["lhand", "LeftHand"],
+    "rbuttock":  ["rbuttock", "RHipJoint"],
+    "rhip":      ["rhip", "RightUpLeg"],
+    "rknee":     ["rknee", "RightLeg"],
+    "rfoot":     ["rfoot", "RightFoot"],
+    "lbuttock":  ["lbuttock", "LHipJoint"],
+    "lhip":      ["lhip", "LeftUpLeg"],
+    "lknee":     ["lknee", "LeftLeg"],
+    "lfoot":     ["lfoot", "LeftFoot"],
+}
+
+
+def resolve_canon(names):
+    """Map each canonical joint to its source-joint name, or None if any is
+    missing (non-humanoid / unexpected skeleton)."""
+    out = {}
+    nameset = set(names)
+    for c in CANON:
+        hit = next((a for a in ALIASES[c] if a in nameset), None)
+        if hit is None:
+            return None
+        out[c] = hit
+    return out
+
 MAX_FRAMES = 120          # cap clip length (~4s @ 30fps); keeps the library small
 
 # One clean, representative CMU clip per action (motion-id, action label).
-# Picked from the annotations for short single-action descriptions.
+# Picked from the cgspeed/CMU index (cmu-mocap-index-text.txt) for short
+# single-action descriptions, then verified by rendering each retargeted clip.
+# v4 fixes: 69_01 was actually "walk forward" (not idle) → 40_10 "wait for
+# bus"; 05_02 ballet (pirouettes fold badly with a locked root) → 60_08 salsa;
+# plus sit / throw / boxing coverage.
 CURATED = [
-    ("02_01", "walk"),
-    ("02_03", "run"),
-    ("16_01", "jump"),     # 16_* has clean locomotion jumps
-    ("05_02", "dance"),
-    ("20_06", "march"),
-    ("10_01", "kick"),
+    # Several takes per action: matchPrompt picks among same-action clips at
+    # random, so repeat generates give VARIETY with real-mocap quality — the
+    # practical answer to "generative" until a licensable model exists.
+    ("07_01", "walk"), ("07_02", "walk"), ("08_01", "walk"),
+    ("08_06", "walk"), ("02_01", "walk"), ("38_01", "walk"),
+    ("09_01", "run"), ("09_02", "run"), ("09_05", "run"), ("02_03", "run"),
+    ("16_01", "jump"), ("16_05", "jump"), ("13_11", "jump"), ("13_19", "jump"),
+    ("60_02", "dance"), ("60_05", "dance"), ("60_08", "dance"),
+    ("60_12", "dance"), ("55_02", "dance"),
+    ("20_06", "march"), ("21_06", "march"),
+    ("10_01", "kick"), ("10_02", "kick"), ("10_05", "kick"), ("11_01", "kick"),
     ("02_05", "punch"),
-    ("13_26", "wave"),
-    ("01_02", "climb"),
-    ("69_01", "idle"),     # standing/idle if present; falls back gracefully
+    ("13_26", "wave"), ("13_27", "wave"), ("14_24", "wave"),
+    ("01_02", "climb"), ("01_04", "climb"),
+    ("40_10", "idle"), ("40_11", "idle"),
+    ("13_01", "sit"), ("13_02", "sit"), ("13_03", "sit"),
+    ("111_33", "throw"),
+    ("13_17", "boxing"), ("13_18", "boxing"), ("14_01", "boxing"),
+    ("14_02", "boxing"), ("15_13", "boxing"), ("17_10", "boxing"),
+    ("13_23", "sweep"), ("13_24", "sweep"),
+    ("13_20", "wash"), ("13_21", "wash"),
 ]
+
+# ---- active-window selection -------------------------------------------------
+# CMU trials often start with idle standing / walking into position, so the
+# FIRST seconds rarely contain the labelled action (the old builder's clips of
+# "wave" never waved). Pick the L-frame window with the highest motion energy
+# (lowest for idle), and SNAP the window start to a nearby low-energy,
+# NEAR-NEUTRAL frame: the retarget (AnimationMerger::applyMotionClip) composes
+# every frame as a delta against clip frame 0, so the window must begin at a
+# calm, standing-like pose for the deltas to be true articulations.
+
+def _angdist(a, b):
+    """Per-element angular distance between two unit-quat arrays [..., 4]."""
+    d = np.abs((a * b).sum(-1)).clip(0.0, 1.0)
+    return 2.0 * np.arccos(d)
+
+
+def select_window(local_q, L, idle=False, skip=30):
+    """Return the best start index for an L-frame window over [T,J,4] LOCAL
+    quats (30fps). Energy = mean joint angular velocity; neutrality = pose
+    distance to the trial's frame 0 (the conversion's T-pose)."""
+    nF = local_q.shape[0]
+    if nF <= L:
+        return 0
+    vel = _angdist(local_q[1:], local_q[:-1]).mean(-1)          # [T-1]
+    vel = np.convolve(vel, np.ones(5) / 5.0, mode="same")        # smooth
+    neut = _angdist(local_q, local_q[:1]).mean(-1)               # [T] vs T-pose
+    lo = min(skip, nF - L)
+    starts = np.arange(lo, nF - L + 1)
+    act = np.array([vel[s:s + L - 1].mean() for s in starts])
+    if idle:
+        score = -(act - act.mean()) / (act.std() + 1e-9)                 - (neut[starts] - neut[starts].mean()) / (neut[starts].std() + 1e-9)
+    else:
+        score = (act - act.mean()) / (act.std() + 1e-9)                 - 0.75 * (neut[starts] - neut[starts].mean()) / (neut[starts].std() + 1e-9)
+    s = int(starts[int(np.argmax(score))])
+    # snap the start to the calmest frame in a ±0.5 s neighbourhood so the
+    # clip opens on a settled pose (the delta reference)
+    a = max(lo, s - 15); b = min(nF - L, s + 15)
+    if b > a:
+        s = int(a + np.argmin(vel[a:b]))
+    return s
 
 
 def is_core(name):
@@ -97,8 +197,8 @@ def clip_quats(path):
     from bvh import Bvh
     with open(path) as f:
         m = Bvh(f.read())
-    names = [n for n in m.get_joints_names() if is_core(n)]
-    if names != CANON:
+    cmap = resolve_canon(m.get_joints_names())
+    if cmap is None:
         return None
     frames = np.array(m.frames, dtype=np.float32)
     nF = len(frames)
@@ -110,21 +210,22 @@ def clip_quats(path):
         for ci, c in enumerate(chans):
             if c.endswith("rotation"):
                 rc.append(col + ci); order += c[0]
-        if j in CANON and len(order) == 3:
+        if len(order) == 3:
             rotcols[j], roto[j] = rc, order
         col += len(chans)
     quats = np.zeros((nF, J, 4), np.float32)
     for ji, j in enumerate(CANON):
-        if j not in rotcols:
+        src = cmap[j]
+        if src not in rotcols:
             quats[:, ji, 3] = 1.0; continue
-        quats[:, ji] = euler_to_quat_vec(np.deg2rad(frames[:, rotcols[j]]), roto[j])
+        quats[:, ji] = euler_to_quat_vec(np.deg2rad(frames[:, rotcols[src]]), roto[src])
     # CMU is 120fps; resample to OUT_FPS by simple stride, cap length.
     try:
         src_fps = round(1.0 / float(m.frame_time))
     except Exception:
         src_fps = 120
     stride = max(1, round(src_fps / OUT_FPS))
-    quats = quats[::stride][:MAX_FRAMES]
+    quats = quats[::stride]                 # full trial; windowed in main()
     # renormalise
     quats /= (np.linalg.norm(quats, axis=-1, keepdims=True) + 1e-8)
     return quats
@@ -152,8 +253,8 @@ def clip_world_quats(path):
     from bvh import Bvh
     with open(path) as f:
         m = Bvh(f.read())
-    core = [n for n in m.get_joints_names() if is_core(n)]
-    if core != CANON:
+    cmap = resolve_canon(m.get_joints_names())
+    if cmap is None:
         return None
     all_names = m.get_joints_names()
     frames = np.array(m.frames, dtype=np.float32)
@@ -197,14 +298,14 @@ def clip_world_quats(path):
         return w
     quats = np.zeros((nF, J, 4), np.float32)
     for ji, j in enumerate(CANON):
-        quats[:, ji] = world_of(j)
+        quats[:, ji] = world_of(cmap[j])
     # CMU is 120fps; resample to OUT_FPS by simple stride, cap length.
     try:
         src_fps = round(1.0 / float(m.frame_time))
     except Exception:
         src_fps = 120
     stride = max(1, round(src_fps / OUT_FPS))
-    quats = quats[::stride][:MAX_FRAMES]
+    quats = quats[::stride]                 # full trial; windowed in main()
     quats /= (np.linalg.norm(quats, axis=-1, keepdims=True) + 1e-8)
     return quats
 
@@ -288,9 +389,13 @@ def main():
             print(f"  skip {action} ({mid}): BVH not found"); continue
         # WORLD-space joint orientations (schema v3) — basis-independent, so the
         # retarget delta carries the true per-bone roll (no arm-twist).
-        q = clip_world_quats(path)
-        if q is None:
+        wq = clip_world_quats(path)
+        lq = clip_quats(path)
+        if wq is None or lq is None:
             print(f"  skip {action} ({mid}): not canonical / too short"); continue
+        s = select_window(lq, MAX_FRAMES, idle=(action == "idle"))
+        q = wq[s:s + MAX_FRAMES]
+        print(f"    window [{s}:{s + q.shape[0]}] of {wq.shape[0]} frames")
         clips.append({
             "action": action,
             "source": f"CMU {mid}",

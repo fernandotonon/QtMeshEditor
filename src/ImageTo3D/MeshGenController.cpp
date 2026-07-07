@@ -1,5 +1,7 @@
 #include "MeshGenController.h"
 
+#include "GamificationManager.h"
+
 #include "MeshGenPredictor.h"
 #include "TripoSGPredictor.h"
 #include "MeshGenBuilder.h"
@@ -271,6 +273,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                                     Qt::CaseInsensitive) == 0;
     const int flowSteps = options.contains(QLatin1String("flow_steps"))
         ? options.value(QLatin1String("flow_steps")).toInt() : 25;
+
+    GamificationManager::noteFeature(QStringLiteral("image_to_3d"));
 
     // Mark busy BEFORE ensureModelBlocking() — it spins a nested QEventLoop for the
     // first-use download, during which the QML button would otherwise stay enabled
