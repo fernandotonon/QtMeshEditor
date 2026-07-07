@@ -25,6 +25,10 @@ Rectangle {
     component InspectorThemedCheckBox: CheckBox {
         id: itcb
         spacing: 6
+        property string accessibleLabel: ""
+        Accessible.name: accessibleLabel !== "" ? accessibleLabel : text
+        Accessible.checkable: true
+        Accessible.checked: itcb.checkState === Qt.Checked
         indicator: Rectangle {
             x: itcb.leftPadding
             y: itcb.height / 2 - height / 2
@@ -4058,6 +4062,7 @@ Rectangle {
                 }
                 InspectorThemedCheckBox {
                     anchors.verticalCenter: parent.verticalCenter
+                    accessibleLabel: qsTr("Enabled")
                     tristate: true
                     checkState: LightPropertiesController.mixedEnabled
                         ? Qt.PartiallyChecked
@@ -5383,6 +5388,7 @@ Rectangle {
                 }
                 InspectorThemedCheckBox {
                     anchors.verticalCenter: parent.verticalCenter
+                    accessibleLabel: qsTr("Receive shadows")
                     tristate: true
                     checkState: PropertiesPanelController.mixedReceiveShadows
                         ? Qt.PartiallyChecked
@@ -5415,6 +5421,7 @@ Rectangle {
                 }
                 InspectorThemedCheckBox {
                     anchors.verticalCenter: parent.verticalCenter
+                    accessibleLabel: qsTr("Cast shadows")
                     tristate: true
                     checkState: LightPropertiesController.mixedCastShadows
                         ? Qt.PartiallyChecked

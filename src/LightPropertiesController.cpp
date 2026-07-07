@@ -741,11 +741,22 @@ bool LightPropertiesController::mixedCastShadows() const
 
 void LightPropertiesController::setCastShadows(bool value)
 {
-    pushImmediateEdit(LightPropertyClass::Shadow, [value](LightSnapshot& snapshot) {
-        snapshot.castShadows = value;
-    });
-    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.shadow_toggle"),
-                                  value ? QStringLiteral("on") : QStringLiteral("off"));
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.isEmpty())
+        return;
+
+    for (const LightSnapshot& snapshot : snapshots)
+    {
+        if (snapshot.castShadows != value)
+        {
+            pushImmediateEdit(LightPropertyClass::Shadow, [value](LightSnapshot& snapshot) {
+                snapshot.castShadows = value;
+            });
+            SentryReporter::addBreadcrumb(QStringLiteral("scene.light.shadow_toggle"),
+                                          value ? QStringLiteral("on") : QStringLiteral("off"));
+            return;
+        }
+    }
 }
 
 double LightPropertiesController::shadowDepthBias() const

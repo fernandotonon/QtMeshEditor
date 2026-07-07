@@ -457,24 +457,81 @@ bool materialReceivesShadows(const Ogre::MaterialPtr& material)
     return !material || material->getReceiveShadows();
 }
 
+QString receiveShadowMaterialName(Ogre::SubEntity* sub)
+{
+    if (!sub || !sub->getParent())
+        return {};
+
+    Ogre::Entity* entity = sub->getParent();
+    unsigned short subIndex = 0;
+    for (unsigned short i = 0; i < entity->getNumSubEntities(); ++i)
+    {
+        if (entity->getSubEntity(i) == sub)
+        {
+            subIndex = i;
+            break;
+        }
+    }
+
+    return QStringLiteral("%1/rs_%2")
+        .arg(QString::fromStdString(entity->getName()))
+        .arg(subIndex);
+}
+
+Ogre::MaterialPtr materialForReceiveShadowEdit(Ogre::SubEntity* sub)
+{
+    if (!sub)
+        return {};
+
+    Ogre::MaterialPtr mat = sub->getMaterial();
+    if (!mat)
+        return {};
+
+    const QString instanceName = receiveShadowMaterialName(sub);
+    if (instanceName.isEmpty())
+        return mat;
+
+    auto& matMgr = Ogre::MaterialManager::getSingleton();
+    if (Ogre::MaterialPtr existing =
+            matMgr.getByName(instanceName.toStdString(), mat->getGroup()))
+    {
+        if (sub->getMaterialName() != existing->getName())
+            sub->setMaterial(existing);
+        return existing;
+    }
+
+    if (sub->getMaterialName() == instanceName.toStdString())
+        return mat;
+
+    Ogre::MaterialPtr clone =
+        mat->clone(instanceName.toStdString(), false, mat->getGroup());
+    sub->setMaterial(clone);
+    return clone;
+}
+
+void setSubEntityReceiveShadows(Ogre::SubEntity* sub, bool enabled)
+{
+    if (!sub)
+        return;
+
+    Ogre::MaterialPtr mat = materialForReceiveShadowEdit(sub);
+    if (!mat)
+        return;
+
+    if (mat->getReceiveShadows() == enabled)
+        return;
+
+    mat->setReceiveShadows(enabled);
+    mat->compile();
+}
+
 void setEntityReceiveShadows(Ogre::Entity* entity, bool enabled)
 {
     if (!entity)
         return;
 
     for (unsigned short i = 0; i < entity->getNumSubEntities(); ++i)
-    {
-        Ogre::SubEntity* sub = entity->getSubEntity(i);
-        if (!sub)
-            continue;
-
-        Ogre::MaterialPtr mat = sub->getMaterial();
-        if (!mat)
-            continue;
-
-        mat->setReceiveShadows(enabled);
-        mat->compile();
-    }
+        setSubEntityReceiveShadows(entity->getSubEntity(i), enabled);
 }
 
 } // namespace
@@ -543,6 +600,23 @@ void PropertiesPanelController::setReceiveShadows(bool enabled)
 {
     const QList<Ogre::Entity*> entities = entitiesInSelection();
     if (entities.isEmpty())
+        return;
+
+    bool changed = false;
+    for (Ogre::Entity* entity : entities)
+    {
+        for (unsigned short i = 0; i < entity->getNumSubEntities(); ++i)
+        {
+            Ogre::SubEntity* sub = entity->getSubEntity(i);
+            if (!sub)
+                continue;
+            Ogre::MaterialPtr mat = sub->getMaterial();
+            const bool current = materialReceivesShadows(mat);
+            if (current != enabled)
+                changed = true;
+        }
+    }
+    if (!changed)
         return;
 
     for (Ogre::Entity* entity : entities)

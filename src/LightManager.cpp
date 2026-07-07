@@ -214,9 +214,6 @@ void LightManager::applySnapshotToHandle(const LightSnapshot& snapshot, LightHan
                         Ogre::Any(snapshot.shadowDepthBias));
     bindings.setUserAny(QStringLiteral("shadow_slope_bias").toStdString(),
                         Ogre::Any(snapshot.shadowSlopeBias));
-
-    if (auto* shadows = ShadowController::instance())
-        shadows->syncFromScene();
 }
 
 LightHandle LightManager::createLightInternal(Ogre::Light::LightTypes type, const QString& baseName)
@@ -440,6 +437,8 @@ LightHandle LightManager::restoreSnapshotUnderParent(Ogre::SceneNode* parent,
     handle.name = QString::fromStdString(node->getName());
 
     m_lights.append(handle);
+    if (auto* shadows = ShadowController::instance())
+        shadows->syncFromScene();
     emit lightCreated(handle);
     return handle;
 }
@@ -555,6 +554,8 @@ bool LightManager::applyProperties(const QString& name, const LightSnapshot& sna
     }
 
     applySnapshotToHandle(applied, *handle);
+    if (auto* shadows = ShadowController::instance())
+        shadows->syncFromScene();
     emit lightChanged(handle->name);
     return true;
 }
@@ -589,8 +590,12 @@ LightHandle* LightManager::findLightBySceneNode(Ogre::SceneNode* node)
     if (!node)
         return nullptr;
 
-    const QString name = QString::fromStdString(node->getName());
-    return findLight(name);
+    for (LightHandle& handle : m_lights)
+    {
+        if (handle.sceneNode == node)
+            return &handle;
+    }
+    return nullptr;
 }
 
 const LightHandle* LightManager::findLightBySceneNode(Ogre::SceneNode* node) const
@@ -598,8 +603,12 @@ const LightHandle* LightManager::findLightBySceneNode(Ogre::SceneNode* node) con
     if (!node)
         return nullptr;
 
-    const QString name = QString::fromStdString(node->getName());
-    return findLight(name);
+    for (const LightHandle& handle : m_lights)
+    {
+        if (handle.sceneNode == node)
+            return &handle;
+    }
+    return nullptr;
 }
 
 void LightManager::onSceneNodeDestroyed(Ogre::SceneNode* node)

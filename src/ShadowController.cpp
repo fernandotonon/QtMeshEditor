@@ -4,6 +4,7 @@
 #include "LightManager.h"
 #include "Manager.h"
 #include "OgreWidget.h"
+#include "SentryReporter.h"
 
 #include <OgreCamera.h>
 #include <OgreLight.h>
@@ -225,11 +226,12 @@ ShadowController::ShadowController(QObject* parent)
     m_spotShadowResolution =
         settings.value(AppSettingsKeys::shadowSpotResolution(), 1024).toInt();
 
-    applyPresetDefaults(m_qualityPreset);
-
     if (auto* lights = LightManager::getSingletonPtr())
     {
         connect(lights, &LightManager::lightChanged, this, &ShadowController::syncFromScene);
+        connect(lights, &LightManager::lightCreated, this, [this](const LightHandle&) {
+            QTimer::singleShot(0, this, &ShadowController::syncFromScene);
+        });
         connect(lights, &LightManager::lightDeleted, this, [this]() {
             // Defer until the current scene-node teardown finishes — syncing while
             // Ogre is destroying lights/rig children corrupts the scene graph.
@@ -277,6 +279,9 @@ void ShadowController::setQualityPreset(int preset)
     QSettings settings;
     settings.setValue(AppSettingsKeys::shadowQualityPreset(), static_cast<int>(next));
 
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Shadow quality: %1")
+                                      .arg(qualityPresetNames().value(static_cast<int>(next))));
     emit settingsChanged();
     syncFromScene();
 }
@@ -289,6 +294,8 @@ void ShadowController::setCascadeCount(int count)
 
     m_cascadeCount = next;
     QSettings().setValue(AppSettingsKeys::shadowCascadeCount(), next);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Shadow cascades: %1").arg(next));
     emit settingsChanged();
     syncFromScene();
 }
@@ -301,6 +308,8 @@ void ShadowController::setSplitLambda(double lambda)
 
     m_splitLambda = next;
     QSettings().setValue(AppSettingsKeys::shadowSplitLambda(), next);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Shadow PSSM split: %1").arg(next, 0, 'f', 2));
     emit settingsChanged();
     syncFromScene();
 }
@@ -318,6 +327,8 @@ void ShadowController::setSpotShadowResolution(int pixels)
 
     m_spotShadowResolution = next;
     QSettings().setValue(AppSettingsKeys::shadowSpotResolution(), next);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("Spot shadow map: %1").arg(next));
     emit settingsChanged();
     syncFromScene();
 }
@@ -485,6 +496,10 @@ void ShadowController::installSceneShadows(Ogre::SceneManager* sceneMgr)
                                                      1.0f,
                                                      profile.shadowFarDistance,
                                                      static_cast<float>(m_splitLambda)));
+    }
+    else
+    {
+        sceneMgr->setShadowCameraSetup(Ogre::ShadowCameraSetupPtr());
     }
 
     sceneMgr->removeShadowTextureListener(&g_shadowBiasListener);
