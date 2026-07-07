@@ -1887,7 +1887,12 @@ Rectangle {
             InspectorCheck {
                 id: mgPbr
                 text: "Generate PBR maps (normal + roughness)"
-                checked: true
+                // Default OFF for TripoSG — the synthesized normal/roughness
+                // over its AI texture tends to look worse than the plain
+                // diffuse (user-verified); ON for TripoSR where it helps. The
+                // binding re-evaluates when the backend changes; the user can
+                // still toggle it per run.
+                checked: !parent.sgSelected
                 // Valid whenever there's a diffuse to derive from: the plain
                 // bake OR the AI texture. Runs after whichever produced it.
                 enabled: !MeshGenController.busy
