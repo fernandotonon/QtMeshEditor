@@ -129,11 +129,18 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     // Composed: (x, y, z) -> (-y, z, -x).
     // TripoSG results are already +Y-up (Result::bakeTripoSROrientation is
     // false) — baking the TripoSR frame onto them lays the model on its back.
+    // BUT TripoSG comes out facing AWAY (its front is -Z here), so rotate it
+    // 180° about Y so the reconstructed front faces the camera (+Z):
+    //   180°Y: (x, y, z) -> (-x, y, -z).
     const bool bakeOrientation = result.bakeTripoSROrientation;
-    auto orient = [bakeOrientation](float& x, float& y, float& z) {
-        if (!bakeOrientation) return;
-        const float nx = -y, ny = z, nz = -x;
-        x = nx; y = ny; z = nz;
+    const bool flipY180 = !bakeOrientation;   // TripoSG path only
+    auto orient = [bakeOrientation, flipY180](float& x, float& y, float& z) {
+        if (bakeOrientation) {
+            const float nx = -y, ny = z, nz = -x;
+            x = nx; y = ny; z = nz;
+        } else if (flipY180) {
+            x = -x; z = -z;   // 180° about Y — face the front forward
+        }
     };
 
     Ogre::Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);

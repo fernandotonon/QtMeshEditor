@@ -2135,6 +2135,19 @@ Rectangle {
                 function onPbrSynthError(msg) {
                     mgStatus.text = "PBR error: " + msg
                 }
+                // Relay the AI-texture step notices (simplify / unwrap / "view
+                // N/M — step X/Y" / bake) to the panel status line, so texture
+                // progress is visible HERE and not only in the Material Editor
+                // window. Also drive the live progress bar off the SD step
+                // fraction while the generate view is the active step.
+                function onSdGenerationNotice(msg) {
+                    mgStatus.text = msg
+                    var i = -1
+                    for (var k = 0; k < mgRoot.mgSteps.length; k++)
+                        if (mgRoot.mgSteps[k].key === "aitex_gen") { i = k; break }
+                    if (i >= 0 && mgRoot.mgActiveIdx === i)
+                        mgRoot.mgActiveProgress = MaterialEditorQML.sdGenerationProgress
+                }
             }
         }
     }
