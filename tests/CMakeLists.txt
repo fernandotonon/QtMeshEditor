@@ -159,6 +159,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBuilder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/BackgroundRemover.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/ImageCaptioner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PbrMapSynth.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureUpscaler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIAssistManager.cpp
@@ -498,6 +499,11 @@ if(BUILD_TESTS)
 
     if(ENABLE_LOCAL_LLM)
         list(APPEND TEST_SUPPORT_LIBRARIES llama ggml)
+        # ImageCaptioner.cpp (in the test-common lib) uses mtmd under
+        # ENABLE_MTMD — link it where available (not Windows-MinGW).
+        if(QTMESH_HAVE_MTMD)
+            list(APPEND TEST_SUPPORT_LIBRARIES mtmd)
+        endif()
     endif()
 
     if(ENABLE_SENTRY)
