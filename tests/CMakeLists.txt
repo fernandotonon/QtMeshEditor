@@ -155,9 +155,11 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshRefine.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/TripoSGPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBuilder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/BackgroundRemover.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/ImageCaptioner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PbrMapSynth.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureUpscaler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIAssistManager.cpp
@@ -497,6 +499,11 @@ if(BUILD_TESTS)
 
     if(ENABLE_LOCAL_LLM)
         list(APPEND TEST_SUPPORT_LIBRARIES llama ggml)
+        # ImageCaptioner.cpp (in the test-common lib) uses mtmd under
+        # ENABLE_MTMD — link it where available (not Windows-MinGW).
+        if(QTMESH_HAVE_MTMD)
+            list(APPEND TEST_SUPPORT_LIBRARIES mtmd)
+        endif()
     endif()
 
     if(ENABLE_SENTRY)
@@ -531,6 +538,15 @@ if(BUILD_TESTS)
         BATCH_EXPORTER_TEST_SEAM
         QTMESH_UNIT_TESTS
         "QTMESH_UT_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    # Manager.cpp (compiled into this lib) picks plugins_d.cfg vs plugins.cfg at
+    # compile time via #ifdef DEBUG. The scoped-DEBUG fix (src/CMakeLists.txt)
+    # applied DEBUG to QtMeshEditor + UnitTests but NOT here, so the standalone
+    # per-file test executables (MaterialEditorQML_test, …) looked for the
+    # nonexistent plugins.cfg in a Debug build → Ogre init failed. Apply DEBUG
+    # here too (PRIVATE — can't leak into FetchContent deps).
+    if(QTMESH_DEFINE_DEBUG)
+        target_compile_definitions(qtmesh_test_common PRIVATE DEBUG)
+    endif()
     target_link_libraries(qtmesh_test_common PUBLIC ${TEST_SUPPORT_LIBRARIES})
 
     if(APPLE)

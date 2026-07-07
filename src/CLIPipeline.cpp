@@ -39,6 +39,7 @@
 #include "SkinWeights.h"
 #include "AutoRig.h"
 #include "ImageTo3D/MeshGenPredictor.h"
+#include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "MeshSegmenter.h"
 #include "MeshDecimator.h"
@@ -9068,7 +9069,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool upscaleTex = false;    // optional Real-ESRGAN 2x on the baked texture
     bool generatePbr = true;    // #404 normal+roughness synthesis on the baked diffuse
     int textureSize = 1024;
+    int flowSteps = 25;         // TripoSG rectified-flow steps
+    float guidance = 7.0f;      // TripoSG CFG scale (0 disables CFG)
     MeshGenPredictor::Quality quality = MeshGenPredictor::Quality::Fp32;
+    MeshGenPredictor::Backend backend = MeshGenPredictor::Backend::TripoSR;
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -9081,6 +9085,43 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-bake-texture") { bake = false; continue; }
         if (arg == "--upscale-texture") { upscaleTex = true; continue; }
         if (arg == "--no-pbr") { generatePbr = false; continue; }
+        if (arg == "--backend") {
+            if (i + 1 >= argc) {
+                err() << "Error: --backend requires triposr or triposg." << Qt::endl;
+                return 2;
+            }
+            const QString b = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (b == "triposr")      backend = MeshGenPredictor::Backend::TripoSR;
+            else if (b == "triposg") backend = MeshGenPredictor::Backend::TripoSG;
+            else { err() << "Error: --backend must be triposr or triposg." << Qt::endl; return 2; }
+            continue;
+        }
+        if (arg == "--flow-steps") {
+            if (i + 1 >= argc) {
+                err() << "Error: --flow-steps requires a value (e.g. 10, 25, 50)." << Qt::endl;
+                return 2;
+            }
+            bool okNum = false;
+            flowSteps = QString::fromLocal8Bit(argv[++i]).toInt(&okNum);
+            if (!okNum || flowSteps < 1 || flowSteps > 200) {
+                err() << "Error: --flow-steps must be an integer in [1..200]." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--guidance") {
+            if (i + 1 >= argc) {
+                err() << "Error: --guidance requires a value (e.g. 7.0; 0 disables CFG)." << Qt::endl;
+                return 2;
+            }
+            bool okNum = false;
+            guidance = QString::fromLocal8Bit(argv[++i]).toFloat(&okNum);
+            if (!okNum || guidance < 0.0f || guidance > 30.0f) {
+                err() << "Error: --guidance must be in [0..30]." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--texture-size") {
             if (i + 1 >= argc) {
                 err() << "Error: --texture-size requires a value (e.g. 512, 1024, 2048)." << Qt::endl;
@@ -9140,7 +9181,8 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
-                 "[--upscale-texture] [--no-pbr]"
+                 "[--upscale-texture] [--no-pbr] "
+                 "[--backend triposr|triposg] [--flow-steps 25] [--guidance 7.0]"
               << Qt::endl;
         return 2;
     }
@@ -9168,22 +9210,50 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Error: failed to read image: " << inputPath << Qt::endl; return 1;
     }
 
+    const bool useSG = (backend == MeshGenPredictor::Backend::TripoSG);
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
-        QString("generate3d .%1 res=%2 color=%3")
-            .arg(fi.suffix()).arg(resolution).arg(vertexColor));
+        QString("generate3d .%1 res=%2 color=%3 backend=%4")
+            .arg(fi.suffix()).arg(resolution).arg(vertexColor)
+            .arg(useSG ? QStringLiteral("triposg") : QStringLiteral("triposr")));
 
-    // Download the model on first use (blocks; clear message when not hosted).
-    const QString enc = MeshGenPredictor::ensureModelBlocking(quality);
-    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(quality)) {
-        err() << "  (looked for models in: "
-              << QFileInfo(MeshGenPredictor::encoderModelPath(quality)).absolutePath()
-              << ")" << Qt::endl;
-        err() << "Error: TripoSR model unavailable. It downloads on first use from "
-                 "the QtMeshEditor models repo; if it is not hosted yet, export it "
-                 "with scripts/export-triposr-onnx.py and point "
-                 "QTMESH_TRIPOSR_MODEL_BASE_URL (or ai/triposrModelBaseUrl) at it, "
-                 "or drop the files in the ai_models/triposr/ cache." << Qt::endl;
-        return 1;
+    // Download the chosen backend's models on first use (blocks; clear
+    // message when not hosted).
+    if (useSG) {
+        if (quality == MeshGenPredictor::Quality::Int8)
+            err() << "Note: --quality int8 is not available for the triposg "
+                     "backend (the quantized DiT degrades geometry); using fp32."
+                  << Qt::endl;
+        const QString enc = TripoSGPredictor::ensureModelBlocking(false);
+        if (enc.isEmpty()) {
+            err() << "  (looked for models in: "
+                  << QFileInfo(TripoSGPredictor::imageEncoderPath()).absolutePath()
+                  << ")" << Qt::endl;
+            err() << "Error: TripoSG models unavailable. They download on first use "
+                     "from the QtMeshEditor models repo; if not hosted yet, export "
+                     "them with scripts/export-triposg-onnx.py and point "
+                     "QTMESH_TRIPOSG_MODEL_BASE_URL (or ai/triposgModelBaseUrl) at "
+                     "them, or drop the files in the ai_models/triposg/ cache."
+                  << Qt::endl;
+            return 1;
+        }
+        // TripoSG's colour bake queries TripoSR's image-conditioned colour
+        // field — ensure those models too (best-effort: absent models fall
+        // back to the untextured clay result with a warning).
+        if (bake)
+            MeshGenPredictor::ensureModelBlocking(quality);
+    } else {
+        const QString enc = MeshGenPredictor::ensureModelBlocking(quality);
+        if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(quality)) {
+            err() << "  (looked for models in: "
+                  << QFileInfo(MeshGenPredictor::encoderModelPath(quality)).absolutePath()
+                  << ")" << Qt::endl;
+            err() << "Error: TripoSR model unavailable. It downloads on first use from "
+                     "the QtMeshEditor models repo; if it is not hosted yet, export it "
+                     "with scripts/export-triposr-onnx.py and point "
+                     "QTMESH_TRIPOSR_MODEL_BASE_URL (or ai/triposrModelBaseUrl) at it, "
+                     "or drop the files in the ai_models/triposr/ cache." << Qt::endl;
+            return 1;
+        }
     }
 
     if (!initOgreHeadless()) return 1;
@@ -9197,6 +9267,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.refineSurface   = refine;
     opts.bakeTexture     = bake;
     opts.textureSize     = textureSize;
+    opts.backend         = backend;
+    opts.flowSteps       = flowSteps;
+    opts.guidanceScale   = guidance;
     MeshGenPredictor::Result res = MeshGenPredictor::predict(
         image, MeshGenPredictor::encoderModelPath(quality),
         MeshGenPredictor::decoderModelPath(), opts);

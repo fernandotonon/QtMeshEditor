@@ -47,7 +47,12 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 # Building directories
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "debug")
     MESSAGE("DEBUG COMPILATION")
-    ADD_DEFINITIONS("-DDEBUG")
+    # NOTE: do NOT use ADD_DEFINITIONS("-DDEBUG") here — it's directory-scoped
+    # and leaks into the FetchContent'd llama.cpp/mtmd subdir, where
+    # mtmd-audio.cpp uses DEBUG as an ordinary identifier and fails to compile.
+    # Apply -DDEBUG to OUR targets only, via this marker + target_compile_
+    # definitions on the app/test targets (see src/CMakeLists.txt).
+    set(QTMESH_DEFINE_DEBUG ON)
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib-debug)
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib-debug)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY  ${CMAKE_BINARY_DIR}/debug)
@@ -168,6 +173,24 @@ if(ENABLE_LOCAL_LLM)
     set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    # The `mtmd` multimodal library (tools/mtmd) powers image captioning
+    # (SmolVLM, #764). It only builds under LLAMA_BUILD_TOOLS + LLAMA_BUILD_COMMON
+    # — but enabling all llama tools also builds CLI executables
+    # (cvector-generator, export-lora, llama-*-cli) that FAIL TO LINK on
+    # Windows-MinGW, where GGML_CPU is off (undefined ggml_backend_cpu_init /
+    # ggml_get_f32_nd). We don't ship those tools. So enable them only where
+    # they link: NOT on MinGW. The captioner (QTMESH_HAVE_MTMD) degrades
+    # gracefully when absent, and Windows-MinGW has ONNX off anyway, so the
+    # image-to-3D texture path there already falls back.
+    if(WIN32 AND MINGW)
+        set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
+        set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+        set(QTMESH_HAVE_MTMD OFF)
+    else()
+        set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
+        set(LLAMA_BUILD_TOOLS ON CACHE BOOL "" FORCE)
+        set(QTMESH_HAVE_MTMD ON)
+    endif()
 
     # Enable Metal on macOS for GPU acceleration
     if(APPLE)
@@ -212,11 +235,20 @@ if(ENABLE_LOCAL_LLM)
 
     FetchContent_MakeAvailable(llama_cpp)
 
-    # Include llama.cpp headers
+    # Include llama.cpp headers (+ mtmd multimodal for image captioning where
+    # available — not on Windows-MinGW, see QTMESH_HAVE_MTMD above).
     include_directories(
         ${llama_cpp_SOURCE_DIR}/include
         ${llama_cpp_SOURCE_DIR}/ggml/include
     )
+    if(QTMESH_HAVE_MTMD)
+        include_directories(
+            ${llama_cpp_SOURCE_DIR}/tools/mtmd
+            ${llama_cpp_SOURCE_DIR}/common
+        )
+        add_definitions(-DENABLE_MTMD)
+        message(STATUS "mtmd multimodal (image captioning) enabled")
+    endif()
 
     add_definitions(-DENABLE_LOCAL_LLM)
     message(STATUS "Local LLM support enabled with llama.cpp")
@@ -334,6 +366,12 @@ if(NOT TARGET xatlas)
     add_library(xatlas STATIC ${xatlas_SOURCE_DIR}/source/xatlas/xatlas.cpp)
     target_include_directories(xatlas PUBLIC ${xatlas_SOURCE_DIR}/source/xatlas)
     set_target_properties(xatlas PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    # Build xatlas SINGLE-THREADED (XA_MULTITHREADED=0). Its internal
+    # std::thread TaskScheduler livelocks on large/organic image-to-3D meshes —
+    # ComputeCharts spins forever in cthread_yield/swtch_pri, freezing the app
+    # with an untextured mesh (verified via process sampling, #764). Unwrap is a
+    # one-off; single-threaded is slower but deadlock-free and correct.
+    target_compile_definitions(xatlas PRIVATE XA_MULTITHREADED=0)
 endif()
 message(STATUS "xatlas enabled (auto UV unwrap)")
 

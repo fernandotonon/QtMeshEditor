@@ -18,6 +18,7 @@
 #include "MeshImporterExporter.h"
 #include "CLIPipeline.h"
 #include "ImageTo3D/MeshGenPredictor.h"
+#include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
@@ -2422,17 +2423,52 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     const bool upscaleTex  = args.value("upscale_texture").toBool();
     const bool generatePbr = args.contains("generate_pbr")
         ? args["generate_pbr"].toBool(true) : true;
+    if (args.contains("backend")) {
+        const QString b = args["backend"].toString().toLower();
+        if (b == "triposg")      opts.backend = MeshGenPredictor::Backend::TripoSG;
+        else if (b == "triposr" || b.isEmpty())
+            opts.backend = MeshGenPredictor::Backend::TripoSR;
+        else return makeErrorResult("'backend' must be 'triposr' or 'triposg'.");
+    }
+    if (args.contains("flow_steps")) {
+        opts.flowSteps = args["flow_steps"].toInt(25);
+        if (opts.flowSteps < 1 || opts.flowSteps > 200)
+            return makeErrorResult("'flow_steps' must be between 1 and 200.");
+    }
+    if (args.contains("guidance")) {
+        opts.guidanceScale = static_cast<float>(args["guidance"].toDouble(7.0));
+        if (opts.guidanceScale < 0.0f || opts.guidanceScale > 30.0f)
+            return makeErrorResult("'guidance' must be between 0 and 30.");
+    }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
-        QStringLiteral("generate_mesh_from_image %1 res=%2")
-            .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution));
+        QStringLiteral("generate_mesh_from_image %1 res=%2 backend=%3")
+            .arg(QFileInfo(imagePath).fileName()).arg(opts.sdfResolution)
+            .arg(opts.backend == MeshGenPredictor::Backend::TripoSG
+                     ? QStringLiteral("triposg") : QStringLiteral("triposr")));
 
-    const QString enc = MeshGenPredictor::ensureModelBlocking(opts.quality);
-    if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(opts.quality))
-        return makeErrorResult(
-            "TripoSR model unavailable — it downloads on first use; if it is not "
-            "hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL / ai/triposrModelBaseUrl "
-            "or drop the files in the ai_models/triposr/ cache.");
+    if (opts.backend == MeshGenPredictor::Backend::TripoSG) {
+        // TripoSG always runs the fp32 DiT (int8 tier dropped — degraded
+        // geometry, no ARM speed win); 'quality' still selects the TripoSR
+        // tier used for the colour bake.
+        const QString enc = TripoSGPredictor::ensureModelBlocking(false);
+        if (enc.isEmpty())
+            return makeErrorResult(
+                "TripoSG models unavailable — they download on first use; if not "
+                "hosted yet, set QTMESH_TRIPOSG_MODEL_BASE_URL / ai/triposgModelBaseUrl "
+                "or drop the files in the ai_models/triposg/ cache.");
+        // TripoSG's colour bake queries TripoSR's colour field — best-effort
+        // ensure (absent models fall back to clay with a warning).
+        if (opts.bakeTexture)
+            MeshGenPredictor::ensureModelBlocking(opts.quality);
+    } else {
+        const QString enc = MeshGenPredictor::ensureModelBlocking(opts.quality);
+        if (enc.isEmpty() || !MeshGenPredictor::modelsPresent(opts.quality))
+            return makeErrorResult(
+                "TripoSR model unavailable — it downloads on first use; if it is not "
+                "hosted yet, set QTMESH_TRIPOSR_MODEL_BASE_URL / ai/triposrModelBaseUrl "
+                "or drop the files in the ai_models/triposr/ cache.");
+    }
 
     QImage image(imagePath);
     if (image.isNull())
@@ -7299,16 +7335,19 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["image_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the source image (a single object, ideally background-removed). Required."}};
         props["output"] = QJsonObject{{"type", "string"}, {"description", "Optional path to save the generated mesh (e.g. /tmp/out.glb). If omitted, the mesh is loaded into the current scene instead."}};
-        props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..1024 (default 256; 128 is a fast/preview tier). Higher = more detail + slower. Cost is res^3 floats in RAM: 512~=0.5 GB, 768~=1.7 GB, 1024~=4.3 GB. The encoder input is fixed at 512^2, so detail gains taper off above 512."}};
-        props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "Bake TripoSR's predicted per-vertex color (default true)."}};
-        props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; TripoSR needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
-        props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Encoder precision/size tier (default fp32). fp32 = best (~1.7GB), int8 = smallest, slight quality loss (~430MB). The chosen tier downloads on demand."}};
+        props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..1024 (default 256; 128 is a fast/preview tier). Higher = more detail + slower. Cost is res^3 floats in RAM: 512~=0.5 GB, 768~=1.7 GB, 1024~=4.3 GB. (TripoSR's encoder input is fixed at 512^2, so its detail gains taper off above 512; TripoSG uses a 224^2 DINOv2 encoder and this is purely the extraction grid.)"}};
+        props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake its predicted per-vertex color (default true). Ignored by triposg (geometry-only — colour comes from the AI texture pass)."}};
+        props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run U²-Net background removal on the image first (default false). Recommended for photos with a background; the model needs an isolated subject. Falls back to the raw image if the model is unavailable."}};
+        props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Precision/size tier, downloaded on demand. TripoSR: fp32 = best (~1.7GB), int8 = smallest with slight quality loss (~430MB). TripoSG: fp32 only (int8 degrades geometry) — int8 is silently upgraded to fp32."}};
         props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "Taubin-smooth the extracted mesh to remove marching-cubes stair-stepping (default true; volume-preserving)."}};
         props["refine"] = QJsonObject{{"type", "boolean"}, {"description", "After smoothing, Newton-project each vertex back onto the network's true iso-surface via extra decoder queries (default true; recovers grid-quantized detail)."}};
-        props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails)."}};
+        props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails). Ignored by triposg (its colour comes from the GUI AI-texture pass; the CLI/MCP triposg mesh is geometry-only)."}};
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
+        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"triposr", "triposg"}}, {"description", "Generation backend (default triposr). triposr = fast single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only (no texture bake). Both MIT. TripoSG models download on first use."}};
+        props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "TripoSG rectified-flow Euler steps 1..200 (default 25; 50 = reference quality, 10 = fast preview). Ignored by triposr."}};
+        props["guidance"] = QJsonObject{{"type", "number"}, {"description", "TripoSG classifier-free-guidance scale 0..30 (default 7; 0 disables CFG and halves DiT cost). Ignored by triposr."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764, TripoSR via ONNX): "

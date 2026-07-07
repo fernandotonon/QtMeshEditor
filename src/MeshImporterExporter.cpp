@@ -44,7 +44,10 @@ THE SOFTWARE.
 #include <QRegularExpression>
 #include <QSet>
 #include <unordered_set>
+#include <unordered_map>
 #include <set>
+#include <array>
+#include <functional>
 #include <limits>
 #include <cmath>
 #include <cctype>
@@ -764,6 +767,159 @@ static std::vector<unsigned int> compactAiMesh(aiMesh* aiM)
     }
 
     return remap;
+}
+
+// Split any aiMesh with > 65535 vertices into ≤65535-vertex chunks before
+// export. Assimp's glTF2/OBJ/FBX exporters truncate the VERTEX accessors at
+// 65536 while keeping the 32-bit index buffer intact — so indices ≥65536
+// dangle and a large generated mesh (e.g. TripoSG/TripoSR at high resolution,
+// 80k+ verts) reimports torn into pieces. Splitting per-triangle-group into
+// sub-65536-vertex meshes sidesteps the exporter bug entirely; each chunk owns
+// a compact, valid vertex range. Faces are the split unit (each face's 3 verts
+// are copied into the chunk with local indices), so no index exceeds the limit.
+//
+// SCOPE: handles POSITION / NORMAL / TEXCOORD0 / COLOR0 meshes — the generated
+// image-to-3D output. Meshes carrying BONES or ANIM(morph) meshes are left
+// UNTOUCHED (returned as-is): those need the weight/target arrays remapped per
+// chunk, which is a heavier follow-up; skinned meshes rarely exceed the limit
+// per submesh in practice. Returns the (possibly multiple) replacement meshes;
+// the caller rebuilds scene->mMeshes and the node index arrays.
+static std::vector<aiMesh*> splitLargeAiMesh(aiMesh* aiM)
+{
+    constexpr unsigned int kMaxVerts = 65535;
+    if (!aiM || aiM->mNumVertices <= kMaxVerts || aiM->mNumFaces == 0)
+        return { aiM };
+    // Don't risk skinned / morph meshes — leave them for a dedicated pass.
+    if (aiM->mNumBones > 0 || aiM->mNumAnimMeshes > 0)
+        return { aiM };
+    // Only split all-triangle meshes. readSubmeshGeometry deliberately emits
+    // quads / n-gons from the cached qtme.faces list; the per-face repack
+    // below is triangle-only, so splitting a polygon mesh would DROP those
+    // faces. A >65k-vertex quad/n-gon mesh is rare — leave it intact (correct,
+    // if still subject to the Assimp exporter cap) rather than lose geometry.
+    for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
+        if (aiM->mFaces[f].mNumIndices != 3)
+            return { aiM };
+
+    const bool hasN  = aiM->mNormals != nullptr;
+    const bool hasUV = aiM->mTextureCoords[0] != nullptr;
+    const bool hasC  = aiM->mColors[0] != nullptr;
+
+    std::vector<aiMesh*> out;
+    unsigned int faceStart = 0;
+    while (faceStart < aiM->mNumFaces) {
+        // Greedily pack faces into a chunk until adding one more would exceed
+        // kMaxVerts unique vertices. Each face contributes ≤3 new verts.
+        std::vector<unsigned int> srcVerts;   // chunk-local → source vertex id
+        std::unordered_map<unsigned int, unsigned int> remap;  // source → local
+        std::vector<std::array<unsigned int, 3>> faces;
+        unsigned int f = faceStart;
+        for (; f < aiM->mNumFaces; ++f) {
+            const aiFace& face = aiM->mFaces[f];
+            if (face.mNumIndices != 3) continue;   // triangulated on read
+            // Would this face push us over the limit? (≤3 new verts.)
+            if (srcVerts.size() + 3 > kMaxVerts && !faces.empty())
+                break;
+            std::array<unsigned int, 3> lf{};
+            for (int v = 0; v < 3; ++v) {
+                const unsigned int s = face.mIndices[v];
+                auto it = remap.find(s);
+                unsigned int local;
+                if (it == remap.end()) {
+                    local = static_cast<unsigned int>(srcVerts.size());
+                    remap.emplace(s, local);
+                    srcVerts.push_back(s);
+                } else {
+                    local = it->second;
+                }
+                lf[v] = local;
+            }
+            faces.push_back(lf);
+        }
+
+        auto* chunk = new aiMesh();
+        chunk->mMaterialIndex = aiM->mMaterialIndex;
+        chunk->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
+        chunk->mNumVertices = static_cast<unsigned int>(srcVerts.size());
+        chunk->mVertices = new aiVector3D[chunk->mNumVertices];
+        if (hasN)  chunk->mNormals = new aiVector3D[chunk->mNumVertices];
+        if (hasUV) {
+            chunk->mNumUVComponents[0] = aiM->mNumUVComponents[0];
+            chunk->mTextureCoords[0] = new aiVector3D[chunk->mNumVertices];
+        }
+        if (hasC)  chunk->mColors[0] = new aiColor4D[chunk->mNumVertices];
+        for (unsigned int i = 0; i < chunk->mNumVertices; ++i) {
+            const unsigned int s = srcVerts[i];
+            chunk->mVertices[i] = aiM->mVertices[s];
+            if (hasN)  chunk->mNormals[i]        = aiM->mNormals[s];
+            if (hasUV) chunk->mTextureCoords[0][i] = aiM->mTextureCoords[0][s];
+            if (hasC)  chunk->mColors[0][i]      = aiM->mColors[0][s];
+        }
+        chunk->mNumFaces = static_cast<unsigned int>(faces.size());
+        chunk->mFaces = new aiFace[chunk->mNumFaces];
+        for (unsigned int i = 0; i < chunk->mNumFaces; ++i) {
+            chunk->mFaces[i].mNumIndices = 3;
+            chunk->mFaces[i].mIndices = new unsigned int[3];
+            for (int v = 0; v < 3; ++v)
+                chunk->mFaces[i].mIndices[v] = faces[i][v];
+        }
+        out.push_back(chunk);
+        faceStart = f;
+    }
+
+    delete aiM;   // replaced by the chunks
+    return out;
+}
+
+// Rewrite scene->mMeshes (and every node's mMeshes index array) so any mesh
+// exceeding the 65535-vertex exporter limit is replaced by its split chunks.
+// No-op when nothing exceeds the limit (the common case).
+static void splitLargeMeshesForExport(aiScene* scene)
+{
+    if (!scene || scene->mNumMeshes == 0) return;
+    bool anyOver = false;
+    for (unsigned int i = 0; i < scene->mNumMeshes; ++i)
+        if (scene->mMeshes[i] && scene->mMeshes[i]->mNumVertices > 65535
+            && scene->mMeshes[i]->mNumBones == 0
+            && scene->mMeshes[i]->mNumAnimMeshes == 0) { anyOver = true; break; }
+    if (!anyOver) return;
+
+    // Build the new mesh list, recording each old index's replacement range.
+    std::vector<aiMesh*> newMeshes;
+    std::vector<std::vector<unsigned int>> oldToNew(scene->mNumMeshes);
+    for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
+        std::vector<aiMesh*> parts = splitLargeAiMesh(scene->mMeshes[i]);
+        for (aiMesh* p : parts) {
+            oldToNew[i].push_back(static_cast<unsigned int>(newMeshes.size()));
+            newMeshes.push_back(p);
+        }
+    }
+    delete[] scene->mMeshes;
+    scene->mNumMeshes = static_cast<unsigned int>(newMeshes.size());
+    scene->mMeshes = new aiMesh*[scene->mNumMeshes];
+    for (unsigned int i = 0; i < scene->mNumMeshes; ++i)
+        scene->mMeshes[i] = newMeshes[i];
+
+    // Fix up every node's mesh-index array to point at the new indices.
+    std::function<void(aiNode*)> fixNode = [&](aiNode* n) {
+        if (!n) return;
+        if (n->mNumMeshes > 0) {
+            std::vector<unsigned int> mapped;
+            for (unsigned int k = 0; k < n->mNumMeshes; ++k) {
+                const unsigned int old = n->mMeshes[k];
+                if (old < oldToNew.size())
+                    for (unsigned int ni : oldToNew[old]) mapped.push_back(ni);
+            }
+            delete[] n->mMeshes;
+            n->mNumMeshes = static_cast<unsigned int>(mapped.size());
+            n->mMeshes = new unsigned int[n->mNumMeshes];
+            for (unsigned int k = 0; k < n->mNumMeshes; ++k)
+                n->mMeshes[k] = mapped[k];
+        }
+        for (unsigned int c = 0; c < n->mNumChildren; ++c)
+            fixNode(n->mChildren[c]);
+    };
+    fixNode(scene->mRootNode);
 }
 
 // Slice A4a: emit per-pose aiAnimMesh entries on an aiMesh, sourced
@@ -3254,6 +3410,9 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             // positions + normals by column, not by UV lookup).
             if (formatId == "gltf2" || formatId == "glb2")
                 exportFlags |= aiProcess_FlipUVs;
+            // Split >65535-vertex meshes so Assimp's exporters don't truncate
+            // the vertex accessors at 65536 (which tears large meshes apart).
+            splitLargeMeshesForExport(scene);
             aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
                                              file.filePath().toStdString().c_str(),
                                              exportFlags);
@@ -3535,6 +3694,8 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
             // Only apply ConvertToLeftHanded for formats that expect left-handed coords (e.g. FBX).
             bool rightHanded = (formatId == "x" || formatId == "gltf2" || formatId == "glb2");
             unsigned int exportFlags = rightHanded ? 0 : aiProcess_ConvertToLeftHanded;
+            // Split >65535-vertex meshes (Assimp exporter vertex-accessor cap).
+            splitLargeMeshesForExport(scene);
             aiReturn aiResult = exporter.Export(scene, formatId.toStdString().c_str(),
                                                 file.filePath().toStdString().c_str(),
                                                 exportFlags);
@@ -3819,6 +3980,8 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
 
         Assimp::Exporter exporter;
 
+        // Split >65535-vertex meshes (Assimp exporter vertex-accessor cap).
+        splitLargeMeshesForExport(scene);
         // Both Ogre and glTF are right-handed — no ConvertToLeftHanded
         aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
                                          file.filePath().toStdString().c_str(), 0);

@@ -1,10 +1,11 @@
 #include "MeshGenPredictor.h"
 
 #include "MarchingCubes.h"
-#include "MeshRefine.h"    // Taubin smoothing + iso-surface reprojection
-#include "MeshGenBaker.h"  // xatlas unwrap + diffuse texture bake
-#include "PbrMapSynth.h"   // toNCHW (image → planar [0,1])
+#include "MeshRefine.h"       // Taubin smoothing + iso-surface reprojection
+#include "MeshGenBaker.h"     // xatlas unwrap + diffuse texture bake
+#include "PbrMapSynth.h"      // toNCHW (image → planar [0,1])
 #include "BackgroundRemover.h"
+#include "TripoSGPredictor.h" // Backend::TripoSG dispatch
 
 #include <QDir>
 #include <QFileInfo>
@@ -215,6 +216,42 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
 {
     if (image.isNull())
         return fail(QStringLiteral("MeshGen: input image is empty."));
+
+    // ---- Backend dispatch: TripoSG (rectified-flow, geometry-only) ----------
+    if (opts.backend == Backend::TripoSG) {
+        QImage subject = image;
+        if (opts.removeBackground) {
+            // TripoSG's reference pipeline composites the cut-out over WHITE
+            // (unlike TripoSR's gray-128) — see docs/TRIPOSG_EXPORT_NOTES.md.
+            const QString bgModel = BackgroundRemover::ensureModelBlocking();
+            BackgroundRemover::Options bg;
+            bg.bgR = 255; bg.bgG = 255; bg.bgB = 255;
+            const BackgroundRemover::Result br =
+                BackgroundRemover::removeBackground(image, bgModel, bg);
+            subject = br.image;
+        }
+        TripoSGPredictor::Options sg;
+        sg.sdfResolution    = opts.sdfResolution;
+        sg.flowSteps        = opts.flowSteps;
+        sg.guidanceScale    = opts.guidanceScale;
+        // int8 tier DROPPED for TripoSG: the quantized 1.5B DiT degrades to
+        // blobs over the flow loop (verified live even with per-channel
+        // quant), and dynamic-int8 MatMuls are no faster than fp32 on ARM.
+        // The tier picker stays meaningful for TripoSR only.
+        sg.useInt8Dit       = false;
+        sg.smoothMesh       = opts.smoothMesh;
+        sg.smoothIterations = opts.smoothIterations;
+        sg.refineSurface    = opts.refineSurface;
+        sg.chunkPoints      = opts.chunkPoints;
+        Result r = TripoSGPredictor::predict(subject, sg, progress);
+        // TripoSG's field is already +Y-up — skip the TripoSR frame bake.
+        r.bakeTripoSROrientation = false;
+        // TripoSG is geometry-only. Colour comes SOLELY from the AI image
+        // generation pass (multi-view depth-ControlNet, run later in the GUI
+        // layer) — no TripoSR field colouring. With no AI texture the mesh
+        // ships uncoloured (neutral clay material in MeshGenBuilder).
+        return r;
+    }
     if (!QFileInfo::exists(encoderModelPath) || !QFileInfo::exists(decoderModelPath))
         return fail(QStringLiteral("MeshGen: TripoSR model not found (not hosted yet? "
                                    "see docs/IMAGE_TO_3D_SPIKE_764.md)."));

@@ -128,9 +128,20 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     //   step 1: -90° about X to stand it up:  (x, y, z) -> (x, z, -y)
     //   step 2: +90° about Y to face forward: (x, y, z) -> (z, y, -x)
     // Composed: (x, y, z) -> (-y, z, -x).
-    auto orient = [](float& x, float& y, float& z) {
-        const float nx = -y, ny = z, nz = -x;
-        x = nx; y = ny; z = nz;
+    // TripoSG results are already +Y-up (Result::bakeTripoSROrientation is
+    // false) — baking the TripoSR frame onto them lays the model on its back.
+    // BUT TripoSG comes out facing AWAY (its front is -Z here), so rotate it
+    // 180° about Y so the reconstructed front faces the camera (+Z):
+    //   180°Y: (x, y, z) -> (-x, y, -z).
+    const bool bakeOrientation = result.bakeTripoSROrientation;
+    const bool flipY180 = !bakeOrientation;   // TripoSG path only
+    auto orient = [bakeOrientation, flipY180](float& x, float& y, float& z) {
+        if (bakeOrientation) {
+            const float nx = -y, ny = z, nz = -x;
+            x = nx; y = ny; z = nz;
+        } else if (flipY180) {
+            x = -x; z = -z;   // 180° about Y — face the front forward
+        }
     };
 
     Ogre::Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
@@ -228,6 +239,27 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
                 Ogre::TVC_DIFFUSE | Ogre::TVC_AMBIENT);
             pass->setCullingMode(Ogre::CULL_CLOCKWISE);
             vc->compile();
+        }
+        sub->setMaterialName(kMat, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    }
+
+    // Geometry-only result (TripoSG, or TripoSR with every colour stage off):
+    // without a material the default flat-white one hides all surface relief.
+    // Assign a shared neutral LIT clay material so the shape actually shades.
+    if (!hasUv && !hasColor) {
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        const char* kMat = "MeshGen/NeutralClay";
+        Ogre::MaterialPtr clay = matMgr.getByName(kMat);
+        if (!clay) {
+            clay = matMgr.create(kMat, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            auto* pass = clay->getTechnique(0)->getPass(0);
+            pass->setLightingEnabled(true);
+            pass->setDiffuse(Ogre::ColourValue(0.72f, 0.68f, 0.62f));   // warm clay
+            pass->setAmbient(Ogre::ColourValue(0.35f, 0.33f, 0.30f));
+            pass->setSpecular(Ogre::ColourValue(0.15f, 0.15f, 0.15f));
+            pass->setShininess(24.0f);
+            pass->setCullingMode(Ogre::CULL_CLOCKWISE);
+            clay->compile();
         }
         sub->setMaterialName(kMat, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     }
@@ -395,6 +427,11 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
     // lights identically to an export→reload of it.
     if (ent)
         MeshImporterExporter::applyNormalMapsToEntity(ent);
+    // Both image-to-3D backends reconstruct into a unit-ish box that lands the
+    // model quite small in the editor scene; scale x2 so it arrives at a
+    // workable size (matches TripoSR + TripoSG). Applied on the node, so it's
+    // baked into any export via the node transform.
+    node->setScale(2.0f, 2.0f, 2.0f);
     return node;
 }
 

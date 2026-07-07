@@ -50,6 +50,11 @@ public:
     // that the ONNX fp16 converters can't rewrite cleanly; int8 is smaller anyway.)
     enum class Quality { Fp32, Int8 };
 
+    // Generation backend. TripoSR = the fast single-pass LRM (default);
+    // TripoSG = the 1.5B rectified-flow model (higher-fidelity geometry,
+    // slower, geometry-only — see TripoSGPredictor). Both MIT code+weights.
+    enum class Backend { TripoSR, TripoSG };
+
     struct Options {
         Options();                    // out-of-line (same idiom as UniRig::Options)
         int     sdfResolution = 256;  // marching-cubes grid resolution (128 = fast)
@@ -82,6 +87,14 @@ public:
         // to vertex colours (Result::warning set) if the unwrap/bake fails.
         bool bakeTexture = true;
         int  textureSize = 1024;
+
+        // ---- Backend selection ------------------------------------------------
+        // TripoSG ignores the colour/bake options (geometry-only model) and
+        // maps Quality::Int8 onto its int8 DiT tier. flowSteps/guidanceScale
+        // only apply to TripoSG.
+        Backend backend = Backend::TripoSR;
+        int   flowSteps = 25;
+        float guidanceScale = 7.0f;
     };
 
     struct Result {
@@ -98,6 +111,11 @@ public:
         int vertexCount   = 0;
         int triangleCount = 0;
         bool usedModel    = false;     // true iff the ONNX path ran
+        // TripoSR's reconstruction frame lies on its back + faces 90° off, so
+        // MeshGenBuilder bakes a fixed -90°X/+90°Y into the vertex data.
+        // TripoSG's field is already +Y-up (upstream exports the marching-cubes
+        // trimesh as-is), so its dispatch sets this false to skip the bake.
+        bool bakeTripoSROrientation = true;
     };
 
     // True only when built with ENABLE_ONNX. (Model presence is checked per call.)
@@ -125,7 +143,8 @@ public:
     // Pipeline stage identifiers for the progress callback — one per
     // user-visible step of predict() (the GUI shows a per-step progress list).
     enum class Stage {
-        Encode,   // TripoSR encoder run (single blocking call: 0/1 → 1/1)
+        Encode,   // image encoder run (single blocking call: 0/1 → 1/1)
+        Denoise,  // TripoSG rectified-flow Euler loop (per-step)
         Decode,   // res³ grid decode (per-chunk; the long one)
         Refine,   // iso-surface reprojection probes (per-chunk)
         Bake,     // texture bake colour queries (per-chunk, baker-reported)
