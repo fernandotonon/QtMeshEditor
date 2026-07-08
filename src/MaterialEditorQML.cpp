@@ -4714,6 +4714,18 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
         QStringLiteral("entity=%1 views=%2 size=%3")
             .arg(st->entityName).arg(viewNames.join(',')).arg(std::max(st->width, st->height)));
 
+    // Decimate + unwrap the mesh NOW, before any depth render / SD view — so
+    // (a) all views AND the final bake share the same decimated+unwrapped
+    // geometry (they were previously mismatched: views from the full mesh,
+    // bake from the decimated one), and (b) the ~2s unwrap runs up front
+    // instead of after the multi-minute SD passes (where a stale
+    // "unwrapping…" status made it look frozen for an hour). Depth renders and
+    // SD then proceed on the final mesh.
+    if (!prepareMeshForTexturing(entity)) {
+        emit sdIsGeneratingChanged();
+        return;   // prepareMeshForTexturing already emitted the error
+    }
+
     m_multiViewBake = std::move(st);
     startNextMultiViewGeneration();
     // LCOV_EXCL_STOP
@@ -4721,6 +4733,57 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
     Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(controlStrength); Q_UNUSED(views);
     emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
 #endif
+}
+
+bool MaterialEditorQML::prepareMeshForTexturing(Ogre::Entity* entity)
+{
+    if (!entity) return false;
+    if (entityHasUv0(entity)) return true;   // already unwrapped
+
+    // Clean degenerate (zero/near-zero-area) triangles FIRST. Marching cubes +
+    // Taubin smoothing (image-to-3D) leave slivers that xatlas can't
+    // parameterize — they collapse to lines in UV and produce the "streaks
+    // across the atlas + untextured patches" symptom.
+    {
+        EditableMesh em;
+        if (em.loadFromEntity(entity)) {
+            const int removed = em.removeDegenerateTriangles(1e-5f);
+            if (removed > 0) {
+                em.commitToEntity(entity);
+                emit sdGenerationNotice(
+                    tr("Cleaned %1 degenerate triangles before unwrap.").arg(removed));
+            }
+        }
+    }
+    // Decimate to a fixed TRIANGLE BUDGET before unwrap. Image-to-3D meshes are
+    // 80k+ tris; single-threaded xatlas (used to dodge its scheduler deadlock)
+    // takes many minutes on that. ~16k tris textures cleanly and unwraps in
+    // ~seconds. Meshopt backend — Ogre's MeshLodGenerator SIGSEGVs on these.
+    {
+        EditableMesh em;
+        int tris = 0;
+        if (em.loadFromEntity(entity))
+            tris = static_cast<int>(em.totalTriangleCount());
+        constexpr int kTextureTriBudget = 16000;
+        const double reduction =
+            MeshDecimator::reductionFromTargetTris(tris, kTextureTriBudget);
+        if (reduction > 0.01) {
+            emit sdGenerationNotice(
+                tr("Simplifying mesh for texturing (%1 → ~%2 tris)…")
+                    .arg(tris).arg(kTextureTriBudget));
+            MeshDecimator::decimateEntity(entity, reduction,
+                                          MeshDecimator::Algorithm::Meshopt);
+        }
+    }
+    emit sdGenerationNotice(tr("Auto-unwrapping UVs…"));
+    const UvUnwrapReport ur = UvUnwrap::unwrapEntity(entity);
+    if (!ur.applied || !entityHasUv0(entity)) {
+        emit sdGenerationError(QStringLiteral(
+            "AI texture: auto UV unwrap failed%1 — cannot bake.")
+            .arg(ur.error.isEmpty() ? QString() : (": " + ur.error)));
+        return false;
+    }
+    return true;
 }
 
 void MaterialEditorQML::startNextMultiViewGeneration()
@@ -4788,70 +4851,13 @@ void MaterialEditorQML::finishMultiViewBake()
     }
     if (!entity) { emit sdGenerationError("Mesh gone before bake."); emit sdIsGeneratingChanged(); return; }
 
-    // The baker projects onto an EXISTING UV0 atlas. A geometry-only mesh
-    // (TripoSG, or any unwrap-less import) has none, so auto-unwrap it in place
-    // first via xatlas. Safe here because these are STATIC generated meshes
-    // (no skeleton — the in-place-mutation caveat that unwrapEntity warns about
-    // only affects live skinned meshes), and they SHOULD keep the new UVs (the
-    // texture binds to them and they're carried into any export).
-    if (!entityHasUv0(entity)) {
-        // Clean degenerate (zero/near-zero-area) triangles FIRST. Marching
-        // cubes + Taubin smoothing (image-to-3D) leave slivers that xatlas
-        // can't parameterize — they collapse to lines in UV and produce the
-        // "streaks across the atlas + untextured patches" symptom. Removing
-        // them (plus the proportional weld epsilon inside unwrapEntity) gives
-        // xatlas clean charts.
-        {
-            EditableMesh em;
-            if (em.loadFromEntity(entity)) {
-                const int removed = em.removeDegenerateTriangles(1e-5f);
-                if (removed > 0) {
-                    em.commitToEntity(entity);
-                    emit sdGenerationNotice(
-                        tr("Cleaned %1 degenerate triangles before unwrap.")
-                            .arg(removed));
-                }
-            }
-        }
-        // Decimate BEFORE unwrap. Image-to-3D meshes are 80k+ tris; xatlas
-        // (single-threaded, to avoid its scheduler deadlock) takes many minutes
-        // on that — effectively a freeze. A texture doesn't need that density:
-        // ~90% reduction (user-verified as visually fine) drops it to a few
-        // thousand tris that unwrap + bake in seconds. Reduction is capped for
-        // meshes that are already small so we don't over-decimate them.
-        {
-            EditableMesh em;
-            int tris = 0;
-            if (em.loadFromEntity(entity))
-                tris = static_cast<int>(em.totalTriangleCount());  // post-cleanup
-            // Decimate to a fixed TRIANGLE BUDGET (more robust than a flat 90%:
-            // a huge mesh is reduced hard, a moderate one gently, and small
-            // meshes are left alone). ~16k tris textures cleanly and unwraps in
-            // seconds; user-verified ~90% reduction (≈ an 80k→16k mesh) looks
-            // fine. reductionFromTargetTris returns 0 when already under budget.
-            constexpr int kTextureTriBudget = 16000;
-            const double reduction =
-                MeshDecimator::reductionFromTargetTris(tris, kTextureTriBudget);
-            if (reduction > 0.01) {
-                emit sdGenerationNotice(
-                    tr("Simplifying mesh for texturing (%1 → ~%2 tris)…")
-                        .arg(tris).arg(kTextureTriBudget));
-                // Meshopt backend, NOT Ogre's MeshLodGenerator — the latter
-                // SIGSEGVs on these dense image-to-3D meshes (verified); meshopt
-                // handles them cleanly.
-                MeshDecimator::decimateEntity(entity, reduction,
-                                              MeshDecimator::Algorithm::Meshopt);
-            }
-        }
-        emit sdGenerationNotice("Auto-unwrapping UVs before bake…");
-        const UvUnwrapReport ur = UvUnwrap::unwrapEntity(entity);
-        if (!ur.applied || !entityHasUv0(entity)) {
-            emit sdGenerationError(QStringLiteral(
-                "AI texture: auto UV unwrap failed%1 — cannot bake.")
-                .arg(ur.error.isEmpty() ? QString() : (": " + ur.error)));
-            emit sdIsGeneratingChanged();
-            return;
-        }
+    // The mesh was already decimated + unwrapped up front (in
+    // generateMeshTextureMultiView, before the depth renders + SD) so every
+    // view and this bake share the same final geometry. Safety net: if UV0 is
+    // somehow still missing (e.g. this path was reached directly), prepare now.
+    if (!entityHasUv0(entity) && !prepareMeshForTexturing(entity)) {
+        emit sdIsGeneratingChanged();
+        return;   // prepareMeshForTexturing already emitted the error
     }
 
     QString geoErr;
