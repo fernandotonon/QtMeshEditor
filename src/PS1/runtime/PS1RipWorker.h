@@ -53,6 +53,11 @@ public slots:
 
 signals:
     void emulationStarted(const QString &coreId);
+    /** In-core rip hook availability for the booted core (#813): true when
+     *  the qtmesh fork registered its capture interface, false on stock
+     *  cores (or QTMESH_PS1_RIP_INCORE=0). Emitted right after
+     *  emulationStarted. */
+    void inCoreHooksState(bool active);
     void emulationStopped();
     void framePresented(const QImage &frame, quint64 frameIndex);
     void emulationError(const QString &message);

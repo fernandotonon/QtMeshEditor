@@ -32,6 +32,9 @@ public:
     virtual void ingestCaptureFrame() {}
     virtual PsxVramMirrorMode lastVramMirrorMode() const { return PsxVramMirrorMode::Unknown; }
     virtual QString lastError() const { return QString(); }
+    /** True when the loaded core exposes the qtmesh rip ABI and the host
+     *  registered its capture interface (#813). Stock cores return false. */
+    virtual bool inCoreHooksActive() const { return false; }
 
     virtual void setJoypadButton(unsigned port, unsigned buttonId, bool pressed)
     {

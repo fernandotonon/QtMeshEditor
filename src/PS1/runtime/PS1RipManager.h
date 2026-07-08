@@ -98,6 +98,9 @@ signals:
     void sessionStarted(const QString &coreId);
     void vramFrameUpdated(const QVector<uint16_t> &cells, const QImage &nativePreview);
     void sessionStopped();
+    /** In-core rip hook availability for the booted core (#813) — forwarded
+     *  from the worker right after sessionStarted. */
+    void inCoreHooksState(bool active);
     void framePresented(const QImage &frame, quint64 frameIndex);
     void frameCaptured(const QString &captureId);
     void meshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes, int instanceCount,

@@ -19,6 +19,10 @@ enum class Gp0CaptureSource : uint8_t {
     RamChainRoot,
     /** Model-space TMD/HMD blob found by a format-aware RAM scanner (#674). */
     RamModelMesh,
+    /** True in-core GP0 command stream from the rip-instrumented beetle fork
+     *  (#815). Ranked above DirectHook — packet-for-packet submission order
+     *  with per-vertex PGXP provenance. */
+    InCoreHook,
 };
 
 struct Gp0CaptureStats {
@@ -39,6 +43,13 @@ struct Gp0CaptureStats {
     int ramHmdCandidates = 0;
     int totalPrims = 0;
     bool liveFrame = false;
+    /** Prims ingested from the in-core GP0 draw hook this frame (#815). */
+    int inCoreHookPrims = 0;
+    /** GTE transform records delivered by the in-core hook this frame (#814). */
+    int gteRecords = 0;
+    /** True when the in-core stream was active and the RAM GP0 passes were
+     *  skipped for this frame (#815). */
+    bool inCoreStream = false;
 
     QString primarySourceLabel() const;
 };

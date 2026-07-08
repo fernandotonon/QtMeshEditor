@@ -333,6 +333,13 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
         else
             m_statusLabel->setText(tr("Running (core: %1)").arg(coreId));
     });
+    connect(m_manager, &PS1RipManager::inCoreHooksState, this, [this](bool active) {
+        // Per-core capability surface (#813): tracked in-core capture only
+        // works with the qtmesh beetle fork in PS1Cores/.
+        m_statusLabel->setText(m_statusLabel->text()
+                               + (active ? tr(" · in-core hooks: active")
+                                         : tr(" · in-core hooks: unavailable (stock core)")));
+    });
     connect(m_manager, &PS1RipManager::vramFrameUpdated, this,
             [this](const QVector<uint16_t> &cells, const QImage &preview) {
                 if (m_vramViewer)

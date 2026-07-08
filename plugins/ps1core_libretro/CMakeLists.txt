@@ -28,6 +28,14 @@ add_library(qtmesh_ps1core_libretro MODULE
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxCaptureFilters.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxBiosValidator.cpp
     ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxDiscResolver.cpp
+    # Model-space RAM scanners (#674) + their reconstruction deps. Referenced
+    # by Gp0HookDispatch::captureFrameFromSystemRam; without these the module
+    # links on Linux (lazy dlopen resolution) but fails macOS ld, which
+    # rejects undefined symbols in MODULE libraries.
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxTmdRamScanner.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/PsxHmdRamScanner.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/MeshReconstructorTexKeys.cpp
+    ${CMAKE_SOURCE_DIR}/src/PS1/runtime/GteInverse.cpp
 )
 
 target_include_directories(qtmesh_ps1core_libretro PRIVATE
@@ -53,6 +61,20 @@ add_custom_command(TARGET qtmesh_ps1core_libretro POST_BUILD
         "$<TARGET_FILE_DIR:qtmesh_ps1core_libretro>"
     COMMENT "Installing mednafen_psx_libretro into PS1Cores (if missing)"
 )
+
+# Optionally build the rip-instrumented beetle fork (#813) so in-core GTE/GP0
+# capture works out of the box. OFF by default: it needs git + a working core
+# toolchain (GNU make); plain ENABLE_PS1_RIP builds keep working against the
+# stock downloaded core (RAM-scan capture paths unchanged).
+option(ENABLE_PS1_RIP_CORE_BUILD "Build the rip-instrumented beetle fork into PS1Cores/" OFF)
+if(ENABLE_PS1_RIP_CORE_BUILD)
+    add_custom_command(TARGET qtmesh_ps1core_libretro POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E env
+            bash "${CMAKE_SOURCE_DIR}/scripts/build-ps1-rip-core.sh"
+            "$<TARGET_FILE_DIR:qtmesh_ps1core_libretro>"
+        COMMENT "Building beetle_psx_qtmesh_libretro (rip fork) into PS1Cores"
+    )
+endif()
 
 if(BUILD_TESTS AND TARGET UnitTests)
     add_dependencies(UnitTests qtmesh_ps1core_libretro)

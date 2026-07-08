@@ -62,6 +62,16 @@ bool LibretroHost::load(const QString &corePath, QString *errorOut)
         return false;
     }
 
+    // Optional qtmesh rip ABI (#813): only the rip-instrumented beetle fork
+    // exports these. Missing symbols are not an error — stock cores run with
+    // the RAM-scan capture paths unchanged.
+    qtmesh_rip_abi_version =
+        reinterpret_cast<qtmesh_rip_abi_version_t>(m_library.resolve("qtmesh_rip_abi_version"));
+    qtmesh_rip_set_interface =
+        reinterpret_cast<qtmesh_rip_set_interface_t>(m_library.resolve("qtmesh_rip_set_interface"));
+    qtmesh_rip_set_armed =
+        reinterpret_cast<qtmesh_rip_set_armed_t>(m_library.resolve("qtmesh_rip_set_armed"));
+
     if (retro_api_version) {
         const unsigned apiVersion = retro_api_version();
         if (apiVersion != RETRO_API_VERSION) {
@@ -96,6 +106,9 @@ void LibretroHost::unload()
     retro_reset = nullptr;
     retro_get_memory_data = nullptr;
     retro_get_memory_size = nullptr;
+    qtmesh_rip_abi_version = nullptr;
+    qtmesh_rip_set_interface = nullptr;
+    qtmesh_rip_set_armed = nullptr;
 
     if (m_library.isLoaded())
         m_library.unload();

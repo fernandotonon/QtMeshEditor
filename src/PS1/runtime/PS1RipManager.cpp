@@ -114,6 +114,7 @@ void PS1RipManager::initializeWorkerThread()
         m_activeCoreId = coreId;
         emit sessionStarted(coreId);
     });
+    connect(m_worker, &PS1RipWorker::inCoreHooksState, this, &PS1RipManager::inCoreHooksState);
     connect(m_worker, &PS1RipWorker::emulationStopped, this, [this]() {
         m_startPending = false;
         m_sessionActive = false;
