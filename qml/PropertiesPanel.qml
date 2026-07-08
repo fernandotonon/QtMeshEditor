@@ -21,6 +21,48 @@ Rectangle {
     property bool showAllModeTools: false
     property var bottomToolHost: null
 
+    // Themed checkbox matching Inspector palette (16px box + checkmark).
+    component InspectorCheckBox: CheckBox {
+        id: itcb
+        spacing: 6
+        property string accessibleLabel: ""
+        Accessible.name: accessibleLabel !== "" ? accessibleLabel : text
+        Accessible.checkable: true
+        Accessible.checked: itcb.checkState === Qt.Checked
+        indicator: Rectangle {
+            x: itcb.leftPadding
+            y: itcb.height / 2 - height / 2
+            implicitWidth: 16
+            implicitHeight: 16
+            radius: 2
+            color: itcb.checkState === Qt.Checked || itcb.checkState === Qt.PartiallyChecked
+                ? PropertiesPanelController.highlightColor
+                : PropertiesPanelController.inputColor
+            border.color: itcb.activeFocus
+                ? PropertiesPanelController.highlightColor
+                : PropertiesPanelController.borderColor
+            border.width: itcb.activeFocus ? 2 : 1
+            opacity: itcb.enabled ? 1.0 : 0.45
+            Text {
+                anchors.centerIn: parent
+                visible: itcb.checkState !== Qt.Unchecked
+                text: itcb.checkState === Qt.PartiallyChecked ? "—" : "✓"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: itcb.checkState === Qt.PartiallyChecked ? 10 : 12
+                font.bold: true
+            }
+        }
+        contentItem: Text {
+            visible: itcb.text !== ""
+            text: itcb.text
+            color: PropertiesPanelController.textColor
+            font.pixelSize: 11
+            leftPadding: itcb.indicator.width + itcb.spacing
+            verticalAlignment: Text.AlignVCenter
+            opacity: itcb.enabled ? 1.0 : 0.45
+        }
+    }
+
     // ---- Auto-rig (#407) inline state, lives in the Inspector Rigging section
     // (replaces the old modal AutoRigDialog) ----
     property var    rigTemplates: ["humanoid", "biped", "quadruped", "generic"]
@@ -655,16 +697,6 @@ Rectangle {
                 Component.onCompleted: content = transformComponent
             }
 
-            // ---- Light (#484 / #485) ----
-            CollapsibleSection {
-                title: "Light"
-                sectionVisible: root.currentTab === root.inspectorTab
-                    && LightPropertiesController.hasLightSelection
-                expanded: false
-
-                Component.onCompleted: content = lightPropertiesComponent
-            }
-
             // ---- Snap Settings ----
             CollapsibleSection {
                 title: "Snap Settings"
@@ -716,6 +748,28 @@ Rectangle {
                 expanded: false
 
                 Component.onCompleted: content = sceneLightingComponent
+            }
+
+            // ---- Light (#484 / #485) ----
+            CollapsibleSection {
+                title: "Light"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    LightPropertiesController.hasLightSelection)
+                expanded: false
+
+                Component.onCompleted: content = lightPropertiesComponent
+            }
+
+            // ---- Shadow (Slice F #488) ----
+            CollapsibleSection {
+                title: "Shadow"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.ObjectMode,
+                    true)
+                expanded: false
+
+                Component.onCompleted: content = shadowToolsComponent
             }
 
             // ---- Environment (HDR / IBL, Object mode) ----
@@ -4221,8 +4275,9 @@ Rectangle {
                     font.pixelSize: 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                CheckBox {
+                InspectorCheckBox {
                     anchors.verticalCenter: parent.verticalCenter
+                    accessibleLabel: qsTr("Enabled")
                     tristate: true
                     checkState: LightPropertiesController.mixedEnabled
                         ? Qt.PartiallyChecked
@@ -4331,7 +4386,7 @@ Rectangle {
                         }
                     }
                 }
-                CheckBox {
+                InspectorCheckBox {
                     anchors.verticalCenter: parent.verticalCenter
                     text: qsTr("Link")
                     checked: LightPropertiesController.colorsLinked
@@ -4541,17 +4596,6 @@ Rectangle {
                     decimals: 2
                     onNewValue: function(val) { LightPropertiesController.spotFalloff = val }
                 }
-            }
-
-            // Directional softness placeholder
-            Text {
-                visible: LightPropertiesController.isDirectional
-                text: qsTr("Directional softness (advanced) — coming soon")
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 10
-                font.italic: true
-                wrapMode: Text.WordWrap
-                width: parent.width - 16
             }
         }
     }
@@ -5381,39 +5425,11 @@ Rectangle {
                 spacing: 6
                 width: parent.width - 16
 
-                CheckBox {
+                InspectorCheckBox {
                     id: replaceLightsCheck
-                    text: "Replace existing lights"
+                    text: qsTr("Replace existing lights")
                     checked: SceneLightingController.replaceExistingLights
                     onToggled: SceneLightingController.replaceExistingLights = checked
-                    spacing: 6
-                    indicator: Rectangle {
-                        x: replaceLightsCheck.leftPadding
-                        y: replaceLightsCheck.height / 2 - height / 2
-                        implicitWidth: 16
-                        implicitHeight: 16
-                        radius: 2
-                        color: replaceLightsCheck.checked
-                            ? PropertiesPanelController.highlightColor
-                            : PropertiesPanelController.inputColor
-                        border.color: PropertiesPanelController.borderColor
-                        border.width: 1
-                        Text {
-                            anchors.centerIn: parent
-                            visible: replaceLightsCheck.checked
-                            text: "✓"
-                            color: PropertiesPanelController.textColor
-                            font.pixelSize: 12
-                            font.bold: true
-                        }
-                    }
-                    contentItem: Text {
-                        text: replaceLightsCheck.text
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 10
-                        leftPadding: replaceLightsCheck.indicator.width + replaceLightsCheck.spacing
-                        verticalAlignment: Text.AlignVCenter
-                    }
                 }
             }
 
@@ -5447,6 +5463,229 @@ Rectangle {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: SceneLightingController.applySelectedRig()
+                }
+            }
+        }
+    }
+
+    // ---- Shadow tools (Object mode, Slice F #488) ----
+    Component {
+        id: shadowToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            Text {
+                text: qsTr("Quality")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            ThemedComboBox {
+                id: shadowQualityPicker
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: ShadowController.qualityPresetNames
+                currentIndex: ShadowController.qualityPreset
+                onActivated: index => ShadowController.qualityPreset = index
+                Connections {
+                    target: ShadowController
+                    function onSettingsChanged() {
+                        shadowQualityPicker.currentIndex = ShadowController.qualityPreset
+                    }
+                }
+            }
+
+            Text {
+                visible: ShadowController.qualityPreset > 0
+                text: qsTr("Directional cascades")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+            ThemedComboBox {
+                visible: ShadowController.qualityPreset > 0
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: ShadowController.cascadeCountChoices
+                currentIndex: Math.max(0, ShadowController.cascadeCount - 2)
+                onActivated: index => ShadowController.cascadeCount = index + 2
+            }
+
+            Text {
+                visible: ShadowController.qualityPreset > 0
+                text: qsTr("Spot shadow map")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+            ThemedComboBox {
+                visible: ShadowController.qualityPreset > 0
+                id: spotShadowResPicker
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: ShadowController.spotShadowResolutionChoices
+                onActivated: index => {
+                    const sizes = [512, 1024, 2048]
+                    ShadowController.spotShadowResolution = sizes[index]
+                }
+                Component.onCompleted: {
+                    const sizes = [512, 1024, 2048]
+                    currentIndex = Math.max(0, sizes.indexOf(ShadowController.spotShadowResolution))
+                }
+                Connections {
+                    target: ShadowController
+                    function onSettingsChanged() {
+                        const sizes = [512, 1024, 2048]
+                        spotShadowResPicker.currentIndex =
+                            Math.max(0, sizes.indexOf(ShadowController.spotShadowResolution))
+                    }
+                }
+            }
+
+            Row {
+                visible: ShadowController.qualityPreset > 0
+                spacing: 6
+                width: parent.width - 16
+                Text {
+                    text: qsTr("PSSM split λ")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 72
+                }
+                Slider {
+                    id: splitLambdaSlider
+                    width: parent.width - 96
+                    height: 22
+                    from: 0
+                    to: 1
+                    stepSize: 0.01
+                    value: ShadowController.splitLambda
+                    onMoved: ShadowController.splitLambda = value
+                    Connections {
+                        target: ShadowController
+                        function onSettingsChanged() {
+                            splitLambdaSlider.value = ShadowController.splitLambda
+                        }
+                    }
+                }
+                Text {
+                    width: 24
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    text: ShadowController.splitLambda.toFixed(2)
+                }
+            }
+
+            Text {
+                visible: PropertiesPanelController.hasMeshInSelection
+                text: qsTr("Selection")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Row {
+                visible: PropertiesPanelController.hasMeshInSelection
+                spacing: 8
+                width: parent.width - 16
+                Text {
+                    text: qsTr("Receive shadows")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorCheckBox {
+                    anchors.verticalCenter: parent.verticalCenter
+                    accessibleLabel: qsTr("Receive shadows")
+                    tristate: true
+                    checkState: PropertiesPanelController.mixedReceiveShadows
+                        ? Qt.PartiallyChecked
+                        : (PropertiesPanelController.receiveShadows ? Qt.Checked : Qt.Unchecked)
+                    onCheckStateChanged: {
+                        if (checkState === Qt.PartiallyChecked)
+                            return
+                        const enabled = (checkState === Qt.Checked)
+                        if (PropertiesPanelController.receiveShadows !== enabled)
+                            PropertiesPanelController.receiveShadows = enabled
+                    }
+                }
+            }
+
+            Text {
+                visible: LightPropertiesController.hasLightSelection
+                text: qsTr("Light")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Row {
+                visible: LightPropertiesController.hasLightSelection
+                spacing: 8
+                width: parent.width - 16
+                Text {
+                    text: qsTr("Cast shadows")
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorCheckBox {
+                    anchors.verticalCenter: parent.verticalCenter
+                    accessibleLabel: qsTr("Cast shadows")
+                    tristate: true
+                    checkState: LightPropertiesController.mixedCastShadows
+                        ? Qt.PartiallyChecked
+                        : (LightPropertiesController.castShadows ? Qt.Checked : Qt.Unchecked)
+                    onCheckStateChanged: {
+                        if (checkState === Qt.PartiallyChecked)
+                            return
+                        const enabled = (checkState === Qt.Checked)
+                        if (LightPropertiesController.castShadows !== enabled)
+                            LightPropertiesController.castShadows = enabled
+                    }
+                }
+            }
+
+            Text {
+                visible: LightPropertiesController.hasLightSelection
+                text: qsTr("Advanced shadow bias")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+            Column {
+                visible: LightPropertiesController.hasLightSelection
+                spacing: 4
+                width: parent.width - 16
+                TransformField {
+                    width: parent.width
+                    labelWidth: 52
+                    inputWidth: 96
+                    label: "Depth"
+                    value: LightPropertiesController.mixedShadowDepthBias
+                        ? 0 : LightPropertiesController.shadowDepthBias
+                    color: "#808080"
+                    step: 0.00001
+                    decimals: 5
+                    onNewValue: function(val) { LightPropertiesController.shadowDepthBias = val }
+                }
+                TransformField {
+                    width: parent.width
+                    labelWidth: 52
+                    inputWidth: 96
+                    label: "Slope"
+                    value: LightPropertiesController.mixedShadowSlopeBias
+                        ? 0 : LightPropertiesController.shadowSlopeBias
+                    color: "#808080"
+                    step: 0.1
+                    decimals: 2
+                    onNewValue: function(val) { LightPropertiesController.shadowSlopeBias = val }
                 }
             }
         }

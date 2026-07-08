@@ -13,6 +13,7 @@
 #include "ViewportSettingsKeys.h"
 #include "Manager.h"
 #include "SpaceCamera.h"
+#include "ShadowController.h"
 #include "mainwindow.h"
 
 // These tests exercise QWidget event handlers and Ogre frame callbacks directly.
@@ -79,6 +80,7 @@ protected:
         }
 
         Manager::kill();
+        ShadowController::kill();
         QThread::msleep(100);
     }
 

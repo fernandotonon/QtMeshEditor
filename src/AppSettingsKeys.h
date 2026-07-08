@@ -249,6 +249,31 @@ inline const QString& lightingGradientBottom()
     return k;
 }
 
+/** @brief Global shadow quality preset (Slice F #488): 0=Off, 1=Low, 2=Medium, 3=High. */
+inline const QString& shadowQualityPreset()
+{
+    static const QString k(QStringLiteral("Lighting/shadowQualityPreset"));
+    return k;
+}
+
+inline const QString& shadowCascadeCount()
+{
+    static const QString k(QStringLiteral("Lighting/shadowCascadeCount"));
+    return k;
+}
+
+inline const QString& shadowSplitLambda()
+{
+    static const QString k(QStringLiteral("Lighting/shadowSplitLambda"));
+    return k;
+}
+
+inline const QString& shadowSpotResolution()
+{
+    static const QString k(QStringLiteral("Lighting/shadowSpotResolution"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H

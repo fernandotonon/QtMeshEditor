@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "LightManager.h"
+#include "LightRigLibrary.h"
 #include "LightVisualizer.h"
 #include "GlobalDefinitions.h"
 #include "Manager.h"
@@ -162,4 +163,26 @@ TEST_F(LightVisualizerOgreTest, LightChangedRebuildsSpotCone)
     const float extentAfter = gizmoExtent(spot.sceneNode);
     EXPECT_GT(extentAfter, extentBefore);
     (void)visualizer;
+}
+
+TEST_F(LightVisualizerOgreTest, DestroyingRigGroupRemovesTrackedLightsAndOverlays)
+{
+    LightVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
+    (void)visualizer;
+
+    Ogre::SceneNode* rigGroup = nullptr;
+    for (const LightHandle& handle : LightManager::getSingleton()->lights())
+    {
+        ASSERT_TRUE(handle.sceneNode);
+        auto* parent = static_cast<Ogre::SceneNode*>(handle.sceneNode->getParent());
+        if (parent && LightRigLibrary::sceneNodeIsRigGroup(parent))
+        {
+            rigGroup = parent;
+            break;
+        }
+    }
+    ASSERT_NE(rigGroup, nullptr);
+
+    Manager::getSingleton()->destroySceneNode(rigGroup);
+    EXPECT_EQ(LightManager::getSingleton()->lights().size(), 0);
 }

@@ -123,6 +123,8 @@ QString lightPropertyClassLabel(LightPropertyClass propertyClass)
         return QStringLiteral("attenuation");
     case LightPropertyClass::SpotCone:
         return QStringLiteral("cone");
+    case LightPropertyClass::Shadow:
+        return QStringLiteral("shadow");
     }
     return QStringLiteral("property");
 }

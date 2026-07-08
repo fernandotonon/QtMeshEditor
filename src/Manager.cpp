@@ -31,6 +31,8 @@ THE SOFTWARE.
 #include <QStandardPaths>
 #include <QDir>
 
+#include <vector>
+
 #include "GlobalDefinitions.h"
 
 #include "PrimitiveObject.h"
@@ -636,7 +638,7 @@ void Manager::destroyAllUserRootNodes()
         destroySceneNode(name);
 }
 
-void Manager::destroySceneNode(Ogre::SceneNode* node)
+void Manager::destroySceneNode(Ogre::SceneNode* node, bool destroyChildrenFirst)
 {
     if(!node || !mSceneMgr || isForbiddenNodeName(node->getName().c_str()))
         return;
@@ -659,10 +661,43 @@ void Manager::destroySceneNode(Ogre::SceneNode* node)
     }
     //TODO if custom class has to be provided for object, userany object should be inside so that this delete is not required...
 
+    if (destroyChildrenFirst)
+    {
+        // Destroy children first so sceneNodeDestroyed fires per child (e.g. rig-group
+        // lights unregister from LightManager before their Ogre objects are torn down).
+        std::vector<Ogre::SceneNode*> childNodes;
+        try
+        {
+            for (auto* child : node->getChildren())
+                childNodes.push_back(static_cast<Ogre::SceneNode*>(child));
+        }
+        catch (...)
+        {
+        }
+        for (Ogre::SceneNode* child : childNodes)
+        {
+            if (auto* lights = LightManager::getSingletonPtr())
+            {
+                if (lights->deleteLightBySceneNode(child))
+                    continue;
+            }
+            destroySceneNode(child, true);
+        }
+    }
+    else
+    {
+        try
+        {
+            node->removeAndDestroyAllChildren();
+        }
+        catch (...)
+        {
+        }
+    }
+
     emit sceneNodeDestroyed(node);  // emitted before destruction so listeners can clean up while entities are still valid
     destroyAllAttachedMovableObjects(node);
-    node->removeAndDestroyAllChildren();
-    
+
     // Safely destroy the scene node
     try {
         mSceneMgr->destroySceneNode(node);

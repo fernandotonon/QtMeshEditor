@@ -119,6 +119,7 @@
 #include "LightsController.h"
 #include "LightRigLibrary.h"
 #include "SceneLightingController.h"
+#include "ShadowController.h"
 #include "LightPropertiesController.h"
 #include "AutoRigController.h"
 #include "MeshDepthRenderer.h"
@@ -555,10 +556,13 @@ MainWindow::~MainWindow()
         MaterialPresetLibrary::kill();
         MaterialPreviewRenderer::kill();
         AIChatManager::kill();
+        ShadowController::kill();
 
         // Only destroy Manager if it still exists and belongs to this MainWindow
         if (manager->getMainWindow() == this)
             Manager::kill();
+    } else {
+        ShadowController::kill();
     }
 }
 
@@ -747,6 +751,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "SceneLightingController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return SceneLightingController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<ShadowController>(
+            "PropertiesPanel", 1, 0, "ShadowController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return ShadowController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<AutoRigController>(
             "PropertiesPanel", 1, 0, "AutoRigController",

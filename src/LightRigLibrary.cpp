@@ -3,6 +3,7 @@
 #include "AppSettingsKeys.h"
 #include "Manager.h"
 #include "SentryReporter.h"
+#include "ShadowController.h"
 
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
@@ -47,7 +48,7 @@ RigLightSpec directional(const QString& name,
                          const Ogre::Vector3& direction,
                          const Ogre::ColourValue& diffuse,
                          float power,
-                         bool shadows = true)
+                         bool shadows = false)
 {
     RigLightSpec spec;
     spec.baseName = name;
@@ -186,6 +187,7 @@ LightSnapshot snapshotFromSpec(const RigLightSpec& spec, const QString& nodeName
     snapshot.spotlightInnerAngleDeg = spec.spotlightInnerAngleDeg;
     snapshot.spotlightOuterAngleDeg = spec.spotlightOuterAngleDeg;
     snapshot.spotlightFalloff = spec.spotlightFalloff;
+    snapshot.castShadows = spec.castShadows;
     snapshot.position = spec.position;
     snapshot.orientation = Ogre::Quaternion::IDENTITY;
     snapshot.scale = Ogre::Vector3::UNIT_SCALE;
@@ -427,11 +429,12 @@ LightRigApplyResult apply(const QString& rigId, bool replaceExisting)
 
         LightSnapshot snapshot = snapshotFromSpec(lightSpec, handle.name);
         lights->applyProperties(handle.name, snapshot);
-        if (handle.light)
-            handle.light->setCastShadows(lightSpec.castShadows);
 
         result.addedLights.append(LightSnapshot::fromHandle(handle));
     }
+
+    if (auto* shadows = ShadowController::instance())
+        shadows->syncFromScene();
 
     mgr->getSceneMgr()->setAmbientLight(spec->ambient);
     result.ambientAfter = spec->ambient;

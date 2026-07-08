@@ -43,6 +43,9 @@ struct LightSnapshot
     Ogre::Vector3 scale = Ogre::Vector3::UNIT_SCALE;
     bool usesDirection = false;
     Ogre::Vector3 direction = Ogre::Vector3::NEGATIVE_UNIT_Z;
+    bool castShadows = false;
+    float shadowDepthBias = 0.00005f;
+    float shadowSlopeBias = 1.0f;
 
     static LightSnapshot fromHandle(const LightHandle& handle);
     bool operator==(const LightSnapshot& other) const;
@@ -89,6 +92,9 @@ public:
     QList<LightSnapshot> captureAllSnapshots() const;
     void deleteAllUserLights();
     bool deleteLight(const QString& name);
+    /// Tear down a tracked user-light scene node (icons/gizmos first). Returns
+    /// true when the node was handled and must not be destroyed again by Manager.
+    bool deleteLightBySceneNode(Ogre::SceneNode* node);
     bool renameLight(const QString& oldName, const QString& newName);
     bool applyProperties(const QString& name, const LightSnapshot& snapshot);
 

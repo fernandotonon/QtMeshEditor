@@ -80,7 +80,7 @@ public:
     Ogre::Entity*       createEntity(Ogre::SceneNode* const& sceneNode, const Ogre::MeshPtr& mesh);
 
     void                destroySceneNode(const QString & name);
-    void                destroySceneNode(Ogre::SceneNode* node);
+    void                destroySceneNode(Ogre::SceneNode* node, bool destroyChildrenFirst = true);
     /// Destroys every user-owned root scene node (matches Scene outliner top level).
     void                destroyAllUserRootNodes();
     void                destroyAllAttachedMovableObjects(Ogre::SceneNode* node);

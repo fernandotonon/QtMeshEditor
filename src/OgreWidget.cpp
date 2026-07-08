@@ -47,6 +47,7 @@ THE SOFTWARE.
 #include "EditModeController.h"
 #include "TransformOperator.h"
 #include "HDR/HdrViewportController.h"
+#include "ShadowController.h"
 #include "SentryReporter.h"
 
 namespace {
@@ -133,6 +134,7 @@ OgreWidget::OgreWidget( QWidget *parent ):
 OgreWidget::~OgreWidget()
 {
     HdrViewportController::getSingleton()->unregisterWidget(this);
+    ShadowController::instance()->unregisterViewport(this);
 
     // Safely clean up OGRE resources
     // Order is important: remove listeners first, then destroy camera, then detach render target, then remove viewports
@@ -299,6 +301,7 @@ void OgreWidget::initOgreWindow(void)
         applyViewportCameraFromSettings(mCamera.get());
 
     HdrViewportController::getSingleton()->registerWidget(this);
+    ShadowController::instance()->registerViewport(this);
 }
 
 void OgreWidget::teardownOgreWindow()
@@ -358,6 +361,7 @@ void OgreWidget::rebuildRenderWindow()
     }
 
     HdrViewportController::getSingleton()->unregisterWidget(this);
+    ShadowController::instance()->unregisterViewport(this);
 
     teardownOgreWindow();
     initOgreWindow();
