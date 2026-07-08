@@ -69,8 +69,10 @@ void RipperHooks::endGpuCapturePass(Gp0CaptureStats &stats)
                >= stats.ramOtPrims + stats.ramLinearPrims + stats.ramChainRootPrims)
         stats.primarySource = Gp0CaptureSource::DirectHook;
     // #815: the in-core packet stream outranks every screen-space heuristic
-    // source — it is the true submission order with PGXP provenance.
-    if (stats.inCoreHookPrims > 0)
+    // source — it is the true submission order with PGXP provenance. Gate on
+    // the sticky stream flag, not this pass's count: once live dedupe has
+    // seen the scene, later passes legitimately add 0 new prims.
+    if (stats.inCoreStream && stats.totalPrims > 0)
         stats.primarySource = Gp0CaptureSource::InCoreHook;
     // #674: model-space meshes always beat any screen-space source for quality, so flip
     // the label here AFTER the DirectHook override above. Only actually emitted meshes

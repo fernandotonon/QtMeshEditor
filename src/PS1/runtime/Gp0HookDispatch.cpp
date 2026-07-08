@@ -506,8 +506,9 @@ Gp0CaptureStats Gp0HookDispatch::captureFrameFromSystemRam(const uint8_t *ram, s
     // #674 model-space RAM scanners: look for Sony SDK TMD (0x00000041) blobs in main RAM
     // and emit them as fully-formed model-space meshes via EmuHooks::onModelMesh. Unlike
     // the screen-space GP0 path below, these bypass MeshReconstructor::screenToModel
-    // entirely — they're the only reliable way to recover model-space geometry from
-    // closed-source retail games until #676 (forked mednafen with in-core GTE hook) lands.
+    // entirely — alongside the in-core capture chain (#813-#817, the forked-beetle
+    // GTE/GP0 hooks; the old #676 reference was stale) they recover model-space
+    // geometry from closed-source retail games.
     // Disable per-format with QTMESH_PS1_TMD_SCANNER=0; HMD is opt-in via QTMESH_PS1_HMD_SCANNER=1.
     const bool tmdScannerDisabled = qEnvironmentVariableIsSet("QTMESH_PS1_TMD_SCANNER")
                                     && qEnvironmentVariableIntValue("QTMESH_PS1_TMD_SCANNER") == 0;

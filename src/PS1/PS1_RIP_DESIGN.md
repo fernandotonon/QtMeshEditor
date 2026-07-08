@@ -81,6 +81,7 @@ See epic #412 for phased issues (#413–#431).
   |------|------|-----------------|--------------|-------|
   | `mednafen_psx_libretro` (software) | full 1024×512 (#660) | live FIFO bridge (`gp0_hook`) + merged RAM | TMD active, HMD opt-in | recommended |
   | `beetle_psx_libretro` (software) | full 1024×512 (#660) | live FIFO bridge (`gp0_hook`) + merged RAM | TMD active, HMD opt-in | recommended |
+  | `beetle_psx_qtmesh_libretro` (rip fork, software) | full 1024×512 (#660) | **in-core hooks (`gp0_incore`)** — true packet stream + GTE records (#813–#815); RAM passes suppressed | TMD active, HMD opt-in | **recommended for model extraction**; in-core hooks: active |
   | `beetle_psx_hw_*` | none | excluded — `gp0_hook` path unavailable | excluded (no RAM access) | rejected by `LibretroCoreOptions` |
   | `stub` (`qtmesh_ps1core_stub`) | synthetic test pattern | direct stub via `submitGp0Words` (`gp0_hook`) | not scanned (synthetic RAM is GP0-only) | CI / no-disc smoke |
 
@@ -175,8 +176,11 @@ classic flat-plate "blob".
   `MeshReconstructor::vertexFromPsx` to fall back to `psxScreenToWorld` (the flat-XY
   blob). The fallback is intentional: an ugly-but-visible mesh beats a degenerate
   zero-extent one. Real per-vertex depth recovery for GP0-only captures requires the
-  in-core GTE hook in #676 (or future RAM scanner work that recovers the SZ FIFO
-  contents alongside the matrix snapshot).
+  in-core GTE hook (#813–#815 in-core capture issue set — the design doc's original
+  `#676` reference is stale; that number was taken by a merged PR) or future RAM scanner
+  work that recovers the SZ FIFO contents alongside the matrix snapshot. With the
+  qtmesh beetle fork loaded, tracked vertices carry `viewW` and the inverse runs
+  well-posed (Tier 1, #816).
 - **When the inverse *does* run:** model-space test fixtures (`PsxPerDrawMatrixTest`,
   `MeshReconstructorCubePipelineTest`) inject vertices via `modelToScreen` so they carry
   the forward-projected `sz` — the math fix is verified on those paths. On retail GP0
@@ -186,9 +190,126 @@ classic flat-plate "blob".
 - **Out of scope:** matrix→primitive *association* (which RT was active when this prim
   was drawn) remains heuristic via per-draw matrix tagging (#658). The math fix in #675
   makes the inverse correct when association is correct *and* depth is available;
-  ground-truth depth + association on retail games still needs the forked-mednafen
-  in-core GTE hook tracked in
-  [#676](https://github.com/fernandotonon/QtMeshEditor/issues/676).
+  ground-truth depth + association on retail games is delivered by the in-core capture
+  chain ([#813](https://github.com/fernandotonon/QtMeshEditor/issues/813)–[#817](https://github.com/fernandotonon/QtMeshEditor/issues/817)
+  — the old `#676` link is stale, that number belongs to a merged PR).
+
+## In-core rip capture (#813–#817) — the primary path
+
+Every capture path above is host-side RAM scanning after `retro_run()` and has a hard
+information ceiling: GP0 packets carry no depth (the SZ FIFO is drained before the packet
+is assembled), and matrix→draw association from RAM scans is heuristic-grade. The fix —
+proven at scale by PGXP (iCatButler 2016) — is to capture **inside the emulator core**, at
+the GTE, where the game hands over its original object-space vertices and per-draw matrix,
+and to value-track those through CPU/memory to the GP0 packet.
+
+### The fork
+
+`fernandotonon/beetle-psx-libretro`, branch `qtmesh-rip`. All rip changes live behind
+`HAVE_QTMESH_RIP` (new files under `rip/`); the artifact is renamed
+`beetle_psx_qtmesh_libretro.{so,dylib,dll}` and the core self-identifies as
+`Beetle PSX (QtMesh rip)`. Build it into `PS1Cores/` with
+`scripts/build-ps1-rip-core.sh` (pinned to a recorded fork commit) or configure with
+`-DENABLE_PS1_RIP_CORE_BUILD=ON`. With a stock core everything below is inert and the
+RAM-scan paths run unchanged.
+
+### The rip ABI (v1)
+
+`rip/qtmesh_rip_abi.h` in the fork; byte-identical vendored copy at
+`src/PS1/runtime/libretro/qtmesh_rip_abi.h`. Pure C, version-checked at registration:
+
+| Export | Purpose |
+|--------|---------|
+| `qtmesh_rip_abi_version()` | compile-time ABI version; host refuses to register on mismatch |
+| `qtmesh_rip_set_interface(iface)` | registers host callbacks (`NULL` unregisters — must happen before core unload) |
+| `qtmesh_rip_set_armed(armed)` | arms/disarms capture; disarmed hot paths are one predictable branch |
+
+| Callback | Fires | Payload |
+|----------|-------|---------|
+| `on_gp0_draw` | per executed GP0 command, in submission order | complete packet words (quads re-assembled from the two-fragment command-buffer flow) + one `qtmesh_rip_vertex_shadow` per vertex word: PGXP precise `sx,sy`, view depth `w`, validity flags, GTE record ring index |
+| `on_gte_records` | once per frame, before `on_frame_end` | every `qtmesh_rip_gte_record` captured this frame: raw object-space V register (`vx,vy,vz`, s16), rotation matrix (`rt[9]`, 4.12), `tr[3]`, `ofx/ofy/h`, precise outputs, `frame`, `seq` |
+| `on_frame_end` | once per armed `retro_run` | frame counter |
+
+The GTE record ring holds `QTMESH_RIP_GTE_RING_ENTRIES` (65536) records — vertex shadows
+reference ring slots, so a draw's tags always resolve against the frame's flush (the host
+buffers draws until the flush arrives). All callbacks fire synchronously inside
+`retro_run()` on the worker thread — the same thread that already drives `RipperHooks`.
+
+### Fork-side mechanics (#814/#815)
+
+- **GTE hook:** the RTPS/RTPT perspective transform (`mednafen/psx/gte.c`, the PGXP
+  precise-push site) records the full transform context into the ring and tags the SXY2
+  PGXP shadow with `ring index + 1` (`rip_tag`, a new `PGXP_value` field; 0 = untagged).
+- **Tag propagation:** tags ride PGXP's own value tracking (MFC2/SWC2/CPU moves/memory
+  shadow). Any operation that *recomputes or splices* shadow components drops the tag
+  (arithmetic and shifts in `pgxp_cpu.c`, halfword paths in `pgxp_mem.c`,
+  `SetValue`/`MakeValid`); pure moves (`addiu rt,rs,0`, `or rd,rs,zero`, loads/stores of
+  whole words) keep it. A dropped tag is not fatal — the precise x/y/w still reach the
+  GPU and the vertex degrades to depth-only reconstruction.
+- **GP0 hook:** one site in `ProcessFIFO` (`mednafen/psx/gpu.c`) covers CPU-direct writes
+  AND DMA (both drain through `GPU_WriteCB`). Quad second-fragments are re-assembled in
+  the rip layer so the host receives complete wire packets. Covered: polygons 0x20–0x3F,
+  sprites 0x60–0x7F, draw-env 0xE1–0xE6 (in-stream, so per-draw TPAGE association is
+  exact), lines 0x40–0x5F (delivered; host ignores).
+- **PGXP mode forcing:** while armed, PGXP runs with
+  `MEMORY|CPU|GTE|TEXTURE_CORRECTION` regardless of the user-facing core option (CPU
+  mode costs perf — armed only); the user's configured modes are restored on disarm.
+  Disarmed sessions run at stock speed.
+
+### Host-side ingest
+
+- `LibretroHost` resolves the three `qtmesh_rip_*` symbols best-effort;
+  `LibretroEmuCore` registers trampolines after `retro_init`, mirrors the worker's armed
+  flag into the core each frame, and unregisters before unload. `EmuCore::inCoreHooksActive()`
+  surfaces the state (session status bar: `in-core hooks: active / unavailable (stock core)`;
+  Sentry `ps1.rip.core.incore_hooks`).
+- `RipperHooks::onGpuDrawTracked` buffers draws; `onGteRecords` appends to
+  `CaptureBuffer::gteRecords` (session cap 256k with drop counter) and feeds each unique
+  `(rt, tr, ofx/ofy/h)` through the existing matrix dedupe; `onCoreFrameEnd` parses each
+  buffered packet with the **existing** `GpuCommandParser::stepGp0`, overlays the vertex
+  shadows, resolves ring indices against the delivered records (with an sx/sy backstop —
+  a tag whose record no longer matches the shadow's precise coords degrades to
+  DepthOnly), and ingests via the normal `addPrim` path with per-vertex
+  `PsxVertexProvenance` (`GteTracked` / `DepthOnly` / `None`) and `PrimRecord::frame`.
+- **Suppression:** while the in-core stream is active, every heuristic screen-space pass
+  is skipped for the session — `PsxGteInstructionCapture`, `PsxGteRamScanner`, the FIFO
+  bridge, and the OT/chain/linear RAM scans. Model-space TMD/HMD scanners stay on
+  (complementary exact source). Attribution: `Gp0CaptureSource::InCoreHook`
+  (`gp0_incore`) outranks `DirectHook`.
+- **Caps:** the in-core path accepts 16384 draws/frame (RAM paths keep 2048); overflow
+  warns via `ps1.rip.capture.overflow` instead of silently truncating.
+
+### Env vars
+
+| Var | Effect |
+|-----|--------|
+| `QTMESH_PS1_RIP_INCORE=0` | skip rip-interface registration even when the fork is loaded — A/B against the RAM-scan heuristics |
+| `QTMESH_RIP_CORE_REPO` / `QTMESH_RIP_CORE_COMMIT` | override fork source/pin for `scripts/build-ps1-rip-core.sh` (testing only) |
+
+### Reconstruction tiers (#816)
+
+`MeshReconstructor::vertexFromPsx` picks per vertex:
+
+- **Tier 0 — GteTracked:** the record's raw `(vx,vy,vz)` → `modelToEditor`. No inversion
+  at all; exact model-space geometry. Prims group by their record's real `(rt, tr)`
+  matrix (majority vote across vertices; `mixedMatrixPrims` counts disagreements), and
+  instances store the full matrix (`ReconstructedInstance::rot/trWorld/hasMatrix`) so
+  scene assembly can apply real rotations.
+- **Tier 1 — DepthOnly:** PGXP-precise screen `(preciseX, preciseY)` + `viewW` make the
+  inverse well-posed — this is exactly the `sz` the #675 math was built for.
+- **Tier 2 — None:** the pre-fork world, byte-identical behavior (screen-space fallback).
+
+The fixed `kMaxVertexRadius` gate applies to Tier 2 only; tracked tiers use a
+percentile-based outlier policy (`outlierDroppedVertices`). Status bar shows
+`tracked N% · depth M%`; the `slabLike` warning remains the regression canary — any
+tracked capture that still reports slabLike is a bug.
+
+### Testing without ROMs
+
+`tests/fake_rip_core/` builds a fake libretro core exporting the rip ABI; UnitTests load
+it through the real plugin + trampolines and stream a scripted tracked cube
+(`InCoreRipCapture_test.cpp`): handshake, ABI-mismatch refusal, `QTMESH_PS1_RIP_INCORE=0`,
+armed mirroring, record→draw correlation, provenance tiers, RAM-pass suppression.
 
 ## Model-space RAM scanners (#674)
 
@@ -257,13 +378,14 @@ yields clean meshes with no inverse step.
   | TIM | `0x00000010` | textures — bound via the VRAM mirror, not model-space | — (texture path) |
   | RSD / PLY / MAT / GRP | text | disc/artist formats — compiled to TMD before being loaded; not present in RAM during gameplay | — (offline) |
 
-- **Out of scope (#675, #676, #677):**
-  - `#675` — heuristic + math fix for the screen-space inverse path (tighten matrix scanner,
+- **Related paths:**
+  - `#675` — heuristic + math fix for the screen-space inverse path (landed; tighten matrix scanner,
     real-rotation inverse roundtrip tests, surface `prims_with_matrix=X/N`).
-  - `#676` — forked `mednafen_psx_libretro` with an in-core RTPS/RTPT callback for
-    ground-truth model-space recovery on any game including custom engines (Crash, Spyro,
-    FFVII field models, MGS).
-  - `#677` — disc/ISO scanner for RSD/PLY/MAT/GRP/TIX off-line ripping (separate CLI/MCP).
+  - `#813`–`#817` — the forked-beetle **in-core capture** issue set (GTE RTPS/RTPT records +
+    PGXP-tagged GP0 correlation + tiered reconstruction) for ground-truth model-space
+    recovery on any game including custom engines (Crash, Spyro, FFVII field models, MGS).
+    (The doc's original `#676`/`#677` links are stale — those numbers were taken by merged PRs;
+    disc/ISO RSD/PLY/MAT/GRP/TIX off-line ripping remains a separate future CLI/MCP follow-up.)
 
 - **Disable:** `QTMESH_PS1_TMD_SCANNER=0` skips the TMD pass entirely (debug / golden
   baselines). HMD scanner is opt-in (`QTMESH_PS1_HMD_SCANNER=1`).
@@ -634,6 +756,13 @@ The **stub** core is active (`coreId=stub`). It draws a test pattern and synthet
 
 ### Capture mesh is a triangle “blob” (normal size, wrong shape)
 
+**First question: does the status bar say `in-core hooks: active`?** If not, you are on
+a stock core and every capture is screen-space heuristics — install the rip fork
+(`scripts/build-ps1-rip-core.sh <build>/bin/PS1Cores`) and re-capture. With the fork
+armed, the mesh stats line shows `tracked N% · depth M%`; `tracked 0%` there means the
+in-core stream isn't flowing (check `QTMESH_PS1_RIP_INCORE`, and that capture was armed
+while the scene rendered).
+
 The screen-space GP0 path (live FIFO bridge + ordering-table chains + standalone chain
 roots + linear scan) used to **always** produce a flat-XY blob because both the GTE
 forward and inverse transforms in `GteInverse` were diagonal-only and silently rejected
@@ -687,18 +816,18 @@ status bar:
   GP0 capture path writes it) and that `screenToModel` returns false for `sz == 0` in
   `GteInverseTest.ScreenToModelRefusesZeroDepth`.
 
-The recommended path for "real meshes from real games" remains the **model-space
-TMD/HMD RAM scanner** (#674) for Sony SDK titles. #675's screen-space math fix
-**unblocks** the screen-space path when matrix association is correct, but the
-matrix-to-draw linkage on retail games is still heuristic — true ground-truth recovery
-requires the forked-mednafen in-core GTE hook tracked in
-[#676](https://github.com/fernandotonon/QtMeshEditor/issues/676).
+The recommended path for "real meshes from real games" is now the **in-core capture
+chain** (#813–#817) with the qtmesh beetle fork — check that the session status bar says
+`in-core hooks: active` first. The **model-space TMD/HMD RAM scanner** (#674) remains a
+complementary exact source for Sony SDK titles and the fallback for stock cores, where
+matrix-to-draw linkage stays heuristic.
 
 - **TMD-using games (clean meshes today via #674):** Tekken 1/2/3, Ridge Racer 1/RR,
   Net Yaroze SDK demos, Wipeout 1/2097, R-Type Delta, Klonoa, many pre-FF7 Square titles.
-- **Custom-engine games (still partial recovery):** Crash, Spyro, FFVII field models,
-  MGS post-Yaroze. These games author their own packed mesh layouts and bespoke transform
-  stacks; only #676 covers them.
+- **Custom-engine games:** Crash, Spyro, FFVII field models, MGS post-Yaroze. These
+  games author their own packed mesh layouts and bespoke transform stacks; only the
+  in-core capture chain (#813–#817, qtmesh beetle fork) covers them — the GTE hook sees
+  their vertices regardless of engine layout.
 - Tune via `QTMESH_PS1_TMD_SCANNER=0` to disable TMD scanning for a baseline, and
   `QTMESH_PS1_HMD_SCANNER=1` to opt into the v1 HMD candidate counter.
 
