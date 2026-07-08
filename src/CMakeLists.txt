@@ -41,6 +41,7 @@ LightsController.cpp
 LightPropertiesController.cpp
 SceneLightingController.cpp
 ShadowController.cpp
+SceneLightsIO.cpp
 SelectionBoxObject.cpp
 ObjectItemModel.cpp
 MaterialComboDelegate.cpp
@@ -245,6 +246,7 @@ LightsController.h
 LightPropertiesController.h
 SceneLightingController.h
 ShadowController.h
+SceneLightsIO.h
 SelectionBoxObject.h
 ObjectItemModel.h
 MaterialComboDelegate.h

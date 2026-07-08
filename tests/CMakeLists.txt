@@ -53,6 +53,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightPropertiesController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightingController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ShadowController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightsIO.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionBoxObject.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ObjectItemModel.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.cpp
@@ -306,6 +307,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightPropertiesController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightingController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ShadowController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightsIO.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionBoxObject.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ObjectItemModel.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.h

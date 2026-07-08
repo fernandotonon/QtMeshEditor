@@ -3,6 +3,7 @@
 #include "GamificationManager.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "SceneLightsIO.h"
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
 #include "MotionLibrary.h"
@@ -1617,6 +1618,12 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
 
     SentryReporter::addBreadcrumb("cli.info", QString("Inspect .%1%2").arg(fi.suffix(), jsonOutput ? " json=true" : ""));
 
+    QString lightError;
+    const QJsonObject lightsPayload =
+        SceneLightsIO::lightsInfoJsonFromFile(fi.absoluteFilePath(), &lightError);
+    const int lightsInFile = lightsPayload.value(QStringLiteral("lightCount")).toInt();
+    const bool hasLightsInFile = lightsInFile > 0;
+
     // Load the file; animation-only files produce no entity but populate animOnlySkeletons.
     QList<Ogre::SkeletonPtr> animOnlySkeletons;
     int upAxis = 1;
@@ -1660,6 +1667,12 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
     }
 
     if (entities.isEmpty()) {
+        if (jsonOutput && hasLightsInFile) {
+            cliWrite(QString::fromUtf8(
+                QJsonDocument(lightsPayload).toJson(QJsonDocument::Indented)));
+            maybePrintCloudPromo(jsonOutput);
+            return 0;
+        }
         SentryReporter::captureMessage(QString("CLI info: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << filePath << Qt::endl;
         return 1;
@@ -1675,10 +1688,24 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
             arr.append(doc.object());
         }
         // Single entity: emit object directly; multiple: emit array
-        if (arr.size() == 1)
-            cliWrite(QString::fromUtf8(QJsonDocument(arr[0].toObject()).toJson(QJsonDocument::Indented)));
-        else
-            cliWrite(QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Indented)));
+        if (arr.size() == 1) {
+            QJsonObject root = arr[0].toObject();
+            if (hasLightsInFile) {
+                root.insert(QStringLiteral("lights"), lightsPayload.value(QStringLiteral("lights")));
+                root.insert(QStringLiteral("ambient"), lightsPayload.value(QStringLiteral("ambient")));
+                root.insert(QStringLiteral("lightCount"), lightsInFile);
+            }
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        } else {
+            QJsonObject root;
+            root.insert(QStringLiteral("meshes"), arr);
+            if (hasLightsInFile) {
+                root.insert(QStringLiteral("lights"), lightsPayload.value(QStringLiteral("lights")));
+                root.insert(QStringLiteral("ambient"), lightsPayload.value(QStringLiteral("ambient")));
+                root.insert(QStringLiteral("lightCount"), lightsInFile);
+            }
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        }
     } else {
         for (Ogre::Entity* entity : entities) {
             MeshInfo info = extractMeshInfo(entity, fi.fileName());

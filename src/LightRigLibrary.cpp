@@ -2,6 +2,7 @@
 
 #include "AppSettingsKeys.h"
 #include "Manager.h"
+#include "SceneLightsIO.h"
 #include "SentryReporter.h"
 #include "ShadowController.h"
 
@@ -359,7 +360,11 @@ Ogre::SceneNode* createRigGroupForRig(const QString& rigId)
 
     Ogre::SceneNode* rigGroup = lights->createRigGroupNode(spec->groupName);
     if (rigGroup)
+    {
         tagRigGroup(rigGroup);
+        rigGroup->getUserObjectBindings().setUserAny(
+            SceneLightsIO::kRigIdUserKey, Ogre::Any(rigId.toStdString()));
+    }
     return rigGroup;
 }
 
@@ -412,6 +417,8 @@ LightRigApplyResult apply(const QString& rigId, bool replaceExisting)
     }
     tagRigGroup(rigGroup);
     result.rigGroupNodeName = QString::fromStdString(rigGroup->getName());
+    rigGroup->getUserObjectBindings().setUserAny(
+        SceneLightsIO::kRigIdUserKey, Ogre::Any(rigId.toStdString()));
 
     for (const RigLightSpec& lightSpec : spec->lights)
     {

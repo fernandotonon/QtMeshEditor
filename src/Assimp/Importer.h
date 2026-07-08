@@ -42,6 +42,8 @@ public:
     // Non-null only when loadModel() processed an animation-only file (no mesh geometry).
     Ogre::SkeletonPtr getLoadedSkeleton() const { return skeleton; }
 
+    const aiScene* getImportedScene() const { return importer.GetScene(); }
+
     // Returns the UpAxis from FBX metadata of the last loaded scene.
     // 1 = Y-up (Mixamo, default), 2 = Z-up (Unreal Engine).
     // Always returns 1 for non-FBX formats or when metadata is absent.

@@ -61,7 +61,9 @@ THE SOFTWARE.
 #include "OgreXML/pugixml.hpp"
 
 #include "AnimationMerger.h"
+#include "LightManager.h"
 #include "Manager.h"
+#include "SceneLightsIO.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "ExportOptimizer.h"
@@ -2675,6 +2677,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 bool convertLH = (file.suffix().compare("x", Qt::CaseInsensitive) != 0);
                 const std::string sourcePath = file.filePath().toStdString();
                 Ogre::MeshPtr mesh = importer.loadModel(sourcePath, convertLH, additionalFlags);
+                if (!SceneLightsIO::importLightsSidecar(file.filePath(), false)) {
+                    if (const aiScene* importScene = importer.getImportedScene())
+                        SceneLightsIO::importFromAssimpScene(importScene, false);
+                }
                 // Read coordinate system from metadata immediately — valid for both mesh and animation-only files.
                 if (outUpAxis) *outUpAxis = importer.getSceneUpAxis();
                 if (mesh) {
@@ -2959,6 +2965,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // .material and extracted image files next to the FBX.
         if (!ok)
             return -1;
+        SceneLightsIO::writeLightsSidecar(_uri);
     } else if (_format == QStringLiteral("PlayStation TMD (*.tmd)")) {
         if (!PS1TMD::exportEntity(e, _uri))
             return -1;
@@ -3739,6 +3746,7 @@ static aiScene* buildSceneAiScene()
         scene->mNumMaterials = 1;
         scene->mMaterials = new aiMaterial*[1];
         scene->mMaterials[0] = new aiMaterial();
+        SceneLightsIO::appendLightsToAiScene(scene, SceneLightsIO::captureFromScene());
         return scene;
     }
 
@@ -3763,6 +3771,7 @@ static aiScene* buildSceneAiScene()
         scene->mNumMaterials = 1;
         scene->mMaterials = new aiMaterial*[1];
         scene->mMaterials[0] = new aiMaterial();
+        SceneLightsIO::appendLightsToAiScene(scene, SceneLightsIO::captureFromScene());
         return scene;
     }
 
@@ -3926,6 +3935,8 @@ static aiScene* buildSceneAiScene()
             scene->mAnimations[i] = allAnimations[i];
     }
 
+    SceneLightsIO::appendLightsToAiScene(scene, SceneLightsIO::captureFromScene());
+
     return scene;
 }
 
@@ -4050,6 +4061,8 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
     SelectionSet::getSingleton()->clearList();
     auto* manager = Manager::getSingleton();
     emit manager->sceneClearing();  // let listeners clean up before nodes are destroyed
+    if (auto* lights = LightManager::getSingletonPtr())
+        lights->deleteAllUserLights();
     auto sceneNodesCopy = manager->getSceneNodes();
     for (auto* sn : sceneNodesCopy)
         manager->destroySceneNode(sn);
@@ -4405,6 +4418,8 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
 
             manager->createEntity(sn, ogreMesh);
         }
+
+        SceneLightsIO::importFromAssimpScene(scene, true);
 
         return true;
     } catch (Ogre::Exception& e) {
