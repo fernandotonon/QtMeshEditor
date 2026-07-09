@@ -787,6 +787,13 @@ if(BUILD_TESTS)
     if(QTMESH_DEFINE_DEBUG)
         target_compile_definitions(UnitTests PRIVATE DEBUG)
     endif()
+    # Opt-in local integration tests that boot a real libretro core against a
+    # user-supplied BIOS+ISO (env-gated at runtime too). Off in CI.
+    option(ENABLE_PS1_LIBRETRO_INTEGRATION_TESTS
+        "Compile PS1 libretro integration tests (need local BIOS/ISO)" OFF)
+    if(ENABLE_PS1_LIBRETRO_INTEGRATION_TESTS)
+        target_compile_definitions(UnitTests PRIVATE QTMESH_PS1_LIBRETRO_INTEGRATION_TESTS)
+    endif()
 
     # Link against Google Test libraries (no gtest_main - we provide our own main)
     target_link_libraries(UnitTests

@@ -61,6 +61,12 @@ git -C "$WORK_DIR" checkout --detach "$PINNED_COMMIT"
 JOBS="$( (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
 echo "build-ps1-rip-core: building $ARTIFACT (platform=$PLATFORM, $JOBS jobs, commit $PINNED_COMMIT)"
+# ALWAYS clean first: beetle's Makefile does not track HAVE_QTMESH_RIP in its
+# per-object flags, so an incremental build over objects compiled without the
+# flag silently leaves the GTE/GP0 capture hooks #ifdef'd out — the core then
+# handshakes and reports "in-core hooks: active" but records zero geometry.
+# A clean build is the only reliable guarantee every TU sees the flag.
+make -C "$WORK_DIR" clean >/dev/null 2>&1 || true
 make -C "$WORK_DIR" -j"$JOBS" HAVE_QTMESH_RIP=1 platform="$PLATFORM"
 
 mkdir -p "$OUT_DIR"

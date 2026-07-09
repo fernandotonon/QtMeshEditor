@@ -763,6 +763,34 @@ armed, the mesh stats line shows `tracked N% · depth M%`; `tracked 0%` there me
 in-core stream isn't flowing (check `QTMESH_PS1_RIP_INCORE`, and that capture was armed
 while the scene rendered).
 
+**`in-core hooks: active` but `tracked 0%` AND `gte records: 0`?** The fork handshook
+but its GTE/GP0 hooks are compiled out. beetle's Makefile does not track
+`HAVE_QTMESH_RIP` per object, so an **incremental** build over objects compiled without
+the flag silently `#ifdef`s the capture code away while the ABI exports still link — the
+core reports active and records nothing. Fix: clean-build the fork
+(`make clean && make HAVE_QTMESH_RIP=1 …`, which `scripts/build-ps1-rip-core.sh` now
+always does). Confirm with `nm pgxp/pgxp_gte.o | grep SetRipTag` — the symbol must be
+present.
+
+**`in-core hooks: active`, hooks compiled in, but still zero GTE records?** Then the CPU
+executed no `RTPS`/`RTPT` — the game isn't rendering GTE geometry in the frames you
+captured. Two common causes: (1) you captured during an **FMV / 2D title / BIOS shell**
+(MDEC + sprites use no GTE) — play into an actual 3D scene before **Capture Frame**;
+(2) the disc didn't boot. A cooked **MODE1/2048 `.iso`** mounts and shows a picture but
+some rips stall the BIOS shell; `QTMESH_PS1_SKIP_BIOS=0` boots through the real BIOS
+(watch for a live, changing framebuffer vs a frozen one), and `.cue`/`.chd` images boot
+more reliably than bare `.iso`. The `qtmesh` GTE hook lives in the **interpreter**
+(`mednafen/psx/gte.c`); if a future build enables the lightrec dynarec by default the
+hook is bypassed — keep `cpu_dynarec` unset/`run_interpreter` while ripping.
+
+For a headless boot-and-capture with tier numbers, build UnitTests with
+`-DENABLE_PS1_LIBRETRO_INTEGRATION_TESTS=ON` and run
+`QTMESH_PS1_TEST_BIOS=… QTMESH_PS1_TEST_ISO=… ./UnitTests --gtest_filter='InCoreRipLiveTest.*'`
+(env: `QTMESH_PS1_RIP_BOOT_FRAMES`, `QTMESH_PS1_RIP_CAPTURE_FRAMES`, `QTMESH_PS1_SKIP_BIOS`).
+Reaching a specific in-game 3D scene is far easier in the GUI where you can see the
+screen and drive the pad — the headless harness is best for scenes that render 3D
+immediately on boot.
+
 The screen-space GP0 path (live FIFO bridge + ordering-table chains + standalone chain
 roots + linear scan) used to **always** produce a flat-XY blob because both the GTE
 forward and inverse transforms in `GteInverse` were diagonal-only and silently rejected

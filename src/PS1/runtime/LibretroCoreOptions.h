@@ -50,7 +50,7 @@ inline const char *valueForKey(const char *key, const QByteArray &rendererPrefer
         return nullptr;
 
     if (strcmp(key, "beetle_psx_skip_bios") == 0)
-        return "enabled";
+        return qgetenv("QTMESH_PS1_SKIP_BIOS") == "0" ? "disabled" : "enabled";
     if (strcmp(key, "beetle_psx_override_bios") == 0)
         return "disabled";
 
