@@ -15,6 +15,8 @@
 
 #include <OgreAxisAlignedBox.h>
 #include <OgreEntity.h>
+#include <OgreMatrix3.h>
+#include <OgreQuaternion.h>
 #include <OgreVector3.h>
 #include <OgreImage.h>
 #include <OgreResourceGroupManager.h>
@@ -693,6 +695,19 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
                 normalize, placementScale, inst.px, inst.py, inst.pz, scaleOut, posOut);
             node->setScale(scaleOut[0], scaleOut[1], scaleOut[2]);
             node->setPosition(posOut[0], posOut[1], posOut[2]);
+            // #816: tracked groups reconstruct in object/model space, so the
+            // group's GTE rotation must be re-applied per instance or every
+            // placed copy renders in its rest orientation. Position keeps the
+            // v1 centroid placement above; `trWorld` stays stored on the
+            // instance for a future full-matrix placement pass.
+            if (inst.hasMatrix) {
+                float editorRot[9];
+                editorRotationFromGte(inst.rot, editorRot);
+                const Ogre::Matrix3 m3(editorRot[0], editorRot[1], editorRot[2],
+                                       editorRot[3], editorRot[4], editorRot[5],
+                                       editorRot[6], editorRot[7], editorRot[8]);
+                node->setOrientation(Ogre::Quaternion(m3));
+            }
 
             Ogre::Entity *entity = mgr->createEntity(node, ogreMesh);
             if (!entity) {
@@ -727,4 +742,16 @@ bool PS1RipMeshBuilder::attachCaptureSetToScene(const ReconstructedCaptureSet &c
             .arg(totalTris)
             .arg(captureSet.instances.size()));
     return true;
+}
+
+void PS1RipMeshBuilder::editorRotationFromGte(const float rot[9], float out[9])
+{
+    // Editor space negates Y and Z relative to the GTE camera basis (see
+    // GteInverse::modelToEditor). Conjugating by S = diag(1,-1,-1) maps a
+    // rotation acting on GTE vectors to one acting on editor vectors:
+    // out = S·R·S, i.e. out[r][c] = s(r)·s(c)·R[r][c] (#816).
+    static constexpr float kSign[3] = {1.0f, -1.0f, -1.0f};
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            out[r * 3 + c] = kSign[r] * kSign[c] * rot[r * 3 + c];
 }

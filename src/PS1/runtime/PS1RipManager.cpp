@@ -216,6 +216,14 @@ void PS1RipManager::initializeWorkerThread()
                         .arg(reconStats.primsTotal)
                         .arg(reconStats.slabLike ? QStringLiteral("yes") : QStringLiteral("no"))
                         .arg(snapshot.modelMeshes.size());
+                // #816 tiered-reconstruction telemetry: tracked/depth vertex share
+                // plus the outlier + mixed-matrix counters.
+                matrixStats +=
+                    QStringLiteral(" tracked=%1%% depth_only=%2%% outliers=%3 mixed_matrix=%4")
+                        .arg(reconStats.gteTrackedPercent())
+                        .arg(reconStats.depthOnlyPercent())
+                        .arg(reconStats.outlierDroppedVertices)
+                        .arg(reconStats.mixedMatrixPrims);
                 if (!goldenId.isEmpty())
                     matrixStats += QStringLiteral(" golden_id=%1").arg(goldenId);
                 SentryReporter::addBreadcrumb(QStringLiteral("ps1.rip.matrix.stats"), matrixStats);
@@ -238,6 +246,7 @@ void PS1RipManager::initializeWorkerThread()
                                captureSet.instanceCount(), built.vertexCount, built.triangleCount,
                                snapshot.matrices.size(), snapshot.cameraMatrixId,
                                snapshot.hasCameraMatrix(), reconStats.gteInversePercent(),
+                               reconStats.gteTrackedPercent(), reconStats.depthOnlyPercent(),
                                reconStats.slabLike, reconStats.primsWithMatrixId,
                                reconStats.primsTotal, vramMirrorMode, captureStats);
             });

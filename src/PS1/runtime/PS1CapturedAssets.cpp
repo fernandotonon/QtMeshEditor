@@ -4,6 +4,8 @@
 
 #include <QHash>
 
+#include <algorithm>
+
 PS1CapturedAssets *PS1CapturedAssets::s_instance = nullptr;
 
 PS1CapturedAssets::PS1CapturedAssets(QObject *parent)
@@ -108,6 +110,33 @@ QString textureIdentityForPrim(const PrimRecord &prim)
                                                   prim.drawModeBits);
 }
 
+/** Dominant reconstruction tier for a prim's vertices (#816): mirrors the
+ *  reconstructor's per-vertex tiering (tracked needs a resolvable record;
+ *  depth needs a valid PGXP viewW). Majority vote, ties toward the higher
+ *  tier so a half-tracked skinned prim still reads "tracked". */
+CapturedAssetProvenance provenanceForPrim(const PrimRecord &prim, int gteRecordCount)
+{
+    int counts[3] = {0, 0, 0}; // Screen / Depth / Tracked
+    const int vertCount = std::min<int>(prim.vertexCount, 4);
+    for (int i = 0; i < vertCount; ++i) {
+        const PsxVertex &v = prim.verts[i];
+        if (v.provenance == static_cast<uint8_t>(PsxVertexProvenance::GteTracked)
+            && v.gteRecordIndex < static_cast<uint32_t>(gteRecordCount))
+            ++counts[2];
+        else if (v.provenance != static_cast<uint8_t>(PsxVertexProvenance::None)
+                 && v.viewW != 0.0f)
+            ++counts[1];
+        else
+            ++counts[0];
+    }
+    int best = 0;
+    for (int tier = 1; tier < 3; ++tier) {
+        if (counts[tier] >= counts[best])
+            best = tier;
+    }
+    return static_cast<CapturedAssetProvenance>(best);
+}
+
 } // namespace
 
 CapturedAssetSet PS1CapturedAssets::buildFromCapture(const QString &captureId,
@@ -164,6 +193,7 @@ CapturedAssetSet PS1CapturedAssets::buildFromCapture(const QString &captureId,
         row.triangleCount = trianglesForKind(prim.kind);
         row.textured = isTexturedKind(prim.kind);
         row.colored = isColoredKind(prim.kind);
+        row.provenance = provenanceForPrim(prim, snapshot.gteRecords.size());
         // `frameIndex` is not part of `PrimRecord` today — left at 0 so the
         // column renders consistently. When scene-capture frame tagging
         // lands (#683 follow-up), this is where to thread it through.

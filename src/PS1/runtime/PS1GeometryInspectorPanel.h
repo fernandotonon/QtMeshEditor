@@ -40,6 +40,7 @@ public:
         ColMatrix,
         ColMaterial,
         ColTriangles,
+        ColProvenance,
         ColCount
     };
 
@@ -58,6 +59,8 @@ public:
     CapturedAssetRow rowAt(int row) const;
 
     static QString primKindLabel(PrimKind kind);
+    /** "tracked" / "depth" / "screen" — the #816 reconstruction-tier chip. */
+    static QString provenanceLabel(CapturedAssetProvenance provenance);
 
 private slots:
     void onCaptureSetChanged();

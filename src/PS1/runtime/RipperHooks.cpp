@@ -321,8 +321,18 @@ void RipperHooks::resolveTrackedDraws(uint32_t frame)
     const QVector<GteRecordEntry> &records = m_buffer->gteRecords();
 
     for (const PendingTrackedDraw &draw : m_pendingTrackedDraws) {
-        const GpuCommandParser::Gp0Step step = GpuCommandParser::stepGp0(
-            draw.words.constData(), static_cast<size_t>(draw.words.size()));
+        // The in-core stream delivers wire-format GP0 words: opcode in bits
+        // 24-31, exactly as the GPU FIFO sees them. The host parser follows
+        // the libgpu in-RAM struct convention instead (opcode in the LOW
+        // byte, payload shifted up 8 — see GpuCommandParser fixtures and
+        // psxGp0OpcodeByte). Rotating the leading command word left by 8
+        // converts wire -> host; every other word (vertices, UVs, gouraud
+        // continuation colors, sprite sizes) is identical in both.
+        QVector<uint32_t> words = draw.words;
+        words[0] = (words[0] << 8) | (words[0] >> 24);
+
+        const GpuCommandParser::Gp0Step step =
+            GpuCommandParser::stepGp0(words.constData(), static_cast<size_t>(words.size()));
         if (step.wordsConsumed == 0 || !step.error.isEmpty())
             continue;
 

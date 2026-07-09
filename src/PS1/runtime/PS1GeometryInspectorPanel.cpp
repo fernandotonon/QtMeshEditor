@@ -70,6 +70,19 @@ QString PS1GeometryInspectorModel::primKindLabel(PrimKind kind)
     return QStringLiteral("?");
 }
 
+QString PS1GeometryInspectorModel::provenanceLabel(CapturedAssetProvenance provenance)
+{
+    switch (provenance) {
+    case CapturedAssetProvenance::Tracked:
+        return QStringLiteral("tracked");
+    case CapturedAssetProvenance::Depth:
+        return QStringLiteral("depth");
+    case CapturedAssetProvenance::Screen:
+        return QStringLiteral("screen");
+    }
+    return QStringLiteral("?");
+}
+
 QVariant PS1GeometryInspectorModel::data(const QModelIndex &index, int role) const
 {
     if (!m_store || !index.isValid())
@@ -100,6 +113,8 @@ QVariant PS1GeometryInspectorModel::data(const QModelIndex &index, int role) con
             return row.materialName;
         case ColTriangles:
             return row.triangleCount;
+        case ColProvenance:
+            return provenanceLabel(row.provenance);
         default:
             return {};
         }
@@ -155,6 +170,8 @@ QVariant PS1GeometryInspectorModel::headerData(int section, Qt::Orientation orie
         return tr("material");
     case ColTriangles:
         return tr("triangles");
+    case ColProvenance:
+        return tr("src");
     default:
         return {};
     }

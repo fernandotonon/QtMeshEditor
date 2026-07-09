@@ -51,6 +51,11 @@ set_target_properties(qtmesh_ps1core_libretro PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/PS1Cores"
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/PS1Cores"
 )
+if(APPLE)
+    # MODULE libraries default to .so on macOS, but EmuCoreLoader resolves
+    # host plugins with the platform dylib suffix.
+    set_target_properties(qtmesh_ps1core_libretro PROPERTIES SUFFIX ".dylib")
+endif()
 
 add_custom_command(TARGET qtmesh_ps1core_libretro POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

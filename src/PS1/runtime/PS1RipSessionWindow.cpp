@@ -1212,7 +1212,8 @@ void PS1RipSessionWindow::refreshCaptureStatusFooter()
 void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedParts, int uniqueMeshes,
                                     int instanceCount, int vertexCount, int triangleCount,
                                     int matrixCount, uint32_t cameraMatrixId, bool hasCameraMatrix,
-                                    int gteInversePercent, bool slabLike,
+                                    int gteInversePercent, int gteTrackedPercent,
+                                    int depthOnlyPercent, bool slabLike,
                                     int primsWithMatrixId, int primsTotal,
                                     PsxVramMirrorMode vramMirrorMode, Gp0CaptureStats captureStats)
 {
@@ -1220,6 +1221,10 @@ void PS1RipSessionWindow::onMeshBuilt(const QString &captureId, int capturedPart
                              ? tr("camera matrix #%1").arg(cameraMatrixId)
                              : tr("camera matrix unknown");
     QString matrixStats = tr("GTE inverse %1%").arg(gteInversePercent);
+    // #816: tiered-reconstruction share — tracked = exact object-space verts
+    // from in-core GTE records, depth = PGXP subpixel inversion. Together
+    // with the inverse % this tells users which capture path fed the mesh.
+    matrixStats += tr(" · tracked %1% · depth %2%").arg(gteTrackedPercent).arg(depthOnlyPercent);
     // #675: surface the prim → matrix association ratio so users can tell at a glance
     // whether the bottleneck is the inverse math (`tag X/X` with low %) or the matrix
     // association (`tag 0/N`). Without this you'd have to read the Sentry breadcrumb

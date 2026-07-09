@@ -8,6 +8,11 @@ namespace GteInverse {
 
 bool screenToModel(const MatrixRecord &matrix, int sx, int sy, int sz, float &mx, float &my, float &mz);
 
+/** Float variant for PGXP subpixel screen coords + view-space depth (#816).
+ *  The int overload delegates here so both share one implementation. */
+bool screenToModel(const MatrixRecord &matrix, float sx, float sy, float sz, float &mx, float &my,
+                   float &mz);
+
 /** Forward projection paired with screenToModel (fixed-point model units, PS1 screen coords). */
 bool modelToScreen(const MatrixRecord &matrix, int mx, int my, int mz, int &sx, int &sy, int &sz);
 

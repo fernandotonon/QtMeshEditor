@@ -36,12 +36,21 @@ public:
 
     /** Places deduplicated meshes with one SceneNode per instance (#423).
      *  Applies `normalize` as SceneNode scale on each newly created capture
-     *  node so the user's flip/scale settings take effect immediately (#424). */
+     *  node so the user's flip/scale settings take effect immediately (#424).
+     *  Instances carrying a tracked GTE matrix (#816) additionally get their
+     *  group rotation applied as node orientation. */
     static bool attachCaptureSetToScene(const ReconstructedCaptureSet &captureSet,
                                         const QString &captureId,
                                         const CaptureSnapshot *textureSource, BuildResult *resultOut,
                                         QString *errorOut = nullptr,
                                         const Ps1NormalizerSettings &normalize = {});
+
+    /** Converts a unit-normalised GTE rotation (`ReconstructedInstance::rot`,
+     *  row-major, camera = R·model) into the editor axis convention used by
+     *  `GteInverse::modelToEditor` (Y/Z negated): out = S·R·S with
+     *  S = diag(1,-1,-1). Pure-data so the conversion is testable without
+     *  Ogre (#816). */
+    static void editorRotationFromGte(const float rot[9], float out[9]);
 };
 
 #endif // PS1RIPMESHBUILDER_H

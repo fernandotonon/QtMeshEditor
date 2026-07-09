@@ -866,6 +866,25 @@ if(BUILD_TESTS)
             target_compile_definitions(UnitTests PRIVATE HAVE_QT_GAMEPAD)
             target_link_libraries(UnitTests Qt6::Gamepad)
         endif()
+
+        # Test-only fake libretro core exporting the qtmesh rip ABI (#817):
+        # lets InCoreRipCapture_test exercise the full in-core capture chain
+        # (handshake → GTE records → GP0 correlation → provenance) through the
+        # real plugin trampolines with zero ROMs/BIOS. Plain C, no Qt.
+        add_library(fake_rip_core MODULE
+            ${CMAKE_SOURCE_DIR}/tests/fake_rip_core/fake_rip_core.c)
+        target_include_directories(fake_rip_core PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/PS1/runtime)
+        set_target_properties(fake_rip_core PROPERTIES
+            PREFIX ""
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+        if(APPLE)
+            # MODULE libraries default to .so even on macOS; the test resolves
+            # the artifact with the platform's shared-library suffix.
+            set_target_properties(fake_rip_core PROPERTIES SUFFIX ".dylib")
+        endif()
+        add_dependencies(UnitTests fake_rip_core)
     endif()
 
     # On macOS, create symlinks from Ogre plugin .framework bundles into the
