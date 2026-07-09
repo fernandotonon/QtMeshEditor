@@ -1,6 +1,7 @@
 #include "SceneLightsIO.h"
 
 #include "LightManager.h"
+#include "LightLinking.h"
 #include "LightRigLibrary.h"
 #include "Manager.h"
 #include "ShadowController.h"
@@ -211,6 +212,9 @@ QJsonObject snapshotToJson(const LightSnapshot& snapshot)
     obj.insert(QStringLiteral("castShadows"), snapshot.castShadows);
     obj.insert(QStringLiteral("shadowDepthBias"), snapshot.shadowDepthBias);
     obj.insert(QStringLiteral("shadowSlopeBias"), snapshot.shadowSlopeBias);
+    obj.insert(QStringLiteral("linkMode"), LightLinking::modeToString(snapshot.linkMode));
+    obj.insert(QStringLiteral("linkedEntities"), QJsonArray::fromStringList(snapshot.linkedEntityNames));
+    obj.insert(QStringLiteral("linkChannelBit"), static_cast<int>(snapshot.linkChannelBit));
     return obj;
 }
 
@@ -258,6 +262,17 @@ bool snapshotFromJson(const QJsonObject& obj, LightSnapshot& snapshot)
         static_cast<float>(obj.value(QStringLiteral("shadowDepthBias")).toDouble(0.00005));
     snapshot.shadowSlopeBias =
         static_cast<float>(obj.value(QStringLiteral("shadowSlopeBias")).toDouble(1.0));
+    snapshot.linkMode =
+        LightLinking::modeFromString(obj.value(QStringLiteral("linkMode")).toString());
+  const QJsonArray linked = obj.value(QStringLiteral("linkedEntities")).toArray();
+    for (const QJsonValue& value : linked)
+    {
+        const QString name = value.toString().trimmed();
+        if (!name.isEmpty())
+            snapshot.linkedEntityNames.append(name);
+    }
+    snapshot.linkChannelBit =
+        static_cast<uint32_t>(obj.value(QStringLiteral("linkChannelBit")).toInt(0));
     return true;
 }
 

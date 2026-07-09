@@ -36,6 +36,7 @@ AnimationWidget.cpp
 SelectionSet.cpp
 LightManager.cpp
 LightRigLibrary.cpp
+LightLinking.cpp
 LightVisualizer.cpp
 LightsController.cpp
 LightPropertiesController.cpp

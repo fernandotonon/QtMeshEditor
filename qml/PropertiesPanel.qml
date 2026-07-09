@@ -5688,6 +5688,114 @@ Rectangle {
                     onNewValue: function(val) { LightPropertiesController.shadowSlopeBias = val }
                 }
             }
+
+            Text {
+                visible: LightPropertiesController.hasLightSelection
+                text: qsTr("Light linking")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Text {
+                visible: LightPropertiesController.hasLightSelection
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: qsTr("Limit which meshes this light affects (32 mask channels). RTSS PBR may not honour masks on all passes.")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.8
+            }
+            ThemedComboBox {
+                visible: LightPropertiesController.hasLightSelection
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: LightPropertiesController.linkModeChoices
+                enabled: !LightPropertiesController.mixedLinkMode
+                currentIndex: LightPropertiesController.mixedLinkMode
+                    ? -1
+                    : LightPropertiesController.linkMode
+                onActivated: index => LightPropertiesController.linkMode = index
+            }
+            Column {
+                visible: LightPropertiesController.hasLightSelection
+                    && LightPropertiesController.linkMode !== 0
+                    && !LightPropertiesController.mixedLinkMode
+                spacing: 4
+                width: parent.width - 16
+                Repeater {
+                    model: LightPropertiesController.linkedEntityNames
+                    delegate: Row {
+                        width: parent.width
+                        spacing: 6
+                        Text {
+                            width: parent.width - removeBtn.width - 6
+                            text: modelData
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Rectangle {
+                            id: removeBtn
+                            width: 18
+                            height: 18
+                            radius: 3
+                            color: removeMouse.pressed
+                                ? Qt.darker(PropertiesPanelController.inputColor, 1.2)
+                                : PropertiesPanelController.inputColor
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: "×"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 12
+                            }
+                            MouseArea {
+                                id: removeMouse
+                                anchors.fill: parent
+                                onClicked: LightPropertiesController.removeLinkedEntity(modelData)
+                            }
+                        }
+                    }
+                }
+                Row {
+                    spacing: 6
+                    width: parent.width
+                    ThemedComboBox {
+                        id: linkTargetPicker
+                        width: parent.width - addLinkBtn.width - 6
+                        height: 22
+                        font.pixelSize: 11
+                        model: LightPropertiesController.availableLinkTargets
+                    }
+                    Rectangle {
+                        id: addLinkBtn
+                        width: 44
+                        height: 22
+                        radius: 3
+                        color: addLinkMouse.pressed
+                            ? Qt.darker(PropertiesPanelController.buttonColor, 1.1)
+                            : PropertiesPanelController.buttonColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: qsTr("Add")
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            id: addLinkMouse
+                            anchors.fill: parent
+                            onClicked: {
+                                if (linkTargetPicker.currentIndex >= 0)
+                                    LightPropertiesController.addLinkedEntity(
+                                        linkTargetPicker.currentText)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

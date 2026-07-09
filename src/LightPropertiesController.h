@@ -58,6 +58,11 @@ class LightPropertiesController : public QObject
     Q_PROPERTY(bool mixedShadowSlopeBias READ mixedShadowSlopeBias NOTIFY propertiesChanged)
     Q_PROPERTY(QStringList lightTypeChoices READ lightTypeChoices CONSTANT)
     Q_PROPERTY(QStringList attenuationPresetChoices READ attenuationPresetChoices CONSTANT)
+    Q_PROPERTY(int linkMode READ linkMode WRITE setLinkMode NOTIFY propertiesChanged)
+    Q_PROPERTY(bool mixedLinkMode READ mixedLinkMode NOTIFY propertiesChanged)
+    Q_PROPERTY(QStringList linkedEntityNames READ linkedEntityNames NOTIFY propertiesChanged)
+    Q_PROPERTY(QStringList linkModeChoices READ linkModeChoices CONSTANT)
+    Q_PROPERTY(QStringList availableLinkTargets READ availableLinkTargets NOTIFY propertiesChanged)
 
 public:
     static LightPropertiesController* instance();
@@ -140,6 +145,16 @@ public:
 
     QStringList lightTypeChoices() const;
     QStringList attenuationPresetChoices() const;
+
+    int linkMode() const;
+    void setLinkMode(int mode);
+    bool mixedLinkMode() const;
+    QStringList linkedEntityNames() const;
+    QStringList linkModeChoices() const;
+    QStringList availableLinkTargets() const;
+
+    Q_INVOKABLE void addLinkedEntity(const QString& entityName);
+    Q_INVOKABLE void removeLinkedEntity(const QString& entityName);
 
     Q_INVOKABLE void beginSliderEdit(int propertyClass);
     Q_INVOKABLE void endSliderEdit(int propertyClass);

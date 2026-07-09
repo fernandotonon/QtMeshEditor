@@ -1,5 +1,6 @@
 #include "LightManager.h"
 
+#include "LightLinking.h"
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "ShadowController.h"
@@ -51,6 +52,50 @@ LightSnapshot LightSnapshot::fromHandle(const LightHandle& handle)
         snapshot.shadowDepthBias = Ogre::any_cast<float>(depthAny);
     if (slopeAny.has_value())
         snapshot.shadowSlopeBias = Ogre::any_cast<float>(slopeAny);
+
+    const auto& linkBindings = handle.light->getUserObjectBindings();
+    const auto modeAny = linkBindings.getUserAny(QStringLiteral("light_link_mode").toStdString());
+    if (modeAny.has_value())
+    {
+        try
+        {
+            snapshot.linkMode =
+                LightLinking::modeFromString(QString::fromStdString(Ogre::any_cast<std::string>(modeAny)));
+        }
+        catch (...)
+        {
+            snapshot.linkMode = LightLinking::Mode::None;
+        }
+    }
+    const auto entitiesAny =
+        linkBindings.getUserAny(QStringLiteral("light_link_entities").toStdString());
+    if (entitiesAny.has_value())
+    {
+        try
+        {
+            const std::string encoded = Ogre::any_cast<std::string>(entitiesAny);
+            snapshot.linkedEntityNames =
+                QString::fromStdString(encoded).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        }
+        catch (...)
+        {
+            snapshot.linkedEntityNames.clear();
+        }
+    }
+    const auto channelAny =
+        linkBindings.getUserAny(QStringLiteral("light_link_channel").toStdString());
+    if (channelAny.has_value())
+    {
+        try
+        {
+            snapshot.linkChannelBit = static_cast<uint32_t>(Ogre::any_cast<uint32_t>(channelAny));
+        }
+        catch (...)
+        {
+            snapshot.linkChannelBit = 0;
+        }
+    }
+
     return snapshot;
 }
 
@@ -70,7 +115,10 @@ bool LightSnapshot::operator==(const LightSnapshot& other) const
            && scale == other.scale && usesDirection == other.usesDirection
            && direction == other.direction && castShadows == other.castShadows
            && shadowDepthBias == other.shadowDepthBias
-           && shadowSlopeBias == other.shadowSlopeBias;
+           && shadowSlopeBias == other.shadowSlopeBias
+           && linkMode == other.linkMode
+           && linkedEntityNames == other.linkedEntityNames
+           && linkChannelBit == other.linkChannelBit;
 }
 
 LightManager* LightManager::getSingleton()
@@ -214,6 +262,16 @@ void LightManager::applySnapshotToHandle(const LightSnapshot& snapshot, LightHan
                         Ogre::Any(snapshot.shadowDepthBias));
     bindings.setUserAny(QStringLiteral("shadow_slope_bias").toStdString(),
                         Ogre::Any(snapshot.shadowSlopeBias));
+
+    bindings.setUserAny(QStringLiteral("light_link_mode").toStdString(),
+                        Ogre::Any(LightLinking::modeToString(snapshot.linkMode).toStdString()));
+    bindings.setUserAny(QStringLiteral("light_link_entities").toStdString(),
+                        Ogre::Any(snapshot.linkedEntityNames.join(QLatin1Char('\n')).toStdString()));
+    bindings.setUserAny(QStringLiteral("light_link_channel").toStdString(),
+                        Ogre::Any(snapshot.linkChannelBit));
+
+    LightSnapshot linkSnap = snapshot;
+    LightLinking::applyFromSnapshot(linkSnap);
 }
 
 LightHandle LightManager::createLightInternal(Ogre::Light::LightTypes type, const QString& baseName)
@@ -333,6 +391,7 @@ void LightManager::deleteAllUserLights()
 
 void LightManager::clearAllLights()
 {
+    LightLinking::clearAllRules();
     deleteAllUserLights();
 }
 
@@ -453,8 +512,10 @@ bool LightManager::deleteLight(const QString& name)
             continue;
 
         Ogre::SceneNode* node = m_lights[i].sceneNode;
+        const LightSnapshot deletedSnapshot = LightSnapshot::fromHandle(m_lights[i]);
         m_lights.removeAt(i);
         emit lightDeleted(name);
+        LightLinking::onLightDeleted(deletedSnapshot);
         SentryReporter::addBreadcrumb(QStringLiteral("scene.light.delete"),
                                       QStringLiteral("Deleted %1").arg(name));
 

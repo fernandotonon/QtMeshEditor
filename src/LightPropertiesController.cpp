@@ -1,6 +1,7 @@
 #include "LightPropertiesController.h"
 
 #include "LightManager.h"
+#include "LightLinking.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "ShadowController.h"
@@ -839,6 +840,82 @@ void LightPropertiesController::setShadowSlopeBias(double value)
 
     pushImmediateEdit(LightPropertyClass::Shadow,
                       [clamped](LightSnapshot& snapshot) { snapshot.shadowSlopeBias = clamped; });
+}
+
+int LightPropertiesController::linkMode() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.isEmpty())
+        return 0;
+    return static_cast<int>(snapshots.first().linkMode);
+}
+
+bool LightPropertiesController::mixedLinkMode() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.size() < 2)
+        return false;
+    const LightLinking::Mode first = snapshots.first().linkMode;
+    for (const LightSnapshot& snapshot : snapshots)
+    {
+        if (snapshot.linkMode != first)
+            return true;
+    }
+    return false;
+}
+
+QStringList LightPropertiesController::linkedEntityNames() const
+{
+    const QList<LightSnapshot> snapshots = selectedSnapshots();
+    if (snapshots.isEmpty())
+        return {};
+    if (snapshots.size() == 1)
+        return snapshots.first().linkedEntityNames;
+    return {};
+}
+
+QStringList LightPropertiesController::linkModeChoices() const
+{
+    return {QStringLiteral("Affect all"), QStringLiteral("Include only"), QStringLiteral("Exclude")};
+}
+
+QStringList LightPropertiesController::availableLinkTargets() const
+{
+    return LightLinking::allEntityNodeNames();
+}
+
+void LightPropertiesController::setLinkMode(int mode)
+{
+    const LightLinking::Mode linkMode = static_cast<LightLinking::Mode>(std::clamp(mode, 0, 2));
+    pushImmediateEdit(LightPropertyClass::Linking, [linkMode](LightSnapshot& snapshot) {
+        snapshot.linkMode = linkMode;
+        if (linkMode == LightLinking::Mode::None)
+        {
+            snapshot.linkedEntityNames.clear();
+            snapshot.linkChannelBit = 0;
+        }
+    });
+}
+
+void LightPropertiesController::addLinkedEntity(const QString& entityName)
+{
+    const QString trimmed = entityName.trimmed();
+    if (trimmed.isEmpty())
+        return;
+
+    pushImmediateEdit(LightPropertyClass::Linking, [trimmed](LightSnapshot& snapshot) {
+        if (snapshot.linkMode == LightLinking::Mode::None)
+            snapshot.linkMode = LightLinking::Mode::Include;
+        if (!snapshot.linkedEntityNames.contains(trimmed))
+            snapshot.linkedEntityNames.append(trimmed);
+    });
+}
+
+void LightPropertiesController::removeLinkedEntity(const QString& entityName)
+{
+    pushImmediateEdit(LightPropertyClass::Linking, [entityName](LightSnapshot& snapshot) {
+        snapshot.linkedEntityNames.removeAll(entityName);
+    });
 }
 
 void LightPropertiesController::beginSliderEdit(int propertyClass)
