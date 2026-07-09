@@ -52,6 +52,7 @@ THE SOFTWARE.
 #include "HDR/HdrBundledLibrary.h"
 #include "HDR/HdrViewportController.h"
 #include "LightManager.h"
+#include "LightLinking.h"
 #include "LightRigLibrary.h"
 
 #if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
@@ -261,6 +262,7 @@ Ogre::Entity* Manager::createEntity(Ogre::SceneNode* const& sceneNode, const Ogr
 
     sceneNode->attachObject(ent);
     emit entityCreated(ent);
+    LightLinking::onEntityCreated(ent);
     if(!mInitializingScene)
         SelectionSet::getSingleton()->selectOne(sceneNode);
     return ent;

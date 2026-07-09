@@ -48,6 +48,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionSet.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightRigLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightLinking.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightVisualizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightsController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LightPropertiesController.cpp

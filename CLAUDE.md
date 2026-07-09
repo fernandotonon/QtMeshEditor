@@ -197,6 +197,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - **MCP tools** (`create_light`, `delete_light`, `list_lights`, `set_light_property`, `apply_light_rig`): operate on the live editor scene via `LightManager` / `LightRigLibrary` / `SceneLightsIO::captureFromScene()`.
 - **Intensity units**: GUI/CLI/MCP use Ogre `powerScale` (Inspector “Intensity”). glTF export writes both `qtmesh.scene.lights` (exact) and best-effort KHR punctual intensity derived from `powerScale × diffuse luminance`. FBX lights are Assimp best-effort; use the `.lights.json` sidecar for bit-exact round-trip.
 - **Sentry breadcrumbs**: `scene.light.create|delete|duplicate|rename|edit|shadow_toggle|apply_rig|gizmo_toggle` on core ops; `ui.action` on menu/toolbar clicks.
+- **Light linking (Slice I #491)**: per-light include/exclude lists map to Ogre `Light::setLightMask` / `Entity::setLightMask` (32 channel bits; bit 0 reserved; max 31 simultaneous link rules). Persisted in `qtmesh.scene.lights` JSON as `linkMode`, `linkedEntities`, `linkChannelBit`. Exclude sets excluded entities to the channel bit only (no overlap with the light's inverted mask). Combining include + exclude on the same entity is best-effort. RTSS PBR may not honour masks on every pass.
 
 ### Debug Overlays
 

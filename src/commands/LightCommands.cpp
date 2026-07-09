@@ -125,6 +125,8 @@ QString lightPropertyClassLabel(LightPropertyClass propertyClass)
         return QStringLiteral("cone");
     case LightPropertyClass::Shadow:
         return QStringLiteral("shadow");
+    case LightPropertyClass::Linking:
+        return QStringLiteral("light linking");
     }
     return QStringLiteral("property");
 }

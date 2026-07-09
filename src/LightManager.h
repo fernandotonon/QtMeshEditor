@@ -7,6 +7,9 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QStringList>
+
+#include "LightLinking.h"
 
 namespace Ogre
 {
@@ -46,6 +49,11 @@ struct LightSnapshot
     bool castShadows = false;
     float shadowDepthBias = 0.00005f;
     float shadowSlopeBias = 1.0f;
+
+    /// Slice I (#491): entity include/exclude via Ogre light masks (bits 1..31).
+    LightLinking::Mode linkMode = LightLinking::Mode::None;
+    QStringList linkedEntityNames;
+    uint32_t linkChannelBit = 0;
 
     static LightSnapshot fromHandle(const LightHandle& handle);
     bool operator==(const LightSnapshot& other) const;
