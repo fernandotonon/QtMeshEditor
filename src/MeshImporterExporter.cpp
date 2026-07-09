@@ -4005,6 +4005,9 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
         }
 
         delete scene;
+        // Assimp's glb2 writer may drop custom aiMetadata; persist a sidecar
+        // (same strategy as FBX export) so user-added lights always round-trip.
+        SceneLightsIO::writeLightsSidecar(_uri);
         reportProgress(100, QStringLiteral("Done."));
     } catch (const std::exception& ex) {
         auto msg = QString("Scene export failed: %1").arg(ex.what());
@@ -4416,7 +4419,8 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
             manager->createEntity(sn, ogreMesh);
         }
 
-        SceneLightsIO::importFromAssimpScene(scene, true);
+        if (!SceneLightsIO::importLightsSidecar(_uri, true))
+            SceneLightsIO::importFromAssimpScene(scene, true);
 
         return true;
     } catch (Ogre::Exception& e) {

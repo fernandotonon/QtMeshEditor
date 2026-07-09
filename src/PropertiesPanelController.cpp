@@ -388,6 +388,7 @@ void PropertiesPanelController::clearSceneTreeAllNodes()
     Manager::getSingleton()->destroyAllUserRootNodes();
     SelectionSet::getSingleton()->clearList();
     UndoManager::getSingleton()->clear();
+    emit selectionChanged();
 }
 
 bool PropertiesPanelController::hasEntitySelection() const

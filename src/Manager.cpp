@@ -618,6 +618,13 @@ void Manager::destroyAllUserRootNodes()
 
     SentryReporter::addBreadcrumb("scene", "Destroy all user root scene nodes");
 
+    // Rig-group lights are child scene nodes. destroySceneNode(name) uses
+    // removeAndDestroyAllChildren() by default, which tears down Ogre light nodes
+    // without unregistering them from LightManager — dangling handles → SIGSEGV.
+    emit sceneClearing();
+    if (auto* lights = LightManager::getSingletonPtr())
+        lights->deleteAllUserLights();
+
     Ogre::SceneNode* root = mSceneMgr->getRootSceneNode();
     QStringList names;
     for (const auto& child : root->getChildren())

@@ -10,6 +10,7 @@
 #include "TestHelpers.h"
 
 #include <QTemporaryDir>
+#include <QFile>
 
 #include <assimp/scene.h>
 
@@ -137,6 +138,31 @@ TEST_F(SceneLightsIOOgreTest, SceneGltfRoundTripPreservesLights)
         }
         EXPECT_TRUE(found) << snapshot.name.toStdString();
     }
+}
+
+TEST_F(SceneLightsIOOgreTest, UserAddedLightGlbRoundTripUsesSidecar)
+{
+    auto* lights = LightManager::getSingleton();
+    Manager::getSingleton()->CreateEmptyScene();
+
+    const int rigLightCount = lights->lights().size();
+    ASSERT_GE(rigLightCount, 3);
+
+    const LightHandle added =
+        lights->createLight(Ogre::Light::LT_POINT, QStringLiteral("UserPointLight"));
+    ASSERT_TRUE(added.isValid());
+
+    Manager::getSingleton()->addSceneNode(QStringLiteral("Prop"));
+    const QString scenePath = tempDir.filePath(QStringLiteral("user_light.scene.glb"));
+    ASSERT_EQ(MeshImporterExporter::sceneExporter(scenePath, nullptr), 0);
+    ASSERT_TRUE(QFile::exists(tempDir.filePath(QStringLiteral("user_light.scene.lights.json"))));
+
+    lights->deleteAllUserLights();
+    EXPECT_TRUE(lights->lights().isEmpty());
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(scenePath));
+    EXPECT_EQ(lights->lights().size(), rigLightCount + 1);
+    EXPECT_NE(lights->findLight(QStringLiteral("UserPointLight")), nullptr);
 }
 
 TEST_F(SceneLightsIOOgreTest, EmptyLightsBlockRestoresDefaultRig)
