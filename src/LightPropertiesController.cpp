@@ -881,7 +881,11 @@ QStringList LightPropertiesController::linkModeChoices() const
 
 QStringList LightPropertiesController::availableLinkTargets() const
 {
-    return LightLinking::allEntityNodeNames();
+    QStringList names = LightLinking::allEntityNodeNames();
+    const QStringList linked = linkedEntityNames();
+    for (const QString& name : linked)
+        names.removeAll(name);
+    return names;
 }
 
 void LightPropertiesController::setLinkMode(int mode)

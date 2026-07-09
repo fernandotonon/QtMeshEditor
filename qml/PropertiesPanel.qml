@@ -5768,16 +5768,33 @@ Rectangle {
                         height: 22
                         font.pixelSize: 11
                         model: LightPropertiesController.availableLinkTargets
+                        enabled: count > 0
+                        Connections {
+                            target: LightPropertiesController
+                            function onPropertiesChanged() {
+                                if (linkTargetPicker.count === 0)
+                                    linkTargetPicker.currentIndex = -1
+                                else if (linkTargetPicker.currentIndex < 0
+                                         || linkTargetPicker.currentIndex >= linkTargetPicker.count)
+                                    linkTargetPicker.currentIndex = 0
+                            }
+                        }
                     }
                     Rectangle {
                         id: addLinkBtn
                         width: 44
                         height: 22
                         radius: 3
-                        color: addLinkMouse.pressed
-                            ? Qt.darker(PropertiesPanelController.buttonColor, 1.1)
-                            : PropertiesPanelController.buttonColor
+                        opacity: linkTargetPicker.count > 0 && linkTargetPicker.currentIndex >= 0
+                            ? 1.0
+                            : 0.45
+                        color: addLinkMouse.containsMouse
+                            && linkTargetPicker.count > 0
+                            && linkTargetPicker.currentIndex >= 0
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
                         border.color: PropertiesPanelController.borderColor
+                        border.width: 1
                         Text {
                             anchors.centerIn: parent
                             text: qsTr("Add")
@@ -5787,6 +5804,13 @@ Rectangle {
                         MouseArea {
                             id: addLinkMouse
                             anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: linkTargetPicker.count > 0
+                                && linkTargetPicker.currentIndex >= 0
+                                ? Qt.PointingHandCursor
+                                : Qt.ArrowCursor
+                            enabled: linkTargetPicker.count > 0
+                                && linkTargetPicker.currentIndex >= 0
                             onClicked: {
                                 if (linkTargetPicker.currentIndex >= 0)
                                     LightPropertiesController.addLinkedEntity(
