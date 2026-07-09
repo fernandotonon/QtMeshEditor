@@ -4997,7 +4997,27 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
     if (!entity || entity->getNumSubEntities() == 0) return;
     Ogre::SubEntity* sub0 = entity->getSubEntity(0);
     if (!sub0 || !sub0->getMaterial()) return;
-    const QString matName = QString::fromStdString(sub0->getMaterial()->getName());
+    QString matName = QString::fromStdString(sub0->getMaterial()->getName());
+
+    // Geometry-only meshes (TripoSG image->3D) share ONE "MeshGen/NeutralClay"
+    // material. If we textured that shared material in place, every generated
+    // mesh in the scene would get this bake. Clone it to a per-entity material
+    // and rebind every sub-entity first, so the texture is isolated to THIS
+    // mesh. (Shared textured materials are left alone — cloning them would
+    // just duplicate an already-correct binding.)
+    if (matName.startsWith("MeshGen/")) {
+        const std::string uniqueMat =
+            entityName.toStdString() + "/mat";
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        Ogre::MaterialPtr cloned = matMgr.getByName(uniqueMat,
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        if (!cloned)
+            cloned = sub0->getMaterial()->clone(uniqueMat);
+        for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i)
+            entity->getSubEntity(i)->setMaterialName(uniqueMat,
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        matName = QString::fromStdString(uniqueMat);
+    }
 
     // Make sure the freshly-written PNG exists as a loadable texture
     // resource. The generated_textures dir is registered as a
@@ -5081,6 +5101,22 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
             // Rebuild the editor's TUS list so the rename + selection
             // are consistent.
             updateTextureUnitList();
+        } else {
+            // The material has NO texture unit at all — this is the
+            // geometry-only "MeshGen/NeutralClay" case the TripoSG
+            // image->3D path produces. The multi-view bake succeeded and
+            // wrote a valid diffuse PNG, but there was nowhere to bind it,
+            // so the mesh kept rendering flat clay. Create a named
+            // "diffuse_map" TUS now so setTextureName() below has a slot
+            // and the PBR/FFP wiring picks it up.
+            Ogre::TextureUnitState* tus =
+                pass->createTextureUnitState(textureFileName.toStdString());
+            tus->setName("diffuse_map");
+            // A flat clay diffuse colour would MODULATE the new texture to
+            // a muddy tint; reset to white so the baked colours show true.
+            pass->setDiffuse(Ogre::ColourValue::White);
+            diffuseTusIndex = static_cast<int>(pass->getNumTextureUnitStates()) - 1;
+            updateTextureUnitList();
         }
     }
     setSelectedTextureUnitIndex(diffuseTusIndex);
@@ -5089,6 +5125,50 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
     // clear it first so the assignment always fires.
     m_textureName.clear();
     setTextureName(textureFileName);
+
+    // When we just CREATED a brand-new diffuse_map TUS on a material RTSS had
+    // already generated shaders for (the geometry-only NeutralClay case), the
+    // light invalidate/validate in setTextureName's regen path does NOT rebuild
+    // the RTSS technique from the now-changed FFP pass — so the viewport keeps
+    // rendering the old TUS-less generated technique and the mesh stays clay.
+    // Force the FULL rebuild: drop all shader techniques, re-wire FFP slots,
+    // recompile, and re-bind sub-entities (same path as a material-text edit).
+    updateMaterialText();
+
+    // updateMaterialText's removeAllShaderBasedTechniques() uses an AUTODETECT
+    // group and, for a freshly-cloned material, sometimes leaves the STALE
+    // (TUS-less) RTSS technique in place — RTShaderHelper then just re-validates
+    // that existing empty technique instead of rebuilding it, so the viewport
+    // keeps rendering an untextured shader (the mesh stays clay even though
+    // FFP tech 0 has the diffuse_map). Remove the shader technique explicitly
+    // against the material's REAL group, re-wire the FFP diffuse slot, then let
+    // RTSS regenerate from tech 0 on the next frame.
+    if (auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+        try {
+            shaderGen->removeAllShaderBasedTechniques(
+                m_ogreMaterial->getName(), m_ogreMaterial->getGroup());
+        } catch (const Ogre::Exception&) {}
+        // removeAllShaderBasedTechniques only drops techniques the
+        // ShaderGenerator is TRACKING. For a freshly clone()d material it often
+        // isn't tracking the cloned RTSS technique, so the stale, TUS-less
+        // ShaderGeneratorDefaultScheme technique survives — the viewport renders
+        // it and the mesh stays clay (confirmed: tusCount 0 even 1.5s later).
+        // Remove that scheme's technique DIRECTLY off the material so RTSS is
+        // forced to regenerate it from FFP tech 0 (which has the diffuse_map)
+        // via handleSchemeNotFound on the next render.
+        const Ogre::String rtssScheme =
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME;
+        for (unsigned short ti = m_ogreMaterial->getNumTechniques(); ti-- > 0; ) {
+            if (m_ogreMaterial->getTechnique(ti)->getSchemeName() == rtssScheme)
+                m_ogreMaterial->removeTechnique(ti);
+        }
+        wirePbrSlotsForFFP(m_ogreMaterial.get());
+        m_ogreMaterial->compile();
+        // Re-bind every sub-entity so it re-resolves its technique against the
+        // recompiled material (setMaterialName(sameName) can keep a stale ptr).
+        for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i)
+            entity->getSubEntity(i)->setMaterial(m_ogreMaterial);
+    }
 }
 
 void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
@@ -5124,7 +5204,13 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
             return;
         }
         s.baked[s.current].image = img.convertToFormat(QImage::Format_RGB888);
-        emit sdTextureGenerated(outputPath);  // let the preview update per view
+        // NOTE: do NOT emit sdTextureGenerated here. That signal drives the
+        // panel's "AI texture applied" completion logic — emitting it per view
+        // made view 0 prematurely mark the bake ✓ and froze the status at the
+        // last SD notice ("view 4/4 — step 12/12"), because subsequent progress
+        // updates are gated on the aitex_gen step still being active. The final
+        // sdTextureGenerated fires once from finishMultiViewBake after the real
+        // bake + apply. (Per-view preview is not worth the false completion.)
         ++s.current;
         if (s.current < s.views.size()) {
             startNextMultiViewGeneration();   // next view

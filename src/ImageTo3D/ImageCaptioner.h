@@ -26,16 +26,24 @@
 namespace ImageCaptioner {
 
 // True only when built with ENABLE_LOCAL_LLM.
-// A DETAIL-seeking prompt: SmolVLM-500M defaults to terse answers ("a
-// rabbit"), which makes a weak texture prompt. Explicitly ask for a rich,
-// comma-separated visual description (colours, materials, markings, surface)
-// and forbid the one-word reply, so the caption feeds SD with real texture cues.
+// A DETAIL-seeking prompt: SmolVLM-500M defaults to terse answers ("a rabbit"),
+// which makes a weak texture prompt, so we ask for a rich comma-separated
+// visual description (colours, materials, markings, surface).
+// IMPORTANT: do NOT include a concrete worked EXAMPLE here. SmolVLM-500M is
+// small enough that it parroted a detailed example ("a fluffy brown and white
+// rabbit, …") verbatim as its answer, ignoring the actual image entirely —
+// which is exactly how a person's photo came back described as a rabbit. Keep
+// the instruction abstract so the model has to look at the picture.
 static constexpr const char* kDefaultPrompt =
-    "Describe this object in detail as a comma-separated visual texture prompt: "
-    "its type, all colours, materials, surface texture, patterns and markings. "
-    "Be specific and descriptive, not a single word. Example: 'a fluffy brown "
-    "and white rabbit, soft short fur, pink inner ears, dark eyes'. "
-    "Answer with only the description.";
+    "Describe ONLY the main subject of this image (ignore the background and "
+    "any scenery) as a detailed, comma-separated visual description for "
+    "texturing a 3D model of it. START by naming WHAT the subject is (for "
+    "example: a woman, a man, a rabbit, a car, a chair), then describe its "
+    "surface appearance: for a person or character give skin tone, hair colour "
+    "and style, eye colour, makeup, and clothing colours/materials; for an "
+    "animal or object give its colours, materials, surface texture, and any "
+    "patterns or markings. Be specific, not a single word, and do not mention "
+    "the background. Answer with only the description.";
 
 bool isAvailable();
 
