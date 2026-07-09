@@ -5115,6 +5115,13 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
             // A flat clay diffuse colour would MODULATE the new texture to
             // a muddy tint; reset to white so the baked colours show true.
             pass->setDiffuse(Ogre::ColourValue::White);
+            // The TripoSR+AI-texture path repurposes "MeshGen/VertexColor",
+            // which has per-vertex colour tracking enabled (setVertexColourTracking
+            // on the decoder colours in MeshGenBuilder). Left on, the baked AI
+            // diffuse would be multiplied by the old decoder vertex colours
+            // instead of replacing them — disable tracking so the texture shows
+            // true. (No-op for NeutralClay, which never enabled it.)
+            pass->setVertexColourTracking(Ogre::TVC_NONE);
             diffuseTusIndex = static_cast<int>(pass->getNumTextureUnitStates()) - 1;
             updateTextureUnitList();
         }
