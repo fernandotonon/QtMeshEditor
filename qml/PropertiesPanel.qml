@@ -4597,6 +4597,135 @@ Rectangle {
                     onNewValue: function(val) { LightPropertiesController.spotFalloff = val }
                 }
             }
+
+            // Light linking (Slice I #491)
+            Text {
+                text: qsTr("Light linking")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 8
+            }
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.WordWrap
+                text: qsTr("Limit which meshes this light affects (32 mask channels). RTSS PBR may not honour masks on all passes.")
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.8
+            }
+            ThemedComboBox {
+                width: parent.width - 16
+                height: 22
+                font.pixelSize: 11
+                model: LightPropertiesController.linkModeChoices
+                enabled: !LightPropertiesController.mixedLinkMode
+                currentIndex: LightPropertiesController.mixedLinkMode
+                    ? -1
+                    : LightPropertiesController.linkMode
+                onActivated: index => LightPropertiesController.linkMode = index
+            }
+            Column {
+                visible: LightPropertiesController.linkMode !== 0
+                    && !LightPropertiesController.mixedLinkMode
+                spacing: 4
+                width: parent.width - 16
+                Repeater {
+                    model: LightPropertiesController.linkedEntityNames
+                    delegate: Row {
+                        width: parent.width
+                        spacing: 6
+                        Text {
+                            width: parent.width - removeBtn.width - 6
+                            text: modelData
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Rectangle {
+                            id: removeBtn
+                            width: 18
+                            height: 18
+                            radius: 3
+                            color: removeMouse.pressed
+                                ? Qt.darker(PropertiesPanelController.inputColor, 1.2)
+                                : PropertiesPanelController.inputColor
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: "×"
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 12
+                            }
+                            MouseArea {
+                                id: removeMouse
+                                anchors.fill: parent
+                                onClicked: LightPropertiesController.removeLinkedEntity(modelData)
+                            }
+                        }
+                    }
+                }
+                Row {
+                    spacing: 6
+                    width: parent.width
+                    ThemedComboBox {
+                        id: linkTargetPicker
+                        width: parent.width - addLinkBtn.width - 6
+                        height: 22
+                        font.pixelSize: 11
+                        model: LightPropertiesController.availableLinkTargets
+                        enabled: count > 0
+                        Connections {
+                            target: LightPropertiesController
+                            function onPropertiesChanged() {
+                                if (linkTargetPicker.count === 0)
+                                    linkTargetPicker.currentIndex = -1
+                                else if (linkTargetPicker.currentIndex < 0
+                                         || linkTargetPicker.currentIndex >= linkTargetPicker.count)
+                                    linkTargetPicker.currentIndex = 0
+                            }
+                        }
+                    }
+                    Rectangle {
+                        id: addLinkBtn
+                        width: 44
+                        height: 22
+                        radius: 3
+                        opacity: linkTargetPicker.count > 0 && linkTargetPicker.currentIndex >= 0
+                            ? 1.0
+                            : 0.45
+                        color: addLinkMouse.containsMouse
+                            && linkTargetPicker.count > 0
+                            && linkTargetPicker.currentIndex >= 0
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.controlBgColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: qsTr("Add")
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            id: addLinkMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: linkTargetPicker.count > 0
+                                && linkTargetPicker.currentIndex >= 0
+                                ? Qt.PointingHandCursor
+                                : Qt.ArrowCursor
+                            enabled: linkTargetPicker.count > 0
+                                && linkTargetPicker.currentIndex >= 0
+                            onClicked: {
+                                if (linkTargetPicker.currentIndex >= 0)
+                                    LightPropertiesController.addLinkedEntity(
+                                        linkTargetPicker.currentText)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -5686,138 +5815,6 @@ Rectangle {
                     step: 0.1
                     decimals: 2
                     onNewValue: function(val) { LightPropertiesController.shadowSlopeBias = val }
-                }
-            }
-
-            Text {
-                visible: LightPropertiesController.hasLightSelection
-                text: qsTr("Light linking")
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 11
-                font.bold: true
-                topPadding: 8
-            }
-            Text {
-                visible: LightPropertiesController.hasLightSelection
-                width: parent.width - 16
-                wrapMode: Text.WordWrap
-                text: qsTr("Limit which meshes this light affects (32 mask channels). RTSS PBR may not honour masks on all passes.")
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 10
-                opacity: 0.8
-            }
-            ThemedComboBox {
-                visible: LightPropertiesController.hasLightSelection
-                width: parent.width - 16
-                height: 22
-                font.pixelSize: 11
-                model: LightPropertiesController.linkModeChoices
-                enabled: !LightPropertiesController.mixedLinkMode
-                currentIndex: LightPropertiesController.mixedLinkMode
-                    ? -1
-                    : LightPropertiesController.linkMode
-                onActivated: index => LightPropertiesController.linkMode = index
-            }
-            Column {
-                visible: LightPropertiesController.hasLightSelection
-                    && LightPropertiesController.linkMode !== 0
-                    && !LightPropertiesController.mixedLinkMode
-                spacing: 4
-                width: parent.width - 16
-                Repeater {
-                    model: LightPropertiesController.linkedEntityNames
-                    delegate: Row {
-                        width: parent.width
-                        spacing: 6
-                        Text {
-                            width: parent.width - removeBtn.width - 6
-                            text: modelData
-                            color: PropertiesPanelController.textColor
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
-                        }
-                        Rectangle {
-                            id: removeBtn
-                            width: 18
-                            height: 18
-                            radius: 3
-                            color: removeMouse.pressed
-                                ? Qt.darker(PropertiesPanelController.inputColor, 1.2)
-                                : PropertiesPanelController.inputColor
-                            border.color: PropertiesPanelController.borderColor
-                            Text {
-                                anchors.centerIn: parent
-                                text: "×"
-                                color: PropertiesPanelController.textColor
-                                font.pixelSize: 12
-                            }
-                            MouseArea {
-                                id: removeMouse
-                                anchors.fill: parent
-                                onClicked: LightPropertiesController.removeLinkedEntity(modelData)
-                            }
-                        }
-                    }
-                }
-                Row {
-                    spacing: 6
-                    width: parent.width
-                    ThemedComboBox {
-                        id: linkTargetPicker
-                        width: parent.width - addLinkBtn.width - 6
-                        height: 22
-                        font.pixelSize: 11
-                        model: LightPropertiesController.availableLinkTargets
-                        enabled: count > 0
-                        Connections {
-                            target: LightPropertiesController
-                            function onPropertiesChanged() {
-                                if (linkTargetPicker.count === 0)
-                                    linkTargetPicker.currentIndex = -1
-                                else if (linkTargetPicker.currentIndex < 0
-                                         || linkTargetPicker.currentIndex >= linkTargetPicker.count)
-                                    linkTargetPicker.currentIndex = 0
-                            }
-                        }
-                    }
-                    Rectangle {
-                        id: addLinkBtn
-                        width: 44
-                        height: 22
-                        radius: 3
-                        opacity: linkTargetPicker.count > 0 && linkTargetPicker.currentIndex >= 0
-                            ? 1.0
-                            : 0.45
-                        color: addLinkMouse.containsMouse
-                            && linkTargetPicker.count > 0
-                            && linkTargetPicker.currentIndex >= 0
-                            ? PropertiesPanelController.highlightColor
-                            : PropertiesPanelController.controlBgColor
-                        border.color: PropertiesPanelController.borderColor
-                        border.width: 1
-                        Text {
-                            anchors.centerIn: parent
-                            text: qsTr("Add")
-                            color: PropertiesPanelController.textColor
-                            font.pixelSize: 11
-                        }
-                        MouseArea {
-                            id: addLinkMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: linkTargetPicker.count > 0
-                                && linkTargetPicker.currentIndex >= 0
-                                ? Qt.PointingHandCursor
-                                : Qt.ArrowCursor
-                            enabled: linkTargetPicker.count > 0
-                                && linkTargetPicker.currentIndex >= 0
-                            onClicked: {
-                                if (linkTargetPicker.currentIndex >= 0)
-                                    LightPropertiesController.addLinkedEntity(
-                                        linkTargetPicker.currentText)
-                            }
-                        }
-                    }
                 }
             }
         }
