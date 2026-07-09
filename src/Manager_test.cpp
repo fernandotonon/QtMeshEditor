@@ -3,6 +3,7 @@
 #include "Manager.h"
 #include "GlobalDefinitions.h"
 #include "PrimitiveObject.h"
+#include "LightManager.h"
 #include <QMap>
 #include "SelectionSet.h"
 #include <OgreException.h>
@@ -640,6 +641,30 @@ TEST_F(ManagerHeadlessTest, DestroyAllUserNodes_ClearsScene)
     EXPECT_FALSE(mgr->hasSceneNode("ClearNode1"));
     EXPECT_FALSE(mgr->hasSceneNode("ClearNode2"));
     EXPECT_FALSE(mgr->hasSceneNode("ClearNodeEmpty"));
+}
+
+TEST_F(ManagerHeadlessTest, DestroyAllUserRootNodes_WithLighting_DoesNotCrash)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
+    auto* mgr = Manager::getSingletonPtr();
+    auto* lights = LightManager::getSingleton();
+    lights->tryConnectToManager();
+
+    mgr->CreateEmptyScene();
+    const int lightsBefore = lights->lights().size();
+    ASSERT_GE(lightsBefore, 3);
+
+    lights->createLight(Ogre::Light::LT_POINT, QStringLiteral("UserPointLight"));
+    ASSERT_EQ(lights->lights().size(), lightsBefore + 1);
+
+    mgr->addSceneNode(QStringLiteral("MeshProp"));
+    EXPECT_FALSE(mgr->getSceneNodes().isEmpty());
+
+    mgr->destroyAllUserRootNodes();
+
+    EXPECT_TRUE(lights->lights().isEmpty());
+    EXPECT_EQ(mgr->getEntities().count(), 0);
+    EXPECT_FALSE(mgr->hasSceneNode(QStringLiteral("MeshProp")));
 }
 
 // Test getEntities with ManualObjects mixed in -- verifies the type-filtering pitfall

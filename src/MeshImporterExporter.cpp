@@ -61,7 +61,9 @@ THE SOFTWARE.
 #include "OgreXML/pugixml.hpp"
 
 #include "AnimationMerger.h"
+#include "LightManager.h"
 #include "Manager.h"
+#include "SceneLightsIO.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "ExportOptimizer.h"
@@ -2678,6 +2680,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 // Read coordinate system from metadata immediately — valid for both mesh and animation-only files.
                 if (outUpAxis) *outUpAxis = importer.getSceneUpAxis();
                 if (mesh) {
+                    SceneLightsIO::importLightsFromFile(file.filePath(), false);
                     // Cache the source file path so EditModeController can
                     // re-import the asset through the n-gon-aware
                     // EditableMesh::loadFromAssimpFile path. Quad-bearing
@@ -2959,6 +2962,13 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // .material and extracted image files next to the FBX.
         if (!ok)
             return -1;
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                      QStringLiteral("Exported FBX: %1").arg(_uri));
+        if (!SceneLightsIO::writeLightsSidecar(_uri))
+        {
+            Ogre::LogManager::getSingleton().logWarning(
+                "FBX exported but lights sidecar write failed: " + _uri.toStdString());
+        }
     } else if (_format == QStringLiteral("PlayStation TMD (*.tmd)")) {
         if (!PS1TMD::exportEntity(e, _uri))
             return -1;
@@ -3739,6 +3749,7 @@ static aiScene* buildSceneAiScene()
         scene->mNumMaterials = 1;
         scene->mMaterials = new aiMaterial*[1];
         scene->mMaterials[0] = new aiMaterial();
+        SceneLightsIO::appendLightsToAiScene(scene, SceneLightsIO::captureFromScene());
         return scene;
     }
 
@@ -3763,6 +3774,7 @@ static aiScene* buildSceneAiScene()
         scene->mNumMaterials = 1;
         scene->mMaterials = new aiMaterial*[1];
         scene->mMaterials[0] = new aiMaterial();
+        SceneLightsIO::appendLightsToAiScene(scene, SceneLightsIO::captureFromScene());
         return scene;
     }
 
@@ -3926,6 +3938,8 @@ static aiScene* buildSceneAiScene()
             scene->mAnimations[i] = allAnimations[i];
     }
 
+    SceneLightsIO::appendLightsToAiScene(scene, SceneLightsIO::captureFromScene());
+
     return scene;
 }
 
@@ -3997,6 +4011,14 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
         }
 
         delete scene;
+        // Assimp's glb2 writer may drop custom aiMetadata; persist a sidecar
+        // (same strategy as FBX export) so user-added lights always round-trip.
+        if (!SceneLightsIO::writeLightsSidecar(_uri))
+        {
+            Ogre::LogManager::getSingleton().logError(
+                "Scene exported but lights sidecar write failed: " + _uri.toStdString());
+            return -1;
+        }
         reportProgress(100, QStringLiteral("Done."));
     } catch (const std::exception& ex) {
         auto msg = QString("Scene export failed: %1").arg(ex.what());
@@ -4050,6 +4072,8 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
     SelectionSet::getSingleton()->clearList();
     auto* manager = Manager::getSingleton();
     emit manager->sceneClearing();  // let listeners clean up before nodes are destroyed
+    if (auto* lights = LightManager::getSingletonPtr())
+        lights->deleteAllUserLights();
     auto sceneNodesCopy = manager->getSceneNodes();
     for (auto* sn : sceneNodesCopy)
         manager->destroySceneNode(sn);
@@ -4405,6 +4429,9 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
 
             manager->createEntity(sn, ogreMesh);
         }
+
+        if (!SceneLightsIO::importLightsSidecar(_uri, true))
+            SceneLightsIO::importFromAssimpScene(scene, true);
 
         return true;
     } catch (Ogre::Exception& e) {
