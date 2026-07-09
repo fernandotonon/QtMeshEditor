@@ -680,6 +680,18 @@ protected:
 };
 
 namespace {
+// Scene import restores light rig nodes alongside mesh entities.
+QList<Ogre::SceneNode*> meshEntitySceneNodes(Manager* manager)
+{
+    QList<Ogre::SceneNode*> out;
+    auto* sceneMgr = manager->getSceneMgr();
+    for (auto* sn : manager->getSceneNodes()) {
+        if (sceneMgr->hasEntity(sn->getName()))
+            out.append(sn);
+    }
+    return out;
+}
+
 QString writeQuadObjForScene(const QTemporaryDir& dir, const QString& fileName)
 {
     if (!dir.isValid())
@@ -792,11 +804,11 @@ TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
 
     ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
 
-    auto& nodes = manager->getSceneNodes();
-    ASSERT_EQ(nodes.size(), 2);
+    const auto entityNodes = meshEntitySceneNodes(manager);
+    ASSERT_EQ(entityNodes.size(), 2);
 
     bool foundNode1 = false, foundNode2 = false;
-    for (auto* sn : nodes)
+    for (auto* sn : entityNodes)
     {
         auto pos = sn->getPosition();
         if (std::abs(pos.x - 1.0f) < 0.1f && std::abs(pos.y - 2.0f) < 0.1f)
@@ -848,10 +860,10 @@ TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding_Gltf)
     ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
 
     ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
-    ASSERT_EQ(manager->getSceneNodes().size(), 1);
+    const auto entityNodes = meshEntitySceneNodes(manager);
+    ASSERT_EQ(entityNodes.size(), 1);
 
-    node = manager->getSceneNodes().front();
-    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+    node = entityNodes.first();
     entity = manager->getSceneMgr()->getEntity(node->getName());
     expectEntityHasSingleQuadBinding(entity, facesBefore[0]);
 }
@@ -879,10 +891,10 @@ TEST_F(SceneSaveLoadTest, RoundTrip_QuadMesh_PreservesNgonFaceBinding_Glb)
     ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
 
     ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
-    ASSERT_EQ(manager->getSceneNodes().size(), 1);
+    const auto entityNodesGlb = meshEntitySceneNodes(manager);
+    ASSERT_EQ(entityNodesGlb.size(), 1);
 
-    node = manager->getSceneNodes().front();
-    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+    node = entityNodesGlb.first();
     entity = manager->getSceneMgr()->getEntity(node->getName());
     expectEntityHasSingleQuadBinding(entity, facesBefore[0]);
 }
@@ -906,10 +918,10 @@ TEST_F(SceneSaveLoadTest, RoundTrip_QuadMeshWithUnusedSharedVertex_RemapPreserve
     ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
 
     ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
-    ASSERT_EQ(manager->getSceneNodes().size(), 1);
+    const auto entityNodesCompact = meshEntitySceneNodes(manager);
+    ASSERT_EQ(entityNodesCompact.size(), 1);
 
-    node = manager->getSceneNodes().front();
-    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(node->getName()));
+    node = entityNodesCompact.first();
     entity = manager->getSceneMgr()->getEntity(node->getName());
     expectEntityHasSingleQuadBinding(entity, {0, 1, 2, 3});
 }
@@ -1068,7 +1080,7 @@ TEST_F(SceneSaveLoadTest, MaterialDedup_SharedMaterial_ExportedOnce) {
 
     // Reimport to verify both entities load correctly
     ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
-    EXPECT_EQ(manager->getSceneNodes().size(), 2);
+    EXPECT_EQ(meshEntitySceneNodes(manager).size(), 2);
 }
 
 TEST_F(SceneSaveLoadTest, EmptyScene_ExportsValidFile) {
@@ -1204,19 +1216,19 @@ TEST_F(SceneSaveLoadTest, SceneImporter_DuplicateNodeNames_AreMadeUnique)
     gltfFile.close();
 
     ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
-    const auto& importedNodes = manager->getSceneNodes();
-    ASSERT_EQ(importedNodes.size(), 2);
+    const auto importedEntityNodes = meshEntitySceneNodes(manager);
+    ASSERT_EQ(importedEntityNodes.size(), 2);
 
     std::set<std::string> uniqueNames;
     bool hasSuffixedVariant = false;
-    for (auto* sn : importedNodes) {
+    for (auto* sn : importedEntityNodes) {
         const std::string name = sn->getName();
         if (name.rfind("DuplicatedNode_", 0) == 0)
             hasSuffixedVariant = true;
         uniqueNames.insert(name);
     }
 
-    EXPECT_EQ(uniqueNames.size(), importedNodes.size());
+    EXPECT_EQ(uniqueNames.size(), importedEntityNodes.size());
     EXPECT_EQ(uniqueNames.count("DuplicatedNode"), 1u);
     EXPECT_TRUE(hasSuffixedVariant);
 }
@@ -1241,13 +1253,11 @@ TEST_F(SceneSaveLoadTest, RoundTrip_SkeletonEntity_PreservesAnimations) {
 
     ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
 
-    auto& nodes = manager->getSceneNodes();
-    ASSERT_EQ(nodes.size(), 1);
+    const auto entityNodes = meshEntitySceneNodes(manager);
+    ASSERT_EQ(entityNodes.size(), 1);
 
-    auto* reimportedNode = nodes.first();
+    auto* reimportedNode = entityNodes.first();
     auto* sceneMgr = manager->getSceneMgr();
-    ASSERT_TRUE(sceneMgr->hasEntity(reimportedNode->getName()));
-
     auto* reimportedEntity = sceneMgr->getEntity(reimportedNode->getName());
     ASSERT_TRUE(reimportedEntity->hasSkeleton());
     auto* skel = reimportedEntity->getMesh()->getSkeleton().get();
@@ -1437,11 +1447,11 @@ TEST_F(SceneSaveLoadTest, RoundTrip_MixedSkeletalAndNonSkeletal) {
     ASSERT_EQ(exportResult, 0);
 
     ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
-    EXPECT_EQ(manager->getSceneNodes().size(), 2);
+    EXPECT_EQ(meshEntitySceneNodes(manager).size(), 2);
 
     // Verify both entities reimported
     bool foundSkeletal = false, foundPlain = false;
-    for (auto* sn : manager->getSceneNodes())
+    for (auto* sn : meshEntitySceneNodes(manager))
     {
         if (!manager->getSceneMgr()->hasEntity(sn->getName()))
             continue;
@@ -1483,11 +1493,11 @@ TEST_F(SceneSaveLoadTest, RoundTrip_TwoSkeletalEntities_BonePrefixing) {
     ASSERT_EQ(exportResult, 0);
 
     ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
-    EXPECT_EQ(manager->getSceneNodes().size(), 2);
+    EXPECT_EQ(meshEntitySceneNodes(manager).size(), 2);
 
     // Verify both reimported entities have skeletons
     int skelCount = 0;
-    for (auto* sn : manager->getSceneNodes())
+    for (auto* sn : meshEntitySceneNodes(manager))
     {
         if (!manager->getSceneMgr()->hasEntity(sn->getName()))
             continue;
