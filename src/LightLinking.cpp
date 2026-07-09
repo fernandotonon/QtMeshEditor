@@ -3,6 +3,7 @@
 #include "Manager.h"
 
 #include <OgreEntity.h>
+#include <OgreLight.h>
 #include <OgreSceneNode.h>
 
 #include <QHash>
@@ -138,30 +139,45 @@ void applyExcludeRule(uint32_t channelBit, const QStringList& excludedNames)
     }
 }
 
-void applyRule(const QString& lightName, const ActiveRule& rule)
+bool channelBitInUseByOther(const QString& lightName, uint32_t bit)
 {
-    auto* lights = LightManager::getSingletonPtr();
-    if (!lights)
-        return;
+    if (bit == 0)
+        return false;
+    for (auto it = g_rulesByLight.constBegin(); it != g_rulesByLight.constEnd(); ++it)
+    {
+        if (it.key() == lightName)
+            continue;
+        if (it->channelBit == bit)
+            return true;
+    }
+    return false;
+}
 
-    const LightHandle* handle = lights->findLight(lightName);
-    if (!handle || !handle->isValid())
+void applyRule(const QString& lightName, const ActiveRule& rule, Ogre::Light* light = nullptr)
+{
+    if (!light)
+    {
+        if (auto* lights = LightManager::getSingletonPtr())
+            if (const LightHandle* handle = lights->findLight(lightName))
+                light = handle->light;
+    }
+    if (!light)
         return;
 
     if (rule.mode == LightLinking::Mode::None || rule.channelBit == 0)
     {
-        handle->light->setLightMask(LightLinking::kDefaultMask);
+        light->setLightMask(LightLinking::kDefaultMask);
         return;
     }
 
     if (rule.mode == LightLinking::Mode::Include)
     {
-        handle->light->setLightMask(rule.channelBit);
+        light->setLightMask(rule.channelBit);
         applyIncludeRule(rule.channelBit, rule.entityNames);
     }
     else if (rule.mode == LightLinking::Mode::Exclude)
     {
-        handle->light->setLightMask(LightLinking::kDefaultMask & ~rule.channelBit);
+        light->setLightMask(LightLinking::kDefaultMask & ~rule.channelBit);
         applyExcludeRule(rule.channelBit, rule.entityNames);
     }
 }
@@ -202,7 +218,7 @@ Mode modeFromString(const QString& text)
     return Mode::None;
 }
 
-void applyFromSnapshot(const LightSnapshot& snapshot)
+void applyFromSnapshot(const LightSnapshot& snapshot, Ogre::Light* light)
 {
     if (snapshot.name.isEmpty())
         return;
@@ -217,22 +233,27 @@ void applyFromSnapshot(const LightSnapshot& snapshot)
         if (rule.channelBit != 0)
             clearChannelFromAllEntities(rule.channelBit);
         g_rulesByLight.remove(snapshot.name);
-        applyRule(snapshot.name, {});
+        applyRule(snapshot.name, {}, light);
         return;
     }
 
-    if (rule.channelBit == 0)
+    if (rule.channelBit == 0 || channelBitInUseByOther(snapshot.name, rule.channelBit))
         rule.channelBit = allocateChannelBit(snapshot.name);
     if (rule.channelBit == 0)
         return; // all 31 channels in use
 
     g_rulesByLight.insert(snapshot.name, rule);
 
-    applyRule(snapshot.name, rule);
+    applyRule(snapshot.name, rule, light);
 
-    if (LightHandle* handle = LightManager::getSingleton()->findLight(snapshot.name))
+    if (!light)
     {
-        auto& bindings = handle->light->getUserObjectBindings();
+        if (LightHandle* handle = LightManager::getSingleton()->findLight(snapshot.name))
+            light = handle->light;
+    }
+    if (light)
+    {
+        auto& bindings = light->getUserObjectBindings();
         bindings.setUserAny(QStringLiteral("light_link_mode").toStdString(),
                             Ogre::Any(modeToString(rule.mode).toStdString()));
         bindings.setUserAny(QStringLiteral("light_link_entities").toStdString(),

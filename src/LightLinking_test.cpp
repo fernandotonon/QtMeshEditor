@@ -100,3 +100,53 @@ TEST_F(LightLinkingOgreTest, JsonRoundTripPreservesLinkFields)
               QStringList{QStringLiteral("Hero")});
     EXPECT_EQ(restored.standaloneLights.first().linkChannelBit, 4u);
 }
+
+TEST_F(LightLinkingOgreTest, RestoreSnapshotAppliesLinkingBeforeRegistration)
+{
+    Ogre::Entity* hero = createTestEntity(QStringLiteral("Hero"));
+    Ogre::Entity* floor = createTestEntity(QStringLiteral("Floor"));
+
+    LightSnapshot snapshot;
+    snapshot.name = QStringLiteral("SavedKey");
+    snapshot.type = Ogre::Light::LT_POINT;
+    snapshot.linkMode = LightLinking::Mode::Include;
+    snapshot.linkedEntityNames = {QStringLiteral("Hero")};
+
+    const LightHandle restored = LightManager::getSingleton()->restoreSnapshot(snapshot);
+    ASSERT_TRUE(restored.isValid());
+    EXPECT_NE(restored.light->getLightMask() & hero->getLightMask(), 0u);
+    EXPECT_EQ(restored.light->getLightMask() & floor->getLightMask(), 0u);
+}
+
+TEST_F(LightLinkingOgreTest, DuplicateLightAllocatesFreshLinkChannel)
+{
+    Ogre::Entity* hero = createTestEntity(QStringLiteral("Hero"));
+
+    const LightHandle source =
+        LightManager::getSingleton()->createLight(Ogre::Light::LT_POINT, QStringLiteral("Key"));
+    ASSERT_TRUE(source.isValid());
+
+    LightSnapshot sourceSnap = LightSnapshot::fromHandle(source);
+    sourceSnap.linkMode = LightLinking::Mode::Include;
+    sourceSnap.linkedEntityNames = {QStringLiteral("Hero")};
+    LightManager::getSingleton()->applyProperties(source.name, sourceSnap);
+
+    const uint32_t sourceBit = LightSnapshot::fromHandle(source).linkChannelBit;
+    ASSERT_NE(sourceBit, 0u);
+
+    const LightHandle clone = LightManager::getSingleton()->duplicateLight(source.name);
+    ASSERT_TRUE(clone.isValid());
+
+    const uint32_t cloneBit = LightSnapshot::fromHandle(clone).linkChannelBit;
+    EXPECT_NE(sourceBit, cloneBit);
+    EXPECT_NE(source.light->getLightMask() & hero->getLightMask(), 0u);
+    EXPECT_NE(clone.light->getLightMask() & hero->getLightMask(), 0u);
+
+    LightSnapshot cloneSnap = LightSnapshot::fromHandle(clone);
+    cloneSnap.linkedEntityNames.clear();
+    LightManager::getSingleton()->applyProperties(clone.name, cloneSnap);
+
+    EXPECT_EQ(LightSnapshot::fromHandle(source).linkChannelBit, sourceBit);
+    EXPECT_EQ(LightSnapshot::fromHandle(clone).linkChannelBit, cloneBit);
+    EXPECT_NE(source.light->getLightMask() & hero->getLightMask(), 0u);
+}

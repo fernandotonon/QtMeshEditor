@@ -270,8 +270,7 @@ void LightManager::applySnapshotToHandle(const LightSnapshot& snapshot, LightHan
     bindings.setUserAny(QStringLiteral("light_link_channel").toStdString(),
                         Ogre::Any(snapshot.linkChannelBit));
 
-    LightSnapshot linkSnap = snapshot;
-    LightLinking::applyFromSnapshot(linkSnap);
+    LightLinking::applyFromSnapshot(snapshot, handle.light);
 }
 
 LightHandle LightManager::createLightInternal(Ogre::Light::LightTypes type, const QString& baseName)

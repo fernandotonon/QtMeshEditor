@@ -7,6 +7,7 @@ struct LightSnapshot;
 namespace Ogre
 {
 class Entity;
+class Light;
 }
 
 namespace LightLinking
@@ -29,7 +30,9 @@ QString modeToString(Mode mode);
 Mode modeFromString(const QString& text);
 
 /// Apply linking from a snapshot onto the live scene (light + entity masks).
-void applyFromSnapshot(const LightSnapshot& snapshot);
+/// When @p light is provided it is used directly (e.g. before the handle is
+/// registered in LightManager); otherwise the light is looked up by name.
+void applyFromSnapshot(const LightSnapshot& snapshot, Ogre::Light* light = nullptr);
 
 /// Remove a light's channel from the pool and reset entity bits for that channel.
 void onLightDeleted(const LightSnapshot& snapshot);
