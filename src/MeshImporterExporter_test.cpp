@@ -21,6 +21,7 @@
 #include <OgreHardwareBufferManager.h>
 #include <OgreTextureManager.h>
 #include <OgreHardwarePixelBuffer.h>
+#include "LightManager.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "EditableMesh.h"
@@ -483,7 +484,9 @@ TEST_F(MeshImporterExporterTest, SceneImporter_ExportedEmptySceneClearsExistingN
 
     EXPECT_TRUE(MeshImporterExporter::sceneImporter(scenePath));
     EXPECT_FALSE(Manager::getSingleton()->getSceneMgr()->hasSceneNode("ExistingNode"));
-    EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
+    EXPECT_TRUE(Manager::getSingleton()->getEntities().isEmpty());
+    if (auto* lights = LightManager::getSingletonPtr())
+        EXPECT_GE(lights->lights().size(), 1u);
 }
 
 TEST_F(MeshImporterExporterTest, SceneImporter_NodeOnlyExportBehavesAsValidEmptyScene)
@@ -500,7 +503,9 @@ TEST_F(MeshImporterExporterTest, SceneImporter_NodeOnlyExportBehavesAsValidEmpty
 
     EXPECT_TRUE(MeshImporterExporter::sceneImporter(scenePath));
     EXPECT_FALSE(Manager::getSingleton()->getSceneMgr()->hasSceneNode("ExistingNode"));
-    EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
+    EXPECT_TRUE(Manager::getSingleton()->getEntities().isEmpty());
+    if (auto* lights = LightManager::getSingletonPtr())
+        EXPECT_GE(lights->lights().size(), 1u);
 }
 
 TEST_F(MeshImporterExporterTest, SceneExporter_InMemoryMeshEntity_WritesSceneFile)

@@ -2677,10 +2677,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 bool convertLH = (file.suffix().compare("x", Qt::CaseInsensitive) != 0);
                 const std::string sourcePath = file.filePath().toStdString();
                 Ogre::MeshPtr mesh = importer.loadModel(sourcePath, convertLH, additionalFlags);
-                if (!SceneLightsIO::importLightsSidecar(file.filePath(), false)) {
-                    if (const aiScene* importScene = importer.getImportedScene())
-                        SceneLightsIO::importFromAssimpScene(importScene, false);
-                }
+                SceneLightsIO::importLightsFromFile(file.filePath(), false);
                 // Read coordinate system from metadata immediately — valid for both mesh and animation-only files.
                 if (outUpAxis) *outUpAxis = importer.getSceneUpAxis();
                 if (mesh) {

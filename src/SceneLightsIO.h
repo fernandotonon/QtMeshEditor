@@ -71,5 +71,6 @@ QJsonObject lightsInfoJsonFromFile(const QString& path, QString* error = nullptr
 /// Assimp FBX lights are best-effort; the sidecar preserves bit-exact QtMeshEditor state.
 bool writeLightsSidecar(const QString& meshPath);
 bool importLightsSidecar(const QString& meshPath, bool useDefaultWhenEmpty = true);
+bool importLightsFromFile(const QString& path, bool useDefaultWhenEmpty = true);
 
 } // namespace SceneLightsIO

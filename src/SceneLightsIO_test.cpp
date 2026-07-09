@@ -11,6 +11,8 @@
 
 #include <QTemporaryDir>
 
+#include <assimp/scene.h>
+
 class SceneLightsIOTest : public ::testing::Test {
 protected:
     void TearDown() override
@@ -34,6 +36,38 @@ protected:
         ASSERT_TRUE(tempDir.isValid());
     }
 };
+
+TEST(SceneLightsIOTest, ChunkedMetadataRoundTripPreservesLargeDocument)
+{
+    SceneLightsIO::SceneLightsDocument doc;
+    doc.ambient = Ogre::ColourValue(0.2f, 0.25f, 0.3f);
+    for (int i = 0; i < 24; ++i)
+    {
+        LightSnapshot light;
+        light.name = QStringLiteral("Fill_%1").arg(i);
+        light.type = Ogre::Light::LT_POINT;
+        light.enabled = true;
+        light.diffuse = Ogre::ColourValue(0.8f, 0.7f, 0.6f);
+        light.specular = Ogre::ColourValue(0.4f, 0.4f, 0.4f);
+        light.powerScale = 1.5f + static_cast<float>(i) * 0.1f;
+        light.position = Ogre::Vector3(static_cast<float>(i), 1.f, 2.f);
+        light.castShadows = (i % 3) == 0;
+        doc.standaloneLights.append(light);
+    }
+
+    const QByteArray json = SceneLightsIO::documentToJson(doc);
+    ASSERT_GT(json.size(), 1023);
+
+    aiScene scene;
+    scene.mRootNode = new aiNode("root");
+    SceneLightsIO::appendLightsToAiScene(&scene, doc);
+
+    SceneLightsIO::SceneLightsDocument restored;
+    ASSERT_TRUE(SceneLightsIO::readDocumentFromAiScene(&scene, restored));
+    EXPECT_EQ(restored.standaloneLights.size(), doc.standaloneLights.size());
+    EXPECT_EQ(restored.standaloneLights.first().name, doc.standaloneLights.first().name);
+    EXPECT_EQ(restored.standaloneLights.last().powerScale, doc.standaloneLights.last().powerScale);
+}
 
 TEST(SceneLightsIOTest, JsonRoundTripPreservesLightSnapshot)
 {

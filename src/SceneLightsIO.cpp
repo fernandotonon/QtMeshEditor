@@ -4,6 +4,7 @@
 #include "LightRigLibrary.h"
 #include "Manager.h"
 #include "ShadowController.h"
+#include "SentryReporter.h"
 
 #include <assimp/light.h>
 #include <assimp/metadata.h>
@@ -18,12 +19,78 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFile>
 #include <QFileInfo>
 #include <QDir>
 
 #include <cmath>
 #include <map>
 #include <vector>
+
+namespace
+{
+
+// Assimp aiString stores AI_MAXLEN bytes including the terminator.
+constexpr int kAiStringMaxPayload = 1023;
+constexpr QLatin1String kSceneLightsChunkCountKey("qtmesh.scene.lights.chunks");
+
+bool readLightsJsonFromMetadata(const aiMetadata* meta, QByteArray& jsonOut)
+{
+    jsonOut.clear();
+    if (!meta)
+        return false;
+
+    aiString encoded;
+    if (meta->Get(SceneLightsIO::kSceneLightsMetadataKey, encoded))
+    {
+        jsonOut = QByteArray(encoded.C_Str());
+        if (!jsonOut.isEmpty())
+            return true;
+    }
+
+    int chunkCount = 0;
+    if (!meta->Get(kSceneLightsChunkCountKey.data(), chunkCount) || chunkCount <= 0)
+        return false;
+
+    for (int i = 0; i < chunkCount; ++i)
+    {
+        const QString key = QStringLiteral("qtmesh.scene.lights.%1").arg(i);
+        aiString chunk;
+        if (!meta->Get(key.toUtf8().constData(), chunk))
+            return false;
+        jsonOut.append(chunk.C_Str());
+    }
+    return !jsonOut.isEmpty();
+}
+
+void writeLightsJsonToMetadata(aiMetadata* meta, const QByteArray& json)
+{
+    if (!meta || json.isEmpty())
+        return;
+
+    if (json.size() <= kAiStringMaxPayload)
+    {
+        meta->Add(SceneLightsIO::kSceneLightsMetadataKey, aiString(json.constData()));
+        return;
+    }
+
+    const int chunkCount =
+        (static_cast<int>(json.size()) + kAiStringMaxPayload - 1) / kAiStringMaxPayload;
+    meta->Add(kSceneLightsChunkCountKey.data(), chunkCount);
+    for (int i = 0; i < chunkCount; ++i)
+    {
+        const QByteArray slice = json.mid(i * kAiStringMaxPayload, kAiStringMaxPayload);
+        const QString key = QStringLiteral("qtmesh.scene.lights.%1").arg(i);
+        meta->Add(key.toUtf8().constData(), aiString(slice.constData()));
+    }
+}
+
+QString lightsSidecarPath(const QFileInfo& fi)
+{
+    return fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(".lights.json"));
+}
+
+} // namespace
 
 namespace
 {
@@ -312,7 +379,7 @@ LightSnapshot snapshotFromAssimpLight(const aiLight* light, const aiNode* node)
         Ogre::ColourValue(light->mColorSpecular.r, light->mColorSpecular.g, light->mColorSpecular.b);
 
     const float importedIntensity = std::max(SceneLightsIO::ogreLuminance(snapshot.diffuse), 1e-6f);
-    snapshot.powerScale = 1.0f;
+    snapshot.powerScale = importedIntensity;
     snapshot.diffuse.r /= importedIntensity;
     snapshot.diffuse.g /= importedIntensity;
     snapshot.diffuse.b /= importedIntensity;
@@ -446,7 +513,7 @@ SceneLightsDocument captureFromScene()
     doc.ambient = mgr->getSceneMgr()->getAmbientLight();
 
     Ogre::SceneNode* root = mgr->getSceneMgr()->getRootSceneNode();
-    std::map<Ogre::SceneNode*, RigGroupExport*> groupByNode;
+    std::map<Ogre::SceneNode*, int> groupIndexByNode;
 
     for (const auto& child : root->getChildren())
     {
@@ -458,8 +525,8 @@ SceneLightsDocument captureFromScene()
         group.name = QString::fromStdString(node->getName());
         group.rigId = rigIdFromSceneNode(node);
         group.preserveGrouping = true;
+        groupIndexByNode[node] = doc.rigGroups.size();
         doc.rigGroups.append(group);
-        groupByNode[node] = &doc.rigGroups.last();
     }
 
     for (const LightHandle& handle : lights->lights())
@@ -468,8 +535,9 @@ SceneLightsDocument captureFromScene()
             continue;
         const LightSnapshot snapshot = LightSnapshot::fromHandle(handle);
         auto* parent = static_cast<Ogre::SceneNode*>(handle.sceneNode->getParent());
-        if (parent && groupByNode.count(parent))
-            groupByNode[parent]->lights.append(snapshot);
+        const auto groupIt = groupIndexByNode.find(parent);
+        if (groupIt != groupIndexByNode.end())
+            doc.rigGroups[groupIt->second].lights.append(snapshot);
         else
             doc.standaloneLights.append(snapshot);
     }
@@ -610,11 +678,11 @@ bool readDocumentFromAiScene(const aiScene* scene, SceneLightsDocument& out)
 
     if (scene->mMetaData)
     {
-        aiString encoded;
-        if (scene->mMetaData->Get(kSceneLightsMetadataKey, encoded))
+        QByteArray encoded;
+        if (readLightsJsonFromMetadata(scene->mMetaData, encoded)
+            && documentFromJson(encoded, out))
         {
-            if (documentFromJson(QByteArray(encoded.C_Str()), out))
-                return true;
+            return true;
         }
     }
 
@@ -642,8 +710,7 @@ void appendLightsToAiScene(aiScene* scene, const SceneLightsDocument& doc)
 
     if (!scene->mMetaData)
         scene->mMetaData = new aiMetadata();
-    scene->mMetaData->Add(kSceneLightsMetadataKey,
-                          aiString(documentToJson(doc).constData()));
+    writeLightsJsonToMetadata(scene->mMetaData, documentToJson(doc));
 
     std::vector<aiLight*> newLights;
     std::vector<aiNode*> ownedNodes;
@@ -728,8 +795,7 @@ QJsonObject lightsInfoJsonFromFile(const QString& path, QString* error)
     if (!readDocumentFromAiScene(scene, doc))
     {
         const QFileInfo fi(path);
-        const QString sidecarPath =
-            fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(".lights.json"));
+        const QString sidecarPath = lightsSidecarPath(fi);
         if (QFile::exists(sidecarPath))
         {
             QFile sidecar(sidecarPath);
@@ -758,9 +824,15 @@ QJsonObject lightsInfoJsonFromFile(const QString& path, QString* error)
     for (const LightSnapshot& snapshot : doc.standaloneLights)
         appendLightInfo(snapshot, {});
 
-    aiString hasQtMeta;
-    const bool hasQtMeshBlock =
-        scene->mMetaData && scene->mMetaData->Get(kSceneLightsMetadataKey, hasQtMeta);
+    const bool hasQtMeshBlock = [&]() {
+        if (!scene->mMetaData)
+            return false;
+        aiString single;
+        if (scene->mMetaData->Get(kSceneLightsMetadataKey, single))
+            return true;
+        int chunkCount = 0;
+        return scene->mMetaData->Get(kSceneLightsChunkCountKey.data(), chunkCount) && chunkCount > 0;
+    }();
 
     QJsonObject root;
     root.insert(QStringLiteral("file"), QFileInfo(path).fileName());
@@ -779,20 +851,20 @@ bool writeLightsSidecar(const QString& meshPath)
     if (!fi.exists())
         return false;
 
-    const QString sidecarPath =
-        fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(".lights.json"));
+    const QString sidecarPath = lightsSidecarPath(fi);
     QFile file(sidecarPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return false;
     file.write(documentToJson(captureFromScene()));
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                  QStringLiteral("Wrote lights sidecar %1").arg(sidecarPath));
     return true;
 }
 
 bool importLightsSidecar(const QString& meshPath, bool useDefaultWhenEmpty)
 {
     const QFileInfo fi(meshPath);
-    const QString sidecarPath =
-        fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral(".lights.json"));
+    const QString sidecarPath = lightsSidecarPath(fi);
     if (!QFile::exists(sidecarPath))
         return false;
 
@@ -803,6 +875,27 @@ bool importLightsSidecar(const QString& meshPath, bool useDefaultWhenEmpty)
     SceneLightsDocument doc;
     if (!documentFromJson(file.readAll(), doc))
         return false;
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("Loaded lights sidecar %1").arg(sidecarPath));
+    return applyToLightManager(doc, useDefaultWhenEmpty);
+}
+
+bool importLightsFromFile(const QString& path, bool useDefaultWhenEmpty)
+{
+    if (importLightsSidecar(path, useDefaultWhenEmpty))
+        return true;
+
+    Assimp::Importer importer;
+    importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+    const unsigned int flags = aiProcess_Triangulate | aiProcess_ValidateDataStructure;
+    const aiScene* scene = importer.ReadFile(path.toUtf8().constData(), flags);
+    if (!scene)
+        return false;
+
+    SceneLightsDocument doc;
+    if (!readDocumentFromAiScene(scene, doc))
+        return false;
+
     return applyToLightManager(doc, useDefaultWhenEmpty);
 }
 

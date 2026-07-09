@@ -1697,14 +1697,16 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
             }
             cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
         } else {
-            QJsonObject root;
-            root.insert(QStringLiteral("meshes"), arr);
             if (hasLightsInFile) {
+                QJsonObject root;
+                root.insert(QStringLiteral("meshes"), arr);
                 root.insert(QStringLiteral("lights"), lightsPayload.value(QStringLiteral("lights")));
                 root.insert(QStringLiteral("ambient"), lightsPayload.value(QStringLiteral("ambient")));
                 root.insert(QStringLiteral("lightCount"), lightsInFile);
+                cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+            } else {
+                cliWrite(QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Indented)));
             }
-            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
         }
     } else {
         for (Ogre::Entity* entity : entities) {
