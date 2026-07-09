@@ -83,6 +83,12 @@ qtmesh material --list-presets                 # list built-in preset names (inc
 qtmesh hdri --list                             # bundled HDRI catalog + on-disk status (#472)
 qtmesh hdri --download studio_neutral          # fetch optional CC0 HDRI into <AppData>/hdri/
 qtmesh hdri --download-all                     # download every downloadable catalog entry
+qtmesh light scene.gltf --list [--json]       # list scene lights from file metadata / sidecar (#490)
+qtmesh light --list-rigs [--json]              # list built-in light rig preset ids
+qtmesh light scene.gltf --add point --pos 0,2,0 --colour "#fff" --intensity 1.5 -o lit.gltf
+qtmesh light scene.gltf --remove PointLight -o out.gltf
+qtmesh light scene.gltf --edit KeyLight --intensity 2.0 --colour "#ffaa66" -o out.gltf
+qtmesh light scene.gltf --apply-rig three_point_studio [--replace] -o out.gltf
 qtmesh material model.fbx --generate-texture "rusty bronze armor" -o out.fbx  # AI mesh-aware (depth-conditioned) texture → diffuse (needs SD build + base model; run `uv --unwrap` first if no UVs)
 qtmesh material model.fbx --generate-texture "..." --model mybase.safetensors --controlnet-strength 0.8 --width 768 --height 768 -o out.fbx  # explicit SD base model + ControlNet strength + size
 qtmesh material --texture albedo.png --generate-pbr [<mesh>] -o out.fbx  # AI PBR map synthesis (normal/roughness/height) from a diffuse → writes maps next to the albedo; with a <mesh> also binds them + re-exports (needs ONNX build + first-run model download; roughness works offline)
@@ -148,7 +154,7 @@ qtmesh cloud upload model.fbx [--name Hero] [--include "*.png,*.fbx"] [--exclude
 qtmesh cloud delete <project-id>              # delete a cloud project
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `isometric`, `scan`, `material`, `hdri`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`, `uv`, `retopo`, `skin`, `rig`, `segment`, `generate3d`, `cloud`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `turntable`, `isometric`, `scan`, `material`, `hdri`, `light`, `pack-textures`, `normal-from-height`, `atlas`, `atlas-apply`, `memory`, `analyze`, `vertex-cache`, `decimate`, `optimize`, `uv`, `retopo`, `skin`, `rig`, `segment`, `generate3d`, `cloud`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 
@@ -181,6 +187,16 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### Material Editor (QML)
 
 - **MaterialEditorQML** (`src/MaterialEditorQML.h/cpp`): QML_SINGLETON exposing full Ogre material property access (colors, lighting, depth, blending, fog, textures) with undo/redo. QML UI in `qml/`.
+
+### Scene Lighting (epic #482, Slice H #490)
+
+- **LightManager** (`src/LightManager.h/cpp`): owns user scene lights as named `Ogre::SceneNode` + `Ogre::Light` pairs tagged `user_light`. Create/duplicate/rename/delete/apply-properties; emits `lightCreated` / `lightChanged` / `lightDeleted`.
+- **LightRigLibrary** (`src/LightRigLibrary.h/cpp`): six built-in rig presets (`three_point_studio`, etc.). `apply(rigId, replaceExisting)` spawns a rig-group node + child lights and sets ambient.
+- **SceneLightsIO** (`src/SceneLightsIO.h/cpp`): bit-exact round-trip via `qtmesh.scene.lights` glTF metadata (chunked when >1 KiB) plus `.lights.json` sidecar for FBX/glb. `powerScaleToGltfIntensity()` maps QtMeshEditor intensity → KHR_lights_punctual lux/candela (approximate; metadata is authoritative).
+- **SceneLightsCLI** (`src/SceneLightsCLI.h/cpp`): headless `qtmesh light` — `--list`, `--list-rigs`, `--add`, `--remove`, `--edit`, `--apply-rig` with `-o` export through `MeshImporterExporter::sceneExporter` / mesh export + sidecar.
+- **MCP tools** (`create_light`, `delete_light`, `list_lights`, `set_light_property`, `apply_light_rig`): operate on the live editor scene via `LightManager` / `LightRigLibrary` / `SceneLightsIO::captureFromScene()`.
+- **Intensity units**: GUI/CLI/MCP use Ogre `powerScale` (Inspector “Intensity”). glTF export writes both `qtmesh.scene.lights` (exact) and best-effort KHR punctual intensity derived from `powerScale × diffuse luminance`. FBX lights are Assimp best-effort; use the `.lights.json` sidecar for bit-exact round-trip.
+- **Sentry breadcrumbs**: `scene.light.create|delete|duplicate|rename|edit|shadow_toggle|apply_rig|gizmo_toggle` on core ops; `ui.action` on menu/toolbar clicks.
 
 ### Debug Overlays
 

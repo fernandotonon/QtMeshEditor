@@ -64,6 +64,10 @@ float ogreLuminance(const Ogre::ColourValue& colour);
 /// Documented in SceneLightsIO.cpp — not bit-exact; use qtmesh metadata for that.
 float powerScaleToGltfIntensity(const LightSnapshot& snapshot);
 
+/// Build the standard lights list JSON object from an in-memory document.
+QJsonObject documentToListJson(const SceneLightsDocument& doc,
+                               const QString& sourceLabel = QString());
+
 /// Headless CLI / info: read lights from a file on disk (Assimp only).
 QJsonObject lightsInfoJsonFromFile(const QString& path, QString* error = nullptr);
 

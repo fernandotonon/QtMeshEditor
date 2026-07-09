@@ -134,6 +134,8 @@ void LightPropertiesController::commitEdit(LightPropertyClass propertyClass,
 
     UndoManager::getSingleton()->push(
         new EditLightPropertyCommand(propertyClass, before, after));
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.edit"),
+                                  lightPropertyClassLabel(propertyClass));
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   lightPropertyClassLabel(propertyClass));
 }
@@ -752,6 +754,10 @@ void LightPropertiesController::setCastShadows(bool value)
             pushImmediateEdit(LightPropertyClass::Shadow, [value](LightSnapshot& snapshot) {
                 snapshot.castShadows = value;
             });
+            SentryReporter::addBreadcrumb(QStringLiteral("scene.light.shadow_toggle"),
+                                          QStringLiteral("Light cast shadows: %1")
+                                              .arg(value ? QStringLiteral("on")
+                                                         : QStringLiteral("off")));
             SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                           QStringLiteral("Light cast shadows: %1")
                                               .arg(value ? QStringLiteral("on")

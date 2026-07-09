@@ -776,6 +776,34 @@ bool importFromAssimpScene(const aiScene* scene, bool useDefaultWhenEmpty)
     return applyToLightManager(doc, useDefaultWhenEmpty);
 }
 
+QJsonObject documentToListJson(const SceneLightsDocument& doc, const QString& sourceLabel)
+{
+    QJsonArray lights;
+    auto appendLightInfo = [&](const LightSnapshot& snapshot, const QString& parentGroup) {
+        QJsonObject obj = snapshotToJson(snapshot);
+        obj.insert(QStringLiteral("gltfIntensity"), powerScaleToGltfIntensity(snapshot));
+        if (!parentGroup.isEmpty())
+            obj.insert(QStringLiteral("rigGroup"), parentGroup);
+        lights.append(obj);
+    };
+
+    for (const RigGroupExport& group : doc.rigGroups)
+    {
+        for (const LightSnapshot& snapshot : group.lights)
+            appendLightInfo(snapshot, group.name);
+    }
+    for (const LightSnapshot& snapshot : doc.standaloneLights)
+        appendLightInfo(snapshot, {});
+
+    QJsonObject root;
+    if (!sourceLabel.isEmpty())
+        root.insert(QStringLiteral("file"), sourceLabel);
+    root.insert(QStringLiteral("ambient"), colourToJson(doc.ambient));
+    root.insert(QStringLiteral("lights"), lights);
+    root.insert(QStringLiteral("lightCount"), lights.size());
+    return root;
+}
+
 QJsonObject lightsInfoJsonFromFile(const QString& path, QString* error)
 {
     if (error)
@@ -806,24 +834,13 @@ QJsonObject lightsInfoJsonFromFile(const QString& path, QString* error)
     }
 
     if (doc.standaloneLights.isEmpty() && doc.rigGroups.isEmpty())
-        return QJsonObject{{QStringLiteral("lights"), QJsonArray{}}};
-
-    QJsonArray lights;
-    auto appendLightInfo = [&](const LightSnapshot& snapshot, const QString& parentGroup) {
-        QJsonObject obj = snapshotToJson(snapshot);
-        obj.insert(QStringLiteral("gltfIntensity"), powerScaleToGltfIntensity(snapshot));
-        if (!parentGroup.isEmpty())
-            obj.insert(QStringLiteral("rigGroup"), parentGroup);
-        lights.append(obj);
-    };
-
-    for (const RigGroupExport& group : doc.rigGroups)
     {
-        for (const LightSnapshot& snapshot : group.lights)
-            appendLightInfo(snapshot, group.name);
+        QJsonObject empty;
+        empty.insert(QStringLiteral("file"), QFileInfo(path).fileName());
+        empty.insert(QStringLiteral("lights"), QJsonArray{});
+        empty.insert(QStringLiteral("lightCount"), 0);
+        return empty;
     }
-    for (const LightSnapshot& snapshot : doc.standaloneLights)
-        appendLightInfo(snapshot, {});
 
     const bool hasQtMeshBlock = [&]() {
         if (!scene->mMetaData)
@@ -835,11 +852,7 @@ QJsonObject lightsInfoJsonFromFile(const QString& path, QString* error)
         return scene->mMetaData->Get(kSceneLightsChunkCountKey.data(), chunkCount) && chunkCount > 0;
     }();
 
-    QJsonObject root;
-    root.insert(QStringLiteral("file"), QFileInfo(path).fileName());
-    root.insert(QStringLiteral("ambient"), colourToJson(doc.ambient));
-    root.insert(QStringLiteral("lights"), lights);
-    root.insert(QStringLiteral("lightCount"), lights.size());
+    QJsonObject root = documentToListJson(doc, QFileInfo(path).fileName());
     root.insert(QStringLiteral("source"),
                 hasQtMeshBlock ? QStringLiteral("qtmesh.scene.lights")
                                : QStringLiteral("assimp"));

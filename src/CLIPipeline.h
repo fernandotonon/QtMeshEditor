@@ -76,6 +76,11 @@ public:
     static void printUsage();
     static void printVersion();
 
+    /// Write CLI stdout (original fd before Ogre redirect). Used by headless subcommands.
+    static void writeOutput(const QString& text);
+    /// Write CLI stderr.
+    static void writeCliError(const QString& text);
+
     /// Initialize Ogre in headless mode (hidden render window).
     /// Returns true on success.  Idempotent — safe to call after tryInitOgre().
     static bool initOgreHeadless();
