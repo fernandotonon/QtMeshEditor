@@ -452,6 +452,8 @@ LightRigApplyResult apply(const QString& rigId, bool replaceExisting)
     if (!result.ok)
         result.error = QStringLiteral("Rig produced no lights");
 
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.apply_rig"),
+                                  QStringLiteral("Apply light rig: %1").arg(rigId));
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   QStringLiteral("Apply light rig: %1").arg(rigId));
 

@@ -59,6 +59,9 @@
 #include "HDR/HDREnvironmentManager.h"
 #include "HDR/HdrEnvironmentController.h"
 #include "HDR/HdrTonemap.h"
+#include "LightManager.h"
+#include "LightRigLibrary.h"
+#include "SceneLightsIO.h"
 #include "RTShaderHelper.h"
 #include <QEventLoop>
 #include <QDebug>
@@ -68,6 +71,7 @@
 #include <QTemporaryFile>
 #include <QImage>
 #include <QBuffer>
+#include <QColor>
 #include "SentryReporter.h"
 #include <QTimer>
 #include <QDateTime>
@@ -76,6 +80,7 @@
 #include <QSet>
 #include <optional>
 #include <OgreException.h>
+#include <OgreLight.h>
 #include <OgreMaterialManager.h>
 #include <OgreMaterial.h>
 #include <OgreTechnique.h>
@@ -648,6 +653,11 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("search_files"), &MCPServer::toolSearchFiles},
         {QStringLiteral("read_file"), &MCPServer::toolReadFile},
         {QStringLiteral("delete_entity"), &MCPServer::toolDeleteEntity},
+        {QStringLiteral("create_light"), &MCPServer::toolCreateLight},
+        {QStringLiteral("delete_light"), &MCPServer::toolDeleteLight},
+        {QStringLiteral("list_lights"), &MCPServer::toolListLights},
+        {QStringLiteral("set_light_property"), &MCPServer::toolSetLightProperty},
+        {QStringLiteral("apply_light_rig"), &MCPServer::toolApplyLightRig},
         {QStringLiteral("duplicate_entity"), &MCPServer::toolDuplicateEntity},
         {QStringLiteral("camera_control"), &MCPServer::toolCameraControl},
         {QStringLiteral("get_camera_info"), &MCPServer::toolGetCameraInfo},
@@ -4731,6 +4741,245 @@ QJsonObject MCPServer::toolDeleteEntity(const QJsonObject &args)
     return makeSuccessResult(QString("Deleted '%1' from the scene.").arg(name));
 }
 
+namespace
+{
+
+bool parseMcpLightType(const QString& text, Ogre::Light::LightTypes& out)
+{
+    const QString lower = text.trimmed().toLower();
+    if (lower == QStringLiteral("directional"))
+    {
+        out = Ogre::Light::LT_DIRECTIONAL;
+        return true;
+    }
+    if (lower == QStringLiteral("point"))
+    {
+        out = Ogre::Light::LT_POINT;
+        return true;
+    }
+    if (lower == QStringLiteral("spot") || lower == QStringLiteral("spotlight"))
+    {
+        out = Ogre::Light::LT_SPOTLIGHT;
+        return true;
+    }
+    return false;
+}
+
+Ogre::ColourValue parseMcpColour(const QJsonValue& value)
+{
+    if (value.isString())
+    {
+        QColor colour(value.toString());
+        if (colour.isValid())
+            return Ogre::ColourValue(colour.redF(), colour.greenF(), colour.blueF(), colour.alphaF());
+    }
+    if (value.isArray())
+    {
+        const QJsonArray arr = value.toArray();
+        if (arr.size() >= 3)
+        {
+            return Ogre::ColourValue(static_cast<float>(arr.at(0).toDouble()),
+                                     static_cast<float>(arr.at(1).toDouble()),
+                                     static_cast<float>(arr.at(2).toDouble()),
+                                     arr.size() > 3 ? static_cast<float>(arr.at(3).toDouble()) : 1.0f);
+        }
+    }
+    return Ogre::ColourValue::White;
+}
+
+} // namespace
+
+QJsonObject MCPServer::toolCreateLight(const QJsonObject& args)
+{
+    const QString typeText = args.value(QStringLiteral("type")).toString();
+    if (typeText.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'type' is required (directional|point|spot)."));
+
+    Ogre::Light::LightTypes type = Ogre::Light::LT_POINT;
+    if (!parseMcpLightType(typeText, type))
+        return makeErrorResult(QStringLiteral("Error: Unknown light type '%1'.").arg(typeText));
+
+    if (!args.contains(QStringLiteral("position")))
+        return makeErrorResult(QStringLiteral("Error: 'position' is required ([x,y,z])."));
+
+    const Ogre::Vector3 position = parseVector3(args.value(QStringLiteral("position")));
+    Ogre::Vector3 direction(0.0f, -1.0f, 0.0f);
+    if (args.contains(QStringLiteral("direction")))
+        direction = parseVector3(args.value(QStringLiteral("direction")));
+
+    auto* lights = LightManager::getSingleton();
+    lights->tryConnectToManager();
+
+    const bool setDirection =
+        type == Ogre::Light::LT_DIRECTIONAL || type == Ogre::Light::LT_SPOTLIGHT;
+    LightHandle handle = lights->createLightAt(
+        type, LightManager::defaultBaseNameForType(type), position, direction, setDirection);
+    if (!handle.isValid())
+        return makeErrorResult(QStringLiteral("Error: Failed to create light."));
+
+    if (args.contains(QStringLiteral("colour")) || args.contains(QStringLiteral("color")))
+    {
+        const QJsonValue colourValue =
+            args.contains(QStringLiteral("colour")) ? args.value(QStringLiteral("colour"))
+                                                    : args.value(QStringLiteral("color"));
+        handle.light->setDiffuseColour(parseMcpColour(colourValue));
+    }
+    if (args.contains(QStringLiteral("intensity")))
+        handle.light->setPowerScale(static_cast<Ogre::Real>(args.value(QStringLiteral("intensity")).toDouble(1.0)));
+    if (args.contains(QStringLiteral("range")) && type != Ogre::Light::LT_DIRECTIONAL)
+    {
+        const float range = static_cast<float>(args.value(QStringLiteral("range")).toDouble(10.0));
+        handle.light->setAttenuation(range, 1.0f, 0.0f, 0.0f);
+    }
+    if (args.contains(QStringLiteral("cone")) && type == Ogre::Light::LT_SPOTLIGHT)
+    {
+        const QJsonValue cone = args.value(QStringLiteral("cone"));
+        float innerDeg = 30.0f;
+        float outerDeg = 40.0f;
+        if (cone.isArray())
+        {
+            const QJsonArray arr = cone.toArray();
+            if (arr.size() >= 1)
+                innerDeg = static_cast<float>(arr.at(0).toDouble(innerDeg));
+            if (arr.size() >= 2)
+                outerDeg = static_cast<float>(arr.at(1).toDouble(outerDeg));
+        }
+        else if (cone.isObject())
+        {
+            const QJsonObject obj = cone.toObject();
+            innerDeg = static_cast<float>(obj.value(QStringLiteral("inner")).toDouble(innerDeg));
+            outerDeg = static_cast<float>(obj.value(QStringLiteral("outer")).toDouble(outerDeg));
+        }
+        handle.light->setSpotlightRange(Ogre::Degree(innerDeg), Ogre::Degree(outerDeg), 1.0f);
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.create"),
+                                  QStringLiteral("MCP create %1").arg(handle.name));
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("name"), handle.name);
+    payload.insert(QStringLiteral("type"), typeText);
+    payload.insert(QStringLiteral("position"),
+                   QJsonArray{position.x, position.y, position.z});
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolDeleteLight(const QJsonObject& args)
+{
+    const QString name = args.value(QStringLiteral("name")).toString();
+    if (name.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'name' is required."));
+
+    auto* lights = LightManager::getSingleton();
+    lights->tryConnectToManager();
+    if (!lights->deleteLight(name))
+        return makeErrorResult(QStringLiteral("Error: Light '%1' not found.").arg(name));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.delete"),
+                                  QStringLiteral("MCP delete %1").arg(name));
+    return makeSuccessResult(QStringLiteral("Deleted light '%1'.").arg(name));
+}
+
+QJsonObject MCPServer::toolListLights(const QJsonObject& args)
+{
+    Q_UNUSED(args);
+    auto* lights = LightManager::getSingleton();
+    lights->tryConnectToManager();
+
+    const QJsonObject payload = SceneLightsIO::documentToListJson(SceneLightsIO::captureFromScene());
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetLightProperty(const QJsonObject& args)
+{
+    const QString name = args.value(QStringLiteral("name")).toString();
+    const QString key = args.value(QStringLiteral("key")).toString().trimmed().toLower();
+    if (name.isEmpty() || key.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'name' and 'key' are required."));
+    if (!args.contains(QStringLiteral("value")))
+        return makeErrorResult(QStringLiteral("Error: 'value' is required."));
+
+    auto* lights = LightManager::getSingleton();
+    lights->tryConnectToManager();
+    LightHandle* handle = lights->findLight(name);
+    if (!handle || !handle->isValid())
+        return makeErrorResult(QStringLiteral("Error: Light '%1' not found.").arg(name));
+
+    const QJsonValue value = args.value(QStringLiteral("value"));
+    LightSnapshot snapshot = LightSnapshot::fromHandle(*handle);
+
+    if (key == QStringLiteral("position"))
+        handle->sceneNode->setPosition(parseVector3(value));
+    else if (key == QStringLiteral("direction"))
+        handle->sceneNode->setDirection(parseVector3(value));
+    else if (key == QStringLiteral("colour") || key == QStringLiteral("color") || key == QStringLiteral("diffuse"))
+        snapshot.diffuse = parseMcpColour(value);
+    else if (key == QStringLiteral("intensity") || key == QStringLiteral("powerscale"))
+        snapshot.powerScale = static_cast<float>(value.toDouble(snapshot.powerScale));
+    else if (key == QStringLiteral("range") || key == QStringLiteral("attenuationrange"))
+        snapshot.attenuationRange = static_cast<float>(value.toDouble(snapshot.attenuationRange));
+    else if (key == QStringLiteral("enabled") || key == QStringLiteral("visible"))
+        snapshot.enabled = value.toBool(snapshot.enabled);
+    else if (key == QStringLiteral("castshadows") || key == QStringLiteral("shadows"))
+        snapshot.castShadows = value.toBool(snapshot.castShadows);
+    else if (key == QStringLiteral("cone") && snapshot.type == Ogre::Light::LT_SPOTLIGHT)
+    {
+        float innerDeg = snapshot.spotlightInnerAngleDeg;
+        float outerDeg = snapshot.spotlightOuterAngleDeg;
+        if (value.isArray())
+        {
+            const QJsonArray arr = value.toArray();
+            if (arr.size() >= 1)
+                innerDeg = static_cast<float>(arr.at(0).toDouble(innerDeg));
+            if (arr.size() >= 2)
+                outerDeg = static_cast<float>(arr.at(1).toDouble(outerDeg));
+        }
+        else if (value.isObject())
+        {
+            const QJsonObject obj = value.toObject();
+            innerDeg = static_cast<float>(obj.value(QStringLiteral("inner")).toDouble(innerDeg));
+            outerDeg = static_cast<float>(obj.value(QStringLiteral("outer")).toDouble(outerDeg));
+        }
+        snapshot.spotlightInnerAngleDeg = innerDeg;
+        snapshot.spotlightOuterAngleDeg = outerDeg;
+    }
+    else
+        return makeErrorResult(QStringLiteral("Error: Unsupported light property key '%1'.").arg(key));
+
+    if (!lights->applyProperties(name, snapshot))
+        return makeErrorResult(QStringLiteral("Error: Failed to set property on '%1'.").arg(name));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.edit"),
+                                  QStringLiteral("MCP set %1 on %2").arg(key, name));
+    return makeSuccessResult(QStringLiteral("Updated '%1'.%2 = %3")
+                                 .arg(name, key, QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("value"), value}}).toJson(QJsonDocument::Compact))));
+}
+
+QJsonObject MCPServer::toolApplyLightRig(const QJsonObject& args)
+{
+    QString rigId = args.value(QStringLiteral("name")).toString();
+    if (rigId.isEmpty())
+        rigId = args.value(QStringLiteral("rig_id")).toString();
+    if (rigId.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'name' (rig id) is required."));
+
+    const bool replaceExisting = args.value(QStringLiteral("replace_existing")).toBool(false);
+    LightManager::getSingleton()->tryConnectToManager();
+
+    const LightRigApplyResult result = LightRigLibrary::apply(rigId, replaceExisting);
+    if (!result.ok)
+        return makeErrorResult(result.error);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.apply_rig"),
+                                  QStringLiteral("MCP rig %1").arg(rigId));
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("rigId"), result.rigId);
+    payload.insert(QStringLiteral("rigGroupNodeName"), result.rigGroupNodeName);
+    payload.insert(QStringLiteral("addedLightCount"), result.addedLights.size());
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Indented)));
+}
+
 QJsonObject MCPServer::toolDuplicateEntity(const QJsonObject &args)
 {
     QString name = args["name"].toString();
@@ -6735,6 +6984,77 @@ QJsonArray MCPServer::buildToolsList()
             "Apply a built-in material preset to a mesh. PBR templates (Metallic-Roughness / Specular-Glossiness / Unlit PBR) create the canonical 6-slot texture-unit layout (albedo / normal_map / metallic / roughness / ao / emissive) and tag the pass with a 'pbr_workflow' user binding so PBR-aware shaders can detect intent.",
             inputSchema
         ));
+    }
+
+    // create_light
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["type"] = QJsonObject{{"type", "string"}, {"description", "directional | point | spot"}};
+        properties["position"] = QJsonObject{{"type", "array"}, {"description", "World position [x, y, z]"}};
+        properties["direction"] = QJsonObject{{"type", "array"}, {"description", "Optional aim direction [x, y, z] for directional/spot lights"}};
+        properties["colour"] = QJsonObject{{"type", "string"}, {"description", "Optional diffuse colour (#rrggbb or [r,g,b])"}};
+        properties["intensity"] = QJsonObject{{"type", "number"}, {"description", "Optional powerScale (QtMeshEditor intensity units)"}};
+        properties["range"] = QJsonObject{{"type", "number"}, {"description", "Optional attenuation range for point/spot lights"}};
+        properties["cone"] = QJsonObject{{"type", "array"}, {"description", "Optional spot cone [innerDeg, outerDeg]"}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"type", "position"};
+        tools.append(buildToolDefinition(
+            "create_light",
+            "Create a user scene light in the live editor scene. Intensity uses QtMeshEditor powerScale units.",
+            inputSchema));
+    }
+
+    // delete_light
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["name"] = QJsonObject{{"type", "string"}, {"description", "Light scene-node name"}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"name"};
+        tools.append(buildToolDefinition(
+            "delete_light",
+            "Delete a user scene light by name from the live editor scene.",
+            inputSchema));
+    }
+
+    // list_lights
+    appendTool(
+        "list_lights",
+        "List every user light in the live scene (name, type, colour, intensity, rig group, etc.) as JSON.",
+        QJsonObject());
+
+    // set_light_property
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["name"] = QJsonObject{{"type", "string"}, {"description", "Light scene-node name"}};
+        properties["key"] = QJsonObject{{"type", "string"}, {"description", "position | direction | colour | intensity | range | enabled | castShadows | cone"}};
+        properties["value"] = QJsonObject{{"description", "New value (type depends on key)"}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"name", "key", "value"};
+        tools.append(buildToolDefinition(
+            "set_light_property",
+            "Set one property on an existing user light in the live scene.",
+            inputSchema));
+    }
+
+    // apply_light_rig
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["name"] = QJsonObject{{"type", "string"}, {"description", "Rig preset id (e.g. three_point_studio). Use list_rigs via qtmesh light --list-rigs."}};
+        properties["replace_existing"] = QJsonObject{{"type", "boolean"}, {"description", "When true, remove existing rig groups before applying."}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"name"};
+        tools.append(buildToolDefinition(
+            "apply_light_rig",
+            "Apply a built-in light rig preset to the live scene (same presets as the Lighting panel).",
+            inputSchema));
     }
 
     // set_hdr_environment

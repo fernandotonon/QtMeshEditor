@@ -291,6 +291,8 @@ LightHandle LightManager::createLightUnderParent(Ogre::SceneNode* parent,
     m_lights.append(handle);
 
     emit lightCreated(handle);
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.create"),
+                                  QStringLiteral("Created %1").arg(handle.name));
     return handle;
 }
 
@@ -382,7 +384,7 @@ LightHandle LightManager::duplicateLight(const QString& sourceName)
     LightHandle clone = restoreSnapshot(snapshot);
     if (clone.isValid())
     {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+        SentryReporter::addBreadcrumb(QStringLiteral("scene.light.duplicate"),
                                       QStringLiteral("Duplicate light: %1").arg(sourceName));
     }
     return clone;
@@ -453,6 +455,8 @@ bool LightManager::deleteLight(const QString& name)
         Ogre::SceneNode* node = m_lights[i].sceneNode;
         m_lights.removeAt(i);
         emit lightDeleted(name);
+        SentryReporter::addBreadcrumb(QStringLiteral("scene.light.delete"),
+                                      QStringLiteral("Deleted %1").arg(name));
 
         if (node && Manager::getSingletonPtr())
         {
@@ -524,7 +528,7 @@ bool LightManager::renameLight(const QString& oldName, const QString& newName)
     if (!renamed.isValid())
         return false;
 
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.rename"),
                                   QStringLiteral("Rename light: %1 -> %2").arg(oldName, newName));
     emit lightChanged(renamed.name);
     return true;

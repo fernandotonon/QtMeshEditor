@@ -224,6 +224,11 @@ private:
     QJsonObject toolCameraControl(const QJsonObject &args);
     QJsonObject toolGetCameraInfo(const QJsonObject &args);
     QJsonObject toolDeleteEntity(const QJsonObject &args);
+    QJsonObject toolCreateLight(const QJsonObject &args);
+    QJsonObject toolDeleteLight(const QJsonObject &args);
+    QJsonObject toolListLights(const QJsonObject &args);
+    QJsonObject toolSetLightProperty(const QJsonObject &args);
+    QJsonObject toolApplyLightRig(const QJsonObject &args);
     QJsonObject toolDuplicateEntity(const QJsonObject &args);
     QJsonObject toolSetSnapSettings(const QJsonObject &args);
     QJsonObject toolGetSnapSettings(const QJsonObject &args);

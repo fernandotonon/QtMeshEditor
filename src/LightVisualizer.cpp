@@ -321,6 +321,9 @@ void LightVisualizer::ensureResources()
 
 void LightVisualizer::setIconsVisible(bool visible)
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.gizmo_toggle"),
+                                  visible ? QStringLiteral("Show light icons")
+                                          : QStringLiteral("Hide light icons"));
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   visible ? QStringLiteral("Show light icons")
                                           : QStringLiteral("Hide light icons"));
@@ -339,6 +342,9 @@ void LightVisualizer::setIconsVisible(bool visible)
 
 void LightVisualizer::setSelectedGizmosOnly(bool selectedOnly)
 {
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.light.gizmo_toggle"),
+                                  selectedOnly ? QStringLiteral("Light gizmos: selected only")
+                                               : QStringLiteral("Light gizmos: show all"));
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   selectedOnly ? QStringLiteral("Light gizmos: selected only")
                                                : QStringLiteral("Light gizmos: show all"));

@@ -54,6 +54,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightingController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ShadowController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightsIO.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneLightsCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionBoxObject.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ObjectItemModel.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.cpp

@@ -4,6 +4,7 @@
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "SceneLightsIO.h"
+#include "SceneLightsCLI.h"
 #include "AnimationMerger.h"
 #include "MotionInbetween.h"
 #include "MotionLibrary.h"
@@ -571,6 +572,16 @@ void CLIPipeline::printVersion()
     cliWrite(QString("qtmesh %1\n").arg(QTMESHEDITOR_VERSION));
 }
 
+void CLIPipeline::writeOutput(const QString& text)
+{
+    cliWrite(text);
+}
+
+void CLIPipeline::writeCliError(const QString& text)
+{
+    err() << text;
+}
+
 void CLIPipeline::printUsage()
 {
     cliWrite(
@@ -810,6 +821,14 @@ void CLIPipeline::printUsage()
         "  hdri [--list]                     List bundled HDRI catalog + on-disk status.\n"
         "  hdri --download <name>            Download one CC0 HDRI from Poly Haven into AppData/hdri/.\n"
         "  hdri --download-all               Download every downloadable catalog entry.\n"
+        "  light <file> --list [--json]      List scene lights (metadata / sidecar / Assimp fallback).\n"
+        "  light --list-rigs [--json]        List built-in light rig preset ids.\n"
+        "  light <file> --add directional|point|spot --pos x,y,z [--dir x,y,z]\n"
+        "                  [--colour #rrggbb] [--intensity N] -o <out>\n"
+        "  light <file> --remove <name> -o <out>\n"
+        "  light <file> --edit <name> [--intensity N] [--colour #rrggbb]\n"
+        "                  [--pos x,y,z] [--dir x,y,z] [--range N] [--enabled 0|1] -o <out>\n"
+        "  light <file> --apply-rig <rig_id> [--replace] -o <out>\n"
         "  retopo <file> [--target-faces N] [--max-angle DEG] [--shape-tol DEG] [--max-aspect R] -o <out> [--json]\n"
         "                                    Quad-dominant retopology via triangle pairing. Pairs adjacent\n"
         "                                    triangles into convex quads where coplanarity + shape + aspect-ratio\n"
@@ -1533,6 +1552,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "vat") rc = cmdVat(argc, argv);
     else if (cmd == "uv") rc = cmdUv(argc, argv);
     else if (cmd == "hdri") rc = cmdHdri(argc, argv);
+    else if (cmd == "light") rc = SceneLightsCLI::run(argc, argv);
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);

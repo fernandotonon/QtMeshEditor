@@ -42,6 +42,7 @@ LightPropertiesController.cpp
 SceneLightingController.cpp
 ShadowController.cpp
 SceneLightsIO.cpp
+SceneLightsCLI.cpp
 SelectionBoxObject.cpp
 ObjectItemModel.cpp
 MaterialComboDelegate.cpp
