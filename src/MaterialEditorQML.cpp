@@ -4714,6 +4714,18 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
         QStringLiteral("entity=%1 views=%2 size=%3")
             .arg(st->entityName).arg(viewNames.join(',')).arg(std::max(st->width, st->height)));
 
+    // Decimate + unwrap the mesh NOW, before any depth render / SD view — so
+    // (a) all views AND the final bake share the same decimated+unwrapped
+    // geometry (they were previously mismatched: views from the full mesh,
+    // bake from the decimated one), and (b) the ~2s unwrap runs up front
+    // instead of after the multi-minute SD passes (where a stale
+    // "unwrapping…" status made it look frozen for an hour). Depth renders and
+    // SD then proceed on the final mesh.
+    if (!prepareMeshForTexturing(entity)) {
+        emit sdIsGeneratingChanged();
+        return;   // prepareMeshForTexturing already emitted the error
+    }
+
     m_multiViewBake = std::move(st);
     startNextMultiViewGeneration();
     // LCOV_EXCL_STOP
@@ -4721,6 +4733,57 @@ void MaterialEditorQML::generateMeshTextureMultiView(const QString &prompt,
     Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(controlStrength); Q_UNUSED(views);
     emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
 #endif
+}
+
+bool MaterialEditorQML::prepareMeshForTexturing(Ogre::Entity* entity)
+{
+    if (!entity) return false;
+    if (entityHasUv0(entity)) return true;   // already unwrapped
+
+    // Clean degenerate (zero/near-zero-area) triangles FIRST. Marching cubes +
+    // Taubin smoothing (image-to-3D) leave slivers that xatlas can't
+    // parameterize — they collapse to lines in UV and produce the "streaks
+    // across the atlas + untextured patches" symptom.
+    {
+        EditableMesh em;
+        if (em.loadFromEntity(entity)) {
+            const int removed = em.removeDegenerateTriangles(1e-5f);
+            if (removed > 0) {
+                em.commitToEntity(entity);
+                emit sdGenerationNotice(
+                    tr("Cleaned %1 degenerate triangles before unwrap.").arg(removed));
+            }
+        }
+    }
+    // Decimate to a fixed TRIANGLE BUDGET before unwrap. Image-to-3D meshes are
+    // 80k+ tris; single-threaded xatlas (used to dodge its scheduler deadlock)
+    // takes many minutes on that. ~16k tris textures cleanly and unwraps in
+    // ~seconds. Meshopt backend — Ogre's MeshLodGenerator SIGSEGVs on these.
+    {
+        EditableMesh em;
+        int tris = 0;
+        if (em.loadFromEntity(entity))
+            tris = static_cast<int>(em.totalTriangleCount());
+        constexpr int kTextureTriBudget = 16000;
+        const double reduction =
+            MeshDecimator::reductionFromTargetTris(tris, kTextureTriBudget);
+        if (reduction > 0.01) {
+            emit sdGenerationNotice(
+                tr("Simplifying mesh for texturing (%1 → ~%2 tris)…")
+                    .arg(tris).arg(kTextureTriBudget));
+            MeshDecimator::decimateEntity(entity, reduction,
+                                          MeshDecimator::Algorithm::Meshopt);
+        }
+    }
+    emit sdGenerationNotice(tr("Auto-unwrapping UVs…"));
+    const UvUnwrapReport ur = UvUnwrap::unwrapEntity(entity);
+    if (!ur.applied || !entityHasUv0(entity)) {
+        emit sdGenerationError(QStringLiteral(
+            "AI texture: auto UV unwrap failed%1 — cannot bake.")
+            .arg(ur.error.isEmpty() ? QString() : (": " + ur.error)));
+        return false;
+    }
+    return true;
 }
 
 void MaterialEditorQML::startNextMultiViewGeneration()
@@ -4788,70 +4851,13 @@ void MaterialEditorQML::finishMultiViewBake()
     }
     if (!entity) { emit sdGenerationError("Mesh gone before bake."); emit sdIsGeneratingChanged(); return; }
 
-    // The baker projects onto an EXISTING UV0 atlas. A geometry-only mesh
-    // (TripoSG, or any unwrap-less import) has none, so auto-unwrap it in place
-    // first via xatlas. Safe here because these are STATIC generated meshes
-    // (no skeleton — the in-place-mutation caveat that unwrapEntity warns about
-    // only affects live skinned meshes), and they SHOULD keep the new UVs (the
-    // texture binds to them and they're carried into any export).
-    if (!entityHasUv0(entity)) {
-        // Clean degenerate (zero/near-zero-area) triangles FIRST. Marching
-        // cubes + Taubin smoothing (image-to-3D) leave slivers that xatlas
-        // can't parameterize — they collapse to lines in UV and produce the
-        // "streaks across the atlas + untextured patches" symptom. Removing
-        // them (plus the proportional weld epsilon inside unwrapEntity) gives
-        // xatlas clean charts.
-        {
-            EditableMesh em;
-            if (em.loadFromEntity(entity)) {
-                const int removed = em.removeDegenerateTriangles(1e-5f);
-                if (removed > 0) {
-                    em.commitToEntity(entity);
-                    emit sdGenerationNotice(
-                        tr("Cleaned %1 degenerate triangles before unwrap.")
-                            .arg(removed));
-                }
-            }
-        }
-        // Decimate BEFORE unwrap. Image-to-3D meshes are 80k+ tris; xatlas
-        // (single-threaded, to avoid its scheduler deadlock) takes many minutes
-        // on that — effectively a freeze. A texture doesn't need that density:
-        // ~90% reduction (user-verified as visually fine) drops it to a few
-        // thousand tris that unwrap + bake in seconds. Reduction is capped for
-        // meshes that are already small so we don't over-decimate them.
-        {
-            EditableMesh em;
-            int tris = 0;
-            if (em.loadFromEntity(entity))
-                tris = static_cast<int>(em.totalTriangleCount());  // post-cleanup
-            // Decimate to a fixed TRIANGLE BUDGET (more robust than a flat 90%:
-            // a huge mesh is reduced hard, a moderate one gently, and small
-            // meshes are left alone). ~16k tris textures cleanly and unwraps in
-            // seconds; user-verified ~90% reduction (≈ an 80k→16k mesh) looks
-            // fine. reductionFromTargetTris returns 0 when already under budget.
-            constexpr int kTextureTriBudget = 16000;
-            const double reduction =
-                MeshDecimator::reductionFromTargetTris(tris, kTextureTriBudget);
-            if (reduction > 0.01) {
-                emit sdGenerationNotice(
-                    tr("Simplifying mesh for texturing (%1 → ~%2 tris)…")
-                        .arg(tris).arg(kTextureTriBudget));
-                // Meshopt backend, NOT Ogre's MeshLodGenerator — the latter
-                // SIGSEGVs on these dense image-to-3D meshes (verified); meshopt
-                // handles them cleanly.
-                MeshDecimator::decimateEntity(entity, reduction,
-                                              MeshDecimator::Algorithm::Meshopt);
-            }
-        }
-        emit sdGenerationNotice("Auto-unwrapping UVs before bake…");
-        const UvUnwrapReport ur = UvUnwrap::unwrapEntity(entity);
-        if (!ur.applied || !entityHasUv0(entity)) {
-            emit sdGenerationError(QStringLiteral(
-                "AI texture: auto UV unwrap failed%1 — cannot bake.")
-                .arg(ur.error.isEmpty() ? QString() : (": " + ur.error)));
-            emit sdIsGeneratingChanged();
-            return;
-        }
+    // The mesh was already decimated + unwrapped up front (in
+    // generateMeshTextureMultiView, before the depth renders + SD) so every
+    // view and this bake share the same final geometry. Safety net: if UV0 is
+    // somehow still missing (e.g. this path was reached directly), prepare now.
+    if (!entityHasUv0(entity) && !prepareMeshForTexturing(entity)) {
+        emit sdIsGeneratingChanged();
+        return;   // prepareMeshForTexturing already emitted the error
     }
 
     QString geoErr;
@@ -4991,7 +4997,27 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
     if (!entity || entity->getNumSubEntities() == 0) return;
     Ogre::SubEntity* sub0 = entity->getSubEntity(0);
     if (!sub0 || !sub0->getMaterial()) return;
-    const QString matName = QString::fromStdString(sub0->getMaterial()->getName());
+    QString matName = QString::fromStdString(sub0->getMaterial()->getName());
+
+    // Geometry-only meshes (TripoSG image->3D) share ONE "MeshGen/NeutralClay"
+    // material. If we textured that shared material in place, every generated
+    // mesh in the scene would get this bake. Clone it to a per-entity material
+    // and rebind every sub-entity first, so the texture is isolated to THIS
+    // mesh. (Shared textured materials are left alone — cloning them would
+    // just duplicate an already-correct binding.)
+    if (matName.startsWith("MeshGen/")) {
+        const std::string uniqueMat =
+            entityName.toStdString() + "/mat";
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        Ogre::MaterialPtr cloned = matMgr.getByName(uniqueMat,
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        if (!cloned)
+            cloned = sub0->getMaterial()->clone(uniqueMat);
+        for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i)
+            entity->getSubEntity(i)->setMaterialName(uniqueMat,
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        matName = QString::fromStdString(uniqueMat);
+    }
 
     // Make sure the freshly-written PNG exists as a loadable texture
     // resource. The generated_textures dir is registered as a
@@ -5075,6 +5101,29 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
             // Rebuild the editor's TUS list so the rename + selection
             // are consistent.
             updateTextureUnitList();
+        } else {
+            // The material has NO texture unit at all — this is the
+            // geometry-only "MeshGen/NeutralClay" case the TripoSG
+            // image->3D path produces. The multi-view bake succeeded and
+            // wrote a valid diffuse PNG, but there was nowhere to bind it,
+            // so the mesh kept rendering flat clay. Create a named
+            // "diffuse_map" TUS now so setTextureName() below has a slot
+            // and the PBR/FFP wiring picks it up.
+            Ogre::TextureUnitState* tus =
+                pass->createTextureUnitState(textureFileName.toStdString());
+            tus->setName("diffuse_map");
+            // A flat clay diffuse colour would MODULATE the new texture to
+            // a muddy tint; reset to white so the baked colours show true.
+            pass->setDiffuse(Ogre::ColourValue::White);
+            // The TripoSR+AI-texture path repurposes "MeshGen/VertexColor",
+            // which has per-vertex colour tracking enabled (setVertexColourTracking
+            // on the decoder colours in MeshGenBuilder). Left on, the baked AI
+            // diffuse would be multiplied by the old decoder vertex colours
+            // instead of replacing them — disable tracking so the texture shows
+            // true. (No-op for NeutralClay, which never enabled it.)
+            pass->setVertexColourTracking(Ogre::TVC_NONE);
+            diffuseTusIndex = static_cast<int>(pass->getNumTextureUnitStates()) - 1;
+            updateTextureUnitList();
         }
     }
     setSelectedTextureUnitIndex(diffuseTusIndex);
@@ -5083,6 +5132,50 @@ void MaterialEditorQML::applyTextureToEntityDiffuse(const QString& entityName,
     // clear it first so the assignment always fires.
     m_textureName.clear();
     setTextureName(textureFileName);
+
+    // When we just CREATED a brand-new diffuse_map TUS on a material RTSS had
+    // already generated shaders for (the geometry-only NeutralClay case), the
+    // light invalidate/validate in setTextureName's regen path does NOT rebuild
+    // the RTSS technique from the now-changed FFP pass — so the viewport keeps
+    // rendering the old TUS-less generated technique and the mesh stays clay.
+    // Force the FULL rebuild: drop all shader techniques, re-wire FFP slots,
+    // recompile, and re-bind sub-entities (same path as a material-text edit).
+    updateMaterialText();
+
+    // updateMaterialText's removeAllShaderBasedTechniques() uses an AUTODETECT
+    // group and, for a freshly-cloned material, sometimes leaves the STALE
+    // (TUS-less) RTSS technique in place — RTShaderHelper then just re-validates
+    // that existing empty technique instead of rebuilding it, so the viewport
+    // keeps rendering an untextured shader (the mesh stays clay even though
+    // FFP tech 0 has the diffuse_map). Remove the shader technique explicitly
+    // against the material's REAL group, re-wire the FFP diffuse slot, then let
+    // RTSS regenerate from tech 0 on the next frame.
+    if (auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+        try {
+            shaderGen->removeAllShaderBasedTechniques(
+                m_ogreMaterial->getName(), m_ogreMaterial->getGroup());
+        } catch (const Ogre::Exception&) {}
+        // removeAllShaderBasedTechniques only drops techniques the
+        // ShaderGenerator is TRACKING. For a freshly clone()d material it often
+        // isn't tracking the cloned RTSS technique, so the stale, TUS-less
+        // ShaderGeneratorDefaultScheme technique survives — the viewport renders
+        // it and the mesh stays clay (confirmed: tusCount 0 even 1.5s later).
+        // Remove that scheme's technique DIRECTLY off the material so RTSS is
+        // forced to regenerate it from FFP tech 0 (which has the diffuse_map)
+        // via handleSchemeNotFound on the next render.
+        const Ogre::String rtssScheme =
+            Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME;
+        for (unsigned short ti = m_ogreMaterial->getNumTechniques(); ti-- > 0; ) {
+            if (m_ogreMaterial->getTechnique(ti)->getSchemeName() == rtssScheme)
+                m_ogreMaterial->removeTechnique(ti);
+        }
+        wirePbrSlotsForFFP(m_ogreMaterial.get());
+        m_ogreMaterial->compile();
+        // Re-bind every sub-entity so it re-resolves its technique against the
+        // recompiled material (setMaterialName(sameName) can keep a stale ptr).
+        for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i)
+            entity->getSubEntity(i)->setMaterial(m_ogreMaterial);
+    }
 }
 
 void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
@@ -5118,7 +5211,13 @@ void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
             return;
         }
         s.baked[s.current].image = img.convertToFormat(QImage::Format_RGB888);
-        emit sdTextureGenerated(outputPath);  // let the preview update per view
+        // NOTE: do NOT emit sdTextureGenerated here. That signal drives the
+        // panel's "AI texture applied" completion logic — emitting it per view
+        // made view 0 prematurely mark the bake ✓ and froze the status at the
+        // last SD notice ("view 4/4 — step 12/12"), because subsequent progress
+        // updates are gated on the aitex_gen step still being active. The final
+        // sdTextureGenerated fires once from finishMultiViewBake after the real
+        // bake + apply. (Per-view preview is not worth the false completion.)
         ++s.current;
         if (s.current < s.views.size()) {
             startNextMultiViewGeneration();   // next view

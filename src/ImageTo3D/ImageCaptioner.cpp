@@ -16,6 +16,7 @@
 #include <mtmd.h>
 #include <mtmd-helper.h>
 
+#include <mutex>
 #include <string>
 #include <vector>
 #endif
@@ -117,6 +118,16 @@ QString caption(const QImage& image, const QString& prompt)
     if (image.isNull() || !modelsPresent())
         return {};
 
+    // Captioning runs on a detached worker thread (MeshGenController), and the
+    // user can pick a new image while a previous caption is still in flight —
+    // spawning a second concurrent call. llama.cpp model load + inference is NOT
+    // safe to run from two threads at once (global ggml backend state); doing so
+    // produced garbage captions (e.g. a person still described from the earlier
+    // image). Serialise: only one caption() runs at a time. The caller's
+    // per-path guard (setCaptionResult) drops any now-stale result.
+    static std::mutex s_captionMutex;
+    std::lock_guard<std::mutex> lock(s_captionMutex);
+
     // ---- Load the text model + its mtmd (vision projector) context ----------
     llama_model_params mparams = llama_model_default_params();
     // Vision projector runs on CPU/accelerator via ggml; the small LM can put a
@@ -168,10 +179,16 @@ QString caption(const QImage& image, const QString& prompt)
         // ---- Build the prompt with the media marker + tokenize --------------
         const QString instruction = prompt.isEmpty()
             ? QString::fromLatin1(kDefaultPrompt) : prompt;
-        // SmolVLM (idefics3) chat format; the media marker is replaced by the
-        // image chunk during tokenization.
+        // SmolVLM (idefics3) chat format, matching the GGUF's embedded Jinja
+        // template EXACTLY. For a user turn whose FIRST content item is an image
+        // the template emits "User:" with NO trailing space (a text-first turn
+        // would use "User: "), then the image, then the text:
+        //   <|im_start|>User:<image>{instruction}<end_of_utterance>\nAssistant:
+        // The media marker is substituted for the real image chunk during
+        // tokenization. (The earlier "User: " + marker form had a stray space
+        // that mis-framed the turn.)
         const std::string text =
-            std::string("<|im_start|>User: ") + mtmd_default_marker()
+            std::string("<|im_start|>User:") + mtmd_default_marker()
             + instruction.toStdString() + "<end_of_utterance>\nAssistant:";
 
         mtmd_input_text itext;
@@ -210,6 +227,8 @@ QString caption(const QImage& image, const QString& prompt)
             char buf[256];
             const int n = llama_token_to_piece(vocab, tok, buf, sizeof(buf), 0, true);
             if (n > 0) out.append(buf, n);
+            // pos == nullptr here → llama_decode auto-assigns positions from the
+            // KV state (seq_pos_max + 1), continuing correctly past the image.
             llama_batch nb = llama_batch_get_one(const_cast<llama_token*>(&tok), 1);
             if (llama_decode(lctx, nb) != 0) break;
         }
