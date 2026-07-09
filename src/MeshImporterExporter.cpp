@@ -2677,10 +2677,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 bool convertLH = (file.suffix().compare("x", Qt::CaseInsensitive) != 0);
                 const std::string sourcePath = file.filePath().toStdString();
                 Ogre::MeshPtr mesh = importer.loadModel(sourcePath, convertLH, additionalFlags);
-                SceneLightsIO::importLightsFromFile(file.filePath(), false);
                 // Read coordinate system from metadata immediately — valid for both mesh and animation-only files.
                 if (outUpAxis) *outUpAxis = importer.getSceneUpAxis();
                 if (mesh) {
+                    SceneLightsIO::importLightsFromFile(file.filePath(), false);
                     // Cache the source file path so EditModeController can
                     // re-import the asset through the n-gon-aware
                     // EditableMesh::loadFromAssimpFile path. Quad-bearing
@@ -2962,7 +2962,13 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // .material and extracted image files next to the FBX.
         if (!ok)
             return -1;
-        SceneLightsIO::writeLightsSidecar(_uri);
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                                      QStringLiteral("Exported FBX: %1").arg(_uri));
+        if (!SceneLightsIO::writeLightsSidecar(_uri))
+        {
+            Ogre::LogManager::getSingleton().logWarning(
+                "FBX exported but lights sidecar write failed: " + _uri.toStdString());
+        }
     } else if (_format == QStringLiteral("PlayStation TMD (*.tmd)")) {
         if (!PS1TMD::exportEntity(e, _uri))
             return -1;
@@ -4007,7 +4013,12 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
         delete scene;
         // Assimp's glb2 writer may drop custom aiMetadata; persist a sidecar
         // (same strategy as FBX export) so user-added lights always round-trip.
-        SceneLightsIO::writeLightsSidecar(_uri);
+        if (!SceneLightsIO::writeLightsSidecar(_uri))
+        {
+            Ogre::LogManager::getSingleton().logError(
+                "Scene exported but lights sidecar write failed: " + _uri.toStdString());
+            return -1;
+        }
         reportProgress(100, QStringLiteral("Done."));
     } catch (const std::exception& ex) {
         auto msg = QString("Scene export failed: %1").arg(ex.what());

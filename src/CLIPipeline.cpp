@@ -1618,11 +1618,16 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
 
     SentryReporter::addBreadcrumb("cli.info", QString("Inspect .%1%2").arg(fi.suffix(), jsonOutput ? " json=true" : ""));
 
-    QString lightError;
-    const QJsonObject lightsPayload =
-        SceneLightsIO::lightsInfoJsonFromFile(fi.absoluteFilePath(), &lightError);
-    const int lightsInFile = lightsPayload.value(QStringLiteral("lightCount")).toInt();
-    const bool hasLightsInFile = lightsInFile > 0;
+    QJsonObject lightsPayload;
+    int lightsInFile = 0;
+    bool hasLightsInFile = false;
+    if (jsonOutput) {
+        QString lightError;
+        lightsPayload =
+            SceneLightsIO::lightsInfoJsonFromFile(fi.absoluteFilePath(), &lightError);
+        lightsInFile = lightsPayload.value(QStringLiteral("lightCount")).toInt();
+        hasLightsInFile = lightsInFile > 0;
+    }
 
     // Load the file; animation-only files produce no entity but populate animOnlySkeletons.
     QList<Ogre::SkeletonPtr> animOnlySkeletons;

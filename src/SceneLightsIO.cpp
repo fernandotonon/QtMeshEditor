@@ -24,6 +24,7 @@
 #include <QDir>
 
 #include <cmath>
+#include <algorithm>
 #include <map>
 #include <vector>
 
