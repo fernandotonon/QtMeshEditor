@@ -11,7 +11,10 @@ the binary). Attribution + licenses for the models and their training data:
 > [`QtMeshEditor-skintokens-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-skintokens-onnx),
 > [`QtMeshEditor-triposr-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposr-onnx),
 > [`QtMeshEditor-triposg-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposg-onnx),
-> [`QtMeshEditor-pbrify-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-pbrify-onnx)
+> [`QtMeshEditor-pbrify-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-pbrify-onnx),
+> [`QtMeshEditor-realesrgan-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-realesrgan-onnx),
+> [`QtMeshEditor-u2net-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-u2net-onnx),
+> [`QtMeshEditor-smolvlm-gguf`](https://huggingface.co/fernandotonon/QtMeshEditor-smolvlm-gguf)
 > (plus the in-house
 > [`QtMeshEditor-rmib-inbetween`](https://huggingface.co/fernandotonon/QtMeshEditor-rmib-inbetween),
 > [`QtMeshEditor-mesh-segmentation`](https://huggingface.co/fernandotonon/QtMeshEditor-mesh-segmentation),
