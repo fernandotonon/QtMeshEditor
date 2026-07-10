@@ -67,6 +67,9 @@ private slots:
     void onError(const QString &message);
     void onDumpVram();
     void onCaptureFrame();
+    /** Remove every captured mesh from the scene — the live preview plus all
+     *  promoted (`PS1Imported_*`) meshes accumulated across captures. */
+    void onClearCapturedMeshes();
     /** Pull the duration spinbox value, ask the manager to start a scene
      *  capture, persist the duration to QSettings (#425). */
     void onCaptureScene();

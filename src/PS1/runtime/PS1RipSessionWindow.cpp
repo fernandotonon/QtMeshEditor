@@ -261,6 +261,12 @@ PS1RipSessionWindow::PS1RipSessionWindow(QWidget *parent)
     dumpVramAct->setToolTip(tr("Snapshot the GPU VRAM mirror to PNG (hotkey: V)"));
     connect(dumpVramAct, &QAction::triggered, this, &PS1RipSessionWindow::onDumpVram);
 
+    auto *clearMeshesAct = toolbar->addAction(tr("Clear Meshes"));
+    clearMeshesAct->setToolTip(tr("Remove all captured meshes from the scene — the live "
+                                  "preview and every promoted mesh from earlier captures"));
+    connect(clearMeshesAct, &QAction::triggered, this,
+            &PS1RipSessionWindow::onClearCapturedMeshes);
+
     // Persist the duration whenever it changes so a session restart keeps the
     // user's last preference. Sentry breadcrumb fires here too so we can
     // correlate scene-capture cancels with the chosen duration in telemetry.
@@ -1075,6 +1081,41 @@ void PS1RipSessionWindow::onDumpVram()
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("ps1_rip_dump_vram"));
     m_manager->dumpVRAM();
+}
+
+void PS1RipSessionWindow::onClearCapturedMeshes()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("ps1_rip_clear_meshes"));
+    Manager *mgr = Manager::getSingletonPtr();
+    if (!mgr)
+        return;
+
+    // Each new capture already purges its own live preview (PS1Capture_*), but
+    // promoted meshes (PS1Imported_*) are deliberately kept so they survive the
+    // next capture — which means they pile up across a session with no way to
+    // clear them. This removes BOTH families so the user can reset the scene.
+    int removed = 0;
+    QStringList toRemove;
+    for (Ogre::SceneNode *node : mgr->getSceneNodes()) {
+        const QString name = QString::fromStdString(node->getName());
+        if (name.startsWith(QStringLiteral("PS1Capture_"))
+            || name.startsWith(QStringLiteral("PS1Imported_")))
+            toRemove.append(name);
+    }
+    for (const QString &name : toRemove) {
+        mgr->destroySceneNode(name);
+        ++removed;
+    }
+
+    // Drop the inspector/browser rows for the live preview too, so the tables
+    // don't point at nodes that no longer exist.
+    if (PS1CapturedAssets *store = PS1CapturedAssets::getSingletonPtr())
+        store->clear();
+
+    m_statusLabel->setText(removed == 0
+                               ? tr("No captured meshes to clear")
+                               : tr("Cleared %n captured mesh(es)", nullptr, removed));
 }
 
 void PS1RipSessionWindow::onCaptureFrame()
