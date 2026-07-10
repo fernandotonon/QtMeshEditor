@@ -271,8 +271,43 @@ the binary). Attribution + licenses for the models and their training data:
   checkbox; the template library remains the default and the automatic
   fallback. Same CMU licensing basis as above.
 
-All of the above clear QtMeshEditor's permissive-redistribution bar (MIT app,
-distributed via Homebrew / WinGet / Snap / Docker). GPL/CC-BY-NC/unlicensed
-models are deliberately excluded (e.g. RigNet was rejected for #408 — GPL code +
+### HY-Motion 1.0 (issue #793) — decision record: REJECTED on license
+
+- **Model:** [Tencent HY-Motion 1.0](https://huggingface.co/tencent/HY-Motion-1.0)
+  (Dec 2025) — DiT + flow-matching text-to-motion, 1.0B params (Lite: 0.46B),
+  SMPL-family skeleton output. Technically the first quality open-weights
+  text-to-motion option, and the #793 plan (ONNX export of the Lite DiT with
+  the sampler loop in C++, int8/fp16 quantization, SMPL→22-joint canonical
+  adapter) mirrors integrations this project has already shipped (UniRig,
+  TripoSG, SkinTokens) — feasibility was not the blocker.
+- **License (Tencent HY-MOTION 1.0 Community License, reviewed 2026-07-10) is
+  disqualifying on three independent grounds:**
+  1. **Territory exclusion** — *"'Territory' shall mean the worldwide territory,
+     excluding the territory of the European Union, United Kingdom and South
+     Korea"*; the agreement states it *"DOES NOT APPLY IN THE EUROPEAN UNION,
+     UNITED KINGDOM AND SOUTH KOREA."* QtMeshEditor distributes worldwide
+     (Homebrew / WinGet / Snap / Docker / GitHub) — the same ground on which
+     Hunyuan3D was rejected for #764.
+  2. **Outputs are territory-restricted too** — *"You must not use, reproduce,
+     modify, distribute, or display the Tencent HY-MOTION 1.0 Works, Output or
+     results of the Tencent HY-MOTION 1.0 Works outside the Territory."* Even
+     the opt-in-download escape hatch contemplated in #793 fails here: an
+     asset editor cannot hand users generated animations they may not legally
+     use or display in the EU/UK/South Korea.
+  3. **1 million MAU cap** — licensees whose products exceed 1M monthly active
+     users need a discretionary Tencent license (10× stricter than
+     Hunyuan3D's 100M threshold).
+- **Decision:** do not integrate, including as an opt-in download. The template
+  clip library stays the default and our from-scratch CVAE the experimental
+  path. Revisit if Tencent relicenses (as they did for some Hunyuan variants)
+  or if a genuinely permissive quality text-to-motion model appears; the #793
+  export/quantization plan remains valid for any such successor.
+
+All of the above (excluding rejected candidates) clear QtMeshEditor's
+permissive-redistribution bar (MIT app, distributed via Homebrew / WinGet /
+Snap / Docker). GPL/CC-BY-NC/unlicensed/territory-restricted models are
+deliberately excluded (e.g. RigNet was rejected for #408 — GPL code +
 unlicensed weights — in favour of UniRig; ShapeNet-Part/PartNet were rejected
-for #410 — non-commercial — in favour of synthetic bone-weight-derived labels).
+for #410 — non-commercial — in favour of synthetic bone-weight-derived labels;
+Hunyuan3D for #764 and HY-Motion 1.0 for #793 — EU/UK/KR territory
+exclusions).
