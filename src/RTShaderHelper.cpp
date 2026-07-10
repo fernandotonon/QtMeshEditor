@@ -168,6 +168,24 @@ void RTShaderHelper::initialize(Ogre::SceneManager* sceneMgr)
     Ogre::MaterialManager::getSingleton().addListener(sListener);
 
     HdrIblRtss::registerFactory();
+
+    // Hardware skinning SRS (issue #819 Slice D — dual-quaternion
+    // display toggle). The factory is registered and a template SRS
+    // added to the generated scheme; it stays dormant on every
+    // material until SkinningDisplay imprints one via
+    // prepareEntityForSkinning (the Ogre ShaderSystem-sample
+    // pattern), so plain materials are unaffected.
+    if (!Ogre::RTShader::HardwareSkinningFactory::getSingletonPtr()) {
+        auto* hsFactory = OGRE_NEW Ogre::RTShader::HardwareSkinningFactory;
+        shaderGen->addSubRenderStateFactory(hsFactory);
+        // Desktop GL has uniform room well past the shader-model-3
+        // default of 70 (DQS costs 2×vec4 per bone; linear 3×vec4).
+        // Entities above the cap keep the default (software) path.
+        Ogre::RTShader::HardwareSkinningFactory::setMaxCalculableBoneCount(96);
+        auto* renderState = shaderGen->getRenderState(Ogre::MSN_SHADERGEN);
+        renderState->addTemplateSubRenderState(
+            shaderGen->createSubRenderState(Ogre::RTShader::SRS_HARDWARE_SKINNING));
+    }
 }
 
 void RTShaderHelper::shutdown(Ogre::SceneManager* sceneMgr)
@@ -183,6 +201,14 @@ void RTShaderHelper::shutdown(Ogre::SceneManager* sceneMgr)
     auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
     if (shaderGen)
     {
+        // Unregister + delete the hardware-skinning factory (#819
+        // Slice D) BEFORE destroying the generator — leaving it
+        // registered aborts in Ogre's teardown.
+        if (auto* hsFactory =
+                Ogre::RTShader::HardwareSkinningFactory::getSingletonPtr()) {
+            shaderGen->removeSubRenderStateFactory(hsFactory);
+            OGRE_DELETE hsFactory;
+        }
         if (sceneMgr)
             shaderGen->removeSceneManager(sceneMgr);
         Ogre::RTShader::ShaderGenerator::destroy();

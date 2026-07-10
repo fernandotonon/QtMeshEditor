@@ -111,6 +111,9 @@ QuadRetopoController.cpp
 SkinWeights.cpp
 SkinWeightsPost.cpp
 GeodesicVoxelBind.cpp
+SkinningDisplay.cpp
+SkinMetrics.cpp
+SkinEvaluate.cpp
 SkinWeightsController.cpp
 AutoRig.cpp
 AutoRigController.cpp
@@ -299,6 +302,9 @@ QuadRetopoController.h
 SkinWeights.h
 SkinWeightsPost.h
 GeodesicVoxelBind.h
+SkinningDisplay.h
+SkinMetrics.h
+SkinEvaluate.h
 SkinWeightsController.h
 AutoRig.h
 AutoRigController.h

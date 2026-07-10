@@ -148,3 +148,4 @@ __pycache__/
 /monk_*.png
 /multiview_bake_*.png
 /multiview_bake_*i.png
+!docs/SKINNING_QUALITY.md

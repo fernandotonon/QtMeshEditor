@@ -50,6 +50,15 @@ public:
                                                        int voxelResolution = 64,
                                                        int smoothIterations = 3);
 
+    /// #819 Slice D: dual-quaternion display toggle for the selected
+    /// entity. Modes: "linear" (default LBS path) or
+    /// "dual-quaternion" (RTSS hardware DQS — kills the candy-wrapper
+    /// collapse on twists). Runtime shading only; exported weights
+    /// are unchanged. Returns the mode applied to / read from the
+    /// first selected entity.
+    Q_INVOKABLE QString skinningDisplayMode() const;
+    Q_INVOKABLE bool setSkinningDisplayMode(const QString& mode);
+
 signals:
     void selectionChanged();
     void busyChanged();

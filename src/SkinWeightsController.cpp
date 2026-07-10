@@ -1,6 +1,7 @@
 #include "SkinWeightsController.h"
 #include "GamificationManager.h"
 #include "SkinWeights.h"
+#include "SkinningDisplay.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "UndoManager.h"
@@ -205,4 +206,38 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
     }
 
     return result;
+}
+
+QString SkinWeightsController::skinningDisplayMode() const
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel) return SkinningDisplay::modeToString(SkinningDisplay::Mode::Linear);
+    const auto entities = sel->getResolvedEntities();
+    Ogre::Entity* entity = entities.isEmpty() ? nullptr : entities.first();
+    return SkinningDisplay::modeToString(SkinningDisplay::current(entity));
+}
+
+bool SkinWeightsController::setSkinningDisplayMode(const QString& mode)
+{
+    auto* sel = SelectionSet::getSingleton();
+    const auto entities = sel ? sel->getResolvedEntities()
+                              : QList<Ogre::Entity*>{};
+    Ogre::Entity* entity = entities.isEmpty() ? nullptr : entities.first();
+    if (!entity) {
+        emit error(QStringLiteral("No mesh selected."));
+        return false;
+    }
+
+    const auto m = SkinningDisplay::modeFromString(mode);
+    SentryReporter::addBreadcrumb(QStringLiteral("render.skinning"),
+        QStringLiteral("display mode %1 on %2")
+            .arg(SkinningDisplay::modeToString(m),
+                 QString::fromStdString(entity->getName())));
+
+    QString err;
+    if (!SkinningDisplay::apply(entity, m, &err)) {
+        emit error(err);
+        return false;
+    }
+    return true;
 }

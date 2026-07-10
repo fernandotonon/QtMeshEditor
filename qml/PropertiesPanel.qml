@@ -2308,6 +2308,81 @@ Rectangle {
                         : "Select a skinned mesh (with a skeleton) first."
                 }
             }
+
+            // #819 Slice D: per-entity skinning display mode.
+            // Dual Quaternion (RTSS hardware skinning) preserves
+            // volume on twists — no candy-wrapper collapse. Display
+            // only: exported weights are unchanged.
+            Row {
+                id: skinDispRow
+                spacing: 6
+                visible: SkinWeightsController.hasSkinnedSelection
+
+                // Re-read the active mode when the selection changes.
+                property string activeMode: SkinWeightsController.skinningDisplayMode()
+                Connections {
+                    target: SkinWeightsController
+                    function onSelectionChanged() {
+                        skinDispRow.activeMode =
+                            SkinWeightsController.skinningDisplayMode()
+                    }
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Display:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    opacity: 0.8
+                }
+
+                Repeater {
+                    model: [
+                        { label: "Linear", mode: "linear" },
+                        { label: "Dual Quaternion", mode: "dual-quaternion" }
+                    ]
+
+                    Rectangle {
+                        id: dispBtn
+                        required property var modelData
+                        readonly property bool active:
+                            skinDispRow.activeMode === modelData.mode
+                        width: dispLabel.implicitWidth + 14
+                        height: 22
+                        radius: 3
+                        color: active ? PropertiesPanelController.highlightColor
+                             : (dispMa.containsMouse
+                                ? PropertiesPanelController.headerColor
+                                : PropertiesPanelController.inputColor)
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+
+                        Text {
+                            id: dispLabel
+                            anchors.centerIn: parent
+                            text: dispBtn.modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            id: dispMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (SkinWeightsController.setSkinningDisplayMode(
+                                        dispBtn.modelData.mode))
+                                    skinDispRow.activeMode = dispBtn.modelData.mode
+                            }
+                            ToolTip.visible: containsMouse
+                            ToolTip.delay: 500
+                            ToolTip.text: dispBtn.modelData.mode === "dual-quaternion"
+                                ? "Render with dual-quaternion hardware skinning — preserves volume on twists (no candy-wrapper). Display only: exported weights are unchanged; engines re-skin with their own blend."
+                                : "Render with the default linear-blend skinning path."
+                        }
+                    }
+                }
+            }
         }
     }
 
