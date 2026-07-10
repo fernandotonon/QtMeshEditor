@@ -894,6 +894,40 @@ AutoRig::Report AutoRig::rigEntityWithMarkers(Ogre::Entity* entity,
         // reach the wire. (Same refresh EditableMesh / EditModeController
         // do after mutating an entity's mesh.)
         mesh->_notifySkeleton(skel);
+
+        // Placeholder rigid bind: weight every vertex 1.0 to the root bone.
+        // A skeletal entity with NO blend data is unrenderable — Ogre's
+        // per-frame software blend asserts ("You must supply position, blend
+        // indices and blend weights") and the viewport dies until real skin
+        // weights arrive (which is minutes away when the ML skinner runs
+        // async, or never if the user rigs without skinning). The real
+        // SkinWeights pass replaces these assignments wholesale.
+        {
+            Ogre::VertexBoneAssignment vba;
+            vba.boneIndex = 0;   // root bone (handle == joint index)
+            vba.weight    = 1.0f;
+            if (mesh->sharedVertexData) {
+                mesh->clearBoneAssignments();
+                const size_t n = mesh->sharedVertexData->vertexCount;
+                for (size_t v = 0; v < n; ++v) {
+                    vba.vertexIndex = static_cast<unsigned int>(v);
+                    mesh->addBoneAssignment(vba);
+                }
+                mesh->_compileBoneAssignments();
+            }
+            for (unsigned short s = 0; s < mesh->getNumSubMeshes(); ++s) {
+                Ogre::SubMesh* sm = mesh->getSubMesh(s);
+                if (sm->useSharedVertices || !sm->vertexData) continue;
+                sm->clearBoneAssignments();
+                const size_t n = sm->vertexData->vertexCount;
+                for (size_t v = 0; v < n; ++v) {
+                    vba.vertexIndex = static_cast<unsigned int>(v);
+                    sm->addBoneAssignment(vba);
+                }
+                sm->_compileBoneAssignments();
+            }
+        }
+
         entity->_initialise(true);
         report.skeletonName = QString::fromStdString(skelName);
         report.boneCount    = static_cast<int>(placed.size());

@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace Ogre {
@@ -145,6 +146,13 @@ public:
                            // deprecated string alias.
     };
 
+    // Called per progress step with (done, total); return false to
+    // cancel (runJob then returns ok=false, error="cancelled").
+    // SkinTokens reports real totals (J×tokens_per_skin decode steps
+    // + J weight decodes); the other algorithms finish too fast to
+    // report.
+    using ProgressFn = std::function<bool(int done, int total)>;
+
     // Compute new skin weights for `entity` against its attached
     // skeleton and commit them to the mesh. Replaces (or merges
     // with — see options) the existing bone-assignment list and
@@ -227,13 +235,73 @@ public:
                                Algorithm algo,
                                std::vector<VertexWeights>& outWeights,
                                ComputeInfo* info = nullptr,
-                               const SkeletonHierarchy* hierarchy = nullptr);
+                               const SkeletonHierarchy* hierarchy = nullptr,
+                               const ProgressFn& progress = {});
 
     static QJsonObject reportToJson(const SkinWeightsReport& report);
     static QString     reportToText(const SkinWeightsReport& report);
 
     static QString algorithmToString(Algorithm algo);
     static Algorithm algorithmFromString(const QString& s);
+
+    // ── Threaded pipeline (GUI async path) ──────────────────────────
+    // The ML skinner takes minutes; running it on the UI thread
+    // freezes the app. computeAndApply is therefore split into three
+    // stages so the GUI can run the heavy middle stage on a worker:
+    //   prepareJob  (MAIN thread — locks Ogre hardware buffers)
+    //   runJob      (ANY thread — pure data: algorithm + post-passes)
+    //   commitJob   (MAIN thread — bone assignments + compile)
+    // computeAndApply() itself is prepare+run+commit back-to-back, so
+    // the synchronous CLI/MCP behaviour is unchanged.
+
+    // Everything the computation needs, snapshotted Ogre-free.
+    struct ComputeJob {
+        std::vector<float>          positions;   // combined xyz
+        std::vector<std::uint32_t>  indices;     // combined, owner-offset
+        std::vector<BoneSegment>    bones;
+        std::vector<unsigned short> boneIdxToHandle;
+        std::vector<int>            handleToIdx;
+        SkeletonHierarchy           hierarchy;   // for the ML path
+        QString meshName;
+        QString skeletonName;
+        QStringList boneNames;                   // by bones[] index
+        int numBones = 0;
+        struct Assign {
+            unsigned int   vertexIndex = 0;
+            unsigned short boneIndex   = 0;      // Ogre handle
+            float          weight      = 0;
+        };
+        struct Owner {
+            int           submeshIndex = -1;     // -1 == shared data
+            std::uint32_t baseVertex   = 0;
+            std::uint32_t vertexCount  = 0;
+            std::vector<Assign> existing;        // pre-skin assignments
+        };
+        std::vector<Owner> owners;
+    };
+
+    struct JobResult {
+        bool ok = false;
+        QString error;
+        std::vector<VertexWeights> weights;      // post-passed, combined
+        std::vector<std::uint8_t>  locked;       // merge-mode locks
+        ComputeInfo info;
+        double bleedFraction = -1.0;
+    };
+
+    static bool prepareJob(Ogre::Entity* entity,
+                           const SkinWeightsOptions& opts,
+                           Algorithm algo,
+                           ComputeJob& out,
+                           QString* error = nullptr);
+    static JobResult runJob(const ComputeJob& job,
+                            const SkinWeightsOptions& opts,
+                            Algorithm algo,
+                            const ProgressFn& progress = {});
+    static SkinWeightsReport commitJob(Ogre::Entity* entity,
+                                       const ComputeJob& job,
+                                       const JobResult& result,
+                                       const SkinWeightsOptions& opts);
 };
 
 #endif // SKIN_WEIGHTS_H

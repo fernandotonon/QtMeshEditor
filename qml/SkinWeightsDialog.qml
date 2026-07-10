@@ -53,7 +53,10 @@ Window {
     function runCompute() {
         if (SkinWeightsController.busy) return
         if (!SkinWeightsController.hasSkinnedSelection) return
-        const r = SkinWeightsController.computeWeightsForSelected(
+        // Async: the compute runs on a worker thread (the ML skinner
+        // takes minutes) — the result arrives via onWeightsApplied /
+        // onError below, progress via skinProgress/skinTotal.
+        const started = SkinWeightsController.computeWeightsForSelectedAsync(
             dialog.maxInfluences,
             dialog.falloff,
             dialog.maxInfluenceDistance,
@@ -62,20 +65,9 @@ Window {
             dialog.algorithm,
             dialog.voxelResolution,
             dialog.smoothIterations)
-        if (r && r.applied) {
-            let status =
-                "Done (" + (r.algorithmUsed || dialog.algorithm) + "): "
-                + r.totalBones + " bones, "
-                + r.totalVerticesProcessed + " verts, "
-                + r.totalAssignmentsBefore + " → "
-                + r.totalAssignmentsAfter + " assignments"
-            if (r.fallbackReason && r.fallbackReason.length > 0)
-                status += " — " + r.fallbackReason
-            dialog.lastStatus = status
+        if (started) {
+            dialog.lastStatus = "Computing…"
             dialog.lastWasError = false
-        } else {
-            dialog.lastStatus = "Failed: " + (r && r.error ? r.error : "unknown error")
-            dialog.lastWasError = true
         }
     }
 
@@ -391,6 +383,43 @@ Window {
 
         Item { Layout.fillHeight: true }
 
+        // Worker progress (ML decode steps + per-joint weight decode)
+        RowLayout {
+            spacing: 8
+            Layout.fillWidth: true
+            visible: SkinWeightsController.busy
+            Rectangle {
+                Layout.fillWidth: true
+                height: 8
+                radius: 4
+                color: PropertiesPanelController.inputColor
+                border.color: PropertiesPanelController.borderColor
+                Rectangle {
+                    height: parent.height
+                    radius: 4
+                    color: PropertiesPanelController.highlightColor
+                    width: SkinWeightsController.skinTotal > 0
+                        ? parent.width * Math.min(1,
+                              SkinWeightsController.skinProgress
+                              / SkinWeightsController.skinTotal)
+                        : 0
+                }
+            }
+            InspectorLabel {
+                text: SkinWeightsController.skinDownloading
+                    ? "Downloading models…"
+                    : (SkinWeightsController.skinTotal > 0
+                        ? SkinWeightsController.skinProgress + " / "
+                          + SkinWeightsController.skinTotal
+                        : "Preparing…")
+            }
+            InspectorButton {
+                label: "Cancel"
+                Layout.preferredWidth: 70
+                onClicked: SkinWeightsController.cancelSkin()
+            }
+        }
+
         // Status line
         InspectorLabel {
             Layout.fillWidth: true
@@ -424,6 +453,18 @@ Window {
         function onError(msg) {
             dialog.lastStatus = "Failed: " + msg
             dialog.lastWasError = true
+        }
+        function onWeightsApplied(r) {
+            let status =
+                "Done (" + (r.algorithmUsed || dialog.algorithm) + "): "
+                + r.totalBones + " bones, "
+                + r.totalVerticesProcessed + " verts, "
+                + r.totalAssignmentsBefore + " → "
+                + r.totalAssignmentsAfter + " assignments"
+            if (r.fallbackReason && r.fallbackReason.length > 0)
+                status += " — " + r.fallbackReason
+            dialog.lastStatus = status
+            dialog.lastWasError = false
         }
     }
 }

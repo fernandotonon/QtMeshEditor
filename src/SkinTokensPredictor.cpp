@@ -596,6 +596,9 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
         Ort::SessionOptions so;
         so.SetIntraOpNumThreads(
             std::max(1u, std::thread::hardware_concurrency() - 1));
+        // Don't busy-spin the pool between ops — spinning starves the GUI
+        // render loop even though the compute runs on a worker thread.
+        so.AddConfigEntry("session.intra_op.allow_spinning", "0");
         auto openSession = [&](const char* file) -> Ort::Session {
             const QString p = modelDir() + QLatin1Char('/')
                               + QLatin1String(file);

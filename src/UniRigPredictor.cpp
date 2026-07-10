@@ -15,6 +15,7 @@
 #include <limits>
 #include <random>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -216,13 +217,26 @@ UniRigPredictor::Result UniRigPredictor::detokenize(
         if (!djoints[j].isRoot && !samePos(djoints[j].pos, djoints[j].parentPos)) {
             for (int k = static_cast<int>(j) - 1; k >= 0; --k)
                 if (samePos(djoints[(size_t)k].pos, djoints[j].parentPos)) { parent = k; break; }
-            // A non-root joint whose explicit parent triple matches no earlier
-            // joint is a malformed decode — reject so the caller falls back
-            // rather than silently emitting it as a spurious extra root.
-            if (parent < 0)
-                return failResult(QStringLiteral(
-                    "UniRig: a branch parent did not match any earlier joint "
-                    "(malformed decode)."));
+            // No exact match: the sampled decode routinely emits a branch's
+            // parent triple a coordinate bin or two off the joint it means
+            // (the model regenerates the parent position rather than copying
+            // it). The upstream pipeline resolves parents by NEAREST joint —
+            // do the same instead of rejecting the whole rig (which made
+            // every real-world mesh fall back to the template, hiding the
+            // ML rigger entirely).
+            if (parent < 0) {
+                double bestD = std::numeric_limits<double>::max();
+                for (int k = static_cast<int>(j) - 1; k >= 0; --k) {
+                    const auto& q = djoints[(size_t)k].pos;
+                    const auto& pp = djoints[j].parentPos;
+                    const double d = (q[0]-pp[0])*(q[0]-pp[0])
+                                   + (q[1]-pp[1])*(q[1]-pp[1])
+                                   + (q[2]-pp[2])*(q[2]-pp[2]);
+                    if (d < bestD) { bestD = d; parent = k; }
+                }
+                // Still nothing earlier at all (first joint claimed a
+                // branch) → treat as root.
+            }
         }
         std::array<double,3> p = djoints[j].pos;
         p = { p[0]*scale + centre[0], p[1]*scale + centre[1], p[2]*scale + centre[2] };
@@ -821,6 +835,12 @@ UniRigPredictor::Result UniRigPredictor::predict(
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_unirig");
         Ort::SessionOptions so;
         so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        // Leave one core for the UI and stop ORT's pool from busy-spinning —
+        // the default (all cores, spin-wait) starves the render loop for the
+        // whole multi-minute decode and the viewport appears frozen.
+        so.SetIntraOpNumThreads(static_cast<int>(
+            std::max(1u, std::thread::hardware_concurrency() - 1)));
+        so.AddConfigEntry("session.intra_op.allow_spinning", "0");
 #ifdef __APPLE__
         try {
             std::unordered_map<std::string, std::string> coremlOpts;
