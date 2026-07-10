@@ -27,15 +27,15 @@ Window {
     property double maxInfluenceDistance: 0.5
     property bool   skipUnweightedBones:  false
     property bool   replaceExisting:      true
-    property string algorithm:            "geodesic-voxel"
+    property string algorithm:            "skintokens"
     property int    voxelResolution:      64
     property int    smoothIterations:     3
 
-    readonly property var algorithmIds: ["geodesic-voxel", "inverse-distance", "unirig"]
+    readonly property var algorithmIds: ["skintokens", "geodesic-voxel", "inverse-distance"]
     readonly property var algorithmLabels: [
-        "Geodesic Voxel (default)",
-        "Inverse Distance (legacy)",
-        "UniRig ML (falls back to Geodesic)"
+        "SkinTokens ML (default)",
+        "Geodesic Voxel",
+        "Inverse Distance (legacy)"
     ]
 
     property string lastStatus: ""
@@ -227,13 +227,13 @@ Window {
             wrapMode: Text.WordWrap
             opacity: 0.85
             text: "Compute per-vertex skin weights against the attached "
-                + "skeleton. Geodesic Voxel (Maya's production bind — "
-                + "distances travel through the mesh volume, so nearby limbs "
-                + "never share weights) is the default; Inverse Distance is "
-                + "the legacy straight-line heuristic, still used for "
-                + "volume-less meshes (planes, cloth). Weights are smoothed "
-                + "and pruned to the influence cap afterwards. Existing "
-                + "assignments are replaced (or merged — see option)."
+                + "skeleton. SkinTokens ML (the default) predicts weights "
+                + "with a rig transformer and localises them geodesically — "
+                + "first use downloads ~2.3 GB of models, and it falls back "
+                + "to Geodesic Voxel (Maya's production bind) when models "
+                + "or ONNX are unavailable. Weights are smoothed and pruned "
+                + "to the influence cap afterwards. Existing assignments "
+                + "are replaced (or merged — see option)."
         }
 
         // Algorithm

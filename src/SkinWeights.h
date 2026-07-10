@@ -24,17 +24,18 @@ namespace Ogre {
 // supersedes that plan with the two paths that beat BBW in
 // production practice without the license problem:
 //
-//   • GeodesicVoxel (Slice A, the DEFAULT) — Maya's "Geodesic
-//     Voxel" bind (Dionne & de Lasa, SCA 2013). Distances travel
-//     through the mesh's interior voxels, so cross-limb bleed
-//     (hand near thigh, inner thighs, fingers) is impossible by
-//     construction, and voxel-resolution hole closing makes it
-//     work on non-watertight / self-intersecting / multi-component
-//     production meshes. See src/GeodesicVoxelBind.{h,cpp}.
-//   • UniRigML (Slice C) — UniRig's skinning head (Bone-Point
-//     Cross Attention, MIT weights) via ONNX; falls back to
-//     GeodesicVoxel automatically when the model / ONNX build is
-//     unavailable.
+//   • SkinTokens (Slice C, the DEFAULT) — SkinTokens/TokenRig ML
+//     skin-weight prediction (VAST-AI, MIT code + weights) via
+//     ONNX, skeleton-teacher-forced and geodesically localised;
+//     falls back to GeodesicVoxel automatically when the models /
+//     ONNX build are unavailable. See src/SkinTokensPredictor.*.
+//   • GeodesicVoxel (Slice A) — Maya's "Geodesic Voxel" bind
+//     (Dionne & de Lasa, SCA 2013). Distances travel through the
+//     mesh's interior voxels, so cross-limb bleed (hand near thigh,
+//     inner thighs, fingers) is impossible by construction, and
+//     voxel-resolution hole closing makes it work on non-watertight
+//     / self-intersecting / multi-component production meshes. The
+//     ML path's fallback. See src/GeodesicVoxelBind.{h,cpp}.
 //
 // InverseDistance — the original #402 closest-point-on-bone smooth
 // bind — is kept as the fallback for meshes that enclose no volume
@@ -133,12 +134,15 @@ public:
         InverseDistance,   // #402 closest-point-on-bone heuristic
                            // (kept: fallback for volume-less meshes
                            // + explicit choice for planes/cloth).
-        GeodesicVoxel,     // #819 Slice A — the DEFAULT. Maya-style
-                           // geodesic voxel binding; falls back to
+        GeodesicVoxel,     // #819 Slice A — Maya-style geodesic voxel
+                           // binding; the fallback for the ML path and
+                           // an explicit choice. Falls back to
                            // InverseDistance on degenerate input.
-        UniRigML,          // #819 Slice C — UniRig skinning head via
-                           // ONNX. Falls back to GeodesicVoxel until
-                           // the exported model is integrated/hosted.
+        SkinTokens,        // #819 Slice C — SkinTokens/TokenRig ML
+                           // skinning (the DEFAULT; falls back to
+                           // GeodesicVoxel when models/ONNX are
+                           // unavailable). "unirig" is kept as a
+                           // deprecated string alias.
     };
 
     // Compute new skin weights for `entity` against its attached
@@ -152,7 +156,7 @@ public:
     // less) entities return `applied=false` with an error.
     static SkinWeightsReport computeAndApply(Ogre::Entity* entity,
                                              const SkinWeightsOptions& opts = {},
-                                             Algorithm algo = Algorithm::GeodesicVoxel);
+                                             Algorithm algo = Algorithm::SkinTokens);
 
     // Pure-data variant: bone segments + vertex positions →
     // sparse weight list (per vertex: K (bone_index, weight)
@@ -187,12 +191,12 @@ public:
         std::vector<std::vector<int>> allowedBones;
     };
 
-    // Skeleton hierarchy for the ML (SkinTokens) path — the
-    // UniRigML algorithm tokenizes the actual joint tree, which the
+    // Skeleton hierarchy for the ML (SkinTokens) path — it
+    // tokenizes the actual joint tree, which the
     // flat BoneSegment list can't express. Entries must be
     // DFS-ordered (parent before child); `parent` indexes into the
     // same array (-1 = root). Pass via the overload's optional
-    // parameter; when absent, UniRigML falls back to GeodesicVoxel.
+    // parameter; when absent, SkinTokens falls back to GeodesicVoxel.
     struct SkeletonHierarchy {
         struct Node {
             double x = 0, y = 0, z = 0;
@@ -209,8 +213,9 @@ public:
     // degenerate input; vertices unreachable from any bone seed
     // (floating islands with no bone) are filled in with
     // inverse-distance weights so everything still moves with the
-    // rig. UniRigML currently falls back to GeodesicVoxel (Slice C
-    // model integration pending). The Slice-B post-passes are NOT
+    // rig. SkinTokens needs the joint hierarchy + downloaded models
+    // and falls back to GeodesicVoxel otherwise. The Slice-B
+    // post-passes are NOT
     // applied here — callers (computeAndApply, tests) run
     // SkinWeightsPost explicitly.
     static bool computeWeights(const float* vertexPositions,

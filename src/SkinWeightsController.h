@@ -35,18 +35,19 @@ public:
     /// `SkinWeightsReport`. Emits `weightsApplied(report)` on
     /// success or `error(msg)` on failure.
     ///
-    /// `algorithm` is one of "geodesic-voxel" (default, #819),
-    /// "inverse-distance", or "unirig" (falls back to geodesic
-    /// until the Slice-C model lands). `voxelResolution` and
-    /// `smoothIterations` map to the same-named
-    /// SkinWeightsOptions fields.
+    /// `algorithm` is one of "skintokens" (default — the ML
+    /// skinner, #819 Slice C; falls back to geodesic-voxel when
+    /// models/ONNX are unavailable), "geodesic-voxel",
+    /// "inverse-distance", or the deprecated alias "unirig".
+    /// `voxelResolution` and `smoothIterations` map to the
+    /// same-named SkinWeightsOptions fields.
     Q_INVOKABLE QVariantMap computeWeightsForSelected(int maxInfluencesPerVertex,
                                                        double falloff,
                                                        double maxInfluenceDistance,
                                                        bool skipUnweightedBones,
                                                        bool replaceExisting,
                                                        const QString& algorithm
-                                                           = QStringLiteral("geodesic-voxel"),
+                                                           = QStringLiteral("skintokens"),
                                                        int voxelResolution = 64,
                                                        int smoothIterations = 3);
 

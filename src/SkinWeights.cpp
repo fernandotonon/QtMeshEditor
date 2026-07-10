@@ -174,7 +174,7 @@ bool SkinWeights::computeWeights(const float* vertexPositions,
     inf = {};
     if (!vertexPositions || vertexCount < 1 || bones.empty()) return false;
 
-    if (algo == Algorithm::UniRigML) {
+    if (algo == Algorithm::SkinTokens) {
         // ML path: SkinTokens (see THIRD_PARTY_AI_MODELS.md — it
         // replaced UniRig's spconv-blocked skin head). Needs the
         // joint hierarchy for tokenization, an ONNX build, and the
@@ -411,7 +411,7 @@ SkinWeightsReport applyToEntity(Ogre::Entity* entity,
     // if an exotic skeleton violates it, the predictor rejects and
     // the geodesic fallback runs.
     SkinWeights::SkeletonHierarchy hierarchy;
-    if (algo == SkinWeights::Algorithm::UniRigML) {
+    if (algo == SkinWeights::Algorithm::SkinTokens) {
         hierarchy.nodes.reserve(bones.size());
         for (size_t i = 0; i < boneIdxToHandle.size(); ++i) {
             Ogre::Bone* bone = skel->getBone(boneIdxToHandle[i]);
@@ -761,9 +761,9 @@ QString SkinWeights::algorithmToString(Algorithm algo)
     switch (algo) {
     case Algorithm::InverseDistance: return QStringLiteral("inverse-distance");
     case Algorithm::GeodesicVoxel:   return QStringLiteral("geodesic-voxel");
-    case Algorithm::UniRigML:        return QStringLiteral("unirig");
+    case Algorithm::SkinTokens:      return QStringLiteral("skintokens");
     }
-    return QStringLiteral("geodesic-voxel");
+    return QStringLiteral("skintokens");
 }
 
 SkinWeights::Algorithm SkinWeights::algorithmFromString(const QString& s)
@@ -773,10 +773,10 @@ SkinWeights::Algorithm SkinWeights::algorithmFromString(const QString& s)
         || v == QLatin1String("inverse_distance")
         || v == QLatin1String("id"))
         return Algorithm::InverseDistance;
-    if (v == QLatin1String("unirig") || v == QLatin1String("unirig-ml")
-        || v == QLatin1String("unirigml"))
-        return Algorithm::UniRigML;
-    // "geodesic-voxel" / "geodesic" / "gvb" / anything else → the
-    // default.
-    return Algorithm::GeodesicVoxel;
+    if (v == QLatin1String("geodesic-voxel") || v == QLatin1String("geodesic")
+        || v == QLatin1String("gvb"))
+        return Algorithm::GeodesicVoxel;
+    // "skintokens" / the deprecated "unirig" aliases / anything else
+    // → the default (SkinTokens ML).
+    return Algorithm::SkinTokens;
 }

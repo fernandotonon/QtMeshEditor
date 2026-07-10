@@ -115,12 +115,13 @@ QVariantMap SkinWeightsController::computeWeightsForSelected(int maxInfluencesPe
     // algorithmFromString's default swallow a typo silently, and
     // clamp the new knobs to the same ranges the CLI/MCP enforce.
     const QString algoName = algorithm.trimmed().toLower();
-    if (algoName != QLatin1String("geodesic-voxel")
+    if (algoName != QLatin1String("skintokens")
+        && algoName != QLatin1String("geodesic-voxel")
         && algoName != QLatin1String("inverse-distance")
-        && algoName != QLatin1String("unirig")) {
+        && algoName != QLatin1String("unirig")) {   // deprecated alias
         const auto msg = QStringLiteral(
-            "Unknown algorithm '%1' — expected 'geodesic-voxel', "
-            "'inverse-distance', or 'unirig'.").arg(algorithm);
+            "Unknown algorithm '%1' — expected 'skintokens', "
+            "'geodesic-voxel', or 'inverse-distance'.").arg(algorithm);
         emit error(msg);
         result["applied"] = false;
         result["error"]   = msg;

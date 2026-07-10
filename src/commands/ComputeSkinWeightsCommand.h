@@ -41,7 +41,7 @@ public:
     ComputeSkinWeightsCommand(std::string entityName,
                               SkinWeightsOptions opts,
                               SkinWeights::Algorithm algo
-                                  = SkinWeights::Algorithm::GeodesicVoxel,
+                                  = SkinWeights::Algorithm::SkinTokens,
                               QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -74,7 +74,7 @@ private:
 
     std::string             mEntityName;
     SkinWeightsOptions      mOpts;
-    SkinWeights::Algorithm  mAlgo = SkinWeights::Algorithm::GeodesicVoxel;
+    SkinWeights::Algorithm  mAlgo = SkinWeights::Algorithm::SkinTokens;
     SkinWeightsReport       mReport;
 
     std::vector<OwnerSnapshot> mBefore;   // pre-skin weights

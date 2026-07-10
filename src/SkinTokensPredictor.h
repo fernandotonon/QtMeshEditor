@@ -8,7 +8,8 @@
 #include <vector>
 
 // SkinTokens / TokenRig ML skin-weight prediction (issue #819 Slice C
-// follow-up) — the ML path behind SkinWeights::Algorithm::UniRigML.
+// follow-up) — the ML path behind SkinWeights::Algorithm::SkinTokens
+// (the default skinning algorithm; "unirig" is a deprecated alias).
 // Ogre-free + unit-testable for its pure-data parts.
 //
 // SkinTokens (VAST-AI-Research/SkinTokens, MIT code + MIT weights on
