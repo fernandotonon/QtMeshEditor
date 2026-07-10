@@ -321,7 +321,22 @@ QString LibretroEmuCore::resolveLibretroCorePath(QString *errorOut)
     const QString appDir = QCoreApplication::applicationDirPath();
     // Only load cores shipped next to the app (or via env). Distro libretro builds are often
     // too old to load .iso images and can segfault the host process.
-    const QStringList searchDirs = {QDir(appDir).filePath(QStringLiteral("PS1Cores"))};
+    // Search PS1Cores/ next to the binary AND, on macOS, next to the .app bundle:
+    // the plugin CMake writes cores to <build>/bin/PS1Cores, which is beside the
+    // .app, not inside Contents/MacOS/ (mirrors EmuCoreLoader::coreSearchPaths).
+    QStringList searchDirs = {QDir(appDir).filePath(QStringLiteral("PS1Cores"))};
+#if defined(Q_OS_MACOS)
+    {
+        QDir bundleDir(appDir);
+        if (bundleDir.dirName() == QLatin1String("MacOS")) {
+            bundleDir.cdUp();                     // Contents
+            if (bundleDir.dirName() == QLatin1String("Contents"))
+                bundleDir.cdUp();                 // .app
+            bundleDir.cdUp();                     // dir containing the .app (dev: <build>/bin)
+            searchDirs << bundleDir.filePath(QStringLiteral("PS1Cores"));
+        }
+    }
+#endif
 
     for (const QString &dirPath : searchDirs) {
         const QDir dir(dirPath);
