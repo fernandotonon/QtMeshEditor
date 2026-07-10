@@ -457,6 +457,43 @@ TEST(MeshReconstructorTieredTest, TrackedGeometryOnlyDropsScreenSpacePrims)
     EXPECT_FALSE(cleanStats.slabLike);
 }
 
+TEST(MeshReconstructorTieredTest, PartlyTrackedPrimStaysCoherentNoSpike)
+{
+    // The radiating-spike artifact: a triangle with one GteTracked corner
+    // (placed from the raw object-space record) and depth corners that, before
+    // the fix, inverted against a *different* matrix and landed in a different
+    // model space — stretching the triangle across the scene. With the fix all
+    // three corners share the prim's tracked matrix and stay within the cube.
+    MatrixRecord matrix = rotationMatrix(kPi / 6.0, kPi / 5.0, 0.0);
+    matrix.tr[0] = 120;
+    matrix.tr[1] = -60;
+    matrix.tr[2] = 5000;
+
+    CaptureSnapshot snap = cubeSnapshot(matrix, FixtureTier::Tracked);
+    // Demote 2 of every triangle's 3 corners to DepthOnly (keep their precise
+    // coords + viewW, strip the tag) so each prim is 1 tracked + 2 depth.
+    for (PrimRecord &prim : snap.prims) {
+        for (int v = 1; v < 3; ++v) {
+            prim.verts[v].provenance = static_cast<uint8_t>(PsxVertexProvenance::DepthOnly);
+            prim.verts[v].gteRecordIndex = UINT32_MAX;
+        }
+    }
+
+    MeshReconstructionStats stats;
+    const ReconstructedCaptureSet set =
+        MeshReconstructor::reconstructDeduped(snap, MeshDedupeMode::Loose, &stats);
+
+    ASSERT_FALSE(set.isEmpty());
+    // Mixed tiers as intended.
+    EXPECT_GT(stats.gteTrackedVertices, 0);
+    EXPECT_GT(stats.depthOnlyVertices, 0);
+    // The cube must stay a cube: every reconstructed vertex within ~4 model
+    // units (0.04 editor) of a real corner. A spike would put verts far away.
+    EXPECT_LE(maxCornerError(set), 0.05f)
+        << "partly-tracked prims must reconstruct in one coherent model space";
+    EXPECT_FALSE(stats.slabLike);
+}
+
 TEST(MeshReconstructorTieredTest, EditorRotationFromGtePins90DegreeYRotation)
 {
     // 90° around Y in the GTE camera basis: model (x,y,z) -> camera (z,y,-x).

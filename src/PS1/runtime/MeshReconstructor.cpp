@@ -90,7 +90,8 @@ struct SubMeshAccumulator {
  *  may mix tiers — each vertex degrades independently. */
 ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix,
                                   const QVector<GteRecordEntry> &gteRecords, bool textured,
-                                  bool *usedGteInverseOut = nullptr, VertexTier *tierOut = nullptr)
+                                  bool *usedGteInverseOut = nullptr, VertexTier *tierOut = nullptr,
+                                  const MatrixRecord *primTrackedMatrix = nullptr)
 {
     ReconstructedVertex out;
     out.diffuseArgb = packDiffuse(v.r, v.g, v.b);
@@ -115,9 +116,17 @@ ReconstructedVertex vertexFromPsx(const PsxVertex &v, const MatrixRecord *matrix
         // Tier 1 — DepthOnly, or a tracked vertex whose ring index went stale.
         // viewW == 0 means "depth unknown" and screenToModel refuses it, so the
         // vertex degrades to Tier 2 below.
+        //
+        // #816 spike fix: prefer the prim's canonical tracked matrix so every
+        // Tier-1 vertex of a partly-tracked prim inverts into the SAME model
+        // space as its Tier-0 corners. Without this, a triangle mixing a
+        // tracked corner (raw object space) with a depth corner (inverted
+        // against a different/own matrix) stretched between two spaces and
+        // radiated the spike artifact. Fall back to this vertex's own record
+        // matrix, then the draw matrix, only when the prim supplied none.
         MatrixRecord recordMatrix;
-        const MatrixRecord *drawMatrix = matrix;
-        if (recordResolves) {
+        const MatrixRecord *drawMatrix = primTrackedMatrix ? primTrackedMatrix : matrix;
+        if (!primTrackedMatrix && recordResolves) {
             recordMatrix = matrixRecordFromGteRecord(gteRecords[static_cast<int>(v.gteRecordIndex)]);
             drawMatrix = &recordMatrix;
         }
@@ -263,12 +272,14 @@ bool depthRatioExceedsTolerance(const PsxVertex &a, const PsxVertex &b, const Ps
 
 void emitTriDirect(const PsxVertex &a, const PsxVertex &b, const PsxVertex &c,
                    const MatrixRecord *matrix, const QVector<GteRecordEntry> &gteRecords,
-                   bool textured, SubMeshAccumulator &acc, MeshReconstructionStats *statsOut)
+                   bool textured, SubMeshAccumulator &acc, MeshReconstructionStats *statsOut,
+                   const MatrixRecord *primTrackedMatrix)
 {
     auto vtx = [&](const PsxVertex &pv) {
         bool usedGte = false;
         VertexTier tier = VertexTier::Screen;
-        ReconstructedVertex out = vertexFromPsx(pv, matrix, gteRecords, textured, &usedGte, &tier);
+        ReconstructedVertex out =
+            vertexFromPsx(pv, matrix, gteRecords, textured, &usedGte, &tier, primTrackedMatrix);
         if (tier != VertexTier::Screen)
             acc.hasTieredVertices = true;
         if (statsOut)
@@ -291,37 +302,38 @@ void emitTriDirect(const PsxVertex &a, const PsxVertex &b, const PsxVertex &c,
 void emitTriSubdivided(const PsxVertex &a, const PsxVertex &b, const PsxVertex &c,
                        const MatrixRecord *matrix, const QVector<GteRecordEntry> &gteRecords,
                        bool textured, SubMeshAccumulator &acc,
+                       const MatrixRecord *primTrackedMatrix,
                        MeshReconstructionStats *statsOut, float tolerance, int remainingDepth)
 {
     if (remainingDepth <= 0 || !depthRatioExceedsTolerance(a, b, c, tolerance)) {
-        emitTriDirect(a, b, c, matrix, gteRecords, textured, acc, statsOut);
+        emitTriDirect(a, b, c, matrix, gteRecords, textured, acc, statsOut, primTrackedMatrix);
         return;
     }
     const PsxVertex ab = midpointPsx(a, b);
     const PsxVertex bc = midpointPsx(b, c);
     const PsxVertex ca = midpointPsx(c, a);
     const int next = remainingDepth - 1;
-    emitTriSubdivided(a,  ab, ca, matrix, gteRecords, textured, acc, statsOut, tolerance, next);
-    emitTriSubdivided(ab, b,  bc, matrix, gteRecords, textured, acc, statsOut, tolerance, next);
-    emitTriSubdivided(ca, bc, c,  matrix, gteRecords, textured, acc, statsOut, tolerance, next);
-    emitTriSubdivided(ab, bc, ca, matrix, gteRecords, textured, acc, statsOut, tolerance, next);
+    emitTriSubdivided(a,  ab, ca, matrix, gteRecords, textured, acc, primTrackedMatrix, statsOut, tolerance, next);
+    emitTriSubdivided(ab, b,  bc, matrix, gteRecords, textured, acc, primTrackedMatrix, statsOut, tolerance, next);
+    emitTriSubdivided(ca, bc, c,  matrix, gteRecords, textured, acc, primTrackedMatrix, statsOut, tolerance, next);
+    emitTriSubdivided(ab, bc, ca, matrix, gteRecords, textured, acc, primTrackedMatrix, statsOut, tolerance, next);
 }
 
 void emitTri(const PsxVertex &a, const PsxVertex &b, const PsxVertex &c,
              const MatrixRecord *matrix, const QVector<GteRecordEntry> &gteRecords, bool textured,
              SubMeshAccumulator &acc, MeshReconstructionStats *statsOut,
-             const Ps1NormalizerSettings &settings)
+             const Ps1NormalizerSettings &settings, const MatrixRecord *primTrackedMatrix)
 {
     // Perspective-correct subdivision exists to reproduce PS1 affine UV
     // sampling at fine grain. There's no UV channel on mono / shaded prims
     // (HUDs, flat-shaded geometry), so tessellating them would just inflate
     // triangle counts without changing the visual — skip them.
     if (textured && settings.perspectiveCorrectUVs && settings.perspectiveMaxDepth > 0) {
-        emitTriSubdivided(a, b, c, matrix, gteRecords, textured, acc, statsOut,
-                          settings.perspectiveTolerance, settings.perspectiveMaxDepth);
+        emitTriSubdivided(a, b, c, matrix, gteRecords, textured, acc, primTrackedMatrix,
+                          statsOut, settings.perspectiveTolerance, settings.perspectiveMaxDepth);
         return;
     }
-    emitTriDirect(a, b, c, matrix, gteRecords, textured, acc, statsOut);
+    emitTriDirect(a, b, c, matrix, gteRecords, textured, acc, statsOut, primTrackedMatrix);
 }
 
 /** "Clean up" filter (#816 follow-up): true when every vertex the prim will
@@ -356,6 +368,27 @@ void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix,
     if (settings.trackedGeometryOnly && !primIsTrackedGeometry(prim, gteRecords))
         return;
 
+    // #816 spike fix: if any vertex of this prim is GteTracked, ALL of its
+    // Tier-1 (DepthOnly) vertices must invert against that same GTE matrix so
+    // the whole triangle lands in one coherent model space. Resolve the prim's
+    // canonical matrix once here (a tracked vertex's record matrix) and pass it
+    // down; vertexFromPsx inverts Tier-1 against it. Without this, a triangle
+    // mixing a tracked corner (raw object space) with a depth corner (inverted
+    // against a different matrix) stretched between spaces and radiated spikes.
+    MatrixRecord primMatrixStorage;
+    const MatrixRecord *primTrackedMatrix = nullptr;
+    const int nvChk = std::min<int>(prim.vertexCount, 4);
+    for (int i = 0; i < nvChk; ++i) {
+        const PsxVertex &pv = prim.verts[i];
+        if (pv.provenance == static_cast<uint8_t>(PsxVertexProvenance::GteTracked)
+            && pv.gteRecordIndex < static_cast<uint32_t>(gteRecords.size())) {
+            primMatrixStorage =
+                matrixRecordFromGteRecord(gteRecords[static_cast<int>(pv.gteRecordIndex)]);
+            primTrackedMatrix = &primMatrixStorage;
+            break;
+        }
+    }
+
     const bool textured = prim.kind == PrimKind::TexturedTri || prim.kind == PrimKind::TexturedQuad
                           || prim.kind == PrimKind::Sprite;
 
@@ -363,7 +396,7 @@ void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix,
         || prim.kind == PrimKind::TexturedTri) {
         if (prim.vertexCount >= 3)
             emitTri(prim.verts[0], prim.verts[1], prim.verts[2], matrix, gteRecords, textured,
-                    acc, statsOut, settings);
+                    acc, statsOut, settings, primTrackedMatrix);
         return;
     }
 
@@ -371,9 +404,9 @@ void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix,
         || prim.kind == PrimKind::TexturedQuad) {
         if (prim.vertexCount >= 4) {
             emitTri(prim.verts[0], prim.verts[1], prim.verts[2], matrix, gteRecords, textured,
-                    acc, statsOut, settings);
+                    acc, statsOut, settings, primTrackedMatrix);
             emitTri(prim.verts[0], prim.verts[2], prim.verts[3], matrix, gteRecords, textured,
-                    acc, statsOut, settings);
+                    acc, statsOut, settings, primTrackedMatrix);
         }
         return;
     }
@@ -387,7 +420,8 @@ void emitPrimitive(const PrimRecord &prim, const MatrixRecord *matrix,
             bool usedGte = false;
             VertexTier tier = VertexTier::Screen;
             ReconstructedVertex out =
-                vertexFromPsx(prim.verts[i], matrix, gteRecords, textured, &usedGte, &tier);
+                vertexFromPsx(prim.verts[i], matrix, gteRecords, textured, &usedGte, &tier,
+                              primTrackedMatrix);
             if (tier != VertexTier::Screen)
                 acc.hasTieredVertices = true;
             if (statsOut)
